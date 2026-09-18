@@ -28,7 +28,9 @@ import {
 
 import { findRootThought, requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
+// Чипы мыслей в таблице и в редакторе собирает общая фабрика облачка
+// (профиль `chip`): значок, цвета, начертание, бледность, метка корзины.
+import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { wireExternalDragSource, registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
 import { applyGroupClamp } from '../../editor/list-heights.js';
@@ -483,13 +485,13 @@ function buildTargetChips(targets: ChronicleTarget[], rowId: string): HTMLElemen
 
 /** A styled thought chip (icon + title), shared with the editor area. */
 export function thoughtChip(ref: ThoughtRef): HTMLElement {
-  const chip = el('span', 'chron-chip thought');
-  chip.dataset['id'] = ref.id;
-  applyCloudStyle(chip, resolveCloudStyle(ref));
-  if (ref.active === false) chip.classList.add('muted');
-  const iconBox = span('', 'chip-icon');
-  applyThoughtIcon(iconBox, ref);
-  chip.append(iconBox, span(ref.title, 'chip-title'));
+  // Мини-облачко собирает общая фабрика: разметка, значок (своя иконка, иначе
+  // типовая по цепочке, иначе 💭), цвета и начертание, бледность неактуальной,
+  // метка корзины у помеченной; обрезка названия — раскладкой с подсказкой.
+  // Класс `chron-chip thought` сохраняет навигацию таблицы (repaintCursor
+  // ищет `.chron-chip`) и стиль строки-чипа.
+  const chip = createThoughtCloud(ref, { profile: 'chip' });
+  chip.classList.add('chron-chip', 'thought');
   // Ctrl+hover on a thought chip shows its permanent comment (preview stage 3).
   markThoughtCommentPreview(chip, ref.id, ref.title);
   return chip;

@@ -26,11 +26,9 @@
  */
 
 import { setFocus } from '../app.js';
-import {
-  applyCloudStyle,
-  applyThoughtIcon,
-  resolveCloudStyle,
-} from '../canvas/canvas.js';
+// Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
+// `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
@@ -41,10 +39,8 @@ import { orderedTypeRows } from '../lib/type-tree.js';
 import { buildUserSelectWidget } from '../lib/users.js';
 import {
   UI_STATE_KEY,
-  type SearchNameHit,
   type SearchResponse,
   type SearchScope,
-  type SearchTextHit,
   type Thought,
 } from '@etn/shared';
 import { store } from '../state.js';
@@ -493,46 +489,27 @@ function renderIdResult(thought: Thought | null): void {
     const row = div('search-hit');
     const key = `thought:${thought.id}`;
     row.dataset['key'] = key;
+    // The «Мысль по ID» row is the only thought fetched via `thoughts.get`,
+    // so its full DTO carries every cloud-style field. The row shows the same
+    // factory-built cloud as the canvas (08-ui-spec.md §2.2) with the id as
+    // the snippet.
+    row.append(
+      createThoughtCloud(thought, {
+        profile: 'tree',
+        actions: {
+          onClick: activateHit(key, () => void setFocus(thought.id)),
+          onCtrlClick: () => activateHit(key, () => void setFocus(thought.id))(),
+        },
+      }),
+    );
     const info = div('search-hit-info');
     info.style.flex = '1';
     info.style.minWidth = '0';
-    info.append(el('div', 'hit-title', thought.title));
     info.append(el('div', 'hit-snippet', thought.id));
-    row.append(
-      thoughtIconEl({
-        thought_id: thought.id,
-        icon: thought.icon,
-        icon_kind: thought.icon_kind,
-        icon_attachment_id: thought.icon_attachment_id,
-        type_id: thought.type_id,
-      }),
-      info,
-    );
-    // The «Мысль по ID» row is the only thought fetched via `thoughts.get`,
-    // so its full DTO carries every cloud-style field. Apply it here too so
-    // the search list matches the canvas uniformly (08-ui-spec.md §2.2).
-    applyThoughtHitStyle(row, {
-      fg_color: thought.fg_color,
-      bg_color: thought.bg_color,
-      font_bold: thought.font_bold,
-      font_italic: thought.font_italic,
-      font_underline: thought.font_underline,
-      font_strike: thought.font_strike,
-      type_id: thought.type_id,
-      active: thought.active,
-    });
+    row.append(info);
     // Stage 3: no per-indicator comment/chrono/attachment icons on this row —
     // Ctrl+hover over the row itself shows the thought's permanent comment.
     markThoughtCommentPreview(row, thought.id, thought.title);
-    row.addEventListener('click', () => {
-      lastSelectedKey = key;
-      applySelection(key, true);
-      hidePanel();
-      // A synthetic Enter click keeps focus in the input; leave it so the
-      // canvas/editor receives the following keystrokes.
-      if (chrome !== null) chrome.input.blur();
-      void setFocus(thought.id);
-    });
     body.append(row);
   } else {
     body.append(el('p', 'muted', 'Мысль с указанным ID отсутствует.'));
@@ -542,60 +519,21 @@ function renderIdResult(thought: Thought | null): void {
   applySelection(lastSelectedKey, false);
 }
 
-/** Builds a hit icon element from the thought's own icon (💭 fallback). */
-function thoughtIconEl(hit: {
-  thought_id: string;
-  icon: string | null;
-  icon_kind: import('@etn/shared').IconKind;
-  icon_attachment_id: string | null;
-  type_id: string | null;
-}): HTMLElement {
-  const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, {
-    id: hit.thought_id,
-    icon: hit.icon,
-    icon_kind: hit.icon_kind,
-    // `type_id` is needed for the type-chain icon fallback — without it the
-    // row would show 💭 for every thought whose own icon is unset, even when
-    // its type carries one (08-ui-spec.md §2.2).
-    type_id: hit.type_id,
-    icon_attachment_id: hit.icon_attachment_id,
-  });
-  return icon;
-}
-
 /**
- * Visual style of a thought hit: the same colour/font/active flags the cloud
- * carries on the canvas. Reused for `by_names`, `by_texts` and the «Мысль по
- * ID» row (which carries the full `Thought` DTO). Link/chrono rows do not
- * carry a thought style (no thought to inherit from).
+ * Активация хитов поиска (единая для всех групп): запоминает выбранный хит,
+ * подсвечивает его, прячет панель и возвращает фокус инпуту поиска — затем
+ * выполняет действие хита.
  */
-function applyThoughtHitStyle(
-  row: HTMLElement,
-  hit: {
-    fg_color: string | null;
-    bg_color: string | null;
-    font_bold: boolean | null;
-    font_italic: boolean | null;
-    font_underline: boolean | null;
-    font_strike: boolean | null;
-    type_id: string | null;
-    active: boolean;
-  },
-): void {
-  const style = resolveCloudStyle({
-    fg_color: hit.fg_color,
-    bg_color: hit.bg_color,
-    font_bold: hit.font_bold,
-    font_italic: hit.font_italic,
-    font_underline: hit.font_underline,
-    font_strike: hit.font_strike,
-    type_id: hit.type_id,
-  });
-  applyCloudStyle(row, style);
-  // Inactive thoughts render dim — the same treatment the canvas applies to
-  // an inactive neighbour's cloud (08-ui-spec.md §6.7).
-  if (!hit.active) row.classList.add('dim');
+function activateHit(key: string, open: () => void): () => void {
+  return () => {
+    lastSelectedKey = key;
+    applySelection(key, true);
+    hidePanel();
+    // A synthetic Enter click keeps focus in the input; leave it so the
+    // canvas/editor receives the following keystrokes.
+    if (chrome !== null) chrome.input.blur();
+    open();
+  };
 }
 
 /** Renders the four result groups. */
@@ -608,17 +546,20 @@ function renderResults(response: SearchResponse | null): void {
     resultsBox.append(el('p', 'muted', 'Введите запрос (минимум 3 символа).'));
     return;
   }
+  // Группы результатов. Для мыслей иконка, название, цвета и начертание
+  // приходят из общей фабрики облачка (мысли выглядят как на холсте); строки
+  // связей и хронологии не несут мысли и остаются простыми строками.
   const groups: Array<{
     key: 'names' | 'texts' | 'links' | 'chronology';
     title: string;
     hits: Array<{
-      iconEl: HTMLElement;
-      title: string;
+      /** Фабричное облачко мысли либо глиф-иконка для не-мысленных хитов. */
+      lead: HTMLElement;
+      /** Заголовок простой строки (связи/хронология); у мыслей — в облачке. */
+      title?: string;
       snippet: string;
       /** Stable row key for selection restore + keyboard navigation. */
       key: string;
-      /** Original hit — used by `applyThoughtHitStyle` to colour the row. */
-      hit?: SearchNameHit | SearchTextHit;
       open: () => void;
       /** Stage 3: Ctrl+hover on the row shows the owner's permanent comment
        *  (no per-indicator icons in this list). */
@@ -629,11 +570,18 @@ function renderResults(response: SearchResponse | null): void {
       key: 'names',
       title: 'Найдено по именам',
       hits: response.by_names.map((hit) => ({
-        iconEl: thoughtIconEl(hit),
-        title: hit.title,
+        lead: createThoughtCloud(
+          { ...hit, id: hit.thought_id },
+          {
+            profile: 'tree',
+            actions: {
+              onClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
+              onCtrlClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
+            },
+          },
+        ),
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
-        hit,
         open: () => void setFocus(hit.thought_id),
         markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
       })),
@@ -642,11 +590,18 @@ function renderResults(response: SearchResponse | null): void {
       key: 'texts',
       title: 'Найдено по текстам',
       hits: response.by_texts.map((hit) => ({
-        iconEl: thoughtIconEl(hit),
-        title: hit.title,
+        lead: createThoughtCloud(
+          { ...hit, id: hit.thought_id },
+          {
+            profile: 'tree',
+            actions: {
+              onClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
+              onCtrlClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
+            },
+          },
+        ),
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
-        hit,
         open: () => void setFocus(hit.thought_id),
         markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
       })),
@@ -655,7 +610,7 @@ function renderResults(response: SearchResponse | null): void {
       key: 'links',
       title: 'Найдено связей',
       hits: response.by_links.map((hit) => ({
-        iconEl: span('🔗'),
+        lead: span('🔗'),
         title: hit.type_name,
         snippet: hit.snippet,
         key: `link:${hit.link_id}`,
@@ -667,7 +622,7 @@ function renderResults(response: SearchResponse | null): void {
       key: 'chronology',
       title: 'Найдено в хронологии',
       hits: response.by_chrono.map((hit) => ({
-        iconEl: span('📅'),
+        lead: span('📅'),
         title: hit.valid_from.slice(0, 10),
         snippet: hit.snippet,
         key: `chrono:${hit.owner}:${hit.owner_id}`,
@@ -699,29 +654,18 @@ function renderResults(response: SearchResponse | null): void {
       for (const hit of group.hits) {
         const row = div('search-hit');
         row.dataset['key'] = hit.key;
+        row.append(hit.lead);
         const info = div('search-hit-info');
         info.style.flex = '1';
         info.style.minWidth = '0';
-        const title = el('div', 'hit-title', hit.title);
+        if (hit.title !== undefined) {
+          info.append(el('div', 'hit-title', hit.title));
+        }
         const snippet = el('div', 'hit-snippet');
         renderHtml(snippet, hit.snippet);
-        info.append(title, snippet);
-        row.append(hit.iconEl, info);
-        // Thought hits pick up the cloud's own colour/font/active (08-ui-spec.md
-        // §2.2, §6.7) — the search list shows the same icon and style as the
-        // canvas. Link/chrono rows have no thought to inherit from and stay
-        // on the default theme.
-        if (hit.hit !== undefined) applyThoughtHitStyle(row, hit.hit);
+        info.append(snippet);
+        row.append(info);
         hit.markPreview(row);
-        row.addEventListener('click', () => {
-          lastSelectedKey = hit.key;
-          applySelection(hit.key, true);
-          hidePanel();
-          // A synthetic Enter click keeps focus in the input; leave it so the
-          // canvas/editor receives the following keystrokes.
-          if (chrome !== null) chrome.input.blur();
-          hit.open();
-        });
         body.append(row);
       }
     }

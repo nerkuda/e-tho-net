@@ -21,7 +21,9 @@ import { STRUCTURE_AUTHOR_OPS, type ChronicleSavedFilter, type StructureAuthorOp
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
-import { applyThoughtIcon } from '../../canvas/canvas.js';
+// Чипы мыслей в поле отбора строит общая фабрика облачка (профиль `chip`):
+// значок, цвета, начертание и бледность — как в любом списке клиента.
+import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { button, div, el, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -233,13 +235,11 @@ function repaintChips(): void {
   chipsBox.replaceChildren();
   for (const id of filter.thoughtIds) {
     const ref = thoughtRefs.get(id);
-    const chip = el('span', 'chron-chip thought');
-    chip.dataset['id'] = id;
-    // Image icons render via <img> (applyThoughtIcon) — the raw ref.icon of an
-    // image thought is a base64 data URI that must never land as chip text.
-    const icon = span('', 'chip-icon');
-    applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-    chip.append(icon, span(ref?.title ?? id, 'chip-title'), span('×', 'chip-x'));
+    // Чип — фабричное мини-облачко (значок с наследованием от типа, цвета,
+    // начертание); «×» — доменная кнопка удаления из отбора.
+    const chip = createThoughtCloud(ref ?? { id, title: id }, { profile: 'chip' });
+    chip.classList.add('chron-chip', 'thought');
+    chip.append(span('×', 'chip-x'));
     // Ctrl+hover on a filter chip previews the thought's permanent comment
     // (preview stage 3 — same as the table's thought chips).
     markThoughtCommentPreview(chip, id, ref?.title ?? id);

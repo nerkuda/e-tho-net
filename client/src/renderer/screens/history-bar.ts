@@ -30,34 +30,24 @@
  */
 
 import { setFocus } from '../app.js';
-import { button, div, clear, el, setTooltip, span } from '../lib/dom.js';
+import { button, div, clear, el, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+// Мини-облачка истории собирает общая фабрика; из неё же приходит канон
+// значка/стиля для строк дропдауна (applyThoughtIcon/applyCloudStyle —
+// единственное разрешённое место, где эти хелперы живут).
+import { applyCloudStyle, applyThoughtIcon, createThoughtCloud, resolveCloudStyle } from '../lib/thought-cloud.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
 import { HISTORY_BAR_MORE_RESERVE, planHistoryChips, type HistoryChipPlan } from '../lib/pure.js';
 
-/**
- * Max title length inside a history mini-cloud (the chip on the bar). When the
- * title is longer we append an ellipsis so the chip stays a single line.
- */
-const CHIP_TITLE_LIMIT = 24;
 /** How many entries the dropdown source returns at once. */
 const HISTORY_LIMIT = 50;
-
-/** Suffix appended when a title is truncated to {@link CHIP_TITLE_LIMIT}. */
-const ELLIPSIS = '…';
-
-/** Truncates `text` to `limit` characters; appends an ellipsis when cut. */
-function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit)}${ELLIPSIS}` : text;
-}
 
 let host: HTMLElement | null = null;
 /** Signature of the inputs the bar depends on — avoids redundant re-renders. */
@@ -309,41 +299,31 @@ async function resolveRefs(
   }
 }
 
-/** Builds a history mini-cloud chip. */
+/** Builds a history mini-cloud chip (icon + title, thought styles, menus). */
 function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined): HTMLElement {
-  const chip = div('history-cloud');
-  chip.dataset['id'] = id;
-  if (ref !== undefined) {
-    applyCloudStyle(chip, resolveCloudStyle(ref));
-  }
-  if (ref !== undefined && !ref.active) chip.classList.add('dim');
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) {
-    applyThoughtIcon(icon, ref);
-  } else {
-    icon.textContent = '💭';
-  }
-  const title = el('span', 'hc-title', clip(ref?.title ?? id, CHIP_TITLE_LIMIT));
-  setTooltip(chip, ref?.title ?? id);
-  chip.append(icon, title);
+  // Мини-облачко собирает общая фабрика (профиль `chip`): значок, цвета,
+  // начертание, бледность неактуальной/помеченной, метка корзины и обрезка
+  // названия раскладкой с подсказкой полного имени. Класс `history-cloud`
+  // сохраняет раскладку полосы (flex: 0 0 auto — чипы отчитываются о своей
+  // естественной ширине для planHistoryChips).
+  const chip = createThoughtCloud(
+    ref ?? { id, title: id },
+    {
+      profile: 'chip',
+      actions: {
+        onClick: (targetId) => openEntry(targetId),
+      },
+    },
+  );
+  chip.classList.add('history-cloud');
+  // Предел ширины чипа полосы (домен раскладки истории): фабричный класс
+  // `.prop-ref-cloud` объявляет `max-width: 100%` позже `.history-cloud` в
+  // styles.css, поэтому предел восстанавливаем инлайном (чистка дублей CSS —
+  // отдельная задача).
+  chip.style.maxWidth = '170px';
   // Stage 3 (same as the pinned bar's `buildChip`): no per-indicator icons on
   // a history mini-cloud — Ctrl+hover on the whole chip shows the thought's
   // permanent comment.
   markThoughtCommentPreview(chip, id, ref?.title ?? id);
-  // A thought in the trash (S13, §5a.2): the mini-cloud dims and carries the
-  // red trash glyph — the same marked reading as the canvas badge, scaled
-  // down to the strip.
-  if (ref?.marked_for_deletion === true) {
-    chip.classList.add('dim');
-    chip.append(buildTrashMark());
-  }
-  chip.addEventListener('click', () => openEntry(id));
   return chip;
-}
-
-/** Builds the small red trash glyph appended to marked history mini-clouds. */
-function buildTrashMark(): HTMLElement {
-  const mark = span('', 'list-trash-mark');
-  mark.append(svgIcon('trash', 11));
-  return mark;
 }

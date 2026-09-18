@@ -69,7 +69,9 @@ import { buildLinkValueEditor } from '../editor/properties.js';
 import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
-import { applyThoughtIcon } from '../canvas/canvas.js';
+// Иконки превью типов — каноном общей фабрики облачка (пилюля типа — не
+// мысль, но использует тот же единый канон).
+import { applyThoughtIcon } from '../lib/thought-cloud.js';
 import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';

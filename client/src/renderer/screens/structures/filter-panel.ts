@@ -29,7 +29,9 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
+// Чипы мыслей в панели отбора строит общая фабрика облачка; `applyCloudStyle`
+// стилизует подписи чипов типов связей (у типов связей нет своей фабрики).
+import { applyCloudStyle, createThoughtCloud } from '../../lib/thought-cloud.js';
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../../editor/properties.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
@@ -42,7 +44,7 @@ import {
   openThoughtTypesPicker as openThoughtTypesPickerLib,
   openTypePickerDialog,
 } from '../../lib/type-picker.js';
-import { orderedTypeRows, resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../../lib/type-tree.js';
+import { orderedTypeRows, resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
@@ -1339,29 +1341,33 @@ function renderPanel(): void {
 // ---------------------------------------------------------------------------
 
 /** Renders a comma-separated row of styled chips (or a placeholder). */
-function renderChips(
-  container: HTMLElement,
-  items: Array<{
-    key: string;
-    label: string;
-    icon: HTMLElement | null;
-    style: { fg: string | null; bg: string | null; bold: boolean; italic: boolean; underline: boolean; strike: boolean };
-  }>,
-): void {
+/** Renders ready-made chips separated by commas (empty → «не выбрано»). */
+function renderChips(container: HTMLElement, chips: HTMLElement[]): void {
   clear(container);
-  if (items.length === 0) {
+  if (chips.length === 0) {
     container.append(el('span', 'st-f-chip-empty', 'не выбрано'));
     return;
   }
-  items.forEach((item, index) => {
-    const chip = el('span', 'st-f-chip');
-    if (item.icon !== null) chip.append(item.icon);
-    const label = el('span', 'st-f-chip-label', item.label);
-    applyCloudStyle(label, item.style);
-    chip.append(label);
-    container.append(chip);
-    if (index < items.length - 1) container.append(el('span', 'st-f-chip-sep', ', '));
+  chips.forEach((chipEl, index) => {
+    container.append(chipEl);
+    if (index < chips.length - 1) container.append(el('span', 'st-f-chip-sep', ', '));
   });
+}
+
+/** Чип типа связи: подпись в цвете типа связи (иконок у типов связей нет). */
+function linkTypeChip(label: string, fg: string | null): HTMLElement {
+  const chip = el('span', 'st-f-chip');
+  const text = el('span', 'st-f-chip-label', label);
+  applyCloudStyle(text, {
+    fg,
+    bg: null,
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+  });
+  chip.append(text);
+  return chip;
 }
 
 /** Renders the «Родительские мысли» chips, resolving unknown titles lazily. */
@@ -1378,28 +1384,15 @@ function renderParentField(): void {
       })
       .catch(() => undefined);
   }
+  // Чипы мыслей — общей фабрикой облачка (профиль `chip`): значок, цвета,
+  // начертание, бледность и метка корзины — как в любом списке клиента.
   renderChips(
     parentFieldBox,
     state.parentIds.map((id) => {
       const ref = parentRefs.get(id);
-      const icon = div('st-f-chip-icon');
-      applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-      return {
-        key: id,
-        label: ref?.title ?? '…',
-        icon,
-        style: resolveCloudStyle(
-          ref ?? {
-            type_id: null,
-            fg_color: null,
-            bg_color: null,
-            font_bold: false,
-            font_italic: false,
-            font_underline: false,
-            font_strike: false,
-          },
-        ),
-      };
+      const chip = createThoughtCloud(ref ?? { id, title: '…' }, { profile: 'chip' });
+      chip.classList.add('st-f-chip');
+      return chip;
     }),
   );
 }
@@ -1425,29 +1418,16 @@ async function openParentPicker(): Promise<void> {
 /** Renders the «Типы мыслей» chips. */
 function renderThoughtTypeField(): void {
   if (typeFieldBox === null) return;
+  // Чипы типов — той же фабрикой облачка: она резолвит значок и стиль по
+  // `type_id` (своя иконка отсутствует — берётся типовая по цепочке предков).
   renderChips(
     typeFieldBox,
     state.typeIds.flatMap((id) => {
       const type = store.state.thoughtTypes.find((t) => t.id === id);
       if (type === undefined) return [];
-      const visual = resolveThoughtTypeVisual(store.state.thoughtTypes, type.id);
-      const icon = div('st-f-chip-icon');
-      applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: type.id });
-      return [
-        {
-          key: id,
-          label: type.name,
-          icon,
-          style: {
-            fg: visual.fg_color,
-            bg: visual.bg_color,
-            bold: visual.font_bold ?? false,
-            italic: visual.font_italic ?? false,
-            underline: visual.font_underline ?? false,
-            strike: visual.font_strike ?? false,
-          },
-        },
-      ];
+      const chip = createThoughtCloud({ id: type.id, title: type.name }, { profile: 'chip' });
+      chip.classList.add('st-f-chip');
+      return [chip];
     }),
   );
 }
@@ -1461,21 +1441,7 @@ function renderLinkTypeField(): void {
       const type = store.state.linkTypes.find((t) => t.id === id);
       if (type === undefined) return [];
       const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
-      return [
-        {
-          key: id,
-          label: type.name_forward,
-          icon: null,
-          style: {
-            fg: visual.color,
-            bg: null,
-            bold: false,
-            italic: false,
-            underline: false,
-            strike: false,
-          },
-        },
-      ];
+      return [linkTypeChip(type.name_forward, visual.color)];
     }),
   );
 }
@@ -1505,21 +1471,7 @@ function renderLinkFilterField(): void {
       const type = store.state.linkTypes.find((t) => t.id === id);
       if (type === undefined) return [];
       const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
-      return [
-        {
-          key: id,
-          label: type.name_forward,
-          icon: null,
-          style: {
-            fg: visual.color,
-            bg: null,
-            bold: false,
-            italic: false,
-            underline: false,
-            strike: false,
-          },
-        },
-      ];
+      return [linkTypeChip(type.name_forward, visual.color)];
     }),
   );
 }

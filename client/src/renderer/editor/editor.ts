@@ -35,12 +35,11 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import {
-  applyThoughtIcon,
-  invalidateIndicators,
-  invalidateRef,
-  resolveCloudStyle,
-} from '../canvas/canvas.js';
+import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
+// Канон значка и стиля мысли живёт в общей фабрике облачка: иконка-кнопка
+// заголовка редактора рисуется им же, а сид диалога настроек читает
+// разрешённый стиль через resolveCloudStyle (редактор полей, не представление).
+import { applyThoughtIcon, resolveCloudStyle } from '../lib/thought-cloud.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';

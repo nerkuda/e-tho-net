@@ -21,10 +21,12 @@
 import type { ThoughtRef } from '@etn/shared';
 
 import { setFocus } from '../app.js';
-import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+// Мини-облачка закреплённых собирает общая фабрика; из неё же приходит канон
+// значка для строк дропдауна (applyThoughtIcon).
+import { applyThoughtIcon, createThoughtCloud } from '../lib/thought-cloud.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
-import { button, clear, div, el, setTooltip, span } from '../lib/dom.js';
+import { button, clear, div, el, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
@@ -33,9 +35,6 @@ import { pinAt } from '../pinned/pins.js';
 import { store } from '../state.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
-
-/** Max title length inside a pinned chip (08-ui-spec.md §16). */
-const TITLE_LIMIT = 64;
 
 let host: HTMLElement | null = null;
 /** Signature of the inputs the panel depends on — avoids redundant re-renders. */
@@ -146,7 +145,10 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
   const items: MenuItem[] = restIds.map((id) => {
     const ref = refs.get(id);
     return {
-      label: `${ref?.icon ?? '💭'} ${ref?.title ?? id}`.slice(0, TITLE_LIMIT),
+      // Иконка — каноном фабрики (своя, иначе типовая по цепочке, иначе 💭);
+      // полное имя — в подписи, длину ограничивает раскладка строки меню.
+      icon: buildDropdownIcon(ref),
+      label: ref?.title ?? id,
       onClick: () => openPinnedEntry(id),
       dragId: id,
     };
@@ -271,43 +273,45 @@ async function resolveRefs(networkId: string, ids: string[]): Promise<Map<string
   return out;
 }
 
-/** Builds a pinned chip (icon + ≤64-char title, thought styles, menus, drag). */
-function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
-  const chip = div('pinned-chip');
-  chip.dataset['id'] = id;
-  if (ref !== undefined && !ref.active) chip.classList.add('dim');
-  if (ref !== undefined) {
-    const style = resolveCloudStyle(ref);
-    if (style.fg !== null) chip.style.color = style.fg;
-    if (style.bg !== null) chip.style.background = style.bg;
-    chip.classList.toggle('font-italic', style.italic);
-  }
+/** Builds the icon node shown in a pinned dropdown row (фабричный канон). */
+function buildDropdownIcon(ref: ThoughtRef | undefined): HTMLElement {
   const icon = el('span', 'mini-icon');
   if (ref !== undefined) {
     applyThoughtIcon(icon, ref);
   } else {
     icon.textContent = '💭';
   }
-  const title = el('span', 'pc-title', (ref?.title ?? id).slice(0, TITLE_LIMIT));
-  setTooltip(chip, ref?.title ?? id);
-  chip.append(icon, title);
+  return icon;
+}
+
+/** Builds a pinned chip (icon + title, thought styles, menus, drag). */
+function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
+  // Мини-облачко собирает общая фабрика (профиль `chip`): значок, цвета,
+  // начертание, бледность, метка корзины и обрезка названия раскладкой с
+  // подсказкой. Класс `pinned-chip` сохраняет раскладку панели и таргетинг
+  // дропа (resolvePinTarget ищет `.pinned-chip[data-id]`).
+  const chip = createThoughtCloud(
+    ref ?? { id, title: id },
+    {
+      profile: 'chip',
+      actions: {
+        onClick: (targetId) => openPinnedEntry(targetId),
+        onContextMenu: (event) => {
+          event.stopPropagation();
+          showThoughtContextMenu(event, { id, title: ref?.title ?? id, dir: 'siblings' });
+        },
+      },
+    },
+  );
+  chip.classList.add('pinned-chip');
+  // Предел ширины чипа панели (домен раскладки закреплённых): фабричный класс
+  // `.prop-ref-cloud` объявляет `max-width: 100%` позже `.pinned-chip` в
+  // styles.css, поэтому предел восстанавливаем инлайном (чистка дублей CSS —
+  // отдельная задача).
+  chip.style.maxWidth = '260px';
   // Stage 3: no per-indicator icons on a pinned chip — Ctrl+hover on the whole
   // chip shows the thought's permanent comment.
   markThoughtCommentPreview(chip, id, ref?.title ?? id);
-  // A thought in the trash (S13, §5a.2): the chip dims and carries the red
-  // trash glyph — the same marked reading as the canvas badge, chip-sized.
-  if (ref?.marked_for_deletion === true) {
-    chip.classList.add('dim');
-    const mark = span('', 'list-trash-mark');
-    mark.append(svgIcon('trash', 11));
-    chip.append(mark);
-  }
-  chip.addEventListener('click', () => openPinnedEntry(id));
-  chip.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    showThoughtContextMenu(event, { id, title: ref?.title ?? id, dir: 'siblings' });
-  });
   wireExternalDragSource(chip, id, 'pinned');
   return chip;
 }

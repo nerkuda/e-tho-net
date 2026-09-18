@@ -25,11 +25,12 @@ import {
 
 import {
   applyCanvasScaleVars,
-  applyCloudStyle,
-  applyThoughtIcon,
   queueIndicatorLoad,
-  resolveCloudStyle,
 } from '../../canvas/canvas.js';
+// Облачка дерева собирает общая фабрика (профиль `tree`): значок, цвета,
+// начертание, бледность и метка корзины; эллипсы и индикаторы дерево
+// добавляет само (домен структур — те же, что на холсте).
+import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { setFocus } from '../../app.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
@@ -867,9 +868,37 @@ function buildMoreButton(marker: MoreMarker, node: TreeRow): HTMLElement {
 /** Builds one thought cloud: same visual language as the canvas (§15.4). */
 function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   const ref = refs.get(row.thoughtId) ?? null;
-  const cloud = div('st-cloud cloud');
-  cloud.dataset['id'] = row.thoughtId;
-  if (ref !== null && !ref.active) cloud.classList.add('dim');
+  // Базовая часть облачка — общая фабрика (профиль `tree`): значок, цвета и
+  // начертание мысли, бледность неактуальной/помеченной, метка корзины и
+  // единые жесты. Дерево добавляет домен структур: эллипсы, индикаторы,
+  // клавиатуру и «открыть в редакторе» контекстом меню.
+  const cloud = createThoughtCloud(
+    ref ?? { id: row.thoughtId, title: '—' },
+    {
+      profile: 'tree',
+      actions: {
+        onClick: (id) => void openStructuresThought(id),
+        onCtrlClick: (id) => toggleSelection([id]),
+        onContextMenu: (event, id) => {
+          event.stopPropagation();
+          showThoughtContextMenu(
+            event,
+            { id, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
+            {
+              openHandler: (targetId) => void openStructuresThought(targetId),
+              findOnMapHandler: (targetId) => {
+                // «Найти на карте мыслей» (L23, §15.8): switch the view first so
+                // the map is visible while the focus response arrives.
+                setActiveView('map');
+                void setFocus(targetId);
+              },
+            },
+          );
+        },
+      },
+    },
+  );
+  cloud.classList.add('st-cloud');
   if (selection.has(row.thoughtId)) cloud.classList.add('selected');
   // Halo of the active thought (§15.7): the same accent ring around the cloud
   // as the canvas (§2.2.4) instead of the old full-width band. The "current
@@ -881,21 +910,6 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   if (currentThoughtId() === row.thoughtId) {
     cloud.classList.add('halo');
   }
-
-  applyCloudStyle(
-    cloud,
-    resolveCloudStyle(
-      ref ?? {
-        type_id: null,
-        fg_color: null,
-        bg_color: null,
-        font_bold: false,
-        font_italic: false,
-        font_underline: false,
-        font_strike: false,
-      },
-    ),
-  );
 
   // Ellipses (§15.5): filled when the thought has parents/children at all —
   // known from the hierarchy directions accumulated so far.
@@ -938,11 +952,6 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     ellipse.addEventListener('mouseleave', () => setLinksHoverThought(null));
   }
 
-  const iconBox = div('cloud-icon');
-  applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-  const title = el('div', 'cloud-title', ref?.title ?? '—');
-  setTooltip(title, ref?.title ?? '');
-
   // Indicator row identical to the canvas cloud (§15.4: 📝/📅/📎, patched
   // asynchronously via the shared indicator queue of canvas.ts).
   const ind = div('cloud-ind');
@@ -953,41 +962,19 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   markChronoPreview(chrono, 'thought', row.thoughtId, ref?.title ?? '—');
   markAttachmentsPreview(att, 'thought', row.thoughtId, ref?.title ?? '—');
   ind.append(perm, chrono, att);
+  // Индикаторы — под названием в колонке облачка (та же разметка, что на
+  // холсте: `.cloud-main > .cloud-title + .cloud-ind`).
+  const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
+  main?.append(ind);
 
-  const main = div('cloud-main');
-  main.append(title, ind);
-  cloud.append(topEllipse, iconBox, main, bottomEllipse);
+  // Порядок эллипсов — как на холсте: верхний перед значком, нижний в конце.
+  cloud.prepend(topEllipse);
+  cloud.append(bottomEllipse);
 
   // Click opens the editor without moving the canvas focus; Ctrl toggles the
-  // shared selection; right-click reuses the canvas context menu with the
-  // editor-opening variant of «Открыть редактор» (§15.8).
-  cloud.tabIndex = 0;
-  cloud.addEventListener('click', (event) => {
-    if (event.ctrlKey || event.metaKey) {
-      toggleSelection([row.thoughtId]);
-      return;
-    }
-    void openStructuresThought(row.thoughtId);
-  });
+  // shared selection (unit gestures already mounted by the factory).
   cloud.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void openStructuresThought(row.thoughtId);
-  });
-  cloud.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    showThoughtContextMenu(
-      event,
-      { id: row.thoughtId, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
-      {
-        openHandler: (id) => void openStructuresThought(id),
-        findOnMapHandler: (id) => {
-          // «Найти на карте мыслей» (L23, §15.8): switch the view first so the
-          // map is visible while the focus response arrives.
-          setActiveView('map');
-          void setFocus(id);
-        },
-      },
-    );
   });
   return cloud;
 }

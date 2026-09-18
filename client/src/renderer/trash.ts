@@ -23,12 +23,11 @@ import {
 } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
-import {
-  applyCloudStyle,
-  applyThoughtIcon,
-  invalidateRef,
-  resolveCloudStyle,
-} from './canvas/canvas.js';
+import { invalidateRef } from './canvas/canvas.js';
+// Мини-облачка строк группового удаления собирает общая фабрика (профиль
+// `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
+// со всеми остальными списками клиента.
+import { createThoughtCloud } from './lib/thought-cloud.js';
 import { reflectThoughtUpdate } from './editor/editor.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
@@ -37,7 +36,6 @@ import { patchFocusEdge, store } from './state.js';
 import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
 import { button, div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
-import { svgIcon } from './lib/icons.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 
@@ -422,31 +420,15 @@ export async function openThoughtGroupDeleteDialog(
 
   /**
    * Builds the mini-cloud cell: the thought's icon and title rendered with its
-   * real colors/fonts (the same `applyCloudStyle`/`applyThoughtIcon` pair the
-   * pinned/history chips use), dimmed and marked with a red trash glyph when
-   * the thought is already in the trash (§2.2 marks, mini version).
+   * real colors/fonts by the shared cloud factory, dimmed and marked with a
+   * red trash glyph when the thought is already in the trash (§2.2 marks, mini
+   * version).
    */
   const buildCloudCell = (id: string): HTMLElement => {
     const ref = refById.get(id);
-    const cloud = div('group-delete-cloud');
-    if (ref !== undefined) {
-      applyCloudStyle(cloud, resolveCloudStyle(ref));
-      if (!ref.active || ref.marked_for_deletion) cloud.classList.add('dim');
-    }
-    const icon = el('span', 'mini-icon');
-    if (ref !== undefined) {
-      applyThoughtIcon(icon, ref);
-    } else {
-      icon.textContent = '💭';
-    }
-    cloud.append(icon, span(ref?.title ?? id, 'group-delete-cloud-title'));
+    const cloud = createThoughtCloud(ref ?? { id, title: id }, { profile: 'chip' });
+    cloud.classList.add('group-delete-cloud');
     setTooltip(cloud, ref?.title ?? id);
-    if (ref?.marked_for_deletion === true) {
-      const mark = span('', 'list-trash-mark');
-      mark.append(svgIcon('trash', 13));
-      setTooltip(mark, 'Мысль уже находится в корзине');
-      cloud.append(mark);
-    }
     return cloud;
   };
 

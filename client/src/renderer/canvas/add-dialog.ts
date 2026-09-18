@@ -31,14 +31,11 @@
  */
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
-import {
-  applyThoughtIcon,
-  invalidateRef,
-  resolveCloudStyle,
-  setAddDialogOpener,
-} from '../canvas/canvas.js';
+import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
+// Строки кандидатов-дублей рисует общая фабрика облачка мысли.
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showDialog } from '../lib/dialog.js';
-import { applyFontFlags, button, div, el, errText, span } from '../lib/dom.js';
+import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
@@ -611,27 +608,17 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       if (list.length === 0) return;
       candidates.append(el('p', 'muted', 'Найденные мысли:'));
       for (const candidate of list) {
-        const row = div('dup-item');
-        row.tabIndex = 0;
-        // The candidate's own icon/style, else its type's defaults — the row
-        // looks like the thought's cloud, so equal titles are easy to tell apart.
-        const iconBox = span('', 'dup-icon');
-        applyThoughtIcon(iconBox, candidate);
-        const title = el('span', 'dup-title', candidate.title);
-        const style = resolveCloudStyle(candidate);
-        applyFontFlags(title, {
-          bold: style.bold,
-          italic: style.italic,
-          underline: style.underline,
-          strike: style.strike,
-        });
-        if (style.fg !== null) title.style.color = style.fg;
-        if (style.bg !== null) row.style.background = style.bg;
-        row.append(iconBox, title);
-        // The parent's title (first 60 chars) instead of the «использовать»
-        // button — the whole row is the pick target (08-ui-spec.md §4.2).
+        // Строка-облачко — общая фабрика (профиль `tree`): значок, цвета и
+        // начертание мысли; так равные имена легко отличить друг от друга.
+        // Жесты фабрики не подходят — строка это цель выбора, поэтому
+        // облачко строится чисто визуальным, а клик/клавиатуру вешает диалог.
+        const row = createThoughtCloud(candidate, { profile: 'tree' });
+        row.classList.add('dup-item');
+        // The parent's title instead of the «использовать» button — the whole
+        // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
+        // tooltip; the visible length is limited by layout.
         if (candidate.parent_title !== null) {
-          const parent = span(candidate.parent_title.slice(0, 60), 'dup-parent');
+          const parent = span(candidate.parent_title, 'dup-parent');
           parent.title = candidate.parent_title;
           row.append(parent);
         }

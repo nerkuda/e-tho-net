@@ -23,7 +23,9 @@
 import type { MentionHit, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
-import { applyCloudStyle, applyThoughtIcon, deferSingleClick, resolveCloudStyle } from '../canvas/canvas.js';
+// Облачка мыслей во вкладке «Связи» (эндпоинты и строки упоминаний) собирает
+// общая фабрика: значок, цвета, начертание, бледность и единые жесты.
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -153,55 +155,26 @@ function endpointBlock(label: string, ref: ThoughtRef): HTMLElement {
  * A thought cloud in the link «Мысли» tab — the same representation and
  * behaviour as a thought cloud anywhere else in the client (canvas,
  * structures): single click opens the thought in the editor without moving
- * the canvas focus (deferred via {@link deferSingleClick} so a double click
- * cancels it), double click focuses, Ctrl/Cmd+click toggles the shared
- * selection, Ctrl+hover previews the permanent comment, right-click opens the
- * thought context menu, Enter acts as a click. No indicator icons (📝/📅/📎) —
- * the comment opens with Ctrl+hover, like a pinned-thought chip.
+ * the canvas focus (deferred so a double click cancels it), double click
+ * focuses, Ctrl/Cmd+click toggles the shared selection, Ctrl+hover previews
+ * the permanent comment, right-click opens the thought context menu, Enter
+ * acts as a click. No indicator icons (📝/📅/📎) — the comment opens with
+ * Ctrl+hover, like a pinned-thought chip.
  */
 function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
-  const cloud = div('cloud');
-  cloud.dataset['id'] = ref.id;
-  cloud.tabIndex = 0;
-  applyCloudStyle(cloud, resolveCloudStyle(ref));
-  if (!ref.active) cloud.classList.add('dim');
-
-  const iconBox = div('cloud-icon');
-  applyThoughtIcon(iconBox, ref);
-  const title = div('cloud-title');
-  title.textContent = ref.title;
-  setTooltip(title, ref.title);
-  const main = div('cloud-main');
-  main.append(title);
-
-  cloud.append(iconBox, main);
+  const cloud = createThoughtCloud(ref, {
+    profile: 'tree',
+    actions: {
+      onClick: (id) => openThoughtInEditor(id),
+      onDoubleClick: (id) => void setFocus(id),
+      onCtrlClick: (id) => toggleSelection([id]),
+      onContextMenu: (event, id) => {
+        event.stopPropagation();
+        showThoughtContextMenu(event, { id, title: ref.title, dir: 'siblings' });
+      },
+    },
+  });
   markThoughtCommentPreview(cloud, ref.id, ref.title);
-
-  let pendingClick: { cancel: () => void } | null = null;
-  cloud.addEventListener('click', (event) => {
-    if (event.ctrlKey || event.metaKey) {
-      pendingClick?.cancel();
-      pendingClick = null;
-      toggleSelection([ref.id]);
-      return;
-    }
-    pendingClick?.cancel();
-    pendingClick = deferSingleClick(() => {
-      pendingClick = null;
-      openThoughtInEditor(ref.id);
-    });
-  });
-  cloud.addEventListener('dblclick', (event) => {
-    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    pendingClick?.cancel();
-    pendingClick = null;
-    void setFocus(ref.id);
-  });
-  cloud.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    showThoughtContextMenu(event, { id: ref.id, title: ref.title, dir: 'siblings' });
-  });
   cloud.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') openThoughtInEditor(ref.id);
   });
@@ -247,14 +220,23 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
       const item = div('mention-item');
       if (!hit.active) item.classList.add('dim');
       const ref = hit.owner_type === 'thought' ? refById.get(hit.owner_id) : undefined;
-      const icon = el('span', 'mini-icon');
-      if (ref !== undefined) {
-        applyCloudStyle(item, resolveCloudStyle(ref));
-        applyThoughtIcon(icon, { ...ref, id: hit.owner_id });
-      } else {
-        icon.textContent = hit.owner_type === 'thought' ? '💭' : '🔗';
-      }
-      const title = el('span', 'link-item-title', hit.title);
+      // Same chip pattern as `chronicle.ts`/`history-bar.ts`: the thought's
+      // icon, colours and font come from the shared cloud factory. For a
+      // deleted thought (ref missing) we still show the hit's title with the
+      // default icon, so the row is never blank. Links have no per-link
+      // visual — the «🔗» glyph.
+      const lead =
+        hit.owner_type === 'thought'
+          ? createThoughtCloud(
+              ref !== undefined
+                ? { ...ref, id: hit.owner_id, title: hit.title }
+                : { id: hit.owner_id, title: hit.title },
+              {
+                profile: 'chip',
+                actions: { onClick: () => void open(hit) },
+              },
+            )
+          : span('🔗');
       const snippet = el('div', 'muted mention-snippet');
       // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
       // из кеша (id не мелькает на экране), затем дорезолвиваем батчем.
@@ -262,7 +244,7 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
       void resolveWikiIdsInSnippet(hit.snippet, networkId).then((resolved) => {
         if (snippet.isConnected) renderHtml(snippet, resolved);
       });
-      item.append(icon, title, snippet);
+      item.append(lead, snippet);
       // Stage 3: the row has no per-indicator icons — Ctrl+hover shows the
       // owner's (thought or link) permanent comment.
       if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
@@ -338,27 +320,32 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       const item = div('mention-item');
       if (!hit.active) item.classList.add('dim');
       const ref = hit.owner_type === 'thought' ? refById.get(hit.owner_id) : undefined;
-      // Same chip pattern as `chronicle.ts`/`history-bar.ts`: icon first, then
-      // the styled title. For a deleted thought (ref missing) we still show
-      // the hit's title with the default icon, so the row is never blank.
-      const icon = el('span', 'mini-icon');
-      if (ref !== undefined) {
-        applyCloudStyle(item, resolveCloudStyle(ref));
-        applyThoughtIcon(icon, { ...ref, id: hit.owner_id });
-      } else {
-        icon.textContent = hit.owner_type === 'thought' ? '💭' : '🔗';
-      }
-      const title = el('span', 'link-item-title', hit.title);
+      // Same chip pattern as `chronicle.ts`/`history-bar.ts`: the thought's
+      // icon, colours and font come from the shared cloud factory. For a
+      // deleted thought (ref missing) we still show the hit's title with the
+      // default icon, so the row is never blank. Links have no per-link
+      // visual — the «🔗» glyph.
+      const lead =
+        hit.owner_type === 'thought'
+          ? createThoughtCloud(
+              ref !== undefined
+                ? { ...ref, id: hit.owner_id, title: hit.title }
+                : { id: hit.owner_id, title: hit.title },
+              {
+                profile: 'chip',
+                actions: { onClick: () => void open(hit) },
+              },
+            )
+          : span('🔗');
       const snippet = el('div', 'muted mention-snippet');
       // The snippet carries server-side <mark> highlights around matches —
       // like the search panel, render it as (escaped, trusted) HTML.
       renderHtml(snippet, hit.snippet);
-      item.append(icon, title, snippet);
+      item.append(lead, snippet);
       // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows
       // the owner's (thought or link) permanent comment.
       if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
       else markCommentPreview(item, 'link', hit.owner_id, hit.title);
-      item.addEventListener('click', () => void open(hit));
       box.append(item);
     }
   }

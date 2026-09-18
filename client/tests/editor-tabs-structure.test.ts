@@ -405,13 +405,9 @@ describe('вкладка «Мысли» редактора связи — обл
   it('облачко размечено и ведёт себя как облачко на холсте', () => {
     const src = readText(SRC.links);
     for (const anchor of [
-      "div('cloud')",
-      'applyCloudStyle(',
-      'resolveCloudStyle(',
-      'applyThoughtIcon(',
-      'setTooltip(',
+      'createThoughtCloud(',
+      "profile: 'tree'",
       'markThoughtCommentPreview(cloud',
-      'deferSingleClick(',
       'openThoughtInEditor(',
       'setFocus(',
       'toggleSelection(',
@@ -419,8 +415,12 @@ describe('вкладка «Мысли» редактора связи — обл
     ]) {
       assert.ok(src.includes(anchor), `cloud behaviour anchor missing: ${anchor}`);
     }
-    // Полное название в тултипе + бледность неактуальной мысли.
-    assert.ok(src.includes("classList.add('dim')"), 'inactive endpoint cloud is dimmed');
+    // Значок, цвета, бледность неактуальной и жесты рисует общая фабрика
+    // облачка (веха 2) — сборка облачка мимо неё запрещена.
+    assert.ok(
+      src.includes('createThoughtCloud(ref, {'),
+      'the endpoint cloud is built by the shared factory',
+    );
   });
 
   it('у облачков концов нет строки счётчиков 📝/📅/📎 (class cloud-ind)', () => {
