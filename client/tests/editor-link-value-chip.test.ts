@@ -295,7 +295,10 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     assert.deepEqual(saved, [null], 'corner «✕» clears all values (persists null)');
   });
 
-  it('chip label is clipped at 200 chars; the tooltip keeps the full title', async () => {
+  it('chip label is NOT clipped by character count; the tooltip keeps the full title', async () => {
+    // Обрезка названия — раскладкой (ADR «Обрезка текста — раскладкой, а не
+    // подсчётом символов»): в DOM лежит полное имя, видимая длина режется
+    // CSS-многоточием профиля `chip`, а полный текст — в подсказке.
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const longTitle = 'Д'.repeat(500);
@@ -310,9 +313,8 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
 
     const cloud = findAllClouds(editor)[0]!;
     const title = cloud.children.find((c) => c.className === 'prc-title')!;
-    assert.equal(title.textContent!.length, 201, 'label clipped to 200 chars + ellipsis');
-    assert.equal(title.textContent!.endsWith('…'), true, 'clipped label ends with …');
-    assert.equal(cloud.title, longTitle, 'tooltip carries the FULL title');
+    assert.equal(title.textContent, longTitle, 'label carries the FULL title (CSS clips it)');
+    assert.equal(title.title, longTitle, 'tooltip carries the FULL title');
   });
 
   it('setAndPersist re-resolves chip metadata so a freshly picked target shows its title, not the id', async () => {
@@ -514,8 +516,8 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
       .children.find((c) => c.className === 'prc-title');
     assert.equal(
       unknownTitle?.textContent,
-      'ta-unkno…',
-      'unknown title falls back to the truncated id before resolve',
+      'ta-unknown',
+      'unknown title falls back to the raw id before resolve (layout clips it visually)',
     );
   });
 

@@ -109,8 +109,8 @@ describe('меню облачка в редакторе — единый кон�
 
   it('внетиповое ребро («Свойства вне типа») зовёт тот же конструктор без «Убрать из значения»', () => {
     const src = readText(SRC.properties);
-    const helper = functionBody(src, 'const openReadonlyMenu = (): void => {', '\n    };');
-    assert.ok(helper.includes('void openThoughtCloudMenu('), 'delegates to the shared menu');
+    const helper = functionBody(src, 'async function openReadonlyChipMenu(');
+    assert.ok(helper.includes('openThoughtCloudMenu('), 'delegates to the shared menu');
     assert.ok(
       !helper.includes('extraItems'),
       'the edge of an outside-type property is not part of the value — nothing to remove',

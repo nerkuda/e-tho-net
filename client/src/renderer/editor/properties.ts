@@ -38,18 +38,16 @@ import {
 } from '../lib/dom.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
-import { svgIcon } from '../lib/icons.js';
 import { type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
-import {
-  applyCloudStyle,
-  applyThoughtIcon,
-  deferSingleClick,
-  resolveCloudStyle,
-} from '../canvas/canvas.js';
+// Мини-облачка целей строит общая фабрика (ADR «Облачко мысли собирает одна
+// фабрика DOM»): значок, цвета, начертание, бледность, метка корзины, обрезка
+// названия раскладкой и единые жесты приходят отсюда; локально остаются только
+// клавиатура чипа и доменные действия (контекстное меню значения, «✕»).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
 import { requireNetworkId } from '../app.js';
@@ -466,68 +464,45 @@ function buildOutsideReadonlyEdgeChip(
   refs: Map<string, ThoughtRef>,
 ): HTMLElement {
     const ref = refs.get(edge.target_id);
-    const fullTitle = edge.target_title ?? ref?.title ?? `${edge.target_id.slice(0, 8)}…`;
-    const known = fullTitle.length > TITLE_CLIP ? `${fullTitle.slice(0, TITLE_CLIP)}…` : fullTitle;
-    const chip = div('prop-ref-cloud');
-    chip.dataset['id'] = edge.target_id;
-    if (ref !== undefined) applyCloudStyle(chip, resolveCloudStyle(ref));
-    if (ref?.active === false || ref?.marked_for_deletion === true) {
-      chip.classList.add('dim');
-    }
-    const icon = el('span', 'mini-icon');
-    if (ref !== undefined) applyThoughtIcon(icon, ref);
-    else icon.textContent = '💭';
-    chip.append(icon, el('span', 'prc-title', known));
+    // Полное имя цели: свежая подпись ребра, иначе заголовок из кеша, иначе
+    // сырой id — видимую длину ограничивает раскладка фабричного чипа, а не
+    // подсчёт символов (ADR «Обрезка текста — раскладкой»).
+    const fullTitle = edge.target_title ?? ref?.title ?? edge.target_id;
+    // Мини-облачко собирает фабрика (профиль `chip` без кнопки удаления:
+    // рёбра управляются через свойства типа связи, а не из таблицы значений
+    // владельца, cab38479); ей же передаются единые жесты — одиночный клик
+    // (отложенный), двойной клик, Ctrl/Cmd+клик и контекстное меню.
+    const chip = createThoughtCloud(
+      ref ?? { id: edge.target_id, title: fullTitle },
+      {
+        profile: 'chip',
+        actions: {
+          onClick: (id) => openLinkRefInEditor(networkId, id),
+          onDoubleClick: (id) => focusLinkRef(networkId, id),
+          onCtrlClick: (id) => toggleSelection([id]),
+          onContextMenu: (event, id) => {
+            event?.stopPropagation?.();
+            void openReadonlyChipMenu({ networkId, id, fullTitle, ref, chip });
+          },
+          onTrashBadgeClick: (id) => {
+            void openTrashBadgeDialog(networkId, id, fullTitle);
+          },
+        },
+      },
+    );
     setTooltip(
       chip,
       `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
     );
     markThoughtCommentPreview(chip, edge.target_id, fullTitle);
-    chip.tabIndex = 0;
     chip.setAttribute('role', 'button');
-    chip.setAttribute('aria-label', known);
-    let pendingClick: { cancel: () => void } | null = null;
-    chip.addEventListener('click', (event) => {
-      event.preventDefault();
-      if (event.ctrlKey || event.metaKey) {
-        pendingClick?.cancel();
-        pendingClick = null;
-        toggleSelection([edge.target_id]);
-        return;
-      }
-      pendingClick?.cancel();
-      pendingClick = deferSingleClick(() => {
-        pendingClick = null;
-        openLinkRefInEditor(networkId, edge.target_id);
-      });
-    });
-    chip.addEventListener('dblclick', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      pendingClick?.cancel();
-      pendingClick = null;
-      focusLinkRef(networkId, edge.target_id);
-    });
-    const openReadonlyMenu = (): void => {
-      // Набор команд — общий с холстом; «Убрать из значения» у внетипового
-      // ребра нет: оно управляется через свойства типа связи, а не из
-      // таблицы значений владельца (cab38479).
-      void openThoughtCloudMenu({
-        networkId,
-        id: edge.target_id,
-        title: fullTitle,
-        trashed: ref?.marked_for_deletion === true,
-        anchor: chip,
-      });
-    };
-    chip.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      openReadonlyMenu();
-    });
+    chip.setAttribute('aria-label', fullTitle);
+    // Клавиатура — доменная часть чипа (фабрика даёт только мышь): Enter —
+    // открыть в редакторе, пробел — в фокус, Shift+F10/ContextMenu — меню.
     chip.addEventListener('keydown', (event) => {
       if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
         event.preventDefault();
-        openReadonlyMenu();
+        void openReadonlyChipMenu({ networkId, id: edge.target_id, fullTitle, ref, chip });
         return;
       }
       if (event.key === 'Enter') {
@@ -1418,13 +1393,6 @@ export function buildValueOptionsCaret(
 const RESOLVE_BATCH = 100;
 
 /**
- * Максимум символов заголовка в подписи чипа (приёмка пользователя 0.8.1):
- * длинные имена обрезаются с «…», полный текст — в tooltip и Ctrl-hover
- * предпросмотре.
- */
-const TITLE_CLIP = 200;
-
-/**
  * Дозаполняет кеш метаданных целей (значок, цвета, active, пометка) батч-резолвом
  * `etn.thoughts.resolve`. Подписи уже есть в рёбрах (`target_title`); этот
  * запрос нужен только для отрисовки мини-облачков. Неудача не фатальна —
@@ -1518,6 +1486,42 @@ async function openThoughtCloudMenu(opts: {
       ...(opts.extraItems !== undefined ? { extraItems: opts.extraItems } : {}),
     },
   );
+}
+
+/**
+ * Клик по метке корзины чипа — тот же двухфазный диалог
+ * «Удалить/Восстановить», что открывает бейдж корзины на холсте (S13).
+ * Импорт ленивый: trash.ts тянет editor/editor.js — статический импорт
+ * замкнул бы цикл (как и у остальных помощников этого файла).
+ */
+async function openTrashBadgeDialog(
+  networkId: string,
+  id: string,
+  title: string,
+): Promise<void> {
+  const { openThoughtDeleteDialog } = await import('../trash.js');
+  await openThoughtDeleteDialog(networkId, { id, title });
+}
+
+/**
+ * Контекстное меню read-only чипа внетипового ребра (cab38479): набор команд —
+ * общий с холстом; «Убрать из значения» у внетипового ребра нет — оно
+ * управляется через свойства типа связи, а не из таблицы значений владельца.
+ */
+async function openReadonlyChipMenu(opts: {
+  networkId: string;
+  id: string;
+  fullTitle: string;
+  ref: ThoughtRef | undefined;
+  chip: Element;
+}): Promise<void> {
+  await openThoughtCloudMenu({
+    networkId: opts.networkId,
+    id: opts.id,
+    title: opts.fullTitle,
+    trashed: opts.ref?.marked_for_deletion === true,
+    anchor: opts.chip,
+  });
 }
 
 /**
@@ -1669,64 +1673,14 @@ export function buildLinkValueEditor(opts: {
   /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1). */
   const buildCloud = (id: string, onRemove: () => void): HTMLElement => {
     const ref = refs.get(id);
-    // Полный заголовок — в tooltip и Ctrl-hover предпросмотре; подпись чипа
-    // обрезается до TITLE_CLIP символов, чтобы длинные имена не растягивали
-    // чип-поле в горизонтальную прокрутку (приёмка пользователя 0.8.1).
-    const fullTitle = ref?.title ?? labels.get(id) ?? `${id.slice(0, 8)}…`;
-    const known =
-      fullTitle.length > TITLE_CLIP ? `${fullTitle.slice(0, TITLE_CLIP)}…` : fullTitle;
-    const cloud = div('prop-ref-cloud');
-    cloud.dataset['id'] = id;
-    if (ref !== undefined) applyCloudStyle(cloud, resolveCloudStyle(ref));
-    if (ref?.active === false || ref?.marked_for_deletion === true) {
-      cloud.classList.add('dim');
-    }
-    const icon = el('span', 'mini-icon');
-    if (ref !== undefined) applyThoughtIcon(icon, ref);
-    else icon.textContent = '💭';
-    cloud.append(icon, el('span', 'prc-title', known));
-    setTooltip(cloud, fullTitle);
-    // Стандартное поведение чипов мыслей: Ctrl+hover — предпросмотр
-    // постоянного комментария цели, если он есть (как в истории, упоминаниях,
-    // мини-графе).
-    markThoughtCommentPreview(cloud, id, fullTitle);
-    // Мысль в корзине (S13, §5a.2): облачко бледное + красная метка корзины.
-    if (ref?.marked_for_deletion === true) {
-      const mark = span('', 'list-trash-mark');
-      mark.append(svgIcon('trash', 10));
-      cloud.append(mark);
-    }
-    cloud.tabIndex = 0;
-    cloud.setAttribute('role', 'button');
-    cloud.setAttribute('aria-label', known);
-    // Клики как на канвасе (08-ui-spec.md): Ctrl/Cmd+клик — добавить/убрать
-    // из панели выбранных; одиночный клик отложен на SINGLE_CLICK_DELAY_MS,
-    // чтобы двойной клик (в фокус) успевал до открытия редактора.
-    let pendingClick: { cancel: () => void } | null = null;
-    cloud.addEventListener('click', (event) => {
-      event.preventDefault();
-      if (event.ctrlKey || event.metaKey) {
-        pendingClick?.cancel();
-        pendingClick = null;
-        toggleSelection([id]);
-        return;
-      }
-      pendingClick?.cancel();
-      pendingClick = deferSingleClick(() => {
-        pendingClick = null;
-        openLinkRefInEditor(networkId, id);
-      });
-    });
-    cloud.addEventListener('dblclick', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      pendingClick?.cancel();
-      pendingClick = null;
-      focusLinkRef(networkId, id);
-    });
+    // Полное имя цели: заголовок из кеша, иначе подпись ребра, иначе сырой
+    // id. Видимую длину ограничивает раскладка чипа (профиль `chip` резервирует
+    // место под значок и «✕» — ADR «Обрезка текста — раскладкой, а не
+    // подсчётом символов»); полный текст — в обязательной подсказке чипа.
+    const fullTitle = ref?.title ?? labels.get(id) ?? id;
+    // Без владельца (дефолт свойства в редакторе типа/реестра) операций над
+    // ребром нет — набор живёт только в save (bb67e546).
     const openMenu = (): void => {
-      // Без владельца (дефолт свойства в редакторе типа/реестра) операций над
-      // ребром нет — набор живёт только в save (bb67e546).
       if (ownerType === undefined || ownerId === undefined) return;
       void showLinkChipMenu(
         networkId,
@@ -1738,10 +1692,39 @@ export function buildLinkValueEditor(opts: {
         cloud,
       );
     };
-    cloud.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      openMenu();
-    });
+    // Мини-облачко собирает общая фабрика: разметка, значок, цвета,
+    // начертание, бледность неактуальной, метка корзины, кнопка «✕» и единые
+    // жесты (одиночный клик отложен, чтобы двойной клик успевал отменить
+    // его, Ctrl/Cmd+клик — панель выбранных, контекстное меню — общее).
+    const cloud = createThoughtCloud(
+      ref ?? { id, title: fullTitle },
+      {
+        profile: 'chip',
+        actions: {
+          onClick: (targetId) => openLinkRefInEditor(networkId, targetId),
+          onDoubleClick: (targetId) => focusLinkRef(networkId, targetId),
+          onCtrlClick: (targetId) => toggleSelection([targetId]),
+          onContextMenu: (event) => {
+            event?.stopPropagation?.();
+            openMenu();
+          },
+          onTrashBadgeClick: () => {
+            void openTrashBadgeDialog(networkId, id, fullTitle);
+          },
+          onRemove,
+        },
+      },
+    );
+    // Стандартное поведение чипов мыслей: Ctrl+hover — предпросмотр
+    // постоянного комментария цели, если он есть (как в истории, упоминаниях,
+    // мини-графе). Полное имя — подсказкой на всём облачке (S-требование
+    // «обрезка по ширине + подсказка»).
+    markThoughtCommentPreview(cloud, id, fullTitle);
+    setTooltip(cloud, fullTitle);
+    cloud.setAttribute('role', 'button');
+    cloud.setAttribute('aria-label', fullTitle);
+    // Клавиатура — доменная часть чипа: Enter открывает мысль в редакторе,
+    // пробел ставит в фокус, Shift+F10/ContextMenu — общее меню мысли.
     cloud.addEventListener('keydown', (event) => {
       if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
         event.preventDefault();
@@ -1756,15 +1739,6 @@ export function buildLinkValueEditor(opts: {
         focusLinkRef(networkId, id);
       }
     });
-    // «✕» удаляет из значения, не открывая мысль (§6.3.1).
-    const removeBtn = el('button', 'st-f-clear-inline', '✕');
-    removeBtn.type = 'button';
-    removeBtn.title = 'Убрать из значения';
-    removeBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      onRemove();
-    });
-    cloud.append(removeBtn);
     return cloud;
   };
 

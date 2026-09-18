@@ -271,10 +271,13 @@ export interface ThoughtCloudInput {
   type_id?: string | null;
   fg_color?: string | null;
   bg_color?: string | null;
-  font_bold?: boolean;
-  font_italic?: boolean;
-  font_underline?: boolean;
-  font_strike?: boolean;
+  // `boolean | null`: поля `font_*` в DTO мысли (`ThoughtRef`/`Thought`)
+  // приходят именно так (`null` = «не задано»), и фабрика обещает принимать
+  // их напрямую; внутри `null` сворачивается в `?? false`.
+  font_bold?: boolean | null;
+  font_italic?: boolean | null;
+  font_underline?: boolean | null;
+  font_strike?: boolean | null;
   /** Актуальна ли мысль; `false` → бледность. */
   active?: boolean;
   /** Помечена на удаление → бледность + метка корзины. */
