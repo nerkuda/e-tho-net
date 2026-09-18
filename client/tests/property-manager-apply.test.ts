@@ -23,16 +23,20 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
-import type { LinkStyle } from '@etn/shared';
+import type { LinkStyle, LinkType } from '@etn/shared';
 
 import {
   buildDescriptionField,
   buildUpdateChanges,
+  defaultValueChanged,
+  scalarDefaultPayload,
   shouldSetLinkDefaultOverride,
+  syncLinkTypeParent,
   type PropertyDraft,
   type RegistryRow,
   type TypeRowDraft,
 } from '../src/renderer/screens/property-manager.js';
+import { store } from '../src/renderer/state.js';
 
 // ---------------------------------------------------------------------------
 // Фикстуры
@@ -247,5 +251,166 @@ describe('shouldSetLinkDefaultOverride — только для унаследо�
       shouldSetLinkDefaultOverride(makeRow({ id: null, definedOn: null })),
       false,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Находки вехи 0, закрытые в вехе 4 (задача 77e7cafd)
+// ---------------------------------------------------------------------------
+
+describe('scalarDefaultPayload — скалярный дефолт для override (2d4b43df)', () => {
+  it('строки, числа и булевы проходят; null — сброс', () => {
+    assert.equal(scalarDefaultPayload('Москва'), 'Москва');
+    assert.equal(scalarDefaultPayload(42), 42);
+    assert.equal(scalarDefaultPayload(false), false);
+    assert.equal(scalarDefaultPayload(null), null);
+  });
+
+  it('массивы, объекты и undefined — null (недопустимое значение)', () => {
+    assert.equal(scalarDefaultPayload(['a']), null);
+    assert.equal(scalarDefaultPayload({}), null);
+    assert.equal(scalarDefaultPayload(undefined), null);
+  });
+});
+
+describe('defaultValueChanged — override только при реальном изменении (2d4b43df)', () => {
+  it('изменённое значение — true', () => {
+    assert.equal(
+      defaultValueChanged(makeRow({ defaultValue: 'Москва', initialDefaultValue: null })),
+      true,
+    );
+    assert.equal(
+      defaultValueChanged(makeRow({ defaultValue: null, initialDefaultValue: 'Москва' })),
+      true,
+    );
+  });
+
+  it('неизменённое значение — false', () => {
+    assert.equal(
+      defaultValueChanged(makeRow({ defaultValue: 'Москва', initialDefaultValue: 'Москва' })),
+      false,
+    );
+    assert.equal(
+      defaultValueChanged(makeRow({ defaultValue: null, initialDefaultValue: null })),
+      false,
+    );
+  });
+
+  it('без снимка (строка добавлена вручную) — false', () => {
+    const row = makeRow({ defaultValue: 'Москва' });
+    assert.equal(row.initialDefaultValue, undefined, 'fixture has no snapshot');
+    assert.equal(defaultValueChanged(row), false);
+  });
+});
+
+describe('syncLinkTypeParent — родительский тип связи (d56c1ae4)', () => {
+  interface UpdateCall {
+    id: string;
+    input: unknown;
+    version: number;
+  }
+
+  /** Ставит мок etn.types с фиксацией PATCH-вызовов (Proxy читает window.etn). */
+  function installEtn(
+    calls: UpdateCall[],
+    extra: { getLinkType?: LinkType } = {},
+  ): void {
+    (globalThis as { window?: unknown }).window = {
+      etn: {
+        types: {
+          updateLinkType: async (
+            _nid: string,
+            id: string,
+            input: unknown,
+            version: number,
+          ) => {
+            calls.push({ id, input, version });
+            return {};
+          },
+          getLinkType: async () => {
+            if (extra.getLinkType !== undefined) return extra.getLinkType;
+            throw new Error('getLinkType не должен вызываться');
+          },
+        },
+      },
+    };
+  }
+
+  function makeLinkType(id: string, parentId: string | null, version: number): LinkType {
+    return {
+      id,
+      name_forward: 'состоит в',
+      name_reverse: 'включает',
+      parent_id: parentId,
+      is_root: false,
+      color: null,
+      style: null,
+      width: null,
+      description: null,
+      version,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      created_by: 'u1',
+    };
+  }
+
+  afterEach(() => {
+    store.update({ linkTypes: [] });
+    delete (globalThis as { window?: unknown }).window;
+  });
+
+  it('при изменении родителя шлёт PATCH /link-types/{id} с parent_id и версией из каталога', async () => {
+    const calls: UpdateCall[] = [];
+    installEtn(calls);
+    store.update({ linkTypes: [makeLinkType('lt-1', null, 3)] });
+    const draft = makeDraft({ valueType: 'link', parentLinkTypeId: 'lt-root' });
+    await syncLinkTypeParent(
+      'n1',
+      makeCurrent({ value_type: 'link', config: { direction: 'out', link_type_id: 'lt-1' } }),
+      draft,
+    );
+    assert.deepEqual(calls, [
+      { id: 'lt-1', input: { parent_id: 'lt-root' }, version: 3 },
+    ]);
+  });
+
+  it('родитель не менялся — PATCH не шлётся', async () => {
+    const calls: UpdateCall[] = [];
+    installEtn(calls);
+    store.update({ linkTypes: [makeLinkType('lt-1', 'lt-root', 3)] });
+    const draft = makeDraft({ valueType: 'link', parentLinkTypeId: 'lt-root' });
+    await syncLinkTypeParent(
+      'n1',
+      makeCurrent({ value_type: 'link', config: { direction: 'out', link_type_id: 'lt-1' } }),
+      draft,
+    );
+    assert.deepEqual(calls, []);
+  });
+
+  it('не свойство-связь или нет link_type_id — PATCH не шлётся', async () => {
+    const calls: UpdateCall[] = [];
+    installEtn(calls);
+    await syncLinkTypeParent('n1', makeCurrent(), makeDraft({ valueType: 'text' }));
+    await syncLinkTypeParent(
+      'n1',
+      makeCurrent({ value_type: 'link', config: { direction: 'out' } }),
+      makeDraft({ valueType: 'link' }),
+    );
+    assert.deepEqual(calls, []);
+  });
+
+  it('типа нет в каталоге — догрузка getLinkType, затем PATCH', async () => {
+    const calls: UpdateCall[] = [];
+    installEtn(calls, { getLinkType: makeLinkType('lt-9', null, 7) });
+    store.update({ linkTypes: [] });
+    const draft = makeDraft({ valueType: 'link', parentLinkTypeId: 'lt-root' });
+    await syncLinkTypeParent(
+      'n1',
+      makeCurrent({ value_type: 'link', config: { direction: 'out', link_type_id: 'lt-9' } }),
+      draft,
+    );
+    assert.deepEqual(calls, [
+      { id: 'lt-9', input: { parent_id: 'lt-root' }, version: 7 },
+    ]);
   });
 });

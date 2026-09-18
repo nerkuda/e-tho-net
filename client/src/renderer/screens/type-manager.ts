@@ -65,7 +65,7 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
-import { buildLinkValueEditor } from '../editor/properties.js';
+import { buildValueEditor } from '../editor/value-editor.js';
 import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
@@ -1988,9 +1988,10 @@ function formatDefault(value: unknown): string {
 
 /**
  * Builds an input for a "default value" field matching a value type, reading
- * its current value into `read()`. Link defaults are the unified target-set
- * chip field (bb67e546, инструкция a47947c8) — `linkContext` supplies the
- * network + definition it filters by. Thought-ref defaults are not supported —
+ * its current value into `read()`. Поле строит общий редактор значения
+ * `editor/value-editor.ts` (стандарт S2, задача 77e7cafd): вид значения,
+ * `config.multiple`, `config.options`; для связи — допустимые типы цели из
+ * определения (`linkContext.def`). Thought-ref defaults are not supported —
  * a default target makes no sense across thoughts. Shared with the inherited
  * default-override dialog (L21).
  */
@@ -2000,67 +2001,42 @@ function defaultInputFor(
   read: (value: unknown) => void,
   linkContext?: { networkId: string; def: EffectiveTypeProperty },
 ): HTMLElement {
-  switch (valueType) {
-    case 'text':
-    case 'url': {
-      const input = el('input', 'text-input');
-      input.type = 'text';
-      input.value = typeof current === 'string' ? current : '';
-      input.placeholder = valueType === 'url' ? 'https://… или путь к файлу' : 'текст по умолчанию';
-      input.addEventListener('change', () => read(input.value.trim() === '' ? null : input.value.trim()));
-      return input;
-    }
-    case 'number': {
-      const input = el('input', 'text-input');
-      input.type = 'number';
-      input.value = typeof current === 'number' ? String(current) : '';
-      input.addEventListener('change', () => {
-        read(input.value === '' ? null : Number(input.value));
-      });
-      return input;
-    }
-    case 'date': {
-      const input = el('input', 'text-input');
-      input.type = 'date';
-      input.value = typeof current === 'string' ? current : '';
-      input.addEventListener('change', () => read(input.value === '' ? null : input.value));
-      return input;
-    }
-    case 'bool': {
-      const input = el('input');
-      input.type = 'checkbox';
-      input.checked = current === true;
-      input.addEventListener('change', () => read(input.checked));
-      return input;
-    }
-    case 'link': {
-      // Дефолт свойства-связи — набор целей (bb67e546): унифицированное
-      // чип-поле из редактора свойств (инструкция a47947c8) — живой поиск,
-      // мини-облачка, пикер «выбрать». Каждый чип-набор сразу читается в
-      // `value`, «Применить» отправляет его на сервер.
-      if (linkContext === undefined) return span('не задаётся', 'muted');
-      const ids = Array.isArray(current) ? (current as string[]) : [];
-      return buildLinkValueEditor({
-        networkId: linkContext.networkId,
-        definition: linkContext.def,
-        values: ids.map((target_id) => ({
-          link_id: '',
-          target_id,
-          target_title: null,
-          target_type_id: null,
-          comment: null,
-        })),
-        save: async (next) => {
-          read(next);
-          return true;
-        },
-      });
-    }
-    case 'thought_ref':
-      // Legacy (миграция 040): создание свойств этого типа отвергается
-      // рантайм-guard'ом; редактор default-значения недостижим.
-      return span('упразднено', 'muted');
+  // Дефолт свойства-связи — набор целей (bb67e546): чип-поле общего
+  // редактора. Без определения (нет сети/типа) связь не задаётся.
+  if (valueType === 'link' && linkContext === undefined) {
+    return span('не задаётся', 'muted');
   }
+  const definition: EffectiveTypeProperty =
+    valueType === 'link'
+      ? linkContext!.def
+      : {
+          id: '',
+          property_id: '',
+          owner_type: 'thought_type',
+          owner_id: '',
+          key: 'default',
+          value_type: valueType,
+          config: null,
+          required: false,
+          position: 0,
+          description: null,
+          inherited: false,
+          defined_on: '',
+          defined_on_name: '',
+          default_value: null,
+          overridden_here: false,
+          description_overridden: false,
+        };
+  return buildValueEditor({
+    networkId: linkContext?.networkId ?? '',
+    definition,
+    value: current,
+    save: async (next) => {
+      read(next);
+      return true;
+    },
+    commitOn: 'change',
+  });
 }
 
 /**
