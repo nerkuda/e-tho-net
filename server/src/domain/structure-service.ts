@@ -717,6 +717,10 @@ function sortClause(
       return { sortSql: `t.title COLLATE NOCASE ${dirKeyword}`, joinSql: '', joinParams: [] };
     case 'created':
       return { sortSql: `t.created_at ${dirKeyword}`, joinSql: '', joinParams: [] };
+    case 'updated':
+      // «По дате изменения» (ошибка 4dd14aa3, 0.8.2): ISO-8601 текстовая
+      // колонка — лексикографический порядок совпадает с хронологическим.
+      return { sortSql: `t.updated_at ${dirKeyword}`, joinSql: '', joinParams: [] };
     case 'viewed':
       return {
         sortSql: `(tv.last_viewed_at IS NULL) ${nullsLast}, tv.last_viewed_at ${dirKeyword}`,

@@ -117,10 +117,11 @@ export type SortOrder = (typeof SORT_ORDERS)[number];
 
 /**
  * Sort kinds available to the structures query (03-server-api.md §6.10).
- * A subset of {@link SORT_KINDS}: `manual` has no global meaning outside a
- * focus zone, so it is not accepted.
+ * `manual` has no global meaning outside a focus zone, so it is not
+ * accepted; `updated` («по дате изменения», `thoughts.updated_at`)
+ * добавлен в 0.8.2 (ошибка 4dd14aa3).
  */
-export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed'] as const;
+export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed', 'updated'] as const;
 export type StructureSort = (typeof STRUCTURE_SORTS)[number];
 
 /**

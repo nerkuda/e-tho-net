@@ -144,6 +144,70 @@ async function createTypedChildWithValue(
   return id;
 }
 
+/**
+ * Набор для проверки сортировок run (ошибка 4dd14aa3): контекстная мысль +
+ * три типизированные мысли. Названия даны НЕ в алфавитном порядке
+ * («Яблоко»/«Арбуз»/«Киви»), чтобы порядок «по названию» не совпадал с
+ * «по дате создания» случайно.
+ */
+async function buildSortFixture(ctx: RestTestContext): Promise<{
+  typeId: string;
+  contextThought: string;
+  a: string;
+  b: string;
+  c: string;
+}> {
+  const h = authHeaders(ctx);
+  const typeId = await createThoughtType(ctx, 'task');
+  const typed = async (title: string): Promise<string> => {
+    const id = await createChild(ctx, title);
+    const res = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}`,
+      headers: h,
+      payload: { type_id: typeId },
+    });
+    assert.equal(res.statusCode, 200, res.body?.toString());
+    return id;
+  };
+  const a = await typed('Яблоко');
+  const b = await typed('Арбуз');
+  const c = await typed('Киви');
+  const contextThought = await typed('Контекст');
+  return { typeId, contextThought, a, b, c };
+}
+
+/** Явно задать `created_at`/`updated_at` мысли (детерминированные порядки). */
+function setTimestamps(
+  ctx: RestTestContext,
+  thoughtId: string,
+  created: string,
+  updated: string,
+): void {
+  ctx.ndb
+    .prepare('UPDATE thoughts SET created_at = ?, updated_at = ? WHERE id = ?')
+    .run(created, updated, thoughtId);
+}
+
+/** Создать отбор с заданным определением и вернуть `viewId`. */
+async function createSortView(
+  ctx: RestTestContext,
+  typeId: string,
+  name: string,
+  sort: string,
+  order: string,
+): Promise<string> {
+  const definition = JSON.stringify({ type_ids: [typeId], sort, order });
+  const res = await ctx.app.inject({
+    method: 'POST',
+    url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+    headers: authHeaders(ctx),
+    payload: { name, definition },
+  });
+  assert.equal(res.statusCode, 201, res.body?.toString());
+  return (res.json().data as ViewDto).id;
+}
+
 interface ViewDto {
   id: string;
   thought_type_id: string;
@@ -778,6 +842,135 @@ describe(
             payload: {},
           });
           assert.equal(res.statusCode, 200);
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+    });
+
+    describe('сортировки в run (ошибка 4dd14aa3)', () => {
+      it('created: страница отсортирована SQL-движком по created_at; дефолт — из определения отбора', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const { typeId, contextThought, a, b, c } = await buildSortFixture(ctx);
+          // created_at: b < c < a (не алфавитный порядок).
+          setTimestamps(ctx, a, '2024-03-01T00:00:00.000Z', '2024-06-01T00:00:00.000Z');
+          setTimestamps(ctx, b, '2024-01-01T00:00:00.000Z', '2024-06-03T00:00:00.000Z');
+          setTimestamps(ctx, c, '2024-02-01T00:00:00.000Z', '2024-06-02T00:00:00.000Z');
+
+          // Определение отбора несёт sort: created. Тело run пустое — сервис
+          // обязан взять сохранённую сортировку (контракт 95273103), а не
+          // зашитый alpha (ошибка 4dd14aa3).
+          await createSortView(ctx, typeId, 'Созданные', 'created', 'asc');
+          const runUrl = `/api/v1/networks/${ctx.networkId}/thoughts/${contextThought}/views/${encodeURIComponent('Созданные')}/run`;
+          const run = await ctx.app.inject({ method: 'POST', url: runUrl, headers: h, payload: {} });
+          assert.equal(run.statusCode, 200, run.body?.toString());
+          const body = run.json() as {
+            data: Array<{ id: string }>;
+            meta: { total: number; sort: string; order: string; unresolved?: unknown[] };
+          };
+          assert.deepEqual(body.meta.unresolved ?? [], []);
+          assert.equal(body.meta.total, 3);
+          assert.equal(body.meta.sort, 'created');
+          assert.equal(body.meta.order, 'asc');
+          // Контекстная мысль исключена; порядок — по created_at.
+          assert.deepEqual(body.data.map((d) => d.id), [b, c, a]);
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      it('created: тело run переопределяет сортировку определения (order desc)', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const { typeId, contextThought, a, b, c } = await buildSortFixture(ctx);
+          setTimestamps(ctx, a, '2024-03-01T00:00:00.000Z', '2024-06-01T00:00:00.000Z');
+          setTimestamps(ctx, b, '2024-01-01T00:00:00.000Z', '2024-06-03T00:00:00.000Z');
+          setTimestamps(ctx, c, '2024-02-01T00:00:00.000Z', '2024-06-02T00:00:00.000Z');
+
+          await createSortView(ctx, typeId, 'Созданные', 'created', 'asc');
+          const runUrl = `/api/v1/networks/${ctx.networkId}/thoughts/${contextThought}/views/${encodeURIComponent('Созданные')}/run`;
+          const run = await ctx.app.inject({
+            method: 'POST',
+            url: runUrl,
+            headers: h,
+            payload: { sort: 'created', order: 'desc' },
+          });
+          assert.equal(run.statusCode, 200, run.body?.toString());
+          const body = run.json() as {
+            data: Array<{ id: string }>;
+            meta: { sort: string; order: string };
+          };
+          assert.equal(body.meta.sort, 'created');
+          assert.equal(body.meta.order, 'desc');
+          assert.deepEqual(body.data.map((d) => d.id), [a, c, b]);
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      it('viewed: по thought_views.last_viewed_at текущего пользователя, непросмотренные — в конце', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const { typeId, contextThought, a, b, c } = await buildSortFixture(ctx);
+          await createSortView(ctx, typeId, 'Просмотренные', 'viewed', 'asc');
+
+          // Просмотры: b — самый ранний, a — поздний, c — не просмотрена
+          // вовсе (нет строки thought_views → NULL в конец при asc).
+          const ins = ctx.ndb.prepare(
+            'INSERT INTO thought_views (user_id, thought_id, last_viewed_at) VALUES (?, ?, ?)',
+          );
+          ins.run(ctx.adminId, b, '2024-05-01T00:00:00.000Z');
+          ins.run(ctx.adminId, a, '2024-05-03T00:00:00.000Z');
+
+          const runUrl = `/api/v1/networks/${ctx.networkId}/thoughts/${contextThought}/views/${encodeURIComponent('Просмотренные')}/run`;
+          const run = await ctx.app.inject({ method: 'POST', url: runUrl, headers: h, payload: {} });
+          assert.equal(run.statusCode, 200, run.body?.toString());
+          const body = run.json() as {
+            data: Array<{ id: string }>;
+            meta: { total: number; sort: string; unresolved?: unknown[] };
+          };
+          assert.deepEqual(body.meta.unresolved ?? [], []);
+          assert.equal(body.meta.total, 3);
+          assert.equal(body.meta.sort, 'viewed');
+          assert.deepEqual(body.data.map((d) => d.id), [b, a, c]);
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      it('updated: принимается сервером и сортирует по updated_at desc', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const { typeId, contextThought, a, b, c } = await buildSortFixture(ctx);
+          // updated_at: b > c > a.
+          setTimestamps(ctx, a, '2024-01-01T00:00:00.000Z', '2024-06-01T00:00:00.000Z');
+          setTimestamps(ctx, b, '2024-02-01T00:00:00.000Z', '2024-06-03T00:00:00.000Z');
+          setTimestamps(ctx, c, '2024-03-01T00:00:00.000Z', '2024-06-02T00:00:00.000Z');
+
+          await createSortView(ctx, typeId, 'Изменённые', 'alpha', 'asc');
+          const runUrl = `/api/v1/networks/${ctx.networkId}/thoughts/${contextThought}/views/${encodeURIComponent('Изменённые')}/run`;
+          // Прежде `updated` отвергался с 400 «Недопустимый sort»; теперь —
+          // валидное значение единого набора.
+          const run = await ctx.app.inject({
+            method: 'POST',
+            url: runUrl,
+            headers: h,
+            payload: { sort: 'updated', order: 'desc' },
+          });
+          assert.equal(run.statusCode, 200, run.body?.toString());
+          const body = run.json() as {
+            data: Array<{ id: string }>;
+            meta: { total: number; sort: string; order: string };
+          };
+          assert.equal(body.meta.total, 3);
+          assert.equal(body.meta.sort, 'updated');
+          assert.equal(body.meta.order, 'desc');
+          assert.deepEqual(body.data.map((d) => d.id), [b, c, a]);
         } finally {
           await closeRestContext(ctx);
         }

@@ -37,9 +37,13 @@
 
 import {
   EtnError,
+  SORT_ORDERS,
+  STRUCTURE_SORTS,
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
   type EffectiveThoughtTypeView,
+  type SortOrder,
+  type StructureSort,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
@@ -627,6 +631,29 @@ export interface RunViewResult {
   /** `[]` — все токены разрешены, иначе условие с токеном не применилось,
    *  и движок отбора возвращает пустую страницу с пояснением. */
   unresolved: TokenIssue[];
+  /** Эффективная сортировка страницы: из тела запроса или из определения
+   *  отбора (ошибка 4dd14aa3 — исполняется SQL-движком, а не JS). */
+  sort: StructureSort;
+  /** Эффективное направление сортировки (см. {@link RunViewResult.sort}). */
+  order: SortOrder;
+}
+
+/**
+ * Параметры страницы исполнения отбора (ошибка 4dd14aa3, 0.8.2). Все поля
+ * необязательны: не переданное значение берётся из определения отбора
+ * (`sort`/`order`, сохраняемые клиентом в `definition`), иначе — дефолт
+ * `alpha asc` с лимитом 100. Сортировка и пагинация исполняются SQL-движком
+ * (`queryThoughts`), а не JS-пересортировкой страницы.
+ */
+export interface RunViewQueryOptions {
+  /** Сортировка страницы — переопределяет сохранённую в определении. */
+  sort?: StructureSort;
+  /** Направление сортировки — переопределяет сохранённое в определении. */
+  order?: SortOrder;
+  /** Лимит страницы (дефолт 100, потолок — `queryThoughts`). */
+  limit?: number;
+  /** Смещение пагинации (дефолт 0). */
+  offset?: number;
 }
 
 /**
@@ -696,6 +723,7 @@ export function runViewForThought(
   thoughtId: string,
   userId: string,
   requestId?: string,
+  options?: RunViewQueryOptions,
 ): RunViewResult {
   const thought = getThought(ndb, thoughtId);
   if (thought === null) {
@@ -710,6 +738,20 @@ export function runViewForThought(
   // Повторная защита: даже если по дороге кто-то подменил definition в БД,
   // здесь отбор не выполнится с невалидными токенами — выбросим 422.
   validateDefinitionForTokens(parsed, undefined, requestId);
+
+  // Сортировка/направление: тело запроса переопределяет сохранённые в
+  // определении отбора (контракт 95273103 «sort/order в теле переопределяют
+  // сортировку, сохранённую в отборе»). Значение из определения проходит
+  // ту же валидацию по единому набору, что и тело: недопустимое (легаси или
+  // опечатка) молча не игнорируется в пользу тишины — деградируем к дефолту
+  // `alpha asc`, как и `parseStructureFilter` для прочих неизвестных полей.
+  // Ошибка 4dd14aa3: прежде сортировка зашивалась в `alpha` здесь и
+  // «исполнялась» JS-сравнением полей, которых нет в ThoughtRef, — теперь
+  // её исполняет SQL-движок.
+  const sort = options?.sort ?? readSavedSort(parsed);
+  const order = options?.order ?? readSavedOrder(parsed);
+  const limit = options?.limit ?? 100;
+  const offset = options?.offset ?? 0;
 
   const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
   const ctx: ResolveContext = buildResolveContext(
@@ -733,7 +775,14 @@ export function runViewForThought(
   const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
 
   if (resolved.unresolved.length > 0) {
-    return { items: [], total: 0, directions: {}, unresolved: resolved.unresolved };
+    return {
+      items: [],
+      total: 0,
+      directions: {},
+      unresolved: resolved.unresolved,
+      sort,
+      order,
+    };
   }
 
   // Парсер ожидает именно `Record<string, unknown>` (это `body` в REST).
@@ -742,10 +791,10 @@ export function runViewForThought(
   const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
   const query: Parameters<typeof queryThoughts>[2] = {
     ...filter,
-    sort: 'alpha',
-    order: 'asc',
-    limit: 100,
-    offset: 0,
+    sort,
+    order,
+    limit,
+    offset,
   };
   const result = queryThoughts(ndb, userId, query, requestId);
   // Исключаем саму контекстную мысль из результата: «отбор относительно
@@ -759,7 +808,30 @@ export function runViewForThought(
     total,
     directions: result.directions,
     unresolved: [],
+    sort,
+    order,
   };
+}
+
+/**
+ * Сохранённая в определении отбора сортировка (клиент кладёт `sort`/`order`
+ * в `definition` всегда — `buildWireFilter`). Валидация по единому набору
+ * {@link STRUCTURE_SORTS}; значение вне набора (легаси/опечатка) → дефолт
+ * `alpha` — как движок отбора трактует прочие неизвестные поля.
+ */
+function readSavedSort(definition: Record<string, unknown>): StructureSort {
+  const raw = definition['sort'];
+  return typeof raw === 'string' && (STRUCTURE_SORTS as readonly string[]).includes(raw)
+    ? (raw as StructureSort)
+    : 'alpha';
+}
+
+/** Сохранённое в определении направление сортировки (см. {@link readSavedSort}). */
+function readSavedOrder(definition: Record<string, unknown>): SortOrder {
+  const raw = definition['order'];
+  return typeof raw === 'string' && (SORT_ORDERS as readonly string[]).includes(raw)
+    ? (raw as SortOrder)
+    : 'asc';
 }
 
 /**

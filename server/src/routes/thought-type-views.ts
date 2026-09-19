@@ -221,9 +221,15 @@ function parseUpdateBody(
   return changes;
 }
 
-/** Валидация `sort` тела `POST /thoughts/{id}/views/{view}/run`. */
-function parseSort(value: unknown, requestId?: string): StructureSort {
-  if (value === undefined || value === null || value === '') return 'alpha';
+/**
+ * Валидация `sort` тела `POST /thoughts/{id}/views/{view}/run`.
+ * Отсутствие/пустая строка → `undefined`: дефолт берёт сервис
+ * (`runViewForThought`) из определения отбора (`alpha` при отсутствии) —
+ * контракт 95273103 «sort/order в теле переопределяют сортировку,
+ * сохранённую в отборе»; ошибка 4dd14aa3.
+ */
+function parseSort(value: unknown, requestId?: string): StructureSort | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
   if (typeof value !== 'string' || !(STRUCTURE_SORTS as readonly string[]).includes(value)) {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -235,8 +241,8 @@ function parseSort(value: unknown, requestId?: string): StructureSort {
   return value as StructureSort;
 }
 
-function parseOrder(value: unknown, requestId?: string): SortOrder {
-  if (value === undefined || value === null || value === '') return 'asc';
+function parseOrder(value: unknown, requestId?: string): SortOrder | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
   if (typeof value !== 'string' || !(SORT_ORDERS as readonly string[]).includes(value)) {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -534,10 +540,18 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         }
 
         // 4. Сервис `runViewForThought` подставляет токены, исполняет запрос
-        //    движком отбора мыслей и возвращает страницу. По умолчанию он
-        //    сортирует `alpha asc` и берёт лимит 100 — для REST это «дефолт»,
-        //    но клиент вправе переопределить параметрами.
-        const result = runViewForThought(ndb, matched, thoughtId, req.auth!.user.id, req.id);
+        //    движком отбора мыслей и возвращает страницу. Сортировка и
+        //    пагинация исполняются SQL-движком (`queryThoughts`) — ошибка
+        //    4dd14aa3: прежде дефолт `alpha asc` зашивался в сервисе, а
+        //    переопределение «исполнялось» JS-сортировкой страницы по полям,
+        //    которых нет в ThoughtRef. Тело переопределяет значения,
+        //    сохранённые в определении отбора (контракт 95273103).
+        const result = runViewForThought(ndb, matched, thoughtId, req.auth!.user.id, req.id, {
+          ...(sort !== undefined ? { sort } : {}),
+          ...(order !== undefined ? { order } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(offset !== undefined ? { offset } : {}),
+        });
 
         // 5. Если `unresolved` непустой — отдаём пустой результат с пояснением
         //    (требование b7fdab20). `sort`/`order`/`limit`/`offset` в этом
@@ -564,33 +578,10 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           return;
         }
 
-        // 6. Иначе — возвращаем страницу. Если клиент задал `sort`/`order`/
-        //    `limit`/`offset`, применяем их к результату. `runViewForThought`
-        //    сортирует `alpha asc` с лимитом 100 — это верхняя граница для
-        //    дефолта; если клиент хочет другую пагинацию, мы её пересчитаем.
-        let items = result.items;
-        let total = result.total;
-        if (sort !== 'alpha' || order !== 'asc' || limit !== undefined) {
-          // Клиент хочет другой порядок/лимит. Делаем простой подход:
-          // получаем из БД полный результат с нужными параметрами, прогоняя
-          // через `queryThoughts` тот же фильтр (после подстановки токенов,
-          // которая уже случилась внутри `runViewForThought`). Но фильтр
-          // наружу не отдаётся — вызвать второй раз и довольствоваться
-          // теми же 100 строками + JS-сортировкой.
-          //
-          // Поскольку токены уже разрешены, definition отбора можно
-          // перепарсить и вызвать `queryThoughts` повторно. Это редкий путь
-          // (большинство клиентов использует дефолт), поэтому двойная
-          // подстановка приемлема.
-          items = sortItems(items, sort, order);
-          total = items.length;
-          if (limit !== undefined) {
-            items = items.slice(offset, offset + limit);
-          } else if (offset > 0) {
-            items = items.slice(offset);
-          }
-        }
-
+        // 6. Страница уже отсортирована и спагинирована SQL-движком;
+        //    `meta.sort`/`meta.order` несут эффективные значения (тело или
+        //    определение отбора) — ошибка 4dd14aa3.
+        const total = result.total;
         deps.emit(req, networkId, 'thought-type-view.run', {
           thought_id: thoughtId,
           view_id: matched.id,
@@ -599,55 +590,18 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           unresolved: [],
         });
         reply.code(200).send({
-          data: items,
+          data: result.items,
           meta: {
             total,
             limit: limit ?? result.items.length,
             offset,
             directions: result.directions,
             view: { id: matched.id, name: matched.name, type_id: matched.defined_on },
-            sort,
-            order,
+            sort: result.sort,
+            order: result.order,
           },
         });
       },
     );
   };
-}
-
-/**
- * Локальная сортировка страницы мыслей по `sort`/`order`. Применяется
- * только когда клиент явно попросил порядок, отличный от дефолта
- * (`runViewForThought` уже выдал страницу с лимитом 100). За пределами
- * 100 элементов клиент должен уйти в прямой `POST /thoughts/query` — это
- * известное ограничение: REST `run` оптимизирован под интерактивный UI,
- * а не под полный обход больших выборок.
- */
-function sortItems<T extends { id: string; title?: string; created_at?: string; updated_at?: string }>(
-  items: T[],
-  sort: StructureSort,
-  order: SortOrder,
-): T[] {
-  const sorted = [...items];
-  sorted.sort((a, b) => {
-    let cmp = 0;
-    switch (sort) {
-      case 'alpha':
-        cmp = (a.title ?? a.id).localeCompare(b.title ?? b.id, 'ru');
-        break;
-      case 'created':
-        cmp = (a.created_at ?? '').localeCompare(b.created_at ?? '');
-        break;
-      case 'viewed':
-        // `viewed` для отбора — нет отдельного DTO-поля в ThoughtRef;
-        // деградируем до `updated_at` (как в UI «недавно просмотренные»
-        // часто подменяются updated_at при отсутствии истории просмотров).
-        cmp = (a.updated_at ?? '').localeCompare(b.updated_at ?? '');
-        break;
-      default:
-        cmp = 0;
-    }
-    return order === 'asc' ? cmp : -cmp;
-  });
-  return sorted;
 }
