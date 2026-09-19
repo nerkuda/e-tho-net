@@ -603,8 +603,11 @@ textarea {
 }
 
 .tab {
-  --tab-w: 180px;
-  flex: 0 0 var(--tab-w);
+  /* Ширина — только из раскладки: `recomputeOverflow` (режим fixed) ставит
+     `style.width` от 180px до 120px. CSS ширину не фиксирует — числовой
+     `flex-basis` перебивал inline-ширину, сжатие не работало и кнопки
+     уезжали под `overflow: hidden` полосы (ошибка 1786ff94). */
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
