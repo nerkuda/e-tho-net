@@ -20,8 +20,10 @@ import { describe, it } from 'node:test';
 
 import {
   buildMcpContext,
+  callWrite,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
   toolJson,
   toolText,
@@ -123,27 +125,12 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'С большим комментарием',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
         // 3000 символов — больше, чем preview-лимит 2000.
         const big = 'x'.repeat(3000);
-        await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: created.id,
-            kind: 'permanent',
-            body_md: big,
-          },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'С большим комментарием',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+          comment: { body_md: big },
         });
         const result = toolJson<{
           items: Array<{ id: string; comment_preview: { body_md: string } | null }>;
@@ -351,18 +338,18 @@ describe('etn.chronicle.query (0.7.2)', { skip: !nativeAvailable() }, () => {
       try {
         // Создаём хроно-комментарий с уникальным словом.
         const today = new Date().toISOString().slice(0, 10);
-        await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: ctx.homeId,
-            kind: 'chronological',
-            title: 'Заметка',
-            body_md: 'уникальный-маркер-для-фильтрации',
-            valid_from: today,
+        await callWrite(handle.client, ctx.networkId, [
+          {
+            thought_id: ctx.homeId,
+            chronicle: [
+              {
+                title: 'Заметка',
+                body_md: 'уникальный-маркер-для-фильтрации',
+                valid_from: today,
+              },
+            ],
           },
-        });
+        ]);
         const found = toolJson<{
           rows: Array<{ id: string; body_md?: string; snippet: string }>;
           meta: { total: number };

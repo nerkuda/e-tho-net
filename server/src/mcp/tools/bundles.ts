@@ -14,14 +14,12 @@ import type {
   McpThoughtWriteItemResult,
   McpThoughtWriteParams,
   McpThoughtWriteResult,
-  McpUpsertBundleResult,
 } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
-import { defineContract, ThoughtsUpsertBundle } from '../../contracts.js';
+import { defineContract } from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
 import { getComment } from '../../domain/comment-service.js';
 import { getAttachment } from '../../domain/attachment-service.js';
-import { upsertThoughtBundle } from '../../domain/thought-bundle-service.js';
 import { writeThoughts } from '../../domain/thought-write-service.js';
 import {
   mcpWriteFx,
@@ -59,228 +57,13 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     valid_from: z.string().min(1).optional(),
     valid_to: z.string().nullable().optional(),
   });
-  const BundleLinkSchema = z
-    .object({
-      direction: LinkDirection,
-      target_thought_id: ThoughtId,
-      type_id: z.string().min(1).nullable().optional(),
-      type: z.string().min(1).optional(),
-    })
-    .refine((v) => v.type_id === undefined || v.type === undefined, {
-      message: TYPE_ID_TYPE_CONFLICT,
-    });
-  const BundleAttachmentSchema = z.object({
-    kind: z.enum(ATTACHMENT_KINDS),
-    url: z.string().min(1).nullable().optional(),
-    file_path: z.string().min(1).nullable().optional(),
-    title: z.string().nullable().optional(),
-    description: z.string().nullable().optional(),
-  });
-  const UpsertBundleSchema = z
-    .object({
-      network_id: NetworkId,
-      thought_id: ThoughtId.optional(),
-      thought: BundleThoughtSchema.optional(),
-      on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
-      comment: BundleCommentSchema.optional(),
-      properties: z.record(z.string(), PropertyValueSchema).optional(),
-      links: z.array(BundleLinkSchema).optional(),
-      attachments: z.array(BundleAttachmentSchema).optional(),
-    })
-    .refine((v) => v.thought_id !== undefined || v.thought !== undefined, {
-      message: 'either thought_id or thought must be provided',
-    });
-  mcp.registerTool(
-    'etn.thoughts.upsert_bundle',
-    {
-      title: 'Составная запись «единицы знания»',
-      description:
-        'Create (or, via `thought_id`/`on_duplicate`, augment) a thought together with its permanent ' +
-        'comment, property values, links and attachments — one atomic transaction, one write-budget ' +
-        'slot. `thought_id` addresses an existing thought to augment in place; otherwise `thought.title`/' +
-        '`synonyms` are matched as in `etn.thoughts.find_duplicates` and `on_duplicate` decides the match ' +
-        'outcome: `fail` (default, errors with `candidates`), `reuse` (attach the other parts to the ' +
-        'match unchanged), `update` (also patch its fields). `thought.type`/`links[].type` resolve a type ' +
-        'by name (see `etn.types.list`). `links[].direction`: "parent" — attach the bundle thought UNDER ' +
-        'the target; "child" — the bundle thought becomes the parent of the target. `warnings` lists the ' +
-        "type's `required` properties left unset (empty when complete).",
-      inputSchema: ThoughtsUpsertBundle.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const thoughtTypeId =
-          args.thought === undefined
-            ? undefined
-            : effectiveThoughtTypeId(ndb, args.thought.type_id, args.thought.type);
-        const resolvedThought =
-          args.thought === undefined
-            ? undefined
-            : {
-                title: args.thought.title,
-                ...(args.thought.synonyms === undefined ? {} : { synonyms: args.thought.synonyms }),
-                ...(thoughtTypeId === undefined ? {} : { type_id: thoughtTypeId }),
-                ...(args.thought.active === undefined ? {} : { active: args.thought.active }),
-              };
-        const resolvedLinks =
-          args.links === undefined
-            ? undefined
-            : args.links.map((l) => {
-                const linkTypeId = effectiveLinkTypeId(ndb, l.type_id, l.type);
-                return {
-                  // Domain/REST direction now matches the MCP one directly
-                  // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
-                  direction: l.direction,
-                  target_thought_id: l.target_thought_id,
-                  ...(linkTypeId === undefined ? {} : { type_id: linkTypeId }),
-                };
-              });
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const result = runWrite(ndb, fx, () => {
-          const bundled = upsertThoughtBundle(
-            ndb,
-            {
-              ...(args.thought_id === undefined ? {} : { thought_id: args.thought_id }),
-              ...(resolvedThought === undefined ? {} : { thought: resolvedThought }),
-              ...(args.on_duplicate === undefined ? {} : { on_duplicate: args.on_duplicate }),
-              ...(args.comment === undefined ? {} : { comment: args.comment }),
-              ...(args.properties === undefined ? {} : { properties: args.properties }),
-              ...(resolvedLinks === undefined ? {} : { links: resolvedLinks }),
-              ...(args.attachments === undefined
-                ? {}
-                : {
-                    attachments: args.attachments.map((a) => ({
-                      kind: a.kind,
-                      url: a.url ?? null,
-                      file_path: a.file_path ?? null,
-                      title: a.title ?? null,
-                      description: a.description ?? null,
-                    })),
-                  }),
-            },
-            rt.deps.auth.userId,
-          );
-
-          const events: AnyWriteEvent[] = [];
-          const activity: WriteActivityEntry[] = [];
-
-          if (bundled.thought_action === 'created') {
-            events.push({ type: 'thought.created', data: { thought: bundled.thought } });
-            activity.push({ kind: 'thought', action: 'created', thought: bundled.thought });
-          } else if (bundled.thought_action === 'updated') {
-            events.push({
-              type: 'thought.updated',
-              data: {
-                id: bundled.thought.id,
-                changes: resolvedThought ?? {},
-                version: bundled.thought.version,
-              },
-            });
-            activity.push({ kind: 'thought', action: 'updated', thought: bundled.thought });
-          }
-          if (bundled.comment !== undefined) {
-            if (bundled.comment_action === 'created') {
-              events.push({ type: 'comment.created', data: { comment: bundled.comment } });
-              activity.push({ kind: 'comment', action: 'created', comment: bundled.comment });
-            } else {
-              events.push({
-                type: 'comment.updated',
-                data: {
-                  id: bundled.comment.id,
-                  changes: {
-                    ...(args.comment?.title === undefined ? {} : { title: args.comment.title }),
-                    body_md: args.comment?.body_md,
-                  },
-                  version: bundled.comment.version,
-                },
-              });
-              activity.push({ kind: 'comment', action: 'updated', comment: bundled.comment });
-            }
-          }
-          if (bundled.properties !== undefined) {
-            for (const stored of Object.values(bundled.properties)) {
-              events.push({
-                type: 'property-value.set',
-                data: {
-                  owner_type: 'thought',
-                  owner_id: bundled.thought.id,
-                  property_id: stored.property_id,
-                  value: stored.value,
-                },
-              });
-              activity.push({
-                kind: 'owner',
-                entityType: 'thought',
-                entity: bundled.thought,
-              });
-            }
-          }
-          if (bundled.links !== undefined) {
-            for (const lr of bundled.links) {
-              events.push({ type: 'link.created', data: { link: lr.link } });
-              activity.push({ kind: 'link', action: 'created', link: lr.link });
-            }
-          }
-          if (bundled.attachments !== undefined) {
-            for (const attachment of bundled.attachments) {
-              events.push({ type: 'attachment.created', data: { attachment } });
-              activity.push({ kind: 'attachment', action: 'created', attachment });
-            }
-          }
-
-          return {
-            result: bundled,
-            events,
-            activity,
-            audit: {
-              action: 'etn.thoughts.upsert_bundle',
-              targetType: 'thought',
-              targetId: bundled.thought.id,
-              details: args,
-            },
-          };
-        });
-
-        return {
-          id: result.thought.id,
-          version: result.thought.version,
-          thought_action: result.thought_action,
-          matched_on: result.matched_on,
-          ...(result.comment === undefined
-            ? {}
-            : { comment: { id: result.comment.id, version: result.comment.version } }),
-          ...(result.properties === undefined
-            ? {}
-            : {
-                properties: Object.fromEntries(
-                  Object.entries(result.properties).map(([key, v]) => [key, { id: v.id }]),
-                ),
-              }),
-          ...(result.links === undefined
-            ? {}
-            : { links: result.links.map((lr) => ({ id: lr.link.id, version: lr.link.version })) }),
-          ...(result.attachments === undefined
-            ? {}
-            : { attachments: result.attachments.map((a) => ({ id: a.id })) }),
-          // Task O6: surface unfilled required properties (computed by the
-          // bundle service against the freshly written card) so the agent
-          // can follow up. `warnings` is always an array here — it is part of
-          // the result even when empty — so callers can rely on the shape.
-          warnings: result.warnings ?? [],
-          request_id: String(extra.requestId),
-        } satisfies McpUpsertBundleResult;
-      }),
-  );
 
   // =========================================================================
   // `etn.thoughts.write` — задача 053751b5, 0.7.2: батч-запись связанных
-  // единиц знания одной транзакцией. Поглощает `etn.thoughts.create`/`update`/
-  // `set_active`/`upsert_bundle`, `etn.links.create`, `etn.properties.set`,
-  // `etn.comments.upsert` (помечены `deprecated_since: '0.7.2'` — см.
-  // `MCP_TOOL_ANNOTATIONS` и механизм пропуска в начале `registerTools`).
+  // единиц знания одной транзакцией. Поглощённые инструменты
+  // (`etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`,
+  // `etn.links.create`, `etn.properties.set`, `etn.comments.upsert`)
+  // удалены в 0.8.2 (задача 937480ca).
   // =========================================================================
 
   const WriteChronicleItemSchema = z.object({
@@ -359,7 +142,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
         '`fail`/`reuse`/`update`. Циклы `ref`/`target_ref` разрешены (фаза 2 — мысли, фаза 3 — связи). ' +
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
-        "`properties.set`, `comments.upsert` (`deprecated_since: '0.7.2'`). Один write-бюджет + одна " +
+        '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +
         'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
         '`etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,

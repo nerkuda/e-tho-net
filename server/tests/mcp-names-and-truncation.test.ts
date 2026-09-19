@@ -26,9 +26,11 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
   toolJson,
   toolText,
+  upsertPermanentViaWrite,
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
@@ -47,32 +49,9 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
       try {
         // Создаём мысли через MCP — `type: 'задача'` резолвится в id
         // под капотом, без отдельного `etn.types.list`.
-        await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Задача №1',
-            type: 'задача',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
-        });
-        await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Ошибка №1',
-            type: 'ошибка',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
-        });
-        await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Заметка №1',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
-        });
+        await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Задача №1', type: 'задача', link: { direction: 'parent', target_thought_id: ctx.homeId } });
+        await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Ошибка №1', type: 'ошибка', link: { direction: 'parent', target_thought_id: ctx.homeId } });
+        await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Заметка №1', link: { direction: 'parent', target_thought_id: ctx.homeId } });
 
         // Одно имя — фильтр по «задача».
         const oneName = toolJson<{
@@ -186,37 +165,9 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const a = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Задача A',
-              type: 'задача',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
-        const b = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Задача B',
-              type: 'задача',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
-        await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Задача C',
-            type: 'задача',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
-        });
+        const a = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Задача A', type: 'задача', link: { direction: 'parent', target_thought_id: ctx.homeId } });
+        const b = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Задача B', type: 'задача', link: { direction: 'parent', target_thought_id: ctx.homeId } });
+        await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Задача C', type: 'задача', link: { direction: 'parent', target_thought_id: ctx.homeId } });
         setPropertyValue(ndb, 'thought', a.id, 'статус', 'в реализации', ctx.adminId);
         setPropertyValue(ndb, 'thought', b.id, 'статус', 'готово', ctx.adminId);
 
@@ -304,23 +255,8 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Ищу задачу',
-            type: 'задача',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
-        });
-        await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Ищу заметку',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
-        });
+        await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Ищу задачу', type: 'задача', link: { direction: 'parent', target_thought_id: ctx.homeId } });
+        await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Ищу заметку', link: { direction: 'parent', target_thought_id: ctx.homeId } });
 
         // По имени типа — только мысли типа «задача».
         const ok = toolJson<{
@@ -383,16 +319,7 @@ describe('etn.thoughts.get full permanent comment (3ea09a54)', { skip: !nativeAv
       try {
         // 5000 символов — больше, чем COMMENT_PREVIEW_CHARS (2000).
         const big = 'x'.repeat(5000);
-        await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: ctx.homeId,
-            kind: 'permanent',
-            body_md: big,
-          },
-        });
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, ctx.homeId, big);
 
         const got = toolJson<{
           meta: {
@@ -445,16 +372,7 @@ describe('etn.thoughts.get full permanent comment (3ea09a54)', { skip: !nativeAv
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // Свежая мысль без постоянного комментария.
-        const created = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Без постоянного',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Без постоянного', link: { direction: 'parent', target_thought_id: ctx.homeId } });
         const got = toolJson<{
           meta: { permanent: unknown };
         }>(

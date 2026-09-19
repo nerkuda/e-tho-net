@@ -30,6 +30,7 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   toolJson,
   toolText,
   type McpClientHandle,
@@ -297,12 +298,10 @@ describe(
         const handle = await connectMcpClient(ctx, ctx.adminKey);
 
         // Создаём мысль через MCP — запись должна появиться в журнале.
-        const createRes = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'MCP-паритет' },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'MCP-паритет',
         });
-        assert.equal(createRes.isError, undefined, toolText(createRes));
-        const thoughtId = (toolJson(createRes) as { id: string }).id;
+        const thoughtId = created.id;
 
         // MCP: etn.activity.list.
         const res = await handle.client.callTool({

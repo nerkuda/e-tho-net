@@ -276,8 +276,11 @@ describe('MCP HTTP endpoint (F1/F2)', { skip: !nativeAvailable() }, () => {
           id: 4,
           method: 'tools/call',
           params: {
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Нет' },
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'x', thought: { title: 'Нет' } }],
+            },
           },
         },
       });

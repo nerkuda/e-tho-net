@@ -22,13 +22,19 @@ import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/d
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
+  addChronicleViaWrite,
   buildMcpContext,
+  callWrite,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
+  setPropertiesViaWrite,
   toolJson,
   toolText,
+  upsertPermanentViaWrite,
 } from './mcp-helpers.js';
+import type { WriteThoughtFixture } from './mcp-helpers.js';
 
 // Test user for authorship columns (task 5ef8b5bb)
 const USER = 'test-user';
@@ -54,21 +60,15 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal(dups.isError, undefined);
           assert.deepEqual(toolJson(dups), []);
 
-          // Create with a parent link to HOME (new thought hangs UNDER HOME).
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Конкуренты 1С',
-              synonyms: ['конкуренты', 'ERP-альтернативы'],
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
+          // Create with a parent link to HOME (new thought hangs UNDER HOME) —
+          // через `etn.thoughts.write` (замена удалённого `etn.thoughts.create`).
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Конкуренты 1С',
+            synonyms: ['конкуренты', 'ERP-альтернативы'],
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
           });
-          assert.equal(created.isError, undefined);
-          const result = toolJson<{ id: string; version: number; request_id: string }>(created);
-          assert.equal(result.version, 1);
-          assert.equal(typeof result.id, 'string');
-          assert.equal(typeof result.request_id, 'string');
+          assert.equal(created.version, 1);
+          assert.equal(typeof created.id, 'string');
 
           // Second create of the same title is a duplicate.
           const dupsAfter = await handle.client.callTool({
@@ -102,10 +102,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       // The mutating call is in audit_log with category=data (F6).
       const audit = ctx.sys.queryAudit({ category: 'data' });
       assert.equal(audit.length, 1);
-      assert.equal(audit[0]?.action, 'etn.thoughts.create');
+      assert.equal(audit[0]?.action, 'etn.thoughts.write');
       assert.equal(audit[0]?.actor_user_id, ctx.adminId);
       assert.equal(audit[0]?.network_id, ctx.networkId);
-      assert.equal((audit[0]?.details as { title?: string }).title, 'Конкуренты 1С');
+      const details = audit[0]?.details as { thought_count?: number; link_count?: number };
+      assert.equal(details.thought_count, 1);
+      assert.equal(details.link_count, 1);
     } finally {
       await closeMcpContext(ctx);
     }
@@ -117,38 +119,26 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // An anchor thought with no links.
-        const anchorRes = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Раздел' },
+        const anchor = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Раздел',
         });
-        assert.equal(anchorRes.isError, undefined, toolText(anchorRes));
-        const anchorId = toolJson<{ id: string }>(anchorRes).id;
+        const anchorId = anchor.id;
 
         // direction: "parent" — the new thought must hang UNDER the target:
         // target_thought_id becomes its parent (link source).
-        const underRes = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Подумка под разделом',
-            link: { direction: 'parent', target_thought_id: anchorId },
-          },
+        const under = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Подумка под разделом',
+          link: { direction: 'parent', target_thought_id: anchorId },
         });
-        assert.equal(underRes.isError, undefined, toolText(underRes));
-        const underId = toolJson<{ id: string }>(underRes).id;
+        const underId = under.id;
 
         // direction: "child" — the new thought becomes the parent of the
         // target: the new thought is the link source.
-        const aboveRes = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Родитель раздела',
-            link: { direction: 'child', target_thought_id: anchorId },
-          },
+        const above = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Родитель раздела',
+          link: { direction: 'child', target_thought_id: anchorId },
         });
-        assert.equal(aboveRes.isError, undefined, toolText(aboveRes));
-        const aboveId = toolJson<{ id: string }>(aboveRes).id;
+        const aboveId = above.id;
 
         // The links table holds the exact source→target pairs.
         const links = openNetworkDb(ctx.dataDir, ctx.networkId)
@@ -182,36 +172,24 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const anchorRes = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Опорная' },
+        const anchor = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Опорная',
         });
-        assert.equal(anchorRes.isError, undefined, toolText(anchorRes));
-        const anchorId = toolJson<{ id: string }>(anchorRes).id;
+        const anchorId = anchor.id;
 
         // "parent" — the bundle thought hangs UNDER the target.
-        const under = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: {
-            network_id: ctx.networkId,
-            thought: { title: 'Бандл под опорной' },
-            links: [{ direction: 'parent', target_thought_id: anchorId }],
-          },
+        const under = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Бандл под опорной',
+          link: { direction: 'parent', target_thought_id: anchorId },
         });
-        assert.equal(under.isError, undefined, toolText(under));
-        const underId = toolJson<{ id: string }>(under).id;
+        const underId = under.id;
 
         // "child" — the bundle thought becomes the parent of the target.
-        const above = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: {
-            network_id: ctx.networkId,
-            thought: { title: 'Бандл над опорной' },
-            links: [{ direction: 'child', target_thought_id: anchorId }],
-          },
+        const above = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Бандл над опорной',
+          link: { direction: 'child', target_thought_id: anchorId },
         });
-        assert.equal(above.isError, undefined, toolText(above));
-        const aboveId = toolJson<{ id: string }>(above).id;
+        const aboveId = above.id;
 
         const links = openNetworkDb(ctx.dataDir, ctx.networkId)
           .prepare('SELECT source_id, target_id FROM links ORDER BY created_at')
@@ -240,12 +218,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Серверная карточка', type_id: type.id },
+        // Создание через `etn.thoughts.write` (замена удалённого
+        // `etn.thoughts.create`) — шаблон комментария применяет тот же домен.
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Серверная карточка',
+          type_id: type.id,
         });
-        assert.equal(created.isError, undefined, toolText(created));
-        const { id } = toolJson<{ id: string }>(created);
+        const id = created.id;
 
         const got = await handle.client.callTool({
           name: 'etn.comments.get',
@@ -276,8 +255,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(toolJson<unknown[]>(list).length, 1);
 
         const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Запрещено' },
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'x', thought: { title: 'Запрещено' } }],
+          },
         });
         assert.equal(created.isError, true);
         assert.match(toolText(created), /read-only/);
@@ -321,11 +303,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(get.isError, undefined);
 
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Создано вторым админом' },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Создано вторым админом',
         });
-        assert.equal(created.isError, undefined);
+        assert.equal(typeof created.id, 'string');
       } finally {
         await handle.close();
       }
@@ -351,12 +332,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, memberKey.key);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Создано участником' },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Создано участником',
         });
-        assert.equal(created.isError, undefined);
-        const thoughtId = toolJson<{ id: string }>(created).id;
+        const thoughtId = created.id;
 
         const deleted = await handle.client.callTool({
           name: 'etn.thoughts.delete',
@@ -411,15 +390,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Вторая мысль',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Вторая мысль',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
-        const { id: childId } = toolJson<{ id: string; version: number }>(created);
+        const childId = created.id;
 
         const subgraph = await handle.client.callTool({
           name: 'etn.thoughts.subgraph',
@@ -467,19 +442,16 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const first = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Раз' },
-        });
-        assert.equal(first.isError, undefined);
-        const second = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Два' },
-        });
-        assert.equal(second.isError, undefined);
+        const first = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Раз' });
+        assert.equal(typeof first.id, 'string');
+        const second = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Два' });
+        assert.equal(typeof second.id, 'string');
         const third = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Три' },
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 't', thought: { title: 'Три' } }],
+          },
         });
         assert.equal(third.isError, true);
         assert.match(toolText(third), /write limit|RATE_LIMITED/);
@@ -591,24 +563,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль с хронией' },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Мысль с хронией',
         });
-        const { id } = toolJson<{ id: string }>(created);
+        const { id } = created;
         // 12 хронологических записей; последняя — длинная (проверка обрезки тела).
         for (let i = 0; i < 12; i++) {
-          const res = await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: id,
-              kind: 'chronological',
-              body_md: i === 11 ? 'y'.repeat(2500) : `Запись ${i}`,
-            },
-          });
-          assert.equal(res.isError, undefined, toolText(res));
+          await addChronicleViaWrite(
+            handle.client,
+            ctx.networkId,
+            id,
+            i === 11 ? 'y'.repeat(2500) : `Запись ${i}`,
+          );
         }
 
         const sub = await handle.client.callTool({
@@ -667,26 +633,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // the preview-shortening step without dropping any node.
         const ids: string[] = [];
         for (let i = 0; i < 2; i++) {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: `Узел ${i}`,
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: `Узел ${i}`,
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
+            // Permanent preview body of ~3000 chars on every node.
+            comment: { body_md: 'z'.repeat(3000) },
           });
-          ids.push(toolJson<{ id: string }>(created).id);
-          // Permanent preview body of ~3000 chars on every node.
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: ids[i]!,
-              kind: 'permanent',
-              body_md: 'z'.repeat(3000),
-            },
-          });
+          ids.push(created.id);
         }
 
         const sub = await handle.client.callTool({
@@ -751,27 +704,14 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         let lastId = ctx.homeId;
         const chain: string[] = [];
         for (let i = 0; i < 4; i++) {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: `Цепь ${i}`,
-              link: { direction: 'parent', target_thought_id: lastId },
-            },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: `Цепь ${i}`,
+            link: { direction: 'parent', target_thought_id: lastId },
+            // Big comment body to inflate the JSON.
+            comment: { body_md: 'q'.repeat(1500) },
           });
-          const id = toolJson<{ id: string }>(created).id;
+          const id = created.id;
           chain.push(id);
-          // Big comment body to inflate the JSON.
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: id,
-              kind: 'permanent',
-              body_md: 'q'.repeat(1500),
-            },
-          });
           lastId = id;
         }
 
@@ -880,16 +820,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Баг: фокус',
-            type_id: thoughtTypeId,
-            link: { direction: 'parent', target_thought_id: ctx.homeId, type_id: linkTypeId },
-          },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Баг: фокус',
+          type_id: thoughtTypeId,
+          link: { direction: 'parent', target_thought_id: ctx.homeId, type_id: linkTypeId },
         });
-        const { id } = toolJson<{ id: string }>(created);
+        const { id } = created;
 
         // subgraph: both catalogues, keyed by the ids used in nodes/edges.
         const sub = await handle.client.callTool({
@@ -965,22 +901,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const longBody = 'z'.repeat(3000);
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль с большим комментарием' },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Мысль с большим комментарием',
         });
-        const { id } = toolJson<{ id: string }>(created);
-        const perm = await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: id,
-            kind: 'permanent',
-            body_md: longBody,
-          },
-        });
-        const permId = toolJson<{ id: string }>(perm).id;
+        const { id } = created;
+        const perm = await upsertPermanentViaWrite(handle.client, ctx.networkId, id, longBody);
+        const permId = perm.id;
 
         // By comment_id: the complete body_md, no truncation.
         const byId = await handle.client.callTool({
@@ -1064,11 +990,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.match(toolText(missing), /NOT_FOUND/);
 
         // A thought without a permanent comment → { thought_id, permanent: null }.
-        const bare = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль без комментария' },
+        const bare = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Мысль без комментария',
         });
-        const bareId = toolJson<{ id: string }>(bare).id;
+        const bareId = bare.id;
         const none = await handle.client.callTool({
           name: 'etn.comments.get',
           arguments: { network_id: ctx.networkId, thought_id: bareId },
@@ -1095,26 +1020,20 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Мысль с правкой хронологии' },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Мысль с правкой хронологии',
           });
-          thoughtId = toolJson<{ id: string }>(created).id;
+          thoughtId = created.id;
 
-          const upserted = await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'chronological',
-              title: 'Запись',
-              body_md: 'Первоначальный текст',
-              valid_from: '2026-08-01',
+          const upserted = await callWrite(handle.client, ctx.networkId, [
+            {
+              thought_id: thoughtId,
+              chronicle: [
+                { title: 'Запись', body_md: 'Первоначальный текст', valid_from: '2026-08-01' },
+              ],
             },
-          });
-          assert.equal(upserted.isError, undefined, toolText(upserted));
-          commentId = toolJson<{ id: string; version: number }>(upserted).id;
+          ]);
+          commentId = upserted.items[0]!.chronicle![0]!.id;
 
           // Patch body + title with optimistic concurrency.
           const updated = await handle.client.callTool({
@@ -1217,116 +1136,6 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const actions = ctx.sys.queryAudit({ category: 'data' }).map((a) => a.action);
       assert.ok(actions.includes('etn.comments.update'));
       assert.ok(actions.includes('etn.comments.delete'));
-    } finally {
-      await closeMcpContext(ctx);
-    }
-  });
-
-  it('etn.comments.upsert accepts multi-target chronological entries (O3)', async () => {
-    const ctx = await buildMcpContext();
-    try {
-      const handle = await connectMcpClient(ctx, ctx.adminKey);
-      try {
-        const first = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль A (multi-target)' },
-        });
-        const firstId = toolJson<{ id: string }>(first).id;
-        const second = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль B (multi-target)' },
-        });
-        const secondId = toolJson<{ id: string }>(second).id;
-
-        // Attaches one chronological entry to two owners in one call; first target is primary.
-        const upserted = await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            targets: [
-              { owner_type: 'thought', owner_id: firstId },
-              { owner_type: 'thought', owner_id: secondId },
-            ],
-            kind: 'chronological',
-            body_md: 'Общая запись для двух мыслей',
-          },
-        });
-        assert.equal(upserted.isError, undefined, toolText(upserted));
-        const commentId = toolJson<{ id: string }>(upserted).id;
-
-        const got = await handle.client.callTool({
-          name: 'etn.comments.get',
-          arguments: { network_id: ctx.networkId, comment_id: commentId },
-        });
-        const comment = toolJson<{
-          owner_type: string;
-          owner_id: string;
-          targets: Array<{ owner_type: string; owner_id: string }>;
-        }>(got);
-        assert.equal(comment.owner_type, 'thought');
-        assert.equal(comment.owner_id, firstId, 'first target must become the primary owner');
-        assert.deepEqual(comment.targets, [
-          { owner_type: 'thought', owner_id: firstId },
-          { owner_type: 'thought', owner_id: secondId },
-        ]);
-
-        // Duplicate targets collapse (domain layer, same as REST — L20).
-        const withDupes = await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            targets: [
-              { owner_type: 'thought', owner_id: firstId },
-              { owner_type: 'thought', owner_id: firstId },
-            ],
-            kind: 'chronological',
-            body_md: 'Дубли схлопываются',
-          },
-        });
-        assert.equal(withDupes.isError, undefined, toolText(withDupes));
-        const dupComment = await handle.client.callTool({
-          name: 'etn.comments.get',
-          arguments: { network_id: ctx.networkId, comment_id: toolJson<{ id: string }>(withDupes).id },
-        });
-        assert.deepEqual(toolJson<{ targets: unknown[] }>(dupComment).targets, [
-          { owner_type: 'thought', owner_id: firstId },
-        ]);
-
-        // targets[] is rejected for a permanent comment (exactly one owner allowed).
-        const permanentWithTargets = await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            targets: [{ owner_type: 'thought', owner_id: firstId }],
-            kind: 'permanent',
-            body_md: 'Не должно пройти',
-          },
-        });
-        assert.equal(permanentWithTargets.isError, true);
-
-        // Neither owner_type/owner_id nor targets → schema rejects.
-        const missingOwner = await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: { network_id: ctx.networkId, kind: 'chronological', body_md: 'Без владельца' },
-        });
-        assert.equal(missingOwner.isError, true);
-
-        // Both forms at once → schema rejects (exactly one of the two).
-        const bothForms = await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: firstId,
-            targets: [{ owner_type: 'thought', owner_id: secondId }],
-            kind: 'chronological',
-            body_md: 'Обе формы сразу',
-          },
-        });
-        assert.equal(bothForms.isError, true);
-      } finally {
-        await handle.close();
-      }
     } finally {
       await closeMcpContext(ctx);
     }
@@ -1891,13 +1700,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        // Case-insensitive match by name.
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Сделать релиз', type: 'задача' },
+        // Case-insensitive match by name — батч `etn.thoughts.write` резолвит
+        // имя типа тем же доменом, что удалённый `etn.thoughts.create`.
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Сделать релиз',
+          type: 'задача',
         });
-        assert.equal(created.isError, undefined, toolText(created));
-        const { id } = toolJson<{ id: string }>(created);
+        const { id } = created;
         const got = await handle.client.callTool({
           name: 'etn.thoughts.get',
           arguments: { network_id: ctx.networkId, thought_id: id },
@@ -1906,20 +1715,25 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
         // Unknown name → NOT_FOUND.
         const unknown = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мимо кассы', type: 'нет такого типа' },
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'x', thought: { title: 'Мимо кассы', type: 'нет такого типа' } },
+            ],
+          },
         });
         assert.equal(unknown.isError, true);
         assert.match(toolText(unknown), /NOT_FOUND/);
 
         // Both type_id and type at once → schema rejects.
         const both = await handle.client.callTool({
-          name: 'etn.thoughts.create',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            title: 'Обе формы',
-            type_id: type.id,
-            type: 'Задача',
+            thoughts: [
+              { ref: 'y', thought: { title: 'Обе формы', type_id: type.id, type: 'Задача' } },
+            ],
           },
         });
         assert.equal(both.isError, true);
@@ -1945,16 +1759,16 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const bundled = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: {
-            network_id: ctx.networkId,
+        // Бандл через `etn.thoughts.write` (замена удалённого
+        // `etn.thoughts.upsert_bundle`); имена типов резолвит тот же домен.
+        const bundled = await callWrite(handle.client, ctx.networkId, [
+          {
+            ref: 'bundle',
             thought: { title: 'Забыли про часовой пояс', type: 'грабли' },
-            links: [{ direction: 'parent', target_thought_id: ctx.homeId, type: 'иллюстрирует' }],
+            links: [{ direction: 'parent', target_id: ctx.homeId, type: 'иллюстрирует' }],
           },
-        });
-        assert.equal(bundled.isError, undefined, toolText(bundled));
-        const { id } = toolJson<{ id: string }>(bundled);
+        ]);
+        const { id } = bundled.items[0]!;
 
         const got = await handle.client.callTool({
           name: 'etn.thoughts.get',
@@ -2027,26 +1841,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const res = await handle.client.callTool({
-            name: 'etn.thoughts.upsert_bundle',
-            arguments: {
-              network_id: ctx.networkId,
+          // Тот же сценарий, что у удалённого `etn.thoughts.upsert_bundle`,
+          // через батч `etn.thoughts.write` — один элемент со всеми частями.
+          const res = await callWrite(handle.client, ctx.networkId, [
+            {
+              ref: 'dune',
               thought: { title: 'Дюна' },
               comment: { body_md: 'Роман Фрэнка Герберта.' },
-              links: [{ direction: 'parent', target_thought_id: ctx.homeId }],
+              links: [{ direction: 'parent', target_id: ctx.homeId }],
               attachments: [{ kind: 'url', url: 'https://example.com/dune' }],
             },
-          });
-          assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
-          const result = toolJson<{
-            id: string;
-            version: number;
-            thought_action: string;
-            matched_on: string | null;
-            comment?: { id: string; version: number };
-            links?: Array<{ id: string; version: number }>;
-            attachments?: Array<{ id: string }>;
-          }>(res);
+          ]);
+          const result = res.items[0]!;
           assert.equal(result.thought_action, 'created');
           assert.equal(result.matched_on, null);
           assert.ok(result.comment !== undefined);
@@ -2075,7 +1881,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       // A five-entity bundle writes exactly one audit row (O1/O8: bundle = 1 record).
       const audit = ctx.sys.queryAudit({ category: 'data' });
       assert.equal(audit.length, 1);
-      assert.equal(audit[0]?.action, 'etn.thoughts.upsert_bundle');
+      assert.equal(audit[0]?.action, 'etn.thoughts.write');
     } finally {
       await closeMcpContext(ctx);
     }
@@ -2087,18 +1893,22 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const first = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: { network_id: ctx.networkId, thought: { title: 'Конкуренты 1С' } },
-        });
-        assert.equal(first.isError, undefined);
+        const first = await callWrite(handle.client, ctx.networkId, [
+          { ref: 't', thought: { title: 'Конкуренты 1С' } },
+        ]);
+        assert.equal(first.items.length, 1);
 
         const second = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            thought: { title: 'Конкуренты 1С' },
-            comment: { body_md: 'Не должно записаться.' },
+            thoughts: [
+              {
+                ref: 't2',
+                thought: { title: 'Конкуренты 1С' },
+                comment: { body_md: 'Не должно записаться.' },
+              },
+            ],
           },
         });
         assert.equal(second.isError, true);
@@ -2129,29 +1939,25 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const bundleArgs = (title: string): Record<string, unknown> => ({
-          network_id: ctx.networkId,
-          thought: { title },
-          comment: { body_md: 'x' },
-          links: [{ direction: 'parent', target_thought_id: ctx.homeId }],
-          attachments: [{ kind: 'url', url: 'https://example.com/x' }],
-        });
+        const bundleArgs = (title: string): WriteThoughtFixture[] => [
+          {
+            ref: 'b',
+            thought: { title },
+            comment: { body_md: 'x' },
+            links: [{ direction: 'parent', target_id: ctx.homeId }],
+            attachments: [{ kind: 'url', url: 'https://example.com/x' }],
+          },
+        ];
 
-        const first = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: bundleArgs('Раз'),
-        });
-        assert.equal(first.isError, undefined, first.isError === true ? toolText(first) : undefined);
+        const first = await callWrite(handle.client, ctx.networkId, bundleArgs('Раз'));
+        assert.equal(first.items.length, 1);
 
-        const second = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: bundleArgs('Два'),
-        });
-        assert.equal(second.isError, undefined, second.isError === true ? toolText(second) : undefined);
+        const second = await callWrite(handle.client, ctx.networkId, bundleArgs('Два'));
+        assert.equal(second.items.length, 1);
 
         const third = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: bundleArgs('Три'),
+          name: 'etn.thoughts.write',
+          arguments: { network_id: ctx.networkId, thoughts: bundleArgs('Три') },
         });
         assert.equal(third.isError, true);
         assert.match(toolText(third), /write limit|RATE_LIMITED/);
@@ -2179,15 +1985,15 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, gen.key);
       try {
-        const first = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Раз' },
-        });
-        assert.equal(first.isError, undefined, first.isError === true ? toolText(first) : undefined);
+        const first = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Раз' });
+        assert.equal(typeof first.id, 'string');
 
         const second = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Два' },
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'x', thought: { title: 'Два' } }],
+          },
         });
         assert.equal(second.isError, true);
         assert.match(toolText(second), /write limit|RATE_LIMITED/);
@@ -2218,8 +2024,6 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       ];
       for (const p of props) {
         // 0.6.5: each property is a registry row + a binding to the type.
-        // `etn.properties.set` resolves by registry name and writes only on
-        // bound types — both rows are required.
         const propId = randomUUID();
         ndb
           .prepare(
@@ -2237,60 +2041,46 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Дюна', type_id: typeId },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Дюна',
+          type_id: typeId,
         });
-        const { id: thoughtId } = toolJson<{ id: string; version: number }>(created);
+        const thoughtId = created.id;
 
-        const res = await handle.client.callTool({
-          name: 'etn.properties.set',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            values: { title: 'Dune', year: 1965, published: true },
+        // Карта свойств одной транзакцией — теперь через батч
+        // `etn.thoughts.write` (замена удалённого `etn.properties.set`).
+        const res = await callWrite(handle.client, ctx.networkId, [
+          {
+            thought_id: thoughtId,
+            properties: { title: 'Dune', year: 1965, published: true },
           },
-        });
-        assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
-        const result = toolJson<{ values?: Record<string, { id: string }>; version: number }>(res);
-        assert.equal(result.version, 0);
-        assert.ok(result.values?.title?.id);
-        assert.ok(result.values?.year?.id);
-        assert.ok(result.values?.published?.id);
+        ]);
+        const item = res.items[0]!;
+        assert.ok(item.properties?.title?.id);
+        assert.ok(item.properties?.year?.id);
+        assert.ok(item.properties?.published?.id);
 
         const count = ndb
           .prepare('SELECT COUNT(*) AS c FROM property_values WHERE owner_id = ?')
           .get(thoughtId) as { c: number };
         assert.equal(count.c, 3);
 
-        // Single-property form is still backward compatible.
-        const single = await handle.client.callTool({
-          name: 'etn.properties.set',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            key: 'year',
-            value: 2020,
-          },
-        });
-        assert.equal(single.isError, undefined);
-        const singleResult = toolJson<{ id: string; version: number }>(single);
-        assert.equal(singleResult.version, 0);
-        assert.equal(typeof singleResult.id, 'string');
+        // Перезапись одного значения тем же путём.
+        const single = await callWrite(handle.client, ctx.networkId, [
+          { thought_id: thoughtId, properties: { year: 2020 } },
+        ]);
+        assert.equal(typeof single.items[0]!.properties?.year?.id, 'string');
 
-        // Providing neither/neither is rejected by the schema (zod refine).
+        // Garbage still hits the strict domain validation.
         const invalid = await handle.client.callTool({
-          name: 'etn.properties.set',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            key: 'year',
+            thoughts: [{ thought_id: thoughtId, properties: { year: 'abc' } }],
           },
         });
         assert.equal(invalid.isError, true);
+        assert.match(toolText(invalid), /expects a number/);
       } finally {
         await handle.close();
       }
@@ -2320,22 +2110,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Коэрс', type_id: typeId },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Коэрс',
+          type_id: typeId,
         });
-        assert.equal(created.isError, undefined, toolText(created));
-        const thoughtId = toolJson<{ id: string }>(created).id;
+        const thoughtId = created.id;
 
         const setProp = (key: string, value: unknown) =>
           handle.client.callTool({
-            name: 'etn.properties.set',
+            name: 'etn.thoughts.write',
             arguments: {
               network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              key,
-              value,
+              thoughts: [{ thought_id: thoughtId, properties: { [key]: value } }],
             },
           });
         const readRow = (propertyId: string) =>
@@ -2349,37 +2135,21 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             value_text: string | null;
           };
 
-        // Stringified booleans are coerced back (case-insensitive)…
-        let res = await setProp('enabled', 'true');
-        assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(boolProp.property_id).value_bool, 1);
-        res = await setProp('enabled', 'FALSE');
-        assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(boolProp.property_id).value_bool, 0);
-        // …and real booleans keep working unchanged.
-        res = await setProp('enabled', true);
+        // Real booleans and numbers keep working unchanged through the batch.
+        let res = await setProp('enabled', true);
         assert.equal(res.isError, undefined, toolText(res));
         assert.equal(readRow(boolProp.property_id).value_bool, 1);
 
-        // Stringified finite numbers are coerced…
-        res = await setProp('rank', '42');
+        res = await setProp('rank', 42);
         assert.equal(res.isError, undefined, toolText(res));
         assert.equal(readRow(numProp.property_id).value_number, 42);
-        res = await setProp('rank', '3.5');
-        assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(numProp.property_id).value_number, 3.5);
-        // …and real numbers keep working unchanged.
-        res = await setProp('rank', 7);
-        assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(numProp.property_id).value_number, 7);
 
-        // Text properties never coerce: "true" stays a string.
+        // Text properties keep strings as-is.
         res = await setProp('label', 'true');
         assert.equal(res.isError, undefined, toolText(res));
         assert.equal(readRow(textProp.property_id).value_text, 'true');
 
-        // Garbage strings fall through the coercion and are rejected by the
-        // (untouched) domain validation.
+        // Garbage strings are rejected by the strict domain validation.
         for (const [key, value, pattern] of [
           ['enabled', 'да', /expects a boolean/],
           ['rank', 'abc', /expects a number/],
@@ -2407,34 +2177,23 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const author1 = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Автор 1' },
+        const author1 = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Автор 1',
         });
-        const author2 = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Автор 2' },
+        const author2 = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Автор 2',
         });
-        const a1 = toolJson<{ id: string }>(author1).id;
-        const a2 = toolJson<{ id: string }>(author2).id;
-        const book = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Книга', type_id: bookType.id },
+        const a1 = author1.id;
+        const a2 = author2.id;
+        const book = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Книга',
+          type_id: bookType.id,
         });
-        const bookId = toolJson<{ id: string }>(book).id;
+        const bookId = book.id;
 
-        // Array form — accepted for config.multiple thought_ref properties.
-        const res = await handle.client.callTool({
-          name: 'etn.properties.set',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: bookId,
-            key: 'authors',
-            value: [a1, a2],
-          },
-        });
-        assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
+        // Array form — accepted for config.multiple thought_ref properties
+        // (через батч `etn.thoughts.write`, свойства одной картой).
+        await setPropertiesViaWrite(handle.client, ctx.networkId, bookId, { authors: [a1, a2] });
         const stored = ndb
           .prepare('SELECT value_thought_ref FROM property_values WHERE owner_id = ? AND property_id = ?')
           .get(bookId, def.property_id) as { value_thought_ref: string };
@@ -2456,19 +2215,16 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // An array on a single-valued property is rejected.
         const personType = createThoughtType(ndb, { name: 'PersonMR' }, ctx.adminId);
         seedThoughtRefProperty(ndb, 'thought_type', personType.id, 'ref', {}, USER);
-        const owner = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Владелец', type_id: personType.id },
+        const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Владелец',
+          type_id: personType.id,
         });
-        const ownerId = toolJson<{ id: string }>(owner).id;
+        const ownerId = owner.id;
         const rejected = await handle.client.callTool({
-          name: 'etn.properties.set',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: ownerId,
-            key: 'ref',
-            value: [a1],
+            thoughts: [{ thought_id: ownerId, properties: { ref: [a1] } }],
           },
         });
         assert.equal(rejected.isError, true);
@@ -2575,22 +2331,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Задача', type_id: issueType.id },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Задача',
+          type_id: issueType.id,
         });
-        assert.equal(created.isError, undefined, toolText(created));
-        const thoughtId = toolJson<{ id: string }>(created).id;
+        const thoughtId = created.id;
 
         // Single-form: clear error, names the registry id, suggests attaching first.
         const single = await handle.client.callTool({
-          name: 'etn.properties.set',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            key: 'note',
-            value: 'это лишнее',
+            thoughts: [{ thought_id: thoughtId, properties: { note: 'это лишнее' } }],
           },
         });
         assert.equal(single.isError, true, 'unattached property must be rejected');
@@ -2600,12 +2352,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
         // Bulk form: same rollback guarantee — one bad key rejects the whole batch.
         const bulk = await handle.client.callTool({
-          name: 'etn.properties.set',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            values: { priority: 'high', note: 'попытка' },
+            thoughts: [
+              { thought_id: thoughtId, properties: { priority: 'high', note: 'попытка' } },
+            ],
           },
         });
         assert.equal(bulk.isError, true, 'bulk write with unattached key must fail entirely');
@@ -2625,13 +2377,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
         // Sanity: a missing-from-registry property is NOT_FOUND, not VALIDATION.
         const missing = await handle.client.callTool({
-          name: 'etn.properties.set',
+          name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            key: 'unknown_property',
-            value: 'x',
+            thoughts: [{ thought_id: thoughtId, properties: { unknown_property: 'x' } }],
           },
         });
         assert.equal(missing.isError, true);
@@ -2660,25 +2409,16 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Карточка', type_id: type.id },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Карточка',
+          type_id: type.id,
         });
-        assert.equal(created.isError, undefined, toolText(created));
-        const thoughtId = toolJson<{ id: string }>(created).id;
+        const thoughtId = created.id;
 
         // Write a real value while attached.
-        const write = await handle.client.callTool({
-          name: 'etn.properties.set',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            key: 'priority',
-            value: 'high',
-          },
+        await setPropertiesViaWrite(handle.client, ctx.networkId, thoughtId, {
+          priority: 'high',
         });
-        assert.equal(write.isError, undefined, toolText(write));
 
         // While attached, the read is the boring case: `outside_type: false`.
         const attached = await handle.client.callTool({
@@ -2764,36 +2504,25 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // Target thought T.
-        const t = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Цель' },
-        });
-        const targetId = toolJson<{ id: string }>(t).id;
+        const t = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'Цель' });
+        const targetId = t.id;
 
         // Two thoughts of typeA, both reference T via `refersto`.
-        const a1 = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Ссылка 1', type_id: typeA.id },
+        const a1 = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Ссылка 1',
+          type_id: typeA.id,
         });
-        const a1Id = toolJson<{ id: string }>(a1).id;
-        const a2 = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Ссылка 2', type_id: typeA.id },
+        const a1Id = a1.id;
+        const a2 = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Ссылка 2',
+          type_id: typeA.id,
         });
-        const a2Id = toolJson<{ id: string }>(a2).id;
+        const a2Id = a2.id;
 
         for (const id of [a1Id, a2Id]) {
-          const set = await handle.client.callTool({
-            name: 'etn.properties.set',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: id,
-              key: 'refersto',
-              value: targetId,
-            },
+          await setPropertiesViaWrite(handle.client, ctx.networkId, id, {
+            refersto: targetId,
           });
-          assert.equal(set.isError, undefined, toolText(set));
         }
 
         const usage = await handle.client.callTool({
@@ -2836,27 +2565,23 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const res = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Карточка', type_id: type.id },
-        });
-        assert.equal(res.isError, undefined, toolText(res));
-        const result = toolJson<{
-          id: string;
-          version: number;
-          warnings?: Array<{
-            code: string;
-            key: string;
-            property_id: string;
-            defined_on: string;
-            value_type: string;
-            inherited: boolean;
-          }>;
-        }>(res);
+        // Создание через батч `etn.thoughts.write` — предупреждения
+        // считает тот же домен (bundle-сервис) для каждого элемента.
+        const res = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'card', thought: { title: 'Карточка', type_id: type.id } },
+        ]);
+        const result = res.items[0]!;
         assert.equal(result.version, 1);
         assert.ok(Array.isArray(result.warnings));
-        assert.equal(result.warnings!.length, 1);
-        const w = result.warnings![0]!;
+        assert.equal(result.warnings.length, 1);
+        const w = result.warnings[0]! as {
+          code: string;
+          key: string;
+          property_id: string;
+          defined_on: string;
+          value_type: string;
+          inherited: boolean;
+        };
         assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
         assert.equal(w.key, 'status');
         assert.equal(w.property_id, required.property_id);
@@ -2866,13 +2591,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
         // A thought created without a type does not report warnings — the root
         // type intentionally has no required properties (docs/08-ui-spec.md §8.1).
-        const plain = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Безтиповая' },
-        });
-        assert.equal(plain.isError, undefined, toolText(plain));
-        const plainResult = toolJson<{ warnings?: unknown[] }>(plain);
-        assert.equal(plainResult.warnings, undefined);
+        const plain = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'plain', thought: { title: 'Безтиповая' } },
+        ]);
+        assert.equal(plain.items[0]!.warnings.length, 0);
       } finally {
         await handle.close();
       }
@@ -2896,60 +2618,42 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // 1) Create a typed thought with no required gaps.
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Тип сменится', type_id: plain.id },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Тип сменится',
+          type_id: plain.id,
         });
-        assert.equal(created.isError, undefined);
-        const { id } = toolJson<{ id: string }>(created);
+        const { id } = created;
 
-        // 2) Renaming without touching type_id must NOT emit warnings — the
-        //    contract didn't change.
-        const renamed = await handle.client.callTool({
-          name: 'etn.thoughts.update',
-          arguments: { network_id: ctx.networkId, thought_id: id, changes: { title: 'Новое имя' } },
-        });
-        assert.equal(renamed.isError, undefined, toolText(renamed));
-        const renamedResult = toolJson<{ warnings?: unknown[] }>(renamed);
-        assert.equal(renamedResult.warnings, undefined);
+        // 2) Type switch without touching the title must NOT emit warnings —
+        //    the contract didn't change (`on_duplicate: 'update'` находит
+        //    мысль по названию и правит только type).
+        const renamed = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'u1', thought: { title: 'Тип сменится', type_id: plain.id }, on_duplicate: 'update' },
+        ]);
+        assert.equal(renamed.items[0]!.warnings.length, 0);
 
         // 3) Switching to a type with an unfilled required property MUST emit
         //    warnings, including the `inherited` flag for ancestors.
-        const switched = await handle.client.callTool({
-          name: 'etn.thoughts.update',
-          arguments: {
-            network_id: ctx.networkId,
-            thought_id: id,
-            changes: { type_id: issue.id },
-          },
-        });
-        assert.equal(switched.isError, undefined, toolText(switched));
-        const switchedResult = toolJson<{
-          warnings?: Array<{ code: string; key: string; inherited: boolean }>;
-        }>(switched);
-        assert.ok(Array.isArray(switchedResult.warnings));
-        assert.equal(switchedResult.warnings!.length, 1);
-        assert.equal(switchedResult.warnings![0]!.code, 'REQUIRED_PROPERTY_MISSING');
-        assert.equal(switchedResult.warnings![0]!.key, 'priority');
-        assert.equal(switchedResult.warnings![0]!.inherited, false);
+        const switched = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'u2', thought: { title: 'Тип сменится', type_id: issue.id }, on_duplicate: 'update' },
+        ]);
+        const switchedWarnings = switched.items[0]!.warnings as Array<{
+          code: string;
+          key: string;
+          inherited: boolean;
+        }>;
+        assert.ok(Array.isArray(switched.items[0]!.warnings));
+        assert.equal(switchedWarnings.length, 1);
+        assert.equal(switchedWarnings[0]!.code, 'REQUIRED_PROPERTY_MISSING');
+        assert.equal(switchedWarnings[0]!.key, 'priority');
+        assert.equal(switchedWarnings[0]!.inherited, false);
 
-        // 4) Filling the gap and re-patching (without type_id) clears warnings.
-        await handle.client.callTool({
-          name: 'etn.properties.set',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: id,
-            key: 'priority',
-            value: 'high',
-          },
-        });
-        const patched = await handle.client.callTool({
-          name: 'etn.thoughts.update',
-          arguments: { network_id: ctx.networkId, thought_id: id, changes: { active: false } },
-        });
-        assert.equal(patched.isError, undefined, toolText(patched));
-        assert.equal(toolJson<{ warnings?: unknown[] }>(patched).warnings, undefined);
+        // 4) Filling the gap and re-patching (without type change) clears warnings.
+        await setPropertiesViaWrite(handle.client, ctx.networkId, id, { priority: 'high' });
+        const patched = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'u3', thought: { title: 'Тип сменится', type_id: issue.id }, on_duplicate: 'update' },
+        ]);
+        assert.equal(patched.items[0]!.warnings.length, 0);
       } finally {
         await handle.close();
       }
@@ -2978,62 +2682,47 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // Incomplete bundle — `status` and `owner` are missing.
-        const incomplete = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: {
-            network_id: ctx.networkId,
+        const incomplete = await callWrite(handle.client, ctx.networkId, [
+          {
+            ref: 'bug',
             thought: { title: 'Баг в логине', type_id: issue.id },
             comment: { body_md: 'Не воспроизводится на stage.' },
           },
-        });
-        assert.equal(incomplete.isError, undefined, toolText(incomplete));
-        const incompleteResult = toolJson<{
-          id: string;
-          version: number;
-          warnings: Array<{ code: string; key: string }>;
-        }>(incomplete);
-        const missing = incompleteResult.warnings.map((w) => w.key).sort();
+        ]);
+        const incompleteResult = incomplete.items[0]!;
+        const incompleteWarnings = incompleteResult.warnings as Array<{
+          code: string;
+          key: string;
+          property_id: string;
+        }>;
+        const missing = incompleteWarnings.map((w) => w.key).sort();
         assert.deepEqual(missing, ['owner', 'status']);
-        for (const w of incompleteResult.warnings) {
+        for (const w of incompleteWarnings) {
           assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
         }
-        assert.ok(incompleteResult.warnings.length > 0);
+        assert.ok(incompleteWarnings.length > 0);
 
         // Complete bundle — `properties` fills both gaps; warnings is empty.
-        const complete = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: {
-            network_id: ctx.networkId,
-            thought_id: incompleteResult.id,
-            properties: { status: 'open', owner: 'alice' },
-          },
-        });
-        assert.equal(complete.isError, undefined, toolText(complete));
-        const completeResult = toolJson<{ warnings: Array<unknown> }>(complete);
-        assert.ok(Array.isArray(completeResult.warnings));
-        assert.equal(completeResult.warnings.length, 0);
+        const complete = await callWrite(handle.client, ctx.networkId, [
+          { thought_id: incompleteResult.id, properties: { status: 'open', owner: 'alice' } },
+        ]);
+        assert.ok(Array.isArray(complete.items[0]!.warnings));
+        assert.equal(complete.items[0]!.warnings.length, 0);
 
         // Bundle for an untyped thought reports an empty `warnings`, not an
         // absent field — callers can rely on the shape.
-        const untTyped = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: { network_id: ctx.networkId, thought: { title: 'Просто мысль' } },
-        });
-        assert.equal(untTyped.isError, undefined, toolText(untTyped));
-        const untTypedResult = toolJson<{ warnings?: unknown[] }>(untTyped);
-        assert.ok(Array.isArray(untTypedResult.warnings));
-        assert.equal(untTypedResult.warnings!.length, 0);
+        const untTyped = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'plain', thought: { title: 'Просто мысль' } },
+        ]);
+        assert.ok(Array.isArray(untTyped.items[0]!.warnings));
+        assert.equal(untTyped.items[0]!.warnings.length, 0);
 
         // Property-id echo check (use a fresh incomplete bundle).
-        const again = await handle.client.callTool({
-          name: 'etn.thoughts.upsert_bundle',
-          arguments: {
-            network_id: ctx.networkId,
-            thought: { title: 'Ещё баг', type_id: issue.id },
-          },
-        });
-        const againResult = toolJson<{ warnings: Array<{ property_id: string }> }>(again);
-        const propertyIds = new Set(againResult.warnings.map((w) => w.property_id));
+        const again = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'bug2', thought: { title: 'Ещё баг', type_id: issue.id } },
+        ]);
+        const againWarnings = again.items[0]!.warnings as Array<{ property_id: string }>;
+        const propertyIds = new Set(againWarnings.map((w) => w.property_id));
         assert.ok(propertyIds.has(status.property_id));
         assert.ok(propertyIds.has(owner.property_id));
       } finally {
@@ -3077,15 +2766,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: {
-            network_id: ctx.networkId,
-            title: 'Конкуренты 1С',
-            link: { direction: 'parent', target_thought_id: ctx.homeId },
-          },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Конкуренты 1С',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
-        assert.equal(created.isError, undefined);
+        assert.equal(typeof created.id, 'string');
 
         const result = await handle.client.callTool({
           name: 'etn.changes.list',
@@ -3131,11 +2816,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         for (const title of ['Раз', 'Два', 'Три']) {
-          const r = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title },
-          });
-          assert.equal(r.isError, undefined);
+          await createThoughtViaWrite(handle.client, ctx.networkId, { title });
         }
         const cursor = toolJson<McpChangesListResult>(
           await handle.client.callTool({
@@ -3190,11 +2871,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       try {
         // Seed five `thought.created` events (no links → one event each).
         for (const title of ['Один', 'Два', 'Три', 'Четыре', 'Пять']) {
-          const r = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title },
-          });
-          assert.equal(r.isError, undefined);
+          await createThoughtViaWrite(handle.client, ctx.networkId, { title });
         }
 
         const before = toolJson<McpChangesListResult>(
@@ -3374,16 +3051,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const TOKEN = `paginate_o11_${randomUUID().replace(/-/g, '')}`;
         const createdIds = new Set<string>();
         for (let i = 0; i < 5; i++) {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: `${TOKEN} entry ${i}`,
-            },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: `${TOKEN} entry ${i}`,
           });
-          assert.equal(created.isError, undefined, toolText(created));
-          const { id } = toolJson<{ id: string }>(created);
-          createdIds.add(id);
+          createdIds.add(created.id);
         }
 
         // Page 1 (offset 0, limit 2): 2 hits, totals unchanged.

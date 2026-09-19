@@ -7,7 +7,7 @@
  * свойства + связи (с их свойствами и комментариями) + вложения. Главный
  * пишущий инструмент ETN; поглощает `etn.thoughts.create`/`update`/
  * `set_active`/`upsert_bundle`, `etn.links.create`, `etn.properties.set`,
- * `etn.comments.upsert` — они помечены `deprecated_since: '0.7.2'`.
+ * `etn.comments.upsert` — они удалены в 0.8.2 (задача 937480ca).
  *
  * Алгоритм — двухфазный внутри одной транзакции:
  *   1. **Resolve** — препроход по всем элементам батча с целью собрать

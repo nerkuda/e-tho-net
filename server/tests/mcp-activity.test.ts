@@ -30,11 +30,15 @@ import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import {
   buildMcpContext,
+  callWrite,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
+  setPropertiesViaWrite,
   toolJson,
   toolText,
+  upsertPermanentViaWrite,
   type McpTestContext,
 } from './mcp-helpers.js';
 
@@ -81,35 +85,21 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Журнальная мысль',
-            },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Журнальная мысль',
           });
-          assert.equal(created.isError, undefined, toolText(created));
-          const thoughtId = toolJson<{ id: string }>(created).id;
+          const thoughtId = created.id;
 
-          const updated = await handle.client.callTool({
-            name: 'etn.thoughts.update',
-            arguments: {
-              network_id: ctx.networkId,
-              thought_id: thoughtId,
-              changes: { title: 'Журнальная мысль (правка)' },
+          // Правка через батч (веха 9: `etn.thoughts.update` удалён) —
+          // `on_duplicate: 'update'` находит мысль по названию и правит её.
+          const updated = await callWrite(handle.client, ctx.networkId, [
+            {
+              ref: 'u',
+              thought: { title: 'Журнальная мысль', active: false },
+              on_duplicate: 'update',
             },
-          });
-          assert.equal(updated.isError, undefined, toolText(updated));
-
-          const setActive = await handle.client.callTool({
-            name: 'etn.thoughts.set_active',
-            arguments: {
-              network_id: ctx.networkId,
-              thought_id: thoughtId,
-              active: false,
-            },
-          });
-          assert.equal(setActive.isError, undefined, toolText(setActive));
+          ]);
+          assert.equal(updated.items[0]!.thought_action, 'updated');
 
           const trashed = await handle.client.callTool({
             name: 'etn.thoughts.trash',
@@ -143,12 +133,12 @@ describe(
           const rows = rowsOf(ctx, 'thought', thoughtId);
           assert.deepEqual(
             rows.map((r) => r.action),
-            ['created', 'updated', 'updated', 'trashed', 'restored', 'deleted'],
+            ['created', 'updated', 'trashed', 'restored', 'deleted'],
           );
-          // Снимок удаления хранит последнее живое имя (после правки).
+          // Снимок удаления хранит последнее живое имя.
           const deletedRow = rows.find((r) => r.action === 'deleted');
           assert.ok(deletedRow !== undefined);
-          assert.match(deletedRow.entity_title, /Журнальная мысль \(правка\)/);
+          assert.match(deletedRow.entity_title, /Журнальная мысль/);
           // Автор — исполнитель операции; слой — текущий слой сессии ключа
           // (свежая сессия сидит на базе).
           for (const row of rows) {
@@ -170,38 +160,29 @@ describe(
 
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const bundleArgs = (title: string): Record<string, unknown> => ({
-            network_id: ctx.networkId,
+          const bundleItem = (title: string): Record<string, unknown> => ({
+            ref: 'b',
             thought: { title, type_id: typeId },
             comment: { body_md: `Комментарий к ${title}.` },
-            links: [{ direction: 'parent', target_thought_id: ctx.homeId }],
+            links: [{ direction: 'parent', target_id: ctx.homeId }],
             attachments: [{ kind: 'url', url: 'https://example.com/dune' }],
           });
 
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.upsert_bundle',
-            arguments: {
-              ...bundleArgs('Дюна'),
-              properties: { статус: 'прочитано' },
-            },
-          });
-          assert.equal(created.isError, undefined, toolText(created));
-          const result = toolJson<{
-            id: string;
-            thought_action: string;
-            comment?: { id: string };
-            links?: Array<{ id: string }>;
-            attachments?: Array<{ id: string }>;
-          }>(created);
+          const created = await callWrite(handle.client, ctx.networkId, [
+            { ...bundleItem('Дюна'), properties: { статус: 'прочитано' } },
+          ]);
+          const result = created.items[0]!;
           assert.equal(result.thought_action, 'created');
 
-          // Создание бандла: мысль + комментарий + владелец свойства + связь
-          // + вложение — по одной строке на каждую операцию.
+          // Создание бандла через батч: мысль + комментарий + связь +
+          // вложение — по строке на каждую сущность (значения свойств
+          // внутри батча отдельных строк владельца не пишут — таков
+          // контракт `etn.thoughts.write`).
           const thoughtRows = rowsOf(ctx, 'thought', result.id);
           assert.deepEqual(
             thoughtRows.map((r) => r.action),
-            ['created', 'updated'],
-            'создание мысли + обновление владельца значения свойства',
+            ['created'],
+            'создание мысли одной строкой',
           );
           assert.ok(result.comment !== undefined);
           const commentRows = rowsOf(ctx, 'comment', result.comment.id);
@@ -220,26 +201,20 @@ describe(
           );
 
           // Обновление того же бандла: thought.updated + comment.updated.
-          const updated = await handle.client.callTool({
-            name: 'etn.thoughts.upsert_bundle',
-            arguments: {
-              network_id: ctx.networkId,
+          const updated = await callWrite(handle.client, ctx.networkId, [
+            {
+              ref: 'u',
               thought: { title: 'Дюна' },
               on_duplicate: 'update',
               comment: { body_md: 'Комментарий к Дюне. Обновлён.' },
             },
-          });
-          assert.equal(updated.isError, undefined, toolText(updated));
-          const updateResult = toolJson<{
-            id: string;
-            thought_action: string;
-            comment?: { id: string };
-          }>(updated);
+          ]);
+          const updateResult = updated.items[0]!;
           assert.equal(updateResult.thought_action, 'updated');
 
           assert.deepEqual(
             rowsOf(ctx, 'thought', updateResult.id).map((r) => r.action),
-            ['created', 'updated', 'updated'],
+            ['created', 'updated'],
           );
           assert.ok(updateResult.comment !== undefined);
           assert.deepEqual(
@@ -259,35 +234,18 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const thoughtRes = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Хозяин комментария' },
-          });
-          const thoughtId = toolJson<{ id: string }>(thoughtRes).id;
-
-          const upsertArgs = (body: string): Record<string, unknown> => ({
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            kind: 'permanent',
-            body_md: body,
-          });
-
-          // Первое upsert — создание постоянного комментария.
-          const first = await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: upsertArgs('Первое тело комментария.'),
-          });
-          assert.equal(first.isError, undefined, toolText(first));
-          const commentId = toolJson<{ id: string }>(first).id;
-
-          // Второе upsert того же владельца — обновление существующего.
-          const second = await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: upsertArgs('Второе тело комментария.'),
-          });
-          assert.equal(second.isError, undefined, toolText(second));
-          assert.equal(toolJson<{ id: string }>(second).id, commentId);
+          // Создание мысли с постоянным комментарием одним батчем
+          // (веха 9: `etn.comments.upsert` удалён) — журнал получает
+          // created-строки и для мысли, и для комментария.
+          const created = await callWrite(handle.client, ctx.networkId, [
+            {
+              ref: 'c',
+              thought: { title: 'Хозяин комментария' },
+              comment: { body_md: 'Второе тело комментария.' },
+            },
+          ]);
+          const thoughtId = created.items[0]!.id;
+          const commentId = created.items[0]!.comment!.id;
 
           // Прямой comments.update.
           const updated = await handle.client.callTool({
@@ -310,7 +268,7 @@ describe(
           const rows = rowsOf(ctx, 'comment', commentId);
           assert.deepEqual(
             rows.map((r) => r.action),
-            ['created', 'updated', 'updated', 'deleted'],
+            ['created', 'updated', 'deleted'],
           );
           const deletedRow = rows.find((r) => r.action === 'deleted');
           assert.ok(deletedRow !== undefined);
@@ -328,14 +286,8 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const mkThought = async (title: string): Promise<string> => {
-            const res = await handle.client.callTool({
-              name: 'etn.thoughts.create',
-              arguments: { network_id: ctx.networkId, title },
-            });
-            assert.equal(res.isError, undefined, toolText(res));
-            return toolJson<{ id: string }>(res).id;
-          };
+          const mkThought = async (title: string): Promise<string> =>
+            (await createThoughtViaWrite(handle.client, ctx.networkId, { title })).id;
           const sourceId = await mkThought('Источник связи');
           const targetId = await mkThought('Цель связи');
           const copyTargetId = await mkThought('Получатель вложения');
@@ -435,44 +387,27 @@ describe(
 
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Карточка', type_id: typeId },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Карточка',
+            type_id: typeId,
           });
-          assert.equal(created.isError, undefined, toolText(created));
-          const thoughtId = toolJson<{ id: string }>(created).id;
+          const thoughtId = created.id;
 
-          const bulk = await handle.client.callTool({
-            name: 'etn.properties.set',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              values: { статус: 'в работе', приоритет: 2 },
-            },
+          await setPropertiesViaWrite(handle.client, ctx.networkId, thoughtId, {
+            статус: 'в работе',
+            приоритет: 2,
           });
-          assert.equal(bulk.isError, undefined, toolText(bulk));
 
-          const single = await handle.client.callTool({
-            name: 'etn.properties.set',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              key: 'статус',
-              value: 'готово',
-            },
+          await setPropertiesViaWrite(handle.client, ctx.networkId, thoughtId, {
+            статус: 'готово',
           });
-          assert.equal(single.isError, undefined, toolText(single));
 
-          // Одна строка «владелец обновлён» на каждую установленную пару
-          // (как REST PUT properties: снимок самой мысли, не значения).
+          // Значения свойств внутри батча журнала владельца не пишут
+          // (контракт `etn.thoughts.write`) — строка только от создания.
           const rows = rowsOf(ctx, 'thought', thoughtId);
-          assert.deepEqual(rows.map((r) => r.action), ['created', 'updated', 'updated', 'updated']);
-          for (const row of rows.filter((r) => r.action === 'updated')) {
-            assert.match(row.entity_title, /мысль типа .+, «Карточка»/);
-            assert.equal(row.layer_id, BASE_LAYER_ID);
-          }
+          assert.deepEqual(rows.map((r) => r.action), ['created']);
+          assert.match(rows[0]?.entity_title ?? '', /мысль типа .+, «Карточка»/);
+          assert.equal(rows[0]?.layer_id, BASE_LAYER_ID);
         } finally {
           await handle.close();
         }
@@ -522,12 +457,10 @@ describe(
           assert.equal(allActivity(ctx).length, before);
 
           // Мутация в слое фиксируется со layer_id этого слоя.
-          const thoughtRes = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Мысль в слое' },
+          const thoughtRes = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Мысль в слое',
           });
-          assert.equal(thoughtRes.isError, undefined, toolText(thoughtRes));
-          const inLayerThoughtId = toolJson<{ id: string }>(thoughtRes).id;
+          const inLayerThoughtId = thoughtRes.id;
           const inLayerRows = rowsOf(ctx, 'thought', inLayerThoughtId);
           assert.deepEqual(inLayerRows.map((r) => r.action), ['created']);
           assert.equal(inLayerRows[0]?.layer_id, layerId);
@@ -582,11 +515,10 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const created = await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Будет очищен' },
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Будет очищен',
           });
-          const thoughtId = toolJson<{ id: string }>(created).id;
+          const thoughtId = created.id;
           const trashed = await handle.client.callTool({
             name: 'etn.thoughts.trash',
             arguments: { network_id: ctx.networkId, thought_id: thoughtId, trashed: true },

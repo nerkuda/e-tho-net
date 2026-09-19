@@ -123,28 +123,6 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
     }
   });
 
-  it('etn.properties.set: обе формы сразу — XOR-сообщение едино (схема)', async () => {
-    const w = await pairedWorld();
-    try {
-      const mcpRes = await w.handle.client.callTool({
-        name: 'etn.properties.set',
-        arguments: {
-          network_id: w.rest.networkId,
-          owner_type: 'thought',
-          owner_id: w.rest.homeId,
-          key: 'k',
-          value: 'x',
-          values: { other: 'y' },
-        },
-      });
-      assert.equal(mcpRes.isError, true);
-      assert.equal(mcpErrorParts(toolText(mcpRes)).code, 'VALIDATION_ERROR');
-      assert.match(toolText(mcpRes), /provide exactly one of/);
-    } finally {
-      await closeWorld(w);
-    }
-  });
-
   it('etn.locks.acquire ↔ POST /locks: entity_type не строкой — код и сообщение совпадают', async () => {
     const w = await pairedWorld();
     try {

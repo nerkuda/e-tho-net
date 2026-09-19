@@ -32,9 +32,8 @@ import {
 /**
  * Strip annotation fields the MCP SDK's `ToolAnnotationsSchema` does NOT
  * round-trip through the wire. Used by the canonical-registry test
- * (задача 053751b5, 0.7.2) so server-only fields like `deprecated_since`
- * don't trip the deepEqual — they live in the canonical registry for the
- * server's own tracking but don't make it back to the client.
+ * (задача 053751b5, 0.7.2): both sides are filtered to the SDK-known keys
+ * before deepEqual.
  */
 function filterToSdkAnnotations(
   ann: Record<string, unknown> | undefined,
@@ -357,9 +356,6 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         for (const name of MCP_TOOL_NAMES) {
           const tool = byName.get(name);
           assert.ok(tool, `tools/list must contain ${name}`);
-          // The MCP SDK's `ToolAnnotationsSchema` strips unknown fields, so
-          // `deprecated_since` (задача 053751b5) does NOT round-trip through
-          // the wire — it lives only in the server-side canonical registry.
           // Filter both sides to the SDK-known keys before deepEqual.
           const wire = filterToSdkAnnotations(tool.annotations);
           const canon = filterToSdkAnnotations(
@@ -383,14 +379,14 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         assert.equal(del.annotations?.readOnlyHint, undefined);
         assert.equal(del.annotations?.destructiveHint, true);
 
-        const upsert = byName.get('etn.thoughts.upsert_bundle')!;
-        assert.equal(upsert.annotations?.idempotentHint, true);
+        const trash = byName.get('etn.thoughts.trash')!;
+        assert.equal(trash.annotations?.idempotentHint, true);
 
-        const setActive = byName.get('etn.thoughts.set_active')!;
-        assert.equal(setActive.annotations?.idempotentHint, true);
+        const restore = byName.get('etn.links.restore')!;
+        assert.equal(restore.annotations?.idempotentHint, true);
 
-        const setProp = byName.get('etn.properties.set')!;
-        assert.equal(setProp.annotations?.idempotentHint, true);
+        const propAdd = byName.get('etn.properties.add')!;
+        assert.equal(propAdd.annotations?.idempotentHint, true);
 
         // Sanity check: count coverage matches the registry so a future
         // addition does not silently leak a tool without a hint.
@@ -429,18 +425,19 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         //   * `etn.networks.write` (idempotentHint) — +1 idempotent;
         //   * `etn.networks.delete` (destructiveHint) — +1 destructive.
         // Task 053751b5 / 0.7.2 добавляет `etn.thoughts.write` (idempotentHint)
-        // — +1 annotated, +1 idempotent. 4 из 7 поглощённых (`etn.thoughts.create`,
-        // `update`, `links.create`, `comments.upsert`) ранее были без записи
-        // в `MCP_TOOL_ANNOTATIONS` — теперь у всех семёрки есть пометка
-        // `deprecated_since: '0.7.2'`, поэтому canonical registry учитывает
-        // их наравне с остальными.
-        // P3 (задача e488f4c1): +4 (`copy_subtree`, `mentions_scan`,
-        // `import.dry_run`, `import.subgraph`) → 67.
-        // Задача c1fa71d4 / 0.7.3: +1 (`etn.views.run`, readOnlyHint) → 68.
-        assert.equal(annotated, 66);
+        // — +1 annotated, +1 idempotent. P3 (задача e488f4c1): +4
+        // (`copy_subtree`, `mentions_scan`, `import.dry_run`,
+        // `import.subgraph`) → 67. Задача c1fa71d4 / 0.7.3: +1
+        // (`etn.views.run`, readOnlyHint) → 68.
+        // Задача 937480ca / 0.8.2 удаляет 6 поглощённых инструментов
+        // (`etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`,
+        // `etn.properties.set`, `etn.comments.upsert`): −3 idempotent
+        // (set_active, properties.set, upsert_bundle), −6 annotated
+        // (без изменения readOnly/destructive) → 60/33/13/11.
+        assert.equal(annotated, 60);
         assert.equal(hintReadOnly, 33);
         assert.equal(hintDestructive, 13);
-        assert.equal(hintIdempotent, 14);
+        assert.equal(hintIdempotent, 11);
       } finally {
         await handle.close();
       }

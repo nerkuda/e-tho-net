@@ -27,6 +27,7 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
   toolJson,
   toolText,
@@ -73,12 +74,28 @@ async function addSecondMember(ctx: McpTestContext): Promise<SecondParty> {
 
 /** Create one thought via MCP, return its id. */
 async function createThought(handle: McpClientHandle, networkId: string, title: string): Promise<string> {
+  return (await createThoughtViaWrite(handle.client, networkId, { title })).id;
+}
+
+/**
+ * Патч мысли через батч `etn.thoughts.write` (веха 9: удалён
+ * `etn.thoughts.update`) — `on_duplicate: 'update'` находит мысль по
+ * названию и правит её, поэтому LOCKED-проверка захвата работает
+ * так же, как у старого инструмента.
+ */
+async function patchThought(
+  handle: McpClientHandle,
+  networkId: string,
+  title: string,
+): Promise<{ isError?: boolean }> {
   const res = await handle.client.callTool({
-    name: 'etn.thoughts.create',
-    arguments: { network_id: networkId, title },
+    name: 'etn.thoughts.write',
+    arguments: {
+      network_id: networkId,
+      thoughts: [{ ref: 'u', thought: { title, active: false }, on_duplicate: 'update' }],
+    },
   });
-  assert.equal(res.isError, undefined, toolText(res));
-  return (toolJson(res) as { id: string }).id;
+  return res as { isError?: boolean };
 }
 
 /** Subscribe to all network events and return an unsubscribe handle. */
@@ -115,15 +132,8 @@ describe(
           assert.equal(lock.client_id, null, 'MCP без Client-Id → null');
 
           // Update — агент-владелец может править свой захват.
-          const upd = await handle.client.callTool({
-            name: 'etn.thoughts.update',
-            arguments: {
-              network_id: ctx.networkId,
-              thought_id: tId,
-              changes: { title: 'Идея (правится агентом)' },
-            },
-          });
-          assert.equal(upd.isError, undefined, toolText(upd));
+          const upd = await patchThought(handle, ctx.networkId, 'Идея');
+          assert.equal(upd.isError, undefined, toolText(upd as never));
 
           // Release — аналог REST 204.
           const rel = await handle.client.callTool({
@@ -285,16 +295,9 @@ describe(
         assert.match(toolText(bobAcq), new RegExp(ctx.adminId.replace(/-/g, '[-]')));
 
         // Bob пытается править мысль — то же LOCKED (enforceLock).
-        const bobUpdate = await bob.handle.client.callTool({
-          name: 'etn.thoughts.update',
-          arguments: {
-            network_id: ctx.networkId,
-            thought_id: tId,
-            changes: { title: 'от Bob' },
-          },
-        });
+        const bobUpdate = await patchThought(bob.handle, ctx.networkId, 'Alice-idea');
         assert.equal(bobUpdate.isError, true);
-        assert.match(toolText(bobUpdate), /ETN error \[LOCKED\]/);
+        assert.match(toolText(bobUpdate as never), /ETN error \[LOCKED\]/);
 
         // Alice отпускает — Bob теперь может править.
         const aliceRel = await alice.client.callTool({
@@ -303,15 +306,8 @@ describe(
         });
         assert.equal(aliceRel.isError, undefined, toolText(aliceRel));
 
-        const bobUpdateAfter = await bob.handle.client.callTool({
-          name: 'etn.thoughts.update',
-          arguments: {
-            network_id: ctx.networkId,
-            thought_id: tId,
-            changes: { title: 'от Bob после release' },
-          },
-        });
-        assert.equal(bobUpdateAfter.isError, undefined, toolText(bobUpdateAfter));
+        const bobUpdateAfter = await patchThought(bob.handle, ctx.networkId, 'Alice-idea');
+        assert.equal(bobUpdateAfter.isError, undefined, toolText(bobUpdateAfter as never));
       } finally {
         if (bob !== null) await bob.handle.close();
         await alice.close();
@@ -495,15 +491,8 @@ describe(
         assert.equal(list.data[0]?.user_id, bob.userId);
 
         // Alice теперь снова может править свои мысли.
-        const upd = await alice.client.callTool({
-          name: 'etn.thoughts.update',
-          arguments: {
-            network_id: ctx.networkId,
-            thought_id: aId,
-            changes: { title: 'Alice снова правит' },
-          },
-        });
-        assert.equal(upd.isError, undefined, toolText(upd));
+        const upd = await patchThought(alice, ctx.networkId, 'A');
+        assert.equal(upd.isError, undefined, toolText(upd as never));
       } finally {
         if (bob !== null) await bob.handle.close();
         await alice.close();

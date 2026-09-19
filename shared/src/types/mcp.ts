@@ -72,13 +72,9 @@ export const MCP_TOOL_NAMES = [
   // mutate (§4.2)
   'etn.networks.write',
   'etn.networks.delete',
-  'etn.thoughts.create',
-  'etn.thoughts.update',
   'etn.thoughts.delete',
   'etn.thoughts.trash',
-  'etn.thoughts.set_active',
   'etn.links.restore',
-  'etn.comments.upsert',
   'etn.comments.update',
   'etn.comments.edit',
   'etn.comments.delete',
@@ -87,16 +83,14 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.search',
   'etn.attachments.update',
   'etn.attachments.delete',
-  'etn.properties.set',
   'etn.properties.add',
   'etn.properties.remove',
-  'etn.thoughts.upsert_bundle',
   // `etn.thoughts.write` (task 053751b5, 0.7.2) — батч-запись: одна транзакция
   // для многих связанных единиц знания (мысли + постоянные/хронологические
   // комментарии + свойства + связи с их свойствами и комментариями + вложения).
-  // Поглощает `thoughts.create`/`update`/`set_active`/`upsert_bundle`,
-  // `links.create`, `properties.set`, `comments.upsert` — они помечены
-  // `deprecated_since: '0.7.2'` ниже, `registerTools` их пропускает.
+  // Поглощённые инструменты (`thoughts.create`/`update`/`set_active`/
+  // `upsert_bundle`, `links.create`, `properties.set`, `comments.upsert`)
+  // удалены в 0.8.2 (задача 937480ca).
   'etn.thoughts.write',
   'etn.trash.purge',
   'etn.thoughts.usage_clear',
@@ -142,14 +136,8 @@ export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
  *   `links.delete`, `comments.delete`). Combined with `readOnlyHint: false`
  *   it tells the agent host that the call needs explicit user approval.
  * - `idempotentHint` — `true` for tools whose repeated call with the same
- *   arguments produces the same final state: `thoughts.set_active`,
- *   `properties.set`, and `thoughts.upsert_bundle` (upsert semantics, O1).
- * - `deprecated_since` — задача 053751b5, 0.7.2: версия, на которой
- *   инструмент был поглощён `etn.thoughts.write` и снят с `tools/list`.
- *   При наличии поля `registerTools` (`server/src/mcp/tools.ts`) ПРОПУСКАЕТ
- *   регистрацию, поэтому инструмент не виден агентам; обработчик в коде
- *   остаётся на случай, если потребуется быстрый rollback (или пока старый
- *   клиент — например, эта сессия ZCode — не перешёл на `etn.thoughts.write`).
+ *   arguments produces the same final state: `thoughts.trash`,
+ *   `properties.add`/`remove`, and `thoughts.write` (upsert semantics, O1).
  *
  * All fields are optional on the wire; tools that carry no hints (the
  * remaining mutating tools — `create`/`update`/`links.create`/comments
@@ -159,10 +147,6 @@ export interface McpToolAnnotations {
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
   idempotentHint?: boolean;
-  /** Задача 053751b5 (0.7.2): версия, на которой инструмент поглощён
-   *  `etn.thoughts.write`; `registerTools` пропускает регистрацию при
-   *  наличии. */
-  deprecated_since?: string;
 }
 
 /**
@@ -230,13 +214,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.networks.write': { destructiveHint: false, idempotentHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
-  'etn.thoughts.set_active': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.thoughts.trash': { idempotentHint: true },
   'etn.links.restore': { idempotentHint: true },
-  'etn.properties.set': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.properties.add': { idempotentHint: true },
   'etn.properties.remove': { idempotentHint: true },
-  'etn.thoughts.upsert_bundle': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
   // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
@@ -246,14 +227,6 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // `etn.comments.edit` (задача d28abe04) — секционная правка ops-ами;
   // повторный вызов с теми же ops поверх нового состояния меняет результат.
   'etn.comments.edit': { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-
-  // ---- задача 053751b5 / 0.7.2 — поглощённые `etn.thoughts.write` --------
-  // Эти 7 инструментов остаются в `MCP_TOOL_NAMES` и в коде `registerTools`,
-  // но `deprecated_since` заставляет `registerTools` пропустить их регистрацию.
-  // Обработчики сохранены для отката и для старых клиентов в период миграции.
-  'etn.thoughts.create': { deprecated_since: '0.7.2' },
-  'etn.thoughts.update': { deprecated_since: '0.7.2' },
-  'etn.comments.upsert': { deprecated_since: '0.7.2' },
 
   // ---- `etn.thoughts.write` (задача 053751b5 / 0.7.2) — главный пишущий ----
   // Батч 1..50 связанных единиц знания одной транзакцией: одна запись бюджета,
@@ -313,10 +286,9 @@ export interface McpMutationResult {
   request_id?: string;
   /**
    * Non-fatal warnings about the resulting card (task O6). Currently emitted
-   * by `etn.thoughts.create`, `etn.thoughts.update` (when `type_id` changes)
-   * and `etn.thoughts.upsert_bundle` — the call succeeded, but the card is
-   * not fully compliant with its type's required-property contract. Absent
-   * when no warnings apply.
+   * by `etn.thoughts.write` batch items (via the bundle domain) — the call
+   * succeeded, but the card is not fully compliant with its type's
+   * required-property contract. Absent when no warnings apply.
    */
   warnings?: ThoughtCardWarning[];
 }
@@ -706,10 +678,10 @@ export interface McpUpsertBundleResult extends McpMutationResult {
 
 // ---------------------------------------------------------------------------
 // `etn.thoughts.write` (task 053751b5, версия 0.7.2) — батч-запись связанных
-// единиц знания одной транзакцией. Поглощает `etn.thoughts.create`/`update`/
-// `set_active`/`upsert_bundle`, `etn.links.create`, `etn.properties.set`,
-// `etn.comments.upsert` (помечены `deprecated_since: '0.7.2'`, регистрация
-// в `tools/list` пропускается).
+// единиц знания одной транзакцией. Поглощённые инструменты
+// (`etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`,
+// `etn.links.create`, `etn.properties.set`, `etn.comments.upsert`)
+// удалены в 0.8.2 (задача 937480ca).
 // ---------------------------------------------------------------------------
 
 /** Один элемент хронологической записи в `etn.thoughts.write` (см. также

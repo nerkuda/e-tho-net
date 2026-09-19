@@ -9,17 +9,11 @@ import type { McpRuntime } from '../context.js';
 import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS, PROPERTY_OWNER_TYPES } from '@etn/shared';
-import type {
-  McpMutationResult,
-  McpPropertiesSetResult,
-  PropertyDefinition,
-  PropertyValueValue,
-} from '@etn/shared';
+import type { McpMutationResult } from '@etn/shared';
 import { getThoughtOrThrow, getThought } from '../../domain/thought-service.js';
 import {
   PropertiesAdd,
   PropertiesRemove,
-  PropertiesSet,
   ThoughtsUsageClear,
 } from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
@@ -27,11 +21,7 @@ import {
   addLinkPropertyValue,
   clearThoughtRefUsages,
   removeLinkPropertyValue,
-  resolveDefinition,
-  setPropertyValue,
-  setPropertyValues,
 } from '../../domain/property-service.js';
-import { emitDomainEvent } from '../../realtime/emit.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -50,175 +40,6 @@ export const PropertyValueSchema = z.union([
   z.null(),
 ]);
 export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
-  /**
-   * Coerce stringified scalars back to their JSON types at the MCP boundary
-   * (0.5.3 bugfix, docs/05-mcp-server.md §5.2). Some MCP hosts (ZCode among
-   * them) stringify the scalar `value` parameter of a union-typed tool input,
-   * so `value: true` arrives as `"true"`; nested objects (`values`,
-   * `properties`) pass through untouched, which is why only the single form of
-   * `etn.properties.set` needs this. The rules stay strict on purpose:
-   *   * `bool` — only the exact strings "true"/"false" (case-insensitive);
-   *   * `number` — only strings `Number()` parses into a finite number
-   *     (so "42", "3.5", "1e3" pass; "", "abc", "Infinity" fall through and
-   *     are rejected by the domain validation, which itself stays untouched).
-   * Text-like properties (`text`, `url`, `date`) never coerce: "true" stays a
-   * string there.
-   */
-  const coerceStringifiedScalar = (
-    def: Pick<PropertyDefinition, 'value_type'>,
-    value: PropertyValueValue,
-  ): PropertyValueValue => {
-    if (typeof value !== 'string') {
-      return value;
-    }
-    if (def.value_type === 'bool' && /^(true|false)$/i.test(value)) {
-      return value.toLowerCase() === 'true';
-    }
-    if (def.value_type === 'number' && value.trim() !== '' && Number.isFinite(Number(value))) {
-      return Number(value);
-    }
-    return value;
-  };
-  const SetPropertySchema = z
-    .object({
-      network_id: NetworkId,
-      owner_type: z.enum(PROPERTY_OWNER_TYPES),
-      owner_id: z.string().min(1),
-      key: z.string().min(1).optional(),
-      value: PropertyValueSchema.optional(),
-      values: z.record(z.string(), PropertyValueSchema).optional(),
-    })
-    .refine((v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined), {
-      message: 'provide exactly one of { key + value } or { values }',
-    });
-  mcp.registerTool(
-    'etn.properties.set',
-    {
-      title: 'Установить свойство',
-      description:
-        'Set (or clear with `value: null`) a property value on a thought/link by key; the value must ' +
-        "match the definition's value_type. `config.multiple = true` properties accept an array: " +
-        '`url` — URL/file-path strings (JSON array, not comma-join); an empty ' +
-        'array clears. Stringified scalars are tolerated in the single form: "true"/"false" for `bool`, ' +
-        'finite numeric strings for `number` — coerced back to JSON types. Either one `key`+`value`, or ' +
-        '`values: {key: value|null}` for several properties in one transaction (an invalid key rolls back ' +
-        "the whole set). Missing key → NOT_FOUND; a property not attached to the owner's type chain → " +
-        'VALIDATION_ERROR with `details.property_id` (call `etn.types.list` against it).',
-      inputSchema: PropertiesSet.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        /** Снимок владельца для журнала (требование b0c7a57c — как REST и
-         *  прежний MCP-диспетчер: без строки — голый id). */
-        const ownerEntity = () =>
-          args.owner_type === 'thought'
-            ? (getThought(ndb, args.owner_id) ?? { id: args.owner_id })
-            : (getLink(ndb, args.owner_id) ?? { id: args.owner_id });
-
-        if (args.values !== undefined) {
-          const values = args.values;
-          const stored = runWrite(ndb, fx, () => {
-            const written = setPropertyValues(
-              ndb,
-              args.owner_type,
-              args.owner_id,
-              values,
-              rt.deps.auth.userId,
-            );
-            const events: AnyWriteEvent[] = [];
-            const activity: WriteActivityEntry[] = [];
-            // Журнал — по строке на каждое записанное значение (как прежний
-            // MCP-диспетчер: один `property-value.set` = одно обновление
-            // владельца, требование b0c7a57c).
-            const owner = ownerEntity();
-            for (const value of Object.values(written)) {
-              events.push({
-                type: 'property-value.set',
-                data: {
-                  owner_type: args.owner_type,
-                  owner_id: args.owner_id,
-                  property_id: value.property_id,
-                  value: value.value,
-                },
-              });
-              activity.push({ kind: 'owner', entityType: args.owner_type, entity: owner });
-            }
-            return {
-              result: written,
-              events,
-              activity,
-              audit: {
-                action: 'etn.properties.set',
-                targetType: args.owner_type,
-                targetId: args.owner_id,
-                details: { values },
-              },
-            };
-          });
-          return {
-            values: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, { id: v.id }])),
-            version: 0,
-            request_id: String(extra.requestId),
-          } satisfies McpPropertiesSetResult;
-        }
-
-        // Single-property form (backward compatible). The refine guarantees both
-        // are present whenever `values` is absent.
-        const key = args.key;
-        const value = args.value;
-        if (key === undefined || value === undefined) {
-          throw new Error('ETN error [VALIDATION_ERROR]: key and value are required');
-        }
-        // Some MCP hosts stringify scalar union parameters ("true" instead of
-        // true) — coerce the string back per the resolved definition's
-        // value_type before the domain call (docs/05-mcp-server.md §5.2).
-        // A missing definition is left to setPropertyValue to report (NOT_FOUND).
-        const def = resolveDefinition(ndb, args.owner_type, args.owner_id, key);
-        const coerced = def === null ? value : coerceStringifiedScalar(def, value);
-        const stored = runWrite(ndb, fx, () => {
-          const set = setPropertyValue(
-            ndb,
-            args.owner_type,
-            args.owner_id,
-            key,
-            coerced,
-            rt.deps.auth.userId,
-          );
-          return {
-            result: set,
-            events: [
-              {
-                type: 'property-value.set',
-                data: {
-                  owner_type: args.owner_type,
-                  owner_id: args.owner_id,
-                  property_id: set.property_id,
-                  value: set.value,
-                },
-              },
-            ],
-            activity: [{ kind: 'owner', entityType: args.owner_type, entity: ownerEntity() }],
-            audit: {
-              action: 'etn.properties.set',
-              targetType: args.owner_type,
-              targetId: args.owner_id,
-              details: { key, value: coerced },
-            },
-          };
-        });
-        return {
-          id: stored.id,
-          version: 0,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
-
   // 0.8.1 (b3ce5014): операции над набором свойства-связи — добавить/убрать одну
   // цель, без чтения текущего набора. `add` принимает необязательный комментарий.
   const AddPropertySchema = z.object({

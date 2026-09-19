@@ -17,22 +17,13 @@ import type { NetworkDb } from '../../db/network-db.js';
 import {
   LinksRestore,
   ThoughtsBulkUpdate,
-  ThoughtsCreate,
   ThoughtsDelete,
-  ThoughtsSetActive,
   ThoughtsTrash,
-  ThoughtsUpdate,
 } from '../../contracts.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
-import {
-  createThoughtWithWarnings,
-  deleteThought,
-  getThoughtOrThrow,
-  updateThought,
-  updateThoughtWithWarnings,
-} from '../../domain/thought-service.js';
-import { findLinksBetween, updateLink } from '../../domain/link-service.js';
+import { deleteThought, getThoughtOrThrow, updateThought } from '../../domain/thought-service.js';
+import { updateLink } from '../../domain/link-service.js';
 import { applyBulkThoughtOp } from '../../domain/thought-bulk-service.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
@@ -44,17 +35,7 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import {
-  NetworkId,
-  ThoughtId,
-  LinkId,
-  ExpectedVersion,
-  TYPE_ID_TYPE_CONFLICT,
-  CreateLink,
-  ThoughtChanges,
-  effectiveThoughtTypeId,
-  effectiveLinkTypeId,
-} from './shared.js';
+import { NetworkId, ThoughtId, LinkId, ExpectedVersion, TYPE_ID_TYPE_CONFLICT } from './shared.js';
 
 export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void {
   const BULK_UPDATE_OPS = [
@@ -200,171 +181,6 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
       }),
   );
 
-  const CreateThoughtSchema = z
-    .object({
-      network_id: NetworkId,
-      title: z.string().min(1),
-      synonyms: z.array(z.string().min(1)).optional(),
-      type_id: ThoughtId.nullable().optional(),
-      type: z.string().min(1).optional(),
-      active: z.boolean().optional(),
-      link: CreateLink,
-    })
-    .refine((v) => v.type_id === undefined || v.type === undefined, {
-      message: TYPE_ID_TYPE_CONFLICT,
-    });
-  mcp.registerTool(
-    'etn.thoughts.create',
-    {
-      title: 'Создать мысль',
-      description:
-        'Create a thought, optionally attaching a link in the same transaction. `link.direction` names ' +
-        'the role of `link.target_thought_id` for the NEW thought: "parent" — attach the new thought ' +
-        'UNDER the target (use this to create inside a section), "child" — the NEW thought becomes the ' +
-        'parent of the target. Call `etn.thoughts.find_duplicates` first. `type`/`link.type` resolve a ' +
-        "type by name (see `etn.types.list`). `warnings` lists the type's `required` properties left " +
-        'unset — follow up with `etn.properties.set`.',
-      inputSchema: ThoughtsCreate.schema,
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const typeId = effectiveThoughtTypeId(ndb, args.type_id, args.type);
-        const linkTypeId =
-          args.link === undefined
-            ? undefined
-            : effectiveLinkTypeId(ndb, args.link.type_id, args.link.type);
-        const { thought, warnings } = runWrite(ndb, fx, () => {
-          const created = createThoughtWithWarnings(
-            ndb,
-            {
-              title: args.title,
-              ...(args.synonyms === undefined ? {} : { synonyms: args.synonyms }),
-              ...(typeId === undefined ? {} : { type_id: typeId }),
-              ...(args.active === undefined ? {} : { active: args.active }),
-              ...(args.link === undefined
-                ? {}
-                : {
-                    // Domain/REST direction now matches the MCP one directly
-                    // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
-                    create_link: {
-                      direction: args.link.direction,
-                      target_thought_id: args.link.target_thought_id,
-                      type_id: linkTypeId ?? null,
-                    },
-                  }),
-            },
-            rt.deps.auth.userId,
-          );
-          const events: AnyWriteEvent[] = [
-            { type: 'thought.created', data: { thought: created.thought } },
-          ];
-          const activity: WriteActivityEntry[] = [
-            { kind: 'thought', action: 'created', thought: created.thought },
-          ];
-          if (args.link !== undefined) {
-            // "parent" — the TARGET is the link source (the new thought hangs
-            // under it); "child" — the new thought is the source.
-            const [sourceId, targetId] =
-              args.link.direction === 'parent'
-                ? [args.link.target_thought_id, created.thought.id]
-                : [created.thought.id, args.link.target_thought_id];
-            const link = findLinksBetween(ndb, sourceId, targetId, linkTypeId ?? null)[0];
-            if (link !== undefined) {
-              events.push({ type: 'link.created', data: { link } });
-              activity.push({ kind: 'link', action: 'created', link });
-            }
-          }
-          return {
-            result: created,
-            events,
-            activity,
-            audit: {
-              action: 'etn.thoughts.create',
-              targetType: 'thought',
-              targetId: created.thought.id,
-              details: {
-                title: args.title,
-                synonyms: args.synonyms,
-                type_id: typeId,
-                active: args.active,
-                link: args.link,
-              },
-            },
-          };
-        });
-        return {
-          id: thought.id,
-          version: thought.version,
-          request_id: String(extra.requestId),
-          ...(warnings.length === 0 ? {} : { warnings }),
-        } satisfies McpMutationResult;
-      }),
-  );
-
-  const UpdateThoughtSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    changes: ThoughtChanges,
-    expected_version: ExpectedVersion,
-  });
-  mcp.registerTool(
-    'etn.thoughts.update',
-    {
-      title: 'Изменить мысль',
-      description:
-        'Patch a thought (last-write-wins per field). `expected_version` enables optimistic concurrency — ' +
-        'on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; `warnings` lists the ' +
-        "new type's `required` properties left unset when `changes.type_id` is present.",
-      inputSchema: ThoughtsUpdate.schema,
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const { thought, warnings } = runWrite(ndb, fx, () => {
-          const updated = updateThoughtWithWarnings(
-            ndb,
-            args.thought_id,
-            args.changes,
-            args.expected_version,
-            rt.deps.auth.userId,
-          );
-          return {
-            result: updated,
-            events: [
-              {
-                type: 'thought.updated',
-                data: {
-                  id: updated.thought.id,
-                  changes: args.changes,
-                  version: updated.thought.version,
-                },
-              },
-            ],
-            activity: [{ kind: 'thought', action: 'updated', thought: updated.thought }],
-            audit: {
-              action: 'etn.thoughts.update',
-              targetType: 'thought',
-              targetId: updated.thought.id,
-              details: args,
-            },
-          };
-        });
-        return {
-          id: thought.id,
-          version: thought.version,
-          request_id: String(extra.requestId),
-          ...(warnings.length === 0 ? {} : { warnings }),
-        } satisfies McpMutationResult;
-      }),
-  );
-
   const DeleteThoughtSchema = z.object({
     network_id: NetworkId,
     thought_id: ThoughtId,
@@ -465,62 +281,6 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
               targetType: 'thought',
               targetId: updated.id,
               details: { trashed: args.trashed },
-            },
-          };
-        });
-        return {
-          id: thought.id,
-          version: thought.version,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
-
-  const SetActiveSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    active: z.boolean(),
-  });
-  mcp.registerTool(
-    'etn.thoughts.set_active',
-    {
-      title: 'Изменить актуальность мысли',
-      description: 'Activate or deactivate a thought. The HOME thought cannot be deactivated.',
-      inputSchema: ThoughtsSetActive.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.set_active'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const thought = runWrite(ndb, fx, () => {
-          const updated = updateThought(
-            ndb,
-            args.thought_id,
-            { active: args.active },
-            undefined,
-            rt.deps.auth.userId,
-          );
-          return {
-            result: updated,
-            events: [
-              {
-                type: 'thought.updated',
-                data: {
-                  id: updated.id,
-                  changes: { active: args.active },
-                  version: updated.version,
-                },
-              },
-            ],
-            activity: [{ kind: 'thought', action: 'updated', thought: updated }],
-            audit: {
-              action: 'etn.thoughts.set_active',
-              targetType: 'thought',
-              targetId: updated.id,
-              details: { active: args.active },
             },
           };
         });

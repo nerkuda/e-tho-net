@@ -27,6 +27,7 @@ import {
   toolText,
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
+import { createComment } from '../src/domain/comment-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import {
   createTypeProperty,
@@ -559,7 +560,10 @@ async function getRootLinkTypeId(ndb: ReturnType<typeof openNetworkDb>): Promise
   return row.id;
 }
 
-/** Дёрнуть `etn.comments.upsert` через прямой open сети + клиента. */
+/** Комментарий для фикстур флагов рёбер — доменом напрямую
+ *  (удалённый `etn.comments.upsert` писал на связи; батч
+ *  `etn.thoughts.write` умеет комментарии только на новых связях,
+ *  а флаги считаются на существующих). */
 async function handleUpsertComment(
   ctx: Awaited<ReturnType<typeof buildMcpContext>>,
   args: {
@@ -570,25 +574,18 @@ async function handleUpsertComment(
     valid_from?: string;
   },
 ): Promise<void> {
-  const handle = await connectMcpClient(ctx, ctx.adminKey);
-  try {
-    const result = await handle.client.callTool({
-      name: 'etn.comments.upsert',
-      arguments: {
-        network_id: ctx.networkId,
-        owner_type: args.owner_type,
-        owner_id: args.owner_id,
-        kind: args.kind,
-        body_md: args.body_md,
-        ...(args.valid_from ? { valid_from: args.valid_from } : {}),
-      },
-    });
-    if (result.isError) {
-      throw new Error(`etn.comments.upsert failed: ${toolText(result)}`);
-    }
-  } finally {
-    await handle.close();
-  }
+  const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+  createComment(
+    ndb,
+    args.owner_type,
+    args.owner_id,
+    {
+      kind: args.kind,
+      body_md: args.body_md,
+      ...(args.valid_from ? { valid_from: args.valid_from } : {}),
+    },
+    ctx.adminId,
+  );
 }
 
 /** Дёрнуть `etn.attachments.add` через клиента. */

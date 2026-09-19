@@ -18,7 +18,6 @@ import { scanMentions } from '../../domain/mentions-scan-service.js';
 
 // Ре-экспорт единых zod-кусков контрактов (веха 8).
 export {
-  CreateLink,
   ExpectedVersion,
   LayerId,
   LinkDirection,
@@ -26,7 +25,6 @@ export {
   LinkId,
   NetworkId,
   PROPERTY_ID_PROPERTY_CONFLICT,
-  ThoughtChanges,
   ThoughtId,
   TYPE_ID_TYPE_CONFLICT,
   View,

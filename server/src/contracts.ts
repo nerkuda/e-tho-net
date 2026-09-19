@@ -103,35 +103,6 @@ export const LinkDirection = z
       'becomes the parent of target_thought_id.',
   );
 
-/** Необязательная ссылка при создании мысли (§4.2, task O4). */
-export const CreateLink = z
-  .object({
-    direction: LinkDirection,
-    target_thought_id: ThoughtId,
-    type_id: z.string().min(1).nullable().optional(),
-    type: z.string().min(1).optional(),
-  })
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
-  .optional();
-
-/** Подмножество полей `etn.thoughts.update` (зеркало `ThoughtUpdateInput`). */
-export const ThoughtChanges = z
-  .object({
-    title: z.string().min(1).optional(),
-    synonyms: z.array(z.string().min(1)).optional(),
-    type_id: z.string().min(1).nullable().optional(),
-    icon: z.string().nullable().optional(),
-    icon_kind: z.enum(ICON_KINDS).optional(),
-    active: z.boolean().optional(),
-    fg_color: z.string().nullable().optional(),
-    bg_color: z.string().nullable().optional(),
-    font_bold: z.boolean().optional(),
-    font_italic: z.boolean().optional(),
-    font_underline: z.boolean().optional(),
-    font_strike: z.boolean().optional(),
-  })
-  .refine((c) => Object.keys(c).length > 0, { message: 'changes must not be empty' });
-
 // ---------------------------------------------------------------------------
 // REST-источники и спецификация поля
 // ---------------------------------------------------------------------------
@@ -846,30 +817,6 @@ export const ThoughtsBulkUpdate = defineContract(
   {},
 );
 
-const CreateThoughtFields = z
-  .object({
-    network_id: NetworkId,
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-    type_id: ThoughtId.nullable().optional(),
-    type: z.string().min(1).optional(),
-    active: z.boolean().optional(),
-    link: CreateLink,
-  })
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
-export const ThoughtsCreate = defineContract('etn.thoughts.create', CreateThoughtFields, {});
-
-export const ThoughtsUpdate = defineContract(
-  'etn.thoughts.update',
-  z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    changes: ThoughtChanges,
-    expected_version: ExpectedVersion,
-  }),
-  {},
-);
-
 export const ThoughtsDelete = defineContract(
   'etn.thoughts.delete',
   z.object({ network_id: NetworkId, thought_id: ThoughtId, expected_version: ExpectedVersion }),
@@ -879,12 +826,6 @@ export const ThoughtsDelete = defineContract(
 export const ThoughtsTrash = defineContract(
   'etn.thoughts.trash',
   z.object({ network_id: NetworkId, thought_id: ThoughtId, trashed: z.boolean() }),
-  {},
-);
-
-export const ThoughtsSetActive = defineContract(
-  'etn.thoughts.set_active',
-  z.object({ network_id: NetworkId, thought_id: ThoughtId, active: z.boolean() }),
   {},
 );
 
@@ -904,20 +845,6 @@ export const PropertyValueSchema = z.union([
   z.array(z.string().min(1)),
   z.null(),
 ]);
-
-const SetPropertyFields = z
-  .object({
-    network_id: NetworkId,
-    owner_type: z.enum(PROPERTY_OWNER_TYPES),
-    owner_id: z.string().min(1),
-    key: z.string().min(1).optional(),
-    value: PropertyValueSchema.optional(),
-    values: z.record(z.string(), PropertyValueSchema).optional(),
-  })
-  .refine((v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined), {
-    message: 'provide exactly one of { key + value } or { values }',
-  });
-export const PropertiesSet = defineContract('etn.properties.set', SetPropertyFields, {});
 
 export const PropertiesAdd = defineContract(
   'etn.properties.add',
@@ -964,30 +891,6 @@ const GetCommentFields = z
     message: 'provide exactly one of comment_id or thought_id',
   });
 export const CommentsGet = defineContract('etn.comments.get', GetCommentFields, {});
-
-const CommentTargetFields = z.object({
-  owner_type: z.enum(COMMENT_OWNER_TYPES),
-  owner_id: z.string().min(1),
-});
-const UpsertCommentFields = z
-  .object({
-    network_id: NetworkId,
-    owner_type: z.enum(COMMENT_OWNER_TYPES).optional(),
-    owner_id: z.string().min(1).optional(),
-    targets: z.array(CommentTargetFields).min(1).max(COMMENT_TARGETS_MAX).optional(),
-    kind: z.enum(COMMENT_KINDS),
-    title: z.string().nullable().optional(),
-    body_md: z.string().min(1),
-    valid_from: z.string().min(1).optional(),
-    valid_to: z.string().nullable().optional(),
-  })
-  .refine((v) => (v.owner_type !== undefined && v.owner_id !== undefined) !== (v.targets !== undefined), {
-    message: 'provide exactly one of { owner_type + owner_id } or { targets }',
-  })
-  .refine((v) => v.targets === undefined || v.kind === 'chronological', {
-    message: 'targets is only allowed for kind: "chronological" (a permanent comment has exactly one owner)',
-  });
-export const CommentsUpsert = defineContract('etn.comments.upsert', UpsertCommentFields, {});
 
 const CommentChangesFields = z
   .object({
@@ -1095,56 +998,6 @@ export const AttachmentsDelete = defineContract(
   z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
   {},
 );
-
-// ===========================================================================
-// Область: составная запись (tools/bundles.ts)
-// ===========================================================================
-
-const BundleThoughtFields = z
-  .object({
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-    type_id: z.string().min(1).nullable().optional(),
-    type: z.string().min(1).optional(),
-    active: z.boolean().optional(),
-  })
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
-const BundleCommentFields = z.object({
-  title: z.string().nullable().optional(),
-  body_md: z.string().min(1),
-  valid_from: z.string().min(1).optional(),
-  valid_to: z.string().nullable().optional(),
-});
-const BundleLinkFields = z
-  .object({
-    direction: LinkDirection,
-    target_thought_id: ThoughtId,
-    type_id: z.string().min(1).nullable().optional(),
-    type: z.string().min(1).optional(),
-  })
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
-const BundleAttachmentFields = z.object({
-  kind: z.enum(ATTACHMENT_KINDS),
-  url: z.string().min(1).nullable().optional(),
-  file_path: z.string().min(1).nullable().optional(),
-  title: z.string().nullable().optional(),
-  description: z.string().nullable().optional(),
-});
-const UpsertBundleFields = z
-  .object({
-    network_id: NetworkId,
-    thought_id: ThoughtId.optional(),
-    thought: BundleThoughtFields.optional(),
-    on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
-    comment: BundleCommentFields.optional(),
-    properties: z.record(z.string(), PropertyValueSchema).optional(),
-    links: z.array(BundleLinkFields).optional(),
-    attachments: z.array(BundleAttachmentFields).optional(),
-  })
-  .refine((v) => v.thought_id !== undefined || v.thought !== undefined, {
-    message: 'either thought_id or thought must be provided',
-  });
-export const ThoughtsUpsertBundle = defineContract('etn.thoughts.upsert_bundle', UpsertBundleFields, {});
 
 // ===========================================================================
 // Область: сети (tools/networks.ts)

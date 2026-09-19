@@ -13,24 +13,21 @@ import {
   COMMENT_TARGETS_MAX,
   MCP_TOOL_ANNOTATIONS,
 } from '@etn/shared';
-import type { CommentTarget, McpMutationResult } from '@etn/shared';
+import type { McpMutationResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
   CommentsDelete,
   CommentsEdit,
   CommentsGet,
   CommentsUpdate,
-  CommentsUpsert,
 } from '../../contracts.js';
 import {
-  createCommentWithTargets,
   deleteComment,
   editComment,
   getComment,
   listComments,
   updateComment,
 } from '../../domain/comment-service.js';
-import { subgraph } from '../../domain/graph-traversal.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -87,126 +84,6 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
 }
 
 export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void {
-  const CommentTargetSchema = z.object({
-    owner_type: z.enum(COMMENT_OWNER_TYPES),
-    owner_id: z.string().min(1),
-  });
-  const UpsertCommentSchema = z
-    .object({
-      network_id: NetworkId,
-      owner_type: z.enum(COMMENT_OWNER_TYPES).optional(),
-      owner_id: z.string().min(1).optional(),
-      targets: z.array(CommentTargetSchema).min(1).max(COMMENT_TARGETS_MAX).optional(),
-      kind: z.enum(COMMENT_KINDS),
-      title: z.string().nullable().optional(),
-      body_md: z.string().min(1),
-      valid_from: z.string().min(1).optional(),
-      valid_to: z.string().nullable().optional(),
-    })
-    .refine(
-      (v) => (v.owner_type !== undefined && v.owner_id !== undefined) !== (v.targets !== undefined),
-      { message: 'provide exactly one of { owner_type + owner_id } or { targets }' },
-    )
-    .refine((v) => v.targets === undefined || v.kind === 'chronological', {
-      message:
-        'targets is only allowed for kind: "chronological" (a permanent comment has exactly one owner)',
-    });
-  mcp.registerTool(
-    'etn.comments.upsert',
-    {
-      title: 'Создать/обновить комментарий',
-      description:
-        'For `permanent`: creates the single permanent comment of the owner, or updates it when it already ' +
-        'exists. For `chronological`: always appends a new dated entry (`valid_from`/`valid_to`); pass ' +
-        '`targets: [{owner_type, owner_id}]` (1..100, first is the primary owner) instead of ' +
-        '`owner_type`+`owner_id` to attach the same entry to several thoughts/links at once. ' +
-        'Returns { id, version }.',
-      inputSchema: CommentsUpsert.schema,
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const targets: CommentTarget[] = args.targets ?? [
-          { owner_type: args.owner_type!, owner_id: args.owner_id! },
-        ];
-        const primary = targets[0]!;
-        if (args.kind === 'permanent') {
-          const existing = listComments(ndb, primary.owner_type, primary.owner_id).find(
-            (c) => c.kind === 'permanent',
-          );
-          if (existing !== undefined) {
-            const changes = {
-              ...(args.title === undefined ? {} : { title: args.title }),
-              body_md: args.body_md,
-            };
-            const comment = runWrite(ndb, fx, () => {
-              const updated = updateComment(
-                ndb,
-                existing.id,
-                changes,
-                undefined,
-                rt.deps.auth.userId,
-              );
-              return {
-                result: updated,
-                events: [
-                  {
-                    type: 'comment.updated',
-                    data: { id: updated.id, changes, version: updated.version },
-                  },
-                ],
-                activity: [{ kind: 'comment', action: 'updated', comment: updated }],
-                audit: {
-                  action: 'etn.comments.upsert',
-                  targetType: 'comment',
-                  targetId: updated.id,
-                  details: args,
-                },
-              };
-            });
-            return {
-              id: comment.id,
-              version: comment.version,
-              request_id: String(extra.requestId),
-            } satisfies McpMutationResult;
-          }
-        }
-        const comment = runWrite(ndb, fx, () => {
-          const created = createCommentWithTargets(
-            ndb,
-            targets,
-            {
-              kind: args.kind,
-              title: args.title ?? null,
-              body_md: args.body_md,
-              ...(args.valid_from === undefined ? {} : { valid_from: args.valid_from }),
-              ...(args.valid_to === undefined ? {} : { valid_to: args.valid_to }),
-            },
-            rt.deps.auth.userId,
-          );
-          return {
-            result: created,
-            events: [{ type: 'comment.created', data: { comment: created } }],
-            activity: [{ kind: 'comment', action: 'created', comment: created }],
-            audit: {
-              action: 'etn.comments.upsert',
-              targetType: 'comment',
-              targetId: created.id,
-              details: args,
-            },
-          };
-        });
-        return {
-          id: comment.id,
-          version: comment.version,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
-
   const CommentChanges = z
     .object({
       title: z.string().nullable().optional(),

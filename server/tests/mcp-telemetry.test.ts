@@ -34,7 +34,9 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
+  setPropertiesViaWrite,
   toolJson,
   toolText,
 } from './mcp-helpers.js';
@@ -120,8 +122,11 @@ describe('MCP tool-call telemetry (940a499d)', { skip: !nativeAvailable() }, () 
         assert.equal(ok.isError, undefined);
 
         const rejected = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'RO must fail' },
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'x', thought: { title: 'RO must fail' } }],
+          },
         });
         assert.equal(rejected.isError, true);
 
@@ -130,10 +135,10 @@ describe('MCP tool-call telemetry (940a499d)', { skip: !nativeAvailable() }, () 
         assert.ok(get !== undefined);
         assert.equal(get.calls_count, 1);
         assert.equal(get.errors_count, 0);
-        const create = rows.find((r) => r.tool_name === 'etn.thoughts.create');
-        assert.ok(create !== undefined, 'rejected mutation must still be counted');
-        assert.equal(create.calls_count, 1);
-        assert.equal(create.errors_count, 1);
+        const write = rows.find((r) => r.tool_name === 'etn.thoughts.write');
+        assert.ok(write !== undefined, 'rejected mutation must still be counted');
+        assert.equal(write.calls_count, 1);
+        assert.equal(write.errors_count, 1);
       } finally {
         await handle.close();
       }
@@ -403,16 +408,10 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
           name: 'etn.layers.select',
           arguments: { network_id: ctx.networkId, layer_id: layer.id },
         });
-        const thought = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Layer-only endpoint',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
+        const thought = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Layer-only endpoint',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+        });
         // The link is created as part of the thought; find it via neighbors.
         const neighbors = toolJson<{ neighbors: Array<{ id: string; link_id?: string; thought_id?: string }> }>(
           await handle.client.callTool({
@@ -448,34 +447,17 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const target = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Referenced target' },
-          }),
-        );
-        const holder = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'Holder',
-              type: 'TRefHolder',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
-        const set = await handle.client.callTool({
-          name: 'etn.properties.set',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: holder.id,
-            key: 'related',
-            value: target.id,
-          },
+        const target = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Referenced target',
         });
-        assert.equal(set.isError, undefined);
+        const holder = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Holder',
+          type: 'TRefHolder',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+        });
+        await setPropertiesViaWrite(handle.client, ctx.networkId, holder.id, {
+          related: target.id,
+        });
 
         const del = await handle.client.callTool({
           name: 'etn.thoughts.delete',
