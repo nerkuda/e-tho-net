@@ -659,7 +659,7 @@ export interface EtnApi {
       networkId: string,
       thoughtId: string,
       viewName: string,
-      opts?: { sort?: 'alpha' | 'created' | 'updated'; order?: 'asc' | 'desc'; limit?: number; offset?: number },
+      opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
     ): Promise<{
       data: ThoughtRef[];
       meta: {

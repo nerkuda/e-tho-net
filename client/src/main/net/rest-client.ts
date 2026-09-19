@@ -1181,8 +1181,11 @@ export class RestClient {
     thoughtId: string,
     viewName: string,
     opts?: {
-      sort?: 'alpha' | 'created' | 'updated';
-      order?: 'asc' | 'desc';
+      /** Единый набор сортировок отбора (`STRUCTURE_SORTS`, см.
+       *  `renderer/lib/filter-builder.ts`) — тип выровнен с серверным
+       *  `parseSort`, прежний `'updated'` был устаревшим значением. */
+      sort?: import('@etn/shared').StructureSort;
+      order?: import('@etn/shared').SortOrder;
       limit?: number;
       offset?: number;
     },

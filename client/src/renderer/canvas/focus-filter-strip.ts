@@ -33,6 +33,7 @@ import { openCanvasLinkFilterDialog } from './link-filter-dialog.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { div, span } from '../lib/dom.js';
+import { isFilterSort, isSortOrder, sortValueLabel } from '../lib/filter-builder.js';
 import { svgIcon } from '../lib/icons.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
@@ -264,6 +265,8 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
   // Сбрасываем кеш `sort`/`order` отбора — для нового фокуса отборы могут
   // быть другими. Перечитываем заново при следующем `runActiveViewIfNeeded`.
   invalidateViewSortCache();
+  // Сообщение о неподдерживаемой сортировке — тоже заново на новый фокус.
+  unsupportedSortNotified = null;
   // Resolve the effective chain. The focus endpoint doesn't ship
   // `meta.views` yet, so the strip reads the focus via `thoughts.get` and
   // falls back to a `thoughtTypeViews.list` direct call for typed thoughts
@@ -805,14 +808,30 @@ function notifyModeChange(): void {
  */
 let runSeq = 0;
 
-/** Cache of `sort`/`order` parsed from each view's definition, keyed by
- *  `viewId`. `null` — определение уже пытались прочитать и распарсить не
- *  удалось (битый JSON / отсутствуют поля). Сбрасывается при смене фокуса
- *  (renderStrip) и realtime-событиях по отборам — см. `invalidateViewSortCache`. */
-const viewSortOrderCache = new Map<
-  string,
-  { sort: StructureSort; order: SortOrder } | null
->();
+/** Ключ последнего показанного сообщения о неподдерживаемой сортировке —
+ *  сообщение выводится один раз на фокус/отбор, а не на каждый ре-рендер. */
+let unsupportedSortNotified: string | null = null;
+
+/**
+ * Cache of `sort`/`order` parsed from each view's definition, keyed by
+ * `viewId`. `null` — определение уже пытались прочитать и распарсить не
+ * удалось (битый JSON / отсутствуют поля). Сбрасывается при смене фокуса
+ * (renderStrip) и realtime-событиях по отборам — см. `invalidateViewSortCache`.
+ */
+const viewSortOrderCache = new Map<string, ViewSortOrder | null>();
+
+/**
+ * Сортировка/направление отбора, прочитанные из `definition`.
+ * `unsupported` — сохранённые значения ВНЕ единого набора конструктора
+ * (`lib/filter-builder.ts`, требование «Сортировки отбора: единый набор…»):
+ * исполнение идёт со значениями по умолчанию, но о расхождении сообщается
+ * явно — молча отбрасывать сохранённую сортировку запрещено (ошибка 33a3e285).
+ */
+interface ViewSortOrder {
+  sort: StructureSort;
+  order: SortOrder;
+  unsupported: { sort?: string; order?: string } | null;
+}
 
 /** Drops every cached view `sort`/`order` (вызывается при rebuild полосы). */
 function invalidateViewSortCache(): void {
@@ -824,12 +843,18 @@ function invalidateViewSortCache(): void {
  *  результат `alpha asc` (домен `thought-type-views-service.ts`), и без
  *  явных `sort`/`order` opts порядок отбора игнорируется — клиент должен
  *  передавать `sort`/`order`, прочитанные из `definition`. Кеш по `viewId`
- *  избавляет от повторного `list` на каждый ре-рендер. */
+ *  избавляет от повторного `list` на каждый ре-рендер.
+ *
+ *  Полоса НЕ имеет собственного мнения о допустимых сортировках: множество
+ *  определяет конструктор (`isFilterSort`), а исполнитель принимает всё,
+ *  что конструктор позволил сохранить. Значения вне набора (легаси
+ *  `updated` из старого диалога) возвращаются с `unsupported` — исполнение
+ *  продолжается, но сообщается явно. */
 async function loadViewSortOrder(
   networkId: string,
   viewTypeId: string,
   viewId: string,
-): Promise<{ sort: StructureSort; order: SortOrder } | null> {
+): Promise<ViewSortOrder | null> {
   const cached = viewSortOrderCache.get(viewId);
   if (cached !== undefined) return cached;
   try {
@@ -855,23 +880,41 @@ async function loadViewSortOrder(
       viewSortOrderCache.set(viewId, null);
       return null;
     }
-    // Принимаем только значения, которые сервер примет (`STRUCTURE_SORTS`
-    // и `SORT_ORDERS`). Нештатные значения оставляем на откуп сервера.
-    if (sort !== 'alpha' && sort !== 'created' && sort !== 'viewed') {
-      viewSortOrderCache.set(viewId, null);
-      return null;
+    if (!isFilterSort(sort) || !isSortOrder(order)) {
+      // Сохранённое значение вне единого набора (ошибка 33a3e285): дефолт
+      // исполнения, но значение запоминаем, чтобы сообщить явно.
+      const value: ViewSortOrder = {
+        sort: 'alpha',
+        order: 'asc',
+        unsupported: {
+          ...(!isFilterSort(sort) ? { sort } : {}),
+          ...(!isSortOrder(order) ? { order } : {}),
+        },
+      };
+      viewSortOrderCache.set(viewId, value);
+      return value;
     }
-    if (order !== 'asc' && order !== 'desc') {
-      viewSortOrderCache.set(viewId, null);
-      return null;
-    }
-    const value: { sort: StructureSort; order: SortOrder } = { sort, order };
+    const value: ViewSortOrder = { sort, order, unsupported: null };
     viewSortOrderCache.set(viewId, value);
     return value;
   } catch {
     viewSortOrderCache.set(viewId, null);
     return null;
   }
+}
+
+/**
+ * Явное сообщение о неподдерживаемом сохранённом значении сортировки —
+ * молчание запрещено (требование «Сортировки отбора: единый набор…»).
+ */
+function formatUnsupportedSortNotice(unsupported: { sort?: string; order?: string }): string {
+  const parts: string[] = [];
+  if (unsupported.sort !== undefined) parts.push(`сортировка ${sortValueLabel(unsupported.sort)}`);
+  if (unsupported.order !== undefined) parts.push(`направление «${unsupported.order}»`);
+  return (
+    `Сохранённый отбор содержит неподдерживаемое значение (${parts.join(', ')}) — ` +
+    'результат отсортирован по названию.'
+  );
 }
 
 export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult | null> {
@@ -889,23 +932,24 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
       currentMode.viewTypeId,
       currentMode.viewId,
     );
+    // Сохранённое значение сортировки вне единого набора конструктора —
+    // исполняем со значением по умолчанию, но сообщаем явно, один раз на
+    // фокус/отбор (ошибка 33a3e285: молча терять сохранённую сортировку
+    // запрещено).
+    if (sortOrder !== null && sortOrder.unsupported !== null) {
+      const key = `${currentMode.viewId}|${JSON.stringify(sortOrder.unsupported)}`;
+      if (unsupportedSortNotified !== key) {
+        unsupportedSortNotified = key;
+        notice(formatUnsupportedSortNotice(sortOrder.unsupported), 'info');
+      }
+    }
     const resp = await etn.thoughtTypeViews.run(
       networkId,
       focusId,
       currentMode.viewName,
-      // Тип opts в `rest-client.runThoughtTypeView` объявлен как
-      // `'alpha' | 'created' | 'updated'` — это устаревшее значение,
-      // серверный `parseSort` валидирует против `STRUCTURE_SORTS`
-      // (`'alpha' | 'created' | 'viewed'`, shared/enums.ts), куда «updated»
-      // не входит. `sort`/`order` из `definition` уже отфильтрованы в
-      // `loadViewSortOrder` под этот набор — приводим к типу opts только
-      // на границе IPC.
-      sortOrder === null
+      sortOrder === null || sortOrder.unsupported !== null
         ? undefined
-        : ({ sort: sortOrder.sort, order: sortOrder.order } as {
-            sort: 'alpha' | 'created' | 'updated';
-            order: 'asc' | 'desc';
-          }),
+        : { sort: sortOrder.sort, order: sortOrder.order },
     );
     // Stale response (focus changed or user re-clicked) — drop it.
     if (seq !== runSeq) return lastResult;

@@ -303,7 +303,8 @@ function view(
     is_default?: boolean;
     position?: number;
     version?: number;
-    sort?: 'alpha' | 'created' | 'viewed';
+    /** Допустимые значения единого набора + легаси `updated` для тестов. */
+    sort?: 'alpha' | 'created' | 'viewed' | 'updated';
     order?: 'asc' | 'desc';
   } = {},
 ): ThoughtTypeView {
@@ -857,6 +858,40 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.equal(state.viewsList.calls.length, 1);
     assert.equal(state.viewRun.calls.length, 2);
     assert.deepEqual(state.viewRun.calls[1]?.opts, { sort: 'created', order: 'desc' });
+  });
+
+  it('runActiveViewIfNeeded: легаси-сортировка updated исполняется с дефолтом, но не молча (ошибка 33a3e285)', async () => {
+    // Сохранённые старым диалогом определения могут нести `updated` — значения
+    // вне единого набора конструктора. Исполнитель принимает их (никакой
+    // собственной фильтрации): отбор исполняется со значением по умолчанию,
+    // а о неподдерживаемом значении сообщается явно (`notice`), а не молча.
+    const harness = installShim();
+    setNetwork();
+    (globalThis as any).window = globalThis; // notice использует window.setTimeout
+    strip.mountFilterStrip(harness.host as any);
+    state.thoughtsGet.response = {
+      meta: [metaViewRow(view('v-u', 'U', { is_default: true, position: 0, sort: 'updated', order: 'asc' }))],
+    };
+    state.viewsList.effective = [
+      view('v-u', 'U', { is_default: true, position: 0, sort: 'updated', order: 'asc' }),
+    ];
+    state.viewRun.response = {
+      data: [],
+      meta: {
+        total: 0,
+        limit: 50,
+        offset: 0,
+        directions: {},
+        view: { id: 'v-u', name: 'U', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
+    const result = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.ok(result !== null, 'отбор с легаси-сортировкой исполняется');
+    // opts не передаются — сервер применит дефолт alpha asc; `updated` не
+    // отправляется серверу и не отбрасывается молча.
+    assert.equal(state.viewRun.calls[0]?.opts, undefined);
   });
 
   it('realtime thought-type-view event triggers a strip rebuild', async () => {

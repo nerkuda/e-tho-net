@@ -905,8 +905,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         thoughtId: string,
         viewName: string,
         opts?: {
-          sort?: 'alpha' | 'created' | 'updated';
-          order?: 'asc' | 'desc';
+          sort?: import('@etn/shared').StructureSort;
+          order?: import('@etn/shared').SortOrder;
           limit?: number;
           offset?: number;
         },
