@@ -34,7 +34,19 @@ import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
-import { buildEntityCombo } from '../lib/entity-picker.js';
+import {
+  buildEntityChipField,
+  buildEntityCombo,
+  linkTypeEntityOptions,
+  thoughtTypeEntityOptions,
+} from '../lib/entity-picker.js';
+import {
+  buildSearchCriteriaWire,
+  defaultSearchCriteriaState,
+  parseSearchCriteria,
+  searchCriteriaToStored,
+  type SearchCriteriaState,
+} from '../lib/filter-builder.js';
 import { buildUserSelectWidget } from '../lib/users.js';
 import {
   UI_STATE_KEY,
@@ -45,25 +57,13 @@ import {
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 
-/** Search options persisted in `search_state` (08-ui-spec.md §3.2). */
-export interface SearchOptions {
-  subtree: boolean;
-  subrootId: string | null;
-  onlyThoughts: boolean;
-  onlyLinks: boolean;
-  onlyChrono: boolean;
-  typeIds: string[];
-  linkTypeIds: string[];
-  showInactive: boolean;
-  /** S13: include thoughts/links marked for deletion in search results. */
-  trashed: boolean;
-  /**
-   * Задача 59119797 «Фильтры Автор/Редактор»: id пользователя-автора
-   * (`author_id`/`editor_id`). Пустая строка — фильтр не применяется.
-   */
-  authorId: string;
-  editorId: string;
-}
+/**
+ * Настройки строки поиска карты (§3.2): критерии — общая модель конструктора
+ * отбора (`lib/filter-builder.ts`); собственной модели (`SearchOptions`) и
+ * собственного парсера сохранённого больше нет. Своё у поиска — группы
+ * результатов и поддерево, они лежат в расширении общей модели.
+ */
+export type SearchOptions = SearchCriteriaState;
 
 /** Minimum trimmed query length for a server search (08-ui-spec.md §3.1). */
 export const MIN_QUERY_LENGTH = 3;
@@ -73,19 +73,7 @@ export function isSearchableQuery(q: string): boolean {
   return q.length >= MIN_QUERY_LENGTH;
 }
 
-const DEFAULT_OPTIONS: SearchOptions = {
-  subtree: false,
-  subrootId: null,
-  onlyThoughts: false,
-  onlyLinks: false,
-  onlyChrono: false,
-  typeIds: [],
-  linkTypeIds: [],
-  showInactive: false,
-  trashed: false,
-  authorId: '',
-  editorId: '',
-};
+const DEFAULT_OPTIONS: SearchOptions = defaultSearchCriteriaState();
 
 /** Search panel chrome (input + gear + results panel). */
 export interface SearchChrome {
@@ -328,7 +316,7 @@ async function restoreState(): Promise<void> {
       chrome.input.value = parsed.q;
     }
     if (typeof parsed.options === 'object' && parsed.options !== null) {
-      options = { ...DEFAULT_OPTIONS, ...(parsed.options as Partial<SearchOptions>) };
+      options = parseSearchCriteria(parsed.options);
       if (chrome !== null) {
         rebuildOptionsRow();
       }
@@ -351,7 +339,9 @@ function persistState(): void {
       .setState(
         networkId,
         UI_STATE_KEY.SEARCH_STATE,
-        JSON.stringify({ q: chrome.input.value, options }),
+        // Набор сохраняемых ключей — конвертер конструктора (совместим с
+        // записанным до 0.8.2: те же имена полей).
+        JSON.stringify({ q: chrome.input.value, options: searchCriteriaToStored(options) }),
       )
       .catch(() => undefined);
   }, 300);
@@ -410,6 +400,9 @@ async function run(): Promise<void> {
   }
   const scopes = scopesFor(options);
   try {
+    // Критерии отбора — единый конвертер конструктора; `q`/`scope`/подкорень
+    // остаются параметрами самого поиска.
+    const criteriaWire = buildSearchCriteriaWire(options);
     const responses = await Promise.all(
       scopes.map((scope) =>
         etn.thoughts.search(networkId, {
@@ -419,14 +412,7 @@ async function run(): Promise<void> {
           from_thought_id: options.subtree
             ? (options.subrootId ?? store.state.focus?.focused.id)
             : undefined,
-          type_id: options.typeIds.length > 0 ? options.typeIds : undefined,
-          link_type_id: options.linkTypeIds.length > 0 ? options.linkTypeIds : undefined,
-          show_inactive: options.showInactive,
-          trashed: options.trashed,
-          // Задача 59119797 «Фильтры Автор/Редактор»: пустая строка —
-          // «не применять» (REST/MCP принимают оба варианта).
-          author_id: options.authorId.trim() !== '' ? options.authorId : undefined,
-          editor_id: options.editorId.trim() !== '' ? options.editorId : undefined,
+          ...criteriaWire,
         }),
       ),
     );
@@ -771,34 +757,32 @@ function buildOptionsRow(row: HTMLElement): void {
     return wrap;
   };
 
-  // L21: the type tree; the root type is not selectable (it would mean
-  // «every type»). Selecting a parent matches its whole subtree — the server
-  // expands type filters (docs/03-server-api.md §12). Both fields render via
-  // the common entity picker (ADR «выбор сущности — один пикер»).
-  const typeCombo = buildEntityCombo({
-    networkId: requireNetworkId(),
-    kind: 'thought-types',
-    value: options.typeIds[0] ?? null,
-    emptyLabel: 'Типы мыслей: все',
-    placeholder: 'Тип мысли…',
-    onChange: (typeId) => {
-      options = { ...options, typeIds: typeId === null ? [] : [typeId] };
+  // L21: the type tree rendered by the common entity chip field (ADR «выбор
+  // сущности — один пикер»). Список типов — МАССИВ (как в состоянии и в
+  // `type_id` запроса): прежнее комбо хранило один id и молча теряло
+  // остальные (задача 3742dd59). Корень иерархии не выбирается.
+  const typeField = buildEntityChipField({
+    getValues: () => options.typeIds,
+    onChange: (values) => {
+      options.typeIds = values;
       persistState();
       refreshSearchIfVisible();
     },
+    loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+    optionsHeader: 'Типы мыслей',
+    placeholder: 'Тип мысли…',
   });
 
-  const linkTypeCombo = buildEntityCombo({
-    networkId: requireNetworkId(),
-    kind: 'link-types',
-    value: options.linkTypeIds[0] ?? null,
-    emptyLabel: 'Типы связей: все',
-    placeholder: 'Тип связи…',
-    onChange: (typeId) => {
-      options = { ...options, linkTypeIds: typeId === null ? [] : [typeId] };
+  const linkTypeField = buildEntityChipField({
+    getValues: () => options.linkTypeIds,
+    onChange: (values) => {
+      options.linkTypeIds = values;
       persistState();
       refreshSearchIfVisible();
     },
+    loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+    optionsHeader: 'Типы связей',
+    placeholder: 'Тип связи…',
   });
 
   const inactiveLabel = el('label', 'checkbox-row');
@@ -851,8 +835,8 @@ function buildOptionsRow(row: HTMLElement): void {
     mkGroupCheck('мысли', 'onlyThoughts'),
     mkGroupCheck('связи', 'onlyLinks'),
     mkGroupCheck('хронологию', 'onlyChrono'),
-    typeCombo.root,
-    linkTypeCombo.root,
+    typeField.root,
+    linkTypeField.root,
     authorSelect,
     editorSelect,
     inactiveLabel,

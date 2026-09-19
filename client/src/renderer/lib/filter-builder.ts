@@ -1043,3 +1043,24 @@ export function buildSearchCriteriaWire(state: SearchCriteriaState): SearchCrite
   if (state.editorId.trim() !== '') out.editor_id = state.editorId;
   return out;
 }
+
+/**
+ * Конвертер критериев поиска в сохраняемый L4-набор `search_state` — те же
+ * ключи, что писал клиент до 0.8.2 (совместимость чтения сохранённого без
+ * миграции).
+ */
+export function searchCriteriaToStored(state: SearchCriteriaState): Record<string, unknown> {
+  return {
+    subtree: state.subtree,
+    subrootId: state.subrootId,
+    onlyThoughts: state.onlyThoughts,
+    onlyLinks: state.onlyLinks,
+    onlyChrono: state.onlyChrono,
+    typeIds: state.typeIds.slice(),
+    linkTypeIds: state.linkTypeIds.slice(),
+    showInactive: state.showInactive,
+    trashed: state.trashed,
+    authorId: state.authorId,
+    editorId: state.editorId,
+  };
+}
