@@ -3722,6 +3722,20 @@ body.cloud-dragging * {
   width: 100%;
 }
 
+/* Режим «(общее)»/«частное» колонки «Значение по умолчанию» таблиц привязок
+ * единого диалога «Свойство / связь» (ошибка e6d92dbf): подпись и кнопки
+ * переключения в ряд, редактор значения под ними. */
+.prop-default-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.prop-default-mode .prop-default-own {
+  white-space: nowrap;
+}
+
 /* --- Outside-type values group (0.6.5) -------------------------------------- */
 
 /* A second, read-only table under the main properties table — values whose
@@ -4457,6 +4471,19 @@ body.cloud-dragging * {
 
 .st-f-picker-list {
   height: 320px;
+}
+
+/* Строка поиска пикера с необязательными кнопками под ней («Отметить все» /
+ * «Снять все»). */
+.st-f-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.st-f-searchbar .st-f-search {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into

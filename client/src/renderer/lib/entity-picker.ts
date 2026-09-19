@@ -38,7 +38,7 @@ import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
-import { clear, div, el, span } from './dom.js';
+import { button, clear, div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { svgIcon } from './icons.js';
 import { wireSuggest, type SuggestSource } from './suggest-dropdown.js';
@@ -188,6 +188,16 @@ export interface EntityPickerModalOptions {
   allowEmpty?: boolean;
   /** Дополнительные кнопки футера (keep-open, например «Пометить все»). */
   extraButtons?: (ctx: EntityPickerDialogCtx) => DialogButton[];
+  /**
+   * Дополнительные маленькие кнопки, рисуемые строкой ПОД полем поиска
+   * (режим типов; например, «Отметить все» / «Снять все»). Не закрывают
+   * диалог — это обычные кнопки тела.
+   */
+  searchButtons?: (ctx: EntityPickerDialogCtx) => {
+    label: string;
+    title?: string;
+    onClick: () => void;
+  }[];
   /** Ширина диалога, px (по умолчанию 480). */
   width?: number;
   /** Подпись кнопки применения (по умолчанию «Применить»). */
@@ -371,7 +381,6 @@ export async function pickEntitiesModal(
     searchInput.autocomplete = 'off';
     searchInput.placeholder = 'Найти…';
     const list = div('st-f-checks st-f-picker-list');
-    body.append(searchInput, list);
 
     const byId = new Map(options.map((o) => [o.id, o]));
 
@@ -469,6 +478,15 @@ export async function pickEntitiesModal(
         updateButtons();
       },
     };
+    // Строка поиска + необязательные маленькие кнопки под ней (режим типов).
+    const searchBar = div('st-f-searchbar');
+    searchBar.append(searchInput);
+    if (opts.searchButtons !== undefined && !single) {
+      for (const item of opts.searchButtons(ctx)) {
+        searchBar.append(button(item.label, item.onClick, 'btn small', item.title));
+      }
+    }
+    body.append(searchBar, list);
     const buttons: DialogButton[] = [];
     if (!single) {
       buttons.push({

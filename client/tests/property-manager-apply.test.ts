@@ -91,6 +91,7 @@ function makeRow(overrides: Partial<TypeRowDraft> = {}): TypeRowDraft {
     side: 'source',
     definedOn: 'tt-1',
     dirty: false,
+    overriddenHere: false,
     ...overrides,
   };
 }
