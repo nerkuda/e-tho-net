@@ -23,17 +23,19 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError, ETNX_MAX_BYTES, type ImportSummary } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  restWriteFx,
+  runWrite,
+  type AnyWriteEvent,
+  type RouteDeps,
+  type WriteActivityEntry,
+} from './helpers.js';
 import { parseRest, RestImportCommit, RestImportPreview } from '../contracts.js';
 import { importFromEtnx, previewFromEtnx } from '../domain/import-service.js';
 import { getThought, getThoughtOrThrow } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
 import { getComment } from '../domain/comment-service.js';
-import {
-  recordCommentActivity,
-  recordLinkActivity,
-  recordThoughtActivity,
-} from '../domain/activity-service.js';
 
 /** `/api/v1/networks*` import routes plugin factory. */
 export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -73,6 +75,9 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         const buf = decodeArchive(archiveB64, request.id);
         const actorUserId = request.auth!.user.id;
         const slices = input.etnx as Parameters<typeof importFromEtnx>[2]['slices'] | undefined;
+        // `importFromEtnx` сам держит весь импорт одной транзакцией; она же
+        // асинхронна (разбор zip), поэтому обёртка здесь исполняет только
+        // пост-коммитные эффекты: события и журнал — из результата импорта.
         const result = await importFromEtnx(
           ndb,
           buf,
@@ -80,54 +85,43 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
           app.appLogger,
         );
 
-        const layerId = request.layerEcho?.id ?? null;
         // Fire realtime events so other clients (and the importer's own
         // canvas/panels) refresh — the canvas, focus history, and selection
         // cache all listen to thought.created / link.created / comment.updated.
-        for (const id of result.createdThoughtIds) {
-          const thought = getThought(ndb, id);
-          if (thought === null) continue;
-          deps.emit(request, networkId, 'thought.created', { thought });
-          recordThoughtActivity(ndb, {
-            networkId,
-            userId: actorUserId,
-            action: 'created',
-            thought,
-            layerId,
-          });
-        }
-        for (const id of result.createdLinkIds) {
-          const link = getLink(ndb, id);
-          if (link === null) continue;
-          deps.emit(request, networkId, 'link.created', { link });
-          recordLinkActivity(ndb, {
-            networkId,
-            userId: actorUserId,
-            action: 'created',
-            link,
-            layerId,
-          });
-        }
-        for (const id of result.updatedCommentIds) {
-          const comment = getComment(ndb, id);
-          if (comment === null) continue;
-          deps.emit(request, networkId, 'comment.updated', {
-            id: comment.id,
-            changes: {
-              body_md: comment.body_md,
-              body_html: comment.body_html,
-              title: comment.title,
-            },
-            version: comment.version,
-          });
-          recordCommentActivity(ndb, {
-            networkId,
-            userId: actorUserId,
-            action: 'updated',
-            comment,
-            layerId,
-          });
-        }
+        runWrite(ndb, restWriteFx(deps, request, networkId), () => {
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          for (const id of result.createdThoughtIds) {
+            const thought = getThought(ndb, id);
+            if (thought === null) continue;
+            events.push({ type: 'thought.created', data: { thought } });
+            activity.push({ kind: 'thought', action: 'created', thought });
+          }
+          for (const id of result.createdLinkIds) {
+            const link = getLink(ndb, id);
+            if (link === null) continue;
+            events.push({ type: 'link.created', data: { link } });
+            activity.push({ kind: 'link', action: 'created', link });
+          }
+          for (const id of result.updatedCommentIds) {
+            const comment = getComment(ndb, id);
+            if (comment === null) continue;
+            events.push({
+              type: 'comment.updated',
+              data: {
+                id: comment.id,
+                changes: {
+                  body_md: comment.body_md,
+                  body_html: comment.body_html,
+                  title: comment.title,
+                },
+                version: comment.version,
+              },
+            });
+            activity.push({ kind: 'comment', action: 'updated', comment });
+          }
+          return { result: undefined, events, activity };
+        });
 
         const {
           thoughtIdRemap: _remap,
@@ -158,12 +152,7 @@ type ImportSlices = NonNullable<Parameters<typeof importFromEtnx>[2]['slices']>;
 function decodeArchive(archiveB64: string, requestId: string): Buffer {
   const buf = Buffer.from(archiveB64, 'base64');
   if (buf.length === 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Архив пустой или не base64.',
-      undefined,
-      requestId,
-    );
+    throw new EtnError('VALIDATION_ERROR', 'Архив пустой или не base64.', undefined, requestId);
   }
   if (buf.length > ETNX_MAX_BYTES) {
     throw new EtnError(

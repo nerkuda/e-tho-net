@@ -6,10 +6,16 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
+import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { PropertyValueSchema } from './properties.js';
 import { z } from 'zod';
 import { ATTACHMENT_KINDS, MCP_MAX_THOUGHTS_PER_WRITE, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import type { McpThoughtWriteItemResult, McpThoughtWriteParams, McpThoughtWriteResult, McpUpsertBundleResult } from '@etn/shared';
+import type {
+  McpThoughtWriteItemResult,
+  McpThoughtWriteParams,
+  McpThoughtWriteResult,
+  McpUpsertBundleResult,
+} from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { defineContract, ThoughtsUpsertBundle } from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
@@ -17,8 +23,23 @@ import { getComment } from '../../domain/comment-service.js';
 import { getAttachment } from '../../domain/attachment-service.js';
 import { upsertThoughtBundle } from '../../domain/thought-bundle-service.js';
 import { writeThoughts } from '../../domain/thought-write-service.js';
-import { auditAgentCall, emitAgentActivityEvent, openMemberNetwork, requireWritable, requireWriteBudget, resolveRuntimeLayer, runWriteTool } from '../context.js';
-import { NetworkId, ThoughtId, TYPE_ID_TYPE_CONFLICT, LinkDirection, effectiveThoughtTypeId, effectiveLinkTypeId } from './shared.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  resolveRuntimeLayer,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
+import {
+  NetworkId,
+  ThoughtId,
+  TYPE_ID_TYPE_CONFLICT,
+  LinkDirection,
+  effectiveThoughtTypeId,
+  effectiveLinkTypeId,
+} from './shared.js';
 
 export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   const BundleThoughtSchema = z
@@ -29,7 +50,9 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       type: z.string().min(1).optional(),
       active: z.boolean().optional(),
     })
-    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
+    .refine((v) => v.type_id === undefined || v.type === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
+    });
   const BundleCommentSchema = z.object({
     title: z.string().nullable().optional(),
     body_md: z.string().min(1),
@@ -43,7 +66,9 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       type_id: z.string().min(1).nullable().optional(),
       type: z.string().min(1).optional(),
     })
-    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
+    .refine((v) => v.type_id === undefined || v.type === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
+    });
   const BundleAttachmentSchema = z.object({
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
@@ -78,12 +103,12 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         'match unchanged), `update` (also patch its fields). `thought.type`/`links[].type` resolve a type ' +
         'by name (see `etn.types.list`). `links[].direction`: "parent" — attach the bundle thought UNDER ' +
         'the target; "child" — the bundle thought becomes the parent of the target. `warnings` lists the ' +
-        'type\'s `required` properties left unset (empty when complete).',
+        "type's `required` properties left unset (empty when complete).",
       inputSchema: ThoughtsUpsertBundle.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -113,92 +138,111 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
                   ...(linkTypeId === undefined ? {} : { type_id: linkTypeId }),
                 };
               });
-        const result = upsertThoughtBundle(
-          ndb,
-          {
-            ...(args.thought_id === undefined ? {} : { thought_id: args.thought_id }),
-            ...(resolvedThought === undefined ? {} : { thought: resolvedThought }),
-            ...(args.on_duplicate === undefined ? {} : { on_duplicate: args.on_duplicate }),
-            ...(args.comment === undefined ? {} : { comment: args.comment }),
-            ...(args.properties === undefined ? {} : { properties: args.properties }),
-            ...(resolvedLinks === undefined ? {} : { links: resolvedLinks }),
-            ...(args.attachments === undefined
-              ? {}
-              : {
-                  attachments: args.attachments.map((a) => ({
-                    kind: a.kind,
-                    url: a.url ?? null,
-                    file_path: a.file_path ?? null,
-                    title: a.title ?? null,
-                    description: a.description ?? null,
-                  })),
-                }),
-          },
-          rt.deps.auth.userId,
-        );
-
-        if (result.thought_action === 'created') {
-          emitAgentActivityEvent(rt, args.network_id, 'thought.created', { thought: result.thought }, ndb, extra.requestId);
-        } else if (result.thought_action === 'updated') {
-          emitAgentActivityEvent(
-            rt,
-            args.network_id,
-            'thought.updated',
-            { id: result.thought.id, changes: resolvedThought ?? {}, version: result.thought.version },
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const result = runWrite(ndb, fx, () => {
+          const bundled = upsertThoughtBundle(
             ndb,
-            extra.requestId,
+            {
+              ...(args.thought_id === undefined ? {} : { thought_id: args.thought_id }),
+              ...(resolvedThought === undefined ? {} : { thought: resolvedThought }),
+              ...(args.on_duplicate === undefined ? {} : { on_duplicate: args.on_duplicate }),
+              ...(args.comment === undefined ? {} : { comment: args.comment }),
+              ...(args.properties === undefined ? {} : { properties: args.properties }),
+              ...(resolvedLinks === undefined ? {} : { links: resolvedLinks }),
+              ...(args.attachments === undefined
+                ? {}
+                : {
+                    attachments: args.attachments.map((a) => ({
+                      kind: a.kind,
+                      url: a.url ?? null,
+                      file_path: a.file_path ?? null,
+                      title: a.title ?? null,
+                      description: a.description ?? null,
+                    })),
+                  }),
+            },
+            rt.deps.auth.userId,
           );
-        }
-        if (result.comment !== undefined) {
-          if (result.comment_action === 'created') {
-            emitAgentActivityEvent(rt, args.network_id, 'comment.created', { comment: result.comment }, ndb, extra.requestId);
-          } else {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'comment.updated',
-              {
-                id: result.comment.id,
-                changes: {
-                  ...(args.comment?.title === undefined ? {} : { title: args.comment.title }),
-                  body_md: args.comment?.body_md,
-                },
-                version: result.comment.version,
-              },
-              ndb,
-              extra.requestId,
-            );
-          }
-        }
-        if (result.properties !== undefined) {
-          for (const stored of Object.values(result.properties)) {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'property-value.set',
-              {
-                owner_type: 'thought',
-                owner_id: result.thought.id,
-                property_id: stored.property_id,
-                value: stored.value,
-              },
-              ndb,
-              extra.requestId,
-            );
-          }
-        }
-        if (result.links !== undefined) {
-          for (const lr of result.links) {
-            emitAgentActivityEvent(rt, args.network_id, 'link.created', { link: lr.link }, ndb, extra.requestId);
-          }
-        }
-        if (result.attachments !== undefined) {
-          for (const attachment of result.attachments) {
-            emitAgentActivityEvent(rt, args.network_id, 'attachment.created', { attachment }, ndb, extra.requestId);
-          }
-        }
 
-        auditAgentCall(rt, 'etn.thoughts.upsert_bundle', args.network_id, 'thought', result.thought.id, args);
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+
+          if (bundled.thought_action === 'created') {
+            events.push({ type: 'thought.created', data: { thought: bundled.thought } });
+            activity.push({ kind: 'thought', action: 'created', thought: bundled.thought });
+          } else if (bundled.thought_action === 'updated') {
+            events.push({
+              type: 'thought.updated',
+              data: {
+                id: bundled.thought.id,
+                changes: resolvedThought ?? {},
+                version: bundled.thought.version,
+              },
+            });
+            activity.push({ kind: 'thought', action: 'updated', thought: bundled.thought });
+          }
+          if (bundled.comment !== undefined) {
+            if (bundled.comment_action === 'created') {
+              events.push({ type: 'comment.created', data: { comment: bundled.comment } });
+              activity.push({ kind: 'comment', action: 'created', comment: bundled.comment });
+            } else {
+              events.push({
+                type: 'comment.updated',
+                data: {
+                  id: bundled.comment.id,
+                  changes: {
+                    ...(args.comment?.title === undefined ? {} : { title: args.comment.title }),
+                    body_md: args.comment?.body_md,
+                  },
+                  version: bundled.comment.version,
+                },
+              });
+              activity.push({ kind: 'comment', action: 'updated', comment: bundled.comment });
+            }
+          }
+          if (bundled.properties !== undefined) {
+            for (const stored of Object.values(bundled.properties)) {
+              events.push({
+                type: 'property-value.set',
+                data: {
+                  owner_type: 'thought',
+                  owner_id: bundled.thought.id,
+                  property_id: stored.property_id,
+                  value: stored.value,
+                },
+              });
+              activity.push({
+                kind: 'owner',
+                entityType: 'thought',
+                entity: bundled.thought,
+              });
+            }
+          }
+          if (bundled.links !== undefined) {
+            for (const lr of bundled.links) {
+              events.push({ type: 'link.created', data: { link: lr.link } });
+              activity.push({ kind: 'link', action: 'created', link: lr.link });
+            }
+          }
+          if (bundled.attachments !== undefined) {
+            for (const attachment of bundled.attachments) {
+              events.push({ type: 'attachment.created', data: { attachment } });
+              activity.push({ kind: 'attachment', action: 'created', attachment });
+            }
+          }
+
+          return {
+            result: bundled,
+            events,
+            activity,
+            audit: {
+              action: 'etn.thoughts.upsert_bundle',
+              targetType: 'thought',
+              targetId: bundled.thought.id,
+              details: args,
+            },
+          };
+        });
 
         return {
           id: result.thought.id,
@@ -260,11 +304,12 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         })
         .optional(),
     })
-    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
-    .refine(
-      (v) => (v.target_id !== undefined) !== (v.target_ref !== undefined),
-      { message: 'each links[] entry must set exactly one of target_id or target_ref' },
-    );
+    .refine((v) => v.type_id === undefined || v.type === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
+    })
+    .refine((v) => (v.target_id !== undefined) !== (v.target_ref !== undefined), {
+      message: 'each links[] entry must set exactly one of target_id or target_ref',
+    });
   const WriteAttachmentSpecSchema = z.object({
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
@@ -287,20 +332,15 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     // Каждый элемент должен иметь ХОТЯ БЫ ОДНО из `thought_id` (адресация
     // существующей мысли) или `thought` (новая/совпадающая мысль). Оба
     // вместе — норм: `thought_id` адресует мысль, `thought` патчит её поля.
-    .refine(
-      (v) => v.thought_id !== undefined || v.thought !== undefined,
-      { message: 'each batch item must set thought_id or thought (at least one)' },
-    )
+    .refine((v) => v.thought_id !== undefined || v.thought !== undefined, {
+      message: 'each batch item must set thought_id or thought (at least one)',
+    })
     // Если задано `thought` И это новая мысль (нет `thought_id`), нужен
     // `ref` для возможных `target_ref` в других элементах батча. Случай
     // `thought + thought_id` (патч существующей) ref не требует.
-    .refine(
-      (v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined,
-      {
-        message:
-          'a batch item with `thought` (new thought) must also declare a local `ref`',
-      },
-    );
+    .refine((v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined, {
+      message: 'a batch item with `thought` (new thought) must also declare a local `ref`',
+    });
   const LocalRefsSchema = z.record(z.string().min(1), z.string().uuid()).optional();
   const WriteSchema = z.object({
     network_id: NetworkId,
@@ -312,22 +352,25 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Батч-запись мыслей',
       description:
-        'Пишет от 1 до ' + MCP_MAX_THOUGHTS_PER_WRITE + ' связанных единиц знания одной транзакцией: ' +
+        'Пишет от 1 до ' +
+        MCP_MAX_THOUGHTS_PER_WRITE +
+        ' связанных единиц знания одной транзакцией: ' +
         'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
         '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
         '`fail`/`reuse`/`update`. Циклы `ref`/`target_ref` разрешены (фаза 2 — мысли, фаза 3 — связи). ' +
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
-        '`properties.set`, `comments.upsert` (`deprecated_since: \'0.7.2\'`). Один write-бюджет + одна ' +
+        "`properties.set`, `comments.upsert` (`deprecated_since: '0.7.2'`). Один write-бюджет + одна " +
         'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
         '`etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
         const writeInput: McpThoughtWriteParams = {
           network_id: args.network_id,
           ...(args.local_refs === undefined ? {} : { local_refs: args.local_refs }),
@@ -343,128 +386,103 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
             ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
           })),
         };
-        const result = writeThoughts(ndb, writeInput, rt.deps.auth.userId);
+        const result = runWrite(ndb, fx, () => {
+          const written = writeThoughts(ndb, writeInput, rt.deps.auth.userId);
 
-        // Real-time events — one per actually-affected entity (per task spec).
-        // Done via the existing helpers so the WS gateway / activity log see
-        // the same shape they do for `etn.thoughts.upsert_bundle` etc.
-        for (const item of result.items) {
-          if (item.thought_action === 'reused') continue;
-          if (item.thought_action === 'created') {
-            const thought = getThoughtOrThrow(ndb, item.id);
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'thought.created',
-              { thought },
-              ndb,
-              extra.requestId,
-            );
-          } else {
-            // 'updated' — also covers the 'set_active' scenario: a batch item
-            // that only sets `active: false` (HOME is rejected, see domain
-            // service) lands here as a normal `thought.updated`. Empty
-            // `changes` is the contract for batched updates: the granular
-            // changes live across `comment`/`chronicle`/`properties`/`links`/
-            // `attachments` blocks of the same item, and the audit_log row
-            // carries the full story.
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'thought.updated',
-              { id: item.id, version: item.version, changes: {} },
-              ndb,
-              extra.requestId,
-            );
-          }
-          if (item.comment !== undefined) {
-            if (item.comment.action === 'created') {
-              const c = getComment(ndb, item.comment.id);
-              if (c !== null) {
-                emitAgentActivityEvent(
-                  rt,
-                  args.network_id,
-                  'comment.created',
-                  { comment: c },
-                  ndb,
-                  extra.requestId,
-                );
-              }
+          // Real-time events — one per actually-affected entity (per task
+          // spec); журнал — из результата записи. Собираем исход здесь,
+          // исполняет обёртка после коммита.
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          for (const item of written.items) {
+            if (item.thought_action === 'reused') continue;
+            if (item.thought_action === 'created') {
+              const thought = getThoughtOrThrow(ndb, item.id);
+              events.push({ type: 'thought.created', data: { thought } });
+              activity.push({ kind: 'thought', action: 'created', thought });
             } else {
-              emitAgentActivityEvent(
-                rt,
-                args.network_id,
-                'comment.updated',
-                {
-                  id: item.comment.id,
-                  version: item.comment.version,
-                  changes: { body_md: '' },
-                },
-                ndb,
-                extra.requestId,
-              );
+              // 'updated' — also covers the 'set_active' scenario: a batch item
+              // that only sets `active: false` (HOME is rejected, see domain
+              // service) lands here as a normal `thought.updated`. Empty
+              // `changes` is the contract for batched updates: the granular
+              // changes live across `comment`/`chronicle`/`properties`/`links`/
+              // `attachments` blocks of the same item, and the audit_log row
+              // carries the full story.
+              events.push({
+                type: 'thought.updated',
+                data: { id: item.id, version: item.version, changes: {} },
+              });
+              const thought = getThoughtOrThrow(ndb, item.id);
+              activity.push({ kind: 'thought', action: 'updated', thought });
             }
-          }
-          if (item.chronicle !== undefined) {
-            for (const entry of item.chronicle) {
-              const c = getComment(ndb, entry.id);
-              if (c !== null) {
-                emitAgentActivityEvent(
-                  rt,
-                  args.network_id,
-                  'comment.created',
-                  { comment: c },
-                  ndb,
-                  extra.requestId,
-                );
+            if (item.comment !== undefined) {
+              if (item.comment.action === 'created') {
+                const c = getComment(ndb, item.comment.id);
+                if (c !== null) {
+                  events.push({ type: 'comment.created', data: { comment: c } });
+                  activity.push({ kind: 'comment', action: 'created', comment: c });
+                }
+              } else {
+                events.push({
+                  type: 'comment.updated',
+                  data: {
+                    id: item.comment.id,
+                    version: item.comment.version,
+                    changes: { body_md: '' },
+                  },
+                });
+                const c = getComment(ndb, item.comment.id);
+                if (c !== null) {
+                  activity.push({ kind: 'comment', action: 'updated', comment: c });
+                }
+              }
+            }
+            if (item.chronicle !== undefined) {
+              for (const entry of item.chronicle) {
+                const c = getComment(ndb, entry.id);
+                if (c !== null) {
+                  events.push({ type: 'comment.created', data: { comment: c } });
+                  activity.push({ kind: 'comment', action: 'created', comment: c });
+                }
+              }
+            }
+            if (item.links !== undefined) {
+              for (const link of item.links) {
+                const l = getLink(ndb, link.id);
+                if (l !== null) {
+                  events.push({ type: 'link.created', data: { link: l } });
+                  activity.push({ kind: 'link', action: 'created', link: l });
+                }
+              }
+            }
+            if (item.attachments !== undefined) {
+              for (const att of item.attachments) {
+                const a = getAttachment(ndb, att.id);
+                if (a !== null) {
+                  events.push({ type: 'attachment.created', data: { attachment: a } });
+                  activity.push({ kind: 'attachment', action: 'created', attachment: a });
+                }
               }
             }
           }
-          if (item.links !== undefined) {
-            for (const link of item.links) {
-              const l = getLink(ndb, link.id);
-              if (l !== null) {
-                emitAgentActivityEvent(
-                  rt,
-                  args.network_id,
-                  'link.created',
-                  { link: l },
-                  ndb,
-                  extra.requestId,
-                );
-              }
-            }
-          }
-          if (item.attachments !== undefined) {
-            for (const att of item.attachments) {
-              const a = getAttachment(ndb, att.id);
-              if (a !== null) {
-                emitAgentActivityEvent(
-                  rt,
-                  args.network_id,
-                  'attachment.created',
-                  { attachment: a },
-                  ndb,
-                  extra.requestId,
-                );
-              }
-            }
-          }
-        }
 
-        // ONE audit row for the whole batch (per task spec).
-        auditAgentCall(
-          rt,
-          'etn.thoughts.write',
-          args.network_id,
-          'network',
-          args.network_id,
-          {
-            thought_count: result.thought_count,
-            link_count: result.link_count,
-            item_count: result.items.length,
-          },
-        );
+          return {
+            result: written,
+            events,
+            activity,
+            // ONE audit row for the whole batch (per task spec).
+            audit: {
+              action: 'etn.thoughts.write',
+              targetType: 'network',
+              targetId: args.network_id,
+              details: {
+                thought_count: written.thought_count,
+                link_count: written.link_count,
+                item_count: written.items.length,
+              },
+            },
+          };
+        });
 
         const layer = resolveRuntimeLayer(rt, args.network_id);
         const items: McpThoughtWriteItemResult[] = result.items;
@@ -480,5 +498,4 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
   // Trash + usage-clear (S13)
   // =========================================================================
-
 }

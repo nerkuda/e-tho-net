@@ -29,7 +29,7 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import { parseBody, RestPropertyCreateBody, RestPropertyUpdateBody } from '../contracts.js';
 import {
   classifyStoredValues,
@@ -43,7 +43,6 @@ import {
   updateNetworkProperty,
   type RegistryPropertyCounters,
 } from '../domain/property-service.js';
-import { recordPropertyActivity } from '../domain/activity-service.js';
 
 // ===========================================================================
 // Body parsers
@@ -81,10 +80,7 @@ function readDetailsObject(details: unknown): Record<string, unknown> | null {
  * are rejected up front so the call does not silently set decoration on a
  * scalar property.
  */
-function parseCreateBody(
-  body: Record<string, unknown>,
-  requestId: string,
-): NetworkPropertyInput {
+function parseCreateBody(body: Record<string, unknown>, requestId: string): NetworkPropertyInput {
   const out = parseBody(RestPropertyCreateBody, body, requestId);
   return {
     name: (out.name as string).trim(),
@@ -124,8 +120,10 @@ function parseUpdateBody(
   const changes: NetworkPropertyUpdateInput = {};
   if (out.name !== undefined) changes.name = (out.name as string).trim();
   if (out.value_type !== undefined) changes.value_type = out.value_type as PropertyValueType;
-  if (out.config !== undefined) changes.config = out.config === null ? null : (out.config as PropertyConfig);
-  if (out.description !== undefined) changes.description = (out.description ?? null) as string | null;
+  if (out.config !== undefined)
+    changes.config = out.config === null ? null : (out.config as PropertyConfig);
+  if (out.description !== undefined)
+    changes.description = (out.description ?? null) as string | null;
   if (out.name_forward !== undefined) changes.name_forward = (out.name_forward as string).trim();
   if (out.name_reverse !== undefined) changes.name_reverse = (out.name_reverse as string).trim();
   if (out.link_color !== undefined) changes.link_color = out.link_color as string | null;
@@ -195,14 +193,13 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         const input = parseCreateBody((req.body ?? {}) as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         try {
-          const property = createNetworkProperty(ndb, input, req.auth!.user.id);
-          deps.emit(req, networkId, 'property-registry.created', { property });
-          recordPropertyActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'created',
-            property,
-            layerId: req.layerEcho?.id ?? null,
+          const property = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            const created = createNetworkProperty(ndb, input, req.auth!.user.id);
+            return {
+              result: created,
+              events: [{ type: 'property-registry.created', data: { property: created } }],
+              activity: [{ kind: 'property', action: 'created', property: created }],
+            };
           });
           sendCreated(reply, property, { request_id: req.id });
         } catch (err) {
@@ -233,10 +230,15 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const property = getNetworkProperty(ndb, id);
         if (property === null) {
-          throw new EtnError('NOT_FOUND', `property ${id} not found`, {
-            entity: 'property',
-            id,
-          }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `property ${id} not found`,
+            {
+              entity: 'property',
+              id,
+            },
+            req.id,
+          );
         }
         const counters = getPropertyRegistryCounters(ndb, id, property.value_type);
         sendSuccess(reply, { ...property, ...counters });
@@ -252,10 +254,15 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const current = getNetworkProperty(ndb, id);
         if (current === null) {
-          throw new EtnError('NOT_FOUND', `property ${id} not found`, {
-            entity: 'property',
-            id,
-          }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `property ${id} not found`,
+            {
+              entity: 'property',
+              id,
+            },
+            req.id,
+          );
         }
         // Поля типа связи (имена сторон/оформление) — только для свойств-связей
         // (0.8.1, единый жизненный цикл): у скалярного свойства связанного
@@ -282,21 +289,17 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           dropped = counts.dropped;
         }
         try {
-          const property = updateNetworkProperty(ndb, id, changes, req.auth!.user.id);
-          deps.emit(req, networkId, 'property-registry.updated', {
-            id,
-            changes,
-            converted,
-            dropped,
+          const property = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            const updated = updateNetworkProperty(ndb, id, changes, req.auth!.user.id);
+            return {
+              result: { ...updated, converted, dropped },
+              events: [
+                { type: 'property-registry.updated', data: { id, changes, converted, dropped } },
+              ],
+              activity: [{ kind: 'property', action: 'updated', property: updated }],
+            };
           });
-          recordPropertyActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'updated',
-            property,
-            layerId: req.layerEcho?.id ?? null,
-          });
-          sendSuccess(reply, { ...property, converted, dropped }, { request_id: req.id });
+          sendSuccess(reply, property, { request_id: req.id });
         } catch (err) {
           if (err instanceof EtnError && err.code === 'DUPLICATE') {
             const conflictId = readConflictPropertyId(err.details);
@@ -320,13 +323,26 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as PropertyIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const existing = getNetworkProperty(ndb, id);
         let result;
         try {
-          // deleteNetworkProperty удаляет и свойство, и связанный link_type
-          // (0.8.1, требование 09f692ff); `links_becoming_structural` —
-          // число рёбер, ставших структурными.
-          result = deleteNetworkProperty(ndb, id);
+          result = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            const existing = getNetworkProperty(ndb, id);
+            // deleteNetworkProperty удаляет и свойство, и связанный link_type
+            // (0.8.1, требование 09f692ff); `links_becoming_structural` —
+            // число рёбер, ставших структурными.
+            const removed = deleteNetworkProperty(ndb, id);
+            return {
+              result: removed,
+              events: [{ type: 'property-registry.deleted', data: { id } }],
+              ...(existing === null
+                ? {}
+                : {
+                    activity: [
+                      { kind: 'property' as const, action: 'deleted' as const, property: existing },
+                    ],
+                  }),
+            };
+          });
         } catch (err) {
           // Re-throw with the canonical `details.property_id` (the domain
           // already adds `types_count` and `values_count` to `details`).
@@ -334,16 +350,6 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
             throw err;
           }
           throw err;
-        }
-        deps.emit(req, networkId, 'property-registry.deleted', { id });
-        if (existing) {
-          recordPropertyActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            property: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
         }
         // 200 OK с телом — спека (требование 09f692ff): для свойств-связей
         // клиенту нужно знать, сколько рёбер потеряло `type_id`. Для скаляров
@@ -364,10 +370,15 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const property = getNetworkProperty(ndb, id);
         if (property === null) {
-          throw new EtnError('NOT_FOUND', `property ${id} not found`, {
-            entity: 'property',
-            id,
-          }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `property ${id} not found`,
+            {
+              entity: 'property',
+              id,
+            },
+            req.id,
+          );
         }
 
         // Весь usage-отчёт считает домен (ADR 8c93f03a): привязки с именами

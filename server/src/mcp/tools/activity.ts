@@ -8,9 +8,22 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
-import { ACTIVITY_LIMIT_MAX, listActivity, rollupActivity, truncateActivity } from '../../domain/activity-service.js';
+import {
+  ACTIVITY_LIMIT_MAX,
+  listActivity,
+  rollupActivity,
+  truncateActivity,
+} from '../../domain/activity-service.js';
 import { ActivityList, ActivityRollup, ActivityTruncate } from '../../contracts.js';
-import { auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  runTool,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId } from './shared.js';
 
 export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
@@ -81,15 +94,22 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.rollup'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const result = rollupActivity(ndb, args.network_id, args.until_ms);
-        auditAgentCall(rt, 'etn.activity.rollup', args.network_id, 'network', args.network_id, {
-          until_ms: args.until_ms,
-          removed: result.removed,
-          kept: result.kept,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const result = runWrite(ndb, fx, () => {
+          const rolled = rollupActivity(ndb, args.network_id, args.until_ms);
+          return {
+            result: rolled,
+            audit: {
+              action: 'etn.activity.rollup',
+              targetType: 'network',
+              targetId: args.network_id,
+              details: { until_ms: args.until_ms, removed: rolled.removed, kept: rolled.kept },
+            },
+          };
         });
         return { ...result, request_id: String(extra.requestId) };
       }),
@@ -111,14 +131,22 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.truncate'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const result = truncateActivity(ndb, args.network_id, args.until_ms);
-        auditAgentCall(rt, 'etn.activity.truncate', args.network_id, 'network', args.network_id, {
-          until_ms: args.until_ms,
-          removed: result.removed,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const result = runWrite(ndb, fx, () => {
+          const truncated = truncateActivity(ndb, args.network_id, args.until_ms);
+          return {
+            result: truncated,
+            audit: {
+              action: 'etn.activity.truncate',
+              targetType: 'network',
+              targetId: args.network_id,
+              details: { until_ms: args.until_ms, removed: truncated.removed },
+            },
+          };
         });
         return { ...result, request_id: String(extra.requestId) };
       }),
@@ -139,4 +167,3 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
   // → `VALIDATION_ERROR` через `networkService.validateTypeRoles`.
   // ---------------------------------------------------------------------------
 }
-

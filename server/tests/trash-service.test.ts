@@ -118,7 +118,7 @@ describe(
         // Blocked row is skipped, not an error.
         assert.deepEqual(
           (() => {
-            const { purged, skipped } = purgeTrash(ndb);
+            const { purged, skipped } = purgeTrash(ndb).result;
             return { purged, skipped };
           })(),
           { purged: 0, skipped: 1 },
@@ -128,7 +128,7 @@ describe(
         clearThoughtRefUsages(ndb, target.id);
         assert.deepEqual(
           (() => {
-            const { purged, skipped } = purgeTrash(ndb);
+            const { purged, skipped } = purgeTrash(ndb).result;
             return { purged, skipped };
           })(),
           { purged: 1, skipped: 0 },
@@ -162,7 +162,7 @@ describe(
 
         assert.deepEqual(
           (() => {
-            const { purged, skipped } = purgeTrash(ndb);
+            const { purged, skipped } = purgeTrash(ndb).result;
             return { purged, skipped };
           })(),
           { purged: 1, skipped: 0 },
@@ -191,7 +191,7 @@ describe(
         assert.equal(listTrash(ndb).links.length, 2);
 
         // Targeted sweep: b + linkGone + one id that is not in the trash at all.
-        const outcome = purgeTrash(ndb, [b.id, linkGone.id, live.id]);
+        const outcome = purgeTrash(ndb, [b.id, linkGone.id, live.id]).result;
         assert.equal(outcome.purged, 2);
         assert.equal(outcome.skipped, 1); // `live` is not marked
         assert.deepEqual(outcome.deleted_thought_ids, [b.id]);
@@ -209,7 +209,7 @@ describe(
         );
 
         // A full purge afterwards still cleans the remainder.
-        assert.equal(purgeTrash(ndb).purged, 2);
+        assert.equal(purgeTrash(ndb).result.purged, 2);
         assert.equal(listTrash(ndb).thoughts.length + listTrash(ndb).links.length, 0);
       } finally {
         ndb.close();

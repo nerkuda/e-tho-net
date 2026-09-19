@@ -9,11 +9,31 @@ import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { ATTACHMENT_KINDS, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
-import { copyAttachment, createAttachment, deleteAttachment, getAttachment, searchAttachments, updateAttachment } from '../../domain/attachment-service.js';
-import { AttachmentsAdd, AttachmentsCopy, AttachmentsDelete, AttachmentsSearch, AttachmentsUpdate } from '../../contracts.js';
+import {
+  copyAttachment,
+  createAttachment,
+  deleteAttachment,
+  getAttachment,
+  searchAttachments,
+  updateAttachment,
+} from '../../domain/attachment-service.js';
+import {
+  AttachmentsAdd,
+  AttachmentsCopy,
+  AttachmentsDelete,
+  AttachmentsSearch,
+  AttachmentsUpdate,
+} from '../../contracts.js';
 import { search } from '../../domain/search-service.js';
-import { recordAttachmentActivity } from '../../domain/activity-service.js';
-import { auditAgentCall, emitAgentActivityEvent, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, resolveRuntimeLayer, runTool, runWriteTool } from '../context.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  runTool,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId } from './shared.js';
 
 export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
@@ -37,32 +57,37 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: AttachmentsAdd.schema,
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const attachment = createAttachment(
-          ndb,
-          args.owner_type,
-          args.owner_id,
-          {
-            kind: args.kind,
-            url: args.url ?? null,
-            file_path: args.file_path ?? null,
-            title: args.title ?? null,
-            description: args.description ?? null,
-          },
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(rt, args.network_id, 'attachment.created', { attachment }, ndb, extra.requestId);
-        auditAgentCall(
-          rt,
-          'etn.attachments.add',
-          args.network_id,
-          'attachment',
-          attachment.id,
-          args,
-        );
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const attachment = runWrite(ndb, fx, () => {
+          const created = createAttachment(
+            ndb,
+            args.owner_type,
+            args.owner_id,
+            {
+              kind: args.kind,
+              url: args.url ?? null,
+              file_path: args.file_path ?? null,
+              title: args.title ?? null,
+              description: args.description ?? null,
+            },
+            rt.deps.auth.userId,
+          );
+          return {
+            result: created,
+            events: [{ type: 'attachment.created', data: { attachment: created } }],
+            activity: [{ kind: 'attachment', action: 'created', attachment: created }],
+            audit: {
+              action: 'etn.attachments.add',
+              targetType: 'attachment',
+              targetId: created.id,
+              details: args,
+            },
+          };
+        });
         return {
           id: attachment.id,
           version: 0,
@@ -89,34 +114,37 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: AttachmentsCopy.schema,
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const result = copyAttachment(
-          ndb,
-          args.attachment_id,
-          { target_owner_type: args.target_owner_type, target_owner_ids: args.target_owner_ids },
-          rt.deps.auth.userId,
-        );
-        for (const attachment of result.created) {
-          emitAgentActivityEvent(
-            rt,
-            args.network_id,
-            'attachment.created',
-            { attachment },
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const result = runWrite(ndb, fx, () => {
+          const copied = copyAttachment(
             ndb,
-            extra.requestId,
+            args.attachment_id,
+            { target_owner_type: args.target_owner_type, target_owner_ids: args.target_owner_ids },
+            rt.deps.auth.userId,
           );
-        }
-        auditAgentCall(
-          rt,
-          'etn.attachments.copy',
-          args.network_id,
-          'attachment',
-          args.attachment_id,
-          args,
-        );
+          return {
+            result: copied,
+            events: copied.created.map((attachment) => ({
+              type: 'attachment.created' as const,
+              data: { attachment },
+            })),
+            activity: copied.created.map((attachment) => ({
+              kind: 'attachment' as const,
+              action: 'created' as const,
+              attachment,
+            })),
+            audit: {
+              action: 'etn.attachments.copy',
+              targetType: 'attachment',
+              targetId: args.attachment_id,
+              details: args,
+            },
+          };
+        });
         return result.created.map((a) => ({
           id: a.id,
           version: 0,
@@ -185,10 +213,11 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.update'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
         const changes: {
           title?: string | null;
           description?: string | null;
@@ -199,28 +228,20 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
         if (args.description !== undefined) changes.description = args.description;
         if (args.url !== undefined) changes.url = args.url;
         if (args.file_path !== undefined) changes.file_path = args.file_path;
-        const attachment = updateAttachment(
-          ndb,
-          args.attachment_id,
-          changes,
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(
-          rt,
-          args.network_id,
-          'attachment.updated',
-          { id: attachment.id, changes },
-          ndb,
-          extra.requestId,
-        );
-        auditAgentCall(
-          rt,
-          'etn.attachments.update',
-          args.network_id,
-          'attachment',
-          attachment.id,
-          args,
-        );
+        const attachment = runWrite(ndb, fx, () => {
+          const updated = updateAttachment(ndb, args.attachment_id, changes, rt.deps.auth.userId);
+          return {
+            result: updated,
+            events: [{ type: 'attachment.updated', data: { id: updated.id, changes } }],
+            activity: [{ kind: 'attachment', action: 'updated', attachment: updated }],
+            audit: {
+              action: 'etn.attachments.update',
+              targetType: 'attachment',
+              targetId: updated.id,
+              details: args,
+            },
+          };
+        });
         return {
           id: attachment.id,
           version: 0,
@@ -251,40 +272,39 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.delete'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        // Берём снимок ДО удаления — это требование `recordAttachmentActivity`
-        // (deleted-ветка emitAgentActivityEvent не пишет журнал, как и REST-роут).
-        const existing = getAttachment(ndb, args.attachment_id);
-        deleteAttachment(ndb, args.attachment_id);
-        emitAgentEvent(
-          rt,
-          args.network_id,
-          'attachment.deleted',
-          { id: args.attachment_id },
-          extra.requestId,
-        );
-        if (existing !== null) {
-          recordAttachmentActivity(ndb, {
-            networkId: args.network_id,
-            userId: rt.deps.auth.userId,
-            action: 'deleted',
-            attachment: existing,
-            layerId: resolveRuntimeLayer(rt, args.network_id).id,
-          });
-        }
-        auditAgentCall(
-          rt,
-          'etn.attachments.delete',
-          args.network_id,
-          'attachment',
-          args.attachment_id,
-          args,
-        );
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        runWrite(ndb, fx, () => {
+          // Берём снимок ДО удаления — он уйдёт в журнал (как REST DELETE
+          // /attachments/:id).
+          const existing = getAttachment(ndb, args.attachment_id);
+          deleteAttachment(ndb, args.attachment_id);
+          return {
+            result: undefined,
+            events: [{ type: 'attachment.deleted', data: { id: args.attachment_id } }],
+            ...(existing === null
+              ? {}
+              : {
+                  activity: [
+                    {
+                      kind: 'attachment' as const,
+                      action: 'deleted' as const,
+                      attachment: existing,
+                    },
+                  ],
+                }),
+            audit: {
+              action: 'etn.attachments.delete',
+              targetType: 'attachment',
+              targetId: args.attachment_id,
+              details: args,
+            },
+          };
+        });
         return { deleted: true, request_id: String(extra.requestId) };
       }),
   );
-
 }

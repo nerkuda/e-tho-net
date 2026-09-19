@@ -15,8 +15,9 @@
  * — вся ветвимость уже учтена в `thought_type_views_v` и `materializeShadow`.
  *
  * События `thought-type-view.{created,updated,deleted,run}` публикуются
- * через `deps.emit(...)`. Уважение слою обеспечивает `layer-visibility.ts`:
- * подписчик в основе не получает правок, сделанных в слое версии, потому что
+ * обёрткой записи домена `runWrite` (ADR 162d8e7a). Уважение слою
+ * обеспечивает `layer-visibility.ts`: подписчик в основе не получает правок,
+ * сделанных в слое версии, потому что
  * `thought-type-view.{created,updated,deleted}` привязаны к строке
  * `thought_type_views` (ветвимая таблица). Событие `run` — non-branchable,
  * доставляется всем подписчикам сети: оно описывает действие («отбор
@@ -38,7 +39,13 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  requestBody,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import {
   parseBody,
   parseRest,
@@ -79,10 +86,7 @@ interface RunViewParams {
 }
 
 /** Допустимые ключи тела `POST /thought-types/{id}/views`. */
-function parseCreateBody(
-  body: Record<string, unknown>,
-  requestId: string,
-): ThoughtTypeViewInput {
+function parseCreateBody(body: Record<string, unknown>, requestId: string): ThoughtTypeViewInput {
   const out = parseBody(RestViewCreateBody, body, requestId);
   return {
     name: out.name as string,
@@ -100,7 +104,8 @@ function parseUpdateBody(
   const out = parseBody(RestViewUpdateBody, body, requestId);
   const changes: ThoughtTypeViewUpdateInput = {};
   if (out.name !== undefined) changes.name = out.name as string;
-  if (out.description !== undefined) changes.description = (out.description ?? null) as string | null;
+  if (out.description !== undefined)
+    changes.description = (out.description ?? null) as string | null;
   if (out.definition !== undefined) changes.definition = out.definition as string;
   if (out.position !== undefined) changes.position = out.position as number;
   if (out.is_default !== undefined) changes.is_default = out.is_default as boolean;
@@ -184,18 +189,22 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         const { networkId, id } = req.params as TypeIdParams;
         const input = parseCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const view = createThoughtTypeView(ndb, id, input, req.auth!.user.id, req.id);
-        // Событие `created` отдаёт EffectiveThoughtTypeView — клиент не делает
-        // лишний GET, чтобы узнать, свой отбор или унаследованный.
-        const effective = effectiveViewsForType(ndb, id);
-        const matched = effective.find((v) => v.id === view.id) ?? {
-          ...view,
-          defined_on: id,
-          inherited: false,
-        };
-        deps.emit(req, networkId, 'thought-type-view.created', {
-          thought_type_id: id,
-          view: matched,
+        const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const created = createThoughtTypeView(ndb, id, input, req.auth!.user.id, req.id);
+          // Событие `created` отдаёт EffectiveThoughtTypeView — клиент не делает
+          // лишний GET, чтобы узнать, свой отбор или унаследованный.
+          const effective = effectiveViewsForType(ndb, id);
+          const matched = effective.find((v) => v.id === created.id) ?? {
+            ...created,
+            defined_on: id,
+            inherited: false,
+          };
+          return {
+            result: created,
+            events: [
+              { type: 'thought-type-view.created', data: { thought_type_id: id, view: matched } },
+            ],
+          };
         });
         sendCreated(reply, view, {
           version: view.version,
@@ -240,29 +249,39 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const view = updateThoughtTypeView(
-          ndb,
-          viewId,
-          changes,
-          expectedVersion,
-          req.auth!.user.id,
-          req.id,
-        );
-        // Эффективный набор — после UPDATE, чтобы клиент видел новый `inherited`/
-        // `defined_on` отбора (вдруг он переехал по `name_key` на одноимённый
-        // отбор предка, или наоборот — был унаследованным, стал собственным).
-        const effective = effectiveViewsForType(ndb, id);
-        const matched = effective.find((v) => v.id === view.id) ?? {
-          ...view,
-          defined_on: id,
-          inherited: false,
-        };
-        deps.emit(req, networkId, 'thought-type-view.updated', {
-          thought_type_id: id,
-          view_id: viewId,
-          changes,
-          version: view.version,
-          view: matched,
+        const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateThoughtTypeView(
+            ndb,
+            viewId,
+            changes,
+            expectedVersion,
+            req.auth!.user.id,
+            req.id,
+          );
+          // Эффективный набор — после UPDATE, чтобы клиент видел новый `inherited`/
+          // `defined_on` отбора (вдруг он переехал по `name_key` на одноимённый
+          // отбор предка, или наоборот — был унаследованным, стал собственным).
+          const effective = effectiveViewsForType(ndb, id);
+          const matched = effective.find((v) => v.id === updated.id) ?? {
+            ...updated,
+            defined_on: id,
+            inherited: false,
+          };
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'thought-type-view.updated',
+                data: {
+                  thought_type_id: id,
+                  view_id: viewId,
+                  changes,
+                  version: updated.version,
+                  view: matched,
+                },
+              },
+            ],
+          };
         });
         sendSuccess(reply, view, {
           version: view.version,
@@ -306,10 +325,14 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             req.id,
           );
         }
-        deleteThoughtTypeView(ndb, viewId, req.id);
-        deps.emit(req, networkId, 'thought-type-view.deleted', {
-          thought_type_id: id,
-          view_id: viewId,
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          deleteThoughtTypeView(ndb, viewId, req.id);
+          return {
+            result: undefined,
+            events: [
+              { type: 'thought-type-view.deleted', data: { thought_type_id: id, view_id: viewId } },
+            ],
+          };
         });
         reply.code(204).send();
       },
@@ -382,13 +405,21 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         //    (требование b7fdab20). `sort`/`order`/`limit`/`offset` в этом
         //    случае игнорируются: фильтр в принципе не применился.
         if (result.unresolved.length > 0) {
-          deps.emit(req, networkId, 'thought-type-view.run', {
-            thought_id: thoughtId,
-            view_id: matched.id,
-            view_name: matched.name,
-            result_count: 0,
-            unresolved: result.unresolved,
-          });
+          runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+            result: undefined,
+            events: [
+              {
+                type: 'thought-type-view.run',
+                data: {
+                  thought_id: thoughtId,
+                  view_id: matched.id,
+                  view_name: matched.name,
+                  result_count: 0,
+                  unresolved: result.unresolved,
+                },
+              },
+            ],
+          }));
           reply.code(200).send({
             data: [],
             meta: {
@@ -407,13 +438,21 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         //    `meta.sort`/`meta.order` несут эффективные значения (тело или
         //    определение отбора) — ошибка 4dd14aa3.
         const total = result.total;
-        deps.emit(req, networkId, 'thought-type-view.run', {
-          thought_id: thoughtId,
-          view_id: matched.id,
-          view_name: matched.name,
-          result_count: total,
-          unresolved: [],
-        });
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: undefined,
+          events: [
+            {
+              type: 'thought-type-view.run',
+              data: {
+                thought_id: thoughtId,
+                view_id: matched.id,
+                view_name: matched.name,
+                result_count: total,
+                unresolved: [],
+              },
+            },
+          ],
+        }));
         reply.code(200).send({
           data: result.items,
           meta: {

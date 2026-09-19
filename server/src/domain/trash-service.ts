@@ -10,6 +10,12 @@
  * The actual delete runs through the same {@link deleteThought} /
  * {@link deleteLink} domain functions as a direct `DELETE`, so the blocking
  * check stays in exactly one place.
+ *
+ * Веха 9 (задача 8b2efe2d): {@link purgeTrash} не открывает транзакцию сам —
+ * она исполняется фасадами через обёртку {@link runWrite}, которая даёт
+ * транзакцию и раздаёт события/журнал после коммита (требование 3269a025,
+ * ошибка ac8a684b). Исход записи собирается из результата: событие и снимок
+ * журнала — по фактически удалённым строкам, а не по списку запрошенных.
  */
 
 import type {
@@ -22,6 +28,7 @@ import type {
 import type { NetworkDb } from '../db/network-db.js';
 import { getLink, checkLinkDeletion, deleteLink } from './link-service.js';
 import { getThought, checkThoughtDeletion, deleteThought } from './thought-service.js';
+import type { AnyWriteEvent, WriteActivityEntry, WriteOutcome } from './write-wrapper.js';
 
 /**
  * Full outcome of a purge: the public {@link TrashPurgeResult} plus the ids
@@ -33,6 +40,9 @@ export interface TrashPurgeOutcome extends TrashPurgeResult {
   deleted_thought_ids: string[];
   deleted_link_ids: string[];
 }
+
+/** Исход очистки для обёртки записи: результат + события + журнал. */
+export type TrashPurgeWrite = WriteOutcome<TrashPurgeOutcome>;
 
 /**
  * Blocking check of one trash entry — the same context-aware check as the
@@ -97,16 +107,21 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
  * In a working layer blocked rows (base-held and other-layer shadows) are
  * skipped just like in the base: the «Удалить» in a layer means a tombstone
  * (13-layers.md §5.2), which the user has not consciously agreed to for rows
- * living elsewhere. Runs each deletion in its own transaction (a blocked row
- * must not roll back the ones that could be deleted); the caller may wrap the
- * whole sweep in a single outer transaction for auto-cleanup after layer
- * operations.
+ * living elsewhere.
+ *
+ * Транзакции функция сама не открывает — атомарность всего прохода даёт
+ * обёртка {@link runWrite} (требование 3269a025, ошибка ac8a684b): сбой
+ * посреди очистки откатывает проход целиком, частичного удаления не
+ * остаётся. События и журнал — в исходе, из фактически удалённых строк;
+ * обёртка исполняет их после коммита.
  */
-export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeOutcome {
+export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
   let purged = 0;
   let skipped = 0;
   const deletedThoughtIds: string[] = [];
   const deletedLinkIds: string[] = [];
+  const events: AnyWriteEvent[] = [];
+  const activity: WriteActivityEntry[] = [];
 
   const wanted = ids === undefined ? null : new Set(ids);
   const takeId = (id: string): boolean => {
@@ -115,6 +130,13 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeOutcome {
     wanted.delete(id); // count each requested id once
     return true;
   };
+
+  // Снимки помеченных строк ДО физического удаления — журналу активности
+  // нужен короткий снимок на момент операции (требование b0c7a57c); после
+  // purgeTrash строк уже нет.
+  const trash = listTrash(ndb);
+  const thoughtSnapshots = new Map(trash.thoughts.map((t) => [t.id, t]));
+  const linkSnapshots = new Map(trash.links.map((l) => [l.id, l]));
 
   const thoughtIds = (
     ndb.prepare('SELECT id FROM thoughts_v WHERE marked_for_deletion = 1').all() as { id: string }[]
@@ -168,5 +190,31 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeOutcome {
     purged += 1;
   }
 
-  return { purged, skipped, deleted_thought_ids: deletedThoughtIds, deleted_link_ids: deletedLinkIds };
+  // События и журнал — из фактически удалённого: снимок берём из
+  // предоперационных карт (каскадно исчезнувшие связи в них есть).
+  for (const id of deletedThoughtIds) {
+    events.push({ type: 'thought.deleted', data: { id } });
+    const snapshot = thoughtSnapshots.get(id);
+    if (snapshot !== undefined) {
+      activity.push({ kind: 'thought', action: 'deleted', thought: snapshot });
+    }
+  }
+  for (const id of deletedLinkIds) {
+    events.push({ type: 'link.deleted', data: { id } });
+    const snapshot = linkSnapshots.get(id);
+    if (snapshot !== undefined) {
+      activity.push({ kind: 'link', action: 'deleted', link: snapshot });
+    }
+  }
+
+  return {
+    result: {
+      purged,
+      skipped,
+      deleted_thought_ids: deletedThoughtIds,
+      deleted_link_ids: deletedLinkIds,
+    },
+    events,
+    activity,
+  };
 }

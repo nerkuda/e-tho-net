@@ -29,6 +29,15 @@ export { openNetworkDb };
 import { resolveSessionLayer } from '../domain/layer-service.js';
 import { parseLinkTypeFilterValue } from '@etn/shared';
 import type { Logger } from '../logger.js';
+import type { WriteFx } from '../domain/write-wrapper.js';
+export { actionOfChanges, runWrite } from '../domain/write-wrapper.js';
+export type {
+  AnyWriteEvent,
+  WriteActivityEntry,
+  WriteAuditEntry,
+  WriteFx,
+  WriteOutcome,
+} from '../domain/write-wrapper.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -84,7 +93,11 @@ export function resolveRequestLayer(
     const auth = req.auth;
     req.layerEcho =
       auth !== null
-        ? resolveSessionLayer(openNetworkDb(dataDir, networkId, log, BASE_LAYER_ID), auth.user.id, auth.clientId)
+        ? resolveSessionLayer(
+            openNetworkDb(dataDir, networkId, log, BASE_LAYER_ID),
+            auth.user.id,
+            auth.clientId,
+          )
         : { id: BASE_LAYER_ID, title: 'Основа' };
   }
   return req.layerEcho;
@@ -115,7 +128,11 @@ export function openRouteNetworkDb(
  * session's layer default is resolved separately via
  * {@link resolveRequestLayer}.
  */
-export function openRouteNetworkDbBase(deps: RouteDeps, networkId: string, log?: Logger): NetworkDb {
+export function openRouteNetworkDbBase(
+  deps: RouteDeps,
+  networkId: string,
+  log?: Logger,
+): NetworkDb {
   return openNetworkDb(deps.dataDir, networkId, log, BASE_LAYER_ID);
 }
 
@@ -126,6 +143,22 @@ export function requestBody(req: FastifyRequest): Record<string, unknown> {
     return {};
   }
   return req.body as Record<string, unknown>;
+}
+
+/**
+ * Контекст записи REST-фасада для обёртки домена ({@link runWrite},
+ * ADR 162d8e7a): актор и слой сессии — из запроса (слой к этому моменту уже
+ * резолвлен открытием `ndb`), транспорт событий — `deps.emit`. Аудита для
+ * data-записей REST не ведёт (audit_log пишут только admin/me/networks-роуты,
+ * работающие с `_system.db`, и MCP-инструменты — 05 §6.1).
+ */
+export function restWriteFx(deps: RouteDeps, req: FastifyRequest, networkId: string): WriteFx {
+  return {
+    networkId,
+    userId: req.auth?.user.id ?? '',
+    layerId: req.layerEcho?.id ?? null,
+    emit: (type, data, options) => deps.emit(req, networkId, type, data, options),
+  };
 }
 
 /**
@@ -175,9 +208,11 @@ export function parseLinkTypeFilterQuery(
   const typeIds = queryStrings(query['link_type_id']);
   const includeStructuralRaw = query['include_structural'];
   const includeStructural =
-    typeof includeStructuralRaw === 'string' && (includeStructuralRaw === 'true' || includeStructuralRaw === '1')
+    typeof includeStructuralRaw === 'string' &&
+    (includeStructuralRaw === 'true' || includeStructuralRaw === '1')
       ? true
-      : typeof includeStructuralRaw === 'string' && (includeStructuralRaw === 'false' || includeStructuralRaw === '0')
+      : typeof includeStructuralRaw === 'string' &&
+          (includeStructuralRaw === 'false' || includeStructuralRaw === '0')
         ? false
         : undefined;
   if (typeIds.length === 0 && includeStructural === undefined) return undefined;

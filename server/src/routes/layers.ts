@@ -28,6 +28,8 @@ import { sendSuccess } from '../http/responses.js';
 import {
   openRouteNetworkDbBase,
   resolveRequestLayer,
+  restWriteFx,
+  runWrite,
   type RouteDeps,
 } from './helpers.js';
 import {
@@ -40,12 +42,25 @@ import {
   updateLayer,
 } from '../domain/layer-service.js';
 import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
-import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../domain/layer-diff-service.js';
+import {
+  layerDiffDoc,
+  resolveDiffTarget,
+  structuralLayerDiff,
+} from '../domain/layer-diff-service.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
 import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
-import { recordLayerActivity } from '../domain/activity-service.js';
-import { LayersCreate, LayersDelete, LayersDiff, LayersDiffDoc, LayersList, LayersMerge, LayersSelect, LayersUpdate, parseRest } from '../contracts.js';
+import {
+  LayersCreate,
+  LayersDelete,
+  LayersDiff,
+  LayersDiffDoc,
+  LayersList,
+  LayersMerge,
+  LayersSelect,
+  LayersUpdate,
+  parseRest,
+} from '../contracts.js';
 
 /** `/api/v1/networks*` layer routes plugin factory. */
 export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -60,7 +75,10 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(LayersList, req);
         const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
         const current = resolveRequestLayer(deps.dataDir, req, input.network_id, app.appLogger);
-        sendSuccess(reply, listLayers(ndb, { includeService: input.include_service, currentLayerId: current.id }));
+        sendSuccess(
+          reply,
+          listLayers(ndb, { includeService: input.include_service, currentLayerId: current.id }),
+        );
       },
     );
 
@@ -78,22 +96,26 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // must not switch the session, so `current` is computed against the
         // real session layer, not against the newly created layer's id
         // (fix for error 9b159e7a — created.layer.current was always `true`).
-        const sessionLayer = resolveRequestLayer(deps.dataDir, req, input.network_id, app.appLogger);
+        const sessionLayer = resolveRequestLayer(
+          deps.dataDir,
+          req,
+          input.network_id,
+          app.appLogger,
+        );
         const parent = input.parent_id ?? sessionLayer.id;
-        const layer = createLayer(ndb, {
-          parentId: parent,
-          title: input.title,
-          comment: input.comment,
-          gitBranch: input.git_branch,
-          colors: (input.colors ?? null) as Parameters<typeof createLayer>[1]['colors'],
-          createdBy: req.auth!.user.id,
-        });
-        recordLayerActivity(ndb, {
-          networkId: input.network_id,
-          userId: req.auth!.user.id,
-          action: 'created',
-          layer,
-          layerId: req.layerEcho?.id ?? null,
+        const layer = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const created = createLayer(ndb, {
+            parentId: parent,
+            title: input.title,
+            comment: input.comment,
+            gitBranch: input.git_branch,
+            colors: (input.colors ?? null) as Parameters<typeof createLayer>[1]['colors'],
+            createdBy: req.auth!.user.id,
+          });
+          return {
+            result: created,
+            activity: [{ kind: 'layer', action: 'created', layer: created }],
+          };
         });
         const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
         sendSuccess(reply, layerWithCurrent, { version: layer.version }, 201);
@@ -123,27 +145,34 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // against the real session layer, not against the edited layer's id
         // (same pattern as the createLayer fix 9b159e7a — layer.current used
         // to be always `true` here).
-        const sessionLayer = resolveRequestLayer(deps.dataDir, req, input.network_id, app.appLogger);
-        const layer = updateLayer(
-          ndb,
-          input.layer_id,
-          {
-            ...(input.title !== undefined ? { title: input.title } : {}),
-            ...(input.comment !== undefined ? { comment: input.comment } : {}),
-            ...(colors !== undefined ? { colors } : {}),
-          },
-          input.expected_version,
-          req.auth!.user.id,
+        const sessionLayer = resolveRequestLayer(
+          deps.dataDir,
+          req,
+          input.network_id,
+          app.appLogger,
         );
-        recordLayerActivity(ndb, {
-          networkId: input.network_id,
-          userId: req.auth!.user.id,
-          action: 'updated',
-          layer,
-          layerId: req.layerEcho?.id ?? null,
+        const layer = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const updated = updateLayer(
+            ndb,
+            input.layer_id,
+            {
+              ...(input.title !== undefined ? { title: input.title } : {}),
+              ...(input.comment !== undefined ? { comment: input.comment } : {}),
+              ...(colors !== undefined ? { colors } : {}),
+            },
+            input.expected_version,
+            req.auth!.user.id,
+          );
+          return {
+            result: updated,
+            activity: [{ kind: 'layer', action: 'updated', layer: updated }],
+          };
         });
         const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
-        sendSuccess(reply, layerWithCurrent, { version: layer.version, updated_at: layer.last_activity_at });
+        sendSuccess(reply, layerWithCurrent, {
+          version: layer.version,
+          updated_at: layer.last_activity_at,
+        });
       },
     );
 
@@ -170,43 +199,61 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // before the cascade so `switched_at_seq` reflects "everything from
         // here on assumes the new layer".
         const switchedAtSeq = app.systemDb.getMaxEventSeq(input.network_id) ?? 0;
-        const result = deleteLayerWithEvents(ndb, input.layer_id, input.cascade, switchedAtSeq);
+        // Родительский слой не входит в каскад, поэтому его снимок и id
+        // перепривязки сессий можно взять ДО удаления: журнальная строка
+        // о слое должна нести id слоя, куда переведены сессии (newLayerId).
+        const newLayerId = parentRow?.parent_id ?? BASE_LAYER_ID;
+        const newLayerRow = getLayerSnapshot(ndb, newLayerId);
+        const result = runWrite(
+          ndb,
+          { ...restWriteFx(deps, req, input.network_id), layerId: newLayerId },
+          () => {
+            const res = deleteLayerWithEvents(ndb, input.layer_id, input.cascade, switchedAtSeq);
+            return {
+              result: res,
+              events: [
+                ...res.deleted_thought_ids.map((id) => ({
+                  type: 'thought.deleted' as const,
+                  data: { id },
+                })),
+                ...res.deleted_link_ids.map((id) => ({
+                  type: 'link.deleted' as const,
+                  data: { id },
+                })),
+              ],
+              ...(parentRow === null
+                ? {}
+                : {
+                    // Сохраняем снимок названия до того, как
+                    // `deleteLayerWithEvents` физически удалил строку. Слой
+                    // на момент записи — сессионный после пере-указания;
+                    // `newLayerId` проставлен в fx.layerId.
+                    activity: [
+                      {
+                        kind: 'layer' as const,
+                        action: 'deleted' as const,
+                        layer: { id: input.layer_id, title: parentRow.title },
+                      },
+                    ],
+                  }),
+            };
+          },
+        );
         // Sessions sitting on the deleted subtree were re-pointed to the
         // parent inside the transaction — drop this request's memoised echo
         // so the onSend hook resolves the post-switch layer.
         req.layerEcho = undefined;
         // Push a forced-resync control frame to every already-connected
         // socket sitting on the deleted subtree (13-layers.md §2.4).
-        const newLayerId = parentRow?.parent_id ?? BASE_LAYER_ID;
-        const newLayerRow = getLayerSnapshot(ndb, newLayerId);
         app.realtimeGateway.notifyLayerDeleted(input.network_id, new Set(subtreeIds), {
           id: newLayerId,
           title: newLayerRow?.title ?? 'Основа',
         });
-        // Fan out the standard deletion events of the trash auto-purge so
-        // connected clients refresh (same fan-out as POST /trash/purge).
-        for (const id of result.deleted_thought_ids) {
-          deps.emit(req, input.network_id, 'thought.deleted', { id });
-        }
-        for (const id of result.deleted_link_ids) {
-          deps.emit(req, input.network_id, 'link.deleted', { id });
-        }
-        if (parentRow) {
-          // Сохраняем снимок названия до того, как `deleteLayerWithEvents`
-          // физически удалил строку. Слой на момент записи — это текущий
-          // сессионный слой после возможного пере-указания; у нас он
-          // уже сброшен (`req.layerEcho = undefined` выше), поэтому
-          // используем `newLayerId` — именно туда переведены сессии
-          // поддерева.
-          recordLayerActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            layer: { id: input.layer_id, title: parentRow.title },
-            layerId: newLayerId,
-          });
-        }
-        sendSuccess(reply, { deleted: result.deleted, purged: result.purged, skipped: result.skipped });
+        sendSuccess(reply, {
+          deleted: result.deleted,
+          purged: result.purged,
+          skipped: result.skipped,
+        });
       },
     );
 
@@ -222,19 +269,26 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // so this session's next `resume`/`etn.changes.list` forces a full
         // resync instead of a delta spanning two different layers' filters.
         const switchedAtSeq = app.systemDb.getMaxEventSeq(input.network_id) ?? 0;
-        const layer = setSessionLayer(
-          ndb,
-          req.auth!.user.id,
-          req.auth!.clientId,
-          input.layer_id,
-          switchedAtSeq,
-        );
+        const layer = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => ({
+          result: setSessionLayer(
+            ndb,
+            req.auth!.user.id,
+            req.auth!.clientId,
+            input.layer_id,
+            switchedAtSeq,
+          ),
+        }));
         // The mutating-response echo must reflect the *new* session layer.
         req.layerEcho = layer;
         // Already-connected sockets of this exact (user, client) session must
         // switch their live delivery filter now and learn their cache is
         // stale — the REST response alone would not reach an open WS.
-        app.realtimeGateway.notifyLayerSwitch(input.network_id, req.auth!.user.id, req.auth!.clientId, layer);
+        app.realtimeGateway.notifyLayerSwitch(
+          input.network_id,
+          req.auth!.user.id,
+          req.auth!.clientId,
+          layer,
+        );
         sendSuccess(reply, layer);
       },
     );
@@ -267,34 +321,50 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
 
         const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
-        const result = mergeLayer(ndb, input.layer_id, selection, req.auth!.user.id);
+        const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const merged = mergeLayer(ndb, input.layer_id, selection, req.auth!.user.id);
 
-        // Exactly one `layer.merged` event per merge (04-realtime.md §11.4):
-        // no per-row fan-out of the replayed rows — recipients resync fully.
-        // The event's layer attribution is the merge target, not the session.
-        const report: LayerMergeReport = {
+          // Exactly one `layer.merged` event per merge (04-realtime.md §11.4):
+          // no per-row fan-out of the replayed rows — recipients resync fully.
+          // The event's layer attribution is the merge target, not the session.
+          const report: LayerMergeReport = {
+            applied: merged.applied,
+            skipped: merged.skipped,
+            reorder_collapsed: merged.reorder_collapsed,
+            reserve_layer_id: merged.reserve_layer_id,
+            purged: merged.purged,
+            activity_rollup: merged.activity_rollup,
+          };
+          return {
+            result: merged,
+            events: [
+              {
+                type: 'layer.merged',
+                data: { ...report, layer: merged.merged_layer, target_layer: merged.target_layer },
+                options: { layerId: merged.target_layer.id },
+              },
+              // The trash auto-purge victims are ordinary deletions outside the
+              // merge row set — fan out the standard events for them (as the
+              // layer delete route does).
+              ...merged.deleted_thought_ids.map((id) => ({
+                type: 'thought.deleted' as const,
+                data: { id },
+              })),
+              ...merged.deleted_link_ids.map((id) => ({
+                type: 'link.deleted' as const,
+                data: { id },
+              })),
+            ],
+          };
+        });
+        sendSuccess(reply, {
           applied: result.applied,
           skipped: result.skipped,
           reorder_collapsed: result.reorder_collapsed,
           reserve_layer_id: result.reserve_layer_id,
           purged: result.purged,
           activity_rollup: result.activity_rollup,
-        };
-        deps.emit(req, input.network_id, 'layer.merged', {
-          ...report,
-          layer: result.merged_layer,
-          target_layer: result.target_layer,
-        }, { layerId: result.target_layer.id });
-        // The trash auto-purge victims are ordinary deletions outside the
-        // merge row set — fan out the standard events for them (as the layer
-        // delete route does).
-        for (const id of result.deleted_thought_ids) {
-          deps.emit(req, input.network_id, 'thought.deleted', { id });
-        }
-        for (const id of result.deleted_link_ids) {
-          deps.emit(req, input.network_id, 'link.deleted', { id });
-        }
-        sendSuccess(reply, report);
+        });
       },
     );
 

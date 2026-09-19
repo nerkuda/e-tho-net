@@ -31,7 +31,7 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import {
   addCommentTarget,
   createComment,
@@ -42,7 +42,6 @@ import {
   removeCommentTarget,
   updateComment,
 } from '../domain/comment-service.js';
-import { recordCommentActivity } from '../domain/activity-service.js';
 import {
   parseRest,
   RestCommentAddTarget,
@@ -85,14 +84,19 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             valid_to: input.valid_to,
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-          const comment = createComment(ndb, ownerType, input.owner_id, parsed, req.auth!.user.id);
-          deps.emit(req, input.network_id, 'comment.created', { comment });
-          recordCommentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'created',
-            comment,
-            layerId: req.layerEcho?.id ?? null,
+          const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+            const created = createComment(
+              ndb,
+              ownerType,
+              input.owner_id,
+              parsed,
+              req.auth!.user.id,
+            );
+            return {
+              result: created,
+              events: [{ type: 'comment.created', data: { comment: created } }],
+              activity: [{ kind: 'comment', action: 'created', comment: created }],
+            };
           });
           sendCreated(reply, comment, {
             version: comment.version,
@@ -121,14 +125,13 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         };
         const targets = input.targets as CommentTarget[];
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const comment = createCommentWithTargets(ndb, targets, parsed, req.auth!.user.id);
-        deps.emit(req, input.network_id, 'comment.created', { comment });
-        recordCommentActivity(ndb, {
-          networkId: input.network_id,
-          userId: req.auth!.user.id,
-          action: 'created',
-          comment,
-          layerId: req.layerEcho?.id ?? null,
+        const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const created = createCommentWithTargets(ndb, targets, parsed, req.auth!.user.id);
+          return {
+            result: created,
+            events: [{ type: 'comment.created', data: { comment: created } }],
+            activity: [{ kind: 'comment', action: 'created', comment: created }],
+          };
         });
         sendCreated(reply, comment, {
           version: comment.version,
@@ -147,7 +150,12 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const comment = getComment(ndb, input.comment_id);
         if (comment === null) {
-          throw new EtnError('NOT_FOUND', `comment ${input.comment_id} not found`, { entity: 'comment', id: input.comment_id }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `comment ${input.comment_id} not found`,
+            { entity: 'comment', id: input.comment_id },
+            req.id,
+          );
         }
         sendSuccess(reply, comment);
       },
@@ -164,18 +172,24 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.valid_from !== undefined) changes.valid_from = input.valid_from;
         if (input.valid_to !== undefined) changes.valid_to = input.valid_to;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const comment = updateComment(ndb, input.comment_id, changes, input.expected_version, req.auth!.user.id);
-        deps.emit(req, input.network_id, 'comment.updated', {
-          id: input.comment_id,
-          changes,
-          version: comment.version,
-        });
-        recordCommentActivity(ndb, {
-          networkId: input.network_id,
-          userId: req.auth!.user.id,
-          action: 'updated',
-          comment,
-          layerId: req.layerEcho?.id ?? null,
+        const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const updated = updateComment(
+            ndb,
+            input.comment_id,
+            changes,
+            input.expected_version,
+            req.auth!.user.id,
+          );
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'comment.updated',
+                data: { id: input.comment_id, changes, version: updated.version },
+              },
+            ],
+            activity: [{ kind: 'comment', action: 'updated', comment: updated }],
+          };
         });
         sendSuccess(reply, comment, {
           version: comment.version,
@@ -191,22 +205,30 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestCommentById, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const existing = getComment(ndb, input.comment_id);
-        deleteComment(ndb, input.comment_id, input.expected_version);
-        if (existing) {
-          deps.emit(req, input.network_id, 'comment.deleted', {
-            owner_type: existing.owner_type,
-            owner_id: existing.owner_id,
-            id: input.comment_id,
-          });
-          recordCommentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            comment: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
+        runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const existing = getComment(ndb, input.comment_id);
+          deleteComment(ndb, input.comment_id, input.expected_version);
+          return {
+            result: undefined,
+            ...(existing === null
+              ? {}
+              : {
+                  events: [
+                    {
+                      type: 'comment.deleted' as const,
+                      data: {
+                        owner_type: existing.owner_type,
+                        owner_id: existing.owner_id,
+                        id: input.comment_id,
+                      },
+                    },
+                  ],
+                  activity: [
+                    { kind: 'comment' as const, action: 'deleted' as const, comment: existing },
+                  ],
+                }),
+          };
+        });
         reply.code(204).send();
       },
     );
@@ -218,18 +240,28 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestCommentAddTarget, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const comment = addCommentTarget(
-          ndb,
-          input.comment_id,
-          input.owner_type as CommentOwnerType,
-          input.owner_id,
-          input.expected_version,
-          req.auth!.user.id,
-        );
-        deps.emit(req, input.network_id, 'comment.updated', {
-          id: input.comment_id,
-          changes: { targets: comment.targets },
-          version: comment.version,
+        const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const updated = addCommentTarget(
+            ndb,
+            input.comment_id,
+            input.owner_type as CommentOwnerType,
+            input.owner_id,
+            input.expected_version,
+            req.auth!.user.id,
+          );
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'comment.updated',
+                data: {
+                  id: input.comment_id,
+                  changes: { targets: updated.targets },
+                  version: updated.version,
+                },
+              },
+            ],
+          };
         });
         sendSuccess(reply, comment, {
           version: comment.version,
@@ -246,18 +278,28 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestCommentDetachTarget, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const comment = removeCommentTarget(
-          ndb,
-          input.comment_id,
-          input.owner_type as CommentOwnerType,
-          input.owner_id,
-          input.expected_version,
-          req.auth!.user.id,
-        );
-        deps.emit(req, input.network_id, 'comment.updated', {
-          id: input.comment_id,
-          changes: { targets: comment.targets },
-          version: comment.version,
+        const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const updated = removeCommentTarget(
+            ndb,
+            input.comment_id,
+            input.owner_type as CommentOwnerType,
+            input.owner_id,
+            input.expected_version,
+            req.auth!.user.id,
+          );
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'comment.updated',
+                data: {
+                  id: input.comment_id,
+                  changes: { targets: updated.targets },
+                  version: updated.version,
+                },
+              },
+            ],
+          };
         });
         sendSuccess(reply, comment, {
           version: comment.version,

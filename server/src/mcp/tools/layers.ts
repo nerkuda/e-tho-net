@@ -11,17 +11,47 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { closeNetworkDb, openNetworkDb } from '../../db/network-db.js';
-import { createLayer, deleteLayerWithEvents, getLayerSnapshot, layerSubtreeIds, listLayers, setSessionLayer, updateLayer } from '../../domain/layer-service.js';
-import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../domain/layer-diff-service.js';
+import {
+  createLayer,
+  deleteLayerWithEvents,
+  getLayerSnapshot,
+  layerSubtreeIds,
+  listLayers,
+  setSessionLayer,
+  updateLayer,
+} from '../../domain/layer-service.js';
+import {
+  layerDiffDoc,
+  resolveDiffTarget,
+  structuralLayerDiff,
+} from '../../domain/layer-diff-service.js';
 import { mergeLayer } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
 import { BRANCHABLE_TABLES } from '../../db/layer-chain.js';
 import type { BranchableTable } from '../../db/layer-write.js';
 import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { LayerMergeReport } from '@etn/shared';
-import { recordLayerActivity } from '../../domain/activity-service.js';
-import { auditAgentCall, emitAgentEvent, mcpLayerClientId, openMemberNetworkBase, requireWritable, requireWriteBudget, resolveRuntimeLayer, runTool, runWriteTool } from '../context.js';
-import { LayersCreate, LayersDelete, LayersDiff, LayersDiffDoc, LayersList, LayersMerge, LayersSelect, LayersUpdate } from '../../contracts.js';
+import {
+  mcpLayerClientId,
+  mcpWriteFx,
+  openMemberNetworkBase,
+  requireWritable,
+  requireWriteBudget,
+  resolveRuntimeLayer,
+  runTool,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
+import {
+  LayersCreate,
+  LayersDelete,
+  LayersDiff,
+  LayersDiffDoc,
+  LayersList,
+  LayersMerge,
+  LayersSelect,
+  LayersUpdate,
+} from '../../contracts.js';
 
 export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
@@ -30,7 +60,7 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Список слоёв',
       description:
         'All layers of the network with hierarchy metadata: id, parent_id, title, comment, git_branch, ' +
-        'depth, children_count (the DELETE cascade confirmation) and `current` — true on the calling key\'s ' +
+        "depth, children_count (the DELETE cascade confirmation) and `current` — true on the calling key's " +
         'own session layer. Service (reserve) layers are hidden unless `include_service: true`.',
       inputSchema: LayersList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.list'],
@@ -39,7 +69,10 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const current = resolveRuntimeLayer(rt, args.network_id);
-        return listLayers(ndb, { includeService: args.include_service, currentLayerId: current.id });
+        return listLayers(ndb, {
+          includeService: args.include_service,
+          currentLayerId: current.id,
+        });
       }),
   );
 
@@ -64,7 +97,12 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const { layer, target } = resolveDiffTarget(ndb, args.layer_id);
         const layerNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, layer.id);
-        const targetNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, target.id);
+        const targetNdb = openNetworkDb(
+          rt.deps.dataDir,
+          args.network_id,
+          rt.deps.logger,
+          target.id,
+        );
         return structuralLayerDiff(layerNdb, targetNdb, layer, target);
       }),
   );
@@ -84,7 +122,12 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const { layer, target } = resolveDiffTarget(ndb, args.layer_id);
         const layerNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, layer.id);
-        const targetNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, target.id);
+        const targetNdb = openNetworkDb(
+          rt.deps.dataDir,
+          args.network_id,
+          rt.deps.logger,
+          target.id,
+        );
         return layerDiffDoc(layerNdb, targetNdb, layer, target);
       }),
   );
@@ -106,14 +149,14 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать слой',
       description:
-        'Create a layer under the given parent — defaults to the calling key\'s current session layer. ' +
-        '`comment` is strongly encouraged: it is how the next agent understands the layer\'s purpose. ' +
+        "Create a layer under the given parent — defaults to the calling key's current session layer. " +
+        "`comment` is strongly encouraged: it is how the next agent understands the layer's purpose. " +
         'Depth is capped at 4 ordinary layers above the base. Does not switch the session — call ' +
         '`etn.layers.select` for that.',
       inputSchema: LayersCreate.schema,
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetworkBase(rt, args.network_id);
@@ -123,27 +166,33 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
         // error 9b159e7a — created.current was always `true`).
         const sessionLayer = resolveRuntimeLayer(rt, args.network_id);
         const parent = args.parent_id ?? sessionLayer.id;
-        const layer = createLayer(ndb, {
-          parentId: parent,
-          title: args.title,
-          comment: args.comment ?? null,
-          gitBranch: args.git_branch ?? null,
-          createdBy: rt.deps.auth.userId,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const layer = runWrite(ndb, fx, () => {
+          const created = createLayer(ndb, {
+            parentId: parent,
+            title: args.title,
+            comment: args.comment ?? null,
+            gitBranch: args.git_branch ?? null,
+            createdBy: rt.deps.auth.userId,
+          });
+          // Journal row, mirroring the REST POST /layers route: the snapshot
+          // layer is the calling key's session layer (creating does not switch).
+          return {
+            result: created,
+            activity: [{ kind: 'layer', action: 'created', layer: created }],
+            audit: {
+              action: 'etn.layers.create',
+              targetType: 'layer',
+              targetId: created.id,
+              details: { title: args.title, parent_id: parent },
+            },
+          };
         });
-        // Journal row, mirroring the REST POST /layers route: the snapshot
-        // layer is the calling key's session layer (creating does not switch).
-        recordLayerActivity(ndb, {
-          networkId: args.network_id,
-          userId: rt.deps.auth.userId,
-          action: 'created',
-          layer,
-          layerId: sessionLayer.id,
-        });
-        auditAgentCall(rt, 'etn.layers.create', args.network_id, 'layer', layer.id, {
-          title: args.title,
-          parent_id: parent,
-        });
-        return { ...layer, current: layer.id === sessionLayer.id, request_id: String(extra.requestId) };
+        return {
+          ...layer,
+          current: layer.id === sessionLayer.id,
+          request_id: String(extra.requestId),
+        };
       }),
   );
 
@@ -152,52 +201,56 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Переименовать слой / изменить комментарий',
       description:
-        'Rename a layer and/or edit its comment. The base layer\'s title is fixed («Основа») — renaming it ' +
+        "Rename a layer and/or edit its comment. The base layer's title is fixed («Основа») — renaming it " +
         'is a VALIDATION_ERROR; editing its comment is allowed. `expected_version` — the usual optimistic ' +
         'lock (409 VERSION_CONFLICT on mismatch).',
       inputSchema: LayersUpdate.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.update'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         if (args.title === undefined && args.comment === undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'нечего менять: передайте title и/или comment.',
-            { fields: ['title', 'comment'] },
-          );
+          throw new EtnError('VALIDATION_ERROR', 'нечего менять: передайте title и/или comment.', {
+            fields: ['title', 'comment'],
+          });
         }
         const ndb = openMemberNetworkBase(rt, args.network_id);
         // Renaming/editing a layer does not switch the session: `current`
         // reflects the calling key's real session layer, not the edited
         // layer (same pattern as the createLayer fix 9b159e7a).
         const sessionLayer = resolveRuntimeLayer(rt, args.network_id);
-        const layer = updateLayer(
-          ndb,
-          args.layer_id,
-          {
-            ...(args.title !== undefined ? { title: args.title } : {}),
-            ...(args.comment !== undefined ? { comment: args.comment } : {}),
-          },
-          args.expected_version,
-          rt.deps.auth.userId,
-        );
-        // Journal row, mirroring the REST PATCH /layers/:id route: the
-        // snapshot layer is the session layer (renaming does not switch).
-        recordLayerActivity(ndb, {
-          networkId: args.network_id,
-          userId: rt.deps.auth.userId,
-          action: 'updated',
-          layer,
-          layerId: sessionLayer.id,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const layer = runWrite(ndb, fx, () => {
+          const updated = updateLayer(
+            ndb,
+            args.layer_id,
+            {
+              ...(args.title !== undefined ? { title: args.title } : {}),
+              ...(args.comment !== undefined ? { comment: args.comment } : {}),
+            },
+            args.expected_version,
+            rt.deps.auth.userId,
+          );
+          // Journal row, mirroring the REST PATCH /layers/:id route: the
+          // snapshot layer is the session layer (renaming does not switch).
+          return {
+            result: updated,
+            activity: [{ kind: 'layer', action: 'updated', layer: updated }],
+            audit: {
+              action: 'etn.layers.update',
+              targetType: 'layer',
+              targetId: updated.id,
+              details: { title: args.title, comment: args.comment },
+            },
+          };
         });
-        auditAgentCall(rt, 'etn.layers.update', args.network_id, 'layer', layer.id, {
-          title: args.title,
-          comment: args.comment,
-        });
-        return { ...layer, current: layer.id === sessionLayer.id, request_id: String(extra.requestId) };
+        return {
+          ...layer,
+          current: layer.id === sessionLayer.id,
+          request_id: String(extra.requestId),
+        };
       }),
   );
 
@@ -215,7 +268,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.delete'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         // Close the doomed layers' pooled connections first (mirrors the REST
@@ -233,30 +286,47 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
           }
         }
         const switchedAtSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id) ?? 0;
-        const result = deleteLayerWithEvents(ndb, args.layer_id, args.cascade, switchedAtSeq);
-        // Per-row realtime events of the trash auto-purge — journaled rows
-        // are intentionally absent for them: the REST DELETE /layers/:id
-        // route records only the layer's own row (parity).
-        for (const id of result.deleted_thought_ids) {
-          emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
-        }
-        for (const id of result.deleted_link_ids) {
-          emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
-        }
-        if (parentRow) {
-          // Journal snapshot layer — where the deleted subtree's sessions were
-          // re-pointed (same choice as the REST route, 13-layers.md §2.4).
-          recordLayerActivity(ndb, {
-            networkId: args.network_id,
-            userId: rt.deps.auth.userId,
-            action: 'deleted',
-            layer: { id: args.layer_id, title: parentRow.title },
-            layerId: parentRow.parent_id ?? BASE_LAYER_ID,
-          });
-        }
-        auditAgentCall(rt, 'etn.layers.delete', args.network_id, 'layer', args.layer_id, {
-          cascade: args.cascade,
-          deleted: result.deleted,
+        // Журнальная строка слоя идёт со снимком «куда переведены сессии»
+        // (родитель удалённого поддерева) — слой для fx переопределяем.
+        const fx = {
+          ...mcpWriteFx(rt, args.network_id, extra.requestId),
+          layerId: parentRow?.parent_id ?? BASE_LAYER_ID,
+        };
+        const result = runWrite(ndb, fx, () => {
+          const res = deleteLayerWithEvents(ndb, args.layer_id, args.cascade, switchedAtSeq);
+          return {
+            result: res,
+            events: [
+              // Per-row realtime events of the trash auto-purge — journaled
+              // rows are intentionally absent for them: the REST DELETE
+              // /layers/:id route records only the layer's own row (parity).
+              ...res.deleted_thought_ids.map((id) => ({
+                type: 'thought.deleted' as const,
+                data: { id },
+              })),
+              ...res.deleted_link_ids.map((id) => ({
+                type: 'link.deleted' as const,
+                data: { id },
+              })),
+            ],
+            ...(parentRow === null
+              ? {}
+              : {
+                  activity: [
+                    {
+                      kind: 'layer' as const,
+                      action: 'deleted' as const,
+                      layer: { id: args.layer_id, title: parentRow.title },
+                    },
+                  ],
+                }),
+            audit: {
+              action: 'etn.layers.delete',
+              targetType: 'layer',
+              targetId: args.layer_id,
+              details: { cascade: args.cascade, deleted: res.deleted },
+            },
+          };
         });
         return {
           deleted: result.deleted,
@@ -272,30 +342,41 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Переключить текущий слой',
       description:
-        'Switch the calling API key\'s current session layer: every later call of this key — reads and ' +
-        'writes alike — runs in the new layer\'s context. A service (reserve) layer cannot be selected; ' +
+        "Switch the calling API key's current session layer: every later call of this key — reads and " +
+        "writes alike — runs in the new layer's context. A service (reserve) layer cannot be selected; " +
         'selecting the current layer again is a no-op. `etn.changes.list` forces a full resync once ' +
         '`since_seq` predates this switch.',
       inputSchema: LayersSelect.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.select'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const switchedAtSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id) ?? 0;
-        const layer = setSessionLayer(
-          ndb,
-          rt.deps.auth.userId,
-          mcpLayerClientId(rt),
-          args.layer_id,
-          switchedAtSeq,
-        );
-        // No activity_log row: switching the session does not change the
-        // layer entity itself — the REST `/select` route does not journal it
-        // either (требование b0c7a57c covers entity mutations only).
-        auditAgentCall(rt, 'etn.layers.select', args.network_id, 'layer', layer.id, {});
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const layer = runWrite(ndb, fx, () => {
+          const selected = setSessionLayer(
+            ndb,
+            rt.deps.auth.userId,
+            mcpLayerClientId(rt),
+            args.layer_id,
+            switchedAtSeq,
+          );
+          return {
+            result: selected,
+            // No activity_log row: switching the session does not change the
+            // layer entity itself — the REST `/select` route does not journal
+            // it either (требование b0c7a57c covers entity mutations only).
+            audit: {
+              action: 'etn.layers.select',
+              targetType: 'layer',
+              targetId: selected.id,
+              details: {},
+            },
+          };
+        });
         return { ...layer, request_id: String(extra.requestId) };
       }),
   );
@@ -314,7 +395,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.merge'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         let selection: MergeSelection | undefined;
@@ -322,55 +403,77 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
           selection = {};
           for (const [table, ids] of Object.entries(args.tables)) {
             if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
-              throw new EtnError(
-                'VALIDATION_ERROR',
-                `неизвестная ветвимая таблица «${table}».`,
-                { field: 'tables', table, allowed: BRANCHABLE_TABLES },
-              );
+              throw new EtnError('VALIDATION_ERROR', `неизвестная ветвимая таблица «${table}».`, {
+                field: 'tables',
+                table,
+                allowed: BRANCHABLE_TABLES,
+              });
             }
             selection[table as BranchableTable] = ids;
           }
         }
         const ndb = openMemberNetworkBase(rt, args.network_id);
-        const result = mergeLayer(ndb, args.layer_id, selection, rt.deps.auth.userId);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const result = runWrite(ndb, fx, () => {
+          const merged = mergeLayer(ndb, args.layer_id, selection, rt.deps.auth.userId);
 
-        // No own activity_log row for the merge — parity with the REST merge
-        // route: mergeLayer already rolled the layer's journal rows up into
-        // the base (autoRollupLayerActivity, задача 6bcccd2b), and REST does
-        // not record a separate `layer` row for the merge operation itself.
+          // No own activity_log row for the merge — parity with the REST merge
+          // route: mergeLayer already rolled the layer's journal rows up into
+          // the base (autoRollupLayerActivity, задача 6bcccd2b), and REST does
+          // not record a separate `layer` row for the merge operation itself.
 
-        // Exactly one `layer.merged` event per merge (04-realtime.md §11.4),
-        // attributed to the merge target — not the agent's session layer.
-        const report: LayerMergeReport = {
+          // Exactly one `layer.merged` event per merge (04-realtime.md §11.4),
+          // attributed to the merge target — not the agent's session layer.
+          const report: LayerMergeReport = {
+            applied: merged.applied,
+            skipped: merged.skipped,
+            reorder_collapsed: merged.reorder_collapsed,
+            reserve_layer_id: merged.reserve_layer_id,
+            purged: merged.purged,
+            activity_rollup: merged.activity_rollup,
+          };
+          return {
+            result: merged,
+            events: [
+              {
+                type: 'layer.merged',
+                data: {
+                  ...report,
+                  layer: merged.merged_layer,
+                  target_layer: merged.target_layer,
+                },
+                options: { layerId: merged.target_layer.id },
+              },
+              // The trash auto-purge victims are ordinary deletions outside the
+              // merge row set — realtime only, no journal rows (as the REST
+              // merge route; the journal side of the merge is the auto-rollup
+              // above).
+              ...merged.deleted_thought_ids.map((id) => ({
+                type: 'thought.deleted' as const,
+                data: { id },
+              })),
+              ...merged.deleted_link_ids.map((id) => ({
+                type: 'link.deleted' as const,
+                data: { id },
+              })),
+            ],
+            audit: {
+              action: 'etn.layers.merge',
+              targetType: 'layer',
+              targetId: args.layer_id,
+              details: { tables: args.tables, applied: report.applied },
+            },
+          };
+        });
+        return {
           applied: result.applied,
           skipped: result.skipped,
           reorder_collapsed: result.reorder_collapsed,
           reserve_layer_id: result.reserve_layer_id,
           purged: result.purged,
           activity_rollup: result.activity_rollup,
+          request_id: String(extra.requestId),
         };
-        emitAgentEvent(
-          rt,
-          args.network_id,
-          'layer.merged',
-          { ...report, layer: result.merged_layer, target_layer: result.target_layer },
-          extra.requestId,
-          result.target_layer.id,
-        );
-        // The trash auto-purge victims are ordinary deletions outside the
-        // merge row set — realtime only, no journal rows (as the REST merge
-        // route; the journal side of the merge is the auto-rollup above).
-        for (const id of result.deleted_thought_ids) {
-          emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
-        }
-        for (const id of result.deleted_link_ids) {
-          emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
-        }
-        auditAgentCall(rt, 'etn.layers.merge', args.network_id, 'layer', args.layer_id, {
-          tables: args.tables,
-          applied: report.applied,
-        });
-        return { ...report, request_id: String(extra.requestId) };
       }),
   );
 

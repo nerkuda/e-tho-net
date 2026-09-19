@@ -174,13 +174,17 @@ describe(
         assert.equal(byId.get(baseThought.id)?.blocked, true);
         assert.equal(byId.get(layerThought.id)?.blocked, false);
 
-        const { purged, skipped } = purgeTrash(ndb);
+        const { purged, skipped } = purgeTrash(ndb).result;
         assert.equal(purged, 1);
         assert.equal(skipped, 1);
         assert.equal(getThought(ndb, layerThought.id), null); // tombstoned in A
         ndb.useLayer(BASE_LAYER_ID);
         assert.equal(getThought(ndb, baseThought.id)?.marked_for_deletion, true);
-        assert.equal(getThought(ndb, layerThought.id), null, 'layer-only row never existed in base');
+        assert.equal(
+          getThought(ndb, layerThought.id),
+          null,
+          'layer-only row never existed in base',
+        );
       } finally {
         ndb.close();
       }

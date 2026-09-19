@@ -6,15 +6,40 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
+import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS, PROPERTY_OWNER_TYPES } from '@etn/shared';
-import type { McpMutationResult, McpPropertiesSetResult, PropertyDefinition, PropertyValueValue } from '@etn/shared';
-import { getThoughtOrThrow } from '../../domain/thought-service.js';
-import { PropertiesAdd, PropertiesRemove, PropertiesSet, ThoughtsUsageClear } from '../../contracts.js';
+import type {
+  McpMutationResult,
+  McpPropertiesSetResult,
+  PropertyDefinition,
+  PropertyValueValue,
+} from '@etn/shared';
+import { getThoughtOrThrow, getThought } from '../../domain/thought-service.js';
+import {
+  PropertiesAdd,
+  PropertiesRemove,
+  PropertiesSet,
+  ThoughtsUsageClear,
+} from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
-import { addLinkPropertyValue, clearThoughtRefUsages, removeLinkPropertyValue, resolveDefinition, setPropertyValue, setPropertyValues } from '../../domain/property-service.js';
+import {
+  addLinkPropertyValue,
+  clearThoughtRefUsages,
+  removeLinkPropertyValue,
+  resolveDefinition,
+  setPropertyValue,
+  setPropertyValues,
+} from '../../domain/property-service.js';
 import { emitDomainEvent } from '../../realtime/emit.js';
-import { auditAgentCall, emitAgentActivityEvent, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, runWriteTool } from '../context.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId, ThoughtId } from './shared.js';
 
 export const PropertyValueSchema = z.union([
@@ -63,11 +88,10 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
       value: PropertyValueSchema.optional(),
       values: z.record(z.string(), PropertyValueSchema).optional(),
     })
-    .refine(
-      (v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined),
-      { message: 'provide exactly one of { key + value } or { values }' },
-    );
-    mcp.registerTool(
+    .refine((v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined), {
+      message: 'provide exactly one of { key + value } or { values }',
+    });
+  mcp.registerTool(
     'etn.properties.set',
     {
       title: 'Установить свойство',
@@ -78,42 +102,63 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
         'array clears. Stringified scalars are tolerated in the single form: "true"/"false" for `bool`, ' +
         'finite numeric strings for `number` — coerced back to JSON types. Either one `key`+`value`, or ' +
         '`values: {key: value|null}` for several properties in one transaction (an invalid key rolls back ' +
-        'the whole set). Missing key → NOT_FOUND; a property not attached to the owner\'s type chain → ' +
+        "the whole set). Missing key → NOT_FOUND; a property not attached to the owner's type chain → " +
         'VALIDATION_ERROR with `details.property_id` (call `etn.types.list` against it).',
       inputSchema: PropertiesSet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        /** Снимок владельца для журнала (требование b0c7a57c — как REST и
+         *  прежний MCP-диспетчер: без строки — голый id). */
+        const ownerEntity = () =>
+          args.owner_type === 'thought'
+            ? (getThought(ndb, args.owner_id) ?? { id: args.owner_id })
+            : (getLink(ndb, args.owner_id) ?? { id: args.owner_id });
 
         if (args.values !== undefined) {
-          const stored = setPropertyValues(
-            ndb,
-            args.owner_type,
-            args.owner_id,
-            args.values,
-            rt.deps.auth.userId,
-          );
-          for (const value of Object.values(stored)) {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'property-value.set',
-              {
-                owner_type: args.owner_type,
-                owner_id: args.owner_id,
-                property_id: value.property_id,
-                value: value.value,
-              },
+          const values = args.values;
+          const stored = runWrite(ndb, fx, () => {
+            const written = setPropertyValues(
               ndb,
-              extra.requestId,
+              args.owner_type,
+              args.owner_id,
+              values,
+              rt.deps.auth.userId,
             );
-          }
-          auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
-            values: args.values,
+            const events: AnyWriteEvent[] = [];
+            const activity: WriteActivityEntry[] = [];
+            // Журнал — по строке на каждое записанное значение (как прежний
+            // MCP-диспетчер: один `property-value.set` = одно обновление
+            // владельца, требование b0c7a57c).
+            const owner = ownerEntity();
+            for (const value of Object.values(written)) {
+              events.push({
+                type: 'property-value.set',
+                data: {
+                  owner_type: args.owner_type,
+                  owner_id: args.owner_id,
+                  property_id: value.property_id,
+                  value: value.value,
+                },
+              });
+              activity.push({ kind: 'owner', entityType: args.owner_type, entity: owner });
+            }
+            return {
+              result: written,
+              events,
+              activity,
+              audit: {
+                action: 'etn.properties.set',
+                targetType: args.owner_type,
+                targetId: args.owner_id,
+                details: { values },
+              },
+            };
           });
           return {
             values: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, { id: v.id }])),
@@ -135,30 +180,36 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
         // A missing definition is left to setPropertyValue to report (NOT_FOUND).
         const def = resolveDefinition(ndb, args.owner_type, args.owner_id, key);
         const coerced = def === null ? value : coerceStringifiedScalar(def, value);
-        const stored = setPropertyValue(
-          ndb,
-          args.owner_type,
-          args.owner_id,
-          key,
-          coerced,
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(
-          rt,
-          args.network_id,
-          'property-value.set',
-          {
-            owner_type: args.owner_type,
-            owner_id: args.owner_id,
-            property_id: stored.property_id,
-            value: stored.value,
-          },
-          ndb,
-          extra.requestId,
-        );
-        auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
-          key,
-          value: coerced,
+        const stored = runWrite(ndb, fx, () => {
+          const set = setPropertyValue(
+            ndb,
+            args.owner_type,
+            args.owner_id,
+            key,
+            coerced,
+            rt.deps.auth.userId,
+          );
+          return {
+            result: set,
+            events: [
+              {
+                type: 'property-value.set',
+                data: {
+                  owner_type: args.owner_type,
+                  owner_id: args.owner_id,
+                  property_id: set.property_id,
+                  value: set.value,
+                },
+              },
+            ],
+            activity: [{ kind: 'owner', entityType: args.owner_type, entity: ownerEntity() }],
+            audit: {
+              action: 'etn.properties.set',
+              targetType: args.owner_type,
+              targetId: args.owner_id,
+              details: { key, value: coerced },
+            },
+          };
         });
         return {
           id: stored.id,
@@ -190,27 +241,39 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.add'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const res = addLinkPropertyValue(
-          ndb,
-          args.owner_type,
-          args.owner_id,
-          args.key,
-          args.value,
-          args.comment ?? null,
-          rt.deps.auth.userId,
-        );
-        const createdLink = res.created ? getLink(ndb, res.link_id) : null;
-        if (createdLink !== null) {
-          emitAgentActivityEvent(rt, args.network_id, 'link.created', { link: createdLink }, ndb, extra.requestId);
-        }
-        auditAgentCall(rt, 'etn.properties.add', args.network_id, args.owner_type, args.owner_id, {
-          key: args.key,
-          value: args.value,
-          comment: args.comment,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const res = runWrite(ndb, fx, () => {
+          const result = addLinkPropertyValue(
+            ndb,
+            args.owner_type,
+            args.owner_id,
+            args.key,
+            args.value,
+            args.comment ?? null,
+            rt.deps.auth.userId,
+          );
+          const createdLink = result.created ? getLink(ndb, result.link_id) : null;
+          return {
+            result,
+            ...(createdLink === null
+              ? {}
+              : {
+                  events: [{ type: 'link.created' as const, data: { link: createdLink } }],
+                  activity: [
+                    { kind: 'link' as const, action: 'created' as const, link: createdLink },
+                  ],
+                }),
+            audit: {
+              action: 'etn.properties.add',
+              targetType: args.owner_type,
+              targetId: args.owner_id,
+              details: { key: args.key, value: args.value, comment: args.comment },
+            },
+          };
         });
         return {
           link_id: res.link_id,
@@ -239,41 +302,51 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.remove'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const res = removeLinkPropertyValue(
-          ndb,
-          args.owner_type,
-          args.owner_id,
-          args.key,
-          args.value,
-          rt.deps.auth.userId,
-        );
-        if (res.link_id !== null) {
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const res = runWrite(ndb, fx, () => {
+          const result = removeLinkPropertyValue(
+            ndb,
+            args.owner_type,
+            args.owner_id,
+            args.key,
+            args.value,
+            rt.deps.auth.userId,
+          );
           // Помечаем в корзину — событие `link.updated` с marked_for_deletion
           // (журнал пишет `trashed`, а не `deleted`).
-          const marked = getLink(ndb, res.link_id);
-          if (marked !== null) {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'link.updated',
-              { id: marked.id, changes: { marked_for_deletion: true }, version: marked.version },
-              ndb,
-              extra.requestId,
-            );
-          }
-        }
-        auditAgentCall(rt, 'etn.properties.remove', args.network_id, args.owner_type, args.owner_id, {
-          key: args.key,
-          value: args.value,
+          const marked = result.link_id !== null ? getLink(ndb, result.link_id) : null;
+          return {
+            result,
+            ...(marked === null
+              ? {}
+              : {
+                  events: [
+                    {
+                      type: 'link.updated' as const,
+                      data: {
+                        id: marked.id,
+                        changes: { marked_for_deletion: true },
+                        version: marked.version,
+                      },
+                    },
+                  ],
+                  activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
+                }),
+            audit: {
+              action: 'etn.properties.remove',
+              targetType: args.owner_type,
+              targetId: args.owner_id,
+              details: { key: args.key, value: args.value },
+            },
+          };
         });
         return { link_id: res.link_id, request_id: String(extra.requestId) };
       }),
   );
-
 }
 
 export function registerUsageClearTool(mcp: McpServer, rt: McpRuntime): void {
@@ -292,14 +365,23 @@ export function registerUsageClearTool(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: ThoughtsUsageClear.schema,
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        getThoughtOrThrow(ndb, args.thought_id);
-        const cleared = clearThoughtRefUsages(ndb, args.thought_id);
-        auditAgentCall(rt, 'etn.thoughts.usage_clear', args.network_id, 'thought', args.thought_id, {
-          cleared,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const cleared = runWrite(ndb, fx, () => {
+          getThoughtOrThrow(ndb, args.thought_id);
+          const result = clearThoughtRefUsages(ndb, args.thought_id);
+          return {
+            result,
+            audit: {
+              action: 'etn.thoughts.usage_clear',
+              targetType: 'thought',
+              targetId: args.thought_id,
+              details: { cleared: result },
+            },
+          };
         });
         return { cleared, request_id: String(extra.requestId) };
       }),
@@ -322,5 +404,4 @@ export function registerUsageClearTool(mcp: McpServer, rt: McpRuntime): void {
   // В журнал активности захваты НЕ пишутся — требование b0c7a57c — поэтому
   // здесь именно `emitAgentEvent`, а не `emitAgentActivityEvent`.
   // =========================================================================
-
 }

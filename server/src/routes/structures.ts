@@ -31,7 +31,13 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  requestBody,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import {
   csvToList,
   parseBody,
@@ -89,10 +95,20 @@ function parseQueryBody(body: Record<string, unknown>, requestId: string): Struc
   const offset = (out.offset as number | undefined) ?? 0;
   const maxLimit = idsOnly ? STRUCTURES_QUERY_IDS_MAX_LIMIT : STRUCTURES_QUERY_MAX_LIMIT;
   if (limit < 1 || limit > maxLimit) {
-    throw new EtnError('VALIDATION_ERROR', `limit должен быть целым числом 1..${maxLimit}.`, { field: 'limit' }, requestId);
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `limit должен быть целым числом 1..${maxLimit}.`,
+      { field: 'limit' },
+      requestId,
+    );
   }
   if (offset < 0) {
-    throw new EtnError('VALIDATION_ERROR', 'offset должен быть целым числом ≥ 0.', { field: 'offset' }, requestId);
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'offset должен быть целым числом ≥ 0.',
+      { field: 'offset' },
+      requestId,
+    );
   }
   return { ...filter, sort, order, limit, offset, ...(idsOnly ? { ids_only: true } : {}) };
 }
@@ -116,21 +132,18 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         // ids_only (L22): bare ids for the bulk filter commands — the same
         // candidate set and ordering, a higher limit ceiling, no meta flags.
         if (query.ids_only === true) {
-          const result = queryThoughtIds(
-            ndb,
-            req.auth!.user.id,
-            structureRequestToQuery(query),
-            { maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT, emptyFilterMode: 'home_orphans' },
-          );
+          const result = queryThoughtIds(ndb, req.auth!.user.id, structureRequestToQuery(query), {
+            maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
+            emptyFilterMode: 'home_orphans',
+          });
           sendSuccess(reply, { ids: result.ids, total: result.total });
           return;
         }
-        const result = queryThoughts(
-          ndb,
-          req.auth!.user.id,
-          structureRequestToQuery(query),
-          { maxLimit: STRUCTURES_QUERY_MAX_LIMIT, emptyFilterMode: 'home_orphans', includeDirections: true },
-        );
+        const result = queryThoughts(ndb, req.auth!.user.id, structureRequestToQuery(query), {
+          maxLimit: STRUCTURES_QUERY_MAX_LIMIT,
+          emptyFilterMode: 'home_orphans',
+          includeDirections: true,
+        });
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,
         });
@@ -190,7 +203,8 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const view = (parseRest(RestSavedFilterViewQuery, req).view ?? 'structures') as SavedFilterView;
+        const view = (parseRest(RestSavedFilterViewQuery, req).view ??
+          'structures') as SavedFilterView;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, listSavedFilters(ndb, req.auth!.user.id, view));
       },
@@ -210,8 +224,19 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
             : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const filter = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
-        deps.emit(req, networkId, 'saved-filter.created', { filter }, { audience: 'user' });
+        const filter = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const created = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
+          return {
+            result: created,
+            events: [
+              {
+                type: 'saved-filter.created',
+                data: { filter: created },
+                options: { audience: 'user' },
+              },
+            ],
+          };
+        });
         sendCreated(reply, filter, { request_id: req.id });
       },
     );
@@ -224,7 +249,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestSavedFilterPatchBody, req);
         const view = (input.view ?? 'structures') as SavedFilterView;
         const name = input.name as string | undefined;
-        let definition;
+        let definition: Parameters<typeof updateSavedFilter>[3]['definition'];
         const definitionRaw = input.definition;
         if (definitionRaw !== undefined) {
           definition =
@@ -233,11 +258,22 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
               : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const filter = updateSavedFilter(ndb, req.auth!.user.id, fid, {
-          ...(name !== undefined ? { name } : {}),
-          ...(definition !== undefined ? { definition } : {}),
+        const filter = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateSavedFilter(ndb, req.auth!.user.id, fid, {
+            ...(name !== undefined ? { name } : {}),
+            ...(definition !== undefined ? { definition } : {}),
+          });
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'saved-filter.updated',
+                data: { filter: updated },
+                options: { audience: 'user' },
+              },
+            ],
+          };
         });
-        deps.emit(req, networkId, 'saved-filter.updated', { filter }, { audience: 'user' });
         sendSuccess(reply, filter, { request_id: req.id });
       },
     );
@@ -248,8 +284,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, fid } = req.params as SavedFilterIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        deleteSavedFilter(ndb, req.auth!.user.id, fid);
-        deps.emit(req, networkId, 'saved-filter.deleted', { id: fid }, { audience: 'user' });
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: deleteSavedFilter(ndb, req.auth!.user.id, fid),
+          events: [
+            { type: 'saved-filter.deleted', data: { id: fid }, options: { audience: 'user' } },
+          ],
+        }));
         sendSuccess(reply, { id: fid });
       },
     );

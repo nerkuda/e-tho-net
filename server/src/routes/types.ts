@@ -34,7 +34,13 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  requestBody,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import {
   assertImageIcon,
   parseBody,
@@ -49,11 +55,7 @@ import {
   RestAttachBody,
   RestTypePropertyUpdateBody,
 } from '../contracts.js';
-import {
-  listLinkTypeCounts,
-  listLinkTypes,
-  updateLinkType,
-} from '../domain/link-type-service.js';
+import { listLinkTypeCounts, listLinkTypes, updateLinkType } from '../domain/link-type-service.js';
 import {
   createThoughtType,
   deleteThoughtType,
@@ -73,11 +75,6 @@ import {
   setTypePropertyDescriptionOverride,
   updateTypeProperty,
 } from '../domain/property-service.js';
-import {
-  recordLinkTypeActivity,
-  recordThoughtTypeActivity,
-  recordTypePropertyActivity,
-} from '../domain/activity-service.js';
 import { getLinkType } from '../domain/link-type-service.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
 
@@ -195,10 +192,7 @@ type AttachPropertyInput =
       side?: LinkPropertySide | null;
     };
 
-function parseAttachBody(
-  body: Record<string, unknown>,
-  requestId: string,
-): AttachPropertyInput {
+function parseAttachBody(body: Record<string, unknown>, requestId: string): AttachPropertyInput {
   const out = parseBody(RestAttachBody, body, requestId);
   const required = (out.required as boolean | undefined) ?? false;
   const position = out.position as number | undefined;
@@ -356,14 +350,13 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as TypeIdParams;
         const input = parseThoughtTypeBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const type = createThoughtType(ndb, input, req.auth!.user.id);
-        deps.emit(req, networkId, 'thought-type.created', { type });
-        recordThoughtTypeActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'created',
-          type,
-          layerId: req.layerEcho?.id ?? null,
+        const type = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const created = createThoughtType(ndb, input, req.auth!.user.id);
+          return {
+            result: created,
+            events: [{ type: 'thought-type.created', data: { type: created } }],
+            activity: [{ kind: 'thought-type', action: 'created', type: created }],
+          };
         });
         sendCreated(reply, type, {
           version: type.version,
@@ -383,10 +376,15 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = getThoughtType(ndb, id);
         if (type === null) {
-          throw new EtnError('NOT_FOUND', `thought-type ${id} not found`, {
-            entity: 'thought_type',
-            id,
-          }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `thought-type ${id} not found`,
+            {
+              entity: 'thought_type',
+              id,
+            },
+            req.id,
+          );
         }
         sendSuccess(reply, type, {
           version: type.version,
@@ -404,18 +402,15 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseThoughtTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const type = updateThoughtType(ndb, id, changes, expectedVersion, req.auth!.user.id);
-        deps.emit(req, networkId, 'thought-type.updated', {
-          id,
-          changes,
-          version: type.version,
-        });
-        recordThoughtTypeActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'updated',
-          type,
-          layerId: req.layerEcho?.id ?? null,
+        const type = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateThoughtType(ndb, id, changes, expectedVersion, req.auth!.user.id);
+          return {
+            result: updated,
+            events: [
+              { type: 'thought-type.updated', data: { id, changes, version: updated.version } },
+            ],
+            activity: [{ kind: 'thought-type', action: 'updated', type: updated }],
+          };
         });
         sendSuccess(reply, type, {
           version: type.version,
@@ -439,9 +434,9 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         // The owner must clear the role in `PATCH /networks/{id}` first.
         const networkRow = app.systemDb.getNetworkById(networkId);
         if (networkRow !== null) {
-          const referencedRole = (Object.entries(networkRow.type_roles) as Array<
-            [string, string | null]
-          >).find(([, value]) => value === id)?.[0];
+          const referencedRole = (
+            Object.entries(networkRow.type_roles) as Array<[string, string | null]>
+          ).find(([, value]) => value === id)?.[0];
           if (referencedRole !== undefined) {
             throw new EtnError(
               'VALIDATION_ERROR',
@@ -457,18 +452,21 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           }
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const existing = getThoughtType(ndb, id);
-        deleteThoughtType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
-        deps.emit(req, networkId, 'thought-type.deleted', { id });
-        if (existing) {
-          recordThoughtTypeActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            type: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const existing = getThoughtType(ndb, id);
+          deleteThoughtType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
+          return {
+            result: undefined,
+            events: [{ type: 'thought-type.deleted', data: { id } }],
+            ...(existing === null
+              ? {}
+              : {
+                  activity: [
+                    { kind: 'thought-type' as const, action: 'deleted' as const, type: existing },
+                  ],
+                }),
+          };
+        });
         reply.code(204).send();
       },
     );
@@ -531,10 +529,15 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = getLinkType(ndb, id);
         if (type === null) {
-          throw new EtnError('NOT_FOUND', `link-type ${id} not found`, {
-            entity: 'link_type',
-            id,
-          }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `link-type ${id} not found`,
+            {
+              entity: 'link_type',
+              id,
+            },
+            req.id,
+          );
         }
         sendSuccess(reply, type, {
           version: type.version,
@@ -552,18 +555,15 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseLinkTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const type = updateLinkType(ndb, id, changes, expectedVersion, req.auth!.user.id);
-        deps.emit(req, networkId, 'link-type.updated', {
-          id,
-          changes,
-          version: type.version,
-        });
-        recordLinkTypeActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'updated',
-          type,
-          layerId: req.layerEcho?.id ?? null,
+        const type = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateLinkType(ndb, id, changes, expectedVersion, req.auth!.user.id);
+          return {
+            result: updated,
+            events: [
+              { type: 'link-type.updated', data: { id, changes, version: updated.version } },
+            ],
+            activity: [{ kind: 'link-type', action: 'updated', type: updated }],
+          };
         });
         sendSuccess(reply, type, {
           version: type.version,
@@ -638,15 +638,21 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                   req.id,
                 );
               }
-              prop = createTypeProperty(ndb, ownerType, id, {
-                key: registry.name,
-                value_type: registry.value_type,
-                config: registry.config,
-                description: registry.description,
-                required: input.required,
-                position: input.position,
-                ...(input.side !== undefined ? { side: input.side } : {}),
-              }, req.auth!.user.id);
+              prop = createTypeProperty(
+                ndb,
+                ownerType,
+                id,
+                {
+                  key: registry.name,
+                  value_type: registry.value_type,
+                  config: registry.config,
+                  description: registry.description,
+                  required: input.required,
+                  position: input.position,
+                  ...(input.side !== undefined ? { side: input.side } : {}),
+                },
+                req.auth!.user.id,
+              );
             } else {
               // The `{ key, value_type }` form promises to CREATE a registry
               // property (task 75404197). Reject the request up front when
@@ -661,34 +667,45 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                   req.id,
                 );
               }
-              prop = createTypeProperty(ndb, ownerType, id, {
-                key: input.key,
-                value_type: input.value_type,
-                config: input.config,
-                description: input.description,
-                required: input.required,
-                position: input.position,
-                ...(input.side !== undefined ? { side: input.side } : {}),
-              }, req.auth!.user.id);
+              prop = createTypeProperty(
+                ndb,
+                ownerType,
+                id,
+                {
+                  key: input.key,
+                  value_type: input.value_type,
+                  config: input.config,
+                  description: input.description,
+                  required: input.required,
+                  position: input.position,
+                  ...(input.side !== undefined ? { side: input.side } : {}),
+                },
+                req.auth!.user.id,
+              );
             }
-            deps.emit(req, networkId, 'property-definition.created', { definition: prop });
-            // Подключение свойства к типу — это операция правки типа
-            // (требование b0c7a57c): фиксируем в журнале как обновление
-            // владельца — самого типа.
-            const ownerTypeRow =
-              ownerType === 'thought_type'
-                ? getThoughtType(ndb, id)
-                : getLinkType(ndb, id);
-            if (ownerTypeRow) {
-              recordTypePropertyActivity(ndb, {
-                networkId,
-                userId: req.auth!.user.id,
-                action: 'updated',
-                typeId: ownerTypeRow.id,
-                typeName: typeName(ownerTypeRow),
-                layerId: req.layerEcho?.id ?? null,
-              });
-            }
+            runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+              // Подключение свойства к типу — это операция правки типа
+              // (требование b0c7a57c): фиксируем в журнале как обновление
+              // владельца — самого типа.
+              const ownerTypeRow =
+                ownerType === 'thought_type' ? getThoughtType(ndb, id) : getLinkType(ndb, id);
+              return {
+                result: undefined,
+                events: [{ type: 'property-definition.created', data: { definition: prop } }],
+                ...(ownerTypeRow === null
+                  ? {}
+                  : {
+                      activity: [
+                        {
+                          kind: 'type-property' as const,
+                          action: 'updated' as const,
+                          typeId: ownerTypeRow.id,
+                          typeName: typeName(ownerTypeRow),
+                        },
+                      ],
+                    }),
+              };
+            });
             sendCreated(reply, prop, { request_id: req.id });
           } catch (err) {
             if (err instanceof EtnError && err.code === 'DUPLICATE') {
@@ -707,7 +724,10 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                     throw new EtnError(
                       'DUPLICATE',
                       err.message,
-                      { ...(err.details as Record<string, unknown> | null ?? {}), property_id: registry.id },
+                      {
+                        ...((err.details as Record<string, unknown> | null) ?? {}),
+                        property_id: registry.id,
+                      },
                       req.id,
                     );
                   }
@@ -739,10 +759,15 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           ) {
             const current = getTypeProperty(ndb, propertyId);
             if (current === null) {
-              throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
-                entity: 'type_property',
-                id: propertyId,
-              }, req.id);
+              throw new EtnError(
+                'NOT_FOUND',
+                `property ${propertyId} not found`,
+                {
+                  entity: 'type_property',
+                  id: propertyId,
+                },
+                req.id,
+              );
             }
             const baseConfig: PropertyConfig = { ...(current.config ?? {}) };
             if (changes.allowedTargetTypeIds !== undefined) {
@@ -761,35 +786,37 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
             }
             configPatch = baseConfig;
           }
-          const prop = updateTypeProperty(
-            ndb,
-            propertyId,
-            {
-              required: changes.required,
-              position: changes.position,
-              ...(changes.side !== undefined ? { side: changes.side } : {}),
-              ...(configPatch !== undefined ? { config: configPatch } : {}),
-            },
-            req.auth!.user.id,
-          );
-          deps.emit(req, networkId, 'property-definition.updated', {
-            id: propertyId,
-            changes,
+          const prop = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            const updated = updateTypeProperty(
+              ndb,
+              propertyId,
+              {
+                required: changes.required,
+                position: changes.position,
+                ...(changes.side !== undefined ? { side: changes.side } : {}),
+                ...(configPatch !== undefined ? { config: configPatch } : {}),
+              },
+              req.auth!.user.id,
+            );
+            const ownerTypeRow =
+              ownerType === 'thought_type' ? getThoughtType(ndb, id) : getLinkType(ndb, id);
+            return {
+              result: updated,
+              events: [{ type: 'property-definition.updated', data: { id: propertyId, changes } }],
+              ...(ownerTypeRow === null
+                ? {}
+                : {
+                    activity: [
+                      {
+                        kind: 'type-property' as const,
+                        action: 'updated' as const,
+                        typeId: ownerTypeRow.id,
+                        typeName: typeName(ownerTypeRow),
+                      },
+                    ],
+                  }),
+            };
           });
-          const ownerTypeRow =
-            ownerType === 'thought_type'
-              ? getThoughtType(ndb, id)
-              : getLinkType(ndb, id);
-          if (ownerTypeRow) {
-            recordTypePropertyActivity(ndb, {
-              networkId,
-              userId: req.auth!.user.id,
-              action: 'updated',
-              typeId: ownerTypeRow.id,
-              typeName: typeName(ownerTypeRow),
-              layerId: req.layerEcho?.id ?? null,
-            });
-          }
           sendSuccess(reply, prop, { request_id: req.id });
         },
       );
@@ -800,22 +827,27 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id, propertyId } = req.params as TypePropertyParams;
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const ownerTypeRow =
-            ownerType === 'thought_type'
-              ? getThoughtType(ndb, id)
-              : getLinkType(ndb, id);
-          deleteTypeProperty(ndb, propertyId, req.auth!.user.id);
-          deps.emit(req, networkId, 'property-definition.deleted', { id: propertyId });
-          if (ownerTypeRow) {
-            recordTypePropertyActivity(ndb, {
-              networkId,
-              userId: req.auth!.user.id,
-              action: 'updated',
-              typeId: ownerTypeRow.id,
-              typeName: typeName(ownerTypeRow),
-              layerId: req.layerEcho?.id ?? null,
-            });
-          }
+          runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            const ownerTypeRow =
+              ownerType === 'thought_type' ? getThoughtType(ndb, id) : getLinkType(ndb, id);
+            deleteTypeProperty(ndb, propertyId, req.auth!.user.id);
+            return {
+              result: undefined,
+              events: [{ type: 'property-definition.deleted', data: { id: propertyId } }],
+              ...(ownerTypeRow === null
+                ? {}
+                : {
+                    activity: [
+                      {
+                        kind: 'type-property' as const,
+                        action: 'updated' as const,
+                        typeId: ownerTypeRow.id,
+                        typeName: typeName(ownerTypeRow),
+                      },
+                    ],
+                  }),
+            };
+          });
           reply.code(204).send();
         },
       );
@@ -864,32 +896,53 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
             );
           }
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          setTypePropertyDefaultOverride(ndb, ownerType, id, propertyId, value, req.auth!.user.id);
-          const def = getTypeProperty(ndb, propertyId);
-          deps.emit(req, networkId, 'property-definition.updated', {
-            id: propertyId,
-            // The payload just signals that this definition's effective
-            // default changed; consumers re-fetch the effective list.
-            changes:
-              value === null ? {} : { config: { ...def?.config, default_value: value } },
+          runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            setTypePropertyDefaultOverride(
+              ndb,
+              ownerType,
+              id,
+              propertyId,
+              value,
+              req.auth!.user.id,
+            );
+            const def = getTypeProperty(ndb, propertyId);
+            const ownerTypeRow =
+              ownerType === 'thought_type' ? getThoughtType(ndb, id) : getLinkType(ndb, id);
+            return {
+              result: undefined,
+              events: [
+                {
+                  type: 'property-definition.updated',
+                  data: {
+                    id: propertyId,
+                    // The payload just signals that this definition's effective
+                    // default changed; consumers re-fetch the effective list.
+                    changes:
+                      value === null ? {} : { config: { ...def?.config, default_value: value } },
+                  },
+                },
+              ],
+              ...(ownerTypeRow === null
+                ? {}
+                : {
+                    activity: [
+                      {
+                        kind: 'type-property' as const,
+                        action: 'updated' as const,
+                        typeId: ownerTypeRow.id,
+                        typeName: typeName(ownerTypeRow),
+                      },
+                    ],
+                  }),
+            };
           });
-          const ownerTypeRow =
-            ownerType === 'thought_type'
-              ? getThoughtType(ndb, id)
-              : getLinkType(ndb, id);
-          if (ownerTypeRow) {
-            recordTypePropertyActivity(ndb, {
-              networkId,
-              userId: req.auth!.user.id,
-              action: 'updated',
-              typeId: ownerTypeRow.id,
-              typeName: typeName(ownerTypeRow),
-              layerId: req.layerEcho?.id ?? null,
-            });
-          }
-          sendSuccess(reply, { property_id: propertyId, default_value: value }, {
-            request_id: req.id,
-          });
+          sendSuccess(
+            reply,
+            { property_id: propertyId, default_value: value },
+            {
+              request_id: req.id,
+            },
+          );
         },
       );
 
@@ -900,30 +953,49 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id, propertyId } = req.params as TypePropertyParams;
-          const description = parseRest(RestDescriptionOverrideBody, req).description as string | null;
+          const description = parseRest(RestDescriptionOverrideBody, req).description as
+            string | null;
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          setTypePropertyDescriptionOverride(ndb, ownerType, id, propertyId, description, req.auth!.user.id);
-          deps.emit(req, networkId, 'property-definition.updated', {
-            id: propertyId,
-            changes: { description },
+          runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+            setTypePropertyDescriptionOverride(
+              ndb,
+              ownerType,
+              id,
+              propertyId,
+              description,
+              req.auth!.user.id,
+            );
+            const ownerTypeRow =
+              ownerType === 'thought_type' ? getThoughtType(ndb, id) : getLinkType(ndb, id);
+            return {
+              result: undefined,
+              events: [
+                {
+                  type: 'property-definition.updated',
+                  data: { id: propertyId, changes: { description } },
+                },
+              ],
+              ...(ownerTypeRow === null
+                ? {}
+                : {
+                    activity: [
+                      {
+                        kind: 'type-property' as const,
+                        action: 'updated' as const,
+                        typeId: ownerTypeRow.id,
+                        typeName: typeName(ownerTypeRow),
+                      },
+                    ],
+                  }),
+            };
           });
-          const ownerTypeRow =
-            ownerType === 'thought_type'
-              ? getThoughtType(ndb, id)
-              : getLinkType(ndb, id);
-          if (ownerTypeRow) {
-            recordTypePropertyActivity(ndb, {
-              networkId,
-              userId: req.auth!.user.id,
-              action: 'updated',
-              typeId: ownerTypeRow.id,
-              typeName: typeName(ownerTypeRow),
-              layerId: req.layerEcho?.id ?? null,
-            });
-          }
-          sendSuccess(reply, { property_id: propertyId, description }, {
-            request_id: req.id,
-          });
+          sendSuccess(
+            reply,
+            { property_id: propertyId, description },
+            {
+              request_id: req.id,
+            },
+          );
         },
       );
     };

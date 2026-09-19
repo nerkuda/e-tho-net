@@ -7,14 +7,39 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
-import { COMMENT_KINDS, COMMENT_OWNER_TYPES, COMMENT_TARGETS_MAX, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import {
+  COMMENT_KINDS,
+  COMMENT_OWNER_TYPES,
+  COMMENT_TARGETS_MAX,
+  MCP_TOOL_ANNOTATIONS,
+} from '@etn/shared';
 import type { CommentTarget, McpMutationResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
-import { CommentsDelete, CommentsEdit, CommentsGet, CommentsUpdate, CommentsUpsert } from '../../contracts.js';
-import { createCommentWithTargets, deleteComment, editComment, getComment, listComments, updateComment } from '../../domain/comment-service.js';
-import { recordCommentActivity } from '../../domain/activity-service.js';
+import {
+  CommentsDelete,
+  CommentsEdit,
+  CommentsGet,
+  CommentsUpdate,
+  CommentsUpsert,
+} from '../../contracts.js';
+import {
+  createCommentWithTargets,
+  deleteComment,
+  editComment,
+  getComment,
+  listComments,
+  updateComment,
+} from '../../domain/comment-service.js';
 import { subgraph } from '../../domain/graph-traversal.js';
-import { auditAgentCall, emitAgentActivityEvent, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  runTool,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId, ThoughtId, ExpectedVersion } from './shared.js';
 
 export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
@@ -33,7 +58,7 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
       title: 'Комментарий (полный текст)',
       description:
         'Fetch one comment in full: by `comment_id` — any comment (permanent or chronological) with its ' +
-        'complete `body_md`; by `thought_id` — the thought\'s permanent comment, or `{thought_id, permanent: ' +
+        "complete `body_md`; by `thought_id` — the thought's permanent comment, or `{thought_id, permanent: " +
         'null}` when absent. Use when a preview (`meta.permanent`, `subgraph` comments) reports `truncated: ' +
         'true`.',
       inputSchema: CommentsGet.schema,
@@ -55,12 +80,10 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         }
         getThoughtOrThrow(ndb, args.thought_id);
         const permanent =
-          listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??
-          null;
+          listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ?? null;
         return { thought_id: args.thought_id, permanent };
       }),
   );
-
 }
 
 export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void {
@@ -85,7 +108,8 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
       { message: 'provide exactly one of { owner_type + owner_id } or { targets }' },
     )
     .refine((v) => v.targets === undefined || v.kind === 'chronological', {
-      message: 'targets is only allowed for kind: "chronological" (a permanent comment has exactly one owner)',
+      message:
+        'targets is only allowed for kind: "chronological" (a permanent comment has exactly one owner)',
     });
   mcp.registerTool(
     'etn.comments.upsert',
@@ -100,12 +124,14 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
       inputSchema: CommentsUpsert.schema,
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const targets: CommentTarget[] =
-          args.targets ?? [{ owner_type: args.owner_type!, owner_id: args.owner_id! }];
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const targets: CommentTarget[] = args.targets ?? [
+          { owner_type: args.owner_type!, owner_id: args.owner_id! },
+        ];
         const primary = targets[0]!;
         if (args.kind === 'permanent') {
           const existing = listComments(ndb, primary.owner_type, primary.owner_id).find(
@@ -116,22 +142,31 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
               ...(args.title === undefined ? {} : { title: args.title }),
               body_md: args.body_md,
             };
-            const comment = updateComment(
-              ndb,
-              existing.id,
-              changes,
-              undefined,
-              rt.deps.auth.userId,
-            );
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'comment.updated',
-              { id: comment.id, changes, version: comment.version },
-              ndb,
-              extra.requestId,
-            );
-            auditAgentCall(rt, 'etn.comments.upsert', args.network_id, 'comment', comment.id, args);
+            const comment = runWrite(ndb, fx, () => {
+              const updated = updateComment(
+                ndb,
+                existing.id,
+                changes,
+                undefined,
+                rt.deps.auth.userId,
+              );
+              return {
+                result: updated,
+                events: [
+                  {
+                    type: 'comment.updated',
+                    data: { id: updated.id, changes, version: updated.version },
+                  },
+                ],
+                activity: [{ kind: 'comment', action: 'updated', comment: updated }],
+                audit: {
+                  action: 'etn.comments.upsert',
+                  targetType: 'comment',
+                  targetId: updated.id,
+                  details: args,
+                },
+              };
+            });
             return {
               id: comment.id,
               version: comment.version,
@@ -139,20 +174,31 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
             } satisfies McpMutationResult;
           }
         }
-        const comment = createCommentWithTargets(
-          ndb,
-          targets,
-          {
-            kind: args.kind,
-            title: args.title ?? null,
-            body_md: args.body_md,
-            ...(args.valid_from === undefined ? {} : { valid_from: args.valid_from }),
-            ...(args.valid_to === undefined ? {} : { valid_to: args.valid_to }),
-          },
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(rt, args.network_id, 'comment.created', { comment }, ndb, extra.requestId);
-        auditAgentCall(rt, 'etn.comments.upsert', args.network_id, 'comment', comment.id, args);
+        const comment = runWrite(ndb, fx, () => {
+          const created = createCommentWithTargets(
+            ndb,
+            targets,
+            {
+              kind: args.kind,
+              title: args.title ?? null,
+              body_md: args.body_md,
+              ...(args.valid_from === undefined ? {} : { valid_from: args.valid_from }),
+              ...(args.valid_to === undefined ? {} : { valid_to: args.valid_to }),
+            },
+            rt.deps.auth.userId,
+          );
+          return {
+            result: created,
+            events: [{ type: 'comment.created', data: { comment: created } }],
+            activity: [{ kind: 'comment', action: 'created', comment: created }],
+            audit: {
+              action: 'etn.comments.upsert',
+              targetType: 'comment',
+              targetId: created.id,
+              details: args,
+            },
+          };
+        });
         return {
           id: comment.id,
           version: comment.version,
@@ -187,26 +233,36 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
       inputSchema: CommentsUpdate.schema,
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const comment = updateComment(
-          ndb,
-          args.comment_id,
-          args.changes,
-          args.expected_version,
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(
-          rt,
-          args.network_id,
-          'comment.updated',
-          { id: comment.id, changes: args.changes, version: comment.version },
-          ndb,
-          extra.requestId,
-        );
-        auditAgentCall(rt, 'etn.comments.update', args.network_id, 'comment', comment.id, args);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const comment = runWrite(ndb, fx, () => {
+          const updated = updateComment(
+            ndb,
+            args.comment_id,
+            args.changes,
+            args.expected_version,
+            rt.deps.auth.userId,
+          );
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'comment.updated',
+                data: { id: updated.id, changes: args.changes, version: updated.version },
+              },
+            ],
+            activity: [{ kind: 'comment', action: 'updated', comment: updated }],
+            audit: {
+              action: 'etn.comments.update',
+              targetType: 'comment',
+              targetId: updated.id,
+              details: args,
+            },
+          };
+        });
         return {
           id: comment.id,
           version: comment.version,
@@ -262,10 +318,11 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.edit'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
         let targetId: string;
         if (args.thought_id !== undefined) {
           // Постоянный комментарий мысли: проверяем, что мысль существует,
@@ -286,28 +343,39 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
           // refine гарантирует одну из двух; здесь — для TS.
           throw new Error('ETN error [VALIDATION_ERROR]: comment_id or thought_id required');
         }
-        const result = editComment(
-          ndb,
-          targetId,
-          args.ops,
-          args.expected_version,
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(
-          rt,
-          args.network_id,
-          'comment.updated',
-          {
-            id: result.id,
-            changes: { body_md: result.body_md },
-            version: result.version,
-          },
-          ndb,
-          extra.requestId,
-        );
-        auditAgentCall(rt, 'etn.comments.edit', args.network_id, 'comment', result.id, {
-          expected_version: args.expected_version,
-          ops_count: args.ops.length,
+        const result = runWrite(ndb, fx, () => {
+          const edited = editComment(
+            ndb,
+            targetId,
+            args.ops,
+            args.expected_version,
+            rt.deps.auth.userId,
+          );
+          // Журнал — из результата: снимок обновлённого комментария
+          // дочитываем из строки (как прежний MCP-диспетчер).
+          const comment = getComment(ndb, edited.id);
+          return {
+            result: edited,
+            events: [
+              {
+                type: 'comment.updated',
+                data: {
+                  id: edited.id,
+                  changes: { body_md: edited.body_md },
+                  version: edited.version,
+                },
+              },
+            ],
+            ...(comment === null
+              ? {}
+              : { activity: [{ kind: 'comment' as const, action: 'updated' as const, comment }] }),
+            audit: {
+              action: 'etn.comments.edit',
+              targetType: 'comment',
+              targetId: edited.id,
+              details: { expected_version: args.expected_version, ops_count: args.ops.length },
+            },
+          };
         });
         return {
           id: result.id,
@@ -335,35 +403,37 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.delete'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const existing = getComment(ndb, args.comment_id);
-        if (existing === null) {
-          throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
-        }
-        deleteComment(ndb, args.comment_id, args.expected_version);
-        emitAgentEvent(
-          rt,
-          args.network_id,
-          'comment.deleted',
-          {
-            owner_type: existing.owner_type,
-            owner_id: existing.owner_id,
-            id: args.comment_id,
-          },
-          extra.requestId,
-        );
-        recordCommentActivity(ndb, {
-          networkId: args.network_id,
-          userId: rt.deps.auth.userId,
-          action: 'deleted',
-          comment: existing,
-          layerId: ndb.layerId,
-        });
-        auditAgentCall(rt, 'etn.comments.delete', args.network_id, 'comment', args.comment_id, {
-          expected_version: args.expected_version,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        runWrite(ndb, fx, () => {
+          const existing = getComment(ndb, args.comment_id);
+          if (existing === null) {
+            throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
+          }
+          deleteComment(ndb, args.comment_id, args.expected_version);
+          return {
+            result: undefined,
+            events: [
+              {
+                type: 'comment.deleted',
+                data: {
+                  owner_type: existing.owner_type,
+                  owner_id: existing.owner_id,
+                  id: args.comment_id,
+                },
+              },
+            ],
+            activity: [{ kind: 'comment', action: 'deleted', comment: existing }],
+            audit: {
+              action: 'etn.comments.delete',
+              targetType: 'comment',
+              targetId: args.comment_id,
+              details: { expected_version: args.expected_version },
+            },
+          };
         });
         return {
           id: args.comment_id,
@@ -372,5 +442,4 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         } satisfies McpMutationResult;
       }),
   );
-
 }

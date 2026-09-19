@@ -27,7 +27,14 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  restWriteFx,
+  runWrite,
+  type AnyWriteEvent,
+  type RouteDeps,
+  type WriteActivityEntry,
+} from './helpers.js';
 import {
   copyAttachment,
   createAttachment,
@@ -42,7 +49,6 @@ import {
   updateAttachment,
   updateAttachmentContent,
 } from '../domain/attachment-service.js';
-import { recordAttachmentActivity } from '../domain/activity-service.js';
 import {
   parseRest,
   RestAttachmentById,
@@ -90,20 +96,23 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             position: input.position as number | undefined,
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-          let attachment = createAttachment(ndb, ownerType, input.owner_id, parsed, req.auth!.user.id);
+          const fx = restWriteFx(deps, req, input.network_id);
+          // Создание — через обёртку (без событий: снимок ещё не окончательный).
+          let attachment = runWrite(ndb, fx, () => ({
+            result: createAttachment(ndb, ownerType, input.owner_id, parsed, req.auth!.user.id),
+          }));
           // URL attachments are enriched (page title + favicon) before the
           // response/event so clients render a filled row at once (L1).
+          // Обогащение — сетевой вызов, поэтому вне транзакции.
           if (attachment.kind === 'url') {
             attachment = await enrichUrlAttachment(ndb, attachment);
           }
-          deps.emit(req, input.network_id, 'attachment.created', { attachment });
-          recordAttachmentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'created',
-            attachment,
-            layerId: req.layerEcho?.id ?? null,
-          });
+          // Событие и журнал — из итогового снимка, после коммита.
+          runWrite(ndb, fx, () => ({
+            result: undefined,
+            events: [{ type: 'attachment.created', data: { attachment } }],
+            activity: [{ kind: 'attachment', action: 'created', attachment }],
+          }));
           sendCreated(reply, attachment, { request_id: req.id });
         },
       );
@@ -125,14 +134,19 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             data_base64: input.data_base64 as string,
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-          const attachment = createAttachmentFile(ndb, ownerType, input.owner_id, parsed, req.auth!.user.id);
-          deps.emit(req, input.network_id, 'attachment.created', { attachment });
-          recordAttachmentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'created',
-            attachment,
-            layerId: req.layerEcho?.id ?? null,
+          const attachment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+            const created = createAttachmentFile(
+              ndb,
+              ownerType,
+              input.owner_id,
+              parsed,
+              req.auth!.user.id,
+            );
+            return {
+              result: created,
+              events: [{ type: 'attachment.created', data: { attachment: created } }],
+              activity: [{ kind: 'attachment', action: 'created', attachment: created }],
+            };
           });
           sendCreated(reply, attachment, { request_id: req.id });
         },
@@ -154,9 +168,14 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const query: AttachmentSearchQuery = {
           q: (input.q as string | undefined) ?? '',
           ...(input.exclude_owner_type !== undefined
-            ? { exclude_owner_type: input.exclude_owner_type as AttachmentSearchQuery['exclude_owner_type'] }
+            ? {
+                exclude_owner_type:
+                  input.exclude_owner_type as AttachmentSearchQuery['exclude_owner_type'],
+              }
             : {}),
-          ...(input.exclude_owner_id !== undefined ? { exclude_owner_id: input.exclude_owner_id as string } : {}),
+          ...(input.exclude_owner_id !== undefined
+            ? { exclude_owner_id: input.exclude_owner_id as string }
+            : {}),
           ...(input.kind !== undefined ? { kind: input.kind as AttachmentKind } : {}),
           ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
           ...(input.offset !== undefined ? { offset: input.offset as number } : {}),
@@ -183,10 +202,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const file = getAttachmentRawByPath(ndb, input.path as string);
         reply
           .header('content-type', file.mime_type)
-          .header(
-            'content-disposition',
-            `inline; filename="${encodeURIComponent(file.filename)}"`,
-          )
+          .header('content-disposition', `inline; filename="${encodeURIComponent(file.filename)}"`)
           .send(file.body);
       },
     );
@@ -204,20 +220,19 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           target_owner_ids: input.target_owner_ids as string[],
         };
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const result = copyAttachment(ndb, input.attachment_id, parsed, req.auth!.user.id);
-        // One event per created row so realtime subscribers can react
-        // individually (re-render the target's attachments tab, refresh the
-        // `attachments_count` indicator, etc.).
-        for (const attachment of result.created) {
-          deps.emit(req, input.network_id, 'attachment.created', { attachment });
-          recordAttachmentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'created',
-            attachment,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
+        const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const copied = copyAttachment(ndb, input.attachment_id, parsed, req.auth!.user.id);
+          // One event per created row so realtime subscribers can react
+          // individually (re-render the target's attachments tab, refresh the
+          // `attachments_count` indicator, etc.).
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          for (const attachment of copied.created) {
+            events.push({ type: 'attachment.created', data: { attachment } });
+            activity.push({ kind: 'attachment', action: 'created', attachment });
+          }
+          return { result: copied, events, activity };
+        });
         sendSuccess(reply, result);
       },
     );
@@ -233,10 +248,15 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const attachment = getAttachment(ndb, input.attachment_id);
         if (attachment === null) {
-          throw new EtnError('NOT_FOUND', `attachment ${input.attachment_id} not found`, {
-            entity: 'attachment',
-            id: input.attachment_id,
-          }, req.id);
+          throw new EtnError(
+            'NOT_FOUND',
+            `attachment ${input.attachment_id} not found`,
+            {
+              entity: 'attachment',
+              id: input.attachment_id,
+            },
+            req.id,
+          );
         }
         sendSuccess(reply, attachment);
       },
@@ -253,20 +273,21 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.file_size !== undefined) changes.file_size = input.file_size as number;
         if (input.mime_type !== undefined) changes.mime_type = input.mime_type as string | null;
         if (input.title !== undefined) changes.title = input.title as string | null;
-        if (input.description !== undefined) changes.description = input.description as string | null;
+        if (input.description !== undefined)
+          changes.description = input.description as string | null;
         if (input.icon !== undefined) changes.icon = input.icon as string | null;
         if (input.position !== undefined) changes.position = input.position as number;
-        if (input.owner_type !== undefined) changes.owner_type = input.owner_type as 'thought' | 'link';
+        if (input.owner_type !== undefined)
+          changes.owner_type = input.owner_type as 'thought' | 'link';
         if (input.owner_id !== undefined) changes.owner_id = input.owner_id as string;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const attachment = updateAttachment(ndb, input.attachment_id, changes, req.auth!.user.id);
-        deps.emit(req, input.network_id, 'attachment.updated', { id: input.attachment_id, changes });
-        recordAttachmentActivity(ndb, {
-          networkId: input.network_id,
-          userId: req.auth!.user.id,
-          action: 'updated',
-          attachment,
-          layerId: req.layerEcho?.id ?? null,
+        const attachment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const updated = updateAttachment(ndb, input.attachment_id, changes, req.auth!.user.id);
+          return {
+            result: updated,
+            events: [{ type: 'attachment.updated', data: { id: input.attachment_id, changes } }],
+            activity: [{ kind: 'attachment', action: 'updated', attachment: updated }],
+          };
         });
         sendSuccess(reply, attachment);
       },
@@ -278,18 +299,25 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestAttachmentById, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const existing = getAttachment(ndb, input.attachment_id);
-        deleteAttachment(ndb, input.attachment_id);
-        deps.emit(req, input.network_id, 'attachment.deleted', { id: input.attachment_id });
-        if (existing) {
-          recordAttachmentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            attachment: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
+        runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const existing = getAttachment(ndb, input.attachment_id);
+          deleteAttachment(ndb, input.attachment_id);
+          return {
+            result: undefined,
+            events: [{ type: 'attachment.deleted', data: { id: input.attachment_id } }],
+            ...(existing === null
+              ? {}
+              : {
+                  activity: [
+                    {
+                      kind: 'attachment' as const,
+                      action: 'deleted' as const,
+                      attachment: existing,
+                    },
+                  ],
+                }),
+          };
+        });
         reply.code(204).send();
       },
     );
@@ -315,26 +343,41 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestAttachmentContentPut, req);
-        const parsed = { data_base64: input.data_base64 as string, mime_type: input.mime_type as string | undefined };
+        const parsed = {
+          data_base64: input.data_base64 as string,
+          mime_type: input.mime_type as string | undefined,
+        };
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const result = updateAttachmentContent(ndb, input.attachment_id, parsed);
-        const updated = getAttachment(ndb, input.attachment_id);
-        deps.emit(req, input.network_id, 'attachment.updated', {
-          id: input.attachment_id,
-          changes: {
-            file_size: updated?.file_size ?? null,
-            mime_type: updated?.mime_type ?? null,
-          },
+        const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const written = updateAttachmentContent(ndb, input.attachment_id, parsed);
+          const updated = getAttachment(ndb, input.attachment_id);
+          return {
+            result: written,
+            events: [
+              {
+                type: 'attachment.updated',
+                data: {
+                  id: input.attachment_id,
+                  changes: {
+                    file_size: updated?.file_size ?? null,
+                    mime_type: updated?.mime_type ?? null,
+                  },
+                },
+              },
+            ],
+            ...(updated === null
+              ? {}
+              : {
+                  activity: [
+                    {
+                      kind: 'attachment' as const,
+                      action: 'updated' as const,
+                      attachment: updated,
+                    },
+                  ],
+                }),
+          };
         });
-        if (updated) {
-          recordAttachmentActivity(ndb, {
-            networkId: input.network_id,
-            userId: req.auth!.user.id,
-            action: 'updated',
-            attachment: updated,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
         sendSuccess(reply, result, { request_id: req.id });
       },
     );

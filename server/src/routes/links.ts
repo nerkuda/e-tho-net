@@ -19,7 +19,14 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError, type LinkUpdateInput } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openNetworkDb, openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import {
+  actionOfChanges,
+  openNetworkDb,
+  openRouteNetworkDb,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import {
   parseRest,
   RestLinkDeletionCheck,
@@ -34,7 +41,6 @@ import {
   listLinksByThought,
   updateLink,
 } from '../domain/link-service.js';
-import { recordLinkActivity } from '../domain/activity-service.js';
 
 /** Route params for a network + link id. */
 interface LinkIdParams {
@@ -90,42 +96,32 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.style !== undefined) changes.style = input.style as LinkUpdateInput['style'];
         if (input.width !== undefined) changes.width = input.width as number | null;
         if (input.active !== undefined) changes.active = input.active as boolean;
-        if (input.marked_for_deletion !== undefined) changes.marked_for_deletion = input.marked_for_deletion as boolean;
+        if (input.marked_for_deletion !== undefined)
+          changes.marked_for_deletion = input.marked_for_deletion as boolean;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const link = updateLink(ndb, id, changes, expectedVersion, req.auth!.user.id);
-        if (link.id !== id) {
-          // S14 (13-layers.md §6.1): an endpoint change in a working layer is
-          // tombstone + insert — the link identity changes, so subscribers see
-          // delete + create, not an update of a row they may no longer resolve.
-          deps.emit(req, networkId, 'link.deleted', { id });
-          deps.emit(req, networkId, 'link.created', { link });
-          // В журнале фиксируем новое состояние как «обновление»: старая
-          // запись уже помечена на удаление в текущем слое.
-          recordLinkActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'updated',
-            link,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        } else {
-          deps.emit(req, networkId, 'link.updated', {
-            id,
-            changes,
-            version: link.version,
-          });
-          recordLinkActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: changes.marked_for_deletion === true
-              ? 'trashed'
-              : changes.marked_for_deletion === false
-                ? 'restored'
-                : 'updated',
-            link,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
+        const link = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateLink(ndb, id, changes, expectedVersion, req.auth!.user.id);
+          if (updated.id !== id) {
+            // S14 (13-layers.md §6.1): an endpoint change in a working layer is
+            // tombstone + insert — the link identity changes, so subscribers see
+            // delete + create, not an update of a row they may no longer resolve.
+            return {
+              result: updated,
+              events: [
+                { type: 'link.deleted', data: { id } },
+                { type: 'link.created', data: { link: updated } },
+              ],
+              // В журнале фиксируем новое состояние как «обновление»: старая
+              // запись уже помечена на удаление в текущем слое.
+              activity: [{ kind: 'link', action: 'updated', link: updated }],
+            };
+          }
+          return {
+            result: updated,
+            events: [{ type: 'link.updated', data: { id, changes, version: updated.version } }],
+            activity: [{ kind: 'link', action: actionOfChanges(changes), link: updated }],
+          };
+        });
         sendSuccess(reply, link, {
           version: link.version,
           updated_at: link.updated_at,

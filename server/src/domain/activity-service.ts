@@ -70,6 +70,13 @@ export interface RecordActivityInput {
   entityTitle: string;
   /** Снимок слоя на момент операции; `null` для базовой записи. */
   layerId: string | null;
+  /**
+   * Явная метка времени строки (ms). Обёртка записи проставляет монотонно
+   * возрастающие значения, чтобы порядок строк одного исхода в ленте был
+   * детерминированным (внутри одной миллисекунды `ORDER BY occurred_at_ms,
+   * id` упирался в случайный UUID). По умолчанию — `Date.now()`.
+   */
+  occurredAtMs?: number;
 }
 
 /** Физическая строка `activity_log`. */
@@ -107,46 +114,48 @@ function toActivityRow(row: ActivityDbRow): ActivityRow {
  * Запись идёт отдельной транзакцией от мутации — намеренно: журнал
  * вспомогательный, консистентность с `data.db` не требуется.
  */
-export function recordActivity(
-  ndb: NetworkDb,
-  input: RecordActivityInput,
-): void {
+export function recordActivity(ndb: NetworkDb, input: RecordActivityInput): void {
   const id = randomUUID();
-  const occurredAtMs = Date.now();
+  const occurredAtMs = input.occurredAtMs ?? Date.now();
   try {
-    ndb.prepare(
-      `INSERT INTO activity_log
+    ndb
+      .prepare(
+        `INSERT INTO activity_log
          (id, network_id, user_id, action, entity_type, entity_id,
           entity_title, layer_id, occurred_at_ms)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      input.networkId,
-      input.userId,
-      input.action,
-      input.entityType,
-      input.entityId,
-      truncateTitle(input.entityTitle),
-      input.layerId,
-      occurredAtMs,
-    );
+      )
+      .run(
+        id,
+        input.networkId,
+        input.userId,
+        input.action,
+        input.entityType,
+        input.entityId,
+        truncateTitle(input.entityTitle),
+        input.layerId,
+        occurredAtMs,
+      );
   } catch (err) {
     logger.error(
-      { err, network_id: input.networkId, action: input.action, entity_type: input.entityType, entity_id: input.entityId },
+      {
+        err,
+        network_id: input.networkId,
+        action: input.action,
+        entity_type: input.entityType,
+        entity_id: input.entityId,
+      },
       'activity_log insert failed; бизнес-операция продолжается',
     );
   }
 }
 
 /** Нормализовать `limit`/`offset` для list-эндпоинта ленты. */
-export function normalizeActivityPagination(params: {
-  limit?: number;
-  offset?: number;
-}): { limit: number; offset: number } {
-  const limit = Math.min(
-    ACTIVITY_LIMIT_MAX,
-    Math.max(1, params.limit ?? ACTIVITY_LIMIT_DEFAULT),
-  );
+export function normalizeActivityPagination(params: { limit?: number; offset?: number }): {
+  limit: number;
+  offset: number;
+} {
+  const limit = Math.min(ACTIVITY_LIMIT_MAX, Math.max(1, params.limit ?? ACTIVITY_LIMIT_DEFAULT));
   const offset = Math.max(0, params.offset ?? 0);
   return { limit, offset };
 }
@@ -166,10 +175,7 @@ export interface ActivityListResult {
  * Фильтры комбинируются по AND; сортировка — `occurred_at_ms DESC` (как и
  * обещает операция 70dfe81d).
  */
-export function listActivity(
-  ndb: NetworkDb,
-  params: ActivityListParams,
-): ActivityListResult {
+export function listActivity(ndb: NetworkDb, params: ActivityListParams): ActivityListResult {
   const { limit, offset } = normalizeActivityPagination(params);
   const where: string[] = ['network_id = ?'];
   const args: unknown[] = [params.networkId];
@@ -186,7 +192,11 @@ export function listActivity(
     where.push('user_id = ?');
     args.push(params.user_id);
   }
-  if (params.entity_type !== undefined && params.entity_type !== null && params.entity_type !== '') {
+  if (
+    params.entity_type !== undefined &&
+    params.entity_type !== null &&
+    params.entity_type !== ''
+  ) {
     where.push('entity_type = ?');
     args.push(params.entity_type);
   }
@@ -237,6 +247,7 @@ export function recordThoughtActivity(
     action: ActivityAction;
     thought: Pick<Thought, 'id' | 'title' | 'type_id'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -247,6 +258,7 @@ export function recordThoughtActivity(
     entityId: params.thought.id,
     entityTitle: snapshotThought(params.thought),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -259,6 +271,7 @@ export function recordLinkActivity(
     action: ActivityAction;
     link: Pick<Link, 'id' | 'source_id' | 'target_id' | 'type_id'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -269,6 +282,7 @@ export function recordLinkActivity(
     entityId: params.link.id,
     entityTitle: snapshotLink(params.link),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -281,6 +295,7 @@ export function recordThoughtTypeActivity(
     action: ActivityAction;
     type: Pick<ThoughtType, 'id' | 'name'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -291,6 +306,7 @@ export function recordThoughtTypeActivity(
     entityId: params.type.id,
     entityTitle: snapshotThoughtType(params.type),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -303,6 +319,7 @@ export function recordLinkTypeActivity(
     action: ActivityAction;
     type: Pick<LinkType, 'id' | 'name_forward'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -313,6 +330,7 @@ export function recordLinkTypeActivity(
     entityId: params.type.id,
     entityTitle: snapshotLinkType(params.type),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -325,6 +343,7 @@ export function recordPropertyActivity(
     action: ActivityAction;
     property: Pick<NetworkProperty, 'id' | 'name'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -335,6 +354,7 @@ export function recordPropertyActivity(
     entityId: params.property.id,
     entityTitle: snapshotProperty(params.property),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -354,6 +374,7 @@ export function recordTypePropertyActivity(
     typeId: string;
     typeName: string;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -364,6 +385,7 @@ export function recordTypePropertyActivity(
     entityId: params.typeId,
     entityTitle: `тип мысли «${params.typeName}»`,
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -376,6 +398,7 @@ export function recordCommentActivity(
     action: ActivityAction;
     comment: Pick<Comment, 'id' | 'owner_type' | 'body_md'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -386,6 +409,7 @@ export function recordCommentActivity(
     entityId: params.comment.id,
     entityTitle: snapshotComment(params.comment),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -403,6 +427,7 @@ export function recordAttachmentActivity(
       file_path?: string | null;
     };
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -413,6 +438,7 @@ export function recordAttachmentActivity(
     entityId: params.attachment.id,
     entityTitle: snapshotAttachment(params.attachment),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -425,6 +451,7 @@ export function recordLayerActivity(
     action: ActivityAction;
     layer: Pick<Layer, 'id' | 'title'>;
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   recordActivity(ndb, {
@@ -435,6 +462,7 @@ export function recordLayerActivity(
     entityId: params.layer.id,
     entityTitle: snapshotLayer(params.layer),
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }
 
@@ -514,10 +542,7 @@ export function rollupActivity(
     }
 
     // 2. Группируем по ключу сущности и вычисляем, какие id оставить.
-    const groups = new Map<
-      string,
-      { ids: string[]; keep: Set<string> }
-    >();
+    const groups = new Map<string, { ids: string[]; keep: Set<string> }>();
     // Сразу строим мапу id -> { occurred_at_ms, action } — она нужна и для
     // группировки, и для сортировки внутри группы. SQL уже вернул строки
     // упорядоченными по (entity_type, entity_id, occurred_at_ms ASC, id ASC),
@@ -721,9 +746,7 @@ export function deleteLayerActivity(
 ): { removed: number } {
   return ndb.transaction(() => {
     const result = ndb
-      .prepare(
-        `DELETE FROM activity_log WHERE network_id = ? AND layer_id = ?`,
-      )
+      .prepare(`DELETE FROM activity_log WHERE network_id = ? AND layer_id = ?`)
       .run(networkId, layerId);
     return { removed: result.changes };
   });
@@ -741,8 +764,12 @@ export function recordOwnerActivity(
     networkId: string;
     userId: string;
     entityType: ActivityEntityType;
-    entity: Pick<Thought, 'id' | 'title' | 'type_id'> | Pick<Link, 'id' | 'source_id' | 'target_id' | 'type_id'> | { id: string };
+    entity:
+      | Pick<Thought, 'id' | 'title' | 'type_id'>
+      | Pick<Link, 'id' | 'source_id' | 'target_id' | 'type_id'>
+      | { id: string };
     layerId: string | null;
+    occurredAtMs?: number;
   },
 ): void {
   let title: string;
@@ -761,5 +788,6 @@ export function recordOwnerActivity(
     entityId: params.entity.id,
     entityTitle: title,
     layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
   });
 }

@@ -21,15 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean } from './guard-helpers.js';
 
-const SERVER_SRC_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'src',
-);
+const SERVER_SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
 /** Файл принадлежит одному из фасадов (routes или mcp)? */
-const inFacades = (rel: string): boolean =>
-  rel.startsWith('routes/') || rel.startsWith('mcp/');
+const inFacades = (rel: string): boolean => rel.startsWith('routes/') || rel.startsWith('mcp/');
 
 /** Строка — вызов SQL-интерфейса БД (`.prepare(`/`.pragma(`). */
 const PREPARE_CALL = /\.(prepare|pragma)\s*\(/;
@@ -91,6 +86,65 @@ describe('guard: слои сервера — фасады без SQL и взаи
         pattern: /from\s+['"]\.\.\/mcp\//,
         filePattern: /from\s+['"]\.\.\/mcp\//,
         include: (rel) => rel.startsWith('routes/'),
+      },
+    ]);
+  });
+
+  it('в routes/* и mcp/* нет ручной оркестрации записи: события, журнал и аудит — только через обёртку runWrite', () => {
+    assertGuardClean(SERVER_SRC_ROOT, [
+      {
+        name: 'no-deps-emit-in-routes',
+        description:
+          'В routes/* запрещён прямой `deps.emit(`: real-time-события публикует ' +
+          'обёртка записи домена `runWrite` (ADR 162d8e7a); фасад только ' +
+          'поставляет транспорт через `restWriteFx` (routes/helpers.ts).',
+        pattern: /deps\.emit\(/,
+        include: (rel) => rel.startsWith('routes/'),
+        allow: (rel) => rel === 'routes/helpers.ts',
+      },
+      {
+        name: 'no-agent-emit-in-mcp',
+        description:
+          'В mcp/* запрещены `emitAgentEvent(`/`emitAgentActivityEvent(`: ' +
+          'события публикует обёртка `runWrite`; транспорт фасада — ' +
+          '`mcpWriteFx` (mcp/context.ts).',
+        pattern: /emitAgent(?:Activity)?Event\(/,
+        include: (rel) => rel.startsWith('mcp/'),
+      },
+      {
+        name: 'no-activity-in-facades',
+        description:
+          'В routes/* и mcp/* запрещены вызовы `record*Activity(`: журнал ' +
+          'активности пишет обёртка `runWrite` из результата записи ' +
+          '(требование 7f526da1); фасад собирает только исход записи.',
+        pattern: /record[A-Z][A-Za-z]*Activity\(/,
+        include: inFacades,
+      },
+      {
+        name: 'no-audit-in-mcp-tools',
+        description:
+          'В mcp/tools/* запрещён прямой `auditAgentCall(`: аудит вызова ' +
+          'исполняет обёртка `runWrite` через `mcpWriteFx` (mcp/context.ts). ' +
+          'Исключение — инструменты жизненного цикла сетей (вне data.db).',
+        pattern: /auditAgentCall\(/,
+        include: (rel) => rel.startsWith('mcp/tools/'),
+        allow: (rel) => rel === 'mcp/tools/networks.ts',
+      },
+      {
+        name: 'no-emit-domain-event-in-facades',
+        description:
+          'В routes/* и mcp/* запрещён прямой `emitDomainEvent(`: публикация ' +
+          'событий — обязанность обёртки `runWrite`. Исключения — события ' +
+          'жизненного цикла сетей (network/membership, вне data.db) в ' +
+          'routes/networks.ts, routes/admin-networks.ts, mcp/tools/networks.ts ' +
+          'и сам транспорт (http/server.ts, mcp/context.ts).',
+        pattern: /emitDomainEvent\(/,
+        include: inFacades,
+        allow: (rel) =>
+          rel === 'routes/networks.ts' ||
+          rel === 'routes/admin-networks.ts' ||
+          rel === 'mcp/tools/networks.ts' ||
+          rel === 'mcp/context.ts',
       },
     ]);
   });

@@ -13,7 +13,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import { listPinnedThoughts, setPinnedThoughts } from '../domain/pin-service.js';
 import { parseRest, RestPinsGet, RestPinsPut } from '../contracts.js';
 
@@ -39,10 +39,16 @@ export function createPinsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestPinsPut, req);
         const orderedIds = input.ordered_ids as string[];
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const pins = setPinnedThoughts(ndb, req.auth!.user.id, orderedIds);
-        deps.emit(req, input.network_id, 'pinned-thoughts.updated', { ordered_ids: orderedIds }, {
-          audience: 'user',
-        });
+        const pins = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => ({
+          result: setPinnedThoughts(ndb, req.auth!.user.id, orderedIds),
+          events: [
+            {
+              type: 'pinned-thoughts.updated',
+              data: { ordered_ids: orderedIds },
+              options: { audience: 'user' },
+            },
+          ],
+        }));
         sendSuccess(reply, pins, { request_id: req.id });
       },
     );

@@ -8,11 +8,24 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import type { EditAcquiredData, EditClearedData, EditReleasedData } from '@etn/shared';
-import { acquireLock, clearLocksForUser, listLocks, releaseLock } from '../../domain/lock-service.js';
+import type { EditAcquiredData, EditReleasedData } from '@etn/shared';
+import {
+  acquireLock,
+  clearLocksForUser,
+  listLocks,
+  releaseLock,
+} from '../../domain/lock-service.js';
 import { LocksAcquire, LocksClear, LocksList, LocksRelease } from '../../contracts.js';
 import type { LockRow } from '../../domain/lock-service.js';
-import { auditAgentCall, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  runTool,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId } from './shared.js';
 
 export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
@@ -34,27 +47,36 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.acquire'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const lock = acquireLock(ndb, {
-          entityType: args.entity_type,
-          entityId: args.entity_id,
-          userId: rt.deps.auth.userId,
-          clientId: null, // MCP-сессия не несёт Client-Id — соответствует REST-вызову без заголовка.
-        });
-        const data: EditAcquiredData = {
-          entity_type: lock.entity_type,
-          entity_id: lock.entity_id,
-          lock_id: lock.id,
-          user_id: lock.user_id,
-          client_id: lock.client_id,
-          acquired_at_ms: lock.acquired_at_ms,
-        };
-        emitAgentEvent(rt, args.network_id, 'edit.acquired', data, extra.requestId);
-        auditAgentCall(rt, 'etn.locks.acquire', args.network_id, lock.entity_type, lock.entity_id, {
-          lock_id: lock.id,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const lock = runWrite(ndb, fx, () => {
+          const acquired = acquireLock(ndb, {
+            entityType: args.entity_type,
+            entityId: args.entity_id,
+            userId: rt.deps.auth.userId,
+            clientId: null, // MCP-сессия не несёт Client-Id — соответствует REST-вызову без заголовка.
+          });
+          const data: EditAcquiredData = {
+            entity_type: acquired.entity_type,
+            entity_id: acquired.entity_id,
+            lock_id: acquired.id,
+            user_id: acquired.user_id,
+            client_id: acquired.client_id,
+            acquired_at_ms: acquired.acquired_at_ms,
+          };
+          return {
+            result: acquired,
+            events: [{ type: 'edit.acquired', data }],
+            audit: {
+              action: 'etn.locks.acquire',
+              targetType: acquired.entity_type,
+              targetId: acquired.entity_id,
+              details: { lock_id: acquired.id },
+            },
+          };
         });
         return {
           ...lock,
@@ -78,21 +100,30 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.release'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const released = releaseLock(ndb, args.lock_id, rt.deps.auth.userId);
-        const data: EditReleasedData = {
-          entity_type: released.entity_type,
-          entity_id: released.entity_id,
-          lock_id: released.id,
-          user_id: released.user_id,
-          client_id: released.client_id,
-        };
-        emitAgentEvent(rt, args.network_id, 'edit.released', data, extra.requestId);
-        auditAgentCall(rt, 'etn.locks.release', args.network_id, released.entity_type, released.entity_id, {
-          lock_id: released.id,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const released = runWrite(ndb, fx, () => {
+          const dropped = releaseLock(ndb, args.lock_id, rt.deps.auth.userId);
+          const data: EditReleasedData = {
+            entity_type: dropped.entity_type,
+            entity_id: dropped.entity_id,
+            lock_id: dropped.id,
+            user_id: dropped.user_id,
+            client_id: dropped.client_id,
+          };
+          return {
+            result: dropped,
+            events: [{ type: 'edit.released', data }],
+            audit: {
+              action: 'etn.locks.release',
+              targetType: dropped.entity_type,
+              targetId: dropped.entity_id,
+              details: { lock_id: dropped.id },
+            },
+          };
         });
         return {
           released: true as const,
@@ -117,25 +148,33 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.clear'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const removed = clearLocksForUser(ndb, args.user_id);
-        for (const lock of removed) {
-          const data: EditClearedData = {
-            entity_type: lock.entity_type,
-            entity_id: lock.entity_id,
-            lock_id: lock.id,
-            user_id: lock.user_id,
-            client_id: lock.client_id,
-            reason: 'manual',
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const removed = runWrite(ndb, fx, () => {
+          const cleared = clearLocksForUser(ndb, args.user_id);
+          return {
+            result: cleared,
+            events: cleared.map((lock) => ({
+              type: 'edit.cleared' as const,
+              data: {
+                entity_type: lock.entity_type,
+                entity_id: lock.entity_id,
+                lock_id: lock.id,
+                user_id: lock.user_id,
+                client_id: lock.client_id,
+                reason: 'manual' as const,
+              },
+            })),
+            audit: {
+              action: 'etn.locks.clear',
+              targetType: 'network',
+              targetId: args.network_id,
+              details: { user_id: args.user_id, cleared: cleared.length },
+            },
           };
-          emitAgentEvent(rt, args.network_id, 'edit.cleared', data, extra.requestId);
-        }
-        auditAgentCall(rt, 'etn.locks.clear', args.network_id, 'network', args.network_id, {
-          user_id: args.user_id,
-          cleared: removed.length,
         });
         return {
           cleared: removed.length,
@@ -181,5 +220,4 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
   // Deduplication (§4.3)
   // =========================================================================
-
 }

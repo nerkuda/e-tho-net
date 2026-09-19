@@ -49,7 +49,11 @@ import {
   parseLinkTypeFilterQuery,
   queryStrings,
   requestBody,
+  restWriteFx,
+  runWrite,
+  type AnyWriteEvent,
   type RouteDeps,
+  type WriteActivityEntry,
 } from './helpers.js';
 import {
   parseRest,
@@ -96,10 +100,6 @@ import {
   BULK_THOUGHT_OPS,
   type BulkThoughtOp,
 } from '../domain/thought-bulk-service.js';
-import {
-  recordLinkActivity,
-  recordThoughtActivity,
-} from '../domain/activity-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -179,10 +179,7 @@ const UUID_RE_FOR_SOURCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
  * what can actually be materialised. Here we just make sure the wrapper
  * fields are well-formed and the arrays are non-empty.
  */
-function parseThoughtCopyBody(
-  body: Record<string, unknown>,
-  requestId: string,
-): ThoughtCopyInput {
+function parseThoughtCopyBody(body: Record<string, unknown>, requestId: string): ThoughtCopyInput {
   return parseBody(RestThoughtCopyBody, body, requestId) as unknown as ThoughtCopyInput;
 }
 
@@ -221,21 +218,26 @@ function parseThoughtUpdateBody(
   const out = parseBody(RestThoughtUpdateBody, body, requestId);
   const changes: ThoughtUpdateInput = {};
   if (out.title !== undefined) changes.title = out.title as string;
-  if (out.synonyms !== undefined) changes.synonyms = toSynonymArray(out.synonyms as string[] | string | undefined);
+  if (out.synonyms !== undefined)
+    changes.synonyms = toSynonymArray(out.synonyms as string[] | string | undefined);
   if (out.type_id !== undefined) changes.type_id = out.type_id as string | null;
   if (out.icon !== undefined) changes.icon = out.icon as string | null;
-  if (out.icon_kind !== undefined) changes.icon_kind = out.icon_kind as ThoughtUpdateInput['icon_kind'];
-  if (out.icon_attachment_id !== undefined) changes.icon_attachment_id = out.icon_attachment_id as string | null;
+  if (out.icon_kind !== undefined)
+    changes.icon_kind = out.icon_kind as ThoughtUpdateInput['icon_kind'];
+  if (out.icon_attachment_id !== undefined)
+    changes.icon_attachment_id = out.icon_attachment_id as string | null;
   if (changes.icon_kind === 'image') {
     assertImageIcon(changes.icon, requestId);
   }
   if (out.active !== undefined) changes.active = out.active as boolean;
-  if (out.marked_for_deletion !== undefined) changes.marked_for_deletion = out.marked_for_deletion as boolean;
+  if (out.marked_for_deletion !== undefined)
+    changes.marked_for_deletion = out.marked_for_deletion as boolean;
   if (out.fg_color !== undefined) changes.fg_color = out.fg_color as string | null;
   if (out.bg_color !== undefined) changes.bg_color = out.bg_color as string | null;
   if (out.font_bold !== undefined) changes.font_bold = out.font_bold as boolean | null;
   if (out.font_italic !== undefined) changes.font_italic = out.font_italic as boolean | null;
-  if (out.font_underline !== undefined) changes.font_underline = out.font_underline as boolean | null;
+  if (out.font_underline !== undefined)
+    changes.font_underline = out.font_underline as boolean | null;
   if (out.font_strike !== undefined) changes.font_strike = out.font_strike as boolean | null;
   return changes;
 }
@@ -301,7 +303,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         // `at_layer_id` — для ленты событий: открыть мысль по id в
         // конкретном слое, не переключая сессию (задача 59119797: фон
         // таблицы событий слетает после клика).
-        const atLayerId = queryStrings((req.query as Record<string, unknown> | undefined)?.['at_layer_id'])[0] ?? null;
+        const atLayerId =
+          queryStrings((req.query as Record<string, unknown> | undefined)?.['at_layer_id'])[0] ??
+          null;
         const ndb =
           atLayerId !== null
             ? openNetworkDb(deps.dataDir, networkId, app.appLogger, atLayerId)
@@ -336,11 +340,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           networkId,
           parseLinkTypeFilter(requestBody(req), req.id),
         );
-        const response = focus(ndb, req.auth!.user.id, id, { showInactive, linkFilter });
-        deps.emit(req, networkId, 'thought-view.updated', {
-          thought_id: id,
-          last_viewed_at: new Date().toISOString(),
-        });
+        const response = runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: focus(ndb, req.auth!.user.id, id, { showInactive, linkFilter }),
+          events: [
+            {
+              type: 'thought-view.updated',
+              data: {
+                thought_id: id,
+                last_viewed_at: new Date().toISOString(),
+              },
+            },
+          ],
+        }));
         sendSuccess(reply, response);
       },
     );
@@ -354,40 +365,33 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const thought = createThought(ndb, input, req.auth!.user.id);
-        deps.emit(req, networkId, 'thought.created', { thought });
-        recordThoughtActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'created',
-          thought,
-          layerId: req.layerEcho?.id ?? null,
-        });
-        if (input.create_link) {
-          // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
-          // parent: target sources a link to the new thought; child: the new
-          // thought sources a link to target.
-          const link = findLinksBetween(
-            ndb,
-            input.create_link.direction === 'parent'
-              ? input.create_link.target_thought_id
-              : thought.id,
-            input.create_link.direction === 'parent'
-              ? thought.id
-              : input.create_link.target_thought_id,
-            input.create_link.type_id,
-          )[0];
-          if (link) {
-            deps.emit(req, networkId, 'link.created', { link });
-            recordLinkActivity(ndb, {
-              networkId,
-              userId: req.auth!.user.id,
-              action: 'created',
-              link,
-              layerId: req.layerEcho?.id ?? null,
-            });
+        const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const created = createThought(ndb, input, req.auth!.user.id);
+          const events: AnyWriteEvent[] = [{ type: 'thought.created', data: { thought: created } }];
+          const activity: WriteActivityEntry[] = [
+            { kind: 'thought', action: 'created', thought: created },
+          ];
+          if (input.create_link) {
+            // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
+            // parent: target sources a link to the new thought; child: the new
+            // thought sources a link to target.
+            const link = findLinksBetween(
+              ndb,
+              input.create_link.direction === 'parent'
+                ? input.create_link.target_thought_id
+                : created.id,
+              input.create_link.direction === 'parent'
+                ? created.id
+                : input.create_link.target_thought_id,
+              input.create_link.type_id,
+            )[0];
+            if (link) {
+              events.push({ type: 'link.created', data: { link } });
+              activity.push({ kind: 'link', action: 'created', link });
+            }
           }
-        }
+          return { result: created, events, activity };
+        });
         sendCreated(reply, thought, {
           version: thought.version,
           updated_at: thought.updated_at,
@@ -406,18 +410,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseThoughtUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const thought = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
-        deps.emit(req, networkId, 'thought.updated', {
-          id,
-          changes,
-          version: thought.version,
-        });
-        recordThoughtActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'updated',
-          thought,
-          layerId: req.layerEcho?.id ?? null,
+        const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
+          return {
+            result: updated,
+            events: [{ type: 'thought.updated', data: { id, changes, version: updated.version } }],
+            activity: [{ kind: 'thought', action: 'updated', thought: updated }],
+          };
         });
         sendSuccess(reply, thought, {
           version: thought.version,
@@ -436,20 +435,23 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as ThoughtIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        // Получаем снимок мысли до удаления — он уйдёт в activity_log.
-        const existing = getThought(ndb, id);
-        // actorUserId нужен для object-lock enforcement (задача 2031df5e).
-        deleteThought(ndb, id, expectedVersion, req.auth!.user.id);
-        deps.emit(req, networkId, 'thought.deleted', { id });
-        if (existing) {
-          recordThoughtActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            thought: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          // Получаем снимок мысли до удаления — он уйдёт в activity_log.
+          const existing = getThought(ndb, id);
+          // actorUserId нужен для object-lock enforcement (задача 2031df5e).
+          deleteThought(ndb, id, expectedVersion, req.auth!.user.id);
+          return {
+            result: undefined,
+            events: [{ type: 'thought.deleted', data: { id } }],
+            ...(existing === null
+              ? {}
+              : {
+                  activity: [
+                    { kind: 'thought' as const, action: 'deleted' as const, thought: existing },
+                  ],
+                }),
+          };
+        });
         reply.code(204).send();
       },
     );
@@ -511,13 +513,22 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const neighborOpts = {
           userId: req.auth!.user.id,
-          showInactive: resolveShowInactive(app, req, networkId, input.show_inactive as boolean | undefined),
+          showInactive: resolveShowInactive(
+            app,
+            req,
+            networkId,
+            input.show_inactive as boolean | undefined,
+          ),
           sort: sortRaw as SortKind | undefined,
           order: orderRaw as SortOrder | undefined,
           typeId,
           linkFilter,
         };
-        const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, { ...neighborOpts, limit, offset });
+        const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, {
+          ...neighborOpts,
+          limit,
+          offset,
+        });
         // Bug fix (0.6.3, thought f2c7c7d3): `total` used to echo the
         // returned page's length, so a neighbour list longer than `limit`
         // looked complete — no signal ever told the caller more rows exist.
@@ -636,7 +647,11 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         if (op === 'link_parents' || op === 'link_children' || op === 'set_only_parents') {
           const rawLinkType = args.link_type_id;
-          if (rawLinkType !== undefined && rawLinkType !== null && typeof rawLinkType !== 'string') {
+          if (
+            rawLinkType !== undefined &&
+            rawLinkType !== null &&
+            typeof rawLinkType !== 'string'
+          ) {
             throw new EtnError(
               'VALIDATION_ERROR',
               'args.link_type_id должен быть строкой или null.',
@@ -648,118 +663,88 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const userId = req.auth!.user.id;
-        const layerId = req.layerEcho?.id ?? null;
+        const fx = restWriteFx(deps, req, networkId);
+        const userId = fx.userId;
 
         // Групповые операции, общие с `etn.thoughts.bulk_update` (задача
         // fffe76f2, ADR 162d8e7a): изменение, журнал активности и
-        // real-time-эффекты — в домене; роут только публикует события своим
-        // механизмом. Остальные операции батча (`delete`/`purge`, связь с
-        // фокусом) — ниже, в локальном цикле.
+        // real-time-эффекты формируются в домене, а исполняются обёрткой
+        // записи (веха 9). Остальные операции батча (`delete`/`purge`, связь
+        // с фокусом) — ниже, в локальном исходе записи.
         if ((BULK_THOUGHT_OPS as readonly string[]).includes(op)) {
-          const result = applyBulkThoughtOp(
-            ndb,
-            { networkId, userId, layerId },
-            ids,
-            op as BulkThoughtOp,
-            {
+          const outcome = runWrite(ndb, fx, () =>
+            applyBulkThoughtOp(ndb, userId, ids, op as BulkThoughtOp, {
               type_id: setTypeId,
               parent_ids: anchorParentIds,
               child_ids: anchorChildIds,
               link_type_id: bulkLinkType,
-            },
+            }),
           );
-          for (const effect of result.effects) {
-            switch (effect.type) {
-              case 'thought.updated':
-                deps.emit(req, networkId, 'thought.updated', effect.data);
-                break;
-              case 'link.created':
-                deps.emit(req, networkId, 'link.created', effect.data);
-                break;
-              case 'link.deleted':
-                deps.emit(req, networkId, 'link.deleted', effect.data);
-                break;
-            }
-          }
-          sendSuccess(reply, { affected: result.affected, failures: result.failures });
+          sendSuccess(reply, outcome);
           return;
         }
 
-        const failures: ThoughtBatchFailure[] = [];
-        let affected = 0;
-        for (const id of ids) {
-          try {
-            switch (op) {
-              case 'delete':
-              case 'purge': {
-                // S13: `delete` is an alias of `purge` — both physically delete
-                // with the same blocking check (deleteThought refuses when the
-                // thought is referenced by a property). actorUserId — для
-                // object-lock enforcement (задача 2031df5e).
-                const existing = getThought(ndb, id);
-                deleteThought(ndb, id, undefined, userId);
-                deps.emit(req, networkId, 'thought.deleted', { id });
-                if (existing) {
-                  recordThoughtActivity(ndb, {
-                    networkId,
+        const outcome = runWrite(ndb, fx, () => {
+          const failures: ThoughtBatchFailure[] = [];
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          let affected = 0;
+          for (const id of ids) {
+            try {
+              switch (op) {
+                case 'delete':
+                case 'purge': {
+                  // S13: `delete` is an alias of `purge` — both physically delete
+                  // with the same blocking check (deleteThought refuses when the
+                  // thought is referenced by a property). actorUserId — для
+                  // object-lock enforcement (задача 2031df5e).
+                  const existing = getThought(ndb, id);
+                  deleteThought(ndb, id, undefined, userId);
+                  events.push({ type: 'thought.deleted', data: { id } });
+                  if (existing) {
+                    activity.push({ kind: 'thought', action: 'deleted', thought: existing });
+                  }
+                  break;
+                }
+                case 'link_to_focus': {
+                  const [sourceId, targetId] =
+                    direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
+                  const link = createLink(
+                    ndb,
+                    { source_id: sourceId, target_id: targetId, type_id: linkTypeForCreate },
                     userId,
-                    action: 'deleted',
-                    thought: existing,
-                    layerId,
-                  });
+                  );
+                  events.push({ type: 'link.created', data: { link } });
+                  activity.push({ kind: 'link', action: 'created', link });
+                  break;
                 }
-                break;
-              }
-              case 'link_to_focus': {
-                const [sourceId, targetId] =
-                  direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
-                const link = createLink(
-                  ndb,
-                  { source_id: sourceId, target_id: targetId, type_id: linkTypeForCreate },
-                  userId,
-                );
-                deps.emit(req, networkId, 'link.created', { link });
-                recordLinkActivity(ndb, {
-                  networkId,
-                  userId,
-                  action: 'created',
-                  link,
-                  layerId,
-                });
-                break;
-              }
-              case 'unlink_from_focus': {
-                const [sourceId, targetId] =
-                  direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
-                const found = findLinksBetween(ndb, sourceId, targetId, linkTypeForFind);
-                if (found.length === 0) {
-                  throw new EtnError('NOT_FOUND', `Нет связи между ${sourceId} и ${targetId}.`);
+                case 'unlink_from_focus': {
+                  const [sourceId, targetId] =
+                    direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
+                  const found = findLinksBetween(ndb, sourceId, targetId, linkTypeForFind);
+                  if (found.length === 0) {
+                    throw new EtnError('NOT_FOUND', `Нет связи между ${sourceId} и ${targetId}.`);
+                  }
+                  for (const link of found) {
+                    deleteLink(ndb, link.id, undefined);
+                    events.push({ type: 'link.deleted', data: { id: link.id } });
+                    activity.push({ kind: 'link', action: 'deleted', link });
+                  }
+                  break;
                 }
-                for (const link of found) {
-                  deleteLink(ndb, link.id, undefined);
-                  deps.emit(req, networkId, 'link.deleted', { id: link.id });
-                  recordLinkActivity(ndb, {
-                    networkId,
-                    userId,
-                    action: 'deleted',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
               }
-            }
-            affected += 1;
-          } catch (err) {
-            if (err instanceof EtnError) {
-              failures.push({ id, code: err.code, message: err.message });
-            } else {
-              failures.push({ id, code: 'INTERNAL', message: 'internal error' });
+              affected += 1;
+            } catch (err) {
+              if (err instanceof EtnError) {
+                failures.push({ id, code: err.code, message: err.message });
+              } else {
+                failures.push({ id, code: 'INTERNAL', message: 'internal error' });
+              }
             }
           }
-        }
-        sendSuccess(reply, { affected, failures });
+          return { result: { affected, failures }, events, activity };
+        });
+        sendSuccess(reply, outcome);
       },
     );
 
@@ -776,33 +761,24 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCopyBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = copyThoughtsBatch(ndb, input, req.auth!.user.id);
-        const layerId = req.layerEcho?.id ?? null;
-        const userId = req.auth!.user.id;
-        // Real-time: emit a `thought.created` for every new thought and a
-        // `link.created` for every new link so other connected clients
-        // refresh without polling. The actor has no echo (04-realtime.md §5);
-        // the local refresh below reconciles the canvas / structures view.
-        for (const thought of result.created_thoughts) {
-          deps.emit(req, networkId, 'thought.created', { thought });
-          recordThoughtActivity(ndb, {
-            networkId,
-            userId,
-            action: 'created',
-            thought,
-            layerId,
-          });
-        }
-        for (const link of result.created_links) {
-          deps.emit(req, networkId, 'link.created', { link });
-          recordLinkActivity(ndb, {
-            networkId,
-            userId,
-            action: 'created',
-            link,
-            layerId,
-          });
-        }
+        const result = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const copied = copyThoughtsBatch(ndb, input, req.auth!.user.id);
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          // Real-time: emit a `thought.created` for every new thought and a
+          // `link.created` for every new link so other connected clients
+          // refresh without polling. The actor has no echo (04-realtime.md §5);
+          // the local refresh below reconciles the canvas / structures view.
+          for (const thought of copied.created_thoughts) {
+            events.push({ type: 'thought.created', data: { thought } });
+            activity.push({ kind: 'thought', action: 'created', thought });
+          }
+          for (const link of copied.created_links) {
+            events.push({ type: 'link.created', data: { link } });
+            activity.push({ kind: 'link', action: 'created', link });
+          }
+          return { result: copied, events, activity };
+        });
         sendSuccess(reply, result);
       },
     );
@@ -920,13 +896,20 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           order: order as SortOrder,
         };
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = setFocusPreferences(ndb, req.auth!.user.id, fid, parsed);
-        deps.emit(req, networkId, 'user-focus-preferences.updated', {
-          focus_thought_id: fid,
-          dir: parsed.dir,
-          sort: parsed.sort,
-          sort_order: parsed.order,
-        });
+        const result = runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: setFocusPreferences(ndb, req.auth!.user.id, fid, parsed),
+          events: [
+            {
+              type: 'user-focus-preferences.updated',
+              data: {
+                focus_thought_id: fid,
+                dir: parsed.dir,
+                sort: parsed.sort,
+                sort_order: parsed.order,
+              },
+            },
+          ],
+        }));
         sendSuccess(reply, result);
       },
     );
@@ -946,12 +929,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           ordered_ids: orderedIds,
         };
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        setFocusOrder(ndb, req.auth!.user.id, fid, parsed);
-        deps.emit(req, networkId, 'user-focus-order.updated', {
-          focus_thought_id: fid,
-          dir: parsed.dir,
-          ordered_ids: orderedIds,
-        });
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: setFocusOrder(ndb, req.auth!.user.id, fid, parsed),
+          events: [
+            {
+              type: 'user-focus-order.updated',
+              data: {
+                focus_thought_id: fid,
+                dir: parsed.dir,
+                ordered_ids: orderedIds,
+              },
+            },
+          ],
+        }));
         sendSuccess(reply, { focus_thought_id: fid, dir: parsed.dir, ordered_ids: orderedIds });
       },
     );

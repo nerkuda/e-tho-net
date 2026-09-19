@@ -35,8 +35,17 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { BASE_LAYER_ID } from '@etn/shared';
 
-import { closeAll, createInMemoryNetworkDb, openNetworkDb, type NetworkDb } from '../src/db/network-db.js';
-import { deleteAttachment, createAttachment, getAttachment } from '../src/domain/attachment-service.js';
+import {
+  closeAll,
+  createInMemoryNetworkDb,
+  openNetworkDb,
+  type NetworkDb,
+} from '../src/db/network-db.js';
+import {
+  deleteAttachment,
+  createAttachment,
+  getAttachment,
+} from '../src/domain/attachment-service.js';
 import { getPermanentPreview, listComments } from '../src/domain/comment-service.js';
 import { checkLinkDeletion, deleteLink, getLink } from '../src/domain/link-service.js';
 import {
@@ -78,10 +87,11 @@ function insertHierarchyLayers(ndb: NetworkDb): void {
 /** Physical row of a thought (id, layer) — raw SQL, direct table access. */
 function thoughtRow(ndb: NetworkDb, id: string, layerId: string) {
   return ndb
-    .prepare('SELECT title, deleted, base_version, version FROM thoughts WHERE id = ? AND layer_id = ?')
+    .prepare(
+      'SELECT title, deleted, base_version, version FROM thoughts WHERE id = ? AND layer_id = ?',
+    )
     .get(id, layerId) as
-    | { title: string; deleted: number; base_version: number; version: number }
-    | undefined;
+    { title: string; deleted: number; base_version: number; version: number } | undefined;
 }
 
 describe(
@@ -140,7 +150,10 @@ describe(
         assert.deepEqual(listComments(ndb, 'thought', parent.id), []);
         assert.equal(getAttachment(ndb, 'att-parent'), null);
         assert.notEqual(getThought(ndb, child.id), null);
-        assert.deepEqual(getNeighbors(ndb, child.id, 'parents').map((n) => n.id), []);
+        assert.deepEqual(
+          getNeighbors(ndb, child.id, 'parents').map((n) => n.id),
+          [],
+        );
 
         // In B (descendant of A): the tombstone is inherited — hidden too.
         ndb.useLayer(LAYER_B);
@@ -235,11 +248,11 @@ describe(
         ndb.useLayer(LAYER_B);
         // The link is hidden by the invisible endpoint, not by its own row.
         assert.equal(getLink(ndb, 'l-xy'), null);
+        assert.deepEqual(ndb.prepare('SELECT id FROM links_v').all(), []);
         assert.deepEqual(
-          ndb.prepare('SELECT id FROM links_v').all(),
+          getNeighbors(ndb, x.id, 'children').map((n) => n.id),
           [],
         );
-        assert.deepEqual(getNeighbors(ndb, x.id, 'children').map((n) => n.id), []);
 
         // Deleting the endpoint through the service produces the same picture
         // (cascade tombstones the link as well — both arms agree).
@@ -313,11 +326,16 @@ describe(
         assert.equal(checkThoughtDeletion(ndb, m.id).blocked, false);
         deleteThought(ndb, m.id, undefined, USER);
         assert.equal(
-          (ndb.prepare('SELECT COUNT(*) AS c FROM thoughts WHERE id = ?').get(m.id) as { c: number }).c,
+          (
+            ndb.prepare('SELECT COUNT(*) AS c FROM thoughts WHERE id = ?').get(m.id) as {
+              c: number;
+            }
+          ).c,
           0,
         );
         assert.equal(
-          (ndb.prepare('SELECT COUNT(*) AS c FROM links WHERE id = ?').get('l-mn') as { c: number }).c,
+          (ndb.prepare('SELECT COUNT(*) AS c FROM links WHERE id = ?').get('l-mn') as { c: number })
+            .c,
           0,
         );
         ndb.useLayer(LAYER_A);
@@ -354,7 +372,7 @@ describe(
         ndb.useLayer(LAYER_A);
         const only = createThought(ndb, { title: 'Только в слое' }, USER);
         updateThought(ndb, only.id, { marked_for_deletion: true }, undefined, USER);
-        const outcome = purgeTrash(ndb);
+        const outcome = purgeTrash(ndb).result;
         assert.equal(outcome.purged, 1);
         assert.equal(outcome.skipped, 1);
         assert.equal(getThought(ndb, only.id), null);
@@ -380,7 +398,12 @@ describe(
         updateThought(ndb, t.id, { title: 'Версия в слое' }, 1, USER);
         const shadow = thoughtRow(ndb, t.id, LAYER_A);
         assert.deepEqual(
-          { title: shadow?.title, deleted: shadow?.deleted, base_version: shadow?.base_version, version: shadow?.version },
+          {
+            title: shadow?.title,
+            deleted: shadow?.deleted,
+            base_version: shadow?.base_version,
+            version: shadow?.version,
+          },
           { title: 'Версия в слое', deleted: 0, base_version: 1, version: 2 },
         );
         assert.equal(getThought(ndb, t.id)?.version, 2);

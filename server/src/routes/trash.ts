@@ -18,11 +18,8 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import { EtnError } from '@etn/shared';
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import { listTrash, purgeTrash } from '../domain/trash-service.js';
-import { recordLinkActivity, recordThoughtActivity } from '../domain/activity-service.js';
-import { getLink } from '../domain/link-service.js';
-import { getThought } from '../domain/thought-service.js';
 import { parseRest, RestTrashList, RestTrashPurge } from '../contracts.js';
 
 /** `/api/v1/networks*` trash routes plugin factory. */
@@ -63,44 +60,15 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
           ids = [...new Set(rawIds)];
         }
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        // Сохраняем снимки мыслей и связей, помеченных на удаление, ДО
-        // физического удаления — после purgeTrash строк в `thoughts`/`links`
-        // уже нет, и для activity_log нужен короткий снимок на момент
-        // операции (требование b0c7a57c).
-        const trash = listTrash(ndb);
-        const thoughtSnapshots = new Map(trash.thoughts.map((t) => [t.id, t]));
-        const linkSnapshots = new Map(trash.links.map((l) => [l.id, l]));
-        const { purged, skipped, deleted_thought_ids, deleted_link_ids } = purgeTrash(ndb, ids);
-        const layerId = req.layerEcho?.id ?? null;
-        const userId = req.auth!.user.id;
-        // Fan out the standard deletion events so connected clients refresh.
-        for (const id of deleted_thought_ids) {
-          const snapshot = thoughtSnapshots.get(id);
-          deps.emit(req, input.network_id, 'thought.deleted', { id });
-          if (snapshot) {
-            recordThoughtActivity(ndb, {
-              networkId: input.network_id,
-              userId,
-              action: 'deleted',
-              thought: snapshot,
-              layerId,
-            });
-          }
-        }
-        for (const id of deleted_link_ids) {
-          const snapshot = linkSnapshots.get(id);
-          deps.emit(req, input.network_id, 'link.deleted', { id });
-          if (snapshot) {
-            recordLinkActivity(ndb, {
-              networkId: input.network_id,
-              userId,
-              action: 'deleted',
-              link: snapshot,
-              layerId,
-            });
-          }
-        }
-        sendSuccess(reply, { purged, skipped });
+        // Весь проход очистки — одна обёрточная транзакция (требование
+        // 3269a025): сбой посреди не оставляет частичного удаления. События
+        // `*.deleted` и журнал — из результата очистки, после коммита.
+        const outcome = runWrite(ndb, restWriteFx(deps, req, input.network_id), () =>
+          purgeTrash(ndb, ids),
+        );
+        // Wire-ответ несёт только счётчики (03-server-api.md §14b) —
+        // списки удалённых id остаются внутри исхода для событий/журнала.
+        sendSuccess(reply, { purged: outcome.purged, skipped: outcome.skipped });
       },
     );
   };

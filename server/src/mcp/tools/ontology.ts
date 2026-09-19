@@ -6,17 +6,39 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
+import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { z } from 'zod';
-import { ICON_KINDS, MCP_TOOL_ANNOTATIONS, PROPERTY_VALUE_TYPES, TYPE_OWNER_TYPES } from '@etn/shared';
-import type { OntologyDeleteParams, OntologyDeleteResult, OntologyWriteParams, OntologyWriteResult } from '@etn/shared';
+import {
+  ICON_KINDS,
+  MCP_TOOL_ANNOTATIONS,
+  PROPERTY_VALUE_TYPES,
+  TYPE_OWNER_TYPES,
+} from '@etn/shared';
+import type {
+  OntologyDeleteParams,
+  OntologyDeleteResult,
+  OntologyWriteParams,
+  OntologyWriteResult,
+} from '@etn/shared';
 import { getNetworkProperty, getTypeProperty } from '../../domain/property-service.js';
 import { defineContract, OntologyWrite } from '../../contracts.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { getLinkType } from '../../domain/link-type-service.js';
 import { writeOntology } from '../../domain/ontology-write-service.js';
 import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
-import { getThoughtTypeView, listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
-import { auditAgentCall, emitAgentActivityEvent, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, resolveRuntimeLayer, runWriteTool } from '../context.js';
+import {
+  getThoughtTypeView,
+  listThoughtTypeViewsByType,
+} from '../../domain/thought-type-views-service.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  resolveRuntimeLayer,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId } from './shared.js';
 
 export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
@@ -141,10 +163,11 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
         const writeInput: OntologyWriteParams = {
           network_id: args.network_id,
           ...(args.thought_types !== undefined ? { thought_types: args.thought_types } : {}),
@@ -153,202 +176,171 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
           ...(args.type_properties !== undefined ? { type_properties: args.type_properties } : {}),
           ...(args.type_views !== undefined ? { type_views: args.type_views } : {}),
         };
-        const result = writeOntology(ndb, writeInput, rt.deps.auth.userId);
+        const result = runWrite(ndb, fx, () => {
+          const written = writeOntology(ndb, writeInput, rt.deps.auth.userId);
 
-        // Real-time + activity log: по одной записи на изменённую сущность.
-        // Снимок для удалённого берётся ДО мутации (тут мутация уже
-        // произошла — но мы используем `unchanged` как маркер для пропуска).
-        for (const item of result.thought_types) {
-          if (item.action === 'unchanged') continue;
-          // After create/update — read back the type for the snapshot.
-          const thoughtType = getThoughtType(ndb, item.id);
-          if (thoughtType === null) continue;
-          if (item.action === 'created') {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'thought-type.created',
-              { type: thoughtType },
-              ndb,
-              extra.requestId,
-            );
-          } else {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'thought-type.updated',
-              { id: item.id, version: item.version, changes: {} },
-              ndb,
-              extra.requestId,
-            );
+          // Real-time + activity log: по одной записи на изменённую сущность.
+          // События и журнал собираются из результата записи и исполняются
+          // обёрткой после коммита.
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          for (const item of written.thought_types) {
+            if (item.action === 'unchanged') continue;
+            // After create/update — read back the type for the snapshot.
+            const thoughtType = getThoughtType(ndb, item.id);
+            if (thoughtType === null) continue;
+            if (item.action === 'created') {
+              events.push({ type: 'thought-type.created', data: { type: thoughtType } });
+              activity.push({ kind: 'thought-type', action: 'created', type: thoughtType });
+            } else {
+              events.push({
+                type: 'thought-type.updated',
+                data: { id: item.id, version: item.version, changes: {} },
+              });
+            }
           }
-        }
-        for (const item of result.link_types) {
-          if (item.action === 'unchanged') continue;
-          const linkType = getLinkType(ndb, item.id);
-          if (linkType === null) continue;
-          if (item.action === 'created') {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'link-type.created',
-              { type: linkType },
-              ndb,
-              extra.requestId,
-            );
-          } else {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'link-type.updated',
-              { id: item.id, version: item.version, changes: {} },
-              ndb,
-              extra.requestId,
-            );
+          for (const item of written.link_types) {
+            if (item.action === 'unchanged') continue;
+            const linkType = getLinkType(ndb, item.id);
+            if (linkType === null) continue;
+            if (item.action === 'created') {
+              events.push({ type: 'link-type.created', data: { type: linkType } });
+              activity.push({ kind: 'link-type', action: 'created', type: linkType });
+            } else {
+              events.push({
+                type: 'link-type.updated',
+                data: { id: item.id, version: item.version, changes: {} },
+              });
+            }
           }
-        }
-        for (const item of result.properties) {
-          if (item.action === 'unchanged') continue;
-          const prop = getNetworkProperty(ndb, item.id);
-          if (prop === null) continue;
-          if (item.action === 'created') {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'property-registry.created',
-              { property: prop },
-              ndb,
-              extra.requestId,
-            );
-          } else {
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'property-registry.updated',
-              {
-                id: item.id,
-                converted: item.converted_values,
-                dropped: item.dropped_values,
-                changes: {},
+          for (const item of written.properties) {
+            if (item.action === 'unchanged') continue;
+            const prop = getNetworkProperty(ndb, item.id);
+            if (prop === null) continue;
+            if (item.action === 'created') {
+              events.push({ type: 'property-registry.created', data: { property: prop } });
+              activity.push({ kind: 'property', action: 'created', property: prop });
+            } else {
+              events.push({
+                type: 'property-registry.updated',
+                data: {
+                  id: item.id,
+                  converted: item.converted_values,
+                  dropped: item.dropped_values,
+                  changes: {},
+                },
+              });
+            }
+          }
+          for (const item of written.type_properties) {
+            if (item.action === 'unchanged') continue;
+            // Подключение свойства — это правка типа-владельца; в журнале
+            // фиксируем как обновление самого типа (требование b0c7a57c).
+            // Перечитываем привязку после её создания/обновления, чтобы
+            // передать полный snapshot в payload `property-definition.*`.
+            const defRow = getTypeProperty(ndb, item.id);
+            if (defRow === null) continue;
+            const propertyRow = getNetworkProperty(ndb, defRow.property_id);
+            if (propertyRow === null) continue;
+            const definitionPayload = {
+              id: defRow.id,
+              property_id: defRow.property_id,
+              owner_type: defRow.owner_type,
+              owner_id: defRow.owner_id,
+              key: propertyRow.name,
+              value_type: propertyRow.value_type,
+              config: propertyRow.config,
+              required: defRow.required,
+              position: defRow.position,
+              description: propertyRow.description,
+            };
+            events.push({
+              type: 'property-definition.created',
+              data: { definition: definitionPayload },
+            });
+            activity.push({
+              kind: 'type-property',
+              action: 'updated',
+              typeId: definitionPayload.owner_id,
+              typeName: definitionPayload.key,
+            });
+          }
+
+          // ---- type_views events (задача c1fa71d4, 0.7.3) -------------
+          // По одному событию `thought-type-view.{created,updated,deleted}` на
+          // изменённую сущность; `unchanged` пропускаем (идемпотентный upsert).
+          for (const item of written.type_views) {
+            if (item.action === 'unchanged') continue;
+            if (item.action === 'created') {
+              // Перечитываем созданный отбор для payload `view` (effective DTO).
+              const viewRow = getThoughtTypeView(ndb, item.id);
+              if (viewRow === null) continue;
+              events.push({
+                type: 'thought-type-view.created',
+                data: {
+                  thought_type_id: viewRow.thought_type_id,
+                  view: {
+                    ...viewRow,
+                    defined_on: viewRow.thought_type_id,
+                    inherited: false,
+                  },
+                },
+              });
+            } else if (item.action === 'updated') {
+              const viewRow = getThoughtTypeView(ndb, item.id);
+              if (viewRow === null) continue;
+              events.push({
+                type: 'thought-type-view.updated',
+                data: {
+                  thought_type_id: viewRow.thought_type_id,
+                  view_id: viewRow.id,
+                  changes: {},
+                  version: viewRow.version,
+                  view: {
+                    ...viewRow,
+                    defined_on: viewRow.thought_type_id,
+                    inherited: false,
+                  },
+                },
+              });
+            } else {
+              // deleted
+              events.push({
+                type: 'thought-type-view.deleted',
+                data: { thought_type_id: item.thought_type_id, view_id: item.id },
+              });
+            }
+          }
+
+          return {
+            result: written,
+            events,
+            activity,
+            // ONE audit row for the whole batch.
+            audit: {
+              action: 'etn.ontology.write',
+              targetType: 'network',
+              targetId: args.network_id,
+              details: {
+                thought_types_count: written.thought_types.length,
+                link_types_count: written.link_types.length,
+                properties_count: written.properties.length,
+                type_properties_count: written.type_properties.length,
+                type_views_count: written.type_views.length,
               },
-              ndb,
-              extra.requestId,
-            );
-          }
-        }
-        for (const item of result.type_properties) {
-          if (item.action === 'unchanged') continue;
-          // Подключение свойства — это правка типа-владельца; в журнале
-          // фиксируем как обновление самого типа (требование b0c7a57c).
-          // Перечитываем привязку после её создания/обновления, чтобы
-          // передать полный snapshot в payload `property-definition.*`.
-          const defRow = getTypeProperty(ndb, item.id);
-          if (defRow === null) continue;
-          const propertyRow = getNetworkProperty(ndb, defRow.property_id);
-          if (propertyRow === null) continue;
-          const definitionPayload = {
-            id: defRow.id,
-            property_id: defRow.property_id,
-            owner_type: defRow.owner_type,
-            owner_id: defRow.owner_id,
-            key: propertyRow.name,
-            value_type: propertyRow.value_type,
-            config: propertyRow.config,
-            required: defRow.required,
-            position: defRow.position,
-            description: propertyRow.description,
+            },
           };
-          emitAgentActivityEvent(
-            rt,
-              args.network_id,
-              'property-definition.created',
-              {
-                definition: definitionPayload,
-              },
-              ndb,
-              extra.requestId,
-            );
-          }
-
-        // ---- type_views events (задача c1fa71d4, 0.7.3) -------------
-        // По одному событию `thought-type-view.{created,updated,deleted}` на
-        // изменённую сущность; `unchanged` пропускаем (идемпотентный upsert).
-        for (const item of result.type_views) {
-          if (item.action === 'unchanged') continue;
-          if (item.action === 'created') {
-            // Перечитываем созданный отбор для payload `view` (effective DTO).
-            const viewRow = getThoughtTypeView(ndb, item.id);
-            if (viewRow === null) continue;
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'thought-type-view.created',
-              {
-                thought_type_id: viewRow.thought_type_id,
-                view: {
-                  ...viewRow,
-                  defined_on: viewRow.thought_type_id,
-                  inherited: false,
-                },
-              },
-              ndb,
-              extra.requestId,
-            );
-          } else if (item.action === 'updated') {
-            const viewRow = getThoughtTypeView(ndb, item.id);
-            if (viewRow === null) continue;
-            emitAgentActivityEvent(
-              rt,
-              args.network_id,
-              'thought-type-view.updated',
-              {
-                thought_type_id: viewRow.thought_type_id,
-                view_id: viewRow.id,
-                changes: {},
-                version: viewRow.version,
-                view: {
-                  ...viewRow,
-                  defined_on: viewRow.thought_type_id,
-                  inherited: false,
-                },
-              },
-              ndb,
-              extra.requestId,
-            );
-          } else {
-            // deleted
-            emitAgentEvent(
-              rt,
-              args.network_id,
-              'thought-type-view.deleted',
-              { thought_type_id: item.thought_type_id, view_id: item.id },
-              extra.requestId,
-            );
-          }
-        }
-
-        // ONE audit row for the whole batch.
-        auditAgentCall(
-          rt,
-          'etn.ontology.write',
-          args.network_id,
-          'network',
-          args.network_id,
-          {
-            thought_types_count: result.thought_types.length,
-            link_types_count: result.link_types.length,
-            properties_count: result.properties.length,
-            type_properties_count: result.type_properties.length,
-            type_views_count: result.type_views.length,
-          },
-        );
+        });
 
         const layer = resolveRuntimeLayer(rt, args.network_id);
         return {
           ...result,
           layer: { id: layer.id, title: layer.title },
           request_id: String(extra.requestId),
-        } satisfies OntologyWriteResult & { layer: { id: string; title: string }; request_id: string };
+        } satisfies OntologyWriteResult & {
+          layer: { id: string; title: string };
+          request_id: string;
+        };
       }),
   );
 
@@ -379,116 +371,92 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.delete'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
         const network = rt.deps.systemDb.getNetworkById(args.network_id);
         const networkRoles = network?.type_roles ?? {};
-        // Pre-fetch snapshots BEFORE the mutation, to record accurate activity rows.
-        let snapshot: unknown = null;
-        try {
-          if (args.kind === 'thought_type') {
-            snapshot = getThoughtType(ndb, args.id);
-          } else if (args.kind === 'link_type') {
-            snapshot = getLinkType(ndb, args.id);
-          } else if (args.kind === 'property') {
-            snapshot = getNetworkProperty(ndb, args.id);
-          }
-        } catch {
-          snapshot = null;
-        }
         const deleteInput: OntologyDeleteParams = {
           network_id: args.network_id,
           kind: args.kind,
           id: args.id,
           ...(args.force !== undefined ? { force: args.force } : {}),
         };
-        const result: OntologyDeleteResult = deleteOntologyEntity(
-          ndb,
-          deleteInput,
-          rt.deps.auth.userId,
-          networkRoles,
-        );
-
-        // Real-time + activity log (mirror REST).
-        if (snapshot !== null && snapshot !== undefined) {
-          if (args.kind === 'thought_type') {
-            emitAgentEvent(
-              rt,
-              args.network_id,
-              'thought-type.deleted',
-              { id: args.id },
-              extra.requestId,
-            );
-            // Каскад отборов (задача c1fa71d4): отдельное событие
-            // `thought-type-view.deleted` на каждый каскадно удалённый отбор,
-            // чтобы агенты с подпиской могли его поймать.
-            const cascadedViews =
-              (result.affected_counts.type_views_count ?? 0) > 0
-                ? listThoughtTypeViewsByType(ndb, args.id).map((v) => ({ id: v.id }))
-                : [];
-            for (const view of cascadedViews) {
-              emitAgentEvent(
-                rt,
-                args.network_id,
-                'thought-type-view.deleted',
-                { thought_type_id: args.id, view_id: view.id },
-                extra.requestId,
-              );
+        const result: OntologyDeleteResult = runWrite(ndb, fx, () => {
+          // Pre-fetch snapshots BEFORE the mutation, to record accurate
+          // activity rows (mirror REST).
+          let snapshot: unknown = null;
+          try {
+            if (args.kind === 'thought_type') {
+              snapshot = getThoughtType(ndb, args.id);
+            } else if (args.kind === 'link_type') {
+              snapshot = getLinkType(ndb, args.id);
+            } else if (args.kind === 'property') {
+              snapshot = getNetworkProperty(ndb, args.id);
             }
-          } else if (args.kind === 'link_type') {
-            emitAgentEvent(
-              rt,
-              args.network_id,
-              'link-type.deleted',
-              { id: args.id },
-              extra.requestId,
-            );
-          } else if (args.kind === 'property') {
-            emitAgentEvent(
-              rt,
-              args.network_id,
-              'property-registry.deleted',
-              { id: args.id },
-              extra.requestId,
-            );
-          } else if (args.kind === 'type_view') {
-            // Отдельная ветка задачи c1fa71d4: `type_view` удаляется
-            // без `snapshot` (он не нужен — у отбора нет rich-DTO для
-            // эха), событие шлём всегда.
-            emitAgentEvent(
-              rt,
-              args.network_id,
-              'thought-type-view.deleted',
-              { thought_type_id: '', view_id: args.id },
-              extra.requestId,
-            );
+          } catch {
+            snapshot = null;
           }
-        } else if (args.kind === 'type_view') {
-          // snapshot null (отбор уже удалили раньше или не было): всё равно
-          // шлём событие, чтобы подписчики узнали об удалении.
-          emitAgentEvent(
-            rt,
-            args.network_id,
-            'thought-type-view.deleted',
-            { thought_type_id: '', view_id: args.id },
-            extra.requestId,
-          );
-        }
+          const removed = deleteOntologyEntity(ndb, deleteInput, rt.deps.auth.userId, networkRoles);
 
-        // ONE audit row for the whole call.
-        auditAgentCall(
-          rt,
-          'etn.ontology.delete',
-          args.network_id,
-          args.kind,
-          args.id,
-          {
-            force: args.force === true,
-            affected_counts: result.affected_counts,
-          },
-        );
+          // Real-time (mirror REST); журнал активности прежний MCP-путь не
+          // писал (только события) — сохраняем поведение.
+          const events: AnyWriteEvent[] = [];
+          if (snapshot !== null && snapshot !== undefined) {
+            if (args.kind === 'thought_type') {
+              events.push({ type: 'thought-type.deleted', data: { id: args.id } });
+              // Каскад отборов (задача c1fa71d4): отдельное событие
+              // `thought-type-view.deleted` на каждый каскадно удалённый отбор,
+              // чтобы агенты с подпиской могли его поймать.
+              const cascadedViews =
+                (removed.affected_counts.type_views_count ?? 0) > 0
+                  ? listThoughtTypeViewsByType(ndb, args.id).map((v) => ({ id: v.id }))
+                  : [];
+              for (const view of cascadedViews) {
+                events.push({
+                  type: 'thought-type-view.deleted',
+                  data: { thought_type_id: args.id, view_id: view.id },
+                });
+              }
+            } else if (args.kind === 'link_type') {
+              events.push({ type: 'link-type.deleted', data: { id: args.id } });
+            } else if (args.kind === 'property') {
+              events.push({ type: 'property-registry.deleted', data: { id: args.id } });
+            } else if (args.kind === 'type_view') {
+              // Отдельная ветка задачи c1fa71d4: `type_view` удаляется
+              // без `snapshot` (он не нужен — у отбора нет rich-DTO для
+              // эха), событие шлём всегда.
+              events.push({
+                type: 'thought-type-view.deleted',
+                data: { thought_type_id: '', view_id: args.id },
+              });
+            }
+          } else if (args.kind === 'type_view') {
+            // snapshot null (отбор уже удалили раньше или не было): всё равно
+            // шлём событие, чтобы подписчики узнали об удалении.
+            events.push({
+              type: 'thought-type-view.deleted',
+              data: { thought_type_id: '', view_id: args.id },
+            });
+          }
+
+          return {
+            result: removed,
+            events,
+            // ONE audit row for the whole call.
+            audit: {
+              action: 'etn.ontology.delete',
+              targetType: args.kind,
+              targetId: args.id,
+              details: {
+                force: args.force === true,
+                affected_counts: removed.affected_counts,
+              },
+            },
+          };
+        });
 
         return {
           ...result,
@@ -500,5 +468,4 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
   // P3 (задача e488f4c1 / 0.7.2) — copy_subtree, mentions_scan, импорт/экспорт
   // =========================================================================
-
 }

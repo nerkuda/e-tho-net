@@ -2,6 +2,11 @@
  * trash.ts — MCP-инструменты области «registerTrashListTool, registerTrashPurgeTool».
  * Вынесено из `tools.ts` (ADR 8c93f03a, веха 7 версии 0.8.2) без изменения
  * поведения: фасады разбиты на модули по областям, логика — в домене.
+ *
+ * Веха 9 (задача 8b2efe2d): очистка корзины исполняется через доменную
+ * обёртку {@link runWrite} — весь проход одна транзакция (требование
+ * 3269a025, ошибка ac8a684b), события и журнал — из результата очистки,
+ * после коммита.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -10,8 +15,15 @@ import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { TrashList, TrashPurge } from '../../contracts.js';
-import { recordLinkActivity, recordThoughtActivity } from '../../domain/activity-service.js';
-import { auditAgentCall, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
+import {
+  mcpWriteFx,
+  openMemberNetwork,
+  requireWritable,
+  requireWriteBudget,
+  runTool,
+  runWrite,
+  runWriteTool,
+} from '../context.js';
 import { NetworkId } from './shared.js';
 
 export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
@@ -32,7 +44,6 @@ export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
         return listTrash(ndb);
       }),
   );
-
 }
 
 export function registerTrashPurgeTool(mcp: McpServer, rt: McpRuntime): void {
@@ -49,46 +60,26 @@ export function registerTrashPurgeTool(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.purge'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
+      runWriteTool(rt, args.network_id, () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        // Снимки помеченных на удаление строк ДО физического удаления —
-        // после purgeTrash их уже нет, а журналу нужен снимок на момент
-        // операции (тот же ход, что в REST POST /trash/purge).
-        const trash = listTrash(ndb);
-        const thoughtSnapshots = new Map(trash.thoughts.map((t) => [t.id, t]));
-        const linkSnapshots = new Map(trash.links.map((l) => [l.id, l]));
-        const { purged, skipped, deleted_thought_ids, deleted_link_ids } = purgeTrash(ndb);
-        for (const id of deleted_thought_ids) {
-          const snapshot = thoughtSnapshots.get(id);
-          emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
-          if (snapshot !== undefined) {
-            recordThoughtActivity(ndb, {
-              networkId: args.network_id,
-              userId: rt.deps.auth.userId,
-              action: 'deleted',
-              thought: snapshot,
-              layerId: ndb.layerId,
-            });
-          }
-        }
-        for (const id of deleted_link_ids) {
-          const snapshot = linkSnapshots.get(id);
-          emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
-          if (snapshot !== undefined) {
-            recordLinkActivity(ndb, {
-              networkId: args.network_id,
-              userId: rt.deps.auth.userId,
-              action: 'deleted',
-              link: snapshot,
-              layerId: ndb.layerId,
-            });
-          }
-        }
-        auditAgentCall(rt, 'etn.trash.purge', args.network_id, 'network', args.network_id, {
-          purged,
-          skipped,
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        // Весь проход — одна обёрточная транзакция (требование 3269a025):
+        // сбой посреди не оставляет частичного удаления. События `*.deleted`
+        // и журнал — из результата очистки, после коммита; аудит — одна
+        // строка на вызов, из результата.
+        const { purged, skipped } = runWrite(ndb, fx, () => {
+          const swept = purgeTrash(ndb);
+          return {
+            ...swept,
+            audit: {
+              action: 'etn.trash.purge',
+              targetType: 'network',
+              targetId: args.network_id,
+              details: { purged: swept.result.purged, skipped: swept.result.skipped },
+            },
+          };
         });
         return {
           purged,
@@ -99,5 +90,4 @@ export function registerTrashPurgeTool(mcp: McpServer, rt: McpRuntime): void {
         };
       }),
   );
-
 }
