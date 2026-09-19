@@ -17,7 +17,7 @@
  * and saved-filter apply).
  */
 
-import { STRUCTURE_AUTHOR_OPS, type ChronicleSavedFilter, type StructureAuthorOp, type ThoughtRef } from '@etn/shared';
+import { type ChronicleSavedFilter, type ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
@@ -31,7 +31,7 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
 import { pickEntitiesModal } from '../../lib/entity-picker.js';
-import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
+import { buildAuthorConditionRow } from '../../lib/filter-builder.js';
 import { store } from '../../state.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
@@ -44,61 +44,8 @@ const LINK_SCOPE_LABELS: Record<ChronicleFilterState['linkScope'], string> = {
   both: 'источники и назначения связей',
 };
 
-/** Russian labels for the chronicle author-op dropdown (задача 59119797). */
-const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
-};
-
-/** Строит одну строку условия авторства хроники: «подпись / оператор / значение». */
-function buildChronicleAuthorRow(opts: {
-  label: string;
-  op: StructureAuthorOp;
-  singleId: string;
-  listIds: string[];
-  onOpChange: (op: StructureAuthorOp) => void;
-  onSingleChange: (id: string) => void;
-  onListChange: (ids: string[]) => void;
-}): HTMLElement {
-  const row = div('chron-author-row');
-  row.append(span(opts.label, 'chron-label'));
-  const opSelect = el('select', 'select-input chron-author-op') as HTMLSelectElement;
-  for (const op of STRUCTURE_AUTHOR_OPS) {
-    const option = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
-    option.value = op;
-    opSelect.append(option);
-  }
-  opSelect.value = opts.op;
-  opSelect.addEventListener('change', () => {
-    opts.onOpChange(opSelect.value as StructureAuthorOp);
-  });
-  row.append(opSelect);
-
-  if (opts.op === 'empty' || opts.op === 'not_empty') {
-    row.append(el('span', 'muted', 'значение не требуется'));
-    return row;
-  }
-  if (opts.op === 'in' || opts.op === 'not_in') {
-    const multi = buildUserMultiSelectWidget({
-      label: '',
-      currentIds: opts.listIds,
-      onChange: opts.onListChange,
-    });
-    row.append(multi);
-    return row;
-  }
-  const single = buildUserSelectWidget({
-    label: '',
-    currentId: opts.singleId,
-    onChange: opts.onSingleChange,
-  });
-  row.append(single);
-  return row;
-}
+// Словарь операторов авторства и строка условия «автор/редактор» — единые
+// экземпляры конструктора (lib/filter-builder.ts); здесь не объявляются.
 
 let filter: ChronicleFilterState = { ...DEFAULT_FILTER };
 /** Ref of the selected saved filter (null — not saved yet / custom). */
@@ -456,7 +403,7 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   // `not_in` используется мульти-чип, для `eq`/`ne` — одиночный `<select>`.
   const row35 = div('chron-filter-row chron-filter-author');
   row35.append(
-    buildChronicleAuthorRow({
+    buildAuthorConditionRow({
       label: 'Автор:',
       op: filter.authorOp,
       singleId: filter.authorId,
@@ -476,7 +423,7 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
         filter = { ...filter, authorIds: ids };
       },
     }),
-    buildChronicleAuthorRow({
+    buildAuthorConditionRow({
       label: 'Редактор:',
       op: filter.editorOp,
       singleId: filter.editorId,

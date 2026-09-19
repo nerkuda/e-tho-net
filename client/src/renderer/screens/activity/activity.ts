@@ -26,6 +26,7 @@ import type { ActivityEntityType, ActivityRow, StructureAuthorOp } from '@etn/sh
 import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { confirmDialog, errorDialog, showDialog } from '../../lib/dialog.js';
+import { AUTHOR_OP_LABELS } from '../../lib/filter-builder.js';
 import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
@@ -482,15 +483,8 @@ function buildActivityUserBlock(): HTMLElement {
   return block;
 }
 
-/** Russian labels для оператора (тот же словарь, что и в Структурах/Хронике). */
-const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
-};
+// Русские подписи оператора «Пользователь» — единый словарь конструктора
+// (lib/filter-builder.ts, AUTHOR_OP_LABELS); здесь не объявляется.
 
 /** A single checkbox-pill («тип сущности» или «действие»). */
 function buildPill(value: string, label: string, group: 'entity' | 'action'): HTMLElement {

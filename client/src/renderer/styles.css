@@ -7019,18 +7019,6 @@ table.chron-table thead th {
   font-size: 12px;
 }
 
-/* Строка условия авторства в Хронике (задача 59119797). */
-.chron-author-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.chron-author-op {
-  width: auto;
-}
-
 .activity-date {
   width: 130px;
 }

@@ -22,6 +22,12 @@
  *
  * Сохранение: `etn.thoughtTypeViews.create`/`.update` через IPC. Пустой отбор
  * (ни одного условия) сохранить нельзя — ошибка показывается под формой.
+ *
+ * Условия отбора строит единый конструктор `lib/filter-builder.ts`
+ * (задача 48b59d00, веха 5 версии 0.8.2): модель состояния, словарь
+ * операторов, наборы сортировок/направлений, конвертер в wire и строка
+ * условия «автор/редактор» импортируются оттуда; диалог держит только
+ * редакторы значения с токенами (value-combo).
  */
 
 import {
@@ -45,6 +51,15 @@ import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../.
 import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
+import {
+  FILTER_ORDERS,
+  FILTER_SORTS,
+  OPS_BY_TYPE,
+  authorFilterActive,
+  buildAuthorConditionRow,
+  datesActive as builderDatesActive,
+  type AuthorRowEditors,
+} from '../../lib/filter-builder.js';
 import { notice } from '../../lib/notice.js';
 import { pickEntitiesModal } from '../../lib/entity-picker.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
@@ -448,23 +463,6 @@ function collapsibleBlock(
   return { box, body, head, star, refresh };
 }
 
-/** Условие «Автор» или «Редактор» активно (для маркера группы). */
-function authorFieldActive(op: StructureAuthorOp, single: string, list: string[]): boolean {
-  if (op === 'empty' || op === 'not_empty') return true;
-  if (op === 'in' || op === 'not_in') return list.length > 0;
-  return single !== '';
-}
-
-/** Условие «Даты» активно (задана хотя бы одна граница). */
-function datesActive(state: DialogCriteriaState): boolean {
-  return (
-    state.createdAfter !== '' ||
-    state.createdBefore !== '' ||
-    state.updatedAfter !== '' ||
-    state.updatedBefore !== ''
-  );
-}
-
 /** Условие «Дополнительно» активно. */
 function extrasActive(state: DialogCriteriaState): boolean {
   return (
@@ -685,8 +683,8 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
     head: authorship.head,
     star: authorship.star,
     isNonEmpty: () =>
-      authorFieldActive(state.authorOp, state.authorId, state.authorIds) ||
-      authorFieldActive(state.editorOp, state.editorId, state.editorIds),
+      authorFilterActive(state.authorOp, state.authorId, state.authorIds) ||
+      authorFilterActive(state.editorOp, state.editorId, state.editorIds),
   });
   const authorRows = div('st-f-author-rows');
   const renderAuthor = (): void => {
@@ -743,7 +741,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
 
   // --- Даты (сворачиваемая группа) ------------------------------------------
   const dates = collapsibleBlock('Даты', () => datesCollapsed, (v) => (datesCollapsed = v));
-  markers.push({ head: dates.head, star: dates.star, isNonEmpty: () => datesActive(state) });
+  markers.push({ head: dates.head, star: dates.star, isNonEmpty: () => builderDatesActive(state) });
   dates.body.append(
     buildDateRangeRow('Создано', state.createdAfter, state.createdBefore, (from, to) => {
       state.createdAfter = from;
@@ -758,14 +756,12 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   );
 
   // --- Сортировка -----------------------------------------------------------
+  // Наборы сортировок и направлений — единые экземпляры конструктора
+  // (`lib/filter-builder.ts`), тот же набор, что принимает исполнитель.
   const sort = block('Сортировка');
   const sortRow = div('st-f-sort');
   const sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'created', label: 'по дате создания' },
-    { v: 'updated', label: 'по дате изменения' },
-    { v: 'alpha', label: 'по алфавиту' },
-  ]) {
+  for (const opt of FILTER_SORTS) {
     const o = el('option', '', opt.label) as HTMLOptionElement;
     o.value = opt.v;
     sortSelect.append(o);
@@ -775,10 +771,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
     state.sort = sortSelect.value as StructureSort;
   });
   const orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'asc', label: 'по возрастанию' },
-    { v: 'desc', label: 'по убыванию' },
-  ]) {
+  for (const opt of FILTER_ORDERS) {
     const o = el('option', '', opt.label) as HTMLOptionElement;
     o.value = opt.v;
     orderSelect.append(o);
@@ -1099,54 +1092,41 @@ interface AuthorRowOpts {
   onListChange: (ids: string[]) => void;
 }
 
-const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
-};
-
+/**
+ * Строка условия «автор/редактор» — единый скелет конструктора
+ * (`buildAuthorConditionRow`); диалог подставляет свои редакторы значения
+ * с токенами и живым поиском (задача 27472616).
+ */
 function buildAuthorRow(opts: AuthorRowOpts): HTMLElement {
-  const row = div('author-cond-row');
-  row.append(el('span', 'author-cond-label', opts.label));
+  const editors: AuthorRowEditors = {
+    buildSingle: ({ currentId, onChange }) => buildAuthorSingleEditor(opts.field, currentId, onChange),
+    buildList: ({ currentIds, onChange }) =>
+      buildAuthorListEditor(opts.field, currentIds, onChange),
+  };
+  return buildAuthorConditionRow({ ...opts, editors });
+}
 
-  const opSelect = el('select', 'select-input author-cond-op') as HTMLSelectElement;
-  for (const op of ['eq', 'ne', 'in', 'not_in', 'empty', 'not_empty'] as StructureAuthorOp[]) {
-    const o = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
-    o.value = op;
-    opSelect.append(o);
-  }
-  opSelect.value = opts.op;
-  opSelect.addEventListener('change', () => opts.onOpChange(opSelect.value as StructureAuthorOp));
-  row.append(opSelect);
-
-  if (opts.op === 'empty' || opts.op === 'not_empty') {
-    row.append(el('span', 'author-cond-hint', 'значение не требуется'));
-    return row;
-  }
-
-  const isList = opts.op === 'in' || opts.op === 'not_in';
-  if (isList) {
-    row.append(buildAuthorListEditor(opts));
-    return row;
-  }
-
-  // Одиночное значение: живой поиск (id, токен или пользователь по имени) +
-  // выбор пользователя из каталога.
+/**
+ * Редактор одиночного значения: живой поиск (id, токен или пользователь по
+ * имени) + выбор пользователя из каталога.
+ */
+function buildAuthorSingleEditor(
+  field: 'author' | 'editor',
+  currentId: string,
+  onChange: (id: string) => void,
+): HTMLElement {
   const single = div('author-single-wrap');
   const input = el('input', 'st-f-input') as HTMLInputElement;
   input.type = 'text';
-  input.value = opts.singleId === '' || opts.singleId.startsWith('$') ? opts.singleId : (resolveUserName(opts.singleId) ?? opts.singleId);
+  input.value = currentId === '' || currentId.startsWith('$') ? currentId : (resolveUserName(currentId) ?? currentId);
   input.placeholder = 'Пользователь, id или токен…';
-  input.addEventListener('input', () => opts.onSingleChange(input.value));
+  input.addEventListener('input', () => onChange(input.value));
   wireTokenCombo({
     input,
-    getOptions: (query) => authorComboOptions(opts.field, query),
+    getOptions: (query) => authorComboOptions(field, query),
     onPick: (value) => {
       input.value = value.startsWith('$') ? value : (resolveUserName(value) ?? value);
-      opts.onSingleChange(value);
+      onChange(value);
       input.focus();
     },
   });
@@ -1154,15 +1134,14 @@ function buildAuthorRow(opts: AuthorRowOpts): HTMLElement {
     input,
     buildUserSelectWidget({
       label: '',
-      currentId: opts.singleId,
+      currentId,
       onChange: (id) => {
         input.value = resolveUserName(id) ?? id;
-        opts.onSingleChange(id);
+        onChange(id);
       },
     }),
   );
-  row.append(single);
-  return row;
+  return single;
 }
 
 /** Live-search кандидаты для полей «Автор»/«Редактор»: токены (`$…`) +
@@ -1182,15 +1161,19 @@ function authorComboOptions(field: 'author' | 'editor', query: string): ComboOpt
  * значений (имена пользователей или тексты токенов) + живой поиск,
  * смешивающий пользователей сети и токены в одном поле ввода.
  */
-function buildAuthorListEditor(opts: AuthorRowOpts): HTMLElement {
-  const field = buildChipListField({
-    getValues: () => opts.listIds,
-    onChange: (values) => opts.onListChange(values),
-    getOptions: (query) => authorComboOptions(opts.field, query),
+function buildAuthorListEditor(
+  field: 'author' | 'editor',
+  currentIds: string[],
+  onChange: (ids: string[]) => void,
+): HTMLElement {
+  const fieldEl = buildChipListField({
+    getValues: () => currentIds,
+    onChange,
+    getOptions: (query) => authorComboOptions(field, query),
     renderLabel: (value) => (value.startsWith('$') ? value : (resolveUserName(value) ?? value)),
     placeholder: 'Пользователь или токен…',
   });
-  return field.root;
+  return fieldEl.root;
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,67 +1214,8 @@ function buildDateRangeRow(
   return row;
 }
 
-// ---------------------------------------------------------------------------
-// Operator set per property value type (mirrors filter-panel.ts OPS_BY_TYPE)
-// ---------------------------------------------------------------------------
-
-const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
-  text: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  url: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  date: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  number: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  bool: [{ op: 'eq', label: 'равно' }],
-  // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
-  // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже.
-  // Паритет с `OPS_BY_TYPE` в `filter-panel.ts` обязателен — иначе UI
-  // предложит операцию, которую сервер отвергнет (ошибка 31a05292), а
-  // `buildConditionRow` упадёт на пустом списке при открытии существующего
-  // отбора с условием на `link`.
-  link: [
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
-  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
-  // Должно совпадать с `OPS_BY_TYPE` в `filter-panel.ts` — иначе при открытии
-  // диалога по существующему отбору с условием на legacy-`thought_ref`
-  // падает «Cannot read properties of undefined (reading 'op')» (ошибка
-  // f7080aea): `OPS_BY_TYPE['thought_ref']` пуст, а `buildConditionRow` берёт
-  // `ops[0]!.op` для восстановления валидной операции.
-  thought_ref: [
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-};
+// Словарь операторов по виду значения — единый экземпляр конструктора
+// (lib/filter-builder.ts); здесь не объявляется повторно.
 
 // ---------------------------------------------------------------------------
 // Pickers (parent / thought types / link types) — задача 27472616: каждый

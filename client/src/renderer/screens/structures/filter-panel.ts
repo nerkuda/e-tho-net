@@ -10,10 +10,15 @@
  * filter DOM and the string→wire value conversion; the host module
  * (`structures.ts`) owns the query lifecycle and persists the state (L4
  * `structures_state`).
+ *
+ * Условия отбора строит единый конструктор `lib/filter-builder.ts`
+ * (задача 48b59d00, веха 5 версии 0.8.2): модель состояния, словарь
+ * операторов, наборы сортировок/направлений, конвертер в wire и строка
+ * условия «автор/редактор» импортируются оттуда — панель держит только
+ * свои критерии (обход по связям) и жизненный цикл отбора.
  */
 
 import {
-  STRUCTURE_AUTHOR_OPS,
   type LinkTypeFilterInput,
   type NetworkProperty,
   type PropertyConfig,
@@ -29,6 +34,23 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 
+import {
+  FILTER_ORDERS,
+  FILTER_SORTS,
+  OPS_BY_TYPE,
+  authorFilterActive,
+  buildAuthorConditionRow,
+  buildConditionsWire,
+  buildKeywordScope as builderKeywordScope,
+  buildWireFilter,
+  datesActive,
+  defaultFilterCriteriaState,
+  parseFilterDefinition,
+  type FilterCriteriaState,
+  type PropertyConditionState,
+  type TriState,
+} from '../../lib/filter-builder.js';
+
 // Чипы мыслей в панели отбора строит общая фабрика облачка; `applyCloudStyle`
 // стилизует подписи чипов типов связей (у типов связей нет своей фабрики).
 import { applyCloudStyle, createThoughtCloud } from '../../lib/thought-cloud.js';
@@ -41,40 +63,17 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { pickEntitiesModal } from '../../lib/entity-picker.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
-import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
-
-/** One property condition row (values kept as strings; typed on the wire). */
-export interface PropertyConditionState {
-  propertyId: string;
-  op: StructurePropertyOp;
-  values: string[];
-}
 
 /** Filter-panel width limits, px (the splitter drag clamps to this range). */
 export const FILTER_W_MIN = 230;
 export const FILTER_W_MAX = 420;
 
-/** Tri-state UI value of a «Дополнительно» field: `null` — «не важно». */
-type TriState = boolean | null;
-
-/** Full filter-panel state (persisted as the L4 `structures_state` JSON). */
-export interface FilterState {
-  keywords: string;
-  /**
-   * Where `keywords` searches (§15.3, bug fix 0.5.5): «наименование» /
-   * «синонимы» / «комментарий» checkboxes under the keywords field. The
-   * panel enforces at least one of «наименование»/«синонимы» checked at all
-   * times — unchecking the last one auto-reverts to the default pair.
-   */
-  keywordInTitle: boolean;
-  keywordInSynonyms: boolean;
-  keywordInComment: boolean;
-  /** Restrict the candidate set to the subtrees of these thoughts (§15.3). */
-  parentIds: string[];
-  typeIds: string[];
-  linkTypeIds: string[];
+/** Full filter-panel state (persisted as the L4 `structures_state` JSON).
+ *  Общая часть критериев — модель `FilterCriteriaState` единого конструктора
+ *  (`lib/filter-builder.ts`); здесь только панельные дополнения. */
+export interface FilterState extends FilterCriteriaState {
   /**
    * Задача c965ad03 «Фильтр обхода по типам связей»: типы связей, по которым
    * раскрывается `parentIds` (поддерево). Отличие от `linkTypeIds`: тот
@@ -84,45 +83,6 @@ export interface FilterState {
   linkFilterTypeIds: string[];
   /** Включить нетипизированные (структурные) связи в обход. */
   linkFilterStructural: boolean;
-  properties: PropertyConditionState[];
-  hasProperties: TriState;
-  hasComment: TriState;
-  hasAttachments: TriState;
-  hasChronology: TriState;
-  /** «Актуальность»: true/false; null — «не важно» (§15.3 «Дополнительно»). */
-  active: TriState;
-  /** S13: показывать помеченные на удаление (по умолчанию выключено). */
-  trashed: boolean;
-  /**
-   * Задача 59119797 «Фильтры Автор/Редактор»: оператор условия по автору.
-   * По умолчанию `eq`. Для `in`/`not_in` используется `authorIds`.
-   */
-  authorOp: StructureAuthorOp;
-  /**
-   * Id пользователя-автора для `eq`/`ne` (пустая строка — фильтр не
-   * применяется). Для `in`/`not_in` — массив id (см. `authorIds`).
-   */
-  authorId: string;
-  /** Список id для операторов `in`/`not_in` авторства. */
-  authorIds: string[];
-  /** Оператор условия по редактору (см. `authorOp`). */
-  editorOp: StructureAuthorOp;
-  /** Id пользователя-редактора для `eq`/`ne`. */
-  editorId: string;
-  /** Список id редакторов для `in`/`not_in`. */
-  editorIds: string[];
-  /**
-   * Задача 7032e55a «Фильтры по датам создания и изменения»: ISO-8601
-   * (`YYYY-MM-DD` или `YYYY-MM-DDTHH:MM:SS[…][Z|±HH:MM]`); пустая строка —
-   * граница не выставляется. Серверная нормализация та же, что у
-   * `chronicle/query` §20.
-   */
-  createdAfter: string;
-  createdBefore: string;
-  updatedAfter: string;
-  updatedBefore: string;
-  sort: StructureSort;
-  order: SortOrder;
   savedFilterId: string | null;
   /** Panel width set by the splitter drag (px), null until first drag. */
   panelWidth: number | null;
@@ -142,96 +102,17 @@ export interface FilterPanelCallbacks {
 }
 
 /**
- * Operators per property value type (03-server-api.md §6.10).
- *
- * `is_empty` / `not_empty` test for the presence of a value at all (the
- * `value` payload is ignored). Available for every type EXCEPT `bool`: for
- * booleans, `eq true` / `eq false` already cover the same intent, so an
- * extra toggle would be redundant noise on a small list.
+ * Operators per property value type (03-server-api.md §6.10) — единый
+ * экземпляр живёт в `lib/filter-builder.ts` (задача 48b59d00, веха 5).
+ * Здесь OPS_BY_TYPE не объявляется и не переписывается.
  */
-export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
-  text: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  url: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  date: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  number: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  bool: [{ op: 'eq', label: 'равно' }],
-  // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
-  // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже —
-  // паритет между `OPS_BY_TYPE` здесь и `OPS_BY_VALUE_TYPE` в
-  // `server/src/domain/structure-service.ts` обязателен, иначе UI предложит
-  // операцию, которую сервер отвергнет (ошибка 31a05292).
-  link: [
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
-  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
-  thought_ref: [
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-};
 
 /** Default panel state: empty filter → HOME only (§15.3). */
 function defaultState(): FilterState {
   return {
-    keywords: '',
-    keywordInTitle: true,
-    keywordInSynonyms: true,
-    keywordInComment: false,
-    parentIds: [],
-    typeIds: [],
-    linkTypeIds: [],
+    ...defaultFilterCriteriaState(),
     linkFilterTypeIds: [],
     linkFilterStructural: false,
-    properties: [],
-    hasProperties: null,
-    hasComment: null,
-    hasAttachments: null,
-    hasChronology: null,
-    active: null,
-    trashed: false,
-    authorOp: 'eq',
-    authorId: '',
-    authorIds: [],
-    editorOp: 'eq',
-    editorId: '',
-    editorIds: [],
-    createdAfter: '',
-    createdBefore: '',
-    updatedAfter: '',
-    updatedBefore: '',
-    sort: 'created',
-    order: 'asc',
     savedFilterId: null,
     panelWidth: null,
   };
@@ -300,7 +181,7 @@ export function setFilterState(next: FilterState): void {
     state.active === null &&
     !authorFilterActive(state.authorOp, state.authorId, state.authorIds) &&
     !authorFilterActive(state.editorOp, state.editorId, state.editorIds);
-  datesCollapsed = !dateFilterActive(state);
+  datesCollapsed = !datesActive(state);
   renderPanel();
 }
 
@@ -320,55 +201,20 @@ export function applyPanelWidth(): void {
   else host.style.setProperty('--st-filter-w', `${Math.round(width)}px`);
 }
 
-/**
- * Wire `keyword_scope` from the panel checkboxes (bug fix 0.5.5). Returns
- * `undefined` when it matches the server default (title+synonyms) — keeps
- * the wire filter and saved-filter definitions minimal, same convention as
- * the other optional §15.3 fields.
- */
+/** Wire `keyword_scope` from the panel checkboxes (bug fix 0.5.5) — единый
+ *  конвертер конструктора (`lib/filter-builder.ts`). */
 export function buildKeywordScope(): StructureKeywordScope[] | undefined {
-  const scope: StructureKeywordScope[] = [];
-  if (state.keywordInTitle) scope.push('title');
-  if (state.keywordInSynonyms) scope.push('synonyms');
-  if (state.keywordInComment) scope.push('comment');
-  if (scope.length === 2 && scope.includes('title') && scope.includes('synonyms')) return undefined;
-  return scope;
+  return builderKeywordScope(state);
 }
 
-/** Wire property conditions built from the panel rows (typed conversion). */
+/** Wire property conditions built from the panel rows (typed conversion) —
+ *  единый конвертер конструктора (`lib/filter-builder.ts`). */
 export function buildConditions(): StructurePropertyCondition[] {
-  const out: StructurePropertyCondition[] = [];
-  for (const cond of state.properties) {
-    const def = propertyDefs.get(cond.propertyId);
-    if (def === undefined) continue; // property deleted — server skips it too
-    // `is_empty` / `not_empty` carry no value at all — emit the condition as
-    // soon as the row names a property (§6.10 presence test, bug fix 0.6.3).
-    if (cond.op === 'is_empty' || cond.op === 'not_empty') {
-      out.push({ property_id: cond.propertyId, op: cond.op, value: '' });
-      continue;
-    }
-    const list = cond.op === 'in' || cond.op === 'not_in';
-    const rawValues = list ? cond.values : cond.values.slice(0, 1);
-    const values: Array<string | number | boolean> = [];
-    for (const raw of rawValues) {
-      if (raw === '') continue;
-      if (def.value_type === 'number') {
-        const num = Number(raw);
-        if (!Number.isFinite(num)) continue;
-        values.push(num);
-      } else if (def.value_type === 'bool') {
-        values.push(raw === 'true');
-      } else {
-        values.push(raw);
-      }
-    }
-    if (values.length === 0) continue; // row not filled in yet
-    out.push({ property_id: cond.propertyId, op: cond.op, value: list ? values : values[0]! });
-  }
-  return out;
+  return buildConditionsWire(state, propertyDefs);
 }
 
-/** The «Родительские мысли»/«Дополнительно» fields of the wire filter (§15.3). */
+/** The «Родительские мысли»/«Дополнительно» fields of the wire filter (§15.3)
+ *  — единый конвертер конструктора (`lib/filter-builder.ts`). */
 export function buildExtraFilter(): Pick<
   StructureFilter,
   | 'parent_ids'
@@ -387,35 +233,26 @@ export function buildExtraFilter(): Pick<
   | 'updated_after'
   | 'updated_before'
 > {
+  const wire = buildWireFilter(state, propertyDefs, {
+    activeMode: 'structures',
+    showInactive: store.state.showInactive,
+  });
   const out: ReturnType<typeof buildExtraFilter> = {};
-  if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
-  if (state.hasProperties !== null) out.has_properties = state.hasProperties;
-  if (state.hasComment !== null) out.has_comment = state.hasComment;
-  if (state.hasAttachments !== null) out.has_attachments = state.hasAttachments;
-  if (state.hasChronology !== null) out.has_chronology = state.hasChronology;
-  // «Актуальность» only participates while «Показывать неактуальное» is on —
-  // otherwise inactive thoughts are not in the candidate set at all (§15.3).
-  if (state.active !== null && store.state.showInactive) out.active = state.active;
-  // S13: a marked-for-deletion filter is an independent checkbox (default off).
-  if (state.trashed) out.trashed = true;
-  // Задача 59119797 «Фильтры Автор/Редактор»: оператор + значение (id или
-  // массив id). empty/not_empty — без значения.
-  const authorWire = buildAuthorWireValue(state.authorOp, state.authorId, state.authorIds);
-  if (authorWire !== undefined) {
-    out.created_by = authorWire;
-    if (state.authorOp !== 'eq') out.created_by_op = state.authorOp;
-  }
-  const editorWire = buildAuthorWireValue(state.editorOp, state.editorId, state.editorIds);
-  if (editorWire !== undefined) {
-    out.updated_by = editorWire;
-    if (state.editorOp !== 'eq') out.updated_by_op = state.editorOp;
-  }
-  // Задача 7032e55a «Фильтры по датам»: пустая строка → граница не выставляется
-  // (сервер тоже её игнорирует).
-  if (state.createdAfter.trim() !== '') out.created_after = state.createdAfter.trim();
-  if (state.createdBefore.trim() !== '') out.created_before = state.createdBefore.trim();
-  if (state.updatedAfter.trim() !== '') out.updated_after = state.updatedAfter.trim();
-  if (state.updatedBefore.trim() !== '') out.updated_before = state.updatedBefore.trim();
+  if (wire.parent_ids !== undefined) out.parent_ids = wire.parent_ids;
+  if (wire.has_properties !== undefined) out.has_properties = wire.has_properties;
+  if (wire.has_comment !== undefined) out.has_comment = wire.has_comment;
+  if (wire.has_attachments !== undefined) out.has_attachments = wire.has_attachments;
+  if (wire.has_chronology !== undefined) out.has_chronology = wire.has_chronology;
+  if (wire.active !== undefined) out.active = wire.active;
+  if (wire.trashed !== undefined) out.trashed = wire.trashed;
+  if (wire.created_by !== undefined) out.created_by = wire.created_by;
+  if (wire.created_by_op !== undefined) out.created_by_op = wire.created_by_op;
+  if (wire.updated_by !== undefined) out.updated_by = wire.updated_by;
+  if (wire.updated_by_op !== undefined) out.updated_by_op = wire.updated_by_op;
+  if (wire.created_after !== undefined) out.created_after = wire.created_after;
+  if (wire.created_before !== undefined) out.created_before = wire.created_before;
+  if (wire.updated_after !== undefined) out.updated_after = wire.updated_after;
+  if (wire.updated_before !== undefined) out.updated_before = wire.updated_before;
   return out;
 }
 
@@ -432,105 +269,12 @@ export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
   return out;
 }
 
-/** Builds the wire value+op for one author filter (задача 59119797). */
-function buildAuthorWireValue(
-  op: StructureAuthorOp,
-  single: string,
-  list: string[],
-): string | string[] | undefined {
-  if (op === 'empty' || op === 'not_empty') return undefined;
-  if (op === 'in' || op === 'not_in') {
-    if (list.length === 0) return undefined;
-    return list;
-  }
-  if (single === '') return undefined;
-  return single;
-}
-
-/** True when the author condition carries a value worth applying. */
-function authorFilterActive(op: StructureAuthorOp, single: string, list: string[]): boolean {
-  if (op === 'empty' || op === 'not_empty') return true;
-  if (op === 'in' || op === 'not_in') return list.length > 0;
-  return single !== '';
-}
-
-/** True when at least one date bound is filled (задача 7032e55a). */
-function dateFilterActive(s: FilterState): boolean {
-  return (
-    s.createdAfter.trim() !== '' ||
-    s.createdBefore.trim() !== '' ||
-    s.updatedAfter.trim() !== '' ||
-    s.updatedBefore.trim() !== ''
-  );
-}
-
 /**
- * Russian labels for the author-op dropdown (задача 59119797).
- * Не используем «содержит»/«не содержит» — у id нет смысла частичного
- * совпадения, поэтому «равен»/«не равен» чище.
+ * Строки условия авторства, словарь операторов, помощники активности и
+ * конвертеры значений автора — единые экземпляры конструктора
+ * `lib/filter-builder.ts` (задача 48b59d00, веха 5). Здесь они не
+ * объявляются повторно.
  */
-const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
-};
-
-/** Russian labels for the saved-filter tag rendering (задача 59119797). */
-function authorOpLabel(op: StructureAuthorOp): string {
-  return AUTHOR_OP_LABELS[op] ?? op;
-}
-
-/**
- * Строит одну строку условия авторства: «подпись / оператор / значение».
- * Значение показывает либо одиночный `<select>`, либо мульти-чипы.
- */
-function buildAuthorConditionRow(opts: {
-  label: string;
-  op: StructureAuthorOp;
-  singleId: string;
-  listIds: string[];
-  onOpChange: (op: StructureAuthorOp) => void;
-  onSingleChange: (id: string) => void;
-  onListChange: (ids: string[]) => void;
-}): HTMLElement {
-  const row = div('author-cond-row');
-  const label = el('span', 'author-cond-label', opts.label);
-  const opSelect = el('select', 'select-input author-cond-op') as HTMLSelectElement;
-  for (const op of STRUCTURE_AUTHOR_OPS) {
-    const opt = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
-    opt.value = op;
-    opSelect.append(opt);
-  }
-  opSelect.value = opts.op;
-  opSelect.addEventListener('change', () => {
-    opts.onOpChange(opSelect.value as StructureAuthorOp);
-  });
-  row.append(label, opSelect);
-
-  if (opts.op === 'empty' || opts.op === 'not_empty') {
-    row.append(el('span', 'author-cond-hint', 'значение не требуется'));
-    return row;
-  }
-  if (opts.op === 'in' || opts.op === 'not_in') {
-    const multi = buildUserMultiSelectWidget({
-      label: '',
-      currentIds: opts.listIds,
-      onChange: opts.onListChange,
-    });
-    row.append(multi);
-    return row;
-  }
-  const single = buildUserSelectWidget({
-    label: '',
-    currentId: opts.singleId,
-    onChange: opts.onSingleChange,
-  });
-  row.append(single);
-  return row;
-}
 
 /** Reloads the saved-filter list (called on `saved-filter.*` realtime events). */
 export function invalidateSavedFilters(): void {
@@ -816,7 +560,7 @@ function refreshGroupTitles(): void {
       (state.active !== null && store.state.showInactive),
   );
   // Задача 7032e55a: маркер «Даты» заполнен, если задана хотя бы одна граница.
-  datesTitle?.classList.toggle('st-f-title-active', dateFilterActive(state));
+  datesTitle?.classList.toggle('st-f-title-active', datesActive(state));
 }
 
 /** Persists the state (L4) and refreshes the uniform group-title marking. */
@@ -1136,7 +880,7 @@ function renderPanel(): void {
     (v) => {
       datesCollapsed = v;
     },
-    () => dateFilterActive(state),
+    () => datesActive(state),
   );
   datesTitle = dates.head;
   dates.body.append(
@@ -1252,14 +996,12 @@ function renderPanel(): void {
   scroll.append(extra.box);
 
   // --- sort -----------------------------------------------------------------
+  // Наборы сортировок и направлений — единые экземпляры конструктора
+  // (`lib/filter-builder.ts`), тот же набор, что принимает исполнитель.
   const sortBlock = block('Сортировка');
   const sortRow = div('st-f-sort');
   sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'alpha', label: 'по названию' },
-    { v: 'created', label: 'по созданию' },
-    { v: 'viewed', label: 'по просмотру' },
-  ]) {
+  for (const opt of FILTER_SORTS) {
     const o = el('option', '', opt.label) as HTMLOptionElement;
     o.value = opt.v;
     sortSelect.append(o);
@@ -1270,10 +1012,7 @@ function renderPanel(): void {
     touch();
   });
   orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'asc', label: 'возрастание' },
-    { v: 'desc', label: 'убывание' },
-  ]) {
+  for (const opt of FILTER_ORDERS) {
     const o = el('option', '', opt.label) as HTMLOptionElement;
     o.value = opt.v;
     orderSelect.append(o);
@@ -1781,46 +1520,16 @@ function renderSavedList(): void {
   }
 }
 
-/** Applies a saved filter to the panel and reruns the query. */
+/** Applies a saved filter to the panel and reruns the query. Общая часть
+ *  восстанавливается единым парсером конструктора (`parseFilterDefinition`),
+ *  панельные дополнения (обход по связям, id отбора, ширина) — здесь. */
 function applySavedFilter(filter: SavedFilter): void {
   const def = filter.definition;
-  const scope = def.keyword_scope ?? [];
+  const criteria = parseFilterDefinition(def);
   setFilterState({
-    keywords: def.keywords ?? '',
-    keywordInTitle: scope.length === 0 ? true : scope.includes('title'),
-    keywordInSynonyms: scope.length === 0 ? true : scope.includes('synonyms'),
-    keywordInComment: scope.includes('comment'),
-    parentIds: def.parent_ids ?? [],
-    typeIds: def.type_ids ?? [],
-    linkTypeIds: def.link_type_ids ?? [],
+    ...criteria,
     linkFilterTypeIds: def.link_filter?.type_ids ?? [],
     linkFilterStructural: def.link_filter?.include_structural ?? false,
-    properties: (def.properties ?? []).map((c) => ({
-      propertyId: c.property_id,
-      op: c.op,
-      values: Array.isArray(c.value) ? c.value.map((v) => String(v)) : [String(c.value)],
-    })),
-    hasProperties: def.has_properties ?? null,
-    hasComment: def.has_comment ?? null,
-    hasAttachments: def.has_attachments ?? null,
-    hasChronology: def.has_chronology ?? null,
-    active: def.active ?? null,
-    trashed: def.trashed ?? false,
-    // Задача 59119797: фильтры авторства читаются прямо из сохранённого
-    // определения. Отсутствующие поля — «не применять».
-    authorId: typeof def.created_by === 'string' ? def.created_by : '',
-    authorIds: Array.isArray(def.created_by) ? def.created_by : [],
-    authorOp: (def.created_by_op ?? 'eq') as StructureAuthorOp,
-    editorId: typeof def.updated_by === 'string' ? def.updated_by : '',
-    editorIds: Array.isArray(def.updated_by) ? def.updated_by : [],
-    editorOp: (def.updated_by_op ?? 'eq') as StructureAuthorOp,
-    // Задача 7032e55a: границы дат — теми же ключами, что отдаёт сервер.
-    createdAfter: typeof def.created_after === 'string' ? def.created_after : '',
-    createdBefore: typeof def.created_before === 'string' ? def.created_before : '',
-    updatedAfter: typeof def.updated_after === 'string' ? def.updated_after : '',
-    updatedBefore: typeof def.updated_before === 'string' ? def.updated_before : '',
-    sort: def.sort,
-    order: def.order,
     savedFilterId: filter.id,
     panelWidth: state.panelWidth,
   });
@@ -1837,20 +1546,15 @@ async function saveCurrentFilter(): Promise<void> {
     notice('Введите имя отбора');
     return;
   }
-  const keywordScope = buildKeywordScope();
   const traversalFilter = buildTraversalFilter();
+  // Общая часть определения — единый конвертер конструктора; панельный
+  // `link_filter` обхода ложится рядом.
   const definition = {
-    ...(state.keywords.trim() !== '' ? { keywords: state.keywords.trim() } : {}),
-    ...(state.keywords.trim() !== '' && keywordScope !== undefined ? { keyword_scope: keywordScope } : {}),
-    ...(state.parentIds.length > 0 ? { parent_ids: state.parentIds } : {}),
-    ...(state.typeIds.length > 0 ? { type_ids: state.typeIds } : {}),
-    ...(state.linkTypeIds.length > 0 ? { link_type_ids: state.linkTypeIds } : {}),
+    ...buildWireFilter(state, propertyDefs, {
+      activeMode: 'structures',
+      showInactive: store.state.showInactive,
+    }),
     ...(traversalFilter !== undefined ? { link_filter: traversalFilter } : {}),
-    ...(buildConditions().length > 0 ? { properties: buildConditions() } : {}),
-    ...buildExtraFilter(),
-    ...(store.state.showInactive ? { show_inactive: true } : {}),
-    sort: state.sort,
-    order: state.order,
   };
   try {
     const created = await etn.savedFilters.create(networkId, { name, definition });
