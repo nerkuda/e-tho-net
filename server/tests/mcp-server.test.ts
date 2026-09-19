@@ -229,6 +229,63 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.thought resource: полный постоянный комментарий и метрика чтения — как у etn.thoughts.get (937480ca)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Мысль с длинным постоянным комментарием (> COMMENT_PREVIEW_CHARS).
+        const longBody = 'z'.repeat(3000);
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 't', thought: { title: 'С большим комментарием' }, comment: { body_md: longBody } },
+            ],
+          },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const thoughtId = toolJson<{ items: Array<{ id: string }> }>(created).items[0]!.id;
+
+        // Ресурс отдаёт meta.permanent в полной форме — без chars_*/truncated.
+        const read = await handle.client.readResource({
+          uri: `etn://networks/${ctx.networkId}/thoughts/${thoughtId}`,
+        });
+        const block = read.contents[0];
+        assert.ok(block !== undefined && 'text' in block);
+        const card = JSON.parse(block.text) as {
+          id: string;
+          meta: {
+            permanent: { id: string; body_md: string } | null;
+          };
+        };
+        assert.equal(card.id, thoughtId);
+        assert.ok(card.meta.permanent !== null, 'permanent должен быть полным');
+        assert.equal(card.meta.permanent.body_md, longBody);
+        assert.equal(
+          (card.meta.permanent as unknown as { truncated?: boolean }).truncated,
+          undefined,
+          'поле truncated отсутствует в полной форме',
+        );
+
+        // Метрика чтения: чтение ресурса увеличило счётчик мысли.
+        const metrics = await handle.client.callTool({
+          name: 'etn.metrics.reads',
+          arguments: { network_id: ctx.networkId, kind: 'top', limit: 200 },
+        });
+        const items = toolJson<{ items: Array<{ thought_id: string; reads_count: number }> }>(metrics).items;
+        const row = items.find((i) => i.thought_id === thoughtId);
+        assert.ok(row !== undefined, 'мысль должна попасть в метрику чтения');
+        assert.ok((row.reads_count ?? 0) >= 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('reads comments as Markdown through the comments resource (F3)', async () => {
     const ctx = await buildMcpContext();
     try {
