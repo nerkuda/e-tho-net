@@ -35,6 +35,7 @@ import type {
 import { EtnError, PREF_KEY, validateTypeRoles } from '@etn/shared';
 
 import type { NetworkService } from '../domain/network-service.js';
+import { updateNetwork } from '../domain/network-write-service.js';
 import { sendEtnError } from '../http/errors.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import { emitDomainEvent } from '../realtime/emit.js';
@@ -90,28 +91,6 @@ function networkDto(n: Network) {
     created_at: n.created_at,
     updated_at: n.updated_at,
   };
-}
-
-/**
- * Resolve a PATCH body field that is `undefined` (keep existing), `null` or
- * empty string (clear), or a non-empty string (set) into the value to persist
- * (task O5, markdown self-description fields). Exported so the MCP
- * `etn.networks.write` tool can apply the same semantics to its patch branch.
- */
-export function normalizeOptionalText(
-  incoming: string | null | undefined,
-  current: string | null,
-): string | null {
-  if (incoming === undefined) {
-    return current;
-  }
-  if (incoming === null) {
-    return null;
-  }
-  if (typeof incoming !== 'string') {
-    return current;
-  }
-  return incoming.length === 0 ? null : incoming;
 }
 
 /**
@@ -222,80 +201,27 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         if (network === null) {
           throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
         }
-        const body = (req.body ?? {}) as UpdateNetworkInput;
-        const displayName =
-          typeof body.display_name === 'string'
-            ? body.display_name.trim() || network.display_name
-            : network.display_name;
-        // Markdown self-description fields (task O5). Treat empty strings and
-        // explicit null as "clear", omit as "keep existing value".
-        const description = normalizeOptionalText(body.description, network.description);
-        const whenToUse = normalizeOptionalText(body.when_to_use, network.when_to_use);
-        const conventions = normalizeOptionalText(body.conventions, network.conventions);
-        const examples = normalizeOptionalText(body.examples, network.examples);
-        // type_roles (task ba024a45 / 0.7.2, ADR 46d17a91): a partial update —
-        // absent keys preserve their existing values, present keys (including
-        // explicit `null`) override them. Validation runs in two steps:
-        //   1. `validateTypeRoles` rejects unknown role keys at the boundary;
-        //   2. `validateTypeRoles` on the service checks that every non-null
-        //      id resolves to a real thought type in this network's data.db.
-        // The merge is done before the second step so a stale id is caught
-        // even when the caller only sets one role.
-        const mergedRoles =
-          body.type_roles === undefined
-            ? network.type_roles
-            : { ...network.type_roles, ...validateTypeRoles(body.type_roles) };
-        const validatedRoles = networkService.validateTypeRoles(
-          network.id,
-          mergedRoles,
+        // Единая доменная реализация патча (ADR 8c93f03a): мерж полей,
+        // валидация type_roles, запись, audit_log и список изменений.
+        const { network: updated, changes } = updateNetwork(
+          app.systemDb,
+          networkService,
+          network,
+          (req.body ?? {}) as UpdateNetworkInput,
+          { userId: req.auth!.user.id },
         );
-        app.systemDb.updateNetwork(network.id, {
-          displayName,
-          description,
-          when_to_use: whenToUse,
-          conventions,
-          examples,
-          type_roles: validatedRoles,
-        });
-        app.systemDb.insertAuditLog({
-          actorUserId: req.auth!.user.id,
-          networkId: network.id,
-          category: 'network',
-          action: 'network.update',
-          targetType: 'network',
-          targetId: network.id,
-          details: {
-            display_name: displayName,
-            description,
-            when_to_use: whenToUse,
-            conventions,
-            examples,
-            type_roles: validatedRoles,
-          },
-        });
-        // Real-time (E3, 04-realtime.md §4.6, task O5): broadcast only changed
-        // fields so clients can merge in place.
-        const changes: Record<string, unknown> = {};
-        if (displayName !== network.display_name) changes['display_name'] = displayName;
-        if (description !== network.description) changes['description'] = description;
-        if (whenToUse !== network.when_to_use) changes['when_to_use'] = whenToUse;
-        if (conventions !== network.conventions) changes['conventions'] = conventions;
-        if (examples !== network.examples) changes['examples'] = examples;
-        if (JSON.stringify(validatedRoles) !== JSON.stringify(network.type_roles)) {
-          changes['type_roles'] = validatedRoles;
-        }
+        // Real-time (E3, 04-realtime.md §4.6): broadcast only changed fields.
         if (Object.keys(changes).length > 0) {
           emitDomainEvent(
             { systemDb: app.systemDb, pubsub: app.pubsub },
-            network.id,
+            networkId,
             'network.updated',
             changes,
             { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
             { meta: { request_id: req.id } },
           );
         }
-        const updated = app.systemDb.getNetworkById(network.id);
-        sendSuccess(reply, networkDto(updated!));
+        sendSuccess(reply, networkDto(updated));
       },
     );
 
