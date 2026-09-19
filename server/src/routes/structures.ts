@@ -45,10 +45,13 @@ import {
   listSavedFilters,
   parseSavedFilterDefinition,
   parseStructureFilter,
-  queryThoughtIds,
-  queryThoughts,
   updateSavedFilter,
 } from '../domain/structure-service.js';
+import {
+  queryThoughtIds,
+  queryThoughts,
+  structureRequestToQuery,
+} from '../domain/query-service.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
 import { getEdgesAmong } from '../domain/link-service.js';
 
@@ -211,14 +214,26 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const query = parseQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Единый движок выборки (задача c5265deb): REST-фильтр переводится в
+        // канонический запрос и исполняется общей доменной функцией.
         // ids_only (L22): bare ids for the bulk filter commands — the same
         // candidate set and ordering, a higher limit ceiling, no meta flags.
         if (query.ids_only === true) {
-          const result = queryThoughtIds(ndb, req.auth!.user.id, query, req.id);
+          const result = queryThoughtIds(
+            ndb,
+            req.auth!.user.id,
+            structureRequestToQuery(query),
+            { maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT, emptyFilterMode: 'home_orphans' },
+          );
           sendSuccess(reply, { ids: result.ids, total: result.total });
           return;
         }
-        const result = queryThoughts(ndb, req.auth!.user.id, query, req.id);
+        const result = queryThoughts(
+          ndb,
+          req.auth!.user.id,
+          structureRequestToQuery(query),
+          { maxLimit: STRUCTURES_QUERY_MAX_LIMIT, emptyFilterMode: 'home_orphans', includeDirections: true },
+        );
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,
         });

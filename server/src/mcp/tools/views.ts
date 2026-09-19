@@ -9,7 +9,6 @@ import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { EtnError, MCP_TOOL_ANNOTATIONS, REALTIME_DEFAULTS } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
-import { queryThoughts } from '../../domain/query-service.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
@@ -97,26 +96,26 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         }
         // `runViewForThought` (домен) уже подставляет токены и фильтрует
         // саму мысль из результата. Здесь — тонкая обёртка: пользовательский
-        // `limit`/`offset` пробрасывается в базовый фильтр, токены берёт
-        // на себя `runViewForThought`.
+        // `limit`/`offset`/`order` пробрасывается в SQL-движок; сортировка
+        // исполняется движком по сохранённому в отборе `sort`/`order`
+        // (контракт как у REST — задача c5265deb, ошибка 4dd14aa3).
         const base = runViewForThought(
           ndb,
           matched,
           args.thought_id,
           rt.deps.auth.userId,
+          undefined,
+          {
+            ...(args.order !== undefined ? { order: args.order } : {}),
+            ...(args.limit !== undefined ? { limit: args.limit } : {}),
+            ...(args.offset !== undefined ? { offset: args.offset } : {}),
+          },
         );
-        // Простейшая пагинация на уровне MCP (сама runViewForThought
-        // возвращает первые 100). Параметры `sort`/`order`/`limit`/
-        // `offset` приходят из запроса; здесь делаем лёгкий slice +
-        // учитываем order. Полная интеграция с `queryThoughts` — отдельная
-        // задача (текущий контракт — превью результата).
+        // Страница уже отсортирована и спагинирована SQL-движком — никакой
+        // JS-пересортировки по названию (задача c5265deb).
+        const pageItems = base.items;
         const limit = args.limit ?? 100;
         const offset = args.offset ?? 0;
-        const ordered = base.items.slice().sort((a, b) => {
-          if (args.order === 'desc') return b.title.localeCompare(a.title);
-          return a.title.localeCompare(b.title);
-        });
-        const pageItems = ordered.slice(offset, offset + limit);
         // Reference table: типы мыслей, реально использованные в items.
         const thoughtTypes = thoughtTypeCatalog(
           ndb,
@@ -137,9 +136,11 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
           data: pageItems,
           thought_types: thoughtTypes,
           meta: {
-            total: ordered.length,
+            total: base.total,
             limit,
             offset,
+            sort: base.sort,
+            order: base.order,
             ...(base.unresolved.length > 0
               ? {
                   unresolved: base.unresolved.map((u) => ({

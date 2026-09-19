@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { EtnError, typeNameKey } from '@etn/shared';
+import { EtnError, STRUCTURES_QUERY_IDS_MAX_LIMIT, typeNameKey } from '@etn/shared';
+import type { StructureQueryRequest } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -25,10 +26,13 @@ import {
   listSavedFilters,
   parseSavedFilterDefinition,
   parseStructureFilter,
-  queryThoughtIds,
-  queryThoughts,
   updateSavedFilter,
 } from '../src/domain/structure-service.js';
+import {
+  queryThoughtIds as domainQueryThoughtIds,
+  queryThoughts as domainQueryThoughts,
+  structureRequestToQuery,
+} from '../src/domain/query-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -229,6 +233,26 @@ function query(filter: Partial<Parameters<typeof queryThoughts>[2]> = {}) {
     offset: 0,
     ...filter,
   };
+}
+
+/**
+ * REST-обёртки над единым движком (задача c5265deb): прежние `queryThoughts`/
+ * `queryThoughtIds` с сигнатурой `(ndb, userId, StructureQueryRequest)` —
+ * запрос переводится в канон адаптером и исполняется с опциями REST-контракта
+ * (пустой фильтр → HOME+сироты, `meta.directions`, потолок лимита).
+ */
+function queryThoughts(ndb: NetworkDb, userId: string, req: StructureQueryRequest) {
+  return domainQueryThoughts(ndb, userId, structureRequestToQuery(req), {
+    emptyFilterMode: 'home_orphans',
+    includeDirections: true,
+  });
+}
+
+function queryThoughtIds(ndb: NetworkDb, userId: string, req: StructureQueryRequest) {
+  return domainQueryThoughtIds(ndb, userId, structureRequestToQuery(req), {
+    emptyFilterMode: 'home_orphans',
+    maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
+  });
 }
 
 describe(
@@ -1020,7 +1044,10 @@ describe(
           const lt = seedLinkType(ndb, 'X');
           const prop = seedLinkProperty(ndb, 't', 'X', lt);
 
-          for (const bad of ['', 42, true]) {
+          // Пустая строка и число — ошибки; boolean теперь валиден: единый
+          // движок (задача c5265deb) принял MCP-семантику «eq с boolean —
+          // наличие связи типа» из спеки 05-mcp-server.md §4.1.
+          for (const bad of ['', 42]) {
             assert.throws(
               () =>
                 queryThoughts(ndb, USER, query({
@@ -1152,7 +1179,7 @@ describe(
         }
       });
 
-      it('terminates on a cyclic subtree via the depth cap', () => {
+      it('terminates on a cyclic subtree via the visited-set', () => {
         const ndb = createInMemoryNetworkDb();
         try {
           seedThought(ndb, { title: 'Home', is_root: 1 });
@@ -1161,7 +1188,12 @@ describe(
           seedLink(ndb, a, b);
           seedLink(ndb, b, a); // cycle
           const result = queryThoughts(ndb, USER, query({ parent_ids: [a] }));
-          assert.deepEqual(result.items.map((t) => t.id).sort(), [a, b].sort());
+          // Единый движок (задача c5265deb) ходит BFS с visited-set: цикл не
+          // втягивает корень обратно в результат — корни исключены по контракту
+          // §6.10 («the roots themselves are excluded»). Прежний CTE без
+          // visited-set возвращал и `a` (через b → a) — артефакт реализации,
+          // противоречивший собственной спеке.
+          assert.deepEqual(result.items.map((t) => t.id).sort(), [b]);
         } finally {
           ndb.close();
         }

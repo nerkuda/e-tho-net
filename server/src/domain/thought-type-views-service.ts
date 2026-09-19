@@ -52,7 +52,8 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
-import { parseStructureFilter, queryThoughts, type StructureQueryResult } from './structure-service.js';
+import { parseStructureFilter } from './structure-service.js';
+import { queryThoughts, structureRequestToQuery, type ThoughtQueryResult } from './query-service.js';
 import {
   buildResolveContext,
   resolveTokensInDefinition as resolveTokensDefinition,
@@ -626,8 +627,8 @@ export interface RunViewResult {
   items: ThoughtRef[];
   total: number;
   /** Направления связей для найденных мыслей (тот же формат, что в
-   *  `StructureQueryResult.directions` — фронт подсвечивает эллипсы). */
-  directions: StructureQueryResult['directions'];
+   *  `ThoughtQueryResult.directions` — фронт подсвечивает эллипсы). */
+  directions: ThoughtQueryResult['directions'];
   /** `[]` — все токены разрешены, иначе условие с токеном не применилось,
    *  и движок отбора возвращает пустую страницу с пояснением. */
   unresolved: TokenIssue[];
@@ -789,14 +790,17 @@ export function runViewForThought(
   // Резолвер оставляет на выходе объект, потому что на входе был объект
   // (валидация отвергла бы не-объект), — cast для согласования типов.
   const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
-  const query: Parameters<typeof queryThoughts>[2] = {
+  const query: Parameters<typeof queryThoughts>[2] = structureRequestToQuery({
     ...filter,
     sort,
     order,
     limit,
     offset,
-  };
-  const result = queryThoughts(ndb, userId, query, requestId);
+  });
+  const result = queryThoughts(ndb, userId, query, {
+    emptyFilterMode: 'home_orphans',
+    includeDirections: true,
+  });
   // Исключаем саму контекстную мысль из результата: «отбор относительно
   // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.
   // `StructureQueryRequest` пока не несёт `exclude_ids` — фильтруем после

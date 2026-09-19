@@ -13,7 +13,6 @@ import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { listEffectiveTypeProperties } from '../../domain/property-service.js';
 import { collectSubtreeTypes } from '../../domain/search-service.js';
 import { shrinkTypesListToBudget } from '../types-list-budget.js';
-import { queryThoughts } from '../../domain/query-service.js';
 import { sanitizeIcon } from '../catalogs.js';
 import { listThoughtTypes } from '../../domain/thought-type-service.js';
 import { listLinkTypes } from '../../domain/link-type-service.js';

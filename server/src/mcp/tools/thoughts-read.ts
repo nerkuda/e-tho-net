@@ -16,7 +16,7 @@ import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolv
 import { findBacklinks } from '../../domain/backlinks-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
-import { queryThoughts } from '../../domain/query-service.js';
+import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { linkTypeCatalog, linkTypeCatalogCompact, sanitizeIcon, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
@@ -242,26 +242,42 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           domainProperties = out;
           if (resolved !== null) resolvedProperties = resolved;
         }
+        // Единый движок выборки (задача c5265deb): MCP-запрос переводится в
+        // канонический адаптером (имена типов/свойств уже отрезолвнуты фасадом
+        // выше) и исполняется той же доменной функцией, что REST-фильтр.
         const result = queryThoughts(
           ndb,
-          {
-            ...args,
-            // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
-            // XOR-схема соблюдена и обе формы не приходят одновременно);
-            // domain-сервис делает второй проход для REST-вызовов.
-            type_id:
-              args.type_id ??
-              (resolvedTypes !== undefined ? resolvedTypes.map((r) => r.id) : undefined),
-            type: undefined,
-            properties: domainProperties,
-          },
-          { maxNodes: rt.limits.maxNodesPerSubgraph },
+          rt.deps.auth.userId,
+          mcpRequestToQuery(
+            {
+              ...args,
+              // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
+              // XOR-схема соблюдена и обе формы не приходят одновременно).
+              type_id:
+                args.type_id ??
+                (resolvedTypes !== undefined ? resolvedTypes.map((r) => r.id) : undefined),
+              type: undefined,
+              properties: domainProperties,
+            },
+            { maxNodes: rt.limits.maxNodesPerSubgraph },
+          ),
+          { maxLimit: 200, emptyFilterMode: 'all' },
         );
         // O10: count every hit in the structured query.
-        recordReads(ndb, result.hits.map((h) => h.id), { now: new Date().toISOString() });
+        recordReads(ndb, result.items.map((h) => h.id), { now: new Date().toISOString() });
+        const hits = result.items.map((t) => ({
+          id: t.id,
+          title: t.title,
+          type_id: t.type_id,
+          active: t.active,
+          depth: result.depths === null ? null : (result.depths.get(t.id) ?? null),
+        }));
         return {
-          ...result,
-          thought_types: thoughtTypeCatalog(ndb, result.hits.map((h) => h.type_id)),
+          total: result.total,
+          hits,
+          truncated: result.truncated,
+          reason: result.reason,
+          thought_types: thoughtTypeCatalog(ndb, result.items.map((h) => h.type_id)),
           ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
           ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
         };

@@ -42,7 +42,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { REF_COLUMNS } from './structure-service.js';
+import { REF_COLUMNS } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */

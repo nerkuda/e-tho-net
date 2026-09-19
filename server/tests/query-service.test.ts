@@ -14,8 +14,9 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
+  mcpRequestToQuery,
   queryThoughts,
-  type QueryBounds,
+  type ThoughtQueryResult,
 } from '../src/domain/query-service.js';
 import { EtnError, type ThoughtQueryRequest, typeNameKey } from '@etn/shared';
 
@@ -155,10 +156,36 @@ function seedPropertyValue(
     .run(randomUUID(), thoughtId, propertyId, bound);
 }
 
-const BOUNDS: QueryBounds = { maxNodes: 100 };
+/** Потолок узлов BFS-обхода поддерева (MCP `max_nodes_per_subgraph`). */
+const BOUNDS_MAX_NODES = 100;
 
-function run(ndb: NetworkDb, request: ThoughtQueryRequest) {
-  return queryThoughts(ndb, request, BOUNDS);
+/**
+ * Проекция канонного результата в MCP-форму `{ total, hits, truncated, reason }`
+ * — та же, что делает фасад `etn.thoughts.query` (задача c5265deb).
+ */
+function toMcpResponse(result: ThoughtQueryResult) {
+  return {
+    total: result.total,
+    hits: result.items.map((t) => ({
+      id: t.id,
+      title: t.title,
+      type_id: t.type_id,
+      active: t.active,
+      depth: result.depths === null ? null : (result.depths.get(t.id) ?? null),
+    })),
+    truncated: result.truncated,
+    reason: result.reason,
+  };
+}
+
+/** Прогнать MCP-запрос через единый движок и вернуть MCP-форму ответа. */
+function run(ndb: NetworkDb, request: ThoughtQueryRequest, maxNodes: number = BOUNDS_MAX_NODES) {
+  return toMcpResponse(
+    queryThoughts(ndb, 'u', mcpRequestToQuery(request, { maxNodes }), {
+      emptyFilterMode: 'all',
+      maxLimit: 200,
+    }),
+  );
 }
 
 describe('query service (N1)', { skip: !nativeAvailable() }, () => {
@@ -487,7 +514,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     for (let i = 0; i < 5; i++) {
       seedLink(ndb, root, seedThought(ndb, `Leaf ${i}`));
     }
-    const res = queryThoughts(ndb, { in_subtree_of: root }, { maxNodes: 3 });
+    const res = run(ndb, { in_subtree_of: root }, 3);
     assert.equal(res.truncated, true);
     assert.equal(res.reason, 'max_nodes');
     assert.ok(res.total <= 3);

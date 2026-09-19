@@ -1,12 +1,16 @@
 /**
  * «Структуры мыслей» domain service (L15, docs/03-server-api.md §6.10, §6.11, §18).
  *
- *  * `queryThoughts` — filter thoughts by keywords / thought types / property
- *    values / link types and page through the matches;
- *  * `getHierarchy` — one-level parents/children expansion of the result tree,
- *    with per-branch dedup (`exclude_ids`) applied before the node limit;
- *  * saved-filter CRUD — named per-user filter definitions stored in
- *    `saved_filters` (L3, docs/02-data-model.md §3.10.5).
+ *   * фильтры и определения отборов — разбор wire-формата REST
+ *     (`parseStructureFilter`, `parseSavedFilterDefinition`);
+ *   * `getHierarchy` — one-level parents/children expansion of the result tree,
+ *     with per-branch dedup (`exclude_ids`) applied before the node limit;
+ *   * saved-filter CRUD — named per-user filter definitions stored in
+ *     `saved_filters` (L3, docs/02-data-model.md §3.10.5).
+ *
+ * Сам движок выборки мыслей живёт в `query-service.ts` (задача c5265deb):
+ * REST-роут переводит разобранный фильтр в канонический запрос адаптером
+ * `structureRequestToQuery` и исполняет единой функцией `queryThoughts`.
  *
  * The wire format is parsed by the route layer; here the input is already
  * shape-checked except for the property conditions, whose operator/value
@@ -20,21 +24,15 @@ import {
   HIERARCHY_EXCLUDE_MAX_IDS,
   SAVED_FILTER_NAME_MAX,
   STRUCTURES_NODE_NEIGHBORS_LIMIT,
-  STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
-  STRUCTURES_QUERY_IDS_MAX_LIMIT,
-  STRUCTURES_QUERY_MAX_LIMIT,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_PROPERTY_OPS,
   STRUCTURE_SORTS,
   SORT_ORDERS,
-  buildLikePattern,
   isLinkTypeFilterActive,
-  parseFilterKeywords,
   parseLinkTypeFilterValue,
   type ChronicleFilterDefinition,
   type ChronicleSavedFilter,
-  type PropertyValueType,
   type SavedFilter,
   type SavedFilterDefinition,
   type SavedFilterView,
@@ -45,120 +43,15 @@ import {
   type StructurePropertyCondition,
   type StructurePropertyOp,
   type StructurePropertyValue,
-  type StructureQueryRequest,
-  type StructureDirectionFlags,
   type StructureSort,
-  type ThoughtRef,
   type HierarchyResponse,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import {
-  getNetworkProperty,
-  isStructuralLinkProperty,
-  linkPropertyDirection,
-  linkPropertyLinkTypeId,
-} from './property-service.js';
-import { getEdgesAmong, getLinkDirections } from './link-service.js';
+import { getEdgesAmong } from './link-service.js';
+import { directionsOf, REF_COLUMNS } from './query-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
-import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
-
-/** Display columns every thought-ref SELECT must carry (see `resolveThoughts`). */
-export const REF_COLUMNS =
-  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,' +
-  ' t.active, t.fg_color, t.bg_color,' +
-  ' t.font_bold, t.font_italic, t.font_underline, t.font_strike, t.font_manual';
-
-/** Row shape accepted by {@link rowToThoughtRef}. */
-type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
-
-/**
- * Operators allowed per property `value_type` (03-server-api.md §6.10).
- *
- * `is_empty` / `not_empty` test for the presence of a value at all and are
- * allowed for every type except `bool` — there the same intent is covered
- * by `eq true` / `eq false`, so an extra toggle would be redundant noise.
- *
- * Свойство-связь (`link`) хранит значение в рёбрах (links_v), а не в
- * property_values (ADR «проекция ребра»). Поддержан тот же набор, что и
- * для legacy `thought_ref`: eq/in/not_in ищут по конкретной цели/списку
- * целей, is_empty/not_empty — по наличию любого живого ребра этого типа
- * (структурная проверка `EXISTS` по `links_v` в `buildFilterQuerySql`).
- */
-const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[]> = {
-  text: ['contains', 'eq', 'in', 'not_in', 'is_empty', 'not_empty'],
-  url: ['contains', 'eq', 'in', 'not_in', 'is_empty', 'not_empty'],
-  date: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
-  number: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
-  bool: ['eq'],
-  link: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
-  // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся,
-  // но value-handling (тесты, унаследованные архивы) пользуется тем же
-  // набором операторов, что и `url` — eq/in/not_in ищут по одиночному id и
-  // внутри JSON-массива, is_empty/not_empty — по наличию хоть какого-то id.
-  thought_ref: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
-};
-
-/** Storage column of `property_values` per property `value_type`. */
-const VALUE_COLUMN: Record<PropertyValueType, string> = {
-  text: 'value_text',
-  url: 'value_text',
-  date: 'value_date',
-  number: 'value_number',
-  bool: 'value_bool',
-  // Свойство-связь значений в property_values не хранит (ADR «проекция
-  // ребра»); условие транслируется в `links_v` отдельной веткой
-  // `buildFilterQuerySql`. Колонка сохранена для совместимости типа, но в
-  // SQL не подставляется.
-  link: 'value_text',
-  // Legacy thought_ref (миграция 040): value-handling читает одиночный id
-  // и JSON-массив id из этого столбца.
-  thought_ref: 'value_thought_ref',
-};
-
-/** Default keyword scope (03-server-api.md §6.10): title + synonyms only —
- *  the original behaviour before the «комментарий» scope existed. */
-const DEFAULT_KEYWORD_SCOPE: readonly StructureKeywordScope[] = ['title', 'synonyms'];
-
-/**
- * Resolves the effective keyword scope: an absent/empty `keyword_scope`
- * falls back to {@link DEFAULT_KEYWORD_SCOPE} (bug fix 0.5.5 — the panel
- * auto-reverts to the same default when the user unchecks all three boxes,
- * this is the server-side mirror of that rule for saved filters / MCP
- * callers that omit the field or send an empty array).
- */
-function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<StructureKeywordScope> {
-  return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
-}
-
-/**
- * One keyword match clause built for the effective scope: title and/or
- * synonyms and/or the permanent comment (OR between the selected sources).
- * The LIKE pattern is built by {@link buildLikePattern} (escaping
- * `%`/`_`/`\`, `*` → `%`), so the match is infix; case-insensitivity comes
- * from `title_norm`/`synonym_norm` being stored lower-cased and from the
- * `unicode_lower()` SQL helper for the comment body (SQLite's built-in
- * `LOWER()` is ASCII-only, `network-db.ts`). Returns the parenthesised SQL
- * fragment plus how many `?` placeholders it needs (same pattern value
- * repeated for each selected source).
- */
-function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; paramCount: number } {
-  const parts: string[] = [];
-  if (scope.has('title')) parts.push("t.title_norm LIKE ? ESCAPE '\\'");
-  if (scope.has('synonyms')) {
-    parts.push(
-      'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
-        " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\')",
-    );
-  }
-  if (scope.has('comment')) {
-    parts.push(
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
-        " AND c.kind = 'permanent' AND unicode_lower(c.body_md) LIKE ? ESCAPE '\\')",
-    );
-  }
-  return { sql: `(${parts.join(' OR ')})`, paramCount: parts.length };
-}
+import { linkTypeFilterClause } from './type-hierarchy.js';
 
 // ---------------------------------------------------------------------------
 // Filter parsing / validation
@@ -262,9 +155,8 @@ export function parseStructureFilter(
   }
 
   // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»): id
-  // пользователя и оператор (задача 59119797, эволюция — eq/ne/in/not_in).
-  // Пустая строка и отсутствие равнозначны — фильтр не применяется; значение
-  // валидируется по формату не-UUID (просто строка).
+  // пользователя и оператор (эволюция — eq/ne/in/not_in). Пустая строка и
+  // отсутствие равнозначны — фильтр не применяется.
   for (const field of ['created_by', 'updated_by'] as const) {
     const raw = body[field];
     if (raw === undefined) continue;
@@ -317,12 +209,7 @@ export function parseStructureFilter(
 /**
  * Lax ISO-8601 check (задача 7032e55a). Accepts both date-only `YYYY-MM-DD`
  * and full timestamps `YYYY-MM-DDTHH:MM:SS[.sss][Z|±HH:MM]` — the same
- * formats that `chronicle/query` (`date_from`/`date_to`, §20) accepts. The
- * downstream comparison uses the underlying `thoughts.created_at` /
- * `updated_at` text columns, which are stored as ISO-8601; SQLite's text
- * comparison is lexicographic and matches ISO-8601 ordering exactly, so the
- * format only has to be a well-formed ISO date — time zone designators are
- * accepted but not required.
+ * formats that `chronicle/query` (`date_from`/`date_to`, §20) accepts.
  */
 function isIso8601(value: string): boolean {
   if (value.length < 10) return false;
@@ -420,9 +307,7 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
     }, requestId);
   }
   // `is_empty` / `not_empty` ignore the value payload — the server decides
-  // presence from the row + value column alone. Accept a missing, empty or
-  // arbitrary `value`; the SQL builder never reads it for these ops
-  // (bug fix 0.6.3).
+  // presence from the row + value column alone.
   if (op === 'is_empty' || op === 'not_empty') {
     const rawValue = obj['value'];
     const placeholder: StructurePropertyValue =
@@ -530,619 +415,6 @@ function validateFilterName(name: string, requestId?: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Query
-// ---------------------------------------------------------------------------
-
-/** Result of {@link queryThoughts}: the page, the unrestricted match count and
- * the link-direction flags of the page (ellipse fill in the tree). */
-export interface StructureQueryResult {
-  items: ThoughtRef[];
-  total: number;
-  directions: StructureDirectionFlags;
-}
-
-/**
- * Appends an author-condition WHERE clause + params for one column
- * (задача 59119797, эволюция операторов). Skips silently when the filter
- * field is absent; an explicit `op: 'empty' | 'not_empty'` adds an IS [NOT]
- * NULL check regardless of the value payload.
- */
-function appendAuthorCondition(
-  where: string[],
-  params: unknown[],
-  column: string,
-  value: string | string[] | undefined,
-  op: StructureAuthorOp | undefined,
-): void {
-  const effective = op ?? 'eq';
-  if (effective === 'empty') {
-    where.push(`${column} IS NULL`);
-    return;
-  }
-  if (effective === 'not_empty') {
-    where.push(`${column} IS NOT NULL`);
-    return;
-  }
-  if (value === undefined) return;
-  if (effective === 'in' || effective === 'not_in') {
-    const ids = Array.isArray(value) ? value : [value];
-    const placeholders = ids.map(() => '?').join(',');
-    where.push(
-      effective === 'in'
-        ? `${column} IN (${placeholders})`
-        : `${column} NOT IN (${placeholders})`,
-    );
-    params.push(...ids);
-    return;
-  }
-  if (effective === 'ne') {
-    where.push(`${column} IS NULL OR ${column} <> ?`);
-    params.push(value);
-    return;
-  }
-  // `eq` (default) — exact match.
-  where.push(`${column} = ?`);
-  params.push(value);
-}
-
-/**
- * Appends one or two date-bound WHERE clauses (задача 7032e55a): `after` →
- * `column >= ?`, `before` → `column <= ?`. Both bounds are inclusive and
- * optional; an empty string is treated as "not set" so the JSON filter can
- * safely carry `''` from a cleared UI field without the parser dropping
- * the rest of the row.
- */
-function appendDateBound(
-  where: string[],
-  params: unknown[],
-  column: string,
-  after: string | undefined,
-  before: string | undefined,
-): void {
-  if (typeof after === 'string' && after.trim() !== '') {
-    where.push(`${column} >= ?`);
-    params.push(after.trim());
-  }
-  if (typeof before === 'string' && before.trim() !== '') {
-    where.push(`${column} <= ?`);
-    params.push(before.trim());
-  }
-}
-
-/** Convert a condition scalar to the SQL parameter of its value column. */
-function sqlScalar(
-  def: { value_type: PropertyValueType },
-  value: StructurePropertyValue,
-  requestId?: string,
-): string | number {
-  switch (def.value_type) {
-    case 'number':
-      if (typeof value !== 'number') {
-        throw new EtnError('VALIDATION_ERROR', 'Значение свойства должно быть числом.', {
-          field: 'value',
-        }, requestId);
-      }
-      return value;
-    case 'bool':
-      if (typeof value !== 'boolean') {
-        throw new EtnError('VALIDATION_ERROR', 'Значение свойства должно быть boolean.', {
-          field: 'value',
-        }, requestId);
-      }
-      return value ? 1 : 0;
-    default:
-      if (typeof value !== 'string') {
-        throw new EtnError('VALIDATION_ERROR', 'Значение свойства должно быть строкой.', {
-          field: 'value',
-        }, requestId);
-      }
-      return value;
-  }
-}
-
-/**
- * Depth-bounded subtree walk from `rootIds` via active `source_id → target_id`
- * links (parent_ids scoping, 03-server-api.md §6.10). The graph may contain
- * cycles (docs/AGENTS.md §7) — the depth cap terminates the walk without a
- * separate visited-set; the final `DISTINCT id` dedups the output.
- *
- * Задача c965ad03: `linkFilter` ограничивает рёбра, по которым раскрывается
- * поддерево (типы с потомками + опционально структурные); без фильтра — все
- * рёбра, как раньше.
- */
-function expandParentIdsToSubtree(
-  ndb: NetworkDb,
-  rootIds: string[],
-  showInactive: boolean,
-  linkFilter?: StructureFilter['link_filter'],
-): string[] {
-  if (rootIds.length === 0) return [];
-  const placeholders = rootIds.map(() => '?').join(',');
-  const activeFlag = showInactive ? 1 : 0;
-  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
-  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
-  const typeParams = typeClause === null ? [] : typeClause.params;
-  const rows = ndb
-    .prepare(
-      `WITH RECURSIVE subtree(id, depth) AS (
-         SELECT l.target_id, 1
-         FROM links_v l
-         WHERE l.source_id IN (${placeholders}) AND (l.active = 1 OR ?)${typeSql}
-         UNION
-         SELECT l.target_id, s.depth + 1
-         FROM links_v l
-         JOIN subtree s ON l.source_id = s.id
-         WHERE (l.active = 1 OR ?) AND s.depth < ?${typeSql}
-       )
-       SELECT DISTINCT id FROM subtree`,
-    )
-    .all(
-      ...rootIds,
-      activeFlag,
-      ...typeParams,
-      activeFlag,
-      STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
-      ...typeParams,
-    ) as Array<{ id: string }>;
-  return rows.map((r) => r.id);
-}
-
-/** Reads the link-direction flags of the given thoughts as a plain record. */
-function directionsOf(
-  ndb: NetworkDb,
-  ids: string[],
-  linkFilter?: StructureFilter['link_filter'],
-): StructureDirectionFlags {
-  const out: StructureDirectionFlags = {};
-  for (const [id, d] of getLinkDirections(ndb, ids, linkFilter)) {
-    out[id] = { has_incoming: d.has_in, has_outgoing: d.has_out };
-  }
-  return out;
-}
-
-/**
- * Sort columns of the requested sort plus the per-user `thought_views` join it
- * needs (enum members are validated by the route layer and interpolated as
- * fixed fragments only). Returned without the `ORDER BY` keyword so callers
- * can prepend their own leading keys.
- */
-function sortClause(
-  userId: string,
-  req: StructureQueryRequest,
-): { sortSql: string; joinSql: string; joinParams: unknown[] } {
-  const dirKeyword = req.order === 'desc' ? 'DESC' : 'ASC';
-  const nullsLast = req.order === 'desc' ? 'DESC' : 'ASC';
-  switch (req.sort) {
-    case 'alpha':
-      return { sortSql: `t.title COLLATE NOCASE ${dirKeyword}`, joinSql: '', joinParams: [] };
-    case 'created':
-      return { sortSql: `t.created_at ${dirKeyword}`, joinSql: '', joinParams: [] };
-    case 'updated':
-      // «По дате изменения» (ошибка 4dd14aa3, 0.8.2): ISO-8601 текстовая
-      // колонка — лексикографический порядок совпадает с хронологическим.
-      return { sortSql: `t.updated_at ${dirKeyword}`, joinSql: '', joinParams: [] };
-    case 'viewed':
-      return {
-        sortSql: `(tv.last_viewed_at IS NULL) ${nullsLast}, tv.last_viewed_at ${dirKeyword}`,
-        joinSql: 'LEFT JOIN thought_views tv ON tv.user_id = ? AND tv.thought_id = t.id',
-        joinParams: [userId],
-      };
-  }
-}
-
-/**
- * Shared WHERE/ORDER BY of the structures filter (03-server-api.md §6.10):
- * the paged ref query and the id-only query of the bulk commands (L22) must
- * run over exactly the same candidate set. `null` — the filter degenerated to
- * an empty result (unknown `parent_ids` scope roots).
- */
-interface FilterQuerySql {
-  /** `FROM thoughts_v t … WHERE …` with `?` placeholders (join params first). */
-  baseSql: string;
-  /** JOIN parameters, bound before the WHERE parameters. */
-  joinParams: unknown[];
-  /** WHERE parameters. */
-  params: unknown[];
-  /** ORDER BY columns without the keyword. */
-  sortSql: string;
-  /** Empty filter pins HOME first with an extra leading sort key. */
-  homeFirst: boolean;
-}
-
-function buildFilterQuerySql(
-  ndb: NetworkDb,
-  userId: string,
-  req: StructureQueryRequest,
-  requestId?: string,
-): FilterQuerySql | null {
-  if (isFilterEmpty(req)) {
-    const showInactive = req.show_inactive === true ? 1 : 0;
-    const { sortSql, joinSql, joinParams } = sortClause(userId, req);
-    return {
-      baseSql: `FROM thoughts_v t ${joinSql}
-       WHERE t.is_root = 1 OR (
-         t.is_root = 0 AND (t.active = 1 OR ?) AND NOT EXISTS (
-           SELECT 1 FROM links_v l WHERE l.target_id = t.id AND l.active = 1))`,
-      joinParams,
-      params: [showInactive],
-      sortSql,
-      homeFirst: true,
-    };
-  }
-
-  const showInactive = req.show_inactive === true ? 1 : 0;
-  const where: string[] = [];
-  const params: unknown[] = [];
-
-  // «Актуальность» (§15.3 «Дополнительно»): an explicit value overrides the
-  // show_inactive default — `false` selects only inactive thoughts.
-  if (req.active !== undefined) {
-    where.push(req.active ? 't.active = 1' : 't.active = 0');
-  } else if (showInactive !== 1) {
-    where.push('t.active = 1');
-  }
-
-  // Пометка на удаление (S13, 03-server-api.md §6.10): default `false` hides
-  // marked thoughts; `true` includes them on equal footing with ordinary ones.
-  if (req.trashed !== true) {
-    where.push('t.marked_for_deletion = 0');
-  }
-
-  // Фильтры авторства (задача 59119797, эволюция операторов): прямое
-  // сравнение / отрицание / IN(...) / IS NULL по колонкам
-  // `created_by`/`updated_by` (миграция 033).
-  appendAuthorCondition(where, params, 't.created_by', req.created_by, req.created_by_op);
-  appendAuthorCondition(where, params, 't.updated_by', req.updated_by, req.updated_by_op);
-
-  // Границы дат создания/изменения (задача 7032e55a, паритет с MCP и панелью
-  // «Структур» §15.3). `thoughts.created_at`/`updated_at` — текстовые ISO-8601
-  // колонки, сравнение лексикографическое совпадает с ISO-порядком. Границы
-  // включающие (`>=`/`<=`).
-  appendDateBound(where, params, 't.created_at', req.created_after, req.created_before);
-  appendDateBound(where, params, 't.updated_at', req.updated_after, req.updated_before);
-
-  if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
-    const scoped = expandParentIdsToSubtree(
-      ndb,
-      req.parent_ids,
-      showInactive === 1,
-      req.link_filter,
-    );
-    if (scoped.length === 0) return null;
-    where.push(`t.id IN (${scoped.map(() => '?').join(',')})`);
-    params.push(...scoped);
-  }
-
-  if (req.has_properties !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
-    where.push(req.has_properties ? sql : `NOT ${sql}`);
-  }
-  if (req.has_comment !== undefined) {
-    const sql =
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')";
-    where.push(req.has_comment ? sql : `NOT ${sql}`);
-  }
-  if (req.has_attachments !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM attachments_v a WHERE a.owner_type = 'thought' AND a.owner_id = t.id)";
-    where.push(req.has_attachments ? sql : `NOT ${sql}`);
-  }
-  if (req.has_chronology !== undefined) {
-    const sql =
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')";
-    where.push(req.has_chronology ? sql : `NOT ${sql}`);
-  }
-
-  const keywords = parseFilterKeywords(req.keywords ?? '');
-  const keywordScope = resolveKeywordScope(req.keyword_scope);
-  const keywordClause = buildKeywordClause(keywordScope);
-  for (const word of keywords.include) {
-    // title_norm/synonym_norm are stored lowercase, comment body is folded by
-    // unicode_lower() at query time — fold the word the same way.
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(keywordClause.sql);
-    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
-  }
-  for (const word of keywords.exclude) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${keywordClause.sql}`);
-    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
-  }
-
-  if (req.type_ids !== undefined && req.type_ids.length > 0) {
-    // L21: a selected parent type matches its whole subtree (OR semantics).
-    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', req.type_ids);
-    if (expanded.length > 0) {
-      where.push(`t.type_id IN (${expanded.map(() => '?').join(',')})`);
-      params.push(...expanded);
-    }
-  }
-
-  for (const cond of req.properties ?? []) {
-    // 0.6.5: a saved filter's property_id references the `properties` registry.
-    const def = getNetworkProperty(ndb, cond.property_id);
-    if (def === null) continue; // property deleted after the filter was saved
-    const allowed = OPS_BY_VALUE_TYPE[def.value_type];
-    if (!allowed.includes(cond.op)) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `Операция ${cond.op} недопустима для свойства типа ${def.value_type}.`,
-        { field: 'op', allowed },
-        requestId,
-      );
-    }
-    const column = `pv.${VALUE_COLUMN[def.value_type]}`;
-    // Свойство-связь (`value_type: 'link'`, задача 20effcbd + расширение в
-    // этом коммите): значение хранится в `links_v` (рёбрах), а не в
-    // `property_values`. Направление (`out`/`in`) и тип связи читаются из
-    // `config` свойства через те же хелперы, что использует
-    // `query-service.linkPropertyClause` (единая точка интерпретации — без
-    // дублирования логики). Поддержан набор `eq`/`in`/`not_in`/`is_empty`/
-    // `not_empty` — паритет с legacy `thought_ref` ниже.
-    if (def.value_type === 'link') {
-      const cfg = def.config;
-      const structural = isStructuralLinkProperty(cfg);
-      const linkTypeId = structural ? null : linkPropertyLinkTypeId(cfg);
-      if (!structural && linkTypeId === null) {
-        // Некорректный config (валидируется при правке онтологии — сюда не
-        // должно доходить). Условие не матчит ничего: 0 → пустой результат.
-        where.push('0');
-        continue;
-      }
-      const direction = linkPropertyDirection(cfg);
-      const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
-      const targetCol = direction === 'out' ? 'target_id' : 'source_id';
-      const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
-      const typeParams = linkTypeId === null ? [] : [linkTypeId];
-      const existsSql = (extraSql: string, extraParams: unknown[]): { sql: string; params: unknown[] } => ({
-        sql: `EXISTS (SELECT 1 FROM links_v l
-           WHERE l.${ownerCol} = t.id AND ${typeSql}
-             AND l.active = 1 AND l.marked_for_deletion = 0${extraSql})`,
-        params: [...typeParams, ...extraParams],
-      });
-      if (cond.op === 'in' || cond.op === 'not_in') {
-        if (!Array.isArray(cond.value) || cond.value.length === 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
-            { field: 'value' },
-            requestId,
-          );
-        }
-        const values = cond.value.map((v) => sqlScalar(def, v, requestId) as string);
-        const placeholders = values.map(() => '?').join(',');
-        const matchSql = existsSql(` AND l.${targetCol} IN (${placeholders})`, values);
-        where.push(cond.op === 'in' ? matchSql.sql : `NOT ${matchSql.sql}`);
-        params.push(...matchSql.params);
-        continue;
-      }
-      if (cond.op === 'is_empty' || cond.op === 'not_empty') {
-        const presence = existsSql('', []);
-        where.push(cond.op === 'not_empty' ? presence.sql : `NOT ${presence.sql}`);
-        params.push(...presence.params);
-        continue;
-      }
-      // `eq`: ровно одно активное ребро заданного типа к указанной цели.
-      if (typeof cond.value !== 'string' || cond.value === '') {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          'Для свойства-связи значение условия eq должно быть id цели (строкой).',
-          { field: 'value' },
-          requestId,
-        );
-      }
-      const targetId = sqlScalar(def, cond.value as StructurePropertyValue, requestId) as string;
-      const specific = existsSql(` AND l.${targetCol} = ?`, [targetId]);
-      where.push(specific.sql);
-      params.push(...specific.params);
-      continue;
-    }
-    // Legacy thought_ref (миграция 040): значение в `value_thought_ref`
-    // может быть одиночным id или JSON-массивом id. Все скалярные операции
-    // (eq/in/not_in/is_empty/not_empty) раскрывают обе формы: одиночное
-    // равенство и вхождение в массив считаются одним и тем же. `contains`
-    // для thought_ref недопустим (см. OPS_BY_VALUE_TYPE).
-    const thoughtRefElements = (col: string): string =>
-      `json_each(CASE WHEN ${col} LIKE '[%' THEN ${col} ELSE '[' || json_quote(${col}) || ']' END)`;
-    if (def.value_type === 'thought_ref') {
-      if (cond.op === 'in' || cond.op === 'not_in') {
-        if (!Array.isArray(cond.value) || cond.value.length === 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
-            { field: 'value' },
-            requestId,
-          );
-        }
-        const values = cond.value.map((v) => sqlScalar(def, v, requestId) as string);
-        const placeholders = values.map(() => '?').join(',');
-        const matchSql = `SELECT 1 FROM property_values_v pv, ${thoughtRefElements(column)} je
-           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-             AND pv.${VALUE_COLUMN[def.value_type]} IS NOT NULL AND je.value IN (${placeholders})`;
-        where.push(cond.op === 'in' ? `EXISTS (${matchSql})` : `NOT EXISTS (${matchSql})`);
-        params.push(cond.property_id, ...values);
-        continue;
-      }
-      if (cond.op === 'is_empty' || cond.op === 'not_empty') {
-        // Заполнено = значение не NULL, не пустая строка, не '[]' и не 'null'.
-        // Массив '[]' и строка 'null' (легаси-форма «пустой ссылки») считаются
-        // пустыми, как и отсутствующая строка value_thought_ref.
-        const filledExpr =
-          `${column} IS NOT NULL AND ${column} != '' AND ${column} != '[]' AND ${column} != 'null'`;
-        const filledSql = `SELECT 1 FROM property_values_v pv
-           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-             AND ${filledExpr}`;
-        where.push(
-          cond.op === 'not_empty' ? `EXISTS (${filledSql})` : `NOT EXISTS (${filledSql})`,
-        );
-        params.push(cond.property_id);
-        continue;
-      }
-      // eq: одиночный id или вхождение в массив.
-      const value = sqlScalar(def, cond.value as StructurePropertyValue, requestId) as string;
-      const matchSql = `SELECT 1 FROM property_values_v pv, ${thoughtRefElements(column)} je
-         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND pv.${VALUE_COLUMN[def.value_type]} IS NOT NULL AND je.value = ?`;
-      where.push(`EXISTS (${matchSql})`);
-      params.push(cond.property_id, value);
-      continue;
-    }
-    if (cond.op === 'in' || cond.op === 'not_in') {
-      if (!Array.isArray(cond.value) || cond.value.length === 0) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
-          { field: 'value' },
-          requestId,
-        );
-      }
-      const values = cond.value.map((v) => sqlScalar(def, v, requestId));
-      const listSql = `SELECT 1 FROM property_values_v pv
-         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND ${column} IN (${values.map(() => '?').join(',')})`;
-      where.push(cond.op === 'in' ? `EXISTS (${listSql})` : `NOT EXISTS (${listSql})`);
-      params.push(cond.property_id, ...values);
-      continue;
-    }
-    if (cond.op === 'contains') {
-      const pattern = buildLikePattern(String(cond.value));
-      where.push(
-        `EXISTS (SELECT 1 FROM property_values_v pv
-           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-             AND ${column} LIKE ? ESCAPE '\\')`,
-      );
-      params.push(cond.property_id, pattern);
-      continue;
-    }
-    if (cond.op === 'is_empty' || cond.op === 'not_empty') {
-      // `is_empty` — the thought has no filled value for this property;
-      // `not_empty` — there is at least one filled value. The single-column
-      // invariant (§3.5) guarantees the value column is NULL for other value
-      // types. Empty-string `''` (text/url) is also "empty" — defensive
-      // against an editor that submits a placeholder string. The `value`
-      // payload is ignored: presence is decided by the row + column alone.
-      const filledExpr = `${column} IS NOT NULL AND ${column} != ''`;
-      const filledSql = `SELECT 1 FROM property_values_v pv
-         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND ${filledExpr}`;
-      where.push(
-        cond.op === 'not_empty' ? `EXISTS (${filledSql})` : `NOT EXISTS (${filledSql})`,
-      );
-      params.push(cond.property_id);
-      continue;
-    }
-    const value = sqlScalar(def, cond.value as StructurePropertyValue, requestId);
-    const opSql = cond.op === 'eq' ? '=' : cond.op === 'gt' ? '>' : '<';
-    where.push(
-      `EXISTS (SELECT 1 FROM property_values_v pv
-         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND ${column} ${opSql} ?)`,
-    );
-    params.push(cond.property_id, value);
-  }
-
-  if (req.link_type_ids !== undefined && req.link_type_ids.length > 0) {
-    // L21: subtree expansion, same as the thought-type filter above.
-    const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids);
-    if (expandedLinks.length > 0) {
-      where.push(
-        `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
-           AND l.type_id IN (${expandedLinks.map(() => '?').join(',')})
-           AND (l.source_id = t.id OR l.target_id = t.id))`,
-      );
-      params.push(...expandedLinks);
-    }
-  }
-
-  // Sort: enum members validated by the route layer, interpolated as fixed
-  // fragments only. `viewed` needs the per-user view-mark join.
-  const { sortSql, joinSql, joinParams } = sortClause(userId, req);
-  return {
-    baseSql: `FROM thoughts_v t ${joinSql} WHERE ${where.join(' AND ')}`,
-    joinParams,
-    params,
-    sortSql,
-    homeFirst: false,
-  };
-}
-
-/** Count the unrestricted matches of a built filter query. */
-function countFilterMatches(ndb: NetworkDb, sql: FilterQuerySql): number {
-  return (
-    ndb.prepare(`SELECT COUNT(*) AS c ${sql.baseSql}`).get(...sql.joinParams, ...sql.params) as {
-      c: number;
-    }
-  ).c;
-}
-
-/** ORDER BY clause of a built filter query (empty filter pins HOME first). */
-function orderClause(sql: FilterQuerySql): string {
-  return sql.homeFirst ? `(t.is_root = 1) DESC, ${sql.sortSql}` : sql.sortSql;
-}
-
-/**
- * Filter thoughts by the structure criteria (docs/03-server-api.md §6.10).
- *
- * An empty filter returns HOME (`is_root=1`, always first) plus the orphans —
- * thoughts with no active parent link — so every disconnected island of the
- * network stays reachable from the empty tree. Conditions with an unknown
- * `property_id` are ignored — the property definition may have been deleted
- * after the filter was saved; the remaining conditions still apply.
- */
-export function queryThoughts(
-  ndb: NetworkDb,
-  userId: string,
-  req: StructureQueryRequest,
-  requestId?: string,
-): StructureQueryResult {
-  const sql = buildFilterQuerySql(ndb, userId, req, requestId);
-  if (sql === null) return { items: [], total: 0, directions: {} };
-  const total = countFilterMatches(ndb, sql);
-  const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_MAX_LIMIT);
-  const offset = Math.max(req.offset, 0);
-  const rows = ndb
-    .prepare(
-      `SELECT ${REF_COLUMNS} ${sql.baseSql}
-       ORDER BY ${orderClause(sql)}
-       LIMIT ? OFFSET ?`,
-    )
-    .all(...sql.joinParams, ...sql.params, limit, offset) as Array<ThoughtRefRow>;
-  const items = rows.map(rowToThoughtRef);
-  // The page carries its own direction flags — the root ellipses are filled
-  // right after the query, without waiting for the first expansion.
-  return { items, total, directions: directionsOf(ndb, items.map((i) => i.id)) };
-}
-
-/** Result of {@link queryThoughtIds} (L22 ids-only filter query, §6.10). */
-export interface StructureIdsResult {
-  ids: string[];
-  total: number;
-}
-
-/**
- * Id-only variant of the structures filter query (03-server-api.md §6.10,
- * `ids_only: true`): the same candidate set and ordering as
- * {@link queryThoughts}, but the page carries bare ids — the bulk filter
- * commands (08-ui-spec.md §15.3) collect the whole result this way. The route
- * layer raises the limit ceiling for this mode.
- */
-export function queryThoughtIds(
-  ndb: NetworkDb,
-  userId: string,
-  req: StructureQueryRequest,
-  requestId?: string,
-): StructureIdsResult {
-  const sql = buildFilterQuerySql(ndb, userId, req, requestId);
-  if (sql === null) return { ids: [], total: 0 };
-  const total = countFilterMatches(ndb, sql);
-  const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_IDS_MAX_LIMIT);
-  const offset = Math.max(req.offset, 0);
-  const rows = ndb
-    .prepare(`SELECT t.id ${sql.baseSql} ORDER BY ${orderClause(sql)} LIMIT ? OFFSET ?`)
-    .all(...sql.joinParams, ...sql.params, limit, offset) as Array<{ id: string }>;
-  return { ids: rows.map((r) => r.id), total };
-}
-
-// ---------------------------------------------------------------------------
 // Hierarchy expansion
 // ---------------------------------------------------------------------------
 
@@ -1157,7 +429,7 @@ export interface HierarchyOptions {
    * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): с фильтром узел
    * дерева разворачивается только по рёбрам выбранных типов (+структурные при
    * `include_structural`), эллипсы и рёбра ответа — те же типы. Держит
-   * раскрытие дерева «Структур» согласован с отбором `parent_ids` +
+   * раскрытие дерева «Структур» согласованным с отбором `parent_ids` +
    * `link_filter` запроса выборки.
    */
   linkFilter?: StructureFilter['link_filter'];
@@ -1197,7 +469,9 @@ export function getHierarchy(
        WHERE ${focusSide} = ? AND (l.active = 1 OR ?) AND (t.active = 1 OR ?)${typeSql}
        ORDER BY t.title COLLATE NOCASE ASC`,
     )
-    .all(thoughtId, showInactive, showInactive, ...typeParams) as Array<ThoughtRefRow>;
+    .all(thoughtId, showInactive, showInactive, ...typeParams) as Array<
+    Parameters<typeof rowToThoughtRef>[0]
+  >;
   const fresh = rows.filter((row) => !exclude.has(row.id));
   const offset = Math.max(opts.offset ?? 0, 0);
   const page = fresh.slice(offset, offset + STRUCTURES_NODE_NEIGHBORS_LIMIT);

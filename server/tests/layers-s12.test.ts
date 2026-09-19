@@ -27,6 +27,7 @@ import { describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { BASE_LAYER_ID, EtnError, MCP_DEFAULTS } from '@etn/shared';
+import type { ThoughtQueryRequest } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { checkLayerIntegrity } from '../src/domain/layer-integrity.js';
@@ -34,7 +35,7 @@ import { createComment } from '../src/domain/comment-service.js';
 import { createLink } from '../src/domain/link-service.js';
 import { subgraph, findPath } from '../src/domain/graph-traversal.js';
 import { search } from '../src/domain/search-service.js';
-import { queryThoughts } from '../src/domain/query-service.js';
+import { mcpRequestToQuery, queryThoughts as domainQueryThoughts } from '../src/domain/query-service.js';
 import {
   createThought,
   deleteThought,
@@ -59,6 +60,18 @@ function nativeAvailable(): boolean {
 }
 
 const USER = 'user-1';
+
+/** MCP-стиль выборки через единый движок (задача c5265deb). */
+function queryThoughts(
+  ndb: NetworkDb,
+  filter: ThoughtQueryRequest,
+  bounds: { maxNodes: number },
+) {
+  return domainQueryThoughts(ndb, USER, mcpRequestToQuery(filter, bounds), {
+    emptyFilterMode: 'all',
+    maxLimit: 200,
+  });
+}
 
 /** Create a layer over the base, switch `ndb` into its context, return its id. */
 function startLayer(ndb: NetworkDb): string {
