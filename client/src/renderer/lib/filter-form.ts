@@ -736,6 +736,79 @@ export function buildAuthorshipSection(
   return section;
 }
 
+/**
+ * Сворачиваемая группа с ОДНОЙ строкой авторства (экран «События»: одно
+ * условие «Пользователь»). Строка — тот же общий скелет
+ * `buildAuthorConditionRow`; поле состояния выбирается параметром.
+ */
+export function buildAuthorConditionSection(
+  ctx: FilterFormContext,
+  opts: {
+    title: string;
+    label: string;
+    field: 'author' | 'editor';
+    editors?: AuthorRowEditors;
+    collapse?: { get: () => boolean; set: (v: boolean) => void };
+  },
+): FilterSection {
+  const section = buildFilterBlock(opts.title, {
+    ...(opts.collapse !== undefined
+      ? { collapsible: true, getCollapsed: opts.collapse.get, setCollapsed: opts.collapse.set }
+      : {}),
+    isNonEmpty: () => {
+      const s = ctx.getState();
+      return opts.field === 'author'
+        ? authorFilterActive(s.authorOp, s.authorId, s.authorIds)
+        : authorFilterActive(s.editorOp, s.editorId, s.editorIds);
+    },
+  });
+  const rows = div('st-f-author-rows');
+  const render = (): void => {
+    clear(rows);
+    const state = ctx.getState();
+    const op = opts.field === 'author' ? state.authorOp : state.editorOp;
+    rows.append(
+      buildAuthorConditionRow({
+        label: opts.label,
+        op,
+        singleId: opts.field === 'author' ? state.authorId : state.editorId,
+        listIds: opts.field === 'author' ? state.authorIds : state.editorIds,
+        ...(opts.editors !== undefined ? { editors: opts.editors } : {}),
+        onOpChange: (next) => {
+          const s = ctx.getState();
+          if (opts.field === 'author') s.authorOp = next;
+          else s.editorOp = next;
+          if (next !== 'eq' && next !== 'ne') {
+            if (opts.field === 'author') s.authorId = '';
+            else s.editorId = '';
+          }
+          if (next !== 'in' && next !== 'not_in') {
+            if (opts.field === 'author') s.authorIds = [];
+            else s.editorIds = [];
+          }
+          render();
+          ctx.touch();
+        },
+        onSingleChange: (id) => {
+          const s = ctx.getState();
+          if (opts.field === 'author') s.authorId = id;
+          else s.editorId = id;
+          ctx.touch();
+        },
+        onListChange: (ids) => {
+          const s = ctx.getState();
+          if (opts.field === 'author') s.authorIds = ids;
+          else s.editorIds = ids;
+          ctx.touch();
+        },
+      }),
+    );
+  };
+  render();
+  section.body.append(rows);
+  return section;
+}
+
 // ---------------------------------------------------------------------------
 // Даты
 // ---------------------------------------------------------------------------

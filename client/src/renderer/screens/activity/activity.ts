@@ -21,12 +21,28 @@
  * удалённые сущности показываются read-only с пометкой «удалена».
  */
 
-import type { ActivityEntityType, ActivityRow, StructureAuthorOp } from '@etn/shared';
+import type { ActivityEntityType, ActivityRow } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { confirmDialog, errorDialog, showDialog } from '../../lib/dialog.js';
-import { AUTHOR_OP_LABELS } from '../../lib/filter-builder.js';
+import {
+  ACTIVITY_ACTION_FILTERS,
+  activityRowPasses,
+  buildActivityQueryPlan,
+
+  type ActivityActionFilter,
+} from '../../lib/filter-builder.js';
+import {
+  buildAuthorConditionSection,
+  buildDatesSection,
+  buildFilterBlock,
+  buildFilterFooterButtons,
+  buildFilterForm,
+  buildKeywordsSection,
+  type FilterFormContext,
+  type FilterSection,
+} from '../../lib/filter-form.js';
 import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
@@ -35,13 +51,7 @@ import { openLayerPropsDialog } from '../layers.js';
 import { showThoughtTypeEditor } from '../type-manager.js';
 import { openPropertyManagerEditor } from '../property-manager.js';
 
-import {
-  buildUserMultiSelectWidget,
-  buildUserSelectWidget,
-  resolve,
-  ensureLoaded,
-  subscribe as subscribeUsers,
-} from '../../lib/users.js';
+import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import {
@@ -54,13 +64,8 @@ import {
 
 const PAGE_SIZE = 50;
 const ENTITY_TYPES: ReadonlyArray<ActivityEntityType> = ENTITY_TYPE_OPTIONS.map((o) => o.value);
-const ACTIONS: ReadonlyArray<ActionFilter> = [
-  'created',
-  'updated',
-  'deleted',
-  'trashed',
-  'restored',
-];
+/** Коды действий — словарь единого конструктора отбора. */
+const ACTIONS: ReadonlyArray<ActionFilter> = ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActivityActionFilter> as ReadonlyArray<ActionFilter>;
 
 /** Russian labels for action codes (the wire format is English). */
 const ACTION_LABELS: Record<ActionFilter, string> = {
@@ -164,7 +169,7 @@ export async function ensureActivityInitialised(): Promise<void> {
       filter = parsed.filter;
       offset = parsed.offset;
       panelWidth = parsed.panelWidth;
-      repaintControls();
+      renderFilterPanel();
     }
   } catch {
     // Fall back to the empty filter.
@@ -338,153 +343,8 @@ export function mountActivity(hostEl: HTMLElement): void {
 // Filter panel
 // ---------------------------------------------------------------------------
 
-let fromInput: HTMLInputElement | null = null;
-let toInput: HTMLInputElement | null = null;
-let keywordsInput: HTMLInputElement | null = null;
-let entityTypesBox: HTMLElement | null = null;
-let actionsBox: HTMLElement | null = null;
-
-function mountFilterPanel(area: HTMLElement): void {
-  area.replaceChildren();
-  const scroll = div('activity-filter-scroll');
-  area.append(scroll);
-
-  // --- keywords (поиск по `entity_title`) -----------------------------
-  const kwTitle = el('div', 'act-f-title', 'Ключевые слова');
-  scroll.append(kwTitle);
-  keywordsInput = el('input', 'text-input act-f-input') as HTMLInputElement;
-  keywordsInput.type = 'text';
-  keywordsInput.placeholder = 'название* -тест';
-  keywordsInput.title = 'Поиск по снимку entity_title (через пробел, * и - как в Структурах)';
-  keywordsInput.addEventListener('input', () => {
-    filter = { ...filter, keywords: keywordsInput!.value };
-    // Только Применить запускает запрос (замечание пользователя).
-  });
-  keywordsInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void applyQuery();
-  });
-  scroll.append(keywordsInput);
-
-  // --- period (даты в одну строку, как в Структурах) ------------------
-  const periodTitle = el('div', 'act-f-title', 'Период');
-  scroll.append(periodTitle);
-  const periodRow = div('act-f-row');
-  fromInput = el('input', 'text-input activity-date') as HTMLInputElement;
-  fromInput.type = 'date';
-  fromInput.title = 'Начало периода (включительно)';
-  fromInput.addEventListener('change', () => {
-    filter = { ...filter, fromMs: fromInput!.value };
-  });
-  toInput = el('input', 'text-input activity-date') as HTMLInputElement;
-  toInput.type = 'date';
-  toInput.title = 'Конец периода (включительно)';
-  toInput.addEventListener('change', () => {
-    filter = { ...filter, toMs: toInput!.value };
-  });
-  periodRow.append(span('с', 'act-f-label'), fromInput, span('по', 'act-f-label'), toInput);
-  scroll.append(periodRow);
-
-  // --- пользователь (бывш. «Участник»; оператор + значение в одну строку) ---
-  const userTitle = el('div', 'act-f-title', 'Пользователь');
-  scroll.append(userTitle);
-  const userBlock = buildActivityUserBlock();
-  scroll.append(userBlock);
-
-  // --- entity types ---------------------------------------------------
-  const entityTitle = el('div', 'act-f-title', 'Тип сущности');
-  scroll.append(entityTitle);
-  entityTypesBox = div('activity-pills');
-  for (const opt of ENTITY_TYPE_OPTIONS) {
-    entityTypesBox.append(buildPill(opt.value, ENTITY_LABELS[opt.value] ?? opt.value, 'entity'));
-  }
-  scroll.append(entityTypesBox);
-
-  // --- actions --------------------------------------------------------
-  const actionTitle = el('div', 'act-f-title', 'Действие');
-  scroll.append(actionTitle);
-  actionsBox = div('activity-pills');
-  for (const action of ACTIONS) {
-    actionsBox.append(buildPill(action, ACTION_LABELS[action], 'action'));
-  }
-  scroll.append(actionsBox);
-
-  // --- apply / clear --------------------------------------------------
-  const footer = div('act-f-footer');
-  const apply = el('button', 'act-f-apply', 'Применить');
-  apply.type = 'button';
-  setTooltip(apply, 'Запустить запрос с текущими отборами (Ctrl+Enter)');
-  apply.addEventListener('click', () => void applyQuery());
-  const clearBtn = el('button', 'act-f-clear', 'Очистить');
-  clearBtn.type = 'button';
-  clearBtn.addEventListener('click', () => {
-    filter = { ...DEFAULT_FILTER };
-    repaintControls();
-    void applyQuery();
-  });
-  footer.append(apply, clearBtn);
-  area.append(footer);
-
-  repaintControls();
-}
-
-/** Builds the «Пользователь» block: оператор + значение в одну строку. */
-function buildActivityUserBlock(): HTMLElement {
-  const block = div('act-f-author');
-  const row = div('act-f-row');
-  const opSelect = el('select', 'select-input act-f-op') as HTMLSelectElement;
-  for (const op of ['eq', 'ne', 'in', 'not_in'] as StructureAuthorOp[]) {
-    const o = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
-    o.value = op;
-    opSelect.append(o);
-  }
-  opSelect.value = filter.userOp;
-
-  const valueBox = div('act-f-author-value');
-  row.append(opSelect, valueBox);
-  block.append(row);
-
-  const renderValue = (): void => {
-    valueBox.replaceChildren();
-    if (filter.userOp === 'in' || filter.userOp === 'not_in') {
-      valueBox.append(
-        buildUserMultiSelectWidget({
-          label: '',
-          currentIds: filter.userIds,
-          onChange: (ids) => {
-            filter = { ...filter, userIds: ids };
-          },
-        }),
-      );
-      return;
-    }
-    valueBox.append(
-      buildUserSelectWidget({
-        label: '',
-        currentId: filter.userId,
-        onChange: (id) => {
-          filter = { ...filter, userId: id };
-        },
-      }),
-    );
-  };
-  opSelect.addEventListener('change', () => {
-    const op = opSelect.value as StructureAuthorOp;
-    filter = {
-      ...filter,
-      userOp: op,
-      ...(op !== 'eq' && op !== 'ne' ? { userId: '' } : {}),
-      ...(op !== 'in' && op !== 'not_in' ? { userIds: [] } : {}),
-    };
-    // Переключаем виджет «пользователь» между single/multi на лету.
-    renderValue();
-    repaintControls();
-  });
-  renderValue();
-  return block;
-}
-
-// Русские подписи оператора «Пользователь» — единый словарь конструктора
-// (lib/filter-builder.ts, AUTHOR_OP_LABELS); здесь не объявляется.
+/** Хост панели отбора (нужен для перерисовки из состояния). */
+let filterPanelHost: HTMLElement | null = null;
 
 /** A single checkbox-pill («тип сущности» или «действие»). */
 function buildPill(value: string, label: string, group: 'entity' | 'action'): HTMLElement {
@@ -498,11 +358,11 @@ function buildPill(value: string, label: string, group: 'entity' | 'action'): HT
     if (group === 'entity') {
       const next = filter.entityTypes.filter((v) => v !== value);
       if (check.checked) next.push(value as ActivityEntityType);
-      filter = { ...filter, entityTypes: next };
+      filter.entityTypes = next;
     } else {
       const next = filter.actions.filter((v) => v !== value);
       if (check.checked) next.push(value as ActionFilter);
-      filter = { ...filter, actions: next };
+      filter.actions = next;
     }
     // Не запускаем запрос сразу — только по «Применить» (замечание
     // пользователя: «изменения отборов применяются сразу»).
@@ -511,22 +371,100 @@ function buildPill(value: string, label: string, group: 'entity' | 'action'): HT
   return labelEl;
 }
 
-function repaintControls(): void {
-  if (keywordsInput !== null) keywordsInput.value = filter.keywords;
-  if (fromInput !== null) fromInput.value = filter.fromMs;
-  if (toInput !== null) toInput.value = filter.toMs;
-  if (entityTypesBox !== null) {
-    const checks = entityTypesBox.querySelectorAll<HTMLInputElement>('input[type=checkbox]');
-    checks.forEach((c) => {
-      c.checked = filter.entityTypes.includes(c.id.replace('act-pill-entity-', '') as ActivityEntityType);
-    });
+/** Секция «Тип сущности»: флажки-пилюли. */
+function buildEntityTypesSection(): FilterSection {
+  const section = buildFilterBlock("Тип сущности", {
+    isNonEmpty: () => filter.entityTypes.length > 0,
+  });
+  const box = div("activity-pills");
+  for (const opt of ENTITY_TYPE_OPTIONS) {
+    box.append(buildPill(opt.value, ENTITY_LABELS[opt.value] ?? opt.value, "entity"));
   }
-  if (actionsBox !== null) {
-    const checks = actionsBox.querySelectorAll<HTMLInputElement>('input[type=checkbox]');
-    checks.forEach((c) => {
-      c.checked = filter.actions.includes(c.id.replace('act-pill-action-', '') as ActionFilter);
-    });
-  }
+  section.body.append(box);
+  return section;
+}
+
+/** Секция «Действие»: флажки-пилюли. */
+function buildActionsSection(): FilterSection {
+  const section = buildFilterBlock("Действие", { isNonEmpty: () => filter.actions.length > 0 });
+  const box = div("activity-pills");
+  for (const action of ACTIONS) box.append(buildPill(action, ACTION_LABELS[action], "action"));
+  section.body.append(box);
+  return section;
+}
+
+/** Перестраивает панель отбора из состояния — секции общего каркаса. */
+function renderFilterPanel(): void {
+  const area = filterPanelHost;
+  if (area === null) return;
+  area.replaceChildren();
+
+  const sections: FilterSection[] = [];
+  const touch = (): void => {
+    for (const section of sections) section.refresh();
+  };
+  const ctx: FilterFormContext = {
+    networkId: requireNetworkId(),
+    getState: () => filter,
+    registry: new Map(),
+    touch,
+  };
+
+  sections.push(
+    buildKeywordsSection(ctx, {
+      placeholder: "название* -тест",
+      tooltip: "Поиск по снимку entity_title (через пробел, * и - как в Структурах)",
+      onEnter: () => void applyQuery(),
+    }),
+    buildDatesSection(
+      ctx,
+      { get: () => false, set: () => undefined },
+      {
+        title: "Период",
+        ranges: [
+          {
+            label: "Период",
+            getFrom: () => filter.createdAfter,
+            getTo: () => filter.createdBefore,
+            setFrom: (v) => {
+              filter.createdAfter = v;
+            },
+            setTo: (v) => {
+              filter.createdBefore = v;
+            },
+          },
+        ],
+        isNonEmpty: () => filter.createdAfter !== "" || filter.createdBefore !== "",
+      },
+    ),
+    buildAuthorConditionSection(ctx, {
+      title: "Пользователь",
+      label: "Пользователь",
+      field: "author",
+    }),
+    buildEntityTypesSection(),
+    buildActionsSection(),
+  );
+
+  buildFilterForm({
+    sections,
+    footer: [
+      buildFilterFooterButtons({
+        onApply: () => void applyQuery(),
+        onClear: () => {
+          filter = { ...DEFAULT_FILTER };
+          renderFilterPanel();
+          void applyQuery();
+        },
+      }),
+    ],
+    mount: area,
+  });
+}
+
+function mountFilterPanel(area: HTMLElement): void {
+  filterPanelHost = area;
+  renderFilterPanel();
 }
 
 // ---------------------------------------------------------------------------
@@ -549,21 +487,17 @@ async function applyQuery(): Promise<void> {
   const seq = ++querySeq;
   renderLoading();
   try {
-    const fromMs = dateToMs(filter.fromMs, false);
-    const toMs = dateToMs(filter.toMs, true);
-    // The server expects a single entity_type — we OR-combine by re-querying
-    // for each selected type. For the typical case (≤2 selections) this is
-    // cheap; for the rare multi-select it stays predictable.
-    const types = filter.entityTypes.length === 0 ? ENTITY_TYPES : filter.entityTypes;
-    const actions = filter.actions.length === 0 ? null : new Set(filter.actions);
-    // То же самое для пользователей: оператор eq/ne — один запрос на id;
-    // in/not_in — серия запросов (как для типов сущностей) с объединением.
-    // empty/not_empty — фильтр применяется клиентом (нет серверной поддержки).
-    const userQueryIds = userQueryIdsForOperator();
+    const fromMs = dateToMs(filter.createdAfter, false);
+    const toMs = dateToMs(filter.createdBefore, true);
+    // План запроса — единый конвертер критериев конструктора. Часть отбора
+    // серверный API не выражает (действие, `empty`/`not_empty`, `ne`/`not_in`,
+    // ключевые слова) — эти условия применяются клиентом ниже, в
+    // `activityRowPasses`, и помечены в `plan.clientFilter`.
+    const plan = buildActivityQueryPlan(filter, ENTITY_TYPES);
     const buckets: ActivityRow[] = [];
     let bucketTotal = 0;
-    for (const et of types) {
-      for (const uid of userQueryIds) {
+    for (const et of plan.entityTypes) {
+      for (const uid of plan.userIds) {
         const params: {
           from_ms?: number;
           to_ms?: number;
@@ -581,20 +515,13 @@ async function applyQuery(): Promise<void> {
         if (toMs !== null) params.to_ms = toMs;
         if (uid !== null) params.user_id = uid;
         const result = await etn.activity.list(networkId, params);
-        // Filter by action client-side (the server has no `action` filter on
-        // `/activity`, requirement b0c7a57c); page-level pagination is applied
-        // per-type. The resulting set is small enough for `O(n log n)` to be a
-        // no-op.
-        let filtered = actions === null
-          ? result.rows
-          : result.rows.filter((r) => actions.has(r.action as ActionFilter));
-        // empty/not_empty по пользователю — клиентский фильтр: `user_id IS NULL`.
-        if (filter.userOp === 'empty') {
-          filtered = filtered.filter((r) => r.user_id === '');
-        } else if (filter.userOp === 'not_empty') {
-          filtered = filtered.filter((r) => r.user_id !== '');
+        // Клиентская дофильтровка: у сервера нет ни `action`, ни `IS NULL`
+        // по автору, ни `NOT IN`, ни полнотекстового мини-синтаксиса по
+        // `entity_title` (требование b0c7a57c). Условие не теряется, а
+        // применяется явно здесь; пагинация — по типу сущности.
+        for (const r of result.rows) {
+          if (activityRowPasses(filter, plan, r)) buckets.push(r);
         }
-        for (const r of filtered) buckets.push(r);
         bucketTotal += result.total;
       }
     }
@@ -608,14 +535,9 @@ async function applyQuery(): Promise<void> {
         seen.add(r.id);
         merged.push(r);
       });
-    // Клиентский фильтр по keywords — минисинтаксис применяется к
-    // `entity_title` (аналог полнотекстового поиска Структур).
-    const keywords = filter.keywords.trim() === '' ? null : parseKeywords(filter.keywords);
-    const page = keywords === null
-      ? merged.slice(0, PAGE_SIZE)
-      : merged
-          .filter((r) => matchesKeywords(r.entity_title, keywords))
-          .slice(0, PAGE_SIZE);
+    // Ключевые слова уже отфильтрованы `activityRowPasses` (мини-синтаксис
+    // по `entity_title`); страница — от объединённого набора.
+    const page = merged.slice(0, PAGE_SIZE);
     if (seq !== querySeq) return;
     rows = page;
     total = bucketTotal;
@@ -633,59 +555,6 @@ async function applyQuery(): Promise<void> {
     if (seq !== querySeq) return;
     renderError(err);
   }
-}
-
-/**
- * Выдаёт список `user_id` для запросов к серверу в зависимости от оператора.
- * - `eq`/`ne` — массив из одного id (`null`, если id пустой).
- * - `in` — все выбранные id (или один пустой запрос, если никого).
- * - `not_in` — сервер не умеет NOT IN; пропускаем фильтр на сервере и
- *   отфильтруем на клиенте (см. `applyQuery`).
- * - `empty`/`not_empty` — без id (фильтр по NULL на клиенте).
- */
-function userQueryIdsForOperator(): Array<string | null> {
-  if (filter.userOp === 'empty' || filter.userOp === 'not_empty') return [null];
-  if (filter.userOp === 'eq' || filter.userOp === 'ne') {
-    return [filter.userId === '' ? null : filter.userId];
-  }
-  // `in` / `not_in` — серия запросов по одному id.
-  return filter.userIds.length === 0 ? [null] : filter.userIds.map((id) => id);
-}
-
-/** Минисинтаксис ключевых слов: те же правила, что и в Структурах. */
-interface ParsedKeywords {
-  include: string[];
-  exclude: string[];
-}
-
-function parseKeywords(raw: string): ParsedKeywords {
-  const tokens = raw.split(/\s+/).filter((t) => t !== '');
-  const include: string[] = [];
-  const exclude: string[] = [];
-  for (const t of tokens) {
-    if (t.startsWith('-') && t.length > 1) exclude.push(t.slice(1).toLowerCase());
-    else include.push(t.toLowerCase());
-  }
-  return { include, exclude };
-}
-
-function matchesKeywords(text: string, kw: ParsedKeywords): boolean {
-  const lower = text.toLowerCase();
-  for (const inc of kw.include) {
-    const pattern = buildKwPattern(inc);
-    if (!pattern.test(lower)) return false;
-  }
-  for (const exc of kw.exclude) {
-    const pattern = buildKwPattern(exc);
-    if (pattern.test(lower)) return false;
-  }
-  return true;
-}
-
-function buildKwPattern(token: string): RegExp {
-  // Звёздочка — подстановочный знак; иначе — точное вхождение.
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*');
-  return new RegExp(escaped, 'i');
 }
 
 async function gotoPage(next: number): Promise<void> {

@@ -38,9 +38,10 @@ describe('parseActivityState', () => {
       offset: 50,
     });
     const parsed = parseActivityState(json);
-    assert.equal(parsed.filter.fromMs, '2024-06-01');
-    assert.equal(parsed.filter.toMs, '2024-06-30');
-    assert.equal(parsed.filter.userId, 'user-123');
+    // Старый формат L4 (`fromMs`/`toMs`/`userId`) читается в общую модель.
+    assert.equal(parsed.filter.createdAfter, '2024-06-01');
+    assert.equal(parsed.filter.createdBefore, '2024-06-30');
+    assert.equal(parsed.filter.authorId, 'user-123');
     assert.deepEqual(parsed.filter.entityTypes, ['thought', 'link']);
     assert.deepEqual(parsed.filter.actions, ['created', 'updated']);
     assert.equal(parsed.offset, 50);
@@ -94,14 +95,8 @@ describe('parseActivityState', () => {
     const json = JSON.stringify({ filter: { userId: 'u-1' } });
     const parsed = parseActivityState(json);
     const expected: ActivityFilterState = {
-      keywords: '',
-      fromMs: '',
-      toMs: '',
-      userOp: 'eq',
-      userId: 'u-1',
-      userIds: [],
-      entityTypes: [],
-      actions: [],
+      ...DEFAULT_FILTER,
+      authorId: 'u-1',
     };
     assert.deepEqual(parsed.filter, expected);
     assert.equal(parsed.panelWidth, null);
