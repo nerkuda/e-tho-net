@@ -8,6 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import type { NetworkDb } from '../../db/network-db.js';
+import { LinksRestore, ThoughtsBulkUpdate, ThoughtsCreate, ThoughtsDelete, ThoughtsSetActive, ThoughtsTrash, ThoughtsUpdate } from '../../contracts.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
 import { createThoughtWithWarnings, deleteThought, getThoughtOrThrow, updateThought, updateThoughtWithWarnings } from '../../domain/thought-service.js';
@@ -123,7 +124,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Групповые операции (одна запись бюджета на ВЕСЬ вызов): `op` ∈ {`set_type`,`clear_type`,' +
         '`set_active`,`set_inactive`,`trash`,`link_parents`,`link_children`,`set_only_parents`,' +
         '`unlink_parents`,`unlink_children`}. Возвращает `{ affected, failures[] }`. Без `purge`/`delete`.',
-      inputSchema: BulkUpdateSchema,
+      inputSchema: ThoughtsBulkUpdate.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.bulk_update'],
     },
     (args, extra) =>
@@ -198,7 +199,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'parent of the target. Call `etn.thoughts.find_duplicates` first. `type`/`link.type` resolve a ' +
         'type by name (see `etn.types.list`). `warnings` lists the type\'s `required` properties left ' +
         'unset — follow up with `etn.properties.set`.',
-      inputSchema: CreateThoughtSchema,
+      inputSchema: ThoughtsCreate.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -272,7 +273,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Patch a thought (last-write-wins per field). `expected_version` enables optimistic concurrency — ' +
         'on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; `warnings` lists the ' +
         'new type\'s `required` properties left unset when `changes.type_id` is present.',
-      inputSchema: UpdateThoughtSchema,
+      inputSchema: ThoughtsUpdate.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -318,7 +319,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'check as `etn.thoughts.deletion_check` runs first: a `blocking` error means the thought is the ' +
         'target of blocking link-property edges or held by a layer — it is not deleted. Protected thoughts (HOME) are ' +
         'rejected. Returns { id, version: 0 }. See prompt etn.how_to_purge.',
-      inputSchema: DeleteThoughtSchema,
+      inputSchema: ThoughtsDelete.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
     },
     (args, extra) =>
@@ -370,7 +371,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Mark a thought for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
         'Does NOT run the blocking check — that only applies to the physical `etn.thoughts.delete`. ' +
         'Returns { id, version }. See prompt etn.how_to_purge.',
-      inputSchema: TrashThoughtSchema,
+      inputSchema: ThoughtsTrash.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.trash'],
     },
     (args, extra) =>
@@ -414,7 +415,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
     {
       title: 'Изменить актуальность мысли',
       description: 'Activate or deactivate a thought. The HOME thought cannot be deactivated.',
-      inputSchema: SetActiveSchema,
+      inputSchema: ThoughtsSetActive.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.set_active'],
     },
     (args, extra) =>
@@ -460,7 +461,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Restore a link from the trash (`trashed: false`). The only remaining operation of the former ' +
         '`etn.links.*` family — creation and deletion moved to property operations (0.8.1). ' +
         'Returns { id, version }.',
-      inputSchema: RestoreLinkSchema,
+      inputSchema: LinksRestore.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.restore'],
     },
     (args, extra) =>

@@ -15,12 +15,14 @@
  * эмитятся в тот же момент, когда меняется состояние таблицы `object_locks`,
  * — после успешной мутации и до ответа клиенту, чтобы клиент и его соседи
  * увидели новое состояние согласованно с REST-ответом.
+ *
+ * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`
+ * (та же валидация, что у MCP `etn.locks.*`).
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import {
-  EtnError,
   type EditAcquiredData,
   type EditClearedData,
   type EditReleasedData,
@@ -34,22 +36,8 @@ import {
   releaseLock,
   type LockRow,
 } from '../domain/lock-service.js';
-import {
-  openRouteNetworkDb,
-  queryStrings,
-  requestBody,
-  type RouteDeps,
-} from './helpers.js';
-
-/** Route params for `:networkId`. */
-interface NetworkIdParams {
-  networkId: string;
-}
-
-/** Route params for the DELETE-by-lock-id variant. */
-interface LockIdParams extends NetworkIdParams {
-  lockId: string;
-}
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { LocksAcquire, LocksClear, LocksList, LocksRelease, parseRest } from '../contracts.js';
 
 /** `/api/v1/networks*` locks routes plugin factory. */
 export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -63,19 +51,16 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
+        const input = parseRest(LocksAcquire, req);
         const auth = req.auth!;
-        const body = requestBody(req);
-        const entityType = stringField(body, 'entity_type', req.id);
-        const entityId = stringField(body, 'entity_id', req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const lock = acquireLock(ndb, {
-          entityType,
-          entityId,
+          entityType: input.entity_type,
+          entityId: input.entity_id,
           userId: auth.user.id,
           clientId: auth.clientId,
         });
-        emitEditAcquired(deps, req, networkId, auth.user.id, auth.clientId, lock);
+        emitEditAcquired(deps, req, input.network_id, auth.user.id, auth.clientId, lock);
         sendSuccess(reply, lock, { request_id: req.id });
       },
     );
@@ -87,11 +72,11 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks/:lockId',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, lockId } = req.params as LockIdParams;
+        const input = parseRest(LocksRelease, req);
         const auth = req.auth!;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const released = releaseLock(ndb, lockId, auth.user.id);
-        emitEditReleased(deps, req, networkId, released);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const released = releaseLock(ndb, input.lock_id, auth.user.id);
+        emitEditReleased(deps, req, input.network_id, released);
         // 204 — успешный release без тела.
         void reply.code(204).send();
       },
@@ -104,22 +89,11 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const q = req.query as Record<string, unknown>;
-        const userIds = queryStrings(q['user_id']);
-        const clientIds = queryStrings(q['client_id']);
-        if (userIds.length > 1 || clientIds.length > 1) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'user_id и client_id принимают ровно одно значение.',
-            { field: 'user_id|client_id' },
-            req.id,
-          );
-        }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const input = parseRest(LocksList, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const locks = listLocks(ndb, {
-          userId: userIds[0] ?? null,
-          clientId: clientIds[0] ?? null,
+          userId: input.user_id ?? null,
+          clientId: input.client_id ?? null,
         });
         sendList(reply, locks, locks.length, 0, locks.length);
       },
@@ -132,13 +106,11 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks/clear',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-        const targetUserId = stringField(body, 'user_id', req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const removed = clearLocksForUser(ndb, targetUserId);
+        const input = parseRest(LocksClear, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const removed = clearLocksForUser(ndb, input.user_id);
         for (const lock of removed) {
-          emitEditCleared(deps, req, networkId, lock, 'manual');
+          emitEditCleared(deps, req, input.network_id, lock, 'manual');
         }
         sendSuccess(reply, { cleared: removed.length }, { request_id: req.id });
       },
@@ -205,18 +177,4 @@ function emitEditCleared(
     reason,
   };
   deps.emit(req, networkId, 'edit.cleared', data);
-}
-
-/** Read a required string field, throw `VALIDATION_ERROR` when absent. */
-function stringField(obj: Record<string, unknown>, key: string, requestId: string): string {
-  const v = obj[key];
-  if (typeof v !== 'string' || v.length === 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} обязателен и должен быть непустой строкой.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return v;
 }

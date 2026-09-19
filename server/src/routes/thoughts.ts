@@ -44,24 +44,31 @@ import {
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
-  assertImageIcon,
-  fieldBoolean,
-  fieldNullableBoolean,
-  fieldNullableString,
-  fieldString,
-  fieldStringArray,
-  fieldStringOrArray,
   openRouteNetworkDb,
-  parseIconKind,
-  parseIfMatch,
   parseLinkTypeFilter,
   parseLinkTypeFilterQuery,
-  queryBoolean,
-  queryInt,
   queryStrings,
   requestBody,
   type RouteDeps,
 } from './helpers.js';
+import {
+  parseRest,
+  RestFocusBody,
+  RestFocusOrderBody,
+  RestFocusPrefsBody,
+  RestIdsBody,
+  RestIfMatch,
+  RestNeighborsQuery,
+  RestResolveIdsBody,
+} from '../contracts.js';
+import {
+  AnchorIdsSchema,
+  assertImageIcon,
+  parseBody,
+  RestThoughtCopyBody,
+  RestThoughtCreateBody,
+  RestThoughtUpdateBody,
+} from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
@@ -142,7 +149,8 @@ function parseAnchorIds(
   field: 'parent_ids' | 'child_ids',
   requestId: string,
 ): string[] {
-  if (!Array.isArray(raw) || raw.length === 0 || raw.some((v) => typeof v !== 'string' || v === '')) {
+  const res = AnchorIdsSchema.safeParse(raw);
+  if (!res.success) {
     throw new EtnError(
       'VALIDATION_ERROR',
       `${field} должен быть непустым массивом непустых строк.`,
@@ -150,7 +158,7 @@ function parseAnchorIds(
       requestId,
     );
   }
-  return [...new Set(raw as string[])];
+  return [...new Set(res.data)];
 }
 
 /** Convert a comma-separated synonym string into an array (service dedupes). */
@@ -175,96 +183,7 @@ function parseThoughtCopyBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtCopyInput {
-  const sourceNetworkId = fieldString(body, 'source_network_id', requestId);
-  if (sourceNetworkId === undefined || sourceNetworkId === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'source_network_id обязателен и не может быть пустым.',
-      { field: 'source_network_id' },
-      requestId,
-    );
-  }
-  const parentThoughtId = fieldString(body, 'parent_thought_id', requestId);
-  if (parentThoughtId === undefined || parentThoughtId === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'parent_thought_id обязателен и не может быть пустым.',
-      { field: 'parent_thought_id' },
-      requestId,
-    );
-  }
-  const thoughtsRaw = body.thoughts;
-  const linksRaw = body.links;
-  if (!Array.isArray(thoughtsRaw) || thoughtsRaw.length === 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'thoughts должен быть непустым массивом снимков мыслей.',
-      { field: 'thoughts' },
-      requestId,
-    );
-  }
-  const thoughts: import('@etn/shared').ThoughtCopyItem[] = [];
-  for (const [idx, raw] of thoughtsRaw.entries()) {
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `thoughts[${idx}] должен быть объектом.`,
-        { field: `thoughts[${idx}]` },
-        requestId,
-      );
-    }
-    const item = raw as Record<string, unknown>;
-    // The snapshot is a copy-paste extension: it carries the original
-    // thought id under `source_id` so the result map can hand it back.
-    // We do not enforce that it parses as a UUID here — the server is
-    // permissive (a missing source_id yields `thought_id_map[''] = …`),
-    // but when present we make sure it has the canonical shape.
-    if (
-      item['source_id'] !== undefined &&
-      item['source_id'] !== null &&
-      item['source_id'] !== '' &&
-      (typeof item['source_id'] !== 'string' ||
-        !UUID_RE_FOR_SOURCE.test(item['source_id'] as string))
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `thoughts[${idx}].source_id должен быть UUID-строкой.`,
-        { field: `thoughts[${idx}].source_id` },
-        requestId,
-      );
-    }
-    thoughts.push(item as unknown as import('@etn/shared').ThoughtCopyItem);
-  }
-
-  const links: import('@etn/shared').ThoughtCopyLink[] = [];
-  if (linksRaw !== undefined) {
-    if (!Array.isArray(linksRaw)) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'links должен быть массивом.',
-        { field: 'links' },
-        requestId,
-      );
-    }
-    for (const [idx, raw] of linksRaw.entries()) {
-      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          `links[${idx}] должен быть объектом.`,
-          { field: `links[${idx}]` },
-          requestId,
-        );
-      }
-      links.push(raw as unknown as import('@etn/shared').ThoughtCopyLink);
-    }
-  }
-
-  return {
-    source_network_id: sourceNetworkId,
-    parent_thought_id: parentThoughtId,
-    thoughts,
-    links,
-  };
+  return parseBody(RestThoughtCopyBody, body, requestId) as unknown as ThoughtCopyInput;
 }
 
 /** Parse and validate the body of `POST /thoughts`. */
@@ -272,77 +191,25 @@ function parseThoughtCreateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtCreateInput {
-  const title = fieldString(body, 'title', requestId);
-  if (title === undefined || title.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'title обязателен и не может быть пустым.',
-      { field: 'title' },
-      requestId,
-    );
-  }
-
-  let createLink: ThoughtCreateInput['create_link'];
-  const createLinkRaw = body.create_link;
-  if (createLinkRaw !== undefined) {
-    if (
-      typeof createLinkRaw !== 'object' ||
-      createLinkRaw === null ||
-      Array.isArray(createLinkRaw)
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'create_link должен быть объектом.',
-        { field: 'create_link' },
-        requestId,
-      );
-    }
-    const cl = createLinkRaw as Record<string, unknown>;
-    const direction = fieldString(cl, 'direction', requestId);
-    if (direction !== 'parent' && direction !== 'child') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'create_link.direction должен быть "parent" или "child".',
-        { field: 'create_link.direction' },
-        requestId,
-      );
-    }
-    const targetThoughtId = fieldString(cl, 'target_thought_id', requestId);
-    if (targetThoughtId === undefined || targetThoughtId === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'create_link.target_thought_id обязателен.',
-        { field: 'create_link.target_thought_id' },
-        requestId,
-      );
-    }
-    createLink = {
-      direction,
-      target_thought_id: targetThoughtId,
-      type_id: fieldNullableString(cl, 'type_id', requestId) ?? null,
-    };
-  }
-
-  const icon = fieldNullableString(body, 'icon', requestId);
-  const iconKind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
+  const out = parseBody(RestThoughtCreateBody, body, requestId);
+  const iconKind = out.icon_kind as ThoughtCreateInput['icon_kind'];
   if (iconKind === 'image') {
-    assertImageIcon(icon, requestId);
+    assertImageIcon(out.icon as string | null | undefined, requestId);
   }
-
   return {
-    title,
-    synonyms: toSynonymArray(fieldStringOrArray(body, 'synonyms', requestId)),
-    type_id: fieldNullableString(body, 'type_id', requestId),
-    icon,
+    title: out.title as string,
+    synonyms: toSynonymArray(out.synonyms as string[] | string | undefined),
+    type_id: (out.type_id ?? null) as string | null,
+    icon: (out.icon ?? null) as string | null,
     icon_kind: iconKind,
-    active: fieldBoolean(body, 'active', requestId),
-    fg_color: fieldNullableString(body, 'fg_color', requestId),
-    bg_color: fieldNullableString(body, 'bg_color', requestId),
-    font_bold: fieldBoolean(body, 'font_bold', requestId),
-    font_italic: fieldBoolean(body, 'font_italic', requestId),
-    font_underline: fieldBoolean(body, 'font_underline', requestId),
-    font_strike: fieldBoolean(body, 'font_strike', requestId),
-    create_link: createLink,
+    active: out.active as boolean | undefined,
+    fg_color: (out.fg_color ?? null) as string | null,
+    bg_color: (out.bg_color ?? null) as string | null,
+    font_bold: out.font_bold as boolean | undefined,
+    font_italic: out.font_italic as boolean | undefined,
+    font_underline: out.font_underline as boolean | undefined,
+    font_strike: out.font_strike as boolean | undefined,
+    create_link: out.create_link as ThoughtCreateInput['create_link'],
   };
 }
 
@@ -351,54 +218,25 @@ function parseThoughtUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtUpdateInput {
+  const out = parseBody(RestThoughtUpdateBody, body, requestId);
   const changes: ThoughtUpdateInput = {};
-  if (body.title !== undefined) {
-    changes.title = fieldString(body, 'title', requestId);
-  }
-  if (body.synonyms !== undefined) {
-    changes.synonyms = toSynonymArray(fieldStringOrArray(body, 'synonyms', requestId));
-  }
-  if (body.type_id !== undefined) {
-    changes.type_id = fieldNullableString(body, 'type_id', requestId);
-  }
-  if (body.icon !== undefined) {
-    changes.icon = fieldNullableString(body, 'icon', requestId);
-  }
-  if (body.icon_kind !== undefined) {
-    changes.icon_kind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
-  }
-  if (body.icon_attachment_id !== undefined) {
-    changes.icon_attachment_id = fieldNullableString(body, 'icon_attachment_id', requestId);
-  }
-  // An image icon must be a valid data/http(s) URL within the size limit.
+  if (out.title !== undefined) changes.title = out.title as string;
+  if (out.synonyms !== undefined) changes.synonyms = toSynonymArray(out.synonyms as string[] | string | undefined);
+  if (out.type_id !== undefined) changes.type_id = out.type_id as string | null;
+  if (out.icon !== undefined) changes.icon = out.icon as string | null;
+  if (out.icon_kind !== undefined) changes.icon_kind = out.icon_kind as ThoughtUpdateInput['icon_kind'];
+  if (out.icon_attachment_id !== undefined) changes.icon_attachment_id = out.icon_attachment_id as string | null;
   if (changes.icon_kind === 'image') {
     assertImageIcon(changes.icon, requestId);
   }
-  if (body.active !== undefined) {
-    changes.active = fieldBoolean(body, 'active', requestId);
-  }
-  if (body.marked_for_deletion !== undefined) {
-    changes.marked_for_deletion = fieldBoolean(body, 'marked_for_deletion', requestId);
-  }
-  if (body.fg_color !== undefined) {
-    changes.fg_color = fieldNullableString(body, 'fg_color', requestId);
-  }
-  if (body.bg_color !== undefined) {
-    changes.bg_color = fieldNullableString(body, 'bg_color', requestId);
-  }
-  // font_* accept null ("inherit from type"); the service flips the manual bit.
-  if (body.font_bold !== undefined) {
-    changes.font_bold = fieldNullableBoolean(body, 'font_bold', requestId);
-  }
-  if (body.font_italic !== undefined) {
-    changes.font_italic = fieldNullableBoolean(body, 'font_italic', requestId);
-  }
-  if (body.font_underline !== undefined) {
-    changes.font_underline = fieldNullableBoolean(body, 'font_underline', requestId);
-  }
-  if (body.font_strike !== undefined) {
-    changes.font_strike = fieldNullableBoolean(body, 'font_strike', requestId);
-  }
+  if (out.active !== undefined) changes.active = out.active as boolean;
+  if (out.marked_for_deletion !== undefined) changes.marked_for_deletion = out.marked_for_deletion as boolean;
+  if (out.fg_color !== undefined) changes.fg_color = out.fg_color as string | null;
+  if (out.bg_color !== undefined) changes.bg_color = out.bg_color as string | null;
+  if (out.font_bold !== undefined) changes.font_bold = out.font_bold as boolean | null;
+  if (out.font_italic !== undefined) changes.font_italic = out.font_italic as boolean | null;
+  if (out.font_underline !== undefined) changes.font_underline = out.font_underline as boolean | null;
+  if (out.font_strike !== undefined) changes.font_strike = out.font_strike as boolean | null;
   return changes;
 }
 
@@ -483,8 +321,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const body = requestBody(req);
-        const override = fieldBoolean(body, 'show_inactive', req.id);
+        const override = parseRest(RestFocusBody, req).show_inactive as boolean | undefined;
         const showInactive = resolveShowInactive(app, req, networkId, override);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Задача c965ad03: фильтр обхода по типам связей — зоны, рёбра и
@@ -497,7 +334,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           req,
           ndb,
           networkId,
-          parseLinkTypeFilter(body, req.id),
+          parseLinkTypeFilter(requestBody(req), req.id),
         );
         const response = focus(ndb, req.auth!.user.id, id, { showInactive, linkFilter });
         deps.emit(req, networkId, 'thought-view.updated', {
@@ -566,7 +403,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
+        const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseThoughtUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
@@ -597,7 +434,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
+        const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Получаем снимок мысли до удаления — он уйдёт в activity_log.
         const existing = getThought(ndb, id);
@@ -634,7 +471,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const ids = fieldStringArray(requestBody(req), 'ids', req.id);
+        const ids = [...new Set(parseRest(RestIdsBody, req).ids as unknown as string[])];
         if (ids === undefined || ids.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
@@ -658,52 +495,23 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/:id/neighbors',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as ThoughtIdParams;
-        const query = req.query as Record<string, unknown>;
-
-        const dirRaw = queryStrings(query.dir)[0];
-        if (dirRaw === undefined || !(FOCUS_DIRS as readonly string[]).includes(dirRaw)) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Параметр dir обязателен: parents|children|siblings.',
-            { field: 'dir', allowed: FOCUS_DIRS },
-            req.id,
-          );
-        }
-        const sortRaw = queryStrings(query.sort)[0];
-        if (sortRaw !== undefined && !(SORT_KINDS as readonly string[]).includes(sortRaw)) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Недопустимый sort.',
-            { field: 'sort', allowed: SORT_KINDS },
-            req.id,
-          );
-        }
-        const orderRaw = queryStrings(query.order)[0];
-        if (orderRaw !== undefined && !(SORT_ORDERS as readonly string[]).includes(orderRaw)) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Недопустимый order.',
-            { field: 'order', allowed: SORT_ORDERS },
-            req.id,
-          );
-        }
-        const typeId = queryStrings(query.type_id)[0];
+        const { id } = req.params as ThoughtIdParams;
+        const input = parseRest(RestNeighborsQuery, req);
+        const networkId = input.network_id as string;
+        const dirRaw = input.dir as string;
+        const sortRaw = input.sort as string | undefined;
+        const orderRaw = input.order as string | undefined;
+        const typeId = input.type_id as string | undefined;
         // Задача c965ad03: фильтр обхода по типам связей (repeatable
         // `link_type_id` + `include_structural`).
-        const linkFilter = parseLinkTypeFilterQuery(query, req.id);
-        const limit = queryInt(query.limit, 50, { field: 'limit', min: 1, requestId: req.id });
-        const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
+        const linkFilter = parseLinkTypeFilterQuery(req.query as Record<string, unknown>, req.id);
+        const limit = input.limit ?? 50;
+        const offset = input.offset ?? 0;
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const neighborOpts = {
           userId: req.auth!.user.id,
-          showInactive: resolveShowInactive(
-            app,
-            req,
-            networkId,
-            queryBoolean(query.show_inactive, 'show_inactive', req.id),
-          ),
+          showInactive: resolveShowInactive(app, req, networkId, input.show_inactive as boolean | undefined),
           sort: sortRaw as SortKind | undefined,
           order: orderRaw as SortOrder | undefined,
           typeId,
@@ -1005,17 +813,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/resolve',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-        const ids = fieldStringArray(body, 'ids', req.id);
-        if (ids === undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'ids обязателен (массив строк).',
-            { field: 'ids' },
-            req.id,
-          );
-        }
+        const input = parseRest(RestResolveIdsBody, req);
+        const networkId = (req.params as NetworkIdParams).networkId;
+        const ids = input.ids as unknown as string[];
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const refs = resolveThoughts(ndb, ids);
         sendList(reply, refs, refs.length, 0, refs.length);
@@ -1108,32 +908,24 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/:fid/focus-preferences',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, fid } = req.params as FocusIdParams;
-        const body = requestBody(req);
-        const dir = fieldString(body, 'dir', req.id);
-        const sort = fieldString(body, 'sort', req.id);
-        const order = fieldString(body, 'order', req.id);
-        if (dir === undefined || sort === undefined || order === undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'dir, sort и order обязательны.',
-            { field: 'dir' },
-            req.id,
-          );
-        }
+        const input = parseRest(RestFocusPrefsBody, req);
+        const { networkId, fid } = req.params as FocusIdParams & NetworkIdParams;
+        const dir = input.dir as string;
+        const sort = input.sort as string;
+        const order = input.order as string;
         // The focus service validates the enum values itself.
-        const input: FocusPreferencesInput = {
+        const parsed: FocusPreferencesInput = {
           dir: dir as FocusDir,
           sort: sort as SortKind,
           order: order as SortOrder,
         };
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = setFocusPreferences(ndb, req.auth!.user.id, fid, input);
+        const result = setFocusPreferences(ndb, req.auth!.user.id, fid, parsed);
         deps.emit(req, networkId, 'user-focus-preferences.updated', {
           focus_thought_id: fid,
-          dir: input.dir,
-          sort: input.sort,
-          sort_order: input.order,
+          dir: parsed.dir,
+          sort: parsed.sort,
+          sort_order: parsed.order,
         });
         sendSuccess(reply, result);
       },
@@ -1145,30 +937,22 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/:fid/focus-order',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, fid } = req.params as FocusIdParams;
-        const body = requestBody(req);
-        const dir = fieldString(body, 'dir', req.id);
-        const orderedIds = fieldStringArray(body, 'ordered_ids', req.id);
-        if (dir === undefined || orderedIds === undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'dir и ordered_ids обязательны.',
-            { field: 'dir' },
-            req.id,
-          );
-        }
-        const input: FocusOrderInput = {
+        const input = parseRest(RestFocusOrderBody, req);
+        const { networkId, fid } = req.params as FocusIdParams & NetworkIdParams;
+        const dir = input.dir as string;
+        const orderedIds = input.ordered_ids as unknown as string[];
+        const parsed: FocusOrderInput = {
           dir: dir as FocusOrderInput['dir'],
           ordered_ids: orderedIds,
         };
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        setFocusOrder(ndb, req.auth!.user.id, fid, input);
+        setFocusOrder(ndb, req.auth!.user.id, fid, parsed);
         deps.emit(req, networkId, 'user-focus-order.updated', {
           focus_thought_id: fid,
-          dir: input.dir,
+          dir: parsed.dir,
           ordered_ids: orderedIds,
         });
-        sendSuccess(reply, { focus_thought_id: fid, dir: input.dir, ordered_ids: orderedIds });
+        sendSuccess(reply, { focus_thought_id: fid, dir: parsed.dir, ordered_ids: orderedIds });
       },
     );
   };

@@ -2,11 +2,14 @@
  * layers.ts — MCP-инструменты области «registerLayersReadTools, registerLayersWriteTools».
  * Вынесено из `tools.ts` (ADR 8c93f03a, веха 7 версии 0.8.2) без изменения
  * поведения: фасады разбиты на модули по областям, логика — в домене.
+ *
+ * Веха 8 (задача c9d5f21e): схемы входа — единые контракты из
+ * `contracts.ts`, общие с REST-роутами; одинаковый невалидный вход даёт
+ * одинаковые код и сообщение в обоих фасадах.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
 import { closeNetworkDb, openNetworkDb } from '../../db/network-db.js';
 import { createLayer, deleteLayerWithEvents, getLayerSnapshot, layerSubtreeIds, listLayers, setSessionLayer, updateLayer } from '../../domain/layer-service.js';
 import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../domain/layer-diff-service.js';
@@ -16,17 +19,11 @@ import { BRANCHABLE_TABLES } from '../../db/layer-chain.js';
 import type { BranchableTable } from '../../db/layer-write.js';
 import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { LayerMergeReport } from '@etn/shared';
-import { search } from '../../domain/search-service.js';
 import { recordLayerActivity } from '../../domain/activity-service.js';
-import { parseChronicleQueryBody, queryChronicle } from '../../domain/chronicle-service.js';
 import { auditAgentCall, emitAgentEvent, mcpLayerClientId, openMemberNetworkBase, requireWritable, requireWriteBudget, resolveRuntimeLayer, runTool, runWriteTool } from '../context.js';
-import { NetworkId, LayerId, ExpectedVersion } from './shared.js';
+import { LayersCreate, LayersDelete, LayersDiff, LayersDiffDoc, LayersList, LayersMerge, LayersSelect, LayersUpdate } from '../../contracts.js';
 
 export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
-  const LayersListSchema = z.object({
-    network_id: NetworkId,
-    include_service: z.boolean().optional(),
-  });
   mcp.registerTool(
     'etn.layers.list',
     {
@@ -35,7 +32,7 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
         'All layers of the network with hierarchy metadata: id, parent_id, title, comment, git_branch, ' +
         'depth, children_count (the DELETE cascade confirmation) and `current` — true on the calling key\'s ' +
         'own session layer. Service (reserve) layers are hidden unless `include_service: true`.',
-      inputSchema: LayersListSchema,
+      inputSchema: LayersList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.list'],
     },
     (args) =>
@@ -50,10 +47,6 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
   // «чем слой отличается» (13-layers.md §10.3, §15): the structural link
   // diff and the deterministic textual documents. Both read on two
   // connections — the layer's own context and its parent's.
-  const LayersDiffSchema = z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-  });
   mcp.registerTool(
     'etn.layers.diff',
     {
@@ -63,7 +56,7 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
         '(1:1 swaps of the parent link)/reorder_collapsed (position-only batches); `overridden` — the ids ' +
         'physically present in the layer (shadow rows, inserts and tombstones). The textual diff ' +
         '(`etn.layers.diff_doc`) is blind to all of these — use both.',
-      inputSchema: LayersDiffSchema,
+      inputSchema: LayersDiff.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.diff'],
     },
     (args) =>
@@ -83,7 +76,7 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
         'Textual diff payload of a layer against its parent: two deterministically assembled markdown ' +
         'documents (`layer_doc`/`target_doc`) for a plain line-by-line comparison (all visible thoughts ' +
         'ordered by id).',
-      inputSchema: LayersDiffSchema,
+      inputSchema: LayersDiffDoc.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.diff_doc'],
     },
     (args) =>
@@ -108,14 +101,6 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
 }
 
 export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
-  const LayersCreateSchema = z.object({
-    network_id: NetworkId,
-    title: z.string().min(1),
-    /** Defaults to the calling key's current session layer (§2.3). */
-    parent_id: LayerId.optional(),
-    comment: z.string().nullable().optional(),
-    git_branch: z.string().nullable().optional(),
-  });
   mcp.registerTool(
     'etn.layers.create',
     {
@@ -125,7 +110,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
         '`comment` is strongly encouraged: it is how the next agent understands the layer\'s purpose. ' +
         'Depth is capped at 4 ordinary layers above the base. Does not switch the session — call ' +
         '`etn.layers.select` for that.',
-      inputSchema: LayersCreateSchema,
+      inputSchema: LayersCreate.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -162,13 +147,6 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LayersUpdateSchema = z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-    title: z.string().min(1).optional(),
-    comment: z.string().nullable().optional(),
-    expected_version: ExpectedVersion,
-  });
   mcp.registerTool(
     'etn.layers.update',
     {
@@ -177,7 +155,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
         'Rename a layer and/or edit its comment. The base layer\'s title is fixed («Основа») — renaming it ' +
         'is a VALIDATION_ERROR; editing its comment is allowed. `expected_version` — the usual optimistic ' +
         'lock (409 VERSION_CONFLICT on mismatch).',
-      inputSchema: LayersUpdateSchema,
+      inputSchema: LayersUpdate.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.update'],
     },
     (args, extra) =>
@@ -223,13 +201,6 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LayersDeleteSchema = z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-    /** Required confirmation once the layer has descendants (§2.4) — the
-     * `children_count` the agent just read from `etn.layers.list`. */
-    cascade: z.number().int().min(0).optional(),
-  });
   mcp.registerTool(
     'etn.layers.delete',
     {
@@ -240,7 +211,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
         'descendants → 422 with the actual count). Physically removes every shadow row and tombstone of ' +
         'the subtree (nothing is transferred to the parent) and auto-purges the trash. The base layer ' +
         'cannot be deleted.',
-      inputSchema: LayersDeleteSchema,
+      inputSchema: LayersDelete.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.delete'],
     },
     (args, extra) =>
@@ -296,10 +267,6 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LayersSelectSchema = z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-  });
   mcp.registerTool(
     'etn.layers.select',
     {
@@ -309,7 +276,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
         'writes alike — runs in the new layer\'s context. A service (reserve) layer cannot be selected; ' +
         'selecting the current layer again is a no-op. `etn.changes.list` forces a full resync once ' +
         '`since_seq` predates this switch.',
-      inputSchema: LayersSelectSchema,
+      inputSchema: LayersSelect.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.select'],
     },
     (args, extra) =>
@@ -333,12 +300,6 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LayersMergeSchema = z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-    /** Closed subset `{ table: [logical row ids…] }` — omit for a full merge. */
-    tables: z.record(z.string(), z.array(z.string().min(1))).optional(),
-  });
   mcp.registerTool(
     'etn.layers.merge',
     {
@@ -349,7 +310,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
         'operation with VALIDATION_ERROR (`conflicts`/`missing_closure`) — no partial application. Returns ' +
         '{ applied, skipped, reorder_collapsed, reserve_layer_id (auto-created pre-merge state for manual ' +
         'rollback), purged }. See prompt etn.how_to_merge_partial.',
-      inputSchema: LayersMergeSchema,
+      inputSchema: LayersMerge.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.merge'],
     },
     (args, extra) =>

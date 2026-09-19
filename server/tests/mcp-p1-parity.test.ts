@@ -109,7 +109,7 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
           arguments: { network_id: ctx.networkId, thought_ids: ids },
         });
         assert.equal(result.isError, true);
-        assert.match(toolText(result), /Invalid arguments|too large/i);
+        assert.match(toolText(result), /ETN error \[VALIDATION_ERROR\]: thought_ids должен содержать не более/);
       } finally {
         await handle.close();
       }
@@ -302,8 +302,7 @@ describe('etn.thoughts.bulk_update (0.7.2)', { skip: !nativeAvailable() }, () =>
           },
         });
         assert.equal(result.isError, true);
-        assert.match(toolText(result), /Invalid arguments/);
-        assert.match(toolText(result), /type_id or type/);
+        assert.match(toolText(result), /ETN error \[VALIDATION_ERROR\]: provide at most one of type_id or type/);
       } finally {
         await handle.close();
       }

@@ -10,22 +10,20 @@
  * `marked_for_deletion = 1` (02-data-model.md §3.1.2). Listing precomputes each
  * row's blocking check; purging physically deletes the unblocked ones and
  * silently skips the blocked ones.
+ *
+ * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import { EtnError } from '@etn/shared';
 import { sendSuccess } from '../http/responses.js';
-import { fieldStringArray, openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { listTrash, purgeTrash } from '../domain/trash-service.js';
 import { recordLinkActivity, recordThoughtActivity } from '../domain/activity-service.js';
 import { getLink } from '../domain/link-service.js';
 import { getThought } from '../domain/thought-service.js';
-
-/** Route params for a network id. */
-interface NetworkIdParams {
-  networkId: string;
-}
+import { parseRest, RestTrashList, RestTrashPurge } from '../contracts.js';
 
 /** `/api/v1/networks*` trash routes plugin factory. */
 export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -36,8 +34,8 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/trash',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const input = parseRest(RestTrashList, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         sendSuccess(reply, listTrash(ndb));
       },
     );
@@ -46,16 +44,15 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/trash/purge',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
+        const input = parseRest(RestTrashPurge, req);
         // Optional targeted purge (ошибка 8b4b7a7e): `ids` narrows the sweep to
         // the listed rows — the per-item «Удалить совсем» of the link delete
         // dialog and the trash screen. Without the field the purge keeps its
         // original "every unblocked marked row" semantics.
-        const body = requestBody(req);
         let ids: string[] | undefined;
-        if (body.ids !== undefined) {
-          const parsed = fieldStringArray(body, 'ids', req.id);
-          if (parsed === undefined || parsed.length === 0) {
+        const rawIds = input.ids as string[] | undefined;
+        if (rawIds !== undefined) {
+          if (rawIds.length === 0) {
             throw new EtnError(
               'VALIDATION_ERROR',
               'ids должен быть непустым массивом строк (или отсутствовать — очистка всей корзины).',
@@ -63,9 +60,9 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
               req.id,
             );
           }
-          ids = [...new Set(parsed)];
+          ids = [...new Set(rawIds)];
         }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         // Сохраняем снимки мыслей и связей, помеченных на удаление, ДО
         // физического удаления — после purgeTrash строк в `thoughts`/`links`
         // уже нет, и для activity_log нужен короткий снимок на момент
@@ -79,10 +76,10 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Fan out the standard deletion events so connected clients refresh.
         for (const id of deleted_thought_ids) {
           const snapshot = thoughtSnapshots.get(id);
-          deps.emit(req, networkId, 'thought.deleted', { id });
+          deps.emit(req, input.network_id, 'thought.deleted', { id });
           if (snapshot) {
             recordThoughtActivity(ndb, {
-              networkId,
+              networkId: input.network_id,
               userId,
               action: 'deleted',
               thought: snapshot,
@@ -92,10 +89,10 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         for (const id of deleted_link_ids) {
           const snapshot = linkSnapshots.get(id);
-          deps.emit(req, networkId, 'link.deleted', { id });
+          deps.emit(req, input.network_id, 'link.deleted', { id });
           if (snapshot) {
             recordLinkActivity(ndb, {
-              networkId,
+              networkId: input.network_id,
               userId,
               action: 'deleted',
               link: snapshot,

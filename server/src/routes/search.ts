@@ -29,17 +29,8 @@ import {
 } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import {
-  fieldBoolean,
-  fieldString,
-  fieldStringArray,
-  openRouteNetworkDb,
-  queryBoolean,
-  queryInt,
-  queryStrings,
-  requestBody,
-  type RouteDeps,
-} from './helpers.js';
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findMentionsInTexts, search } from '../domain/search-service.js';
 
@@ -53,90 +44,6 @@ function extensionFor(contentType: string): string {
   if (contentType.includes('markdown')) return 'md';
   if (contentType.includes('zip')) return 'etnx';
   return 'bin';
-}
-
-/** Parse the optional `etnx` block of an export request (phase P, P2). */
-function parseEtnxOptions(
-  body: Record<string, unknown>,
-  requestId: string,
-): ExportEtnxOptions | undefined {
-  const raw = body['etnx'];
-  if (raw === undefined) return undefined;
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Поле etnx должно быть объектом.',
-      { field: 'etnx' },
-      requestId,
-    );
-  }
-  const obj = raw as Record<string, unknown>;
-  const opts: ExportEtnxOptions = {};
-  if (obj['include_types'] !== undefined) {
-    if (typeof obj['include_types'] !== 'boolean') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'etnx.include_types должен быть boolean.',
-        { field: 'etnx.include_types' },
-        requestId,
-      );
-    }
-    opts.include_types = obj['include_types'];
-  }
-  if (obj['include_attachments'] !== undefined) {
-    if (typeof obj['include_attachments'] !== 'boolean') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'etnx.include_attachments должен быть boolean.',
-        { field: 'etnx.include_attachments' },
-        requestId,
-      );
-    }
-    opts.include_attachments = obj['include_attachments'];
-  }
-  if (obj['include_chronology'] !== undefined) {
-    if (typeof obj['include_chronology'] !== 'boolean') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'etnx.include_chronology должен быть boolean.',
-        { field: 'etnx.include_chronology' },
-        requestId,
-      );
-    }
-    opts.include_chronology = obj['include_chronology'];
-  }
-  if (obj['include_subtree'] !== undefined) {
-    if (typeof obj['include_subtree'] !== 'boolean') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'etnx.include_subtree должен быть boolean.',
-        { field: 'etnx.include_subtree' },
-        requestId,
-      );
-    }
-    opts.include_subtree = obj['include_subtree'];
-  }
-  if (obj['subtree_depth'] !== undefined) {
-    if (typeof obj['subtree_depth'] !== 'number' || !Number.isInteger(obj['subtree_depth'])) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'etnx.subtree_depth должен быть целым числом.',
-        { field: 'etnx.subtree_depth' },
-        requestId,
-      );
-    }
-    const depth = obj['subtree_depth'] as number;
-    if (depth < 1 || depth > ETNX_SUBTREE_DEPTH_MAX) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `etnx.subtree_depth должен быть в диапазоне 1..${ETNX_SUBTREE_DEPTH_MAX}.`,
-        { field: 'etnx.subtree_depth', min: 1, max: ETNX_SUBTREE_DEPTH_MAX },
-        requestId,
-      );
-    }
-    opts.subtree_depth = depth;
-  }
-  return opts;
 }
 
 /** Route params for a network id. */
@@ -195,51 +102,18 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/search',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const query = req.query as Record<string, unknown>;
+        const input = parseRest(RestSearchQuery, req);
+        const networkId = input.network_id;
+        const q = input.q as string;
 
-        const q = queryStrings(query.q)[0];
-        if (q === undefined || q.trim() === '') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Параметр q обязателен и не может быть пустым.',
-            { field: 'q' },
-            req.id,
-          );
-        }
-
-        const scopeRaw = queryStrings(query.scope)[0];
-        if (scopeRaw !== undefined && !ACCEPTED_SCOPES.has(scopeRaw)) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Недопустимый scope.',
-            { field: 'scope', allowed: [...ACCEPTED_SCOPES] },
-            req.id,
-          );
-        }
+        const scopeRaw = input.scope as string | undefined;
         // Legacy `thoughts` → two granular queries merged (names + texts).
         const granularScopes: SearchScope[] = LEGACY_SCOPE_MAP[scopeRaw ?? ''] ?? [
           (scopeRaw as SearchScope | undefined) ?? 'all',
         ];
 
-        const inParam = queryStrings(query.in)[0];
-        if (inParam !== undefined && inParam !== 'subtree') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'in должен быть равен "subtree".',
-            { field: 'in' },
-            req.id,
-          );
-        }
-        const fromThoughtId = queryStrings(query.from_thought_id)[0];
-        if (inParam === 'subtree' && fromThoughtId === undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'При in=subtree нужен from_thought_id.',
-            { field: 'from_thought_id' },
-            req.id,
-          );
-        }
+        const inParam = input.in as 'subtree' | undefined;
+        const fromThoughtId = input.from_thought_id as string | undefined;
 
         const pref = app.systemDb.getNetworkPreference(
           req.auth!.user.id,
@@ -247,24 +121,24 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           PREF_KEY.SHOW_INACTIVE,
         );
         const showInactiveDefault = pref?.value === true;
-        const limit = queryInt(query.limit, 50, { field: 'limit', min: 1, requestId: req.id });
-        const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
+        const limit = input.limit ?? 50;
+        const offset = input.offset ?? 0;
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const requestBase = {
           q,
           in: inParam as 'subtree' | undefined,
           from_thought_id: fromThoughtId,
-          type_id: queryStrings(query.type_id),
-          link_type_id: queryStrings(query.link_type_id),
-          show_inactive: queryBoolean(query.show_inactive, 'show_inactive', req.id),
-          trashed: queryBoolean(query.trashed, 'trashed', req.id),
+          type_id: (input.type_id ?? []) as string[],
+          link_type_id: (input.link_type_id ?? []) as string[],
+          show_inactive: input.show_inactive as boolean | undefined,
+          trashed: input.trashed as boolean | undefined,
           // Фильтры авторства (задача 59119797): query-параметры
           // `author_id`/`editor_id`, семантически эквивалентные MCP-тулу
           // `etn.thoughts.search`. Пустая строка и отсутствие — фильтр не
           // применяется (domain-слой сам приводит к `null`).
-          author_id: queryStrings(query.author_id)[0],
-          editor_id: queryStrings(query.editor_id)[0],
+          author_id: input.author_id as string | undefined,
+          editor_id: input.editor_id as string | undefined,
           limit,
           offset,
         };
@@ -290,38 +164,11 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/mentions/scan',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-
-        const texts = fieldStringArray(body, 'texts', req.id);
-        if (texts === undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'texts обязателен (массив строк).',
-            { field: 'texts' },
-            req.id,
-          );
-        }
-        if (texts.length > MENTIONS_SCAN_MAX_TEXTS) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            `texts не может содержать больше ${MENTIONS_SCAN_MAX_TEXTS} элементов.`,
-            { field: 'texts', max: MENTIONS_SCAN_MAX_TEXTS },
-            req.id,
-          );
-        }
-        const totalChars = texts.reduce((sum, t) => sum + t.length, 0);
-        if (totalChars > MENTIONS_SCAN_MAX_TOTAL_CHARS) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            `Суммарная длина texts не может превышать ${MENTIONS_SCAN_MAX_TOTAL_CHARS} символов.`,
-            { field: 'texts', max_total_chars: MENTIONS_SCAN_MAX_TOTAL_CHARS },
-            req.id,
-          );
-        }
-
-        const showInactive = fieldBoolean(body, 'show_inactive', req.id) ?? false;
-        const excludeThoughtId = fieldString(body, 'exclude_thought_id', req.id);
+        const input = parseRest(RestMentionsScan, req);
+        const networkId = input.network_id;
+        const texts = input.texts as string[];
+        const showInactive = (input.show_inactive as boolean | undefined) ?? false;
+        const excludeThoughtId = input.exclude_thought_id as string | undefined;
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const results: MentionsScanMatch[][] = findMentionsInTexts(ndb, texts, {
@@ -338,36 +185,15 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/export',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-
-        const thoughtIds = fieldStringArray(body, 'thought_ids', req.id);
-        if (
-          thoughtIds === undefined ||
-          thoughtIds.length === 0 ||
-          thoughtIds.some((id) => id === '')
-        ) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'thought_ids обязателен (непустой массив строк).',
-            { field: 'thought_ids' },
-            req.id,
-          );
-        }
-        const format = fieldString(body, 'format', req.id);
-        if (format === undefined || !(EXPORT_FORMATS as readonly string[]).includes(format)) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Недопустимый format.',
-            { field: 'format', allowed: EXPORT_FORMATS },
-            req.id,
-          );
-        }
+        const input = parseRest(RestExport, req);
+        const networkId = input.network_id;
+        const thoughtIds = input.thought_ids as string[];
+        const format = input.format as ExportFormat;
 
         // .etnx-specific options (phase P, task P2). For other formats these
         // are ignored — passing `etnx: {...}` alongside `format: 'markdown'`
         // is allowed for forward compatibility.
-        const etnxOpts = parseEtnxOptions(body, req.id);
+        const etnxOpts = input.etnx as ExportEtnxOptions | undefined;
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // PDF is rejected by the service on MVP (VALIDATION_ERROR → 422).
@@ -389,8 +215,8 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/jobs/:jobId',
       { preHandler: [app.authPreHandler] },
       async (req: FastifyRequest, reply) => {
-        const { jobId } = req.params as JobIdParams;
-        const job = getExportJob(jobId);
+        const input = parseRest(RestJobById, req);
+        const job = getExportJob(input.job_id);
         if (job === null) {
           throw new EtnError('NOT_FOUND', 'Задача экспорта не найдена.', undefined, req.id);
         }
@@ -402,8 +228,8 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/jobs/:jobId/download',
       { preHandler: [app.authPreHandler] },
       async (req: FastifyRequest, reply) => {
-        const { jobId } = req.params as JobIdParams;
-        const content = getExportJobContent(jobId);
+        const input = parseRest(RestJobById, req);
+        const content = getExportJobContent(input.job_id);
         if (content === null) {
           throw new EtnError(
             'NOT_FOUND',

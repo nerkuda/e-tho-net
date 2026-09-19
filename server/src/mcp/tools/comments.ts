@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { COMMENT_KINDS, COMMENT_OWNER_TYPES, COMMENT_TARGETS_MAX, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { CommentTarget, McpMutationResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
+import { CommentsDelete, CommentsEdit, CommentsGet, CommentsUpdate, CommentsUpsert } from '../../contracts.js';
 import { createCommentWithTargets, deleteComment, editComment, getComment, listComments, updateComment } from '../../domain/comment-service.js';
 import { recordCommentActivity } from '../../domain/activity-service.js';
 import { subgraph } from '../../domain/graph-traversal.js';
@@ -35,7 +36,7 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         'complete `body_md`; by `thought_id` — the thought\'s permanent comment, or `{thought_id, permanent: ' +
         'null}` when absent. Use when a preview (`meta.permanent`, `subgraph` comments) reports `truncated: ' +
         'true`.',
-      inputSchema: GetCommentSchema,
+      inputSchema: CommentsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.get'],
     },
     (args) =>
@@ -96,7 +97,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         '`targets: [{owner_type, owner_id}]` (1..100, first is the primary owner) instead of ' +
         '`owner_type`+`owner_id` to attach the same entry to several thoughts/links at once. ' +
         'Returns { id, version }.',
-      inputSchema: UpsertCommentSchema,
+      inputSchema: CommentsUpsert.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -183,7 +184,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'field. `valid_from`/`valid_to` apply to chronological entries only and are ignored for permanent ' +
         'ones. `expected_version` enables optimistic concurrency — on mismatch the call fails with ' +
         'VERSION_CONFLICT. Returns { id, version }.',
-      inputSchema: UpdateCommentSchema,
+      inputSchema: CommentsUpdate.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -257,7 +258,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'text; for heading-less text the first non-empty line is a virtual ' +
         'heading. `comment_id` XOR `thought_id`. Returns ' +
         '`{ id, version, sections[], chars_total }`.',
-      inputSchema: EditCommentSchema,
+      inputSchema: CommentsEdit.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.edit'],
     },
     (args, extra) =>
@@ -330,7 +331,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
       description:
         'Delete a comment (chronological or permanent) by `comment_id` together with all its ' +
         'attachments to owners. Returns { id, version: 0 }.',
-      inputSchema: DeleteCommentSchema,
+      inputSchema: CommentsDelete.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.delete'],
     },
     (args, extra) =>

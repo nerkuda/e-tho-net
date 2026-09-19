@@ -8,6 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { openNetworkDb } from '../../db/network-db.js';
+import { NetworksDelete, NetworksStructure, NetworksWrite } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
 import type { Network } from '@etn/shared';
 import { getPermanentPreview } from '../../domain/comment-service.js';
@@ -80,7 +81,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         'property values, neighbour counters, `thought_types`. Carries `conventions`, `type_roles` and ' +
         '`instructions_ref` when the `instructions` role is set. `include_examples: true` adds `examples`. ' +
         '`has_structure: false` → empty `sections`, fall back to search/query.',
-      inputSchema: NetworksStructureSchema,
+      inputSchema: NetworksStructure.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
     },
     (args) =>
@@ -212,7 +213,7 @@ export function registerNetworksWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Upsert: omit `network_id` to create (caller → owner); pass `network_id` to patch (owner/admin). ' +
         'Editable: `display_name`, `description`, `when_to_use`, `conventions`, `examples`, `type_roles`. ' +
         'Unknown role keys / stale `type_id` → `VALIDATION_ERROR`. Returns the network card.',
-      inputSchema: NetworksWriteSchema,
+      inputSchema: NetworksWrite.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.write'],
     },
     (args, extra) => {
@@ -384,7 +385,7 @@ export function registerNetworksWriteTools(mcp: McpServer, rt: McpRuntime): void
       description:
         'Destructive: remove a network and its `data.db`. Admin only. Requires `confirm: true`. ' +
         'Returns `{ deleted, network_id, request_id }`.',
-      inputSchema: NetworksDeleteSchema,
+      inputSchema: NetworksDelete.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.delete'],
     },
     (args, extra) =>

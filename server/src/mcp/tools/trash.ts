@@ -9,6 +9,7 @@ import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
+import { TrashList, TrashPurge } from '../../contracts.js';
 import { recordLinkActivity, recordThoughtActivity } from '../../domain/activity-service.js';
 import { auditAgentCall, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { NetworkId } from './shared.js';
@@ -22,7 +23,7 @@ export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
       description:
         'The trash of the network: every thought and link with `marked_for_deletion=true`, each with its ' +
         'precomputed blocking check — what is purgeable is visible at once. See prompt etn.how_to_purge.',
-      inputSchema: TrashListSchema,
+      inputSchema: TrashList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.list'],
     },
     (args) =>
@@ -44,7 +45,7 @@ export function registerTrashPurgeTool(mcp: McpServer, rt: McpRuntime): void {
         '«Удалить всё, что возможно»: physically delete every marked thought/link for which the blocking ' +
         'check reports nothing; blocked ones are skipped silently. Returns { purged, skipped } — a ' +
         'non-empty `skipped` also carries `how_to`. See prompt etn.how_to_purge.',
-      inputSchema: TrashPurgeSchema,
+      inputSchema: TrashPurge.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.purge'],
     },
     (args, extra) =>

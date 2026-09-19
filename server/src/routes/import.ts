@@ -23,7 +23,8 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError, ETNX_MAX_BYTES, type ImportSummary } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { parseRest, RestImportCommit, RestImportPreview } from '../contracts.js';
 import { importFromEtnx, previewFromEtnx } from '../domain/import-service.js';
 import { getThought, getThoughtOrThrow } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
@@ -44,8 +45,8 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/import/preview',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (request: FastifyRequest, reply) => {
-        const body = requestBody(request);
-        const archiveB64 = readArchiveB64(body, request.id);
+        const input = parseRest(RestImportPreview, request);
+        const archiveB64 = input.archive_b64 as string;
         const buf = decodeArchive(archiveB64, request.id);
         const preview = await previewFromEtnx(buf, app.appLogger);
         return sendSuccess(reply, preview);
@@ -59,11 +60,11 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler],
       },
       async (request: FastifyRequest, reply) => {
-        const networkId = (request.params as { networkId: string }).networkId;
+        const input = parseRest(RestImportCommit, request);
+        const networkId = input.network_id;
         const ndb = openRouteNetworkDb(deps, request, networkId, app.appLogger);
-        const body = requestBody(request);
-        const archiveB64 = readArchiveB64(body, request.id);
-        const parentThoughtId = readParentThoughtId(body, request.id);
+        const archiveB64 = input.archive_b64 as string;
+        const parentThoughtId = input.parent_thought_id as string;
 
         // Validate parent up-front so the import transaction does not have to
         // roll back half-way through. Errors here surface as 4xx instead of 5xx.
@@ -71,7 +72,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const buf = decodeArchive(archiveB64, request.id);
         const actorUserId = request.auth!.user.id;
-        const slices = readImportSlices(body);
+        const slices = input.etnx as Parameters<typeof importFromEtnx>[2]['slices'] | undefined;
         const result = await importFromEtnx(
           ndb,
           buf,
@@ -146,78 +147,8 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
   };
 }
 
-/** Extract `archive_b64` (string) from a JSON body. */
-function readArchiveB64(body: Record<string, unknown>, requestId: string): string {
-  const value = body['archive_b64'];
-  if (typeof value !== 'string' || value === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Поле archive_b64 обязательно и должно быть непустой строкой.',
-      { field: 'archive_b64' },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/** Extract `parent_thought_id` (UUID) from a JSON body. */
-function readParentThoughtId(body: Record<string, unknown>, requestId: string): string {
-  const value = body['parent_thought_id'];
-  if (typeof value !== 'string' || value === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Поле parent_thought_id обязательно и должно быть UUID.',
-      { field: 'parent_thought_id' },
-      requestId,
-    );
-  }
-  return value;
-}
-
 /** Type alias for the `slices` parameter of `importFromEtnx`. */
 type ImportSlices = NonNullable<Parameters<typeof importFromEtnx>[2]['slices']>;
-
-/**
- * Extract the optional `etnx` slice toggles from a JSON body. Returns
- * `undefined` when the field is absent — the import service then defaults
- * to importing every slice.
- */
-function readImportSlices(body: Record<string, unknown>): ImportSlices | undefined {
-  const raw = body['etnx'];
-  if (raw === undefined) return undefined;
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Поле etnx должно быть объектом.', {
-      field: 'etnx',
-    });
-  }
-  const obj = raw as Record<string, unknown>;
-  const slices: ImportSlices = {};
-  if (obj['include_types'] !== undefined) {
-    if (typeof obj['include_types'] !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'etnx.include_types должен быть boolean.', {
-        field: 'etnx.include_types',
-      });
-    }
-    slices.include_types = obj['include_types'];
-  }
-  if (obj['include_attachments'] !== undefined) {
-    if (typeof obj['include_attachments'] !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'etnx.include_attachments должен быть boolean.', {
-        field: 'etnx.include_attachments',
-      });
-    }
-    slices.include_attachments = obj['include_attachments'];
-  }
-  if (obj['include_chronology'] !== undefined) {
-    if (typeof obj['include_chronology'] !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'etnx.include_chronology должен быть boolean.', {
-        field: 'etnx.include_chronology',
-      });
-    }
-    slices.include_chronology = obj['include_chronology'];
-  }
-  return slices;
-}
 
 /**
  * Decode a base64 archive string and check its size against the configured

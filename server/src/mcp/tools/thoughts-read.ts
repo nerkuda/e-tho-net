@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { FOCUS_DIRS, MCP_TOOL_ANNOTATIONS, SEARCH_SCOPES, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { checkThoughtDeletion, countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
+import { ThoughtsBacklinks, ThoughtsDeletionCheck, ThoughtsFindDuplicates, ThoughtsGet, ThoughtsMentions, ThoughtsNeighbors, ThoughtsPath, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolvePropertyIdByName } from '../../domain/property-service.js';
@@ -60,7 +61,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
         '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
         'per group.',
-      inputSchema: SearchSchema,
+      inputSchema: ThoughtsSearch.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
     (args) =>
@@ -202,7 +203,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`link_filter` — { type_ids?, include_structural? } ограничивает рёбра спуска `in_subtree_of`. Response carries ' +
         'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +
         'for inputs that came in by name.',
-      inputSchema: QuerySchema,
+      inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
     (args) =>
@@ -300,7 +301,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'имя, описание и тип-владелец каждого доступного отбора (без `definition`); ' +
         'исполняется через `etn.views.run { view_name }`. ' +
         '`view: "compact"` (default) drops visual fields.',
-      inputSchema: GetSchema,
+      inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
     (args) =>
@@ -355,7 +356,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'полнотекстовый `comment_preview` и `meta.views` (0.7.3, задача c1fa71d4) — ' +
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
         'Лимит — `maxNodesPerSubgraph`.',
-      inputSchema: ResolveSchema,
+      inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
     },
     (args) =>
@@ -442,7 +443,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
         '`link_filter` — { type_ids?, include_structural? } ограничивает связи, по которым считается соседство. ' +
         'Справочники `link_types`/`thought_types`.',
-      inputSchema: NeighborsSchema,
+      inputSchema: ThoughtsNeighbors.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
     (args) =>
@@ -614,7 +615,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',
-      inputSchema: SubgraphSchema,
+      inputSchema: ThoughtsSubgraph.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
     },
     (args) =>
@@ -777,7 +778,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Shortest path between two thoughts through undirected parent/child edges, bounded by ' +
         '`max_depth`. `link_filter` — { type_ids?, include_structural? } ограничивает рёбра, по ' +
         'которым ищется путь. Returns the id sequence or `path: null` when unreachable.',
-      inputSchema: PathSchema,
+      inputSchema: ThoughtsPath.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.path'],
     },
     (args) =>
@@ -816,7 +817,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       title: 'Где упоминается мысль',
       description:
         'Comments (on thoughts and links) whose text mentions the thought by title or synonym.',
-      inputSchema: MentionsSchema,
+      inputSchema: ThoughtsMentions.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.mentions'],
     },
     (args) =>
@@ -836,7 +837,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`[[n:<net>#<id>]]` to this thought. Distinct from `etn.thoughts.mentions` — that one finds implicit ' +
         'text matches by title/synonym via FTS5, this one explicit UUID references. Returns the same ' +
         '`MentionHit[]` shape; the thought\'s own comments are excluded.',
-      inputSchema: BacklinksSchema,
+      inputSchema: ThoughtsBacklinks.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.backlinks'],
     },
     (args) =>
@@ -855,7 +856,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Thoughts referencing this thought through link-property edges (formal links), grouped by the ' +
         'registry property: { total, groups: [{property_id, key, thoughts[]}], thought_types } — one group ' +
         'per network property. `view: "compact"` (default) drops visual fields from each referencing thought.',
-      inputSchema: UsageSchema,
+      inputSchema: ThoughtsUsage.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.usage'],
     },
     (args) =>
@@ -907,7 +908,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Check what blocks a thought from being physically deleted: use in blocking link properties, holding ' +
         'layers, and future orphans among its children. Accepts an array; returns a map id → ' +
         '{ blocked, blocking, orphaned_children }. See prompt etn.how_to_purge for the two-phase deletion flow.',
-      inputSchema: DeletionCheckThoughtsSchema,
+      inputSchema: ThoughtsDeletionCheck.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.deletion_check'],
     },
     (args) =>
@@ -938,7 +939,7 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
         'A partial match requires the typed fragments to occur inside CONSECUTIVE words of the title or of ' +
         'one synonym, in the typed order («исправ ошиб» finds «Исправленные ошибки», but not «исправить ' +
         'старую ошибку»); `-word` excludes. Always call before `etn.thoughts.create`.',
-      inputSchema: FindDuplicatesSchema,
+      inputSchema: ThoughtsFindDuplicates.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },
     (args) =>

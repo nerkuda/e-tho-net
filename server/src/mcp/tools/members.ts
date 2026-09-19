@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
 import { NetworkId } from './shared.js';
+import { MembersList } from '../../contracts.js';
 
 export function registerMembersListTool(mcp: McpServer, rt: McpRuntime): void {
   const MembersListSchema = z.object({ network_id: NetworkId });
@@ -20,7 +21,7 @@ export function registerMembersListTool(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Список участников сети (user_id, display_name, role, joined_at). Паритет ' +
         'с `GET /networks/{id}/members`. Доступ — участники или глобальный админ.',
-      inputSchema: MembersListSchema,
+      inputSchema: MembersList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.members.list'],
     },
     (args) =>

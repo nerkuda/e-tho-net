@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS, PROPERTY_OWNER_TYPES } from '@etn/shared';
 import type { McpMutationResult, McpPropertiesSetResult, PropertyDefinition, PropertyValueValue } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
+import { PropertiesAdd, PropertiesRemove, PropertiesSet, ThoughtsUsageClear } from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
 import { addLinkPropertyValue, clearThoughtRefUsages, removeLinkPropertyValue, resolveDefinition, setPropertyValue, setPropertyValues } from '../../domain/property-service.js';
 import { emitDomainEvent } from '../../realtime/emit.js';
@@ -79,7 +80,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
         '`values: {key: value|null}` for several properties in one transaction (an invalid key rolls back ' +
         'the whole set). Missing key → NOT_FOUND; a property not attached to the owner\'s type chain → ' +
         'VALIDATION_ERROR with `details.property_id` (call `etn.types.list` against it).',
-      inputSchema: SetPropertySchema,
+      inputSchema: PropertiesSet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },
     (args, extra) =>
@@ -185,7 +186,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
         'Add one target (thought id) to a link property by key — idempotent: an already-live edge is a ' +
         'no-op. Accepts an optional `comment` explaining «why this link». Direction comes from the property ' +
         'definition, never from the call. Returns { link_id, created }.',
-      inputSchema: AddPropertySchema,
+      inputSchema: PropertiesAdd.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.add'],
     },
     (args, extra) =>
@@ -234,7 +235,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
         'Remove one target (thought id) from a link property by key — marks the edge for deletion (trash), ' +
         'preserving its comment. Idempotent: an absent edge is a no-op (`link_id: null`). Returns ' +
         '{ link_id }.',
-      inputSchema: RemovePropertySchema,
+      inputSchema: PropertiesRemove.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.remove'],
     },
     (args, extra) =>
@@ -288,7 +289,7 @@ export function registerUsageClearTool(mcp: McpServer, rt: McpRuntime): void {
         'Trash every blocking link-property edge of other thoughts that references this one — clears ' +
         'the «использование в свойствах» blocking arm in one call instead of editing each property. ' +
         'Returns { cleared }.',
-      inputSchema: UsageClearSchema,
+      inputSchema: ThoughtsUsageClear.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { EditAcquiredData, EditClearedData, EditReleasedData } from '@etn/shared';
 import { acquireLock, clearLocksForUser, listLocks, releaseLock } from '../../domain/lock-service.js';
+import { LocksAcquire, LocksClear, LocksList, LocksRelease } from '../../contracts.js';
 import type { LockRow } from '../../domain/lock-service.js';
 import { auditAgentCall, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { NetworkId } from './shared.js';
@@ -29,7 +30,7 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
         'the same user — a repeated acquire updates `client_id` / `acquired_at_ms` and returns the existing ' +
         'row. A different holder is rejected with `LOCKED` carrying the holder coordinates in ' +
         '`details.holder`. Returns the canonical `LockRow`.',
-      inputSchema: LocksAcquireSchema,
+      inputSchema: LocksAcquire.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.acquire'],
     },
     (args, extra) =>
@@ -73,7 +74,7 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Release the lock with id `lock_id` for the calling user. Only the holder may release — anyone ' +
         'else gets `FORBIDDEN`; an unknown lock id is `LOCK_NOT_FOUND`. Returns `{ released: true }`.',
-      inputSchema: LocksReleaseSchema,
+      inputSchema: LocksRelease.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.release'],
     },
     (args, extra) =>
@@ -112,7 +113,7 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Remove every lock held by `user_id` in the network — any network member may invoke this for any ' +
         'other member (равноправие). Returns `{ cleared: number }`.',
-      inputSchema: LocksClearSchema,
+      inputSchema: LocksClear.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.clear'],
     },
     (args, extra) =>
@@ -156,7 +157,7 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
         'List active locks in the network, optionally filtered by `user_id` and/or `client_id` (a single ' +
         'value each; `null` or omitted removes the constraint). Returns the same ' +
         '`{ data: LockRow[], meta: { total, offset, limit } }` envelope as `GET /locks`.',
-      inputSchema: LocksListSchema,
+      inputSchema: LocksList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.list'],
     },
     (args) =>

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMetricsReadsResult, McpMetricsToolsResult, Network } from '@etn/shared';
 import { search } from '../../domain/search-service.js';
+import { MetricsReads, MetricsTools } from '../../contracts.js';
 import { clampReadMetricsParams, getColdReads, getTopReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { subgraph } from '../../domain/graph-traversal.js';
@@ -33,7 +34,7 @@ export function registerMetricsTools(mcp: McpServer, rt: McpRuntime): void {
         'thoughts (`reads_count DESC, last_read_at DESC`); `kind: "cold"` — never read, or (with `since`) ' +
         'not read since the cutoff, ordered `updated_at DESC` so the freshest un-touched nodes come first. ' +
         'Counted by `etn.thoughts.get`, `subgraph`, `query`, `search` and `etn.networks.structure`.',
-      inputSchema: MetricsReadsSchema,
+      inputSchema: MetricsReads.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.reads'],
     },
     (args) =>
@@ -92,7 +93,7 @@ export function registerMetricsTools(mcp: McpServer, rt: McpRuntime): void {
         'only the rows of their own networks plus their own network-less calls. Verdicts: `calls_count = 0` ' +
         'over a period — removal candidate; `errors_count / calls_count > 0.5` — unclear tool, revise its ' +
         'contract/description.',
-      inputSchema: MetricsToolsSchema,
+      inputSchema: MetricsTools.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.tools'],
     },
     (args) =>

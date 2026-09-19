@@ -8,6 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { openNetworkDb } from '../../db/network-db.js';
+import { Instructions } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { assertNetworkAccess, runTool } from '../context.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
@@ -63,7 +64,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
         'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
         'whitespace-AND, `-word` exclusion); `{ network_id }` returns every active instruction. When the network ' +
         'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
-      inputSchema: InstructionsSchema,
+      inputSchema: Instructions.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
     },
     (args) =>

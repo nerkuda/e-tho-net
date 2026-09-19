@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { EXPORT_FORMATS, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { ExportFormat } from '@etn/shared';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../../domain/export-service.js';
+import { ExportSubgraph } from '../../contracts.js';
 import { subgraph } from '../../domain/graph-traversal.js';
 import { openMemberNetwork, runTool } from '../context.js';
 import { NetworkId, ThoughtId } from './shared.js';
@@ -43,7 +44,7 @@ export function registerExportTool(mcp: McpServer, rt: McpRuntime): void {
         '`.etnx` (zip-архив с мыслями, связями, типами, комментариями, вложениями — задача e488f4c1, ' +
         '0.7.2). Для `etnx` опции `include_types`/`include_attachments`/`include_chronology`/`include_subtree` ' +
         'передаются через `etnx_options`. `format: "etnx"` возвращает base64-строку архива в `content_b64`.',
-      inputSchema: ExportSchema,
+      inputSchema: ExportSubgraph.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.export.subgraph'],
     },
     (args) =>

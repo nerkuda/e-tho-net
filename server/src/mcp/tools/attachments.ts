@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { ATTACHMENT_KINDS, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
 import { copyAttachment, createAttachment, deleteAttachment, getAttachment, searchAttachments, updateAttachment } from '../../domain/attachment-service.js';
+import { AttachmentsAdd, AttachmentsCopy, AttachmentsDelete, AttachmentsSearch, AttachmentsUpdate } from '../../contracts.js';
 import { search } from '../../domain/search-service.js';
 import { recordAttachmentActivity } from '../../domain/activity-service.js';
 import { auditAgentCall, emitAgentActivityEvent, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, resolveRuntimeLayer, runTool, runWriteTool } from '../context.js';
@@ -33,7 +34,7 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Attach a URL or a local file path to a thought/link (`kind` selects which; for `url` ' +
         'provide `url`, for `file` provide `file_path`). Returns { id, version: 0 }.',
-      inputSchema: AddAttachmentSchema,
+      inputSchema: AttachmentsAdd.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -85,7 +86,7 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
         'carrying the same visible fields as the source; the underlying file is not duplicated. Targets ' +
         'that already own the same attachment (same kind + same url/file_path) are skipped silently. ' +
         'Returns one `{id, version: 0, request_id}` per created row.',
-      inputSchema: CopyAttachmentSchema,
+      inputSchema: AttachmentsCopy.schema,
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -142,7 +143,7 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
         '(case-insensitive LIKE, no FTS index). `q` uses the `etn.thoughts.search` mini-syntax: AND of ' +
         'include-words, `-word` exclusion, `*` infix wildcard. Pass `exclude_owner_type`/' +
         '`exclude_owner_id` to hide rows already attached to a specific owner.',
-      inputSchema: SearchAttachmentsSchema,
+      inputSchema: AttachmentsSearch.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.search'],
     },
     (args, _extra) =>
@@ -180,7 +181,7 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Правка метаданных (title/description/url/file_path). Last-write-wins (у `attachments` нет ' +
         '`version`). `kind` неизменяем. Возвращает `{ id, version }`.',
-      inputSchema: UpdateAttachmentSchema,
+      inputSchema: AttachmentsUpdate.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.update'],
     },
     (args, extra) =>
@@ -246,7 +247,7 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Отвязка вложения от владельца. Физический файл НЕ удаляется — судьбу решает domain ' +
         'по оставшимся ссылкам. Возвращает `{ deleted: true }`.',
-      inputSchema: DeleteAttachmentSchema,
+      inputSchema: AttachmentsDelete.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.delete'],
     },
     (args, extra) =>

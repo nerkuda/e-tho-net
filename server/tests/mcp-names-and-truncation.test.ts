@@ -161,8 +161,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         // Zod-валидация рубит запрос до домена: «Invalid arguments» +
         // сообщение `.refine()`. Этого достаточно — MCP-агент видит и
         // причину, и формулировку конфликта.
-        assert.match(text, /Invalid arguments/);
-        assert.match(text, /type_id or type/);
+        assert.match(text, /ETN error \[VALIDATION_ERROR\]: provide at most one of type_id or type/);
       } finally {
         await handle.close();
       }
@@ -273,8 +272,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(conflict.isError, true);
         const text = toolText(conflict);
-        assert.match(text, /Invalid arguments/);
-        assert.match(text, /property_id or property/);
+        assert.match(text, /ETN error \[VALIDATION_ERROR\]: provide at most one of property_id or property/);
 
         // Несуществующее имя свойства — NOT_FOUND.
         const missing = await handle.client.callTool({
@@ -354,8 +352,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(conflict.isError, true);
         const text = toolText(conflict);
-        assert.match(text, /Invalid arguments/);
-        assert.match(text, /type_id or type/);
+        assert.match(text, /ETN error \[VALIDATION_ERROR\]: provide at most one of type_id or type/);
 
         // Неизвестное имя — NOT_FOUND.
         const missing = await handle.client.callTool({

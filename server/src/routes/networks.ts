@@ -35,6 +35,15 @@ import type {
 import { EtnError, PREF_KEY, validateTypeRoles } from '@etn/shared';
 
 import type { NetworkService } from '../domain/network-service.js';
+import {
+  parseRest,
+  RestNetworkById,
+  RestNetworkCreate,
+  RestNetworkMemberAdd,
+  RestNetworkMemberById,
+  RestNetworkMemberPatch,
+  RestNetworkPreferenceKey,
+} from '../contracts.js';
 import { updateNetwork } from '../domain/network-write-service.js';
 import { sendEtnError } from '../http/errors.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
@@ -137,18 +146,13 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks',
       { preHandler: [app.authPreHandler, requireAuth, app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const body = (req.body ?? {}) as CreateNetworkInput;
-        const displayName = typeof body.display_name === 'string' ? body.display_name.trim() : '';
-        if (displayName.length === 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'display_name обязательно и не может быть пустым.',
-            { field: 'display_name' },
-            req.id,
-          );
-        }
-        const description = typeof body.description === 'string' ? body.description || null : null;
-        const typeRoles = body.type_roles !== undefined ? validateTypeRoles(body.type_roles) : {};
+        const input = parseRest(RestNetworkCreate, req);
+        const displayName = (input.display_name as string).trim();
+        const description = (input.description ?? null) as string | null;
+        const typeRoles =
+          input.type_roles !== undefined
+            ? validateTypeRoles(input.type_roles as Record<string, unknown>)
+            : {};
 
         // Real creation (directory + data.db + HOME) is delegated to NetworkService.
         // The stub throws "Not implemented: see task C10" until C10 lands.
@@ -180,8 +184,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const network = app.systemDb.getNetworkById(networkId);
+        const input = parseRest(RestNetworkById, req);
+        const network = app.systemDb.getNetworkById(input.network_id);
         if (network === null) {
           throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
         }
@@ -193,7 +197,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
+        const input = parseRest(RestNetworkById, req);
+        const networkId = input.network_id;
         if (!(await requireOwnerOrAdmin(app, req, reply, networkId))) {
           return;
         }
@@ -229,8 +234,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId/members',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const members = app.systemDb.listNetworkMembers(networkId);
+        const input = parseRest(RestNetworkById, req);
+        const members = app.systemDb.listNetworkMembers(input.network_id);
         sendList(reply, members.map(memberDto), members.length, 0, members.length);
       },
     );
@@ -239,20 +244,12 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId/members',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
+        const input = parseRest(RestNetworkMemberAdd, req);
+        const networkId = input.network_id;
         if (!(await requireOwnerOrAdmin(app, req, reply, networkId))) {
           return;
         }
-        const body = (req.body ?? {}) as AddMemberInput;
-        const userId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
-        if (userId.length === 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'user_id обязательно.',
-            { field: 'user_id' },
-            req.id,
-          );
-        }
+        const userId = input.user_id.trim();
         const target = app.systemDb.getUserById(userId);
         if (target === null) {
           throw new EtnError('NOT_FOUND', `Пользователь ${userId} не найден.`, undefined, req.id);
@@ -293,7 +290,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId/members/:uid',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, uid } = req.params as MemberParams;
+        const input = parseRest(RestNetworkMemberById, req);
+        const { network_id: networkId, uid } = input;
         if (!(await requireOwnerOrAdmin(app, req, reply, networkId))) {
           return;
         }
@@ -340,18 +338,10 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId/members/:uid',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, uid } = req.params as MemberParams;
+        const input = parseRest(RestNetworkMemberPatch, req);
+        const { network_id: networkId, uid } = input;
         if (!(await requireOwnerOrAdmin(app, req, reply, networkId))) {
           return;
-        }
-        const body = (req.body ?? {}) as UpdateMemberInput;
-        if (body.role !== 'owner') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Поддерживается только передача владения (role: "owner").',
-            { field: 'role' },
-            req.id,
-          );
         }
         if (!app.members.isMember(uid, networkId)) {
           throw new EtnError(
@@ -411,8 +401,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId/preferences',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const prefs = app.systemDb.listNetworkPreferences(req.auth!.user.id, networkId);
+        const input = parseRest(RestNetworkById, req);
+        const prefs = app.systemDb.listNetworkPreferences(req.auth!.user.id, input.network_id);
         sendSuccess(reply, prefs);
       },
     );
@@ -421,7 +411,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       '/networks/:networkId/preferences/:key',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, key } = req.params as PreferenceKeyParams;
+        const input = parseRest(RestNetworkPreferenceKey, req);
+        const { network_id: networkId, key } = input;
         if (!SUPPORTED_PREFERENCE_KEYS.has(key)) {
           throw new EtnError(
             'VALIDATION_ERROR',

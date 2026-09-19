@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { ATTACHMENT_KINDS, MCP_MAX_THOUGHTS_PER_WRITE, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpThoughtWriteItemResult, McpThoughtWriteParams, McpThoughtWriteResult, McpUpsertBundleResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
+import { defineContract, ThoughtsUpsertBundle } from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
 import { getComment } from '../../domain/comment-service.js';
 import { getAttachment } from '../../domain/attachment-service.js';
@@ -78,7 +79,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         'by name (see `etn.types.list`). `links[].direction`: "parent" — attach the bundle thought UNDER ' +
         'the target; "child" — the bundle thought becomes the parent of the target. `warnings` lists the ' +
         'type\'s `required` properties left unset (empty when complete).',
-      inputSchema: UpsertBundleSchema,
+      inputSchema: ThoughtsUpsertBundle.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
     },
     (args, extra) =>
@@ -319,7 +320,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         '`properties.set`, `comments.upsert` (`deprecated_since: \'0.7.2\'`). Один write-бюджет + одна ' +
         'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
         '`etn.how_to_write_batch`.',
-      inputSchema: WriteSchema,
+      inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },
     (args, extra) =>

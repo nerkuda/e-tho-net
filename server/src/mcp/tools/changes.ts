@@ -8,6 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { openNetworkDb } from '../../db/network-db.js';
+import { ChangesList } from '../../contracts.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../../domain/layer-service.js';
 import { isEventVisibleInLayer } from '../../realtime/layer-visibility.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, REALTIME_DEFAULTS } from '@etn/shared';
@@ -35,7 +36,7 @@ export function registerChangesListTool(mcp: McpServer, rt: McpRuntime): void {
         'caller\'s session layer. `truncated: true` — `since_seq` predates the retained window or the ' +
         'session\'s last layer switch: do a full resync (`etn.thoughts.search` + `etn.thoughts.get`) ' +
         'before resuming. Each entry carries `layer_id`.',
-      inputSchema: ChangesListSchema,
+      inputSchema: ChangesList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.changes.list'],
     },
     (args) =>

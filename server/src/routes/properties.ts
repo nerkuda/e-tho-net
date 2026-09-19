@@ -10,14 +10,16 @@
  * of the owner's type by the property service (unknown property → 404,
  * wrong-typed value → 422). The property key is addressed by path segment, so
  * an empty key cannot match the route; the service double-checks anyway.
+ *
+ * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { EtnError, type PropertyOwnerType, type PropertyValueValue } from '@etn/shared';
+import { type PropertyOwnerType, type PropertyValueValue } from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import {
   deletePropertyValue,
   getPropertyValuesWithLinks,
@@ -26,19 +28,7 @@ import {
 import { recordOwnerActivity } from '../domain/activity-service.js';
 import { getThought } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
-
-/** Route params for a network + owner id. */
-interface OwnerParams {
-  networkId: string;
-  id: string;
-}
-
-/** Route params for a network + owner id + property key. */
-interface OwnerKeyParams {
-  networkId: string;
-  id: string;
-  key: string;
-}
+import { parseRest, RestPropertyDelete, RestPropertyList, RestPropertyPut } from '../contracts.js';
 
 /** `/api/v1/networks*` property-value routes plugin factory. */
 export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -51,9 +41,9 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         `${pathBase}/properties`,
         { preHandler: [app.authPreHandler, requireNetworkMember()] },
         async (req: FastifyRequest, reply) => {
-          const { networkId, id } = req.params as OwnerParams;
-          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const values = getPropertyValuesWithLinks(ndb, ownerType, id);
+          const input = parseRest(RestPropertyList, req);
+          const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+          const values = getPropertyValuesWithLinks(ndb, ownerType, input.owner_id);
           sendList(reply, values, values.length, 0, values.length);
         },
       );
@@ -62,36 +52,19 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         `${pathBase}/properties/:key`,
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
-          const { networkId, id, key } = req.params as OwnerKeyParams;
-          if (key.trim() === '') {
-            throw new EtnError(
-              'VALIDATION_ERROR',
-              'Ключ свойства не может быть пустым.',
-              { field: 'key' },
-              req.id,
-            );
-          }
-          const body = requestBody(req);
-          if (!('value' in body)) {
-            throw new EtnError(
-              'VALIDATION_ERROR',
-              'Поле value обязательно.',
-              { field: 'value' },
-              req.id,
-            );
-          }
-          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+          const input = parseRest(RestPropertyPut, req);
+          const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const value = setPropertyValue(
             ndb,
             ownerType,
-            id,
-            key,
-            body.value as PropertyValueValue,
+            input.owner_id,
+            input.key,
+            input.value as PropertyValueValue,
             req.auth!.user.id,
           );
-          deps.emit(req, networkId, 'property-value.set', {
+          deps.emit(req, input.network_id, 'property-value.set', {
             owner_type: ownerType,
-            owner_id: id,
+            owner_id: input.owner_id,
             property_id: value.property_id,
             value: value.value,
           });
@@ -99,11 +72,11 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
           // b0c7a57c): смена значения свойства — это её операция.
           const ownerEntity =
             ownerType === 'thought'
-              ? getThought(ndb, id)
-              : getLink(ndb, id);
+              ? getThought(ndb, input.owner_id)
+              : getLink(ndb, input.owner_id);
           if (ownerEntity) {
             recordOwnerActivity(ndb, {
-              networkId,
+              networkId: input.network_id,
               userId: req.auth!.user.id,
               entityType: ownerType,
               entity: ownerEntity,
@@ -118,24 +91,24 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         `${pathBase}/properties/:key`,
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
-          const { networkId, id, key } = req.params as OwnerKeyParams;
-          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const removed = deletePropertyValue(ndb, ownerType, id, key, req.auth!.user.id);
+          const input = parseRest(RestPropertyDelete, req);
+          const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+          const removed = deletePropertyValue(ndb, ownerType, input.owner_id, input.key, req.auth!.user.id);
           // Idempotent DELETE (error cefb4db0): nothing stored → 204 without
           // the event or the owner-activity record — the call had no effect.
           if (removed.deleted) {
-            deps.emit(req, networkId, 'property-value.deleted', {
+            deps.emit(req, input.network_id, 'property-value.deleted', {
               owner_type: ownerType,
-              owner_id: id,
+              owner_id: input.owner_id,
               property_id: removed.property_id,
             });
             const ownerEntity =
               ownerType === 'thought'
-                ? getThought(ndb, id)
-                : getLink(ndb, id);
+                ? getThought(ndb, input.owner_id)
+                : getLink(ndb, input.owner_id);
             if (ownerEntity) {
               recordOwnerActivity(ndb, {
-                networkId,
+                networkId: input.network_id,
                 userId: req.auth!.user.id,
                 entityType: ownerType,
                 entity: ownerEntity,

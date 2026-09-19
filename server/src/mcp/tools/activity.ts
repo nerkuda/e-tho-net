@@ -9,6 +9,7 @@ import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX, listActivity, rollupActivity, truncateActivity } from '../../domain/activity-service.js';
+import { ActivityList, ActivityRollup, ActivityTruncate } from '../../contracts.js';
 import { auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { NetworkId } from './shared.js';
 
@@ -33,7 +34,7 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
         'or layer; `entity_title` is a snapshot at the moment of the event. Captures (`edit.*`) are not ' +
         'recorded. Filters combine with AND; sorted by `occurred_at_ms DESC`; paginated (`limit` default ' +
         '50, max 200, + `offset`).',
-      inputSchema: ActivityListSchema,
+      inputSchema: ActivityList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
     },
     (args) =>
@@ -76,7 +77,7 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
         'Roll up the activity log of a network up to `until_ms`: for each live `(entity_type, entity_id)` ' +
         'only the earliest creation/update and the latest update stay; a `deleted`/`trashed` event up to ' +
         '`until_ms` alone remains. IRREVERSIBLE; runs in one SQLite transaction. Returns `{ removed, kept }`.',
-      inputSchema: ActivityRollupSchema,
+      inputSchema: ActivityRollup.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.rollup'],
     },
     (args, extra) =>
@@ -106,7 +107,7 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
         'Hard-truncate the activity log of a network up to `until_ms`: every row with ' +
         '`occurred_at_ms <= until_ms` is deleted, including creation and deletion records. ' +
         'IRREVERSIBLE; runs in one SQLite transaction. Returns `{ removed }`.',
-      inputSchema: ActivityTruncateSchema,
+      inputSchema: ActivityTruncate.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.truncate'],
     },
     (args, extra) =>

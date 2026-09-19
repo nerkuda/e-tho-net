@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { ICON_KINDS, MCP_TOOL_ANNOTATIONS, PROPERTY_VALUE_TYPES, TYPE_OWNER_TYPES } from '@etn/shared';
 import type { OntologyDeleteParams, OntologyDeleteResult, OntologyWriteParams, OntologyWriteResult } from '@etn/shared';
 import { getNetworkProperty, getTypeProperty } from '../../domain/property-service.js';
+import { defineContract, OntologyWrite } from '../../contracts.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { getLinkType } from '../../domain/link-type-service.js';
 import { writeOntology } from '../../domain/ontology-write-service.js';
@@ -136,7 +137,7 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
         'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
         'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +
         '`property-definition.*`).',
-      inputSchema: OntologyWriteSchema,
+      inputSchema: OntologyWrite.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],
     },
     (args, extra) =>
@@ -374,7 +375,7 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
         '`type_property` удаляет строку привязки; `type_view` удаляется безусловно ' +
         '(не имеет использований). Элемент, занятый в `type_roles` сети, отвергается даже с `force`. ' +
         'HOME-мысль не имеет типа и не задевается. Один write-бюджет + одна строка `audit_log`.',
-      inputSchema: OntologyDeleteSchema,
+      inputSchema: defineContract('etn.ontology.delete', OntologyDeleteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.delete'],
     },
     (args, extra) =>

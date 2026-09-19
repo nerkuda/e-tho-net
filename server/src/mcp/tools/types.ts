@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, TYPES_LIST_BUDGET_PREVIEW_CHARS, TYPES_LIST_SCOPES } from '@etn/shared';
 import type { McpTypesListMeta, McpTypesListResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
+import { TypesList } from '../../contracts.js';
 import { listEffectiveTypeProperties } from '../../domain/property-service.js';
 import { collectSubtreeTypes } from '../../domain/search-service.js';
 import { shrinkTypesListToBudget } from '../types-list-budget.js';
@@ -86,7 +87,7 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         'хвостовые типы. Диагностика — `meta.truncated` + `meta.reason`. Поведение без новых ' +
         'параметров не меняется. When the response risks being cut off, fetch a single catalogue via ' +
         '`scope: "links"` / `"thoughts"`.',
-      inputSchema: TypesListSchema,
+      inputSchema: TypesList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
     (args) =>

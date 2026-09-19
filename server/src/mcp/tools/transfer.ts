@@ -8,6 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { openNetworkDb } from '../../db/network-db.js';
+import { ImportDryRun, ImportSubgraph, ThoughtsCopySubtree, ThoughtsMentionsScan } from '../../contracts.js';
 import { MCP_MAX_THOUGHTS_PER_WRITE, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { getHomeThoughtId, getThoughtOrThrow } from '../../domain/thought-service.js';
 import { getLink } from '../../domain/link-service.js';
@@ -47,7 +48,7 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
         '`link_id_map` для переписывания wiki-ссылок. HOME-мысль как корень — VALIDATION_ERROR. ' +
         'Онтология целевой сети должна покрывать все используемые типы мыслей/связей — иначе ' +
         'VALIDATION_ERROR со списком недостающих. Один write-бюджет + одна строка audit_log.',
-      inputSchema: CopySubtreeSchema,
+      inputSchema: ThoughtsCopySubtree.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.copy_subtree'],
     },
     (args, extra) =>
@@ -181,7 +182,7 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
         '`min_confidence` отбрасывается. С `create_links: true` создаёт направленные связи от ' +
         '`source_thought_id` к найденным (требует `link_type` и `source_thought_id`). Без `create_links` — ' +
         'read-only.',
-      inputSchema: MentionsScanSchema,
+      inputSchema: ThoughtsMentionsScan.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.mentions_scan'],
     },
     (args, extra) => {
@@ -238,7 +239,7 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Читает `.etnx` (file или base64), валидирует manifest и возвращает план: сколько мыслей/связей/' +
         'вложений создастся в целевой сети. Без побочных эффектов — read-only.',
-      inputSchema: ImportDryRunSchema,
+      inputSchema: ImportDryRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.import.dry_run'],
     },
     (args) =>
@@ -274,7 +275,7 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
         '`parent_thought_id` — куда подвесить корневые мысли; по умолчанию — HOME. Возвращает ' +
         '`{ imported: {...counts...}, conflicts: [...], manifest_version, layer, request_id }`. ' +
         'Один write-бюджет + одна строка audit_log. `destructiveHint: true`.',
-      inputSchema: ImportSubgraphSchema,
+      inputSchema: ImportSubgraph.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.import.subgraph'],
     },
     (args, extra) =>

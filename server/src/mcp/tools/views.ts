@@ -9,6 +9,7 @@ import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { EtnError, MCP_TOOL_ANNOTATIONS, REALTIME_DEFAULTS } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
+import { ViewsRun } from '../../contracts.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
@@ -54,7 +55,7 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен) и ' +
         '`meta.unresolved` (не пусто, если в `definition` встретился токен, ' +
         'неразрешимый на момент исполнения — тогда `data` пустая).',
-      inputSchema: ViewsRunSchema,
+      inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
     },
     (args) =>

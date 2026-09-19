@@ -9,6 +9,7 @@ import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { parseChronicleQueryBody, queryChronicle } from '../../domain/chronicle-service.js';
+import { ChronicleQuery } from '../../contracts.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
@@ -41,7 +42,7 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         'Двухфазный запрос хроники (паритет `POST /chronicle/query`): фаза 1 — мысли по ' +
         '`keywords`/`thought_ids`/`include_subtree`/`type[]`; фаза 2 — хроно-комментарии к ним ' +
         'или их связям с фильтрами `link_type[]`/`link_scope`/`date_from/to`. `{ rows[], meta }`.',
-      inputSchema: ChronicleQuerySchema,
+      inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },
     (args) =>

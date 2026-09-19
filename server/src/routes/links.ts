@@ -19,21 +19,15 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError, type LinkUpdateInput } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
+import { openNetworkDb, openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import {
-  fieldBoolean,
-  fieldNullableInt,
-  fieldNullableString,
-  fieldString,
-  fieldStringArray,
-  openNetworkDb,
-  openRouteNetworkDb,
-  parseIfMatch,
-  parseLinkStyle,
-  queryBoolean,
-  queryStrings,
-  requestBody,
-  type RouteDeps,
-} from './helpers.js';
+  parseRest,
+  RestLinkDeletionCheck,
+  RestLinkDeletionCheckBatch,
+  RestLinkGet,
+  RestLinkPatch,
+  RestLinksByThought,
+} from '../contracts.js';
 import {
   checkLinkDeletion,
   getLink,
@@ -54,45 +48,6 @@ interface ThoughtIdParams {
   id: string;
 }
 
-/** Parse and validate the body of `PATCH /links/:id`. */
-function parseLinkUpdateBody(body: Record<string, unknown>, requestId: string): LinkUpdateInput {
-  const changes: LinkUpdateInput = {};
-  // Endpoints change together (swapping them inverts the link's direction).
-  if (body.source_id !== undefined || body.target_id !== undefined) {
-    const sourceId = fieldString(body, 'source_id', requestId);
-    const targetId = fieldString(body, 'target_id', requestId);
-    if (sourceId === undefined || targetId === undefined) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'source_id и target_id меняются вместе.',
-        { field: 'source_id' },
-        requestId,
-      );
-    }
-    changes.source_id = sourceId;
-    changes.target_id = targetId;
-  }
-  if (body.type_id !== undefined) {
-    changes.type_id = fieldNullableString(body, 'type_id', requestId);
-  }
-  if (body.color !== undefined) {
-    changes.color = fieldNullableString(body, 'color', requestId);
-  }
-  if (body.style !== undefined) {
-    changes.style = parseLinkStyle(fieldNullableString(body, 'style', requestId), requestId);
-  }
-  if (body.width !== undefined) {
-    changes.width = fieldNullableInt(body, 'width', requestId);
-  }
-  if (body.active !== undefined) {
-    changes.active = fieldBoolean(body, 'active', requestId);
-  }
-  if (body.marked_for_deletion !== undefined) {
-    changes.marked_for_deletion = fieldBoolean(body, 'marked_for_deletion', requestId);
-  }
-  return changes;
-}
-
 /** `/api/v1/networks*` link routes plugin factory. */
 export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
@@ -102,15 +57,16 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/links/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as LinkIdParams;
+        const input = parseRest(RestLinkGet, req);
+        const networkId = input.network_id;
         // `at_layer_id` — открыть связь по id в конкретном слое, не
         // переключая сессию (лента событий, задача 59119797).
-        const atLayerId = queryStrings((req.query as Record<string, unknown> | undefined)?.['at_layer_id'])[0] ?? null;
+        const atLayerId = (input.at_layer_id as string | undefined) ?? null;
         const ndb =
           atLayerId !== null
             ? openNetworkDb(deps.dataDir, networkId, app.appLogger, atLayerId)
             : openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const link = getLink(ndb, id);
+        const link = getLink(ndb, input.link_id);
         if (link === null) {
           throw new EtnError('NOT_FOUND', 'Связь не найдена.', undefined, req.id);
         }
@@ -122,9 +78,19 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/links/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as LinkIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const changes = parseLinkUpdateBody(requestBody(req), req.id);
+        const input = parseRest(RestLinkPatch, req);
+        const { network_id: networkId, link_id: id, expected_version: expectedVersion } = input;
+        const changes: LinkUpdateInput = {};
+        if (input.source_id !== undefined || input.target_id !== undefined) {
+          changes.source_id = input.source_id as string;
+          changes.target_id = input.target_id as string;
+        }
+        if (input.type_id !== undefined) changes.type_id = input.type_id as string | null;
+        if (input.color !== undefined) changes.color = input.color as string | null;
+        if (input.style !== undefined) changes.style = input.style as LinkUpdateInput['style'];
+        if (input.width !== undefined) changes.width = input.width as number | null;
+        if (input.active !== undefined) changes.active = input.active as boolean;
+        if (input.marked_for_deletion !== undefined) changes.marked_for_deletion = input.marked_for_deletion as boolean;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = updateLink(ndb, id, changes, expectedVersion, req.auth!.user.id);
         if (link.id !== id) {
@@ -174,9 +140,9 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/links/:id/deletion-check',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as LinkIdParams;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        sendSuccess(reply, checkLinkDeletion(ndb, id));
+        const input = parseRest(RestLinkDeletionCheck, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        sendSuccess(reply, checkLinkDeletion(ndb, input.link_id));
       },
     );
 
@@ -184,16 +150,9 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/links/deletion-check-batch',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as LinkIdParams;
-        const ids = fieldStringArray(requestBody(req), 'ids', req.id);
-        if (ids === undefined || ids.length === 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'ids обязателен (непустой массив строк).',
-            { field: 'ids' },
-            req.id,
-          );
-        }
+        const input = parseRest(RestLinkDeletionCheckBatch, req);
+        const networkId = input.network_id;
+        const ids = input.ids as string[];
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result: Record<string, import('@etn/shared').LinkDeletionCheckResult> = {};
         for (const id of [...new Set(ids)]) {
@@ -209,20 +168,11 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/:id/links',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as ThoughtIdParams;
-        const query = req.query as Record<string, unknown>;
-        const group = queryStrings(query.group)[0];
-        if (group !== undefined && group !== 'type') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Поддерживается только group=type.',
-            { field: 'group' },
-            req.id,
-          );
-        }
+        const input = parseRest(RestLinksByThought, req);
+        const networkId = input.network_id;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const grouped = listLinksByThought(ndb, id, {
-          showInactive: queryBoolean(query.show_inactive, 'show_inactive', req.id) === true,
+        const grouped = listLinksByThought(ndb, input.thought_id, {
+          showInactive: input.show_inactive === true,
         });
         sendSuccess(reply, grouped);
       },
