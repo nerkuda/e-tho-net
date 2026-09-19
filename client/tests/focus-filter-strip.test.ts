@@ -860,11 +860,11 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.deepEqual(state.viewRun.calls[1]?.opts, { sort: 'created', order: 'desc' });
   });
 
-  it('runActiveViewIfNeeded: легаси-сортировка updated исполняется с дефолтом, но не молча (ошибка 33a3e285)', async () => {
-    // Сохранённые старым диалогом определения могут нести `updated` — значения
-    // вне единого набора конструктора. Исполнитель принимает их (никакой
-    // собственной фильтрации): отбор исполняется со значением по умолчанию,
-    // а о неподдерживаемом значении сообщается явно (`notice`), а не молча.
+  it('runActiveViewIfNeeded: сортировка updated из определения передаётся серверу (бывшая легаси, ошибки 33a3e285/4dd14aa3)', async () => {
+    // До 0.8.2 `updated` было легаси-значением вне единого набора и
+    // исполнялось с дефолтом + предупреждением. Сервер поддержал сортировку
+    // «по дате изменения» (ошибка 4dd14aa3) — теперь она в едином наборе
+    // конструктора и передаётся как обычные opts, без дефолта и без notice.
     const harness = installShim();
     setNetwork();
     (globalThis as any).window = globalThis; // notice использует window.setTimeout
@@ -888,10 +888,10 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     };
     await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
     const result = await strip.runActiveViewIfNeeded(FOCUS_ID);
-    assert.ok(result !== null, 'отбор с легаси-сортировкой исполняется');
-    // opts не передаются — сервер применит дефолт alpha asc; `updated` не
-    // отправляется серверу и не отбрасывается молча.
-    assert.equal(state.viewRun.calls[0]?.opts, undefined);
+    assert.ok(result !== null, 'отбор с сортировкой updated исполняется');
+    // `updated` — валидное значение единого набора: opts уходят на сервер,
+    // дефолт alpha не подменяет сохранённую сортировку.
+    assert.deepEqual(state.viewRun.calls[0]?.opts, { sort: 'updated', order: 'asc' });
   });
 
   it('realtime thought-type-view event triggers a strip rebuild', async () => {
