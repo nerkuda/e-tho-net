@@ -2313,6 +2313,12 @@ body.cloud-dragging * {
   padding: 8px 10px 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  /* Высота полосы не зависит от длины содержимого панели: `.editor-scroll` —
+     column-flex, и при длинном комментарии суммарная высота детей превышает
+     контейнер; flex-shrink (по умолчанию 1) сжимал полосу до 1px — кнопки
+     вкладок пропадали (`overflow: hidden` обнуляет автоматический минимум).
+     Ошибка 79193e82. */
+  flex: 0 0 auto;
   /* `min-width: 0` — стандартный фикс flexbox для row-flex внутри column-flex
      родителя: без него flex-item растягивается по min-content (сумма
      фиксированных кнопок вкладок), его clientWidth раздувается,
