@@ -7,7 +7,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
-import { openNetworkDb } from '../../db/network-db.js';
 import { NetworksDelete, NetworksStructure, NetworksWrite } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
 import type { Network } from '@etn/shared';
@@ -19,7 +18,7 @@ import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
-import { assertNetworkAccess, auditAgentCall, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
+import { assertNetworkAccess, auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { updateNetwork } from '../../domain/network-write-service.js';
 import { listTocSections } from '../../domain/network-structure-service.js';
 
@@ -120,7 +119,9 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
             thought_types: [],
           };
         }
-        const ndb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
+        // Слой сессии (ошибка 3f535ae8): разделы оглавления читаются тем же
+        // контекстом, что и остальные инструменты — правки слоя видны в слое.
+        const ndb = openMemberNetwork(rt, args.network_id);
         const rows = listTocSections(ndb, sectionTypeId);
 
         const sections = rows.map((row) => {

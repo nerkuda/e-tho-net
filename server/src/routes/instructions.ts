@@ -8,8 +8,9 @@
  *     ?limit=&offset=        — пейджинг списка (только без instruction_id).
  *
  * Тонкий фасад над доменным {@link getNetworkInstructions}: разбирает вход,
- * зовёт домен, добавляет `network_id` в ответ. Читает базовый слой — тот же
- * контекст, что и MCP-инструмент (инструкции сети — канон из основы).
+ * зовёт домен, добавляет `network_id` в ответ. Читает **слой сессии** — тот же
+ * контекст, что и остальные чтения сети (`openRouteNetworkDb`; ошибка
+ * 3f535ae8: раньше здесь читалась основа в обход слоя).
  *
  * Веха 8 (задача c9d5f21e): вход — единый контракт `RestInstructions` из
  * `contracts.ts`; сообщения ошибок — канонические, те же, что у MCP.
@@ -20,7 +21,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDbBase, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { getNetworkInstructions } from '../domain/instructions-service.js';
 import { parseRest, RestInstructions } from '../contracts.js';
 
@@ -39,7 +40,7 @@ export function createInstructionsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (network === null) {
           throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
         }
-        const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const result = getNetworkInstructions(
           ndb,
           network.type_roles.instructions ?? null,

@@ -7,10 +7,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
-import { openNetworkDb } from '../../db/network-db.js';
 import { Instructions } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import { assertNetworkAccess, runTool } from '../context.js';
+import { openMemberNetwork, runTool } from '../context.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
 
 export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
@@ -57,8 +56,10 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
             network_id: args.network_id,
           });
         }
-        assertNetworkAccess(rt, args.network_id);
-        const ndb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
+        // Слой сессии (ошибка 3f535ae8): витрина обязана читать ту же сеть,
+        // что и остальные инструменты — `openMemberNetwork` резолвит слой
+        // ключа и проверяет доступ. Без выбранного слоя это основа.
+        const ndb = openMemberNetwork(rt, args.network_id);
         return {
           network_id: args.network_id,
           ...getNetworkInstructions(
