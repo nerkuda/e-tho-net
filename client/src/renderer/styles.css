@@ -3999,6 +3999,25 @@ body.cloud-dragging * {
   overflow-wrap: break-word;
 }
 
+/* Хит-мысль (ошибка 265cdb5f): облачко занимает всю ширину выпадашки, а не
+   холстовые 200px (`--cloud-width`) — название обрезается многоточием по
+   ширине списка; snippet с подсветкой вхождений уходит на следующую строку
+   под облачко и отступает от левого края самого облачка, а не от края
+   строки. Строки связи/хронологии остаются однострочными (глиф + текст). */
+.search-hit.search-hit-cloud {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.search-hit.search-hit-cloud > .cloud {
+  width: auto;
+  max-width: 100%;
+}
+
+.search-hit.search-hit-cloud > .search-hit-info {
+  padding-left: 10px;
+}
+
 /* Keyboard/restore selection (08-ui-spec.md §3.1). */
 .search-group-header.selected,
 .search-hit.selected {

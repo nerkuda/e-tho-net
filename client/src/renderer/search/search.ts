@@ -486,7 +486,7 @@ function renderIdResult(thought: Thought | null): void {
     syncCursorAfterToggle(header);
   });
   if (thought !== null) {
-    const row = div('search-hit');
+    const row = div('search-hit search-hit-cloud');
     const key = `thought:${thought.id}`;
     row.dataset['key'] = key;
     // The «Мысль по ID» row is the only thought fetched via `thoughts.get`,
@@ -557,6 +557,12 @@ function renderResults(response: SearchResponse | null): void {
       lead: HTMLElement;
       /** Заголовок простой строки (связи/хронология); у мыслей — в облачке. */
       title?: string;
+      /**
+       * Хит-мысль: облачко занимает всю ширину списка (название обрезается
+       * по ней, а не по ширине холстового облачка `--cloud-width`), snippet
+       * с `<mark>` уходит под облачко (ошибка 265cdb5f).
+       */
+      isThought: boolean;
       snippet: string;
       /** Stable row key for selection restore + keyboard navigation. */
       key: string;
@@ -580,6 +586,7 @@ function renderResults(response: SearchResponse | null): void {
             },
           },
         ),
+        isThought: true,
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
         open: () => void setFocus(hit.thought_id),
@@ -600,6 +607,7 @@ function renderResults(response: SearchResponse | null): void {
             },
           },
         ),
+        isThought: true,
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
         open: () => void setFocus(hit.thought_id),
@@ -612,6 +620,7 @@ function renderResults(response: SearchResponse | null): void {
       hits: response.by_links.map((hit) => ({
         lead: span('🔗'),
         title: hit.type_name,
+        isThought: false,
         snippet: hit.snippet,
         key: `link:${hit.link_id}`,
         open: () => void openLinkHit(hit.link_id),
@@ -624,6 +633,7 @@ function renderResults(response: SearchResponse | null): void {
       hits: response.by_chrono.map((hit) => ({
         lead: span('📅'),
         title: hit.valid_from.slice(0, 10),
+        isThought: false,
         snippet: hit.snippet,
         key: `chrono:${hit.owner}:${hit.owner_id}`,
         open: () => void openChronoHit(hit.owner, hit.owner_id),
@@ -654,6 +664,10 @@ function renderResults(response: SearchResponse | null): void {
       for (const hit of group.hits) {
         const row = div('search-hit');
         row.dataset['key'] = hit.key;
+        // Хит-мысль — облачко на всю ширину списка и snippet под ним
+        // (ошибка 265cdb5f); строки связи/хронологии остаются в одну строку
+        // с глифом-иконкой.
+        if (hit.isThought) row.classList.add('search-hit-cloud');
         row.append(hit.lead);
         const info = div('search-hit-info');
         info.style.flex = '1';
