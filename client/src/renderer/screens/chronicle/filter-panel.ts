@@ -183,7 +183,10 @@ function repaintChips(): void {
     const ref = thoughtRefs.get(id);
     // Чип — фабричное мини-облачко (значок с наследованием от типа, цвета,
     // начертание); «×» — доменная кнопка удаления из отбора.
-    const chip = createThoughtCloud(ref ?? { id, title: id }, { profile: 'chip' });
+    const chip = createThoughtCloud(
+      ref ?? { id, title: id },
+      { profile: 'chip', width: 'container' },
+    );
     chip.classList.add('chron-chip', 'thought');
     chip.append(span('×', 'chip-x'));
     // Ctrl+hover on a filter chip previews the thought's permanent comment

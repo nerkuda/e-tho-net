@@ -465,14 +465,23 @@ describe('вкладка «Мысли» редактора связи — обл
     );
   });
 
-  it('CSS даёт блокам колонку, подписи — приглушённый вид, облачку — растяжение', () => {
+  it('CSS даёт блокам колонку, подписи — приглушённый вид, облачку — ширину по колонке', () => {
     const css = readText(SRC.css);
+    const src = readText(SRC.links);
     assert.ok(/\.link-thoughts-tab\s*\{/.test(css), '.link-thoughts-tab style');
     assert.ok(/\.link-endpoint\s*\{/.test(css), '.link-endpoint style');
     assert.ok(/\.link-endpoint-label\s*\{/.test(css), '.link-endpoint-label style');
+    // Ширину «по колонке вкладки» объявляет вызов фабрики (опция
+    // width: 'container'), а не контекстный селектор `.link-endpoint .cloud`
+    // (закрыт сторожем guard-thought-cloud).
+    assert.match(
+      src,
+      /profile: 'tree',\n(?:\s*\/\/[^\n]*\n)+\s*width: 'container',/,
+      'endpoint cloud declares the container width at the factory call',
+    );
     assert.ok(
-      /\.link-endpoint\s+\.cloud\s*\{[^}]*width:\s*auto/.test(css),
-      'endpoint cloud stretches to the panel width',
+      !/\.link-endpoint\s+\.cloud\s*\{/.test(css),
+      '.link-endpoint .cloud width override is gone (library class instead)',
     );
   });
 });

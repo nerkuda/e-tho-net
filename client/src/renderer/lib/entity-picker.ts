@@ -299,6 +299,9 @@ export async function pickEntitiesModal(
           chipsBox.append(
             createThoughtCloud(cloud, {
               profile: 'chip',
+              // Ширина — по чип-полю выбора: имя обрезается многоточием по
+              // нему, а не раздувает диалог (принцип ширины облачка).
+              width: 'container',
               actions: {
                 onRemove: () => {
                   checked.delete(id);
@@ -452,7 +455,13 @@ export async function pickEntitiesModal(
           swatch.style.borderTop = `${Math.max(1, Math.min(6, opt.line.width ?? 1))}px ${dash} ${opt.line.color ?? '#9aa3b2'}`;
           line.append(swatch);
         }
-        line.append(createThoughtCloud(opt.cloud, { profile: 'chip' }));
+        line.append(
+          createThoughtCloud(opt.cloud, {
+            profile: 'chip',
+            // Ширина — по строке списка выбора.
+            width: 'container',
+          }),
+        );
         if (single) {
           line.addEventListener('click', () => finish([opt.id]));
         }
@@ -618,6 +627,8 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     valueHost.append(
       createThoughtCloud(cloud, {
         profile: 'chip',
+        // Ширина — по полю значения диалога.
+        width: 'container',
         actions:
           opts.disabled === true
             ? undefined

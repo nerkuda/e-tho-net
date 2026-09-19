@@ -17,6 +17,8 @@ import { describe, it, mock } from 'node:test';
 
 import {
   CLOUD_PROFILES,
+  CLOUD_WIDTHS,
+  CLOUD_WIDTH_CONTAINER_CLASS,
   SINGLE_CLICK_DELAY_MS,
   applyCloudStyle as factoryApplyCloudStyle,
   applyThoughtIcon,
@@ -241,6 +243,45 @@ describe('профили отображения (закрытый перечен
     assert.ok(findByClass(root, 'cloud-icon') !== undefined);
     assert.ok(findByClass(root, 'cloud-title') !== undefined);
     assert.equal(findByClass(root, 'cloud-main'), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ширина: предел места (`fixed`) или ширина контейнера (`container`)
+// ---------------------------------------------------------------------------
+
+describe('ширина облачка — предел места или ширина контейнера', () => {
+  it('перечень ширин — ровно fixed и container', () => {
+    assert.deepEqual([...CLOUD_WIDTHS], ['fixed', 'container']);
+    assert.equal(CLOUD_WIDTH_CONTAINER_CLASS, 'cloud-width-container');
+  });
+
+  it('без опции ширины (и с fixed) корень НЕ несёт библиотечный класс', () => {
+    for (const options of [{ profile: 'tree' as const }, { profile: 'chip' as const, width: 'fixed' as const }]) {
+      const root = cloud(thought(), options);
+      assert.ok(
+        !root.classList.contains(CLOUD_WIDTH_CONTAINER_CLASS),
+        'fixed (дефолт) — ширину задаёт место/контейнер, класс не нужен',
+      );
+    }
+  });
+
+  for (const profile of CLOUD_PROFILES) {
+    it(`${profile}: width 'container' вешает библиотечный класс на корень`, () => {
+      const root = cloud(thought(), { profile, width: 'container' });
+      assert.ok(root.classList.contains(CLOUD_WIDTH_CONTAINER_CLASS));
+      // Профиль и состояние при этом не теряются.
+      assert.ok(root.classList.contains(`cloud-profile-${profile}`));
+      assert.equal(root.dataset['id'], 't-1');
+    });
+  }
+
+  it('однострочная обрезка имени от ширины контейнера не зависит (раскладка)', () => {
+    const root = cloud(thought({ title: 'длинное имя' }), { profile: 'tree', width: 'container' });
+    const title = findByClass(root, 'cloud-title');
+    assert.ok(title !== undefined);
+    assert.equal(title.style.textOverflow, 'ellipsis');
+    assert.equal(title.title, 'длинное имя');
   });
 });
 

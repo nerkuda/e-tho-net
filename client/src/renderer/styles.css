@@ -1723,6 +1723,23 @@ body.resizing-h {
     border-color 0.12s ease;
 }
 
+/* Ширина облачка по контейнеру — опция `width: 'container'` общей фабрики
+   (`lib/thought-cloud.ts`, класс `cloud-width-container`). Снимает заданный
+   предел ширины (холстовую `--cloud-width` у `.cloud`, пилюлю у
+   `.prop-ref-cloud`) и растягивает облачко по контейнеру; имя обрезается
+   многоточием по нему (у однострочных профилей — `.cloud-title` /
+   `.prc-title` с `nowrap` + `text-overflow`). ЕДИНСТВЕННЫЙ способ задать
+   ширину «по контейнеру»: контекстные переопределения (`.link-endpoint
+   .cloud`, `.search-hit… > .cloud`, `.st-row .st-cloud.cloud`) закрыты —
+   ширину места объявляет вызов фабрики, а не селектор в стилях.
+   Снимать предел без своего `max-width` контекстом запрещено (сторож
+   `guard-thought-cloud`). */
+.cloud-width-container {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
 /* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
 .cloud-ghosts {
   position: absolute;
@@ -2607,12 +2624,8 @@ body.cloud-dragging * {
   color: var(--text-dim);
 }
 
-/* Облачко внутри вкладки растягивается по ширине панели: базовый `.cloud`
-   жёстко 200px (`--cloud-width`), здесь ширина — по контейнеру. */
-.link-endpoint .cloud {
-  width: auto;
-  max-width: 100%;
-}
+/* Облачко внутри вкладки растягивается по ширине панели: ширину объявляет
+   вызов фабрики (`width: 'container'`), а не селектор этого контекста. */
 
 /* Mention snippets carry server-side <mark> highlights (same look as the
    search panel). */
@@ -3999,19 +4012,17 @@ body.cloud-dragging * {
   overflow-wrap: break-word;
 }
 
-/* Хит-мысль (ошибка 265cdb5f): облачко занимает всю ширину выпадашки, а не
-   холстовые 200px (`--cloud-width`) — название обрезается многоточием по
-   ширине списка; snippet с подсветкой вхождений уходит на следующую строку
-   под облачко и отступает от левого края самого облачка, а не от края
-   строки. Строки связи/хронологии остаются однострочными (глиф + текст). */
+/* Хит-мысль (ошибки 265cdb5f, a42ea662): облачко занимает всю ширину
+   выпадашки, а не холстовые 200px (`--cloud-width`) — название обрезается
+   многоточием по ширине списка; snippet с подсветкой вхождений уходит на
+   следующую строку под облачко и отступает от левого края самого облачка, а
+   не от края строки. Ширину «по контейнеру» объявляет вызов фабрики
+   (`width: 'container'`, класс `cloud-width-container`) — здесь только
+   раскладка строки. Строки связи/хронологии остаются однострочными
+   (глиф + текст). */
 .search-hit.search-hit-cloud {
   flex-direction: column;
   align-items: stretch;
-}
-
-.search-hit.search-hit-cloud > .cloud {
-  width: auto;
-  max-width: 100%;
 }
 
 .search-hit.search-hit-cloud > .search-hit-info {
@@ -4839,11 +4850,12 @@ body.cloud-dragging * {
   margin-bottom: 10px;
 }
 
-/* The tree cloud matches the canvas cloud 1-to-1 (§15.4): same width, same
+/* The tree cloud matches the canvas cloud 1-to-1 (§15.4): same size and same
  * ellipses (the canvas defaults apply), only the expand/fold cursor differs
- * from the canvas drag cursor. */
+ * from the canvas drag cursor. Ширину «по колонке дерева» объявляет вызов
+ * фабрики (`width: 'container'`, класс `cloud-width-container`), а не этот
+ * селектор; здесь остаётся раскладка строки — облачко не сжимается. */
 .st-row .st-cloud.cloud {
-  max-width: 100%;
   flex: 0 0 auto;
 }
 

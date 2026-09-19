@@ -608,11 +608,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       if (list.length === 0) return;
       candidates.append(el('p', 'muted', 'Найденные мысли:'));
       for (const candidate of list) {
-        // Строка-облачко — общая фабрика (профиль `tree`): значок, цвета и
-        // начертание мысли; так равные имена легко отличить друг от друга.
+        // Строка-облачко — общая фабрика (профиль `tree`, ширина — по ширине
+        // списка): значок, цвета и начертание мысли; так равные имена легко
+        // отличить друг от друга, а длинное имя обрезается многоточием по
+        // ширине списка, а не по холстовым 200px (ошибка a42ea662).
         // Жесты фабрики не подходят — строка это цель выбора, поэтому
         // облачко строится чисто визуальным, а клик/клавиатуру вешает диалог.
-        const row = createThoughtCloud(candidate, { profile: 'tree' });
+        const row = createThoughtCloud(candidate, {
+          profile: 'tree',
+          width: 'container',
+        });
         row.classList.add('dup-item');
         // The parent's title instead of the «использовать» button — the whole
         // row is the pick target (08-ui-spec.md §4.2). Full parent name in the

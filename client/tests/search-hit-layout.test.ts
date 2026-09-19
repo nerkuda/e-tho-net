@@ -1,5 +1,5 @@
 /**
- * Раскладка хита-мысли в выпадашке поиска (ошибка 265cdb5f).
+ * Раскладка хита-мысли в выпадашке поиска (ошибки 265cdb5f, a42ea662).
  *
  * Контракт: строка-мысль несёт облачко в ширину ВСЕГО выпадающего списка —
  * название обрезается многоточием по ней, а не по холстовой фиксированной
@@ -8,10 +8,12 @@
  * остаются однострочными (глиф + текст).
  *
  * Регрессия родилась из перевода списков на общую фабрику облачка (1b9dccc5):
- * фабричное `.cloud` — холстовое, фиксированной ширины. Клиентские тесты идут
- * без jsdom (см. конвенцию в соседних тестах), поэтому контракт раскладки
- * проверяется по якорям исходника: модификатор строки в модуле поиска и
- * снимающая фиксированную ширину группа правил в стилях.
+ * фабричное `.cloud` — холстовое, фиксированной ширины. Ширину «по
+ * контейнеру» теперь объявляет вызов фабрики (`width: 'container'`, класс
+ * `cloud-width-container`) — контекстный обход `.search-hit… > .cloud`
+ * закрыт. Клиентские тесты идут без jsdom (см. конвенцию в соседних тестах),
+ * поэтому контракт раскладки проверяется по якорям исходника: опция ширины в
+ * модуле поиска, модификатор строки и раскладка в стилях.
  */
 
 import assert from 'node:assert/strict';
@@ -52,7 +54,21 @@ describe('раскладка хита-мысли в выпадашке поис�
     );
   });
 
-  it('в контексте хита-мысли облачко растягивается по списку, snippet уходит под него', () => {
+  it('все три облачка хита-мысли берут ширину по контейнеру (библиотечная опция)', () => {
+    const src = readText(SEARCH_TS);
+    assert.equal(
+      (src.match(/createThoughtCloud\(/g) ?? []).length,
+      3,
+      'the search dropdown builds exactly three clouds (id row + two hit groups)',
+    );
+    assert.equal(
+      (src.match(/width: 'container',/g) ?? []).length,
+      3,
+      'each search cloud declares the container width instead of a contextual CSS override',
+    );
+  });
+
+  it('в контексте хита-мысли строка — колонка, snippet уходит под облачко', () => {
     const css = readText(STYLES_CSS);
     const block = /\.search-hit\.search-hit-cloud \{(?<body>[^}]*)\}/.exec(css);
     assert.ok(block?.groups?.['body'] !== undefined, 'the modifier rule must exist');
@@ -60,11 +76,12 @@ describe('раскладка хита-мысли в выпадашке поис�
     assert.match(body, /flex-direction:\s*column;/, 'cloud above, snippet below');
     assert.match(body, /align-items:\s*stretch;/, 'the cloud must stretch to the list width');
 
-    const cloudOverride =
-      /\.search-hit\.search-hit-cloud > \.cloud \{(?<body>[^}]*)\}/.exec(css);
-    assert.ok(cloudOverride?.groups?.['body'] !== undefined, 'the cloud width override must exist');
-    const cloudBody = cloudOverride.groups['body'] ?? '';
-    assert.match(cloudBody, /width:\s*auto;/, 'the fixed --cloud-width must be released');
-    assert.match(cloudBody, /max-width:\s*100%;/, 'the cloud must not overflow the list');
+    // Снятие холстовой ширины — только библиотечным классом, не селектором
+    // этого контекста (контекстный обход закрыт сторожем guard-thought-cloud).
+    assert.ok(
+      !/\.search-hit\.search-hit-cloud\s*>\s*\.cloud\s*\{/.test(css),
+      'no contextual width override for the cloud (use width: container)',
+    );
+    assert.match(css, /\.cloud-width-container\s*\{[^}]*width:\s*auto;/, 'library class rule');
   });
 });

@@ -496,6 +496,9 @@ function renderIdResult(thought: Thought | null): void {
     row.append(
       createThoughtCloud(thought, {
         profile: 'tree',
+        // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+        // многоточием по списку, а не по холстовым 200px.
+        width: 'container',
         actions: {
           onClick: activateHit(key, () => void setFocus(thought.id)),
           onCtrlClick: () => activateHit(key, () => void setFocus(thought.id))(),
@@ -580,6 +583,9 @@ function renderResults(response: SearchResponse | null): void {
           { ...hit, id: hit.thought_id },
           {
             profile: 'tree',
+            // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+            // многоточием по списку, а не по холстовым 200px.
+            width: 'container',
             actions: {
               onClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
               onCtrlClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
@@ -601,6 +607,9 @@ function renderResults(response: SearchResponse | null): void {
           { ...hit, id: hit.thought_id },
           {
             profile: 'tree',
+            // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+            // многоточием по списку, а не по холстовым 200px.
+            width: 'container',
             actions: {
               onClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
               onCtrlClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),

@@ -346,6 +346,9 @@ function buildTextChip(value: string, opts: {
     { id: value, title: value, icon: opts.icon, icon_kind: 'emoji' },
     {
       profile: 'chip',
+      // Ширина — по чип-полю множественного значения (ошибка 10ad23d1):
+      // длинное значение обрезается многоточием, а не раздувает таблицу.
+      width: 'container',
       actions: {
         onClick: opts.onClick === undefined ? undefined : () => opts.onClick?.(),
         onRemove: () => opts.onRemove(),
@@ -885,6 +888,9 @@ export function buildOutsideReadonlyEdgeChip(
     ref ?? { id: edge.target_id, title: fullTitle },
     {
       profile: 'chip',
+      // Ширина — по колонке значения (ошибка 10ad23d1): имя обрезается
+      // многоточием, а не раздувает таблицу «Свойства вне типа».
+      width: 'container',
       actions: {
         onClick: (id) => openLinkRefInEditor(networkId, id),
         onDoubleClick: (id) => focusLinkRef(networkId, id),
@@ -1062,6 +1068,10 @@ export function buildLinkValueEditor(opts: {
       ref ?? { id, title: fullTitle },
       {
         profile: 'chip',
+        // Ширина — по полю значения: длинное имя обрезается многоточием по
+        // нему, а не раздувает таблицу свойств горизонтальной прокруткой
+        // (ошибка 10ad23d1).
+        width: 'container',
         actions: {
           onClick: (targetId) => openLinkRefInEditor(networkId, targetId),
           onDoubleClick: (targetId) => focusLinkRef(networkId, targetId),

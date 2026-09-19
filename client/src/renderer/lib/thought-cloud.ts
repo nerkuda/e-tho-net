@@ -19,6 +19,15 @@
  * раскладкой (`text-overflow: ellipsis`) с обязательной `title`-подсказкой;
  * числовые лимиты длины отображаемого текста запрещены (ADR «Обрезка текста
  * в интерфейсе — раскладкой, а не подсчётом символов»).
+ *
+ * Ширина облачка — опция {@link ThoughtCloudOptions.width}: имя всегда
+ * обрезается либо по явно заданному пределу ширины (профиль/модификатор
+ * контейнера: `.pinned-chip` 260px, `.history-cloud` 170px, холстовая
+ * `--cloud-width`), либо по ширине своего контейнера (`'container'`).
+ * Второй случай — не «размазанные» контекстные селекторы в стилях, а
+ * класс-модификатор {@link CLOUD_WIDTH_CONTAINER_CLASS} и одно общее правило:
+ * место, где предел ширины не задан явно, обязано передать `width: 'container'`
+ * (следит сторож `guard-thought-cloud`).
  */
 
 import type { IconKind, ThoughtRef } from '@etn/shared';
@@ -256,6 +265,31 @@ export type CloudProfile = 'canvas' | 'tree' | 'chip' | 'graph';
 export const CLOUD_PROFILES: readonly CloudProfile[] = ['canvas', 'tree', 'chip', 'graph'];
 
 /**
+ * Откуда облачко берёт ширину — принцип «имя всегда обрезано»:
+ *
+ * | Ширина | Что задаёт предел имени |
+ * |---|---|
+ * | `fixed` (дефолт) | явный предел ширины: модификатор контейнера (`chip`-профиль в полосе закреплённых — `.pinned-chip` 260px, в полосе истории — `.history-cloud` 170px) или холстовая `--cloud-width` |
+ * | `container` | ширину контейнера: облачко тянется по нему и обрезает имя многоточием по нему |
+ *
+ * Дефолт `fixed` — текущее поведение всех прочих мест. Место, где явного
+ * предела нет (строка списка, поле ввода), обязано указать `container`.
+ */
+export type CloudWidth = 'fixed' | 'container';
+
+/** Закрытый перечень ширин (для проверок и переборов). */
+export const CLOUD_WIDTHS: readonly CloudWidth[] = ['fixed', 'container'];
+
+/**
+ * Класс-модификатор ширины «по контейнеру»: снимает заданный предел ширины
+ * (`--cloud-width` у `.cloud`, пилюлю у `.prop-ref-cloud`) и растягивает
+ * облачко по контейнеру. Единственный способ задать такую ширину — этот
+ * класс и одно общее правило в `styles.css`; контекстные селекторы
+ * (`.link-endpoint .cloud`, `.search-hit .cloud`) закрыты.
+ */
+export const CLOUD_WIDTH_CONTAINER_CLASS = 'cloud-width-container';
+
+/**
  * Данные мысли, из которых облачко строится. Визуальные поля опциональны:
  * непришедшие значения резолвятся по цепочке типа как «не заданы».
  * Структурно совместимо с `ThoughtRef` — можно передавать напрямую.
@@ -296,6 +330,12 @@ export interface ThoughtCloudLock {
 export interface ThoughtCloudOptions {
   /** Профиль отображения (закрытый перечень {@link CLOUD_PROFILES}). */
   profile: CloudProfile;
+  /**
+   * Откуда берётся ширина облачка (закрытый перечень {@link CLOUD_WIDTHS});
+   * по умолчанию `fixed` — явный предел ширины задаёт место/контейнер.
+   * {@link CloudWidth} — `'container'` для строк списка и полей ввода.
+   */
+  width?: CloudWidth;
   /**
    * Действия домена. Без них жесты не монтируются, а кнопка удаления чипа
    * не рисуется; элемент остаётся чисто визуальным.
@@ -411,6 +451,10 @@ function buildRemoveButton(id: string, actions: ThoughtCloudActions): HTMLButton
  *
  * Профиль `chip` резервирует место под значок и кнопку удаления: иначе
  * многоточие съедает кнопку и чип становится неудаляемым.
+ *
+ * Ширина — опция {@link ThoughtCloudOptions.width}: при `'container'` на
+ * корень вешается {@link CLOUD_WIDTH_CONTAINER_CLASS}, и имя обрезается
+ * многоточием по ширине контейнера, а не по холстовому пределу.
  */
 export function createThoughtCloud(
   input: ThoughtCloudInput,
@@ -420,6 +464,9 @@ export function createThoughtCloud(
   const spec = PROFILE_DOM[profile];
   const root = div(spec.root);
   root.classList.add(`cloud-profile-${profile}`);
+  if ((options.width ?? 'fixed') === 'container') {
+    root.classList.add(CLOUD_WIDTH_CONTAINER_CLASS);
+  }
   root.dataset['id'] = input.id;
   root.tabIndex = 0;
 

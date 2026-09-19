@@ -137,6 +137,9 @@ async function renderList(ids: string[]): Promise<void> {
       ref ?? { id, title: id },
       {
         profile: 'chip',
+        // Ширина — по строке панели выбранных: имя обрезается многоточием
+        // по ней, а не растягивает панель.
+        width: 'container',
         actions: {
           onClick: (targetId) => {
             // Click on the row focuses the thought (canvas + editor repaint);

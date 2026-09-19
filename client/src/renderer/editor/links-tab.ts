@@ -164,6 +164,10 @@ function endpointBlock(label: string, ref: ThoughtRef): HTMLElement {
 function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
   const cloud = createThoughtCloud(ref, {
     profile: 'tree',
+    // Ширина — по колонке вкладки: имя обрезается многоточием по ней, а не
+    // по холстовым 200px (`--cloud-width`); ширину объявляет вызов фабрики,
+    // а не контекстный селектор в стилях.
+    width: 'container',
     actions: {
       onClick: (id) => openThoughtInEditor(id),
       onDoubleClick: (id) => void setFocus(id),
@@ -233,6 +237,8 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
                 : { id: hit.owner_id, title: hit.title },
               {
                 profile: 'chip',
+                // Ширина — по строке списка упоминаний.
+                width: 'container',
                 actions: { onClick: () => void open(hit) },
               },
             )
@@ -333,6 +339,8 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
                 : { id: hit.owner_id, title: hit.title },
               {
                 profile: 'chip',
+                // Ширина — по строке списка упоминаний.
+                width: 'container',
                 actions: { onClick: () => void open(hit) },
               },
             )

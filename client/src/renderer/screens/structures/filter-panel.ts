@@ -1136,7 +1136,7 @@ function renderParentField(): void {
     parentFieldBox,
     state.parentIds.map((id) => {
       const ref = parentRefs.get(id);
-      const chip = createThoughtCloud(ref ?? { id, title: '…' }, { profile: 'chip' });
+      const chip = createThoughtCloud(ref ?? { id, title: '…' }, { profile: 'chip', width: 'container' });
       chip.classList.add('st-f-chip');
       return chip;
     }),
@@ -1171,7 +1171,10 @@ function renderThoughtTypeField(): void {
     state.typeIds.flatMap((id) => {
       const type = store.state.thoughtTypes.find((t) => t.id === id);
       if (type === undefined) return [];
-      const chip = createThoughtCloud({ id: type.id, title: type.name }, { profile: 'chip' });
+      const chip = createThoughtCloud(
+        { id: type.id, title: type.name },
+        { profile: 'chip', width: 'container' },
+      );
       chip.classList.add('st-f-chip');
       return [chip];
     }),

@@ -876,6 +876,9 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     ref ?? { id: row.thoughtId, title: '—' },
     {
       profile: 'tree',
+      // Ширина — по колонке дерева: имя обрезается многоточием по ней
+      // (раньше это делал контекстный селектор `.st-row .st-cloud.cloud`).
+      width: 'container',
       actions: {
         onClick: (id) => void openStructuresThought(id),
         onCtrlClick: (id) => toggleSelection([id]),
