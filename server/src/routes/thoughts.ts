@@ -64,7 +64,7 @@ import {
 } from './helpers.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
-import { createLink, deleteLink, findLinksBetween, incomingLinksOf } from '../domain/link-service.js';
+import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
 import {
   clearThoughtRefUsages,
   findThoughtUsage,
@@ -84,6 +84,11 @@ import {
   updateThought,
 } from '../domain/thought-service.js';
 import { copyThoughtsBatch } from '../domain/thought-copy-service.js';
+import {
+  applyBulkThoughtOp,
+  BULK_THOUGHT_OPS,
+  type BulkThoughtOp,
+} from '../domain/thought-bulk-service.js';
 import {
   recordLinkActivity,
   recordThoughtActivity,
@@ -837,75 +842,47 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const userId = req.auth!.user.id;
         const layerId = req.layerEcho?.id ?? null;
+
+        // Групповые операции, общие с `etn.thoughts.bulk_update` (задача
+        // fffe76f2, ADR 162d8e7a): изменение, журнал активности и
+        // real-time-эффекты — в домене; роут только публикует события своим
+        // механизмом. Остальные операции батча (`delete`/`purge`, связь с
+        // фокусом) — ниже, в локальном цикле.
+        if ((BULK_THOUGHT_OPS as readonly string[]).includes(op)) {
+          const result = applyBulkThoughtOp(
+            ndb,
+            { networkId, userId, layerId },
+            ids,
+            op as BulkThoughtOp,
+            {
+              type_id: setTypeId,
+              parent_ids: anchorParentIds,
+              child_ids: anchorChildIds,
+              link_type_id: bulkLinkType,
+            },
+          );
+          for (const effect of result.effects) {
+            switch (effect.type) {
+              case 'thought.updated':
+                deps.emit(req, networkId, 'thought.updated', effect.data);
+                break;
+              case 'link.created':
+                deps.emit(req, networkId, 'link.created', effect.data);
+                break;
+              case 'link.deleted':
+                deps.emit(req, networkId, 'link.deleted', effect.data);
+                break;
+            }
+          }
+          sendSuccess(reply, { affected: result.affected, failures: result.failures });
+          return;
+        }
+
         const failures: ThoughtBatchFailure[] = [];
         let affected = 0;
         for (const id of ids) {
           try {
             switch (op) {
-              case 'set_type': {
-                const updated = updateThought(ndb, id, { type_id: setTypeId }, undefined, userId);
-                deps.emit(req, networkId, 'thought.updated', {
-                  id,
-                  changes: { type_id: setTypeId },
-                  version: updated.version,
-                });
-                recordThoughtActivity(ndb, {
-                  networkId,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'clear_type': {
-                const updated = updateThought(ndb, id, { type_id: null }, undefined, userId);
-                deps.emit(req, networkId, 'thought.updated', {
-                  id,
-                  changes: { type_id: null },
-                  version: updated.version,
-                });
-                recordThoughtActivity(ndb, {
-                  networkId,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'set_active': {
-                const updated = updateThought(ndb, id, { active: true }, undefined, userId);
-                deps.emit(req, networkId, 'thought.updated', {
-                  id,
-                  changes: { active: true },
-                  version: updated.version,
-                });
-                recordThoughtActivity(ndb, {
-                  networkId,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'set_inactive': {
-                const updated = updateThought(ndb, id, { active: false }, undefined, userId);
-                deps.emit(req, networkId, 'thought.updated', {
-                  id,
-                  changes: { active: false },
-                  version: updated.version,
-                });
-                recordThoughtActivity(ndb, {
-                  networkId,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
               case 'delete':
               case 'purge': {
                 // S13: `delete` is an alias of `purge` — both physically delete
@@ -924,28 +901,6 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                     layerId,
                   });
                 }
-                break;
-              }
-              case 'trash': {
-                const updated = updateThought(
-                  ndb,
-                  id,
-                  { marked_for_deletion: true },
-                  undefined,
-                  userId,
-                );
-                deps.emit(req, networkId, 'thought.updated', {
-                  id,
-                  changes: { marked_for_deletion: true },
-                  version: updated.version,
-                });
-                recordThoughtActivity(ndb, {
-                  networkId,
-                  userId,
-                  action: 'trashed',
-                  thought: updated,
-                  layerId,
-                });
                 break;
               }
               case 'link_to_focus': {
@@ -983,116 +938,6 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                     link,
                     layerId,
                   });
-                }
-                break;
-              }
-              // Bulk link operations of the structures filter commands
-              // (03-server-api.md §6.6, L22): anchors come from the picker,
-              // newly created links get `args.link_type_id` (untyped when
-              // absent) and pairs already linked in any type are left
-              // untouched — the op is idempotent per pair.
-              case 'link_parents': {
-                for (const parentId of anchorParentIds!) {
-                  if (parentId === id) continue; // self-loop is skipped silently
-                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
-                  const link = createLink(
-                    ndb,
-                    { source_id: parentId, target_id: id, type_id: bulkLinkType },
-                    userId,
-                  );
-                  deps.emit(req, networkId, 'link.created', { link });
-                  recordLinkActivity(ndb, {
-                    networkId,
-                    userId,
-                    action: 'created',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'link_children': {
-                for (const childId of anchorChildIds!) {
-                  if (childId === id) continue;
-                  if (findLinksBetween(ndb, id, childId).length > 0) continue;
-                  const link = createLink(
-                    ndb,
-                    { source_id: id, target_id: childId, type_id: bulkLinkType },
-                    userId,
-                  );
-                  deps.emit(req, networkId, 'link.created', { link });
-                  recordLinkActivity(ndb, {
-                    networkId,
-                    userId,
-                    action: 'created',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'set_only_parents': {
-                const keepers = new Set(anchorParentIds!);
-                for (const link of incomingLinksOf(ndb, id)) {
-                  if (keepers.has(link.source_id)) continue;
-                  deleteLink(ndb, link.id, undefined);
-                  deps.emit(req, networkId, 'link.deleted', { id: link.id });
-                  recordLinkActivity(ndb, {
-                    networkId,
-                    userId,
-                    action: 'deleted',
-                    link,
-                    layerId,
-                  });
-                }
-                for (const parentId of anchorParentIds!) {
-                  if (parentId === id) continue;
-                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
-                  const link = createLink(
-                    ndb,
-                    { source_id: parentId, target_id: id, type_id: bulkLinkType },
-                    userId,
-                  );
-                  deps.emit(req, networkId, 'link.created', { link });
-                  recordLinkActivity(ndb, {
-                    networkId,
-                    userId,
-                    action: 'created',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'unlink_parents': {
-                for (const parentId of anchorParentIds!) {
-                  for (const link of findLinksBetween(ndb, parentId, id)) {
-                    deleteLink(ndb, link.id, undefined);
-                    deps.emit(req, networkId, 'link.deleted', { id: link.id });
-                    recordLinkActivity(ndb, {
-                      networkId,
-                      userId,
-                      action: 'deleted',
-                      link,
-                      layerId,
-                    });
-                  }
-                }
-                break;
-              }
-              case 'unlink_children': {
-                for (const childId of anchorChildIds!) {
-                  for (const link of findLinksBetween(ndb, id, childId)) {
-                    deleteLink(ndb, link.id, undefined);
-                    deps.emit(req, networkId, 'link.deleted', { id: link.id });
-                    recordLinkActivity(ndb, {
-                      networkId,
-                      userId,
-                      action: 'deleted',
-                      link,
-                      layerId,
-                    });
-                  }
                 }
                 break;
               }

@@ -8,11 +8,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { z } from 'zod';
 import type { NetworkDb } from '../../db/network-db.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
 import { createThoughtWithWarnings, deleteThought, getThoughtOrThrow, updateThought, updateThoughtWithWarnings } from '../../domain/thought-service.js';
-import { activeIncomingLinksOf, activeOutgoingLinksOf, createLink, deleteLink, findLinksBetween, updateLink } from '../../domain/link-service.js';
-import { recordLinkActivity, recordThoughtActivity } from '../../domain/activity-service.js';
+import { findLinksBetween, updateLink } from '../../domain/link-service.js';
+import { recordThoughtActivity } from '../../domain/activity-service.js';
+import { applyBulkThoughtOp } from '../../domain/thought-bulk-service.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
 import { auditAgentCall, emitAgentActivityEvent, emitAgentEvent, openMemberNetwork, requireWritable, requireWriteBudget, resolveRuntimeLayer, runWriteTool } from '../context.js';
@@ -138,239 +139,40 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
           args.args ?? {},
         );
         const ids = [...new Set(args.ids)];
-        const failures: Array<{ id: string; code: string; message: string }> = [];
-        let affected = 0;
-        for (const id of ids) {
-          try {
-            switch (args.op) {
-              case 'set_type': {
-                const updated = updateThought(
-                  ndb,
-                  id,
-                  { type_id: normalized.type_id ?? null },
-                  undefined,
-                  userId,
-                );
-                emitAgentEvent(rt, args.network_id, 'thought.updated', {
-                  id,
-                  changes: { type_id: normalized.type_id ?? null },
-                  version: updated.version,
-                }, extra.requestId, layerId);
-                recordThoughtActivity(ndb, {
-                  networkId: args.network_id,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'clear_type': {
-                const updated = updateThought(ndb, id, { type_id: null }, undefined, userId);
-                emitAgentEvent(rt, args.network_id, 'thought.updated', {
-                  id,
-                  changes: { type_id: null },
-                  version: updated.version,
-                }, extra.requestId, layerId);
-                recordThoughtActivity(ndb, {
-                  networkId: args.network_id,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'set_active': {
-                const updated = updateThought(ndb, id, { active: true }, undefined, userId);
-                emitAgentEvent(rt, args.network_id, 'thought.updated', {
-                  id,
-                  changes: { active: true },
-                  version: updated.version,
-                }, extra.requestId, layerId);
-                recordThoughtActivity(ndb, {
-                  networkId: args.network_id,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'set_inactive': {
-                const updated = updateThought(ndb, id, { active: false }, undefined, userId);
-                emitAgentEvent(rt, args.network_id, 'thought.updated', {
-                  id,
-                  changes: { active: false },
-                  version: updated.version,
-                }, extra.requestId, layerId);
-                recordThoughtActivity(ndb, {
-                  networkId: args.network_id,
-                  userId,
-                  action: 'updated',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'trash': {
-                const updated = updateThought(
-                  ndb,
-                  id,
-                  { marked_for_deletion: true },
-                  undefined,
-                  userId,
-                );
-                emitAgentEvent(rt, args.network_id, 'thought.updated', {
-                  id,
-                  changes: { marked_for_deletion: true },
-                  version: updated.version,
-                }, extra.requestId, layerId);
-                recordThoughtActivity(ndb, {
-                  networkId: args.network_id,
-                  userId,
-                  action: 'trashed',
-                  thought: updated,
-                  layerId,
-                });
-                break;
-              }
-              case 'link_parents': {
-                for (const parentId of normalized.parent_ids ?? []) {
-                  if (parentId === id) continue;
-                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
-                  const link = createLink(
-                    ndb,
-                    {
-                      source_id: parentId,
-                      target_id: id,
-                      type_id: normalized.link_type_id ?? null,
-                    },
-                    userId,
-                  );
-                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
-                  recordLinkActivity(ndb, {
-                    networkId: args.network_id,
-                    userId,
-                    action: 'created',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'link_children': {
-                for (const childId of normalized.child_ids ?? []) {
-                  if (childId === id) continue;
-                  if (findLinksBetween(ndb, id, childId).length > 0) continue;
-                  const link = createLink(
-                    ndb,
-                    {
-                      source_id: id,
-                      target_id: childId,
-                      type_id: normalized.link_type_id ?? null,
-                    },
-                    userId,
-                  );
-                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
-                  recordLinkActivity(ndb, {
-                    networkId: args.network_id,
-                    userId,
-                    action: 'created',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'set_only_parents': {
-                const wanted = new Set(normalized.parent_ids ?? []);
-                const existing = activeIncomingLinksOf(ndb, id);
-                // Drop parents not in the wanted set.
-                for (const link of existing) {
-                  if (wanted.has(link.source_id)) continue;
-                  deleteLink(ndb, link.id, undefined);
-                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
-                }
-                // Add missing parents.
-                for (const parentId of normalized.parent_ids ?? []) {
-                  if (parentId === id) continue;
-                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
-                  const link = createLink(
-                    ndb,
-                    {
-                      source_id: parentId,
-                      target_id: id,
-                      type_id: normalized.link_type_id ?? null,
-                    },
-                    userId,
-                  );
-                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
-                  recordLinkActivity(ndb, {
-                    networkId: args.network_id,
-                    userId,
-                    action: 'created',
-                    link,
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'unlink_parents': {
-                const wanted = new Set(normalized.parent_ids ?? []);
-                const existing = activeIncomingLinksOf(ndb, id);
-                for (const link of existing) {
-                  if (!wanted.has(link.source_id)) continue;
-                  deleteLink(ndb, link.id, undefined);
-                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
-                  recordLinkActivity(ndb, {
-                    networkId: args.network_id,
-                    userId,
-                    action: 'deleted',
-                    link: { id: link.id, source_id: link.source_id, target_id: id, type_id: null },
-                    layerId,
-                  });
-                }
-                break;
-              }
-              case 'unlink_children': {
-                const wanted = new Set(normalized.child_ids ?? []);
-                const existing = activeOutgoingLinksOf(ndb, id);
-                for (const link of existing) {
-                  if (!wanted.has(link.target_id)) continue;
-                  deleteLink(ndb, link.id, undefined);
-                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
-                  recordLinkActivity(ndb, {
-                    networkId: args.network_id,
-                    userId,
-                    action: 'deleted',
-                    link: { id: link.id, source_id: id, target_id: link.target_id, type_id: null },
-                    layerId,
-                  });
-                }
-                break;
-              }
-            }
-            affected += 1;
-          } catch (err) {
-            const code = err instanceof EtnError ? err.code : 'INTERNAL';
-            const message =
-              err instanceof Error ? err.message : 'bulk update failed';
-            failures.push({ id, code, message });
+        // Изменение, журнал активности и real-time-эффекты — в домене
+        // (задача fffe76f2, ADR 162d8e7a); тул публикует события и пишет
+        // только аудит вызова.
+        const result = applyBulkThoughtOp(
+          ndb,
+          { networkId: args.network_id, userId, layerId },
+          ids,
+          args.op,
+          normalized,
+        );
+        for (const effect of result.effects) {
+          switch (effect.type) {
+            case 'thought.updated':
+              emitAgentEvent(rt, args.network_id, 'thought.updated', effect.data, extra.requestId, layerId);
+              break;
+            case 'link.created':
+              emitAgentEvent(rt, args.network_id, 'link.created', effect.data, extra.requestId, layerId);
+              break;
+            case 'link.deleted':
+              emitAgentEvent(rt, args.network_id, 'link.deleted', effect.data, extra.requestId, layerId);
+              break;
           }
         }
-        // Per-id real-time event + activity row уже отправлены внутри цикла;
-        // здесь оставляем только аудит вызова (одна запись на КАЖДЫЙ вызов,
-        // независимо от числа id — контракт бюджета 0ff98632).
+        // Аудит — одна запись на КАЖДЫЙ вызов, независимо от числа id
+        // (контракт бюджета 0ff98632).
         auditAgentCall(
           rt,
           'etn.thoughts.bulk_update',
           args.network_id,
           'thought',
           ids[0] ?? '',
-          { op: args.op, ids: ids.length, affected, failures: failures.length },
+          { op: args.op, ids: ids.length, affected: result.affected, failures: result.failures.length },
         );
-        return { affected, failures };
+        return { affected: result.affected, failures: result.failures };
       }),
   );
 
