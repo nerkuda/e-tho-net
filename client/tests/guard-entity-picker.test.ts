@@ -13,17 +13,24 @@
  * 2. Новый модальный чек-лист выбора сущностей не пишется вне пикера:
  *    классы чек-листа пикера (`st-f-checks` / `st-f-check`) встречаются
  *    только в `lib/entity-picker.ts`.
+ * 3. Строка списка типов (`type-combo-item`) собирается только общим
+ *    модулем выпадашки `lib/suggest-dropdown.ts`: оба пикера (общее комбо и
+ *    прежний `type-combobox`) обязаны делегировать строки ему, а не рисовать
+ *    собственную копию (задача ae0d4ffb, веха 3 версии 0.8.2).
  *
  * Сторож вводится зелёным — в том же изменении, которое переводит все
  * модальные чек-листы типов и голые `<select>` на общий пикер
  * (мета-стандарт «Правило без теста-сторожа не считается введённым»).
  */
 
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { assertGuardClean } from './guard-helpers.js';
+import { assertGuardClean, collectViolations, type GuardRule } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -35,6 +42,19 @@ const RENDERER_ROOT = path.resolve(
 /** Максимальный разрыв между чтением каталога типов и созданием `<option>`:
  *  дальше конструкция уже не «сборка списка из каталога». */
 const SELECT_FROM_CATALOGUE_WINDOW = 1500;
+
+/** Строка списка типов (`type-combo-item`) собирается только общим модулем
+ *  выпадашки: `div`/`el` с этим классом (класс может быть с доп. токенами),
+ *  первым или вторым аргументом. */
+const ITEM_BUILD_RULE: GuardRule = {
+  name: 'no-own-type-combo-item',
+  description:
+    'Строка списка типов (класс type-combo-item) собирается только общим модулем ' +
+    'выпадашки lib/suggest-dropdown.ts: собственная копия строки каталога вне него ' +
+    'запрещена (S3, ADR «одна выпадашка-подсказчик»).',
+  pattern: /\b(?:div|el)\(\s*(?:'(?:[^'\\]|\\.)*'\s*,\s*)?'[^']*\btype-combo-item\b/,
+  allow: (rel) => rel === 'lib/suggest-dropdown.ts',
+};
 
 describe('guard: выбор сущности делается только общим пикером', () => {
   it('<select> не собирается из типов мыслей или типов связей', () => {
@@ -75,5 +95,31 @@ describe('guard: выбор сущности делается только об�
         allow: (rel) => rel === 'lib/entity-picker.ts',
       },
     ]);
+  });
+
+  it('строка списка типов собирается только общим модулем выпадашки', () => {
+    assertGuardClean(RENDERER_ROOT, [ITEM_BUILD_RULE]);
+  });
+
+  it('правило про type-combo-item краснеет на умышленно добавленной копии', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'fake-combo.ts'),
+        [
+          "import { div } from './lib/dom.js';",
+          "const row = div('type-combo-item');",
+          'void row;',
+        ].join('\n'),
+        'utf8',
+      );
+      const violations = collectViolations(dir, [ITEM_BUILD_RULE]);
+      assert.ok(
+        violations.some((v) => v.rule === 'no-own-type-combo-item'),
+        'собственная копия строки списка типов обязана попадать в нарушение',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

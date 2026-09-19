@@ -19,7 +19,7 @@
  * выделенное (без выделения — первую строку), клик — выбрать, Esc —
  * закрыть список, НЕ закрывая диалог, потеря фокуса — закрыть.
  *
- * Защита диалога от Esc повторяет приём type-combobox.ts: capture-слушатель
+ * Защита диалога от Esc: capture-слушатель
  * на `window` регистрируется в момент подключения — раньше, чем `showDialog`
  * добавит свой capture-обработчик Esc, — поэтому `stopImmediatePropagation`
  * гасит нажатие до диалога (на одном узле capture-слушатели выполняются в
@@ -40,7 +40,10 @@
  * истории текстовых значений, `config.options`, токенов.
  */
 
-import { div, el, positionBodyDropdown } from './dom.js';
+import type { LinkStyle } from '@etn/shared';
+
+import { div, el, positionBodyDropdown, span } from './dom.js';
+import { svgIcon } from './icons.js';
 import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 
 /** Одна выбираемая строка выпадашки. */
@@ -60,6 +63,23 @@ export interface SuggestEntry {
   section?: string;
   /** `true` — строка показывается, но не выбирается (недоступный вариант). */
   disabled?: boolean;
+  /**
+   * Отступ строки в шагах дерева типов (0 — верхний уровень). Строки с
+   * заданным отступом выравниваются по общей колонке тоггла: у листа вместо
+   * треугольника остаётся пустое место. Нет — строка без отступа и без
+   * колонки тоггла.
+   */
+  indent?: number;
+  /** Свотч линии перед строкой — вид линии типа связи (цвет/штрих/толщина). */
+  swatch?: { color: string | null; style: LinkStyle | null; width: number | null } | null;
+  /**
+   * Узел дерева с раскрытием: слева рисуется треугольник ▾/▸. Клик по
+   * треугольнику вызывает `onToggle` (источник меняет своё состояние
+   * раскрытия) и перерисовывает список; сама строка остаётся выбираемой.
+   */
+  toggle?: { expanded: boolean; onToggle(): void };
+  /** Строка быстрого создания: акцентный цвет и значок «+» (`type-combo-create`). */
+  create?: boolean;
 }
 
 /** Когда источник участвует в списке. */
@@ -193,7 +213,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
   };
 
   /** Рисует (или перерисовывает) список; пустой результат закрывает его. */
-  const render = (groups: Array<{ source: SuggestSource; entries: SuggestEntry[] }>): void => {
+  function render(groups: Array<{ source: SuggestSource; entries: SuggestEntry[] }>): void {
     const nonEmpty = groups.filter((group) => group.entries.length > 0);
     if (nonEmpty.length === 0) {
       close();
@@ -222,13 +242,47 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
         }
         lastSection = entry.section;
         const row = div('type-combo-item');
+        if (entry.create === true) row.classList.add('type-combo-create');
         if (entry.disabled === true) row.classList.add('disabled');
+        // Отступ дерева типов: строки с отступом получают колонку тоггла,
+        // у листа она пустая — подписи соседних уровней не разъезжаются.
+        if (entry.indent !== undefined) {
+          row.style.paddingLeft = `${8 + Math.max(0, entry.indent) * 16}px`;
+        }
+        if (entry.toggle !== undefined) {
+          const toggle = span(entry.toggle.expanded ? '▾' : '▸', 'type-combo-toggle');
+          toggle.addEventListener('mousedown', (event) => event.preventDefault());
+          toggle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            entry.toggle?.onToggle();
+            refresh(false);
+          });
+          row.append(toggle);
+        } else if (entry.indent !== undefined) {
+          row.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
+        }
+        if (entry.swatch !== undefined && entry.swatch !== null) {
+          const swatch = span('', 'type-combo-swatch');
+          const style = entry.swatch.style;
+          const dash = style === 'dashed' ? 'dashed' : style === 'dotted' ? 'dotted' : 'solid';
+          const width = Math.max(1, Math.min(6, entry.swatch.width ?? 1));
+          swatch.style.borderTop = `${width}px ${dash} ${entry.swatch.color ?? '#9aa3b2'}`;
+          row.append(swatch);
+        }
         if (entry.thought !== undefined) {
           // Строка-мысль — готовое облачко фабрики: значок, цвета,
           // начертание, бледность неактуальной, метка корзины и обрезка
           // имени по ширине выпадашки. Профиль `chip` — списочная строка,
           // метка корзины у него встроена в пилюлю и не вылезает за край.
           row.append(createThoughtCloud(entry.thought, { profile: 'chip', width: 'container' }));
+        } else if (entry.create === true) {
+          const icon = span('', 'type-combo-icon');
+          icon.append(svgIcon('plus', 12));
+          row.append(icon);
+          const label = el('span', 'type-combo-label');
+          label.style.flex = '1';
+          label.append(entry.label);
+          row.append(label);
         } else {
           const label = el('span', 'type-combo-label', entry.label);
           label.title = entry.label;
@@ -254,7 +308,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     }
     if (cursor !== null) cursor = Math.min(cursor, rowEntries.length - 1);
     paint();
-  };
+  }
 
   /**
    * Пересчитывает список по текущему состоянию поля. `force` — ручное
@@ -263,7 +317,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
    * не осталось и список закрывается: устаревший асинхронный ответ,
    * пришедший после ввода, открыть список не должен.
    */
-  const refresh = (force: boolean): void => {
+  function refresh(force: boolean): void {
     const query = input.value;
     const run = ++seq;
     const sources = force
@@ -284,13 +338,12 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       if (run !== seq || (!force && !focused) || !input.isConnected) return;
       render(groups);
     });
-  };
+  }
 
   /** Клик мимо (вне поля и списка) закрывает список. */
   const onWinDown = (event: MouseEvent): void => {
     // Поле выпало из документа (перерисованный редактор, закрытый диалог) —
-    // оконные capture-слушатели снимаем, чтобы они не жили дольше виджета
-    // (приём type-combobox.ts).
+    // оконные capture-слушатели снимаем, чтобы они не жили дольше виджета.
     if (!input.isConnected) {
       dispose();
       return;
@@ -310,7 +363,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     if (event.key !== 'Escape') return;
     if (list !== null || event.repeat) {
       // Регистрация при подключении ставит этот capture-слушатель раньше
-      // диалогового — диалог до события не дойдёт (приём type-combobox.ts).
+      // диалогового — диалог до события не дойдёт.
       event.stopImmediatePropagation();
       event.preventDefault();
       if (list !== null) close();

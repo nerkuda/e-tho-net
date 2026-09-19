@@ -79,10 +79,7 @@ import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
 import {
-  linkTypeOptions,
-  thoughtTypeOptions,
   buildTypeTree,
   flattenTypeTree,
   resolveLinkTypeVisual,
@@ -93,7 +90,7 @@ import {
 import { onRealtimeEvent } from '../realtime.js';
 import { buildChipListField } from './thought-type/value-combo.js';
 import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { pickEntitiesModal } from '../lib/entity-picker.js';
+import { buildEntityCombo, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
@@ -1235,8 +1232,9 @@ export function openPropertyManagerEditor(
 
     // Родительский тип связи + кнопка «Оформление»
     const parentRow = div('form-row type-editor-row');
-    const parentCombo = createTypeCombobox({
-      options: () => linkTypeOptions(store.state.linkTypes),
+    const parentCombo = buildEntityCombo({
+      networkId,
+      kind: 'link-types',
       value: draft.parentLinkTypeId,
       placeholder: 'Без родителя',
       onChange: (id) => {

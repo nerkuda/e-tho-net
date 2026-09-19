@@ -56,13 +56,13 @@ import {
   saveDraft,
 } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions, resolveLinkTypeVisual, thoughtTypeOptions } from '../lib/type-tree.js';
+import { resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -721,7 +721,7 @@ function updateTitleEl(ctx: EditorContext | null): void {
  */
 function patchHeader(ctx: EditorContext): void {
   if (scrollBox === null || headerEl === null) return;
-  // Body-mounted widgets (type-combobox dropdowns) anchored to the OLD header
+  // Body-mounted widgets (entity-combo type dropdowns) anchored to the OLD header
   // nodes must close before those nodes are replaced — same reasoning as the
   // full rebuild below.
   window.dispatchEvent(new Event('etn:editor-rebuild'));
@@ -840,7 +840,7 @@ async function render(): Promise<void> {
   const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const refocus = activeEl !== null && scrollBox.contains(activeEl) ? activeEl : null;
 
-  // Body-mounted widgets (type-combobox dropdowns) must close before the old
+  // Body-mounted widgets (entity-combo type dropdowns) must close before the old
   // DOM is destroyed — otherwise their fixed-position lists stay behind as
   // ghosts that neither Escape nor an outside click can dismiss (e.g. Tab
   // from an edited title into the type field opens the list, then a dock
@@ -1015,7 +1015,7 @@ async function render(): Promise<void> {
 const REFOCUS_MARKERS = new Set([
   'editor-title-input',
   'synonyms-input',
-  'type-combo-input',
+  'entity-combo-input',
   'editor-icon-box',
   'md-field-area',
   'chrono-meta-input',
@@ -1455,8 +1455,9 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // when the dialog closes — the same save path as a regular pick — and the
   // caret then moves into the comment field.
   let focusCommentAfterTypeSave = false;
-  const typeCombo = createTypeCombobox({
-    options: () => thoughtTypeOptions(store.state.thoughtTypes),
+  const typeCombo = buildEntityCombo({
+    networkId,
+    kind: 'thought-types',
     value: thought.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
@@ -1684,6 +1685,7 @@ function buildLinkHeaderLoading(linkId: string): HTMLElement {
 
 /** Builds the link header form (type + active). */
 function buildLinkHeader(link: Link): HTMLElement {
+  const networkId = requireNetworkId();
   const box = div('editor-fields');
 
   // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
@@ -1697,8 +1699,9 @@ function buildLinkHeader(link: Link): HTMLElement {
   // applied when the dialog closes and the caret moves into the comment
   // field — same flow as in the thought header.
   let focusCommentAfterTypeSave = false;
-  const typeCombo = createTypeCombobox({
-    options: () => linkTypeOptions(store.state.linkTypes),
+  const typeCombo = buildEntityCombo({
+    networkId,
+    kind: 'link-types',
     value: link.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',

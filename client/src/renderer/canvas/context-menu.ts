@@ -35,10 +35,10 @@ import {
 import { getRef, invalidateRef, requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
+import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
-import { orderedTypeRows } from '../lib/type-tree.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
 import { reflectThoughtUpdate } from '../editor/editor.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
@@ -508,7 +508,7 @@ export function buildThoughtMenuItems(
     },
     {
       label: 'Изменить тип',
-      submenu: buildTypeMenu(networkId, target.id),
+      onClick: () => void pickTypeForThought(networkId, target.id),
     },
     {
       label: 'Изменить иконку',
@@ -604,17 +604,32 @@ export function buildThoughtMenuItems(
 /** Internals exported for unit tests. */
 export const menuInternals = { buildThoughtMenuItems };
 
-/** Type-change submenu (type tree with indents + clear; L21). */
-function buildTypeMenu(networkId: string, thoughtId: string): MenuItem[] {
-  // The hierarchy root is not assignable to thoughts (L21) — skip it.
-  const items: MenuItem[] = orderedTypeRows(store.state.thoughtTypes)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({
-      label: `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name}`,
-      onClick: () => void changeType(networkId, thoughtId, row.type.id),
-    }));
-  items.push({ label: 'очистить тип', onClick: () => void changeType(networkId, thoughtId, null) });
-  return items;
+/** Sentinel id строки «Без типа» в пикере — не совпадает ни с одним id (UUID). */
+const CLEAR_TYPE_ID = '\u0000clear';
+
+/**
+ * «Изменить тип»: одиночный выбор типа общим пикером (значки, цвета,
+ * иерархия с раскрытием, живой поиск) плюс строка «Без типа» — снять тип.
+ */
+async function pickTypeForThought(networkId: string, thoughtId: string): Promise<void> {
+  const picked = await pickEntitiesModal({
+    networkId,
+    kind: 'thought-types',
+    title: 'Изменить тип',
+    single: true,
+    allowEmpty: true,
+    extraOptions: [
+      {
+        id: CLEAR_TYPE_ID,
+        title: 'Без типа',
+        selectable: true,
+        cloud: { id: CLEAR_TYPE_ID, title: 'Без типа', icon: '∅', icon_kind: 'emoji' },
+      },
+    ],
+  });
+  const id = picked?.[0];
+  if (id === undefined) return;
+  await changeType(networkId, thoughtId, id === CLEAR_TYPE_ID ? null : id);
 }
 
 /** Toggles the active flag. */

@@ -41,8 +41,7 @@ import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
@@ -302,8 +301,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // `defaultNewThoughtTypeId` option preselects a type (link-property
     // pickers pass the first allowed target type).
     let newThoughtTypeId: string | null = opts.defaultNewThoughtTypeId ?? null;
-    const thoughtTypeCombo = createTypeCombobox({
-      options: () => thoughtTypeOptions(store.state.thoughtTypes),
+    const thoughtTypeCombo = buildEntityCombo({
+      networkId,
+      kind: 'thought-types',
       value: opts.defaultNewThoughtTypeId ?? null,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
@@ -315,8 +315,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // Type of the created link(s), remembered as the last used one. Hidden
     // for pickers that never create links. The hierarchy root is not offered.
     let linkTypeId: string | null = store.state.lastUsedLinkTypeId;
-    const linkTypeCombo = createTypeCombobox({
-      options: () => linkTypeOptions(store.state.linkTypes),
+    const linkTypeCombo = buildEntityCombo({
+      networkId,
+      kind: 'link-types',
       value: linkTypeId,
       placeholder: 'без типа',
       emptyLabel: 'без типа',

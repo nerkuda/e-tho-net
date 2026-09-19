@@ -17,8 +17,7 @@ import { requireNetworkId } from '../app.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -47,8 +46,9 @@ function focusCombo(combo: HTMLElement): void {
  */
 export function pickLinkType(title: string): Promise<string | null | undefined> {
   return new Promise((resolve) => {
-    const combo = createTypeCombobox({
-      options: () => linkTypeOptions(store.state.linkTypes),
+    const combo = buildEntityCombo({
+      networkId: requireNetworkId(),
+      kind: 'link-types',
       value: store.state.lastUsedLinkTypeId,
       emptyLabel: 'Без типа',
       placeholder: 'Поиск типа связи…',
@@ -85,8 +85,9 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
  */
 export function pickThoughtType(initial: string | null): Promise<string | null | undefined> {
   return new Promise((resolve) => {
-    const combo = createTypeCombobox({
-      options: () => thoughtTypeOptions(store.state.thoughtTypes),
+    const combo = buildEntityCombo({
+      networkId: requireNetworkId(),
+      kind: 'thought-types',
       value: initial,
       emptyLabel: 'Без типа',
       placeholder: 'Поиск типа…',

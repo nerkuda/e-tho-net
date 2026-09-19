@@ -25,7 +25,10 @@
  *     множественный выбор, раскрытие иерархии типов, поиск, «Очистить» и
  *     дополнительные кнопки вызывающего;
  *   - {@link buildEntityCombo} — встроенное комбо-поле: одиночный выбор,
- *     облачко выбранного (чип с крестиком), выпадашка живого поиска.
+ *     облачко выбранного (чип с крестиком), выпадашка живого поиска, дерево
+ *     типов с отступами и раскрытием (`expandAll`), свотч линии, быстрое
+ *     создание типа (`onCreateNew`) — всё, ради чего существовал прежний
+ *     `lib/type-combobox.ts` (поглощён и удалён, веха 3 версии 0.8.2).
  *
  * Зависимости — только `lib/*`, `state.ts` и типы `@etn/shared` /
  * `main/ipc/contract.js` (грабли «Цикл импортов canvas.ts ↔ editor-модулей»:
@@ -38,10 +41,15 @@ import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
-import { button, clear, div, el, span } from './dom.js';
+import { button, div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { svgIcon } from './icons.js';
-import { wireSuggest, type SuggestSource } from './suggest-dropdown.js';
+import {
+  wireSuggest,
+  type SuggestEntry,
+  type SuggestHandle,
+  type SuggestSource,
+} from './suggest-dropdown.js';
 import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
 
@@ -97,21 +105,22 @@ export function thoughtTypeEntityOptions(types: readonly ThoughtType[]): EntityO
 }
 
 /** Варианты каталога типов связей: как {@link thoughtTypeEntityOptions}, плюс
- *  свотч линии и обратное имя для поиска. */
+ *  свотч линии и обратное имя в подписи («прямое / обратное»). */
 export function linkTypeEntityOptions(types: readonly LinkType[]): EntityOption[] {
   return orderedTypeRows(types)
     .filter((row) => !row.type.is_root)
     .map((row) => {
       const line = resolveLinkTypeVisual(types, row.type.id);
+      const title = `${row.type.name_forward} / ${row.type.name_reverse}`;
       return {
         id: row.type.id,
-        title: row.type.name_forward,
+        title,
         searchText: row.type.name_reverse,
         parentId: row.type.parent_id,
         depth: row.depth - 1,
         hasChildren: row.hasChildren,
         selectable: true,
-        cloud: { id: row.type.id, title: row.type.name_forward, icon: LINK_TYPE_CLOUD_ICON, icon_kind: 'emoji' },
+        cloud: { id: row.type.id, title, icon: LINK_TYPE_CLOUD_ICON, icon_kind: 'emoji' },
         line,
       };
     });
@@ -127,6 +136,72 @@ export function thoughtEntityOption(hit: DuplicateHit): EntityOption {
     selectable: true,
     cloud: { ...hit },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Чистые помощники списка (проверяются юнит-тестами)
+// ---------------------------------------------------------------------------
+
+/** Служебный id строки «Создать новый» — не совпадает ни с одним id (UUID). */
+export const CREATE_ROW_ID = '\u0000create';
+
+/**
+ * Имя для строки «Создать новый „<имя>“», или `null`, когда строки быть не
+ * должно: только для непустого запроса без совпадений (пустой запрос
+ * показывает весь каталог, любое совпадение делает создание ненужным) и
+ * только если вызывающий передал `onCreateNew`. Чистая — под юнит-тестами.
+ */
+export function createRowName(query: string, matchCount: number, enabled: boolean): string | null {
+  if (!enabled || matchCount > 0) return null;
+  const name = query.trim();
+  return name === '' ? null : name;
+}
+
+/**
+ * Шагов отступа строки каталога типов по её глубине. `depth` вариантов
+ * начинается с 1 у верхнего уровня списка (корень иерархии из `options`
+ * исключён, поэтому первыми идут его дети). Единая формула для модального
+ * чек-листа и встроенного комбо — строки каталога выглядят одинаково.
+ */
+export function typeRowIndentSteps(depth: number | undefined): number {
+  return Math.max(0, (depth ?? 1) - 1);
+}
+
+/**
+ * Id вариантов, видимых при поиске. Пустой запрос — весь каталог с учётом
+ * раскрытия: вариант виден, если у него нет родителя, родителя нет среди
+ * вариантов (корень иерархии исключён из списка — сервер проставляет его
+ * `parent_id` типов верхнего уровня, но сам корень в `options` не попадает)
+ * или родитель раскрыт. Непустой — совпадения вместе с цепочкой предков.
+ * Чистая — единственный источник правила «пустой поиск показывает всё»
+ * и для модального чек-листа, и для встроенного комбо.
+ */
+export function visibleEntityIds(
+  options: readonly EntityOption[],
+  needle: string,
+  expanded: ReadonlySet<string>,
+): Set<string> {
+  const byId = new Map(options.map((o) => [o.id, o]));
+  const ids = new Set<string>();
+  if (needle === '') {
+    for (const opt of options) {
+      const parent = opt.parentId ?? null;
+      if (parent === null || !byId.has(parent) || expanded.has(parent)) ids.add(opt.id);
+    }
+    return ids;
+  }
+  const matches = (opt: EntityOption): boolean =>
+    opt.title.toLowerCase().includes(needle) ||
+    (opt.searchText ?? '').toLowerCase().includes(needle);
+  for (const opt of options) {
+    if (!matches(opt)) continue;
+    let cur: EntityOption | undefined = opt;
+    while (cur !== undefined) {
+      ids.add(cur.id);
+      cur = cur.parentId != null ? byId.get(cur.parentId) : undefined;
+    }
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +367,7 @@ export async function pickEntitiesModal(
       });
 
       const renderChips = (): void => {
-        clear(chipsBox);
+        chipsBox.replaceChildren();
         if (checked.size === 0) {
           chipsBox.append(el('p', 'muted', 'Ничего не выбрано.'));
           return;
@@ -388,37 +463,11 @@ export async function pickEntitiesModal(
     searchInput.placeholder = 'Найти…';
     const list = div('st-f-checks st-f-picker-list');
 
-    const byId = new Map(options.map((o) => [o.id, o]));
-
-    /** Совпадение варианта с поиском (имя + обратное имя типа связи). */
-    const matches = (opt: EntityOption): boolean => {
-      if (opt.title.toLowerCase().includes(needle)) return true;
-      return (opt.searchText ?? '').toLowerCase().includes(needle);
-    };
-
-    /** Id, видимые при поиске: совпадения вместе с цепочкой предков. */
-    const visibleIds = (): Set<string> => {
-      const ids = new Set<string>();
-      if (needle === '') {
-        for (const opt of options) {
-          const parent = opt.parentId ?? null;
-          if (parent === null || expanded.has(parent)) ids.add(opt.id);
-        }
-        return ids;
-      }
-      for (const opt of options) {
-        if (!matches(opt)) continue;
-        let cur: EntityOption | undefined = opt;
-        while (cur !== undefined) {
-          ids.add(cur.id);
-          cur = cur.parentId != null ? byId.get(cur.parentId) : undefined;
-        }
-      }
-      return ids;
-    };
+    /** Id, видимые при поиске (пустой запрос — весь каталог). */
+    const visibleIds = (): Set<string> => visibleEntityIds(options, needle, expanded);
 
     const renderList = (): void => {
-      clear(list);
+      list.replaceChildren();
       const ids = visibleIds();
       const shown = options.filter((opt) => ids.has(opt.id));
       if (shown.length === 0) {
@@ -427,7 +476,7 @@ export async function pickEntitiesModal(
       }
       for (const opt of shown) {
         const line = el('label', 'st-f-check entity-pick-row');
-        line.style.paddingLeft = `${Math.max(0, opt.depth ?? 0) * 14}px`;
+        line.style.paddingLeft = `${8 + typeRowIndentSteps(opt.depth) * 16}px`;
         if (opt.hasChildren === true) {
           const toggle = span(expanded.has(opt.id) ? '▾' : '▸', 'type-combo-toggle');
           toggle.addEventListener('mousedown', (event) => event.preventDefault());
@@ -559,13 +608,30 @@ export interface EntityComboOptions {
   kind: EntityKind;
   /** Текущее значение (id сущности; `null` — пусто). */
   value: string | null;
-  /** Подпись пустого значения (строка «пусто» в выпадашке). */
+  /** Подпись пустого значения (строка «пусто» в выпадашке и в поле). */
   emptyLabel?: string;
   placeholder?: string;
   /** Заблокированное поле (без поиска и очистки). */
   disabled?: boolean;
   /** Типы мыслей, сужающие живой поиск (только для `thoughts`). */
   searchTypeIds?: readonly string[];
+  /**
+   * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
+   * редактора типа). По умолчанию раскрыт только верхний уровень.
+   */
+  expandAll?: boolean;
+  /**
+   * Свой каталог вариантов вместо чтения типа из store (родительский пикер
+   * фильтрует кандидатов: без себя, потомков и с учётом предела глубины).
+   */
+  options?: () => EntityOption[];
+  /**
+   * Быстрое создание типа: непустой запрос без совпадений даёт строку
+   * «Создать новый „<запрос>“»; выбор строки вызывает хук — вызывающий
+   * открывает диалог создания и резолвит id нового типа (или `null`, если
+   * пользователь отказался: поле и список возвращаются к вводу).
+   */
+  onCreateNew?: (query: string) => Promise<string | null>;
   onChange: (id: string | null) => void;
 }
 
@@ -581,8 +647,16 @@ export interface EntityCombo {
 /**
  * Собирает встроенное комбо-поле пикера: облачко выбранного (чип с
  * крестиком), строка живого поиска с общей выпадашкой и каретка ▾ для
- * полного списка. Одиночный выбор: выбранная строка (или «пусто»)
- * становится значением через `onChange`.
+ * полного списка. Одиночный выбор: выбранная строка (или «пусто») становится
+ * значением через `onChange`.
+ *
+ * Режим типов — дерево с отступами и раскрытием (`expandAll` раскрывает всё);
+ * строки — те же облачка, что в модальном чек-листе (значок, цвета и
+ * начертание из цепочки типов), у типа связи — свотч линии и подпись
+ * «прямое / обратное». Каталог отдаёт ЕДИНСТВЕННЫЙ источник общей выпадашки
+ * (пустой запрос — весь каталог с учётом раскрытия, непустой — совпадения с
+ * цепочкой предков), поэтому ручное открытие кареткой не рисует список
+ * дважды.
  */
 export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   let current = opts.value;
@@ -591,11 +665,15 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   /** Полный список вариантов (для типов — каталог из store, перечитывается). */
   let allOptions: EntityOption[] = [];
   let byId = new Map<string, EntityOption>();
+  /** Раскрытие узлов дерева: явный выбор пользователя (иначе — дефолт). */
+  const expanded = new Map<string, boolean>();
 
   /** Перечитывает каталог типов на каждое открытие списка (realtime может
    *  принести каталог позже создания поля). */
   const reloadOptions = (): void => {
-    if (opts.kind === 'thought-types') {
+    if (opts.options !== undefined) {
+      allOptions = opts.options();
+    } else if (opts.kind === 'thought-types') {
       allOptions = thoughtTypeEntityOptions(store.state.thoughtTypes);
     } else if (opts.kind === 'link-types') {
       allOptions = linkTypeEntityOptions(store.state.linkTypes);
@@ -605,6 +683,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     byId = new Map(allOptions.map((o) => [o.id, o]));
   };
   reloadOptions();
+
+  /** Эффективное раскрытие узла: явный выбор, иначе режим `expandAll`. */
+  const isExpanded = (opt: EntityOption): boolean =>
+    expanded.get(opt.id) ?? (opts.expandAll === true && opt.hasChildren === true);
 
   const root = div('entity-combo');
   const valueHost = div('entity-combo-value');
@@ -620,7 +702,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
 
   /** Облачко выбранного значения или подпись пустого. */
   const renderValue = (): void => {
-    clear(valueHost);
+    valueHost.replaceChildren();
     if (current === null) {
       if (opts.emptyLabel !== undefined) valueHost.append(span(opts.emptyLabel, 'muted'));
       return;
@@ -654,35 +736,70 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     renderValue();
   };
 
-  /** Подпись строки варианта с индентом дерева типов. */
-  const rowLabel = (opt: EntityOption): string =>
-    `${'· '.repeat(Math.max(0, opt.depth ?? 0))}${opt.title}`;
+  /** Строка выпадашки по варианту каталога типов: облачко типа (значок,
+   *  цвета, начертание), отступ дерева, свотч линии, тоггл раскрытия. */
+  const typeEntry = (opt: EntityOption): SuggestEntry => {
+    const entry: SuggestEntry = {
+      value: opt.id,
+      label: opt.title,
+      thought: opt.cloud,
+      indent: typeRowIndentSteps(opt.depth),
+      swatch: opt.line ?? null,
+    };
+    if (opt.hasChildren === true) {
+      entry.toggle = {
+        expanded: isExpanded(opt),
+        onToggle: () => expanded.set(opt.id, !isExpanded(opt)),
+      };
+    }
+    return entry;
+  };
+
+  /** Последний запрос, пришедший в источник (для строки «Создать новый»). */
+  let lastQuery = '';
 
   const sources: SuggestSource[] = [];
   if (opts.kind !== 'thoughts') {
-    // Полный список каталога: на фокусе пустого поля и по кнопке ▾ (force
-    // игнорирует `when`, так что ▾ открывает весь список при любом тексте).
+    // Единственный источник на весь каталог: пустой запрос — весь список
+    // (с учётом раскрытия), непустой — совпадения вместе с цепочкой предков.
+    // Один источник — ручное открытие кареткой (force игнорирует `when`) не
+    // рисует каталог дважды.
     sources.push({
-      when: 'empty',
-      load: () => {
-        if (opts.disabled === true) return [];
-        reloadOptions();
-        const rows = allOptions.filter((o) => o.selectable !== false).map((o) => ({ value: o.id, label: rowLabel(o) }));
-        if (opts.emptyLabel !== undefined) rows.unshift({ value: '', label: opts.emptyLabel });
-        return rows;
-      },
-    });
-    // Живой поиск по имени (для типа связи — и по обратному имени).
-    sources.push({
-      when: 'typed',
+      when: 'always',
       load: (query) => {
         if (opts.disabled === true) return [];
         reloadOptions();
         const q = query.trim().toLowerCase();
-        return allOptions
-          .filter((o) => o.selectable !== false)
-          .filter((o) => o.title.toLowerCase().includes(q) || (o.searchText ?? '').toLowerCase().includes(q))
-          .map((o) => ({ value: o.id, label: rowLabel(o) }));
+        const expandedIds = new Set(allOptions.filter(isExpanded).map((o) => o.id));
+        const visible = visibleEntityIds(allOptions, q, expandedIds);
+        const entries = allOptions
+          .filter((o) => o.selectable !== false && visible.has(o.id))
+          .map(typeEntry);
+        const matchedCount =
+          q === ''
+            ? 0
+            : allOptions.filter(
+                (o) =>
+                  o.title.toLowerCase().includes(q) ||
+                  (o.searchText ?? '').toLowerCase().includes(q),
+              ).length;
+        if (
+          opts.emptyLabel !== undefined &&
+          (q === '' || opts.emptyLabel.toLowerCase().includes(q))
+        ) {
+          entries.unshift({ value: '', label: opts.emptyLabel, indent: 0 });
+        }
+        const createName = createRowName(query, matchedCount, opts.onCreateNew !== undefined);
+        if (createName !== null) {
+          entries.push({
+            value: CREATE_ROW_ID,
+            label: `Создать новый „${createName}“`,
+            create: true,
+            indent: 0,
+          });
+        }
+        lastQuery = query;
+        return entries;
       },
     });
   } else {
@@ -718,9 +835,35 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     input.value = current !== null ? (byId.get(current)?.title ?? current) : '';
   });
 
-  const handle = wireSuggest(input, {
+  let handle: SuggestHandle | null = null;
+
+  /** Запускает «Создать новый тип» по строке выпадашки. */
+  const runCreate = async (query: string): Promise<void> => {
+    if (opts.onCreateNew === undefined) return;
+    let id: string | null = null;
+    try {
+      id = await opts.onCreateNew(query.trim());
+    } catch {
+      id = null; // неудачное создание ведёт себя как отказ
+    }
+    if (id !== null) {
+      setValue(id);
+      return;
+    }
+    // Отказ: вернуть каретку в поле и снова открыть список с той же строкой.
+    if (root.isConnected) {
+      input.focus();
+      handle?.open();
+    }
+  };
+
+  handle = wireSuggest(input, {
     sources,
     onPick: (entry) => {
+      if (entry.value === CREATE_ROW_ID) {
+        void runCreate(lastQuery);
+        return;
+      }
       if (entry.value === '') {
         setValue(null);
         return;
@@ -729,16 +872,20 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     },
   });
 
-  // Каретка: открыть полный список, не забирая фокус из поля.
+  // Каретка: открыть полный список, не забирая фокус из поля. Подпись
+  // выбранного (или набранный текст) очищается, чтобы источник отдал весь
+  // каталог, а не срез по случайному запросу.
   caret.addEventListener('mousedown', (event) => event.preventDefault());
   caret.addEventListener('click', () => {
-    if (opts.disabled !== true) handle.open();
+    if (opts.disabled === true) return;
+    input.value = '';
+    handle?.open();
   });
 
   renderValue();
   return {
     root,
     value: () => current,
-    dispose: () => handle.dispose(),
+    dispose: () => handle?.dispose(),
   };
 }

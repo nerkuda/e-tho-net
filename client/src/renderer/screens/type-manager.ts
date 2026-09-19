@@ -92,7 +92,7 @@ import {
   typeSearchVisibleIds,
   type FlatTypeRow,
 } from '../lib/type-tree.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
+import { buildEntityCombo, type EntityOption } from '../lib/entity-picker.js';
 import {
   cacheAttachedRegistryRow,
   draftPropertiesFrom,
@@ -449,56 +449,53 @@ function buildParentPicker(opts: {
   const types = (): typeof store.state.thoughtTypes | typeof store.state.linkTypes =>
     kinds === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
   const rootId = types().find((t) => t.is_root)?.id ?? null;
-  const combo = createTypeCombobox({
-    options: () => {
-      // Candidate parents: every type except the root, the edited one and its
-      // descendants; the depth cap must hold for the resulting subtree.
-      const allowed = (id: string): boolean => {
-        if (id === rootId) return false;
-        const selfId = currentId();
-        if (selfId !== null) {
-          if (id === selfId) return false;
-          if (subtreeTypeIds(types(), selfId).has(id)) return false;
-        }
-        const subtree = selfId !== null ? subtreeHeight(types(), selfId) : 1;
-        return typeDepth(types(), id) + subtree <= MAX_TYPE_DEPTH;
-      };
-      if (kinds === 'thought') {
-        return orderedTypeRows(store.state.thoughtTypes)
-          .filter((row) => allowed(row.type.id))
-          .map((row) => ({
-            id: row.type.id,
-            label: row.type.name,
-            parent_id: row.type.parent_id,
-            depth: row.depth,
-            has_children: row.hasChildren,
-            selectable: true,
-            icon: { icon: row.type.icon, kind: row.type.icon_kind },
-            style: {
-              fg: row.type.fg_color,
-              bg: row.type.bg_color,
-              bold: row.type.font_bold ?? false,
-              italic: row.type.font_italic ?? false,
-              underline: row.type.font_underline ?? false,
-              strike: row.type.font_strike ?? false,
-            },
-          }));
+  const optionRows = (): EntityOption[] => {
+    // Candidate parents: every type except the root, the edited one and its
+    // descendants; the depth cap must hold for the resulting subtree.
+    const allowed = (id: string): boolean => {
+      if (id === rootId) return false;
+      const selfId = currentId();
+      if (selfId !== null) {
+        if (id === selfId) return false;
+        if (subtreeTypeIds(types(), selfId).has(id)) return false;
       }
-      return orderedTypeRows(store.state.linkTypes)
+      const subtree = selfId !== null ? subtreeHeight(types(), selfId) : 1;
+      return typeDepth(types(), id) + subtree <= MAX_TYPE_DEPTH;
+    };
+    if (kinds === 'thought') {
+      return orderedTypeRows(store.state.thoughtTypes)
         .filter((row) => allowed(row.type.id))
-        .map((row) => {
-          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
-          return {
-            id: row.type.id,
-            label: `${row.type.name_forward} / ${row.type.name_reverse}`,
-            parent_id: row.type.parent_id,
-            depth: row.depth,
-            has_children: row.hasChildren,
-            selectable: true,
-            line: { color: line.color, style: line.style, width: line.width },
-          };
-        });
-    },
+        .map((row) => ({
+          id: row.type.id,
+          title: row.type.name,
+          parentId: row.type.parent_id,
+          depth: row.depth - 1,
+          hasChildren: row.hasChildren,
+          selectable: true,
+          cloud: { id: row.type.id, title: row.type.name, type_id: row.type.id },
+        }));
+    }
+    return orderedTypeRows(store.state.linkTypes)
+      .filter((row) => allowed(row.type.id))
+      .map((row) => {
+        const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+        const title = `${row.type.name_forward} / ${row.type.name_reverse}`;
+        return {
+          id: row.type.id,
+          title,
+          parentId: row.type.parent_id,
+          depth: row.depth - 1,
+          hasChildren: row.hasChildren,
+          selectable: true,
+          cloud: { id: row.type.id, title, icon: '🔗', icon_kind: 'emoji' as const },
+          line: { color: line.color, style: line.style, width: line.width },
+        };
+      });
+  };
+  const combo = buildEntityCombo({
+    networkId: store.state.networkId ?? '',
+    kind: kinds === 'thought' ? 'thought-types' : 'link-types',
+    options: optionRows,
     // The root id is not an option — normalize it to the «без родителя» entry.
     value: value !== null && value === rootId ? null : value,
     placeholder: 'без родителя',
@@ -536,7 +533,7 @@ export interface TypeEditorExtras {
  * Reparenting validation is unchanged: the parent picker filters
  * cycles/depth client-side and the server re-checks on apply.
  *
- * `extras.initialName` prefills the name of a new type (the type-combobox
+ * `extras.initialName` prefills the name of a new type (the entity combo's
  * «Создать новый» row). The returned promise resolves when the dialog closes:
  * with the id of the type created in this session, or `null` when the dialog
  * closed without creating one (also for an existing type).
