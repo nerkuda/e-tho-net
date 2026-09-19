@@ -38,15 +38,15 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
+import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
 import {
-  fieldBoolean,
-  fieldNullableString,
-  fieldString,
-  openRouteNetworkDb,
-  parseIfMatch,
-  requestBody,
-  type RouteDeps,
-} from './helpers.js';
+  parseBody,
+  parseRest,
+  RestIfMatch,
+  RestViewCreateBody,
+  RestViewRunBody,
+  RestViewUpdateBody,
+} from '../contracts.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
@@ -79,179 +79,32 @@ interface RunViewParams {
 }
 
 /** Допустимые ключи тела `POST /thought-types/{id}/views`. */
-const CREATE_BODY_KEYS = new Set([
-  'name',
-  'description',
-  'definition',
-  'position',
-  'is_default',
-]);
-
-/** Допустимые ключи тела `PATCH /thought-types/{id}/views/{viewId}`. */
-const UPDATE_BODY_KEYS = new Set([
-  'name',
-  'description',
-  'definition',
-  'position',
-  'is_default',
-]);
-
-/**
- * Разобрать тело `POST /thought-types/{id}/views` в {@link ThoughtTypeViewInput}.
- * Домен (17eb741e) проверяет имя/описание/definition, `is_default` и
- * уникальность имени в пределах типа. На уровне маршрута — только привести
- * типы и не пустить лишние поля: опечатка клиента (`definitionn`) молча бы
- * превратилась в `undefined`, и отбор сохранился бы без `definition`.
- */
 function parseCreateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtTypeViewInput {
-  const unknown = Object.keys(body).filter((key) => !CREATE_BODY_KEYS.has(key));
-  if (unknown.length > 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Неизвестные поля: ${unknown.join(', ')}.`,
-      { fields: unknown, allowed: [...CREATE_BODY_KEYS] },
-      requestId,
-    );
-  }
-  const name = fieldString(body, 'name', requestId);
-  if (name === undefined || name.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'name обязателен и не может быть пустым.',
-      { field: 'name' },
-      requestId,
-    );
-  }
-  const description = fieldNullableString(body, 'description', requestId);
-  const definition = fieldString(body, 'definition', requestId);
-  if (definition === undefined || definition.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'definition обязателен.',
-      { field: 'definition' },
-      requestId,
-    );
-  }
-  const positionRaw = body.position;
-  let position: number | undefined;
-  if (positionRaw !== undefined) {
-    if (typeof positionRaw !== 'number' || !Number.isInteger(positionRaw) || positionRaw < 0) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'position должен быть неотрицательным целым числом.',
-        { field: 'position' },
-        requestId,
-      );
-    }
-    position = positionRaw;
-  }
-  const isDefault = fieldBoolean(body, 'is_default', requestId);
+  const out = parseBody(RestViewCreateBody, body, requestId);
   return {
-    name,
-    description,
-    definition,
-    ...(position !== undefined ? { position } : {}),
-    ...(isDefault !== undefined ? { is_default: isDefault } : {}),
-  };
+    name: out.name as string,
+    description: (out.description ?? null) as string | null,
+    definition: out.definition as string,
+    ...(out.position !== undefined ? { position: out.position as number } : {}),
+    ...(out.is_default !== undefined ? { is_default: out.is_default as boolean } : {}),
+  } as unknown as ThoughtTypeViewInput;
 }
 
-/**
- * Разобрать тело `PATCH /thought-types/{id}/views/{viewId}` в
- * {@link ThoughtTypeViewUpdateInput}. Частичная правка: переданы только
- * те поля, что реально меняются.
- */
 function parseUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtTypeViewUpdateInput {
-  const unknown = Object.keys(body).filter((key) => !UPDATE_BODY_KEYS.has(key));
-  if (unknown.length > 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Неизвестные поля: ${unknown.join(', ')}.`,
-      { fields: unknown, allowed: [...UPDATE_BODY_KEYS] },
-      requestId,
-    );
-  }
+  const out = parseBody(RestViewUpdateBody, body, requestId);
   const changes: ThoughtTypeViewUpdateInput = {};
-  if (body.name !== undefined) {
-    const name = fieldString(body, 'name', requestId);
-    if (name === undefined || name.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'name не может быть пустым.',
-        { field: 'name' },
-        requestId,
-      );
-    }
-    changes.name = name;
-  }
-  if (body.description !== undefined) {
-    changes.description = fieldNullableString(body, 'description', requestId) ?? null;
-  }
-  if (body.definition !== undefined) {
-    const definition = fieldString(body, 'definition', requestId);
-    if (definition === undefined || definition.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'definition не может быть пустым.',
-        { field: 'definition' },
-        requestId,
-      );
-    }
-    changes.definition = definition;
-  }
-  if (body.position !== undefined) {
-    if (typeof body.position !== 'number' || !Number.isInteger(body.position) || body.position < 0) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'position должен быть неотрицательным целым числом.',
-        { field: 'position' },
-        requestId,
-      );
-    }
-    changes.position = body.position;
-  }
-  if (body.is_default !== undefined) {
-    changes.is_default = fieldBoolean(body, 'is_default', requestId);
-  }
+  if (out.name !== undefined) changes.name = out.name as string;
+  if (out.description !== undefined) changes.description = (out.description ?? null) as string | null;
+  if (out.definition !== undefined) changes.definition = out.definition as string;
+  if (out.position !== undefined) changes.position = out.position as number;
+  if (out.is_default !== undefined) changes.is_default = out.is_default as boolean;
   return changes;
-}
-
-/**
- * Валидация `sort` тела `POST /thoughts/{id}/views/{view}/run`.
- * Отсутствие/пустая строка → `undefined`: дефолт берёт сервис
- * (`runViewForThought`) из определения отбора (`alpha` при отсутствии) —
- * контракт 95273103 «sort/order в теле переопределяют сортировку,
- * сохранённую в отборе»; ошибка 4dd14aa3.
- */
-function parseSort(value: unknown, requestId?: string): StructureSort | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string' || !(STRUCTURE_SORTS as readonly string[]).includes(value)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Недопустимый sort.',
-      { field: 'sort', allowed: STRUCTURE_SORTS },
-      requestId,
-    );
-  }
-  return value as StructureSort;
-}
-
-function parseOrder(value: unknown, requestId?: string): SortOrder | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string' || !(SORT_ORDERS as readonly string[]).includes(value)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Недопустимый order.',
-      { field: 'order', allowed: SORT_ORDERS },
-      requestId,
-    );
-  }
-  return value as SortOrder;
 }
 
 /**
@@ -384,7 +237,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id, viewId } = req.params as ViewIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
+        const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const view = updateThoughtTypeView(
@@ -426,7 +279,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id, viewId } = req.params as ViewIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
+        const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const before = getThoughtTypeView(ndb, viewId);
         if (before === null) {
@@ -503,41 +356,13 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           );
         }
 
-        // 3. Разобрать `sort`/`order`/`limit`/`offset` из тела.
-        const body = requestBody(req);
-        const sort = parseSort(body.sort, req.id);
-        const order = parseOrder(body.order, req.id);
-        const limitRaw = body.limit;
-        let limit: number | undefined;
-        if (limitRaw !== undefined) {
-          if (
-            typeof limitRaw !== 'number' ||
-            !Number.isInteger(limitRaw) ||
-            limitRaw < 1 ||
-            limitRaw > STRUCTURES_QUERY_MAX_LIMIT
-          ) {
-            throw new EtnError(
-              'VALIDATION_ERROR',
-              `limit должен быть целым числом 1..${STRUCTURES_QUERY_MAX_LIMIT}.`,
-              { field: 'limit' },
-              req.id,
-            );
-          }
-          limit = limitRaw;
-        }
-        const offsetRaw = body.offset;
-        let offset = 0;
-        if (offsetRaw !== undefined) {
-          if (typeof offsetRaw !== 'number' || !Number.isInteger(offsetRaw) || offsetRaw < 0) {
-            throw new EtnError(
-              'VALIDATION_ERROR',
-              'offset должен быть целым числом ≥ 0.',
-              { field: 'offset' },
-              req.id,
-            );
-          }
-          offset = offsetRaw;
-        }
+        // 3. Разобрать `sort`/`order`/`limit`/`offset` из тела —
+        //    единым контрактом (веха 8).
+        const runInput = parseRest(RestViewRunBody, req);
+        const sort = runInput.sort as StructureSort | undefined;
+        const order = runInput.order as SortOrder | undefined;
+        const limit = runInput.limit as number | undefined;
+        const offset = runInput.offset ?? 0;
 
         // 4. Сервис `runViewForThought` подставляет токены, исполняет запрос
         //    движком отбора мыслей и возвращает страницу. Сортировка и

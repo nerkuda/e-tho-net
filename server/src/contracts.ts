@@ -42,6 +42,8 @@ import {
   EtnError,
   ETNX_SUBTREE_DEPTH_MAX,
   SORT_KINDS,
+  STRUCTURE_SORTS,
+  STRUCTURES_QUERY_MAX_LIMIT,
   SORT_ORDERS,
   FOCUS_DIRS,
   ICON_KINDS,
@@ -51,6 +53,7 @@ import {
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
   REALTIME_DEFAULTS,
+  SAVED_FILTER_VIEWS,
   SEARCH_SCOPES,
   TRAVERSAL_DEFAULTS,
   TYPES_LIST_SCOPES,
@@ -210,6 +213,7 @@ export interface ZodIssueLike {
   minimum?: number | bigint;
   maximum?: number | bigint;
   values?: unknown[];
+  keys?: unknown[];
   errors?: Array<Array<ZodIssueLike>>;
   message: string;
 }
@@ -235,11 +239,17 @@ function issueKey(fallback: string, issue: ZodIssueLike): string {
   return fallback;
 }
 
-/** Детали ошибки REST: `{ field }`, для enum — с `allowed`. */
-function issueDetails(key: string, issue: ZodIssueLike): Record<string, unknown> {
+/** Детали ошибки REST: `{ field }`, для enum — с `allowed`, для
+ *  unrecognized_keys — `fields` + `allowed` (допустимые ключи). */
+function issueDetails(key: string, issue: ZodIssueLike, allowedKeys?: string[]): Record<string, unknown> {
   const details: Record<string, unknown> = { field: key };
   if (issue.code === 'invalid_value' && issue.values !== undefined) {
     details.allowed = issue.values;
+  }
+  if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys)) {
+    details.fields = issue.keys;
+    if (allowedKeys !== undefined) details.allowed = allowedKeys;
+    delete details.field;
   }
   return details;
 }
@@ -310,6 +320,10 @@ export function messageForIssue(
   }
   if (issue.code === 'invalid_value') {
     return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+  }
+  if (issue.code === 'unrecognized_keys') {
+    const keys = Array.isArray(issue.keys) ? issue.keys.map(String).join(', ') : '';
+    return template(spec?.msg ?? 'Неизвестные поля: {keys}.', { ...specVars, keys });
   }
   return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
 }
@@ -460,8 +474,11 @@ export function parseRest<S extends z.ZodObject>(
   }
 
   // Кросс-полевые refine общей схемы (XOR type_id/type и т.п.) — применяются
-  // и к REST: то же сообщение, что в MCP.
-  const res = contract.schema.safeParse(out);
+  // и к REST: то же сообщение, что в MCP. Строгие схемы (.strict()) проверяют
+  // лишние ключи ПО СЫРОМУ телу: сливаем его с распарсенными полями (out
+  // перезаписывает валидированные значения).
+  const merged = body === undefined ? out : { ...body, ...out };
+  const res = contract.schema.safeParse(merged);
   if (!res.success) {
     const issue = firstIssue(res.error);
     if (issue.code === 'custom') {
@@ -469,7 +486,11 @@ export function parseRest<S extends z.ZodObject>(
     }
     const fieldKey = issueKey('', issue);
     const spec = contract.rest[fieldKey];
-    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue), issueDetails(fieldKey, issue));
+    const allowedKeys = [
+      ...Object.keys(contract.schema.shape),
+      ...Object.keys(contract.rest),
+    ].filter((k, i, arr) => arr.indexOf(k) === i);
+    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue), issueDetails(fieldKey, issue, allowedKeys));
   }
   // Возвращается `out`, а не `res.data`: схема отбрасывает неизвестные поля,
   // а в REST-карте бывают поля вне схемы (например, `colors` у слоёв).
@@ -2739,5 +2760,492 @@ export const RestFocusOrderBody = defineContract(
       req: true,
       msg: 'dir и ordered_ids обязательны.',
     },
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Хвост вехи 8 (приёмка c9d5f21e): типы, отборы, свойства, структуры, админ
+// ---------------------------------------------------------------------------
+
+/** CSV-список query-параметра → массив id (parseExcludeIds прежнего роута). */
+export function csvToList(value: unknown): string[] {
+  if (typeof value !== 'string' || value === '') return [];
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+}
+
+/** PATCH /admin/networks/:id/members/:uid — принудительная роль. */
+export const RestAdminMemberRole = defineContract(
+  'rest:admin.member-role',
+  z.object({
+    id: z.string().min(1),
+    uid: z.string().min(1),
+    role: z.enum(['owner', 'member']),
+  }),
+  {
+    id: { from: { kind: 'param' } },
+    uid: { from: { kind: 'param' } },
+    role: { from: { kind: 'body' }, msg: 'role должен быть owner или member.' },
+  },
+);
+
+/** DELETE /networks/:id/thought-types/:tid — ?force. */
+export const RestForceQuery = defineContract(
+  'rest:types.force-query',
+  z.object({ force: z.boolean().optional() }),
+  { force: { from: { kind: 'query', coerce: 'bool' } } },
+);
+
+/** { ordered_ids: string[] } — переупорядочивание привязок. */
+export const RestOrderedIdsBody = defineContract(
+  'rest:ordered-ids-body',
+  z.object({}),
+  {
+    ordered_ids: {
+      from: { kind: 'body' },
+      t: z.array(z.string()),
+      req: true,
+      msg: 'ordered_ids обязателен (массив строк).',
+    },
+  },
+);
+
+/** { description: string|null } — override описания привязки. */
+export const RestDescriptionOverrideBody = defineContract(
+  'rest:description-override-body',
+  z.object({ description: z.string().nullable() }),
+  {
+    description: {
+      from: { kind: 'body' },
+      msg: 'description обязателен (текст или null).',
+    },
+  },
+);
+
+/** Тело POST /thought-types (сообщения — канон схемы, как у MCP ontology). */
+export const RestThoughtTypeCreateBody = defineContract(
+  'rest:thought-types.create-body',
+  z.object({
+    name: z.string().min(1),
+    parent_id: z.string().nullable().optional(),
+    icon: z.string().nullable().optional(),
+    icon_kind: z.enum(ICON_KINDS).optional(),
+    fg_color: z.string().nullable().optional(),
+    bg_color: z.string().nullable().optional(),
+    font_bold: z.boolean().nullable().optional(),
+    font_italic: z.boolean().nullable().optional(),
+    font_underline: z.boolean().nullable().optional(),
+    font_strike: z.boolean().nullable().optional(),
+    description: z.string().nullable().optional(),
+    comment_template_md: z.string().nullable().optional(),
+  }),
+  {
+    name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
+    parent_id: {
+      from: { kind: 'body' },
+      parse: (raw: unknown) => (raw === '' ? null : raw),
+    },
+    icon: { from: { kind: 'body' } },
+    icon_kind: { from: { kind: 'body' } },
+    fg_color: { from: { kind: 'body' } },
+    bg_color: { from: { kind: 'body' } },
+    font_bold: { from: { kind: 'body' } },
+    font_italic: { from: { kind: 'body' } },
+    font_underline: { from: { kind: 'body' } },
+    font_strike: { from: { kind: 'body' } },
+    description: { from: { kind: 'body' } },
+    comment_template_md: { from: { kind: 'body' } },
+  },
+);
+
+/** Тело PATCH /thought-types/:id. */
+export const RestThoughtTypeUpdateBody = defineContract(
+  'rest:thought-types.update-body',
+  z.object({
+    name: z.string().min(1).optional(),
+    parent_id: z.string().nullable().optional(),
+    icon: z.string().nullable().optional(),
+    icon_kind: z.enum(ICON_KINDS).optional(),
+    fg_color: z.string().nullable().optional(),
+    bg_color: z.string().nullable().optional(),
+    font_bold: z.boolean().nullable().optional(),
+    font_italic: z.boolean().nullable().optional(),
+    font_underline: z.boolean().nullable().optional(),
+    font_strike: z.boolean().nullable().optional(),
+    description: z.string().nullable().optional(),
+    comment_template_md: z.string().nullable().optional(),
+  }),
+  {
+    name: { from: { kind: 'body' } },
+    parent_id: { from: { kind: 'body' }, parse: (raw: unknown) => (raw === '' ? null : raw) },
+    icon: { from: { kind: 'body' } },
+    icon_kind: { from: { kind: 'body' } },
+    fg_color: { from: { kind: 'body' } },
+    bg_color: { from: { kind: 'body' } },
+    font_bold: { from: { kind: 'body' } },
+    font_italic: { from: { kind: 'body' } },
+    font_underline: { from: { kind: 'body' } },
+    font_strike: { from: { kind: 'body' } },
+    description: { from: { kind: 'body' } },
+    comment_template_md: { from: { kind: 'body' } },
+  },
+);
+
+/** Тело PATCH /link-types/:id (имена не меняются — только свойство-связь). */
+export const RestLinkTypeUpdateBody = defineContract(
+  'rest:link-types.update-body',
+  z.object({
+    parent_id: z.string().nullable().optional(),
+    color: z.string().nullable().optional(),
+    style: z.enum(LINK_STYLES).nullable().optional(),
+    width: z.number().nullable().optional(),
+  }),
+  {
+    parent_id: { from: { kind: 'body' }, parse: (raw: unknown) => (raw === '' ? null : raw) },
+    color: { from: { kind: 'body' } },
+    style: { from: { kind: 'body' } },
+    width: { from: { kind: 'body' } },
+    name_forward: {
+      from: { kind: 'body' },
+      t: z.string().optional(),
+      check: () =>
+        'PATCH /link-types/{id} не меняет имена — редактируйте свойство-связь (PATCH /networks/{nid}/properties/{id}).',
+    },
+    name_reverse: {
+      from: { kind: 'body' },
+      t: z.string().optional(),
+      check: () =>
+        'PATCH /link-types/{id} не меняет имена — редактируйте свойство-связь (PATCH /networks/{nid}/properties/{id}).',
+    },
+  },
+);
+
+/** Тело POST …/types/:id/properties — двухформенная привязка (attach/create). */
+export const RestAttachBody = defineContract(
+  'rest:types.attach-body',
+  z.object({}),
+  {
+    required: { from: { kind: 'body' }, t: z.boolean().optional() },
+    position: {
+      from: { kind: 'body' },
+      t: z.number().int().optional(),
+      parse: (raw: unknown) => (typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : undefined),
+    },
+    side: {
+      from: { kind: 'body' },
+      t: z.enum(['source', 'target']).nullable().optional(),
+      msg: 'side должен быть одним из: source, target или null.',
+    },
+    property_id: {
+      from: { kind: 'body' },
+      t: z.string().optional(),
+      check: (v: unknown) =>
+        v !== undefined && (typeof v !== 'string' || v.trim() === '')
+          ? 'property_id должен быть непустой строкой.'
+          : null,
+    },
+    key: { from: { kind: 'body' }, t: z.string().optional() },
+    value_type: { from: { kind: 'body' }, t: z.enum(PROPERTY_VALUE_TYPES).optional() },
+    config: { from: { kind: 'body' }, t: z.unknown().optional() },
+    description: { from: { kind: 'body' }, t: z.string().nullable().optional() },
+  },
+);
+
+/** Тело PATCH …/types/{id}/properties/{propertyId} — роль привязки в типе. */
+export const RestTypePropertyUpdateBody = defineContract(
+  'rest:types.type-property-update-body',
+  z.object({}),
+  {
+    required: { from: { kind: 'body' }, t: z.boolean().optional() },
+    position: {
+      from: { kind: 'body' },
+      t: z.number().int().optional(),
+      parse: (raw: unknown) => (typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : undefined),
+    },
+    side: {
+      from: { kind: 'body' },
+      t: z.enum(['source', 'target']).nullable().optional(),
+      msg: 'side должен быть одним из: source, target или null.',
+    },
+    allowed_target_type_ids: {
+      from: { kind: 'body' },
+      t: z.array(z.string().min(1)).nullable().optional(),
+      msg: 'allowed_target_type_ids должен быть массивом id или null.',
+    },
+    allowed_source_type_ids: {
+      from: { kind: 'body' },
+      t: z.array(z.string().min(1)).nullable().optional(),
+      msg: 'allowed_source_type_ids должен быть массивом id или null.',
+    },
+  },
+);
+
+/** Тело POST /thought-types/{id}/views (лишние ключи — strict-схема). */
+export const RestViewCreateBody = defineContract(
+  'rest:views.create-body',
+  z
+    .object({
+      name: z.string().min(1),
+      description: z.string().nullable().optional(),
+      definition: z.string().min(1),
+      position: z.number().int().min(0).optional(),
+      is_default: z.boolean().optional(),
+    })
+    .strict(),
+  {
+    name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
+    description: { from: { kind: 'body' } },
+    definition: { from: { kind: 'body' }, msg: 'definition обязателен.' },
+    position: { from: { kind: 'body' } },
+    is_default: { from: { kind: 'body' } },
+  },
+);
+
+/** Тело PATCH /thought-types/{id}/views/{viewId}. */
+export const RestViewUpdateBody = defineContract(
+  'rest:views.update-body',
+  z
+    .object({
+      name: z.string().min(1).optional(),
+      description: z.string().nullable().optional(),
+      definition: z.string().min(1).optional(),
+      position: z.number().int().min(0).optional(),
+      is_default: z.boolean().optional(),
+    })
+    .strict(),
+  {
+    name: { from: { kind: 'body' }, msg: 'name не может быть пустым.' },
+    description: { from: { kind: 'body' } },
+    definition: { from: { kind: 'body' }, msg: 'definition не может быть пустым.' },
+    position: { from: { kind: 'body' } },
+    is_default: { from: { kind: 'body' } },
+  },
+);
+
+/** Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки. */
+export const RestViewRunBody = defineContract(
+  'rest:views.run-body',
+  z.object({
+    sort: z.enum(STRUCTURE_SORTS).optional(),
+    order: z.enum(SORT_ORDERS).optional(),
+    limit: z.number().int().min(1).max(STRUCTURES_QUERY_MAX_LIMIT).optional(),
+    offset: z.number().int().min(0).optional(),
+  }),
+  {
+    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
+    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    limit: { from: { kind: 'body' } },
+    offset: { from: { kind: 'body' } },
+  },
+);
+
+/** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/offset. */
+export const RestHierarchyQuery = defineContract(
+  'rest:structures.hierarchy-query',
+  z.object({
+    network_id: NetworkId,
+    thought_id: z.string().min(1),
+    dir: z.enum(['parents', 'children']),
+    show_inactive: z.boolean().optional(),
+    offset: z.number().int().min(0).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    thought_id: { from: { kind: 'param', name: 'id' } },
+    dir: { from: { kind: 'query' }, msg: 'dir должен быть parents или children.' },
+    show_inactive: { from: { kind: 'query', coerce: 'bool' } },
+    offset: {
+      from: { kind: 'query' },
+      parse: (raw: unknown) => {
+        const first = Array.isArray(raw) ? raw[0] : raw;
+        if (typeof first === 'string' && first !== '' && Number.isInteger(Number(first))) {
+          return Math.max(0, Number(first));
+        }
+        return undefined;
+      },
+    },
+  },
+);
+
+/** Тело POST /thoughts/edges — { ids, show_inactive }. */
+export const RestEdgesBody = defineContract(
+  'rest:structures.edges-body',
+  z.object({ ids: z.array(z.string()).min(1), show_inactive: z.boolean().optional() }),
+  {
+    ids: { from: { kind: 'body' }, msg: 'ids должен быть массивом строк.' },
+    show_inactive: { from: { kind: 'body' } },
+  },
+);
+
+/** Тело POST /saved-filters — { view, name, definition }. */
+export const RestSavedFilterCreateBody = defineContract(
+  'rest:structures.saved-filter-create-body',
+  z.object({
+    view: z.enum(SAVED_FILTER_VIEWS),
+    name: z.string().min(1),
+  }),
+  {
+    view: { from: { kind: 'body' }, msg: 'Недопустимый view.' },
+    name: { from: { kind: 'body' }, msg: 'name обязателен.' },
+    definition: {
+      from: { kind: 'body' },
+      t: z.object({}).catchall(z.unknown()),
+      req: true,
+      msg: 'definition обязателен.',
+    },
+  },
+);
+
+/** Тело PATCH /saved-filters/:fid. */
+export const RestSavedFilterPatchBody = defineContract(
+  'rest:structures.saved-filter-patch-body',
+  z.object({
+    view: z.enum(SAVED_FILTER_VIEWS).optional(),
+    name: z.string().min(1).optional(),
+  }),
+  {
+    view: { from: { kind: 'body' }, msg: 'Недопустимый view.' },
+    name: { from: { kind: 'body' }, msg: 'name обязателен.' },
+    definition: { from: { kind: 'body' }, t: z.object({}).catchall(z.unknown()), msg: 'definition должен быть объектом.' },
+  },
+);
+
+/** GET /saved-filters — ?view. */
+export const RestSavedFilterViewQuery = defineContract(
+  'rest:structures.saved-filter-view-query',
+  z.object({ view: z.enum(SAVED_FILTER_VIEWS).optional() }),
+  {
+    view: {
+      from: { kind: 'query' },
+      msg: 'Недопустимый view.',
+      parse: (raw: unknown) => (raw === undefined || raw === null || raw === '' ? undefined : raw),
+    },
+  },
+);
+
+/** Обёртка тела POST /thoughts/query (фильтр парсит parseStructureFilter из
+ *  shared — делегат в роуте). */
+export const RestStructureQueryBody = defineContract(
+  'rest:structures.query-body',
+  z
+    .object({
+      keywords: z.unknown().optional(),
+      keyword_scope: z.unknown().optional(),
+      parent_ids: z.unknown().optional(),
+      type_ids: z.unknown().optional(),
+      link_type_ids: z.unknown().optional(),
+      link_filter: z.unknown().optional(),
+      show_inactive: z.unknown().optional(),
+      has_properties: z.unknown().optional(),
+      has_comment: z.unknown().optional(),
+      has_attachments: z.unknown().optional(),
+      has_chronology: z.unknown().optional(),
+      active: z.unknown().optional(),
+      trashed: z.unknown().optional(),
+      properties: z.unknown().optional(),
+      created_by: z.unknown().optional(),
+      updated_by: z.unknown().optional(),
+      created_after: z.unknown().optional(),
+      created_before: z.unknown().optional(),
+      updated_after: z.unknown().optional(),
+      updated_before: z.unknown().optional(),
+      sort: z.enum(STRUCTURE_SORTS).optional(),
+      order: z.enum(SORT_ORDERS).optional(),
+      ids_only: z.boolean().optional(),
+      limit: z.number().int().optional(),
+      offset: z.number().int().optional(),
+    })
+    .strict(),
+  {
+    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
+    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    ids_only: { from: { kind: 'body' } },
+    limit: { from: { kind: 'body' } },
+    offset: { from: { kind: 'body' } },
+  },
+);
+
+/** Тело POST /properties (справочник) — full-форма с link-полями (0.8.1). */
+export const RestPropertyCreateBody = defineContract(
+  'rest:properties-registry.create-body',
+  z.strictObject({
+    name: z.string().min(1),
+    value_type: z.enum(PROPERTY_VALUE_TYPES),
+    config: z.unknown().optional(),
+    description: z.string().nullable().optional(),
+    name_forward: z.string().optional(),
+    name_reverse: z.string().optional(),
+    parent_link_type_id: z.string().nullable().optional(),
+    link_color: z.string().nullable().optional(),
+    link_style: z.enum(LINK_STYLES).nullable().optional(),
+    link_width: z.number().nullable().optional(),
+  }),
+  {
+    name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
+    value_type: {
+      from: { kind: 'body' },
+      msg: 'value_type обязателен и должен быть одним из поддерживаемых.',
+      check: (v: unknown, all: Record<string, unknown>) => {
+        const linkFields = [
+          'name_forward',
+          'name_reverse',
+          'parent_link_type_id',
+          'link_color',
+          'link_style',
+          'link_width',
+        ].some((k) => all[k] !== undefined);
+        return linkFields && v !== 'link'
+          ? 'name_forward/name_reverse/parent_link_type_id/link_color/link_style/link_width применимы только к value_type="link".'
+          : null;
+      },
+    },
+    config: { from: { kind: 'body' } },
+    description: { from: { kind: 'body' } },
+    name_forward: {
+      from: { kind: 'body' },
+      msg: 'name_forward должен быть непустой строкой.',
+      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'name_forward должен быть непустой строкой.' : null),
+    },
+    name_reverse: {
+      from: { kind: 'body' },
+      msg: 'name_reverse должен быть непустой строкой.',
+      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'name_reverse должен быть непустой строкой.' : null),
+    },
+    parent_link_type_id: { from: { kind: 'body' } },
+    link_color: { from: { kind: 'body' } },
+    link_style: { from: { kind: 'body' }, msg: 'Недопустимый link_style.' },
+    link_width: { from: { kind: 'body' }, msg: 'link_width должен быть числом или null.' },
+  },
+);
+
+/** Тело PATCH /properties/{id} (справочник). */
+export const RestPropertyUpdateBody = defineContract(
+  'rest:properties-registry.update-body',
+  z.strictObject({
+    name: z.string().min(1).optional(),
+    value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
+    config: z.unknown().optional(),
+    description: z.string().nullable().optional(),
+    name_forward: z.string().min(1).optional(),
+    name_reverse: z.string().min(1).optional(),
+    link_color: z.string().nullable().optional(),
+    link_style: z.enum(LINK_STYLES).nullable().optional(),
+    link_width: z.number().nullable().optional(),
+  }),
+  {
+    name: { from: { kind: 'body' }, msg: 'name должен быть непустой строкой.' },
+    value_type: {
+      from: { kind: 'body' },
+      msg: 'value_type должен быть одним из поддерживаемых.',
+    },
+    config: { from: { kind: 'body' } },
+    description: { from: { kind: 'body' } },
+    name_forward: { from: { kind: 'body' }, msg: 'name_forward должен быть непустой строкой.' },
+    name_reverse: { from: { kind: 'body' }, msg: 'name_reverse должен быть непустой строкой.' },
+    link_color: { from: { kind: 'body' }, msg: 'link_color должен быть строкой или null.' },
+    link_style: { from: { kind: 'body' }, msg: 'Недопустимый link_style.' },
+    link_width: { from: { kind: 'body' }, msg: 'link_width должен быть числом или null.' },
   },
 );

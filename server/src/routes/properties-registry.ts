@@ -29,13 +29,8 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import {
-  bodyObject,
-  fieldNullableString,
-  openRouteNetworkDb,
-  requestBody,
-  type RouteDeps,
-} from './helpers.js';
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { parseBody, RestPropertyCreateBody, RestPropertyUpdateBody } from '../contracts.js';
 import {
   classifyStoredValues,
   createNetworkProperty,
@@ -90,144 +85,23 @@ function parseCreateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): NetworkPropertyInput {
-  const name = body.name;
-  if (typeof name !== 'string' || name.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'name обязателен и не может быть пустым.',
-      { field: 'name' },
-      requestId,
-    );
-  }
-  const valueType = body.value_type;
-  if (
-    typeof valueType !== 'string' ||
-    !(PROPERTY_VALUE_TYPES as readonly string[]).includes(valueType)
-  ) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'value_type обязателен и должен быть одним из поддерживаемых.',
-      { field: 'value_type', allowed: PROPERTY_VALUE_TYPES },
-      requestId,
-    );
-  }
-  const config = body.config;
-  const configValue: PropertyConfig | null | undefined =
-    config === undefined
-      ? undefined
-      : config === null
-        ? null
-        : (config as PropertyConfig);
-  const description = fieldNullableString(body, 'description', requestId);
-
-  // Поля оформления создаваемого типа связи (0.8.1) — только для свойств-связей.
-  const linkFieldsPresent =
-    body.name_forward !== undefined ||
-    body.name_reverse !== undefined ||
-    body.parent_link_type_id !== undefined ||
-    body.link_color !== undefined ||
-    body.link_style !== undefined ||
-    body.link_width !== undefined;
-  if (linkFieldsPresent && valueType !== 'link') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'name_forward/name_reverse/parent_link_type_id/link_color/link_style/link_width применимы только к value_type="link".',
-      { field: 'value_type', actual: valueType },
-      requestId,
-    );
-  }
-
-  let nameForward: string | undefined;
-  let nameReverse: string | undefined;
-  let parentLinkTypeId: string | null | undefined;
-  let linkColor: string | null | undefined;
-  let linkStyle: LinkStyle | null | undefined;
-  let linkWidth: number | null | undefined;
-
-  if (body.name_forward !== undefined) {
-    if (typeof body.name_forward !== 'string' || body.name_forward.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'name_forward должен быть непустой строкой.',
-        { field: 'name_forward' },
-        requestId,
-      );
-    }
-    nameForward = body.name_forward.trim();
-  }
-  if (body.name_reverse !== undefined) {
-    if (typeof body.name_reverse !== 'string' || body.name_reverse.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'name_reverse должен быть непустой строкой.',
-        { field: 'name_reverse' },
-        requestId,
-      );
-    }
-    nameReverse = body.name_reverse.trim();
-  }
-  if (body.parent_link_type_id !== undefined) {
-    if (body.parent_link_type_id !== null && typeof body.parent_link_type_id !== 'string') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'parent_link_type_id должен быть строкой или null.',
-        { field: 'parent_link_type_id' },
-        requestId,
-      );
-    }
-    parentLinkTypeId = body.parent_link_type_id as string | null;
-  }
-  if (body.link_color !== undefined) {
-    if (body.link_color !== null && typeof body.link_color !== 'string') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'link_color должен быть строкой или null.',
-        { field: 'link_color' },
-        requestId,
-      );
-    }
-    linkColor = body.link_color as string | null;
-  }
-  if (body.link_style !== undefined) {
-    if (
-      body.link_style !== null &&
-      !(LINK_STYLES as readonly string[]).includes(body.link_style as string)
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `link_style должен быть одним из: ${LINK_STYLES.join(', ')}.`,
-        { field: 'link_style', allowed: LINK_STYLES },
-        requestId,
-      );
-    }
-    linkStyle = body.link_style as LinkStyle | null;
-  }
-  if (body.link_width !== undefined) {
-    if (
-      body.link_width !== null &&
-      (typeof body.link_width !== 'number' || !Number.isFinite(body.link_width as number))
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'link_width должен быть числом или null.',
-        { field: 'link_width' },
-        requestId,
-      );
-    }
-    linkWidth = body.link_width as number | null;
-  }
-
+  const out = parseBody(RestPropertyCreateBody, body, requestId);
   return {
-    name: name.trim(),
-    value_type: valueType as PropertyValueType,
-    ...(configValue !== undefined ? { config: configValue } : {}),
-    ...(description !== undefined ? { description } : {}),
-    ...(nameForward !== undefined ? { name_forward: nameForward } : {}),
-    ...(nameReverse !== undefined ? { name_reverse: nameReverse } : {}),
-    ...(parentLinkTypeId !== undefined ? { parent_link_type_id: parentLinkTypeId } : {}),
-    ...(linkColor !== undefined ? { link_color: linkColor } : {}),
-    ...(linkStyle !== undefined ? { link_style: linkStyle } : {}),
-    ...(linkWidth !== undefined ? { link_width: linkWidth } : {}),
+    name: (out.name as string).trim(),
+    value_type: out.value_type as PropertyValueType,
+    config:
+      out.config === undefined
+        ? undefined
+        : out.config === null
+          ? null
+          : (out.config as PropertyConfig),
+    description: (out.description ?? null) as string | null,
+    name_forward: out.name_forward === undefined ? undefined : (out.name_forward as string).trim(),
+    name_reverse: out.name_reverse === undefined ? undefined : (out.name_reverse as string).trim(),
+    parent_link_type_id: (out.parent_link_type_id ?? null) as string | null,
+    link_color: (out.link_color ?? null) as string | null,
+    link_style: (out.link_style ?? null) as LinkStyle | null,
+    link_width: (out.link_width ?? null) as number | null,
   };
 }
 
@@ -246,99 +120,17 @@ function parseUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): NetworkPropertyUpdateInput {
+  const out = parseBody(RestPropertyUpdateBody, body, requestId);
   const changes: NetworkPropertyUpdateInput = {};
-  if (body.name !== undefined) {
-    if (typeof body.name !== 'string' || body.name.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'name должен быть непустой строкой.',
-        { field: 'name' },
-        requestId,
-      );
-    }
-    changes.name = body.name.trim();
-  }
-  if (body.value_type !== undefined) {
-    if (
-      typeof body.value_type !== 'string' ||
-      !(PROPERTY_VALUE_TYPES as readonly string[]).includes(body.value_type)
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'value_type должен быть одним из поддерживаемых.',
-        { field: 'value_type', allowed: PROPERTY_VALUE_TYPES },
-        requestId,
-      );
-    }
-    changes.value_type = body.value_type as PropertyValueType;
-  }
-  if (body.config !== undefined) {
-    changes.config = body.config === null ? null : (body.config as PropertyConfig);
-  }
-  if (body.description !== undefined) {
-    changes.description = fieldNullableString(body, 'description', requestId) ?? null;
-  }
-  if (body.name_forward !== undefined) {
-    if (typeof body.name_forward !== 'string' || body.name_forward.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'name_forward должен быть непустой строкой.',
-        { field: 'name_forward' },
-        requestId,
-      );
-    }
-    changes.name_forward = body.name_forward.trim();
-  }
-  if (body.name_reverse !== undefined) {
-    if (typeof body.name_reverse !== 'string' || body.name_reverse.trim() === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'name_reverse должен быть непустой строкой.',
-        { field: 'name_reverse' },
-        requestId,
-      );
-    }
-    changes.name_reverse = body.name_reverse.trim();
-  }
-  if (body.link_color !== undefined) {
-    if (body.link_color !== null && typeof body.link_color !== 'string') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'link_color должен быть строкой или null.',
-        { field: 'link_color' },
-        requestId,
-      );
-    }
-    changes.link_color = body.link_color as string | null;
-  }
-  if (body.link_style !== undefined) {
-    if (
-      body.link_style !== null &&
-      !(LINK_STYLES as readonly string[]).includes(body.link_style as string)
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `link_style должен быть одним из: ${LINK_STYLES.join(', ')}.`,
-        { field: 'link_style', allowed: LINK_STYLES },
-        requestId,
-      );
-    }
-    changes.link_style = body.link_style as LinkStyle | null;
-  }
-  if (body.link_width !== undefined) {
-    if (
-      body.link_width !== null &&
-      (typeof body.link_width !== 'number' || !Number.isFinite(body.link_width as number))
-    ) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'link_width должен быть числом или null.',
-        { field: 'link_width' },
-        requestId,
-      );
-    }
-    changes.link_width = body.link_width as number | null;
-  }
+  if (out.name !== undefined) changes.name = (out.name as string).trim();
+  if (out.value_type !== undefined) changes.value_type = out.value_type as PropertyValueType;
+  if (out.config !== undefined) changes.config = out.config === null ? null : (out.config as PropertyConfig);
+  if (out.description !== undefined) changes.description = (out.description ?? null) as string | null;
+  if (out.name_forward !== undefined) changes.name_forward = (out.name_forward as string).trim();
+  if (out.name_reverse !== undefined) changes.name_reverse = (out.name_reverse as string).trim();
+  if (out.link_color !== undefined) changes.link_color = out.link_color as string | null;
+  if (out.link_style !== undefined) changes.link_style = out.link_style as LinkStyle | null;
+  if (out.link_width !== undefined) changes.link_width = out.link_width as number | null;
   return changes;
 }
 
@@ -400,7 +192,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as PropertyIdParams;
-        const input = parseCreateBody(bodyObject(req.body ?? {}, req.id), req.id);
+        const input = parseCreateBody((req.body ?? {}) as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         try {
           const property = createNetworkProperty(ndb, input, req.auth!.user.id);
@@ -456,7 +248,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as PropertyIdParams;
-        const changes = parseUpdateBody(bodyObject(req.body ?? {}, req.id), req.id);
+        const changes = parseUpdateBody((req.body ?? {}) as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const current = getNetworkProperty(ndb, id);
         if (current === null) {

@@ -16,7 +16,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError, type NetworkRole } from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
-import { fieldString, requestBody } from './helpers.js';
+import { parseRest, RestAdminMemberRole } from '../contracts.js';
 import { emitDomainEvent } from '../realtime/emit.js';
 import type { NetworkService } from '../domain/network-service.js';
 
@@ -82,16 +82,8 @@ export function createAdminNetworksRoutes(networkService: NetworkService): Fasti
       '/admin/networks/:id/members/:uid',
       { preHandler: [app.authPreHandler, requireAdmin, app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { id, uid } = req.params as MemberParams;
-        const role = fieldString(requestBody(req) as Record<string, unknown>, 'role', req.id);
-        if (role !== 'owner' && role !== 'member') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'role должен быть owner или member.',
-            { field: 'role' },
-            req.id,
-          );
-        }
+        const input = parseRest(RestAdminMemberRole, req);
+        const { id, uid, role } = input as { id: string; uid: string; role: 'owner' | 'member' };
         const current = app.systemDb.getMemberRole(uid, id);
         if (current === null) {
           throw new EtnError(
