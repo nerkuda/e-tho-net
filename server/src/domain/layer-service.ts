@@ -230,6 +230,23 @@ export function listLayers(
   return rows;
 }
 
+/**
+ * Снимок слоя для журнала/уведомлений: `parent_id` и `title` на момент
+ * чтения, или `null`, когда слой отсутствует. Читается до физического
+ * удаления строки каскадом — фасады (REST DELETE /layers/:id и
+ * `etn.layers.delete`) используют его, чтобы перевести сессии поддерева на
+ * родителя и записать снимок в activity_log.
+ */
+export function getLayerSnapshot(
+  ndb: NetworkDb,
+  id: string,
+): { parent_id: string | null; title: string } | null {
+  const row = ndb.prepare('SELECT parent_id, title FROM layers WHERE id = ?').get(id) as
+    | { parent_id: string | null; title: string }
+    | undefined;
+  return row ?? null;
+}
+
 /** Input of {@link createLayer}. */
 export interface CreateLayerInput {
   /** Parent layer id; the route defaults it to the session's current layer (§2.3). */

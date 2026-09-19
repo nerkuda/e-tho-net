@@ -365,6 +365,18 @@ export function getThoughtOrThrow(ndb: NetworkDb, id: string): Thought {
 }
 
 /**
+ * Id защищённой HOME-мысли сети (`is_root = 1`), или `null`, когда её нет.
+ * Вынесено из MCP-фасада (ADR 8c93f03a): импорт `.etnx` подвешивает корневые
+ * мысли к HOME, когда `parent_thought_id` не задан.
+ */
+export function getHomeThoughtId(ndb: NetworkDb): string | null {
+  const row = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
+    | { id: string }
+    | undefined;
+  return row?.id ?? null;
+}
+
+/**
  * Resolve up to {@link THOUGHT_RESOLVE_MAX_IDS} thought ids into lightweight
  * {@link ThoughtRef} metadata (docs/03-server-api.md §6.9). Unknown ids are
  * silently dropped. Used by the client for focus history and mentions where the

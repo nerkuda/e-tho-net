@@ -25,7 +25,9 @@ import { EtnError, ETNX_MAX_BYTES, type ImportSummary } from '@etn/shared';
 import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
 import { importFromEtnx, previewFromEtnx } from '../domain/import-service.js';
-import { getThoughtOrThrow } from '../domain/thought-service.js';
+import { getThought, getThoughtOrThrow } from '../domain/thought-service.js';
+import { getLink } from '../domain/link-service.js';
+import { getComment } from '../domain/comment-service.js';
 import {
   recordCommentActivity,
   recordLinkActivity,
@@ -82,12 +84,8 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         // canvas/panels) refresh — the canvas, focus history, and selection
         // cache all listen to thought.created / link.created / comment.updated.
         for (const id of result.createdThoughtIds) {
-          const thought = ndb
-            .prepare(
-              'SELECT id, title, title_norm, type_id, icon, icon_kind, active, is_protected, is_root, fg_color, bg_color, font_bold, font_italic, font_underline, font_strike, version, created_at, created_by, updated_at, updated_by FROM thoughts_v WHERE id = ?',
-            )
-            .get(id) as unknown as import('@etn/shared').Thought | undefined;
-          if (thought === undefined) continue;
+          const thought = getThought(ndb, id);
+          if (thought === null) continue;
           deps.emit(request, networkId, 'thought.created', { thought });
           recordThoughtActivity(ndb, {
             networkId,
@@ -98,12 +96,8 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
           });
         }
         for (const id of result.createdLinkIds) {
-          const link = ndb
-            .prepare(
-              'SELECT id, source_id, target_id, type_id, color, style, width, active, version, created_at, updated_at, created_by, updated_by FROM links_v WHERE id = ?',
-            )
-            .get(id) as unknown as import('@etn/shared').Link | undefined;
-          if (link === undefined) continue;
+          const link = getLink(ndb, id);
+          if (link === null) continue;
           deps.emit(request, networkId, 'link.created', { link });
           recordLinkActivity(ndb, {
             networkId,
@@ -114,12 +108,8 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
           });
         }
         for (const id of result.updatedCommentIds) {
-          const comment = ndb
-            .prepare(
-              'SELECT id, owner_type, owner_id, kind, title, body_md, body_html, valid_from, valid_to, version, created_at, updated_at, created_by, updated_by FROM comments_v WHERE id = ?',
-            )
-            .get(id) as unknown as import('@etn/shared').Comment | undefined;
-          if (comment === undefined) continue;
+          const comment = getComment(ndb, id);
+          if (comment === null) continue;
           deps.emit(request, networkId, 'comment.updated', {
             id: comment.id,
             changes: {

@@ -234,6 +234,30 @@ export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
 }
 
 /**
+ * Активные входящие связи мысли (target = `thoughtId`, `active = 1`) —
+ * backing `set_only_parents`/`unlink_parents` групповых операций
+ * (03-server-api.md §6.6). Вынесено из MCP-фасада (ADR 8c93f03a).
+ */
+export function activeIncomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
+  const rows = ndb
+    .prepare('SELECT * FROM links_v WHERE target_id = ? AND active = 1')
+    .all(thoughtId) as LinkRow[];
+  return rows.map(rowToLink);
+}
+
+/**
+ * Активные исходящие связи мысли (source = `thoughtId`, `active = 1`) —
+ * backing `unlink_children` групповой операции. Вынесено из MCP-фасада
+ * (ADR 8c93f03a).
+ */
+export function activeOutgoingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
+  const rows = ndb
+    .prepare('SELECT * FROM links_v WHERE source_id = ? AND active = 1')
+    .all(thoughtId) as LinkRow[];
+  return rows.map(rowToLink);
+}
+
+/**
  * Returns every link whose both ends are in `ids` (the visible thoughts of a
  * focus response), optionally including inactive ones. Used to draw all links
  * among the visible clouds — not just those incident to the focus.

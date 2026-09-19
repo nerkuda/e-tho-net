@@ -37,6 +37,7 @@ import {
 import {
   createLayer,
   deleteLayerWithEvents,
+  getLayerSnapshot,
   layerSubtreeIds,
   listLayers,
   setSessionLayer,
@@ -200,9 +201,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // `layer_chain` would otherwise keep referencing deleted layers.
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
         const subtreeIds = layerSubtreeIds(ndb, layerId);
-        const parentRow = ndb
-          .prepare('SELECT parent_id, title FROM layers WHERE id = ?')
-          .get(layerId) as { parent_id: string | null; title: string } | undefined;
+        const parentRow = getLayerSnapshot(ndb, layerId);
         for (const id of subtreeIds) {
           if (id !== BASE_LAYER_ID) {
             closeNetworkDb(networkId, id);
@@ -222,9 +221,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Push a forced-resync control frame to every already-connected
         // socket sitting on the deleted subtree (13-layers.md §2.4).
         const newLayerId = parentRow?.parent_id ?? BASE_LAYER_ID;
-        const newLayerRow = ndb.prepare('SELECT title FROM layers WHERE id = ?').get(newLayerId) as
-          | { title: string }
-          | undefined;
+        const newLayerRow = getLayerSnapshot(ndb, newLayerId);
         app.realtimeGateway.notifyLayerDeleted(networkId, new Set(subtreeIds), {
           id: newLayerId,
           title: newLayerRow?.title ?? 'Основа',

@@ -857,18 +857,8 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                     ? getNetworkProperty(ndb, input.property_id)?.name
                     : input.key;
                 if (typeof name === 'string') {
-                  const registry = (() => {
-                    try {
-                      // Round-trip via the service's own name resolver to
-                      // stay consistent with `name_key` collation.
-                      return ndb
-                        .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?)')
-                        .get(name) as { id: string } | undefined;
-                    } catch {
-                      return undefined;
-                    }
-                  })();
-                  if (registry !== undefined) {
+                  const registry = getNetworkPropertyByName(ndb, name);
+                  if (registry !== null) {
                     throw new EtnError(
                       'DUPLICATE',
                       err.message,
