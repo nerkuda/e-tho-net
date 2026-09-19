@@ -6227,70 +6227,31 @@ body.cloud-dragging * {
   background: var(--layer-bg, var(--bg));
 }
 
-/* Filter panel: four rows of criteria (saved filters/keywords, thoughts/types,
- * period/link types/scope, order/actions). */
+/* Filter area: общий каркас отбора (lib/filter-form.ts) — прокручиваемый
+ * список секций + приклеенный футер; область даёт высоту и границу. */
 .chron-filter-area {
   flex: 0 0 auto;
   max-height: 46%;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 10px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
 .chron-filter {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.chron-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.chron-label {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.chron-keywords {
-  flex: 1;
-  min-width: 220px;
-}
-
-.chron-saved-select {
-  max-width: 240px;
-}
-
-/* «Мысли» chips stretch over the remaining row width (the picker lives in a
- * dialog now — «Выбрать…»); external drops land here too. */
-.chron-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  flex: 1;
-  min-width: 160px;
-}
-
-/* Row 3: type buttons share the whole row width. */
-.chron-type-btn {
-  flex: 1;
-  min-width: 150px;
-}
-
+/* `.chron-date` — ширина колонки даты в таблице «Хроники»; поле периода
+ * панели отбора строит общий каркас (`.st-f-date-field`). */
 .chron-date {
   width: 130px;
-}
-
-.chron-name-input {
-  flex: 1;
-  min-width: 140px;
-  max-width: 260px;
 }
 
 .chron-splitter {
@@ -6872,6 +6833,7 @@ table.chron-table thead th {
   max-width: 480px;
   display: flex;
   flex-direction: column;
+  padding: 12px 14px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow: hidden;
@@ -6904,92 +6866,18 @@ table.chron-table thead th {
   overflow: hidden;
 }
 
-.activity-filter-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-}
 
-.act-f-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin-top: 4px;
-}
 
-.act-f-input {
-  width: 100%;
-}
 
-.act-f-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
 
-.act-f-label {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
 
-.act-f-op {
-  width: auto;
-}
 
-.act-f-author-value {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
 
-.act-f-author .act-f-row {
-  flex-wrap: nowrap;
-}
 
-.act-f-author .act-f-op {
-  flex: 0 0 auto;
-}
 
-.act-f-footer {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-2);
-}
 
-.act-f-apply,
-.act-f-clear {
-  padding: 3px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
 
-.act-f-apply {
-  background: var(--accent);
-  color: var(--accent-text, #fff);
-  border-color: var(--accent);
-}
 
-.act-f-apply:hover,
-.act-f-clear:hover {
-  background: var(--surface);
-}
 
 /* Виджет мульти-выбора пользователей (задача 59119797, эволюция операторов). */
 .user-multi-select {
