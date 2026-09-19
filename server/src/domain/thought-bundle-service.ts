@@ -115,7 +115,7 @@ function resolveThought(
   return { thought: matched, action: 'reused', matchedOn: topHit.matched_on };
 }
 
-/** Create-or-update the bundle owner's permanent comment (like `etn.comments.upsert`). */
+/** Create-or-update the bundle owner's permanent comment (как удалённый `etn.comments.upsert`). */
 function upsertPermanentComment(
   ndb: NetworkDb,
   thoughtId: string,
@@ -175,7 +175,7 @@ export function upsertThoughtBundle(
     // Chronicle entries — appended AFTER the permanent comment write so the
     // chronology shares the same `created_at` timeline as the rest of the
     // bundle. Each entry becomes its own dated `chronological` comment row
-    // (matches `etn.comments.upsert` semantics for `kind: 'chronological'`).
+    // (семантика удалённого `etn.comments.upsert` для `kind: 'chronological'`).
     let chronicle: Comment[] | undefined;
     if (input.chronicle !== undefined && input.chronicle.length > 0) {
       chronicle = input.chronicle.map((c) =>

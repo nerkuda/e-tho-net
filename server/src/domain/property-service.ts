@@ -2731,9 +2731,9 @@ function attachedPropertyIds(
  *
  * Connectivity to the owner's type is NOT checked here — callers decide
  * (writes reject unattached properties with 422, deletes of outside-type
- * values must succeed). Exported for the MCP facade (`etn.properties.set`),
- * which needs the resolved `value_type` to coerce stringified scalars at the
- * transport boundary (docs/05-mcp-server.md §5.2).
+ * values must succeed). До 0.8.2 экспортировалась для фасада
+ * `etn.properties.set` (удалён, задача 937480ca); остальные пользователи —
+ * внутри домена.
  */
 export function resolveDefinition(
   ndb: NetworkDb,

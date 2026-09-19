@@ -778,7 +778,7 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
         'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, partial). ' +
         'A partial match requires the typed fragments to occur inside CONSECUTIVE words of the title or of ' +
         'one synonym, in the typed order («исправ ошиб» finds «Исправленные ошибки», but not «исправить ' +
-        'старую ошибку»); `-word` excludes. Always call before `etn.thoughts.create`.',
+        'старую ошибку»); `-word` excludes. Always call before creating a thought (`etn.thoughts.write`).',
       inputSchema: ThoughtsFindDuplicates.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },

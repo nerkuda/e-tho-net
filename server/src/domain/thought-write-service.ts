@@ -147,7 +147,7 @@ function validateEnvelope(input: ThoughtWriteInput): void {
 /**
  * Resolve every `thoughts[]` item's type by name → id and every
  * `links[].type` by name → id, raising `VALIDATION_ERROR` for missing
- * types (mirrors `etn.thoughts.create` / `etn.thoughts.upsert_bundle`).
+ * types (унаследовано от удалённых в 0.8.2 `etn.thoughts.create` / `etn.thoughts.upsert_bundle`).
  */
 function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInput {
   return {

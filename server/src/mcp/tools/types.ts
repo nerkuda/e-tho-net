@@ -34,7 +34,7 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         'описание и `is_default` отборов этого типа без наследования от предков ' +
         '(эффективный набор для конкретной мысли — через `etn.thoughts.get { meta.views }`). ' +
         'Call before creating a typed thought/link; also lets `type_id` be replaced by a type name in ' +
-        '`etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. `in_subtree_of` ' +
+        '`etn.thoughts.write` (`thought.type`/`links[].type`). `in_subtree_of` ' +
         '(+`max_depth`) scopes to the types actually used inside that subtree, each with a ' +
         '`usage_count`. Пагинация `limit`/`offset` (1..500 / ≥0) применяется к каждому каталогу ' +
         'отдельно; `max_chars` (≥1000) мягко режет payload до бюджета клиента — сначала сужает ' +
