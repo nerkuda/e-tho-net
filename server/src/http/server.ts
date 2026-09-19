@@ -36,6 +36,7 @@ import { meRoutes } from '../routes/me.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
+import { createInstructionsRoutes } from '../routes/instructions.js';
 import { auditRoutes } from '../routes/audit.js';
 import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { createLinksRoutes } from '../routes/links.js';
@@ -290,6 +291,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Thought routes (task D1): CRUD, focus, neighbours, batch, resolve,
   // mentions, focus preferences/order (03-server-api.md §6).
   await app.register(createThoughtsRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // REST-аналог витрины инструкций (ADR 8c93f03a, веха 7 версии 0.8.2):
+  // паритет с `etn.instructions` через общий доменный сервис.
+  await app.register(createInstructionsRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Link routes (task D2): CRUD + grouped editor listing (03-server-api.md §7).
   await app.register(createLinksRoutes(routeDeps), { prefix: '/api/v1' });
