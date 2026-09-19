@@ -152,17 +152,29 @@ async function membersDialog(): Promise<void> {
       actions.style.whiteSpace = 'nowrap';
       // «Снять все блокировки» (task 4f141756, UI element ae74b044) is
       // available to ANY participant (not only owner) per the network
-      // равноправие rule. Visible always; disabled when the participant
-      // currently holds no locks (the «предохранитель от залипших
-      // захватов» is the main use case, but it's also a clean reset for
-      // the rare legit case of a participant with a lock count > 0).
+      // равноправие rule. Always clickable (bug ba1a5e40): a disabled
+      // `.link-btn` looked like a live link and silently ignored clicks,
+      // so a user with no locks saw «nothing happen». The click always
+      // reports the cleared count — including 0. The «(N)» badge shows
+      // the currently known lock count of the participant.
       const lockCount = lockCounts.get(member.user_id) ?? 0;
       const clearBtn = button(
         lockCount > 0 ? `Снять блокировки (${lockCount})` : 'Снять блокировки',
-        () => void clearMemberLocks(member.user_id, name),
+        () =>
+          void clearMemberLocks(networkId, member.user_id, name, {
+            confirm: (title, message) => confirmDialog(title, message),
+            clear: (nid, uid) => etn.locks.clear(nid, uid),
+            onCleared: (message) => notice(message),
+            onError: (message) => {
+              errorLine.textContent = message;
+            },
+            refresh: async () => {
+              await refreshLockCounts();
+              await refresh();
+            },
+          }),
         'link-btn',
       );
-      clearBtn.disabled = lockCount === 0;
       actions.append(clearBtn);
       if (member.role !== 'owner') {
         actions.append(
@@ -193,28 +205,6 @@ async function membersDialog(): Promise<void> {
       }
     } catch {
       // Non-fatal — the buttons stay enabled but the count badge is hidden.
-    }
-  }
-
-  async function clearMemberLocks(userId: string, displayName: string): Promise<void> {
-    if (
-      !(await confirmDialog(
-        'Снять все блокировки',
-        `Снять все блокировки участника «${displayName}»? Действие необратимо.`,
-      ))
-    ) {
-      return;
-    }
-    try {
-      const result = await etn.locks.clear(networkId, userId);
-      notice(`Снято блокировок: ${result.cleared}.`);
-      // The realtime bus will fan-out `edit.cleared` for every row, but the
-      // local badge needs an immediate refresh — pull the fresh count once
-      // and let the realtime subscriber pick up the rest.
-      await refreshLockCounts();
-      await refresh();
-    } catch (err) {
-      errorLine.textContent = errText(err);
     }
   }
 
@@ -298,6 +288,55 @@ async function membersDialog(): Promise<void> {
     buttons: [{ label: 'Закрыть', primary: true }],
   });
   await refresh();
+}
+
+/**
+ * Dependencies of {@link clearMemberLocks} — injected so the handler is
+ * testable without a DOM (bug ba1a5e40).
+ */
+export interface ClearMemberLocksDeps {
+  /** Confirmation before the reset («Снять все блокировки»). */
+  confirm: (title: string, message: string) => Promise<boolean>;
+  /** Server-side reset of all locks of the participant (`POST /locks/clear`). */
+  clear: (networkId: string, userId: string) => Promise<{ cleared: number }>;
+  /** User-facing result message (the cleared count, including 0). */
+  onCleared: (message: string) => void;
+  /** User-facing error message when the call fails. */
+  onError: (message: string) => void;
+  /** Refreshes the dialog after a successful reset (counts + roster). */
+  refresh: () => Promise<void>;
+}
+
+/**
+ * «Снять все блокировки» (UI element ae74b044, bug ba1a5e40): asks for
+ * confirmation, resets all locks of the participant on the server and always
+ * reports the result to the user — «Снято блокировок: N», including N = 0.
+ * A failed call is reported as a readable message, never silently.
+ */
+export async function clearMemberLocks(
+  networkId: string,
+  userId: string,
+  displayName: string,
+  deps: ClearMemberLocksDeps,
+): Promise<void> {
+  if (
+    !(await deps.confirm(
+      'Снять все блокировки',
+      `Снять все блокировки участника «${displayName}»? Действие необратимо.`,
+    ))
+  ) {
+    return;
+  }
+  try {
+    const result = await deps.clear(networkId, userId);
+    deps.onCleared(`Снято блокировок: ${result.cleared}.`);
+    // The realtime bus will fan-out `edit.cleared` for every row, but the
+    // local badge needs an immediate refresh — pull the fresh count once
+    // and let the realtime subscriber pick up the rest.
+    await deps.refresh();
+  } catch (err) {
+    deps.onError(`Не удалось снять блокировки: ${errText(err)}`);
+  }
 }
 
 /** Leaves the network (non-owner): removes self from members. */
