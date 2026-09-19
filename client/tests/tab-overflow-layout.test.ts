@@ -319,6 +319,59 @@ describe('recomputeOverflow — режим fixed (вкладки рабочег�
     assert.equal(strip.elements.overflowButton?.hidden, false);
   });
 
+  it('пол в 120px держится даже когда на всех места меньше минимума', () => {
+    // Семь вкладок по 180px в окне 500px: даже если бы все ужались до 120px,
+    // они всё равно не помещаются — ширина обязана упереться в пол 120px,
+    // а не уйти ниже, и лишние вкладки должны уйти в `▾N` (свёртка работает
+    // при любой ширине окна — критерий приёмки df24b0e1).
+    const strip = buildStrip({ widths: TITLES, containerWidth: 500 });
+    recomputeOverflow(
+      strip.elements,
+      strip.tabs.map((t) => t.id),
+      fixed,
+    );
+    assert.deepEqual(new Set(strip.tabs.map((t) => t.style['width'])), new Set(['120px']));
+    const visible = strip.tabs.filter((t) => !t.hidden);
+    assert.ok(visible.length < strip.tabs.length, 'часть вкладок скрыта');
+    for (let i = 0; i < strip.tabs.length; i += 1) {
+      assert.equal(
+        strip.tabs[i]!.hidden,
+        i >= visible.length,
+        `вкладка ${i} — хвостовая или видимая`,
+      );
+    }
+    assert.equal(strip.elements.hidden.length, strip.tabs.length - visible.length);
+    assert.equal(strip.elements.overflowButton?.hidden, false, 'кнопка `▾N` показана');
+    assert.equal(
+      strip.elements.overflowButton?.textContent,
+      `▾${strip.elements.hidden.length}`,
+      'счётчик совпадает с числом скрытых',
+    );
+  });
+
+  it('длинные заголовки не выталкивают кнопки за край: ширина остаётся заданной раскладкой', () => {
+    // Заголовки по 400px (широкие) в окне 800px: раскладка обязана задать
+    // ширину сама (180px по умолчанию / сжатие), а не принять естественную
+    // ширину содержимого — иначе кнопки вылезали бы под `overflow: hidden`.
+    // Обрезка самого текста — за CSS (ellipsis), здесь проверяем только
+    // раскладку: видимая цепочка + `▾N` не шире полосы.
+    const strip = buildStrip({ widths: [400, 400, 400], containerWidth: 800 });
+    recomputeOverflow(
+      strip.elements,
+      strip.tabs.map((t) => t.id),
+      fixed,
+    );
+    const widths = new Set(strip.tabs.map((t) => t.style['width']));
+    assert.equal(widths.size, 1, 'ширина одна на все вкладки');
+    const width = Number.parseFloat([...widths][0]!);
+    assert.ok(width < 400, 'раскладка не приняла ширину по длинному содержимому');
+    assert.ok(width >= 120 && width <= 180, 'ширина в границах 120–180px');
+    assert.ok(!strip.tabs.some((t) => t.hidden), 'все три вкладки поместились');
+    // Все ширины одинаковы (проверено выше) — цепочка не выходит за полосу.
+    const used = width * strip.tabs.length;
+    assert.ok(used <= 800, 'видимая цепочка не выходит за пределы полосы');
+  });
+
   it('кнопка может оказаться уже своего содержимого — это и была ошибка редактора', () => {
     // Документируем поведение fixed: длинный заголовок в ужатой кнопке не
     // помещается. Именно поэтому полоса редактора переведена на `content`.

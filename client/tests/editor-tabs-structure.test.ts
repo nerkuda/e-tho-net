@@ -313,6 +313,35 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     assert.ok(/min-width:\s*0\b/.test(body), '.editor-tabs has min-width: 0');
     assert.ok(/overflow:\s*hidden\b/.test(body), '.editor-tabs has overflow: hidden');
   });
+
+  it('регрессия: `.editor-tabs` не сжимается по высоте при длинном комментарии (79193e82)', () => {
+    // `.editor-scroll` — column-flex: при длинном комментарии суммарная высота
+    // детей превышает контейнер, и flex-shrink (по умолчанию 1) сжимал полосу
+    // до 1px — кнопки вкладок пропадали (`overflow: hidden` обнуляет
+    // автоматический минимум). Высота полосы обязана не зависеть от длины
+    // содержимого панели.
+    const css = readText(SRC.css);
+    const block = css.match(/\.editor-tabs\s*\{[^}]*\}/);
+    assert.ok(block !== null, '.editor-tabs CSS block found');
+    assert.ok(
+      /flex:\s*0\s+0\s+auto/.test(block![0]),
+      '.editor-tabs must not shrink (flex: 0 0 auto)',
+    );
+  });
+
+  it('регрессия: `.tab` не фиксирует ширину — `flex: 0 0 auto`, `--tab-w` удалён (1786ff94)', () => {
+    // Один источник ширины вкладки рабочего стола — раскладка: `recomputeOverflow`
+    // (режим fixed) ставит `style.width` 180→120px. Числовой `flex-basis` в CSS
+    // перебивал inline-ширину: сжатие не работало, кнопки уезжали под
+    // `overflow: hidden`, `▾N` не появлялся.
+    const css = readText(SRC.css);
+    const block = css.match(/\.tab\s*\{[^}]*\}/);
+    assert.ok(block !== null, '.tab CSS block found');
+    const body = block![0];
+    assert.ok(/flex:\s*0\s+0\s+auto/.test(body), '.tab declares flex: 0 0 auto');
+    assert.ok(!/var\(--tab-w\)/.test(body), '.tab must not fix flex-basis via --tab-w');
+    assert.ok(!/--tab-w\s*:/.test(body), '--tab-w custom property is gone from .tab');
+  });
 });
 
 /** Source slice of a `const <name> … ];` array literal. */
