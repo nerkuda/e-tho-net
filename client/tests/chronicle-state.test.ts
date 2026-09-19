@@ -16,7 +16,9 @@ import {
 
 describe('toDefinition / fromDefinition', () => {
   it('round-trips a full filter', () => {
+    // Общая модель конструктора: полный набор полей даёт default + правки.
     const state: ChronicleFilterState = {
+      ...DEFAULT_FILTER,
       keywords: 'счет* -вод*',
       thoughtIds: ['a', 'b'],
       includeSubtree: true,

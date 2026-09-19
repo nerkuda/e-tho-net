@@ -774,7 +774,9 @@ export function buildChronicleWire(state: ChronicleCriteriaState): ChronicleFilt
   if (state.includeSubtree) out.include_subtree = true;
   if (state.typeIds.length > 0) out.type_ids = state.typeIds.slice();
   if (state.linkTypeIds.length > 0) out.link_type_ids = state.linkTypeIds.slice();
-  if (state.linkScope !== 'both') out.link_scope = state.linkScope;
+  // `link_scope` отдаём всегда (как прежний конвертер «Хроники»): сервер
+  // принимает и «both», а сохранённые определения читаются одинаково.
+  out.link_scope = state.linkScope;
   if (state.dateFrom.trim() !== '') out.date_from = state.dateFrom.trim();
   if (state.dateTo.trim() !== '') out.date_to = state.dateTo.trim();
   Object.assign(out, buildAuthorPair('created_by', state.authorOp, state.authorId, state.authorIds));
