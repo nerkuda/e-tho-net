@@ -30,6 +30,9 @@ import {
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_SORTS,
+  type ActivityEntityType,
+  type ChronicleFilterDefinition,
+  type ChronicleLinkScope,
   type NetworkProperty,
   type PropertyValueType,
   type SortOrder,
@@ -643,4 +646,398 @@ function buildDefaultAuthorListEditor(opts: {
     currentIds: opts.currentIds,
     onChange: opts.onChange,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Общие парсеры и клиентский мини-синтаксис ключевых слов
+// ---------------------------------------------------------------------------
+
+/** Приводит неизвестное значение оператора авторства к союзу (по умолчанию `eq`). */
+export function coerceAuthorOp(value: unknown): StructureAuthorOp {
+  return typeof value === 'string' && (STRUCTURE_AUTHOR_OPS as readonly string[]).includes(value)
+    ? (value as StructureAuthorOp)
+    : 'eq';
+}
+
+/** Разобранный мини-синтаксис ключевых слов: обязательные и исключаемые слова. */
+export interface ParsedKeywords {
+  include: string[];
+  exclude: string[];
+}
+
+/**
+ * Мини-синтаксис ключевых слов (`*` — любые символы, `-слово` — исключение).
+ * Единственная реализация на клиент: панель «Событий» применяет её к снимку
+ * `entity_title` (у сервера там нет полнотекстового отбора).
+ */
+export function parseKeywords(raw: string): ParsedKeywords {
+  const include: string[] = [];
+  const exclude: string[] = [];
+  for (const token of raw.split(/\s+/).filter((t) => t !== '')) {
+    if (token.startsWith('-') && token.length > 1) exclude.push(token.slice(1));
+    else include.push(token);
+  }
+  return { include, exclude };
+}
+
+/** True — текст удовлетворяет разобранному мини-синтаксису ключевых слов. */
+export function matchesKeywords(text: string, parsed: ParsedKeywords): boolean {
+  const haystack = text.toLowerCase();
+  const match = (word: string): boolean => {
+    const needle = word.toLowerCase();
+    if (!needle.includes('*')) return haystack.includes(needle);
+    const parts = needle.split('*').filter((p) => p !== '');
+    let from = 0;
+    for (const part of parts) {
+      const at = haystack.indexOf(part, from);
+      if (at === -1) return false;
+      from = at + part.length;
+    }
+    return true;
+  };
+  for (const word of parsed.include) if (!match(word)) return false;
+  for (const word of parsed.exclude) if (match(word)) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Отбор «Хроники» (L20): общая модель + её wire-конвертер
+// ---------------------------------------------------------------------------
+
+/**
+ * Отбор «Хроники»: общая модель критериев + поля этого экрана. Собственной
+ * модели панель не держит — тип, парсер и конвертер живут здесь, в единственном
+ * модуле конструктора (задача 3742dd59).
+ */
+export interface ChronicleCriteriaState extends FilterCriteriaState {
+  /** Корневые мысли отбора («мысли»). */
+  thoughtIds: string[];
+  /** Включать подчинённые корневых мыслей. */
+  includeSubtree: boolean;
+  /** Сторона связи, на которой должна быть выбранная мысль. */
+  linkScope: ChronicleLinkScope;
+  /** Границы периода хроно-комментариев (`YYYY-MM-DD`). */
+  dateFrom: string;
+  dateTo: string;
+}
+
+/** Пустой отбор «Хроники» — все мысли сети. */
+export function defaultChronicleCriteriaState(): ChronicleCriteriaState {
+  return {
+    ...defaultFilterCriteriaState(),
+    thoughtIds: [],
+    includeSubtree: false,
+    linkScope: 'both',
+    dateFrom: '',
+    dateTo: '',
+  };
+}
+
+/**
+ * Читает сохранённое определение отбора «Хроники» (`ChronicleFilterDefinition`,
+ * в т.ч. записанное до 0.8.2) в общую модель. Незнакомые поля игнорируются;
+ * старые определения читаются теми же ключами — формат хранения не меняется.
+ */
+export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
+  const next = defaultChronicleCriteriaState();
+  if (def === null || typeof def !== 'object' || Array.isArray(def)) return next;
+  const parsed = def as Record<string, unknown>;
+  const common = parseFilterDefinition(parsed);
+  Object.assign(next, common);
+  if (Array.isArray(parsed['thought_ids'])) {
+    next.thoughtIds = (parsed['thought_ids'] as string[]).slice();
+  }
+  if (parsed['include_subtree'] === true) next.includeSubtree = true;
+  const scope = parsed['link_scope'];
+  if (scope === 'sources' || scope === 'targets' || scope === 'both') next.linkScope = scope;
+  if (typeof parsed['date_from'] === 'string') next.dateFrom = parsed['date_from'];
+  if (typeof parsed['date_to'] === 'string') next.dateTo = parsed['date_to'];
+  // `parseFilterDefinition` читает только общие границы; у «Хроники» период —
+  // свои поля, а `created_after`/`updated_*` в её определении не участвуют.
+  next.createdAfter = '';
+  next.createdBefore = '';
+  next.updatedAfter = '';
+  next.updatedBefore = '';
+  if (typeof parsed['order'] === 'string' && isSortOrder(parsed['order'])) next.order = parsed['order'];
+  return next;
+}
+
+/**
+ * Конвертер отбора «Хроники» в wire-определение `ChronicleFilterDefinition`.
+ * Ключи совпадают с форматом сохранённых отборов — ранее сохранённое
+ * читается и перезаписывается без потерь.
+ */
+export function buildChronicleWire(state: ChronicleCriteriaState): ChronicleFilterDefinition {
+  const out: ChronicleFilterDefinition = { order: state.order };
+  if (state.keywords.trim() !== '') out.keywords = state.keywords.trim();
+  if (state.thoughtIds.length > 0) out.thought_ids = state.thoughtIds.slice();
+  if (state.includeSubtree) out.include_subtree = true;
+  if (state.typeIds.length > 0) out.type_ids = state.typeIds.slice();
+  if (state.linkTypeIds.length > 0) out.link_type_ids = state.linkTypeIds.slice();
+  if (state.linkScope !== 'both') out.link_scope = state.linkScope;
+  if (state.dateFrom.trim() !== '') out.date_from = state.dateFrom.trim();
+  if (state.dateTo.trim() !== '') out.date_to = state.dateTo.trim();
+  Object.assign(out, buildAuthorPair('created_by', state.authorOp, state.authorId, state.authorIds));
+  Object.assign(out, buildAuthorPair('updated_by', state.editorOp, state.editorId, state.editorIds));
+  return out;
+}
+
+/** Пара `{ <field>, <field>_op }` одного условия авторства (§59119797). */
+function buildAuthorPair(
+  field: 'created_by' | 'updated_by',
+  op: StructureAuthorOp,
+  single: string,
+  list: string[],
+): Partial<ChronicleFilterDefinition> {
+  if (op === 'empty' || op === 'not_empty') {
+    return { [`${field}_op`]: op } as Partial<ChronicleFilterDefinition>;
+  }
+  if (op === 'in' || op === 'not_in') {
+    if (list.length === 0) return {};
+    return { [field]: list, [`${field}_op`]: op } as Partial<ChronicleFilterDefinition>;
+  }
+  if (single === '') return {};
+  return { [field]: single, ...(op !== 'eq' ? { [`${field}_op`]: op } : {}) } as Partial<ChronicleFilterDefinition>;
+}
+
+// ---------------------------------------------------------------------------
+// Отбор «Событий» (§18): общая модель + её план запроса
+// ---------------------------------------------------------------------------
+
+/** Код действия в журнале активности (совпадает с wire-словарём сервера). */
+export type ActivityActionFilter = 'created' | 'updated' | 'deleted' | 'trashed' | 'restored';
+
+/** Все коды действий — порядок и состав списка задаёт серверный словарь. */
+export const ACTIVITY_ACTION_FILTERS: readonly ActivityActionFilter[] = [
+  'created',
+  'updated',
+  'deleted',
+  'trashed',
+  'restored',
+];
+
+/**
+ * Отбор «Событий»: общая модель критериев + поля этого экрана. Период лежит
+ * в общих `createdAfter`/`createdBefore` (строки `YYYY-MM-DD`), пользователь —
+ * в общих `authorOp`/`authorId`/`authorIds`.
+ */
+export interface ActivityCriteriaState extends FilterCriteriaState {
+  /** Типы сущностей (пусто = любой). */
+  entityTypes: ActivityEntityType[];
+  /** Коды действий (пусто = любое). */
+  actions: ActivityActionFilter[];
+}
+
+/** Пустой отбор «Событий» — вся лента. */
+export function defaultActivityCriteriaState(): ActivityCriteriaState {
+  return { ...defaultFilterCriteriaState(), entityTypes: [], actions: [] };
+}
+
+/**
+ * Читает сохранённый L4-отбор «Событий» (старый формат `ActivityFilterState`
+ * с `fromMs`/`toMs`/`userOp`/`userId`/`userIds` и новый с общими ключами).
+ */
+export function parseActivityCriteria(raw: unknown): ActivityCriteriaState {
+  const next = defaultActivityCriteriaState();
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return next;
+  const f = raw as Record<string, unknown>;
+  // Общие критерии: новый формат читается напрямую, старый — по своим ключам.
+  const common = parseFilterDefinition(f);
+  Object.assign(next, common);
+  if (typeof f['fromMs'] === 'string') next.createdAfter = f['fromMs'];
+  if (typeof f['toMs'] === 'string') next.createdBefore = f['toMs'];
+  if (typeof f['userOp'] === 'string') next.authorOp = coerceAuthorOp(f['userOp']);
+  if (typeof f['userId'] === 'string') next.authorId = f['userId'];
+  if (Array.isArray(f['userIds'])) {
+    next.authorIds = (f['userIds'] as string[]).filter((v): v is string => typeof v === 'string');
+  }
+  if (Array.isArray(f['entityTypes'])) {
+    next.entityTypes = (f['entityTypes'] as ActivityEntityType[]).filter(
+      (v): v is ActivityEntityType => typeof v === 'string',
+    );
+  }
+  if (Array.isArray(f['actions'])) {
+    next.actions = (f['actions'] as ActivityActionFilter[]).filter(
+      (v): v is ActivityActionFilter => (ACTIVITY_ACTION_FILTERS as readonly string[]).includes(v),
+    );
+  }
+  return next;
+}
+
+/** План запроса «Событий»: что спросить у сервера, а что дофильтровать клиентом. */
+export interface ActivityQueryPlan {
+  /** Типы сущностей: пустой выбор — все известные типы. */
+  entityTypes: ActivityEntityType[];
+  /**
+   * `user_id` для веера запросов: `null` — без фильтра по пользователю.
+   * `eq`/`ne`/`in`/`not_in` дают список; у `ne` и `not_in` фильтр сервер не
+   * умеет, он дофильтровывается клиентом (см. {@link ActivityQueryPlan.clientFilter}).
+   */
+  userIds: Array<string | null>;
+  /** Коды действий (`null` — без фильтра). Серверного `action` нет — фильтр клиентский. */
+  actions: Set<ActivityActionFilter> | null;
+  /** Мини-синтаксис ключевых слов (`null` — без фильтра). Фильтр клиентский. */
+  keywords: ParsedKeywords | null;
+  /** Какие условия применяются на клиенте (серверный API их не выражает). */
+  clientFilter: {
+    actions: boolean;
+    keywords: boolean;
+    /** `user_id` пуст/непуст (`IS NULL`) — у сервера такого отбора нет. */
+    userEmpty: boolean;
+    /** `user_id != id` (`ne`) — сервер умеет только равенство/список. */
+    userNotEqual: boolean;
+    /** `user_id NOT IN list` — сервер умеет только `IN`. */
+    userNotIn: boolean;
+  };
+}
+
+/**
+ * Строит план запроса «Событий» из общей модели. Часть отбора серверный API
+ * выразить не может — она помечена в `clientFilter` и применяется клиентом
+ * явно (панель «Событий»), а не теряется.
+ */
+export function buildActivityQueryPlan(
+  state: ActivityCriteriaState,
+  allEntityTypes: readonly ActivityEntityType[],
+): ActivityQueryPlan {
+  const entityTypes = state.entityTypes.length === 0 ? [...allEntityTypes] : state.entityTypes;
+  const actions =
+    state.actions.length === 0 ? null : new Set<ActivityActionFilter>(state.actions);
+  const keywords = state.keywords.trim() === '' ? null : parseKeywords(state.keywords);
+
+  const op = state.authorOp;
+  let userIds: Array<string | null>;
+  let userNotEqual = false;
+  let userNotIn = false;
+  if (op === 'empty' || op === 'not_empty') {
+    userIds = [null];
+  } else if (op === 'eq') {
+    userIds = [state.authorId === '' ? null : state.authorId];
+  } else if (op === 'ne') {
+    // Сервер равенства не исключает — веер по всем не нужен, дофильтруем клиентом.
+    userIds = [state.authorId === '' ? null : state.authorId];
+    userNotEqual = state.authorId !== '';
+  } else if (op === 'not_in') {
+    userIds = [null];
+    userNotIn = state.authorIds.length > 0;
+  } else {
+    userIds = state.authorIds.length === 0 ? [null] : state.authorIds.slice();
+  }
+
+  return {
+    entityTypes,
+    userIds,
+    actions,
+    keywords,
+    clientFilter: {
+      actions: actions !== null,
+      keywords: keywords !== null,
+      userEmpty: op === 'empty' || op === 'not_empty',
+      userNotEqual,
+      userNotIn,
+    },
+  };
+}
+
+/** Строка «Событий» в объёме, нужном клиентской дофильтровке. */
+export interface ActivityFilterableRow {
+  user_id: string;
+  action: string;
+  entity_title: string;
+}
+
+/**
+ * Клиентская дофильтровка строки «Событий» по условиям, которые серверный API
+ * не выражает (действие, пустой/непустой пользователь, `ne`/`not_in`,
+ * ключевые слова). Зеркало серверной семантики, а не второй конвертер.
+ */
+export function activityRowPasses(state: ActivityCriteriaState, plan: ActivityQueryPlan, row: ActivityFilterableRow): boolean {
+  if (plan.actions !== null && !plan.actions.has(row.action as ActivityActionFilter)) return false;
+  if (plan.clientFilter.userEmpty) {
+    const empty = row.user_id === '';
+    if (state.authorOp === 'empty' && !empty) return false;
+    if (state.authorOp === 'not_empty' && empty) return false;
+  }
+  if (plan.clientFilter.userNotEqual && row.user_id === state.authorId) return false;
+  if (plan.clientFilter.userNotIn && state.authorIds.includes(row.user_id)) return false;
+  if (plan.keywords !== null && !matchesKeywords(row.entity_title, plan.keywords)) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Настройки отбора строки поиска карты (§3.2): общая модель + её wire
+// ---------------------------------------------------------------------------
+
+/**
+ * Отбор строки поиска карты: общая модель критериев + поля этого экрана.
+ * Общие `typeIds`/`linkTypeIds`/`authorId`/`editorId`/`trashed` берутся у
+ * модели; группы результатов и поддерево — только у поиска.
+ */
+export interface SearchCriteriaState extends FilterCriteriaState {
+  subtree: boolean;
+  subrootId: string | null;
+  onlyThoughts: boolean;
+  onlyLinks: boolean;
+  onlyChrono: boolean;
+  /** «Показывать неактуальные» (у поиска нет трёхзначной актуальности). */
+  showInactive: boolean;
+}
+
+/** Пустые настройки поиска. */
+export function defaultSearchCriteriaState(): SearchCriteriaState {
+  return {
+    ...defaultFilterCriteriaState(),
+    subtree: false,
+    subrootId: null,
+    onlyThoughts: false,
+    onlyLinks: false,
+    onlyChrono: false,
+    showInactive: false,
+  };
+}
+
+/**
+ * Читает сохранённые настройки поиска (`search_state`), в т.ч. записанные до
+ * 0.8.2 со старыми ключами (`subrootId`, `typeIds`, `linkTypeIds`,
+ * `showInactive`, `authorId`, `editorId`) — формат хранения не меняется.
+ */
+export function parseSearchCriteria(raw: unknown): SearchCriteriaState {
+  const next = defaultSearchCriteriaState();
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return next;
+  const o = raw as Record<string, unknown>;
+  if (o['subtree'] === true) next.subtree = true;
+  if (typeof o['subrootId'] === 'string') next.subrootId = o['subrootId'];
+  if (o['onlyThoughts'] === true) next.onlyThoughts = true;
+  if (o['onlyLinks'] === true) next.onlyLinks = true;
+  if (o['onlyChrono'] === true) next.onlyChrono = true;
+  if (Array.isArray(o['typeIds'])) next.typeIds = (o['typeIds'] as string[]).slice();
+  if (Array.isArray(o['linkTypeIds'])) next.linkTypeIds = (o['linkTypeIds'] as string[]).slice();
+  if (o['showInactive'] === true) next.showInactive = true;
+  if (o['trashed'] === true) next.trashed = true;
+  if (typeof o['authorId'] === 'string') next.authorId = o['authorId'];
+  if (typeof o['editorId'] === 'string') next.editorId = o['editorId'];
+  return next;
+}
+
+/** Часть параметров серверного поиска, вырастающая из критериев отбора. */
+export interface SearchCriteriaWire {
+  type_id?: string[];
+  link_type_id?: string[];
+  show_inactive: boolean;
+  trashed: boolean;
+  author_id?: string;
+  editor_id?: string;
+}
+
+/** Конвертер критериев поиска в параметры запроса (без `q`/`scope`/подкорня). */
+export function buildSearchCriteriaWire(state: SearchCriteriaState): SearchCriteriaWire {
+  const out: SearchCriteriaWire = {
+    show_inactive: state.showInactive,
+    trashed: state.trashed,
+  };
+  if (state.typeIds.length > 0) out.type_id = state.typeIds.slice();
+  if (state.linkTypeIds.length > 0) out.link_type_id = state.linkTypeIds.slice();
+  if (state.authorId.trim() !== '') out.author_id = state.authorId;
+  if (state.editorId.trim() !== '') out.editor_id = state.editorId;
+  return out;
 }

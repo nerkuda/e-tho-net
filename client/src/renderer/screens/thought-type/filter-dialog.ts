@@ -48,18 +48,21 @@ import {
 } from '@etn/shared';
 
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
+import { div, el, errText, span } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import {
-  FILTER_ORDERS,
-  FILTER_SORTS,
-  OPS_BY_TYPE,
-  authorFilterActive,
-  buildAuthorConditionRow,
-  datesActive as builderDatesActive,
-  type AuthorRowEditors,
-} from '../../lib/filter-builder.js';
+  buildAuthorshipSection,
+  buildConditionsSection,
+  buildDatesSection,
+  buildEntityChipSection,
+  buildExtrasSection,
+  buildKeywordsSection,
+  buildSortSection,
+  type EntityChipSection,
+  type FilterFormContext,
+  type FilterSection,
+} from '../../lib/filter-form.js';
 import { notice } from '../../lib/notice.js';
 import {
   buildEntityChipField,
@@ -72,7 +75,6 @@ import {
 import { wireSuggest, type SuggestEntry, type SuggestSource } from '../../lib/suggest-dropdown.js';
 import { type ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
-import { buildValueEditor } from '../../editor/value-editor.js';
 import { store } from '../../state.js';
 
 import {
@@ -418,76 +420,17 @@ interface CriteriaBuilder {
   hasAnyCriteria: () => boolean;
 }
 
-/** A group title whose conditions may be non-empty: the head is highlighted
- *  and its `*` marker toggled by {@link refreshGroupTitles}. */
-interface GroupMarker {
-  head: HTMLElement;
-  star: HTMLElement;
-  isNonEmpty: () => boolean;
-}
-
-/** Plain section with a title and a group-marker star. */
-function block(title: string): { box: HTMLElement; body: HTMLElement; head: HTMLElement; star: HTMLElement } {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title');
-  head.append(el('span', '', title));
-  const star = el('span', 'st-f-star', '');
-  head.append(star);
-  const body = div('st-f-body');
-  box.append(head, body);
-  return { box, body, head, star };
-}
-
-/** Collapsible section; `refresh()` toggles the caret and the body. */
-function collapsibleBlock(
-  title: string,
-  getCollapsed: () => boolean,
-  setCollapsed: (v: boolean) => void,
-): { box: HTMLElement; body: HTMLElement; head: HTMLElement; star: HTMLElement; refresh: () => void } {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title st-f-collapsible-title');
-  const caret = el('span', 'st-f-caret', getCollapsed() ? '▸' : '▾');
-  head.append(caret, el('span', '', title));
-  const star = el('span', 'st-f-star', '');
-  head.append(star);
-  const body = div('st-f-body');
-  box.append(head, body);
-  const refresh = (): void => {
-    const collapsed = getCollapsed();
-    body.classList.toggle('hidden', collapsed);
-    caret.textContent = collapsed ? '▸' : '▾';
-  };
-  head.addEventListener('click', () => {
-    setCollapsed(!getCollapsed());
-    refresh();
-  });
-  refresh();
-  return { box, body, head, star, refresh };
-}
-
-/** Условие «Дополнительно» активно. */
-function extrasActive(state: DialogCriteriaState): boolean {
-  return (
-    state.hasProperties !== null ||
-    state.hasComment !== null ||
-    state.hasAttachments !== null ||
-    state.hasChronology !== null ||
-    state.active !== null ||
-    state.trashed
-  );
-}
-
 /**
- * Builds a self-contained criteria form. Unlike the previous implementation,
- * the form is built once and mutated in place: input handlers update `state`
- * and refresh group markers WITHOUT rebuilding the DOM (which used to drop
- * focus on every keystroke). Only structural changes (add/remove condition,
- * switch operator, reorder the author list) rebuild the affected subtree.
+ * Строит форму критериев отбора. Состав и порядок секций — параметр сборки
+ * этого места; вид и поведение каждого элемента — общий каркас
+ * `lib/filter-form.ts` (задача 3742dd59). Форма строится один раз и меняется
+ * на месте: ввод обновляет состояние и маркеры секций БЕЗ перерисовки DOM
+ * (иначе терялся бы фокус). Токены-кандидаты (`$today`, `$thought.*`,
+ * свойства цепочки типов) — источники подсказок вызывающего.
  */
 function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   const { networkId, registryById } = opts;
   const state = opts.initial;
-  const root = div('st-f-layout view-editor-criteria');
 
   // Transient collapse state (default collapsed, §e0257ca5).
   let propsCollapsed = true;
@@ -495,532 +438,119 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   let authorCollapsed = true;
   let datesCollapsed = true;
 
-  // Uniform «group carries values» marking.
-  const markers: GroupMarker[] = [];
-  const refreshGroupTitles = (): void => {
-    for (const m of markers) {
-      const active = m.isNonEmpty();
-      m.head.classList.toggle('st-f-title-active', active);
-      m.star.textContent = active ? ' *' : '';
-    }
+  const sections: FilterSection[] = [];
+  const touch = (): void => {
+    for (const section of sections) section.refresh();
   };
-  /** Persist-less touch: refresh markers only (no DOM rebuild). */
-  const touch = (): void => refreshGroupTitles();
+  const ctx: FilterFormContext = {
+    networkId,
+    getState: () => state,
+    registry: registryById,
+    touch,
+  };
 
-  // --- Ключевые слова -------------------------------------------------------
-  const kw = block('Ключевые слова');
-  markers.push({ head: kw.head, star: kw.star, isNonEmpty: () => state.keywords.trim() !== '' });
+  // --- Ключевые слова (составное поле: токен заменяет слово у каретки) ------
+  sections.push(
+    buildKeywordsSection(ctx, {
+      placeholder: 'счет* -вод*',
+      tooltip: 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
+      showScope: true,
+      composite: true,
+      suggestSource: tokenSourceFor({ kind: 'keywords' }),
+    }),
+  );
 
-  const kwWrap = div('st-f-kw-wrap');
-  const kwInput = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
-  kwInput.type = 'text';
-  kwInput.value = state.keywords;
-  kwInput.placeholder = 'счет* -вод*';
-  setTooltip(kwInput, 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.');
-  kwInput.addEventListener('input', () => {
-    state.keywords = kwInput.value;
-    touch();
-  });
-  // Составное поле (несколько слов) — живой поиск фильтрует по последнему
-  // «слову» у каретки, а выбор токена заменяет только его, не всё значение
-  // (общая выпадашка, источник — её параметр).
-  wireSuggest(kwInput, {
-    sources: [
-      {
-        when: 'always',
-        load: () => comboToEntries(getTokenOptions({ kind: 'keywords' }, trailingWordQuery(kwInput))),
-      },
-    ],
-    pickFirstOnEnter: false,
-    onPick: (entry) => {
-      replaceTrailingWord(kwInput, entry.value, (v) => {
-        state.keywords = v;
-        touch();
-      });
-    },
-  });
-  const kwClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
-  kwClear.type = 'button';
-  setTooltip(kwClear, 'Очистить');
-  kwClear.addEventListener('click', () => {
-    state.keywords = '';
-    kwInput.value = '';
-    touch();
-  });
-  kwWrap.append(kwInput, kwClear);
-  kw.body.append(kwWrap);
-  kw.body.append(buildKeywordScopeRow(state, touch));
-
-  // --- Родительские мысли -----------------------------------------------
-  // Общий чип-лист сущностей (инструкция «Использовать унифицированные поля
-  // выбора ссылок в диалогах»): чипы — мини-облачка, живой поиск мыслей общим
-  // пикером-выпадашкой, токены (`$thought`) — источник вызывающего, кнопка
-  // «выбрать…» ДОБАВЛЯЕТ результат к уже набранным, а не подменяет список.
-  const pt = block('Родительские мысли');
-  markers.push({ head: pt.head, star: pt.star, isNonEmpty: () => state.parentIds.length > 0 });
-  const parentField = buildEntityChipField({
+  // --- Родительские мысли ---------------------------------------------------
+  const parentSection = buildEntityChipSection(ctx, {
+    title: 'Родительские мысли',
     getValues: () => state.parentIds,
-    onChange: (values) => {
+    setValues: (values) => {
       state.parentIds = values;
-      touch();
     },
     loadOptions: (query) => parentThoughtOptions(networkId, query),
     optionsHeader: 'Мысли',
     extraSources: [tokenSourceFor({ kind: 'parent' })],
     cloudOf: (value) => (value.startsWith('$') ? null : (parentClouds.get(value) ?? null)),
     placeholder: 'Название мысли или токен…',
+    tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
     picker: { label: 'выбрать…', open: (managed) => pickParentThoughts(networkId, managed) },
   });
-  setTooltip(parentField.root, 'Ограничить отбор мыслями, подчинёнными указанным');
-  pt.body.append(parentField.root);
+  sections.push(parentSection);
   // Догрузить облачка уже выбранных мыслей (в каталоге живого поиска их нет).
-  void resolveParentClouds(networkId, state.parentIds).then(() => parentField.refresh());
+  void resolveParentClouds(networkId, state.parentIds).then(() => parentSection.fieldRefresh());
 
-  // --- Типы мыслей --------------------------------------------------------
-  const tt = block('Типы мыслей');
-  markers.push({ head: tt.head, star: tt.star, isNonEmpty: () => state.typeIds.length > 0 });
-  const typeField = buildEntityChipField({
-    getValues: () => state.typeIds,
-    onChange: (values) => {
-      state.typeIds = values;
-      touch();
-    },
-    loadOptions: (query) =>
-      filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
-    optionsHeader: 'Типы мыслей',
-    extraSources: [tokenSourceFor({ kind: 'thought_type' })],
-    placeholder: 'Название типа или токен…',
-    picker: { label: 'список типов…', open: (managed) => openThoughtTypesPicker(networkId, managed) },
-  });
-  tt.body.append(typeField.root);
-
-  // --- Типы связей ----------------------------------------------------------
-  const lt = block('Типы связей');
-  markers.push({ head: lt.head, star: lt.star, isNonEmpty: () => state.linkTypeIds.length > 0 });
-  const linkTypeField = buildEntityChipField({
-    getValues: () => state.linkTypeIds,
-    onChange: (values) => {
-      state.linkTypeIds = values;
-      touch();
-    },
-    loadOptions: (query) =>
-      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
-    optionsHeader: 'Типы связей',
-    extraSources: [tokenSourceFor({ kind: 'link_type' })],
-    placeholder: 'Название типа или токен…',
-    picker: { label: 'список типов…', open: (managed) => openLinkTypesPicker(networkId, managed) },
-  });
-  lt.body.append(linkTypeField.root);
-
-  // --- Свойства (сворачиваемая группа) -------------------------------------
-  const props = collapsibleBlock('Свойства', () => propsCollapsed, (v) => (propsCollapsed = v));
-  markers.push({ head: props.head, star: props.star, isNonEmpty: () => state.properties.length > 0 });
-  const condsBox = div('st-f-conds');
-  const renderConditions = (): void => {
-    clear(condsBox);
-    if (state.properties.length === 0) {
-      condsBox.append(el('div', 'st-f-empty', 'Условий нет'));
-      return;
-    }
-    state.properties.forEach((cond, idx) => {
-      condsBox.append(buildConditionRow({ networkId, cond, index: idx, state, registryById, touch, renderConditions }));
-    });
-  };
-  renderConditions();
-  const addCond = el('button', 'st-f-add', '+ условие по свойству') as HTMLButtonElement;
-  addCond.type = 'button';
-  addCond.addEventListener('click', () => {
-    const firstReg = registryById.values().next().value as NetworkProperty | undefined;
-    if (firstReg === undefined) {
-      notice('В реестре свойств сети пока нет ни одного свойства.', 'info');
-      return;
-    }
-    const firstOp = OPS_BY_TYPE[firstReg.value_type][0]!.op;
-    state.properties = [...state.properties, { propertyId: firstReg.id, op: firstOp, values: [''] }];
-    renderConditions();
-    touch();
-  });
-  props.body.append(condsBox, addCond);
-
-  // --- Дополнительно (сворачиваемая группа) ---------------------------------
-  const extra = collapsibleBlock('Дополнительно', () => extraCollapsed, (v) => (extraCollapsed = v));
-  markers.push({ head: extra.head, star: extra.star, isNonEmpty: () => extrasActive(state) });
-  const triRow = (
-    label: string,
-    get: () => boolean | null,
-    set: (v: boolean | null) => void,
-    options?: { yes: string; no: string },
-  ): HTMLElement => {
-    const row = div('st-f-tri-row');
-    row.append(el('span', 'st-f-tri-label', label));
-    const select = el('select', 'st-f-input') as HTMLSelectElement;
-    for (const opt of [
-      { v: '', label: 'не важно' },
-      { v: 'true', label: options?.yes ?? 'да' },
-      { v: 'false', label: options?.no ?? 'нет' },
-    ]) {
-      const o = el('option', '', opt.label) as HTMLOptionElement;
-      o.value = opt.v;
-      select.append(o);
-    }
-    const cur = get();
-    select.value = cur === null ? '' : cur ? 'true' : 'false';
-    select.addEventListener('change', () => {
-      set(select.value === '' ? null : select.value === 'true');
-      touch();
-    });
-    row.append(select);
-    return row;
-  };
-  extra.body.append(
-    triRow('Есть значение свойства', () => state.hasProperties, (v) => (state.hasProperties = v)),
-    triRow('Есть постоянный комментарий', () => state.hasComment, (v) => (state.hasComment = v)),
-    triRow('Есть вложения', () => state.hasAttachments, (v) => (state.hasAttachments = v)),
-    triRow('Есть хронология', () => state.hasChronology, (v) => (state.hasChronology = v)),
-    triRow('Только актуальные', () => state.active, (v) => (state.active = v), { yes: 'актуальные', no: 'не актуальные' }),
-  );
-  const trashedRow = div('st-f-tri-row');
-  const trashedLbl = el('label', 'checkbox-row') as HTMLLabelElement;
-  const trashedCb = el('input') as HTMLInputElement;
-  trashedCb.type = 'checkbox';
-  trashedCb.checked = state.trashed;
-  trashedCb.addEventListener('change', () => {
-    state.trashed = trashedCb.checked;
-    touch();
-  });
-  trashedLbl.append(trashedCb, span('Включая помеченные на удаление'));
-  trashedRow.append(el('span', 'st-f-tri-label', 'Корзина'), trashedLbl);
-  extra.body.append(trashedRow);
-
-  // --- Автор / Редактор (сворачиваемая группа) ------------------------------
-  const authorship = collapsibleBlock('Автор / Редактор', () => authorCollapsed, (v) => (authorCollapsed = v));
-  markers.push({
-    head: authorship.head,
-    star: authorship.star,
-    isNonEmpty: () =>
-      authorFilterActive(state.authorOp, state.authorId, state.authorIds) ||
-      authorFilterActive(state.editorOp, state.editorId, state.editorIds),
-  });
-  const authorRows = div('st-f-author-rows');
-  const renderAuthor = (): void => {
-    clear(authorRows);
-    authorRows.append(
-      buildAuthorRow({
-        label: 'Автор',
-        field: 'author',
-        op: state.authorOp,
-        singleId: state.authorId,
-        listIds: state.authorIds,
-        onOpChange: (op) => {
-          state.authorOp = op;
-          if (op !== 'eq' && op !== 'ne') state.authorId = '';
-          if (op !== 'in' && op !== 'not_in') state.authorIds = [];
-          renderAuthor();
-          touch();
-        },
-        onSingleChange: (id) => {
-          state.authorId = id;
-          touch();
-        },
-        onListChange: (ids) => {
-          state.authorIds = ids;
-          touch();
-        },
-      }),
-      buildAuthorRow({
-        label: 'Редактор',
-        field: 'editor',
-        op: state.editorOp,
-        singleId: state.editorId,
-        listIds: state.editorIds,
-        onOpChange: (op) => {
-          state.editorOp = op;
-          if (op !== 'eq' && op !== 'ne') state.editorId = '';
-          if (op !== 'in' && op !== 'not_in') state.editorIds = [];
-          renderAuthor();
-          touch();
-        },
-        onSingleChange: (id) => {
-          state.editorId = id;
-          touch();
-        },
-        onListChange: (ids) => {
-          state.editorIds = ids;
-          touch();
-        },
-      }),
-    );
-  };
-  renderAuthor();
-  authorship.body.append(authorRows);
-
-  // --- Даты (сворачиваемая группа) ------------------------------------------
-  const dates = collapsibleBlock('Даты', () => datesCollapsed, (v) => (datesCollapsed = v));
-  markers.push({ head: dates.head, star: dates.star, isNonEmpty: () => builderDatesActive(state) });
-  dates.body.append(
-    buildDateRangeRow(networkId, 'Создано', state.createdAfter, state.createdBefore, (from, to) => {
-      state.createdAfter = from;
-      state.createdBefore = to;
-      touch();
+  // --- Типы мыслей и связи --------------------------------------------------
+  sections.push(
+    buildEntityChipSection(ctx, {
+      title: 'Типы мыслей',
+      getValues: () => state.typeIds,
+      setValues: (values) => {
+        state.typeIds = values;
+      },
+      loadOptions: (query) =>
+        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
+      optionsHeader: 'Типы мыслей',
+      extraSources: [tokenSourceFor({ kind: 'thought_type' })],
+      placeholder: 'Название типа или токен…',
+      picker: { label: 'список типов…', open: (managed) => openThoughtTypesPicker(networkId, managed) },
     }),
-    buildDateRangeRow(networkId, 'Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
-      state.updatedAfter = from;
-      state.updatedBefore = to;
-      touch();
+    buildEntityChipSection(ctx, {
+      title: 'Типы связей',
+      getValues: () => state.linkTypeIds,
+      setValues: (values) => {
+        state.linkTypeIds = values;
+      },
+      loadOptions: (query) =>
+        filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
+      optionsHeader: 'Типы связей',
+      extraSources: [tokenSourceFor({ kind: 'link_type' })],
+      placeholder: 'Название типа или токен…',
+      picker: { label: 'список типов…', open: (managed) => openLinkTypesPicker(networkId, managed) },
     }),
   );
 
-  // --- Сортировка -----------------------------------------------------------
-  // Наборы сортировок и направлений — единые экземпляры конструктора
-  // (`lib/filter-builder.ts`), тот же набор, что принимает исполнитель.
-  const sort = block('Сортировка');
-  const sortRow = div('st-f-sort');
-  const sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of FILTER_SORTS) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    sortSelect.append(o);
-  }
-  sortSelect.value = state.sort;
-  sortSelect.addEventListener('change', () => {
-    state.sort = sortSelect.value as StructureSort;
-  });
-  const orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of FILTER_ORDERS) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    orderSelect.append(o);
-  }
-  orderSelect.value = state.order;
-  orderSelect.addEventListener('change', () => {
-    state.order = orderSelect.value as SortOrder;
-  });
-  sortRow.append(sortSelect, orderSelect);
-  sort.body.append(sortRow);
-
-  root.append(
-    kw.box,
-    pt.box,
-    tt.box,
-    lt.box,
-    props.box,
-    extra.box,
-    authorship.box,
-    dates.box,
-    sort.box,
+  // --- Свойства / Дополнительно / Автор-Редактор / Даты / Сортировка --------
+  sections.push(
+    buildConditionsSection(
+      ctx,
+      { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) },
+      {
+        // Токены значений — у тех же видов, где они были (text/url/date/link).
+        extraSuggestFor: (cond) => {
+          const def = registryById.get(cond.propertyId);
+          const valueType = def?.value_type ?? 'text';
+          const editorType = valueType === 'thought_ref' ? 'link' : valueType;
+          const withTokens =
+            editorType === 'link' || valueType === 'text' || valueType === 'url' || valueType === 'date';
+          return withTokens ? [tokenSourceFor({ kind: 'property', valueType, op: cond.op })] : [];
+        },
+      },
+    ),
+    buildExtrasSection(ctx, { get: () => extraCollapsed, set: (v) => (extraCollapsed = v) }),
+    buildAuthorshipSection(
+      ctx,
+      { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) },
+      {
+        // Редакторы значения — с токенами и живым поиском пользователей.
+        editors: {
+          buildSingle: ({ currentId, onChange }) => buildAuthorSingleEditor(currentId, onChange),
+          buildList: ({ currentIds, onChange }) => buildAuthorListEditor(currentIds, onChange),
+        },
+      },
+    ),
+    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }),
+    buildSortSection(ctx),
   );
 
-  refreshGroupTitles();
+  const root = div('st-f-layout view-editor-criteria');
+  for (const section of sections) root.append(section.box);
+  touch();
 
   return {
     root,
     buildWire: () => buildWireDefinition(state, registryById),
     hasAnyCriteria: () => hasAnyCriteria(state),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Keyword scope row
-// ---------------------------------------------------------------------------
-
-function buildKeywordScopeRow(state: DialogCriteriaState, touch: () => void): HTMLElement {
-  const row = div('st-f-kw-scope');
-  const items: Array<{ label: string; get: () => boolean; set: (v: boolean) => void; input: HTMLInputElement | null }> = [
-    { label: 'наименование', get: () => state.keywordInTitle, set: (v) => (state.keywordInTitle = v), input: null },
-    { label: 'синонимы', get: () => state.keywordInSynonyms, set: (v) => (state.keywordInSynonyms = v), input: null },
-    { label: 'комментарий', get: () => state.keywordInComment, set: (v) => (state.keywordInComment = v), input: null },
-  ];
-  for (const item of items) {
-    const lbl = el('label', 'checkbox-row st-f-kw-scope-item') as HTMLLabelElement;
-    const cb = el('input') as HTMLInputElement;
-    cb.type = 'checkbox';
-    cb.checked = item.get();
-    item.input = cb;
-    cb.addEventListener('change', () => {
-      item.set(cb.checked);
-      // Last checked guard: default back to title+synonyms when all cleared.
-      if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
-        state.keywordInTitle = true;
-        state.keywordInSynonyms = true;
-      }
-      for (const other of items) other.input!.checked = other.get();
-      touch();
-    });
-    lbl.append(cb, span(item.label));
-    row.append(lbl);
-  }
-  return row;
-}
-
-// ---------------------------------------------------------------------------
-// Property condition row + value editor
-// ---------------------------------------------------------------------------
-
-interface ConditionRowOpts {
-  networkId: string;
-  cond: DialogPropertyCondition;
-  index: number;
-  state: DialogCriteriaState;
-  registryById: Map<string, NetworkProperty>;
-  touch: () => void;
-  renderConditions: () => void;
-}
-
-function buildConditionRow(opts: ConditionRowOpts): HTMLElement {
-  const { networkId, cond, index, state, registryById, touch, renderConditions } = opts;
-  const row = div('st-f-cond');
-  const def = registryById.get(cond.propertyId);
-
-  // Property picker.
-  const propSelect = el('select', 'st-f-input st-f-prop') as HTMLSelectElement;
-  if (!registryById.has(cond.propertyId)) {
-    const placeholder = el('option', '', cond.propertyId === '' ? '— свойство —' : '?') as HTMLOptionElement;
-    placeholder.value = cond.propertyId;
-    propSelect.append(placeholder);
-  }
-  for (const [id, entry] of registryById) {
-    const opt = el('option', '', entry.name) as HTMLOptionElement;
-    opt.value = id;
-    propSelect.append(opt);
-  }
-  propSelect.value = cond.propertyId;
-  propSelect.addEventListener('change', () => {
-    const nextId = propSelect.value;
-    const nextDef = registryById.get(nextId);
-    const nextType: PropertyValueType = nextDef?.value_type ?? 'text';
-    const ops = OPS_BY_TYPE[nextType];
-    const nextOp = ops.some((o) => o.op === cond.op) ? cond.op : ops[0]!.op;
-    state.properties[index] = { propertyId: nextId, op: nextOp, values: [''] };
-    renderConditions();
-    touch();
-  });
-
-  // Operator picker.
-  const opSelect = el('select', 'st-f-input st-f-op') as HTMLSelectElement;
-  const ops = OPS_BY_TYPE[def?.value_type ?? 'text'];
-  for (const op of ops) {
-    const option = el('option', '', op.label) as HTMLOptionElement;
-    option.value = op.op;
-    opSelect.append(option);
-  }
-  if (!ops.some((o) => o.op === cond.op)) {
-    cond.op = ops[0]!.op;
-  }
-  opSelect.value = cond.op;
-  opSelect.addEventListener('change', () => {
-    const live = state.properties[index] ?? cond;
-    state.properties[index] = { ...live, op: opSelect.value as StructurePropertyOp, values: [''] };
-    renderConditions();
-    touch();
-  });
-
-  // Value editor.
-  const valueBox = buildConditionValueEditor({
-    networkId,
-    cond,
-    index,
-    state,
-    registryById,
-    touch,
-  });
-
-  const remove = el('button', 'st-f-remove', '×') as HTMLButtonElement;
-  remove.type = 'button';
-  remove.addEventListener('click', () => {
-    state.properties = state.properties.filter((_, i) => i !== index);
-    renderConditions();
-    touch();
-  });
-
-  row.append(propSelect, opSelect, valueBox, remove);
-  return row;
-}
-
-interface ConditionValueOpts {
-  networkId: string;
-  cond: DialogPropertyCondition;
-  index: number;
-  state: DialogCriteriaState;
-  registryById: Map<string, NetworkProperty>;
-  touch: () => void;
-}
-
-/**
- * Редактор значения условия — ОБЩИЙ редактор значения
- * (`editor/value-editor.ts`, стандарт S2): вид значения выбирает он, а
- * вызывающий даёт список токенов источником подсказок (`extraSuggest`) —
- * так токены (`$today`, `$user`, `$thought`, `$thought.<ключ>`) сохраняются
- * ровно там, где были, и не появляются у number/bool. `thought_ref` — legacy-
- * вид с тем же значением (id мысли), поэтому ведётся редактором связи.
- * Состояние условия хранит строки, редактор связи отдаёт массив id —
- * переходник сводит массив к строкам; списочная операция включает
- * `config.multiple` (чипы), скалярная — одиночное поле.
- */
-function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
-  const { networkId, cond, index, state, registryById, touch } = opts;
-  const def = registryById.get(cond.propertyId);
-  const valueType: PropertyValueType = def?.value_type ?? 'text';
-  const box = div('st-f-values');
-  const isList = cond.op === 'in' || cond.op === 'not_in';
-  const isPresence = cond.op === 'is_empty' || cond.op === 'not_empty';
-  if (isPresence) {
-    box.append(el('span', 'st-f-value-hint', 'значение не требуется'));
-    return box;
-  }
-
-  const live = (): DialogPropertyCondition => state.properties[index] ?? cond;
-  const setValues = (values: string[]): void => {
-    state.properties[index] = { ...live(), values: values.length > 0 ? values : [''] };
-    touch();
-  };
-
-  const current = live();
-  const editorType: PropertyValueType = valueType === 'thought_ref' ? 'link' : valueType;
-  const stored = current.values.filter((v) => v !== '');
-  const raw = current.values[0] ?? '';
-  // Скаляр — одно значение в родном типе редактора; связь и списочная
-  // операция — набор. Без ветвления по виду значения: диспетчер по виду —
-  // только в общем редакторе (стандарт S2).
-  const scalar: unknown =
-    valueType === 'bool'
-      ? (raw === '' ? null : raw === 'true')
-      : valueType === 'number'
-        ? (raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : '')
-        : raw;
-  const value: unknown = editorType === 'link' || isList ? stored : scalar;
-  // Токены — только у видов, где они были (text/url/date/link/thought_ref).
-  const withTokens =
-    editorType === 'link' || valueType === 'text' || valueType === 'url' || valueType === 'date';
-
-  box.append(
-    buildValueEditor({
-      networkId,
-      definition: {
-        value_type: editorType,
-        config: isList ? { ...(def?.config ?? {}), multiple: true } : (def?.config ?? null),
-        required: false,
-        default_value: null,
-      },
-      value,
-      commitOn: 'change',
-      boolTriState: valueType === 'bool',
-      extraSuggest: withTokens
-        ? [tokenSourceFor({ kind: 'property', valueType, op: cond.op })]
-        : [],
-      ...(valueType === 'date' ? { placeholder: 'YYYY-MM-DD или токен ($today+7d)…' } : {}),
-      save: (next) => {
-        if (Array.isArray(next)) {
-          setValues(next.map((v) => String(v)));
-        } else if (next === null || next === undefined || next === '') {
-          setValues(['']);
-        } else {
-          setValues([String(next)]);
-        }
-        return true;
-      },
-    }),
-  );
-  return box;
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,41 +587,11 @@ async function resolveParentClouds(networkId: string, ids: readonly string[]): P
   }
 }
 
-// ---------------------------------------------------------------------------
-// Author condition row
-// ---------------------------------------------------------------------------
-
-interface AuthorRowOpts {
-  label: string;
-  field: 'author' | 'editor';
-  op: StructureAuthorOp;
-  singleId: string;
-  listIds: string[];
-  onOpChange: (op: StructureAuthorOp) => void;
-  onSingleChange: (id: string) => void;
-  onListChange: (ids: string[]) => void;
-}
-
-/**
- * Строка условия «автор/редактор» — единый скелет конструктора
- * (`buildAuthorConditionRow`); диалог подставляет свои редакторы значения
- * с токенами и живым поиском (задача 27472616).
- */
-function buildAuthorRow(opts: AuthorRowOpts): HTMLElement {
-  const editors: AuthorRowEditors = {
-    buildSingle: ({ currentId, onChange }) => buildAuthorSingleEditor(opts.field, currentId, onChange),
-    buildList: ({ currentIds, onChange }) =>
-      buildAuthorListEditor(opts.field, currentIds, onChange),
-  };
-  return buildAuthorConditionRow({ ...opts, editors });
-}
-
 /**
  * Редактор одиночного значения: живой поиск (id, токен или пользователь по
  * имени) + выбор пользователя из каталога.
  */
 function buildAuthorSingleEditor(
-  field: 'author' | 'editor',
   currentId: string,
   onChange: (id: string) => void,
 ): HTMLElement {
@@ -1106,7 +606,7 @@ function buildAuthorSingleEditor(
   // `input`-обработчик выше.
   wireSuggest(input, {
     sources: [
-      { when: 'always', load: (query) => comboToEntries(authorComboOptions(field, query)) },
+      { when: 'always', load: (query) => comboToEntries(authorComboOptions(query)) },
     ],
     pickFirstOnEnter: false,
     onPick: (entry) => {
@@ -1131,8 +631,10 @@ function buildAuthorSingleEditor(
 
 /** Live-search кандидаты для полей «Автор»/«Редактор»: токены (`$…`) +
  *  пользователи сети, отфильтрованные по имени/логину (задача 27472616). */
-function authorComboOptions(field: 'author' | 'editor', query: string): ComboOption[] {
-  const tokenOpts = tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], field), null);
+function authorComboOptions(query: string): ComboOption[] {
+  // Для обоих полей набор токенов один и тот же (`$thought.author`,
+  // `$thought.editor`, `$user`) — см. `buildTokensForSpecialField`.
+  const tokenOpts = tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], 'author'), null);
   const userOpts: ComboOption[] = listUsers().map((u) => ({
     value: u.id,
     label: `${u.display_name ?? u.username} (${u.username})`,
@@ -1148,7 +650,6 @@ function authorComboOptions(field: 'author' | 'editor', query: string): ComboOpt
  * общий чип-лист сущностей (`lib/entity-picker.ts`).
  */
 function buildAuthorListEditor(
-  field: 'author' | 'editor',
   currentIds: string[],
   onChange: (ids: string[]) => void,
 ): HTMLElement {
@@ -1164,7 +665,7 @@ function buildAuthorListEditor(
     loadOptions: () => usersEntityOptions(),
     optionsHeader: 'Пользователи',
     extraSources: [
-      { when: 'always', load: (query) => comboToEntries(authorTokenOptions(field, query)) },
+      { when: 'always', load: (query) => comboToEntries(authorTokenOptions(query)) },
     ],
     cloudOf: (value) =>
       value.startsWith('$')
@@ -1186,63 +687,14 @@ function usersEntityOptions(): EntityOption[] {
 }
 
 /** Токен-кандидаты полей «Автор»/«Редактор» (без пользователей). */
-function authorTokenOptions(field: 'author' | 'editor', query: string): ComboOption[] {
+function authorTokenOptions(query: string): ComboOption[] {
   return filterComboOptions(
-    tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], field), null),
+    tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], 'author'), null),
     query,
   );
 }
 
-// ---------------------------------------------------------------------------
-// Date range row
-// ---------------------------------------------------------------------------
 
-/**
- * Строка «от / до» одной временной группы. Поля строит общий редактор
- * значения (вид «дата» + источник токенов вызывающего): у поля есть «✕»
- * очистки, живой поиск токенов (`$today`, `$thought.created`) заменяет
- * значение целиком; пустая строка — граница не выставлена.
- */
-function buildDateRangeRow(
-  networkId: string,
-  label: string,
-  from: string,
-  to: string,
-  onChange: (from: string, to: string) => void,
-): HTMLElement {
-  const row = div('st-f-date-row');
-  row.append(el('span', 'st-f-date-label', label));
-
-  const buildField = (value: string, set: (v: string) => void): HTMLElement => {
-    const wrap = div('st-f-date-field');
-    wrap.append(
-      buildValueEditor({
-        networkId,
-        definition: { value_type: 'date', config: null, required: false, default_value: null },
-        value,
-        commitOn: 'change',
-        placeholder: 'YYYY-MM-DD или токен…',
-        extraSuggest: [tokenSourceFor({ kind: 'property', valueType: 'date', op: null })],
-        save: (next) => {
-          set(next === null || next === undefined ? '' : String(next));
-          return true;
-        },
-      }),
-    );
-    return wrap;
-  };
-
-  row.append(
-    span('от', 'st-f-date-tag'),
-    buildField(from, (v) => onChange(v, to)),
-    span('до', 'st-f-date-tag'),
-    buildField(to, (v) => onChange(from, v)),
-  );
-  return row;
-}
-
-// Словарь операторов по виду значения — единый экземпляр конструктора
-// (lib/filter-builder.ts); здесь не объявляется повторно.
 
 // ---------------------------------------------------------------------------
 // Pickers (parent / thought types / link types) — каждый возвращает
@@ -1344,33 +796,3 @@ function filterEntityOptions(options: readonly EntityOption[], query: string): E
   );
 }
 
-/** Извлекает слово у каретки — запрос составного поля («Ключевые слова»). */
-function trailingWordQuery(input: HTMLInputElement): string {
-  const caret = input.selectionStart ?? input.value.length;
-  const before = input.value.slice(0, caret);
-  return /(\S*)$/.exec(before)?.[1] ?? '';
-}
-
-/** Заменяет слово у каретки токеном, оставляя остальной текст, и возвращает
- *  каретку сразу после токена (составное поле «Ключевые слова»). */
-function replaceTrailingWord(
-  input: HTMLInputElement,
-  token: string,
-  onChange: (v: string) => void,
-): void {
-  const caret = input.selectionStart ?? input.value.length;
-  const before = input.value.slice(0, caret);
-  const after = input.value.slice(caret);
-  const wordLen = /(\S*)$/.exec(before)?.[1]?.length ?? 0;
-  const wordStart = caret - wordLen;
-  const next = input.value.slice(0, wordStart) + token + after;
-  input.value = next;
-  onChange(next);
-  input.focus();
-  const newCaret = wordStart + token.length;
-  try {
-    input.setSelectionRange(newCaret, newCaret);
-  } catch {
-    /* ignore */
-  }
-}
