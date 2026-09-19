@@ -3,14 +3,14 @@
  * модель связей; правка — инструкция «Использовать унифицированные поля
  * выбора ссылок в диалогах», a47947c8) — редактор значения свойства-связи на
  * мысль: мини-облачко(-а) выбранных мыслей + «✕» + кнопка «выбрать»
- * (`pickThoughtsDialog`) + живой поиск (`wireThoughtRefSearch`) для пустого
- * поля / добавления.
+ * (`pickThoughtsDialog`) + живой поиск (общая выпадашка подсказок,
+ * `lib/suggest-dropdown.ts`) для пустого поля / добавления.
  *
- * Здесь намеренно избегаем dispatch('input') (внутренняя `wireThoughtRefSearch`
- * запускает асинхронную цепочку `etn.thoughts.findDuplicates →
- * document.body.append → positionBodyDropdown`, в shim-среде зависающую на
- * неопределённое время) — тесты покрывают статическую структуру DOM и факт
- * регистрации click/dblclick/contextmenu/keydown обработчиков облачка.
+ * Здесь намеренно избегаем dispatch('input') (выпадашка запускает
+ * асинхронную цепочку `etn.thoughts.findDuplicates → document.body.append →
+ * positionBodyDropdown`, в shim-среде зависающую на неопределённое время) —
+ * тесты покрывают статическую структуру DOM и факт регистрации
+ * click/dblclick/contextmenu/keydown обработчиков облачка.
  */
 
 import assert from 'node:assert/strict';
@@ -99,10 +99,10 @@ let seenResolves: string[] = [];
 
 /**
  * Установка шима: document/window + минимальные `etn.thoughts.resolve` /
- * `etn.thoughts.findDuplicates` (для `wireThoughtRefSearch`, не вызывается в
- * этих тестах, но должен существовать, чтобы модуль импортировался).
- * `lib/etn.ts` привязывается к `window.etn` при первом импорте — оставляем
- * ОДИН глобальный объект на весь test-файл.
+ * `etn.thoughts.findDuplicates` (для живой выпадашки редактора, не
+ * вызывается в этих тестах, но должен существовать, чтобы модуль
+ * импортировался). `lib/etn.ts` привязывается к `window.etn` при первом
+ * импорте — оставляем ОДИН глобальный объект на весь test-файл.
  */
 function installShim(): void {
   seenResolves = [];

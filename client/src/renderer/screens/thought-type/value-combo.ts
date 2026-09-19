@@ -15,22 +15,17 @@
  * сервере не трогается, это чисто клиентский редактор ввода.
  */
 
-import { clear, div, el, positionBodyDropdown, span } from '../../lib/dom.js';
+import { div, el, span } from '../../lib/dom.js';
+
+import { wireSuggest, type SuggestSource } from '../../lib/suggest-dropdown.js';
 
 import type { ComboOption } from './filter-dialog-pure.js';
 
 export type { ComboOption } from './filter-dialog-pure.js';
 
 // ---------------------------------------------------------------------------
-// Live-search dropdown — attaches to an existing <input>
+// Live-search dropdown — общая выпадашка подсказок
 // ---------------------------------------------------------------------------
-
-/** Pure index math for ↑/↓ over a candidate list. */
-function navIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {
-  if (count === 0) return null;
-  const base = cursor === null || cursor >= count ? (delta === 1 ? -1 : count) : cursor;
-  return Math.min(count - 1, Math.max(0, base + delta));
-}
 
 export interface TokenComboOptions {
   /** The input the live-search dropdown is attached to. The caller keeps
@@ -52,107 +47,36 @@ export interface TokenComboOptions {
 }
 
 /**
- * Attaches a live-search dropdown to `opts.input`: typing (and focusing an
- * empty field) filters/lists candidates in a body-mounted dropdown; ↑/↓ move
- * the highlight, Enter picks the highlighted row (or does nothing over free
- * text — the caller's own `input` listener already persisted it), Escape
- * closes without touching the value.
+ * Attaches a live-search dropdown to `opts.input` — тонкая обёртка над общей
+ * выпадашкой подсказок (`lib/suggest-dropdown.ts`, ADR «одна
+ * выпадашка-подсказчик, источник вариантов — её параметр»). Навигация
+ * (↑/↓/Enter/Esc/клик/потеря фокуса) и разметка строк живут ровно в одном
+ * экземпляре — здесь остаются только секции и токены, которые дают строки
+ * источника: секция строки — `section`, недоступный вариант — `disabled`.
+ * Enter по свободному тексту отдан обработчику вызывающего
+ * (`pickFirstOnEnter: false`) — как был у прежнего комбо.
  */
 export function wireTokenCombo(opts: TokenComboOptions): void {
   const { input } = opts;
   const queryOf = opts.queryOf ?? ((inp: HTMLInputElement) => inp.value);
-  let list: HTMLElement | null = null;
-  let cursor: number | null = null;
-  let seq = 0;
-
-  const close = (): void => {
-    if (list === null) return;
-    list.remove();
-    list = null;
-    cursor = null;
-    window.removeEventListener('mousedown', onOutside, true);
+  const source: SuggestSource = {
+    when: 'always',
+    load: () =>
+      Promise.resolve(opts.getOptions(queryOf(input))).then((options) =>
+        options.map((opt) => ({
+          value: opt.value,
+          label: opt.label,
+          ...(opt.section !== undefined ? { section: opt.section } : {}),
+          ...(opt.disabled === true ? { disabled: true } : {}),
+        })),
+      ),
   };
-
-  const onOutside = (event: MouseEvent): void => {
-    if (list !== null && event.target instanceof Node && !list.contains(event.target) && event.target !== input) {
-      close();
-    }
-  };
-
-  const render = (options: ComboOption[]): void => {
-    if (list === null) return;
-    clear(list);
-    cursor = null;
-    let lastSection: string | undefined;
-    for (const opt of options) {
-      if (opt.section !== undefined && opt.section !== lastSection) {
-        list.append(el('div', 'value-combo-section', opt.section));
-        lastSection = opt.section;
-      }
-      const row = div(`type-combo-item${opt.disabled === true ? ' disabled' : ''}`);
-      row.append(el('span', 'type-combo-label', opt.label));
-      if (opt.disabled !== true) {
-        row.addEventListener('mousedown', (event) => event.preventDefault());
-        row.addEventListener('click', () => {
-          close();
-          opts.onPick(opt.value);
-        });
-      }
-      list.append(row);
-    }
-    if (options.length === 0) list.append(el('p', 'muted', 'Совпадений нет.'));
-    positionBodyDropdown(list, input);
-  };
-
-  const open = async (): Promise<void> => {
-    const run = ++seq;
-    const query = queryOf(input);
-    const options = await opts.getOptions(query);
-    if (run !== seq || !input.isConnected) return;
-    if (list === null) {
-      list = div('type-combo-list');
-      document.body.append(list);
-      window.addEventListener('mousedown', onOutside, true);
-    }
-    render(options);
-  };
-
-  input.addEventListener('input', () => void open());
-  input.addEventListener('focus', () => void open());
-  input.addEventListener('keydown', (event) => {
-    if (list === null) return;
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      close();
-      return;
-    }
-    const rows = Array.from(list.querySelectorAll<HTMLElement>('.type-combo-item:not(.disabled)'));
-    const paint = (): void => {
-      rows.forEach((row, i) => row.classList.toggle('active', i === cursor));
-      if (cursor !== null) rows[cursor]?.scrollIntoView({ block: 'nearest' });
-    };
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      if (rows.length === 0) return;
-      event.preventDefault();
-      const next = navIndex(cursor, rows.length, event.key === 'ArrowDown' ? 1 : -1);
-      if (next === null) return;
-      cursor = next;
-      paint();
-    } else if (event.key === 'Enter' && cursor !== null && !event.shiftKey) {
-      // A highlighted candidate wins Enter outright — `stopImmediatePropagation`
-      // also suppresses a sibling keydown listener on the SAME input (e.g. the
-      // chip-list's own Enter-commits-free-text handler in `buildChipListField`),
-      // not just bubbling, so the pick and a stale free-text commit can never
-      // both fire for one keystroke.
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      rows[cursor]?.click();
-    }
-  });
-  input.addEventListener('blur', () => {
-    // A short delay lets a row's `mousedown`/click land before the dropdown
-    // is torn down (blur-restore pattern).
-    window.setTimeout(close, 0);
+  wireSuggest(input, {
+    sources: [source],
+    // Enter над выделенной строкой выбирает её (и гасит событие); без
+    // выделения свободный текст фиксирует обработчик вызывающего.
+    pickFirstOnEnter: false,
+    onPick: (entry) => opts.onPick(entry.value),
   });
 }
 
@@ -281,9 +205,9 @@ export function buildChipListField(opts: ChipListOptions): ChipListField {
     onPick: commit,
   });
   addInput.addEventListener('keydown', (event) => {
-    // wireTokenCombo's own keydown listener (registered above, on the same
-    // input) already consumed Enter over a highlighted candidate via
-    // `stopImmediatePropagation` — this only ever fires for free-typed text.
+    // Общая выпадашка (внутри wireTokenCombo) уже выбрала строку под
+    // выделением и очистила поле через `commit`; этот обработчик срабатывает
+    // только на свободном тексте (пустое значение — no-op).
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       commit(addInput.value);

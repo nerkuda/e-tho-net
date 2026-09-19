@@ -18,6 +18,13 @@ export interface MenuItem {
    *  icon). DOM nodes get the same `menu-item-icon` class wrapper so the
    *  layout stays consistent across both shapes. */
   icon?: string | Node;
+  /**
+   * Ready-made row content instead of the `icon` + `label` pair — for rich
+   * rows (e.g. a thought cloud from the shared factory). Rendered in a
+   * full-width `.menu-item-content` wrapper; `label` stays the textual
+   * caption of the row (accessibility).
+   */
+  content?: Node;
   submenu?: MenuItem[];
   disabled?: boolean;
   danger?: boolean;
@@ -59,16 +66,23 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
     row.classList.toggle('menu-item-disabled', item.disabled === true);
     row.classList.toggle('menu-item-checked', item.checked === true);
     if (item.dragId !== undefined) row.dataset['dragId'] = item.dragId;
-    if (item.icon !== undefined) {
-      if (typeof item.icon === 'string') {
-        row.append(span(item.icon, 'menu-item-icon'));
-      } else {
-        const wrap = span('', 'menu-item-icon');
-        wrap.append(item.icon);
-        row.append(wrap);
+    if (item.content !== undefined) {
+      // Rich row: the caller-owned node replaces icon + label entirely.
+      const wrap = span('', 'menu-item-content');
+      wrap.append(item.content);
+      row.append(wrap);
+    } else {
+      if (item.icon !== undefined) {
+        if (typeof item.icon === 'string') {
+          row.append(span(item.icon, 'menu-item-icon'));
+        } else {
+          const wrap = span('', 'menu-item-icon');
+          wrap.append(item.icon);
+          row.append(wrap);
+        }
       }
+      row.append(span(item.label, 'menu-item-label'));
     }
-    row.append(span(item.label, 'menu-item-label'));
     if (item.submenu !== undefined) row.append(span('▸', 'menu-item-arrow'));
     row.addEventListener('click', (event) => {
       event.stopPropagation();

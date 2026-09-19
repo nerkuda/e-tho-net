@@ -249,38 +249,47 @@ function textHistorySource(networkId: string, propertyId: string): SuggestSource
   });
 }
 
-/** Кеш id → подпись цели для истории свойства-связи (по network+property). */
-const linkHistoryLabels = new Map<string, Map<string, string>>();
+/** Кеш id → DTO цели для истории свойства-связи (по network+property). */
+const linkHistoryRefs = new Map<string, Map<string, ThoughtRef>>();
 
 /**
  * Источник «история последних целей» для свойства-связи: значения — id
- * мыслей, подписи догружаются батч-резолвом (неудача — сырой id).
+ * мыслей, DTO догружаются батч-резолвом (неудача — сырой id голой строкой).
+ * Строка-мысль идёт облачком фабрики: значок, цвета, начертание, бледность
+ * неактуальной, метка корзины (S1).
  */
 function linkHistorySource(networkId: string, propertyId: string): SuggestSource {
   return historySuggestSource({
     load: async () => {
       const ids = loadRecentValues(networkId, propertyId);
       if (ids.length === 0) return [];
-      let labels = linkHistoryLabels.get(`${networkId}:${propertyId}`);
-      if (labels === undefined) {
-        labels = new Map();
-        linkHistoryLabels.set(`${networkId}:${propertyId}`, labels);
+      const key = `${networkId}:${propertyId}`;
+      let refs = linkHistoryRefs.get(key);
+      if (refs === undefined) {
+        refs = new Map();
+        linkHistoryRefs.set(key, refs);
       }
-      const missing = ids.filter((id) => !labels!.has(id));
+      const missing = ids.filter((id) => !refs!.has(id));
       if (missing.length > 0) {
         try {
-          const refs = await etn.thoughts.resolve(networkId, missing);
-          for (const ref of refs) labels!.set(ref.id, ref.title);
+          const resolved = await etn.thoughts.resolve(networkId, missing);
+          for (const ref of resolved) refs!.set(ref.id, ref);
         } catch {
-          // Оффлайн: подписи останутся сырыми id.
+          // Оффлайн: оставшиеся id покажутся голой строкой.
         }
       }
-      return ids.map((id) => ({ value: id, label: labels!.get(id) ?? id }));
+      return ids.map((id) => {
+        const ref = refs!.get(id);
+        return ref === undefined
+          ? { value: id, label: id }
+          : { value: id, label: ref.title, thought: { ...ref } };
+      });
     },
   });
 }
 
-/** Источник живого поиска целей свойства-связи (отбор по типам — input aid). */
+/** Источник живого поиска целей свойства-связи (отбор по типам — input aid).
+ *  Строка-мысль — облачком: DTO кандидата структурно совместим с `ThoughtCloudInput`. */
 function linkSearchSource(networkId: string, typeIds: string[]): SuggestSource {
   const filter = typeIds.filter((id) => id !== '');
   return searchSuggestSource({
@@ -290,9 +299,7 @@ function linkSearchSource(networkId: string, typeIds: string[]): SuggestSource {
       return etn.thoughts
         .findDuplicates(networkId, trimmed, [], filter)
         .catch(() => [] as Awaited<ReturnType<typeof etn.thoughts.findDuplicates>>)
-        .then((hits) =>
-          hits.map((hit) => ({ value: hit.id, label: `${hit.title} — ${hit.matched_on}` })),
-        );
+        .then((hits) => hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })));
     },
   });
 }

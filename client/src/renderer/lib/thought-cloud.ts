@@ -376,6 +376,11 @@ function buildTitle(profile: CloudProfile, title: string): HTMLElement {
     node.style.whiteSpace = 'nowrap';
     node.style.overflow = 'hidden';
     node.style.textOverflow = 'ellipsis';
+    // Как flex-элемент пилюли/облачка имя без `min-width: 0` не сжимается
+    // ниже min-content и многоточие не срабатывает: строка либо клипается
+    // родителем, либо раздувает контейнер. Нужно для строк выпадашки и
+    // чипов в узких колонках (`width: 'container'`).
+    node.style.minWidth = '0';
   }
   return node;
 }

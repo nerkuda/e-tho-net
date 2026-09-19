@@ -258,20 +258,23 @@ export async function pickEntitiesModal(
             .findDuplicates(opts.networkId, query.trim(), [], (opts.searchTypeIds ?? []).filter((id) => id !== ''))
             .catch(() => [] as DuplicateHit[])
             .then((hits) =>
-              hits.map((hit) => ({ value: hit.id, label: `${hit.title} — ${hit.matched_on}` })),
+              // Строка-мысль — облачком: DTO кандидата структурно совместим с
+              // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
+              hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
             ),
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
         onPick: (entry) => {
-          const opt = { id: entry.value, title: entry.label };
           if (single) {
             finish([entry.value]);
             return;
           }
           checked.add(entry.value);
-          // Облачко выбранной мысли: догружаем минимум данных по id.
-          pickedThoughts.set(entry.value, { id: entry.value, title: entry.label.split(' — ')[0] ?? entry.value });
+          // Облачко выбранной мысли: данные из строки выпадашки, догрузка
+          // полного DTO по id — если строка пришла без него.
+          const title = entry.thought?.title ?? entry.label;
+          pickedThoughts.set(entry.value, entry.thought ?? { id: entry.value, title });
           void etn.thoughts
             .resolve(opts.networkId, [entry.value])
             .then((refs) => {
@@ -684,6 +687,8 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     });
   } else {
     // Мысли: живой поиск по серверу; полный список без запроса невозможен.
+    // Строка-мысль — облачком фабрики: DTO кандидата идёт в `thought`, визуал
+    // (значок, цвета, начертание, бледность, корзина) резолвит фабрика (S1).
     sources.push({
       when: 'typed',
       load: (query) => {
@@ -691,14 +696,13 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         return etn.thoughts
           .findDuplicates(opts.networkId, query.trim(), [], (opts.searchTypeIds ?? []).filter((id) => id !== ''))
           .catch(() => [] as DuplicateHit[])
-          .then((hits) => {
-            allOptions = hits.map((hit) => {
+          .then((hits) =>
+            hits.map((hit) => {
               const opt = thoughtEntityOption(hit);
               byId.set(hit.id, opt);
-              return opt;
-            });
-            return hits.map((hit) => ({ value: hit.id, label: hit.title }));
-          });
+              return { value: hit.id, label: hit.title, thought: opt.cloud };
+            }),
+          );
       },
     });
   }

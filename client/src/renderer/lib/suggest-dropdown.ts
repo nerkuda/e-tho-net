@@ -31,9 +31,17 @@
  * (`RECENT_VALUES_MAX` в editor/recent-values.ts), модуль рендерит всё, что
  * вернул `load`. Множественный выбор (галочки, «Готово») остаётся вне
  * контракта: это отдельный режим ввода, а не подсказка.
+ *
+ * Строка, показывающая мысль, строится фабрикой облачка
+ * (`createThoughtCloud`, профиль `chip`, ширина по контейнеру): значок, цвета,
+ * начертание, бледность неактуальной и метка корзины приходят из одного
+ * представления мысли (стандарт «Клиент: представление мысли — только через
+ * общую фабрику облачка»). Голый `label` остаётся для нессылочных подсказок —
+ * истории текстовых значений, `config.options`, токенов.
  */
 
 import { div, el, positionBodyDropdown } from './dom.js';
+import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 
 /** Одна выбираемая строка выпадашки. */
 export interface SuggestEntry {
@@ -41,6 +49,17 @@ export interface SuggestEntry {
   value: string;
   /** Подпись строки (может отличаться от значения: id → название). */
   label: string;
+  /**
+   * Данные мысли: строка рисуется готовым облачком общей фабрики — значок,
+   * цвета, начертание, бледность неактуальной, метка корзины и обрезка имени
+   * по ширине контейнера. Нет — строка остаётся голым текстом `label`
+   * (богатая строка это опция источника, а не обязанность).
+   */
+  thought?: ThoughtCloudInput;
+  /** Заголовок группы строки (секции токен-комбо): строки одной секции подряд. */
+  section?: string;
+  /** `true` — строка показывается, но не выбирается (недоступный вариант). */
+  disabled?: boolean;
 }
 
 /** Когда источник участвует в списке. */
@@ -72,6 +91,12 @@ export interface SuggestSource {
 export interface WireSuggestOptions {
   /** Источники в порядке отображения; строки всех активных источников — один список. */
   sources: readonly SuggestSource[];
+  /**
+   * Enter без выделенной строки выбирает первую (история и живой поиск —
+   * да). `false` — только явно выделенную: свободный текст обрабатывает
+   * обработчик вызывающего (токен-комбо, chip-поле).
+   */
+  pickFirstOnEnter?: boolean;
   /** Выбрана строка (клик или Enter). Список к этому моменту уже закрыт. */
   onPick(entry: SuggestEntry): void;
 }
@@ -93,7 +118,12 @@ function matchesWhen(when: SuggestWhen, query: string): boolean {
   return true;
 }
 
-/** Индексная арифметика ↑/↓ по строкам (то же правило, что у recent-values). */
+/**
+ * Индексная арифметика ↑/↓ по строкам — единственный экземпляр на клиент
+ * (сторож `guard-suggest-dropdown` краснеет на копии): из общего поля пустое
+ * выделение идёт к первой строке вниз и к последней вверх, дальше — шаг без
+ * перехода через край.
+ */
 function navIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {
   if (count === 0) return null;
   const base = cursor === null || cursor >= count ? (delta === 1 ? -1 : count) : cursor;
@@ -140,6 +170,28 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     if (cursor !== null) rows[cursor]?.scrollIntoView({ block: 'nearest' });
   };
 
+  /** Первая выбираемая (не `disabled`) строка; нет такой — `null`. */
+  const firstSelectable = (): number | null => {
+    for (let i = 0; i < rowEntries.length; i++) {
+      if (rowEntries[i]?.disabled !== true) return i;
+    }
+    return null;
+  };
+
+  /** Индекс следующей выбираемой строки в направлении ↑/↓ (без перехода через край). */
+  const moveCursor = (delta: 1 | -1): number | null => {
+    if (rowEntries.length === 0) return null;
+    let cur = cursor;
+    for (let guard = 0; guard <= rowEntries.length; guard++) {
+      const next = navIndex(cur, rowEntries.length, delta);
+      if (next === null) return null;
+      if (rowEntries[next]?.disabled !== true) return next;
+      if (next === cur) return null; // упёрлись в край, выбираемых дальше нет
+      cur = next;
+    }
+    return null;
+  };
+
   /** Рисует (или перерисовывает) список; пустой результат закрывает его. */
   const render = (groups: Array<{ source: SuggestSource; entries: SuggestEntry[] }>): void => {
     const nonEmpty = groups.filter((group) => group.entries.length > 0);
@@ -163,18 +215,34 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       if (group.source.header !== undefined) {
         box.append(el('p', 'muted type-combo-empty', group.source.header));
       }
+      let lastSection: string | undefined;
       for (const entry of group.entries) {
+        if (entry.section !== undefined && entry.section !== lastSection) {
+          box.append(el('p', 'muted type-combo-empty', entry.section));
+        }
+        lastSection = entry.section;
         const row = div('type-combo-item');
-        const label = el('span', 'type-combo-label', entry.label);
-        label.title = entry.label;
-        label.style.flex = '1';
-        row.append(label);
-        // Фокус остаётся в поле — нет blur-коммита во время выбора.
-        row.addEventListener('mousedown', (event) => event.preventDefault());
-        row.addEventListener('click', () => {
-          close();
-          opts.onPick(entry);
-        });
+        if (entry.disabled === true) row.classList.add('disabled');
+        if (entry.thought !== undefined) {
+          // Строка-мысль — готовое облачко фабрики: значок, цвета,
+          // начертание, бледность неактуальной, метка корзины и обрезка
+          // имени по ширине выпадашки. Профиль `chip` — списочная строка,
+          // метка корзины у него встроена в пилюлю и не вылезает за край.
+          row.append(createThoughtCloud(entry.thought, { profile: 'chip', width: 'container' }));
+        } else {
+          const label = el('span', 'type-combo-label', entry.label);
+          label.title = entry.label;
+          label.style.flex = '1';
+          row.append(label);
+        }
+        if (entry.disabled !== true) {
+          // Фокус остаётся в поле — нет blur-коммита во время выбора.
+          row.addEventListener('mousedown', (event) => event.preventDefault());
+          row.addEventListener('click', () => {
+            close();
+            opts.onPick(entry);
+          });
+        }
         box.append(row);
         rows.push(row);
         rowEntries.push(entry);
@@ -220,6 +288,13 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
 
   /** Клик мимо (вне поля и списка) закрывает список. */
   const onWinDown = (event: MouseEvent): void => {
+    // Поле выпало из документа (перерисованный редактор, закрытый диалог) —
+    // оконные capture-слушатели снимаем, чтобы они не жили дольше виджета
+    // (приём type-combobox.ts).
+    if (!input.isConnected) {
+      dispose();
+      return;
+    }
     if (list === null) return;
     if (event.target === input) return;
     if (event.target !== null && list.contains(event.target as Node)) return;
@@ -228,6 +303,10 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
 
   /** Esc: пока список открыт, нажатие принадлежит списку, не диалогу. */
   const onWinKey = (event: KeyboardEvent): void => {
+    if (!input.isConnected) {
+      dispose();
+      return;
+    }
     if (event.key !== 'Escape') return;
     if (list !== null || event.repeat) {
       // Регистрация при подключении ставит этот capture-слушатель раньше
@@ -254,7 +333,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       if (rowEntries.length === 0) return;
       event.preventDefault();
-      const next = navIndex(cursor, rowEntries.length, event.key === 'ArrowDown' ? 1 : -1);
+      const next = moveCursor(event.key === 'ArrowDown' ? 1 : -1);
       if (next === null) return;
       cursor = next;
       paint();
@@ -262,14 +341,15 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey) {
       // Enter (и Ctrl+Enter) выбирает выделенную строку — как и остальные
-      // выпадашки клиента; без выделения побеждает первая.
+      // выпадашки клиента; без выделения побеждает первая выбираемая.
       if (rowEntries.length === 0) return;
+      const index = cursor ?? (opts.pickFirstOnEnter === false ? null : firstSelectable());
+      if (index === null) return;
+      const entry = rowEntries[index];
+      if (entry === undefined || entry.disabled === true) return;
       event.preventDefault();
-      const entry = rowEntries[cursor ?? 0];
-      if (entry !== undefined) {
-        close();
-        opts.onPick(entry);
-      }
+      close();
+      opts.onPick(entry);
     }
   };
 

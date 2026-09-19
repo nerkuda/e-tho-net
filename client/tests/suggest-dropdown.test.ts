@@ -60,17 +60,29 @@ class ShimElement {
   children: ShimElement[] = [];
   parent: ShimElement | null = null;
   style: Record<string, string> = {};
+  dataset: Record<string, string> = {};
+  innerHTML = '';
+  tabIndex = -1;
   textContent = '';
   value = '';
   title = '';
   isConnected = true;
   classList = new ShimClassList();
+  private attrs = new Map<string, string>();
   private listeners = new Map<string, Array<(event: any) => void>>();
 
   constructor(tag: string, className?: string, text?: string) {
     this.tagName = tag;
     if (className !== undefined) this.className = className;
     if (text !== undefined) this.textContent = text;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attrs.set(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attrs.get(name) ?? null;
   }
 
   append(...nodes: ShimElement[]): void {
@@ -193,6 +205,7 @@ function installShim(): { input: ShimElement; body: ShimElement; win: ShimWindow
   const body = new ShimElement('body');
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     body,
   };
   const capture = new Map<string, Array<(event: any) => void>>();
@@ -731,5 +744,139 @@ describe('suggest-dropdown: общие контракты', () => {
 
     await openBy(() => w.input.emit('focus'));
     assert.equal(openList(w.body), undefined, 'после dispose выпадашка молчит');
+  });
+
+  it('поле выпало из документа — оконные слушатели снимаются сами', async () => {
+    const w = wire(historySuggestSource({ load: () => [{ value: 'a', label: 'А' }] }));
+    await openBy(() => w.input.emit('focus'));
+    assert.equal(w.win.captureCount('mousedown'), 1);
+
+    w.input.isConnected = false;
+    w.win.dispatchCapture('mousedown', mousedown(new ShimElement('div')));
+    assert.equal(w.win.captureCount('mousedown'), 0, 'mousedown-слушатель снят');
+    assert.equal(w.win.captureCount('keydown'), 0, 'keydown-слушатель снят');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Богатая строка: мысль показывается облачком фабрики
+// ---------------------------------------------------------------------------
+
+describe('suggest-dropdown: строка-мысль — облачко общей фабрики', () => {
+  const rich: SuggestEntry = {
+    value: 't1',
+    label: 'Мысль в корзине',
+    thought: { id: 't1', title: 'Мысль в корзине', active: false, marked_for_deletion: true },
+  };
+  const plain: SuggestEntry = { value: 't2', label: 'Просто строка' };
+  const source: SuggestSource = { when: 'typed', load: () => [rich, plain] };
+
+  /** Корень облачка в строке (первый ребёнок строки-подсказки). */
+  function cloudOf(row: ShimElement | undefined): ShimElement | undefined {
+    return row?.children[0];
+  }
+
+  it('мысль идёт готовым облачком, а не голой подписью', async () => {
+    const w = wire(source);
+    w.input.value = 'м';
+    await openBy(() => {
+      w.input.emit('focus');
+      w.input.emit('input');
+    });
+    const rows = itemRows(w.body);
+    const cloud = cloudOf(rows[0]);
+    assert.ok(cloud !== undefined, 'у строки-мысли есть облачко');
+    assert.ok(cloud.className.includes('prop-ref-cloud'), 'профиль chip');
+    assert.ok(
+      cloud.classList.contains('cloud-width-container'),
+      'ширина — по контейнеру выпадашки (width: container)',
+    );
+    assert.ok(cloud.classList.contains('dim'), 'неактуальная мысль бледная');
+    assert.ok(
+      cloud.children.some((c) => c.className === 'list-trash-mark'),
+      'метка корзины показана',
+    );
+    assert.ok(
+      !rows[0]?.children.some((c) => c.className === 'type-combo-label'),
+      'голой текстовой подписи у строки-мысли нет',
+    );
+  });
+
+  it('нессылочная подсказка остаётся голым текстом', async () => {
+    const w = wire(source);
+    w.input.value = 'м';
+    await openBy(() => {
+      w.input.emit('focus');
+      w.input.emit('input');
+    });
+    const row = itemRows(w.body)[1];
+    assert.equal(row?.children[0]?.className, 'type-combo-label');
+    assert.equal(row?.children[0]?.textContent, 'Просто строка');
+  });
+
+  it('клик по строке-облачку выбирает мысль', async () => {
+    const w = wire(source);
+    w.input.value = 'м';
+    await openBy(() => {
+      w.input.emit('focus');
+      w.input.emit('input');
+    });
+    itemRows(w.body)[0]?.click();
+    assert.deepEqual(w.picked, [rich]);
+    assert.equal(openList(w.body), undefined);
+  });
+
+  it('секции строк дают заголовки групп', async () => {
+    const w = wire({
+      when: 'always',
+      load: () => [
+        { value: 'a', label: 'А', section: 'Токены' },
+        { value: 'b', label: 'Б', section: 'Токены' },
+        { value: 'c', label: 'В', section: 'Мысли' },
+      ],
+    });
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(groupHeaders(w.body), ['Токены', 'Мысли']);
+    assert.deepEqual(rowLabels(w.body), ['А', 'Б', 'В']);
+  });
+
+  it('недоступная строка не выбирается ни кликом, ни Enter, и пропускается стрелками', async () => {
+    const w = wire({
+      when: 'always',
+      load: () => [
+        { value: 'x', label: 'Недоступно', disabled: true },
+        { value: 'y', label: 'Доступно' },
+      ],
+    });
+    await openBy(() => w.input.emit('focus'));
+    const rows = itemRows(w.body);
+    assert.ok(rows[0]?.classList.contains('disabled'), 'строка помечена disabled');
+    rows[0]?.click();
+    assert.deepEqual(w.picked, [], 'клик по недоступной строке ничего не выбирает');
+
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.ok(rows[1]?.classList.contains('active'), '↓ перешагивает недоступную строку');
+    w.input.emit('keydown', key('Enter'));
+    assert.deepEqual(w.picked, [{ value: 'y', label: 'Доступно' }]);
+  });
+
+  it('pickFirstOnEnter=false: Enter по свободному тексту не выбирает', async () => {
+    const { input, body } = installShim();
+    const picked: SuggestEntry[] = [];
+    wireSuggest(input as unknown as HTMLInputElement, {
+      sources: [{ when: 'always', load: () => [{ value: 'a', label: 'А' }] }],
+      pickFirstOnEnter: false,
+      onPick: (entry) => picked.push(entry),
+    });
+    await openBy(() => input.emit('focus'));
+    const enter = key('Enter');
+    input.emit('keydown', enter);
+    assert.ok(!enter.defaultPrevented, 'свободный Enter не потреблён');
+    assert.deepEqual(picked, [], 'выбора нет');
+    assert.notEqual(openList(body), undefined, 'список остался открыт');
+
+    input.emit('keydown', key('ArrowDown'));
+    input.emit('keydown', key('Enter'));
+    assert.deepEqual(picked, [{ value: 'a', label: 'А' }], 'выделенная строка выбирается');
   });
 });

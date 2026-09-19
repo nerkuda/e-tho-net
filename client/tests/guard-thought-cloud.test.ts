@@ -18,6 +18,8 @@
  * 3. Элементы облачка (`cloud`, `cloud-main`, `cloud-icon`, `cloud-title`,
  *    `prop-ref-cloud`, `mini-icon`, `prc-title`) не собираются вручную вне
  *    фабрики — готовая разметка приходит только из `createThoughtCloud`.
+ *    Класс ловится и первым аргументом (`el('cloud-icon')`), и вторым
+ *    (`el('span', 'mini-icon')`).
  * 4. Ширина облачка объявляется местом, а не селектором в стилях: имя всегда
  *    обрезано либо по явному пределу ширины, либо по ширине контейнера.
  *    Ширину «по контейнеру» задаёт ОДИН библиотечный класс-модификатор
@@ -196,8 +198,13 @@ describe('guard: представление мысли строится толь
         description:
           'Ручная сборка элементов облачка (div/el с классами cloud, cloud-main, ' +
           'cloud-icon, cloud-title, prop-ref-cloud, mini-icon, prc-title) вне ' +
-          'lib/thought-cloud.ts запрещена: готовая разметка — только из createThoughtCloud.',
-        pattern: /\b(?:div|el)\(\s*'(?:[^']*,\s*)?(?:cloud|cloud-main|cloud-icon|cloud-title|prop-ref-cloud|mini-icon|prc-title)'/,
+          'lib/thought-cloud.ts запрещена: готовая разметка — только из createThoughtCloud. ' +
+          'Класс ловится и первым аргументом (el(\'cloud-icon\')), и вторым ' +
+          '(el(\'span\', \'mini-icon\')).',
+        // Опциональная первая строковая пара «(tag, class)»: класс — либо
+        // единственный аргумент, либо второй в паре. `[^'\\]|\\.` — строка до
+        // закрывающей кавычки (без переносов), чтобы не перескочить аргумент.
+        pattern: /\b(?:div|el)\(\s*(?:'(?:[^'\\]|\\.)*'\s*,\s*)?'(?:cloud|cloud-main|cloud-icon|cloud-title|prop-ref-cloud|mini-icon|prc-title)'/,
         allow: (rel) => rel === 'lib/thought-cloud.ts',
       },
     ]);

@@ -4340,24 +4340,10 @@ body.cloud-dragging * {
   align-self: flex-start;
 }
 
-/* Section header inside the live-search dropdown (mirrors the old menu's
- * grouping, e.g. «Свойства «Версия»»). */
-.value-combo-section {
-  margin: 4px 8px 2px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.value-combo-section:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
-}
+/* Section headers of the shared suggestions dropdown are rendered with the
+ * common `type-combo-empty` header class (lib/suggest-dropdown.ts) — the
+ * old combobox-specific `.value-combo-section` rule is gone with its own
+ * dropdown implementation. */
 
 /* Keyword-history / saved-filter dropdowns: a small absolute list under the
  * anchor field (§15.3). */
@@ -5037,6 +5023,15 @@ body.cloud-dragging * {
   text-align: center;
 }
 
+/* Rich menu row (MenuItem.content): caller-owned node (e.g. a thought cloud of
+ * the shared factory) fills the row and truncates inside it by its width. */
+.menu-item-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
 .menu-item-label {
   flex: 1;
   overflow: hidden;
@@ -5062,28 +5057,10 @@ body.cloud-dragging * {
   color: var(--accent);
 }
 
-/* Начертание мысли в строках меню (дропдаун истории: applyCloudStyle
-   навешивает те же классы, что и на облачка) — другие меню не затронуты. */
-.menu-item.font-bold .menu-item-label {
-  font-weight: 700;
-}
-.menu-item.font-italic .menu-item-label {
-  font-style: italic;
-}
-.menu-item.font-underline .menu-item-label {
-  text-decoration-line: underline;
-}
-.menu-item.font-strike .menu-item-label {
-  text-decoration-line: line-through;
-}
-/* Оба начертания сразу (см. `.cloud.font-underline.font-strike`). */
-.menu-item.font-underline.font-strike .menu-item-label {
-  text-decoration-line: underline line-through;
-}
-.menu-item.dim {
-  opacity: 0.55;
-  font-style: italic;
-}
+/* Rich thought rows in the history / pinned dropdowns are factory clouds
+ * (MenuItem.content) and carry their own font/dim classes — the old
+ * `.menu-item.font-* : .menu-item-label` and `.menu-item.dim` rules went with
+ * the manual row styling in those bars. */
 
 /* ---------------------------------------------------------------------------
  * Dialogs (lib/dialog.ts)

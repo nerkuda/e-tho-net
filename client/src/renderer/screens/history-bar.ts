@@ -13,9 +13,9 @@
  * - each mini cloud renders the thought's icon + title (clipped to
  *   {@link CHIP_TITLE_LIMIT} chars + ellipsis), real fg/bg/font styles via
  *   `applyCloudStyle`, dimmed when inactive;
- * - dropdown items mirror the search-panel rendering (08-ui-spec.md §6.7):
- *   the same `mini-icon` DOM node, font/fg/bg/dim classes from the thought,
- *   CSS ellipsis by width;
+ * - dropdown items are the same thought mini-clouds from the shared factory
+ *   (profile `chip`): icon, colours, font, dim state and trash mark, ellipsis
+ *   by the row width;
  * - empty history hides the area entirely;
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, and
@@ -30,17 +30,17 @@
  */
 
 import { setFocus } from '../app.js';
-import { button, div, clear, el, span } from '../lib/dom.js';
+import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
-// Мини-облачка истории собирает общая фабрика; из неё же приходит канон
-// значка/стиля для строк дропдауна (applyThoughtIcon/applyCloudStyle —
-// единственное разрешённое место, где эти хелперы живут).
-import { applyCloudStyle, applyThoughtIcon, createThoughtCloud, resolveCloudStyle } from '../lib/thought-cloud.js';
+// Мини-облачка истории и строки её дропдауна собирает общая фабрика:
+// значок, цвета, начертание, бледность и метка корзины приходят из одного
+// представления мысли (стандарт «представление мысли — только через фабрику»).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
@@ -225,57 +225,29 @@ function openHistoryMenu(
   anchor: HTMLElement,
 ): void {
   const items: MenuItem[] = rest.map(({ id, ref }) => ({
-    icon: buildDropdownIcon(ref),
+    // Строка-мысль — готовое облачко фабрики (профиль `chip`, ширина по
+    // строке меню): значок, цвета, начертание, бледность неактуальной и метка
+    // корзины. Прежняя ручная доклейка значка/стиля ушла вместе с ней.
+    content: createThoughtCloud(ref ?? { id, title: id }, {
+      profile: 'chip',
+      width: 'container',
+    }),
     label: ref?.title ?? id,
     dragId: id,
     onClick: () => openEntry(id),
   }));
   const rect = anchor.getBoundingClientRect();
   const root = showMenuAt(rect.left, rect.bottom + 2, items);
-  styleDropdownRows(root, rest.map((r) => r.ref));
   // Dropdown rows mirror the strip chips: they drag onto the canvas (§11.1)
   // and Ctrl+hover previews the thought's permanent comment (preview stage 3,
   // same marking as `buildChip` — rows are built by `showMenuAt`, so they are
-  // walked here in the same order as `rest`, like `styleDropdownRows` does).
+  // walked here in the same order as `rest`).
   const rows = root.querySelectorAll<HTMLElement>(':scope > .menu-item');
   rest.forEach(({ id, ref }, index) => {
     const row = rows[index];
     if (row === undefined) return;
     wireExternalDragSource(row, id, 'history', { fromMenu: true });
     markThoughtCommentPreview(row, id, ref?.title ?? id);
-  });
-}
-
-/**
- * Builds the icon node shown in a history dropdown row. Mirrors the
- * search-panel rendering (08-ui-spec.md §6.7): a real `mini-icon` node with
- * the same icon/image and font/fg/bg styles as the on-canvas cloud.
- */
-function buildDropdownIcon(ref: import('@etn/shared').ThoughtRef | undefined): HTMLElement {
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) {
-    applyThoughtIcon(icon, ref);
-  } else {
-    icon.textContent = '💭';
-  }
-  return icon;
-}
-
-/**
- * Applies cloud-style classes (`font-*`, `dim`) to the dropdown rows after
- * they are built — `showMenuAt` builds rows internally, so we walk them
- * here in the same order as the items.
- */
-function styleDropdownRows(
-  root: HTMLElement,
-  refs: Array<import('@etn/shared').ThoughtRef | undefined>,
-): void {
-  const rows = root.querySelectorAll<HTMLElement>(':scope > .menu-item');
-  refs.forEach((ref, index) => {
-    const row = rows[index];
-    if (row === undefined || ref === undefined) return;
-    applyCloudStyle(row, resolveCloudStyle(ref));
-    if (!ref.active || ref.marked_for_deletion) row.classList.add('dim');
   });
 }
 

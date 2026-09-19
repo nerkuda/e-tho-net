@@ -21,12 +21,13 @@
 import type { ThoughtRef } from '@etn/shared';
 
 import { setFocus } from '../app.js';
-// Мини-облачка закреплённых собирает общая фабрика; из неё же приходит канон
-// значка для строк дропдауна (applyThoughtIcon).
-import { applyThoughtIcon, createThoughtCloud } from '../lib/thought-cloud.js';
+// Мини-облачка закреплённых и строки их дропдауна собирает общая фабрика:
+// значок, цвета, начертание, бледность и метка корзины — из одного
+// представления мысли (стандарт «представление мысли — только через фабрику»).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
-import { button, clear, div, el, span } from '../lib/dom.js';
+import { button, clear, div, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
@@ -145,9 +146,13 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
   const items: MenuItem[] = restIds.map((id) => {
     const ref = refs.get(id);
     return {
-      // Иконка — каноном фабрики (своя, иначе типовая по цепочке, иначе 💭);
-      // полное имя — в подписи, длину ограничивает раскладка строки меню.
-      icon: buildDropdownIcon(ref),
+      // Строка-мысль — готовое облачко фабрики (профиль `chip`, ширина по
+      // строке меню): значок, цвета, начертание, бледность неактуальной и
+      // метка корзины; полное имя — в `label`/подсказке облачка.
+      content: createThoughtCloud(ref ?? { id, title: id }, {
+        profile: 'chip',
+        width: 'container',
+      }),
       label: ref?.title ?? id,
       onClick: () => openPinnedEntry(id),
       dragId: id,
@@ -271,17 +276,6 @@ async function resolveRefs(networkId: string, ids: string[]): Promise<Map<string
     if (ref !== undefined) out.set(id, ref);
   }
   return out;
-}
-
-/** Builds the icon node shown in a pinned dropdown row (фабричный канон). */
-function buildDropdownIcon(ref: ThoughtRef | undefined): HTMLElement {
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) {
-    applyThoughtIcon(icon, ref);
-  } else {
-    icon.textContent = '💭';
-  }
-  return icon;
 }
 
 /** Builds a pinned chip (icon + title, thought styles, menus, drag). */
