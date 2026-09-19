@@ -13,17 +13,29 @@
  *    `*SORT*`-массив с литералом `'alpha'`, либо сборка списка `<option>`/
  *    `for (const opt of […)` из литералов сортировок — признак второго
  *    набора, который разойдётся с исполнителем (ошибка 33a3e285).
+ * 4. Вторая МОДЕЛЬ состояния отбора в экранах запрещена
+ *    (`ChronicleFilterState`, `ActivityFilterState`, `SearchOptions`,
+ *    `DialogCriteriaState`): критерии выражаются общей моделью
+ *    `FilterCriteriaState`; экранное расширение допустимо только как
+ *    `interface X extends FilterCriteriaState`.
+ * 5. Второй конвертер/парсер отбора в экранах запрещён (`toDefinition`,
+ *    `fromDefinition`, `buildChronicleWire`, `parseChronicleCriteria`,
+ *    `buildActivityQueryPlan`, `parseSearchCriteria`, …): и чтение
+ *    сохранённого, и запись в wire живут в `lib/filter-builder.ts`.
  *
- * Сторож вводится зелёным — в том же изменении, которое сводит оба
- * конструктора к одному модулю (мета-стандарт «Правило без теста-сторожа
+ * Сторож вводится зелёным — в том же изменении, которое сводит все пять
+ * мест применения к одному модулю (мета-стандарт «Правило без теста-сторожа
  * не считается введённым»).
  */
 
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { assertGuardClean } from './guard-helpers.js';
+import { assertGuardClean, collectViolations } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,6 +46,20 @@ const RENDERER_ROOT = path.resolve(
 
 /** Файл единого конструктора — единственное разрешённое место словарей. */
 const BUILDER = 'lib/filter-builder.ts';
+
+/** Экраны и строка поиска — места применения конструктора, а не его копии. */
+const APPLY_SITES = (rel: string): boolean => rel.startsWith('screens/') || rel.startsWith('search/');
+
+/** Тонкие обёртки-делегаты диалога отбора типа мысли (логики в них нет). */
+const DELEGATING_WRAPPERS = new Set(['screens/thought-type/filter-dialog-pure.ts']);
+
+/** Признак собственной модели критериев отбора. */
+const OWN_MODEL_NAMES =
+  /^(?:export\s+)?interface\s+(?:ChronicleFilterState|ActivityFilterState|SearchOptions|DialogCriteriaState|FilterCriteriaState|FilterState)\s*(?:extends\b|\{)/;
+
+/** Признак собственного конвертера/парсера отбора. */
+const OWN_CONVERTER =
+  /^(?:export\s+)?(?:function|const)\s+(?:toDefinition|fromDefinition|buildWireFilter|buildChronicleWire|parseChronicleCriteria|parseFilterDefinition|buildActivityQueryPlan|parseActivityCriteria|parseSearchCriteria|buildWireDefinition|parseViewDefinition)\b/;
 
 describe('guard: условия отбора строятся только общим конструктором', () => {
   it('второй словарь операторов (OPS_BY_TYPE) вне lib/filter-builder.ts запрещён', () => {
@@ -85,5 +111,81 @@ describe('guard: условия отбора строятся только об�
         allow: (rel) => rel === BUILDER,
       },
     ]);
+  });
+
+  it('вторая модель состояния отбора в экранах запрещена', () => {
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'no-second-criteria-model',
+        description:
+          'Своя модель критериев отбора в экране (`ChronicleFilterState`, ' +
+          '`ActivityFilterState`, `SearchOptions`, …) запрещена: критерии ' +
+          'выражаются общей `FilterCriteriaState`; экранное расширение — только ' +
+          '`interface X extends FilterCriteriaState` (задача 3742dd59).',
+        pattern: OWN_MODEL_NAMES,
+        include: APPLY_SITES,
+        // Экранное расширение общей модели (панель «Структур») — не вторая
+        // модель: у него нет своих критериев, только панельные дополнения.
+        allow: (rel, line) => DELEGATING_WRAPPERS.has(rel) || line.includes('extends FilterCriteriaState'),
+      },
+    ]);
+  });
+
+  it('второй конвертер/парсер отбора в экранах запрещён', () => {
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'no-second-wire-converter',
+        description:
+          'Свой конвертер состояния отбора в wire или свой парсер сохранённого ' +
+          'определения в экране запрещён (`toDefinition`/`fromDefinition`/' +
+          '`buildChronicleWire`/`parseChronicleCriteria`/`buildActivityQueryPlan`/' +
+          '`parseSearchCriteria`): и запись, и чтение живут в ' +
+          'lib/filter-builder.ts (задача 3742dd59).',
+        pattern: OWN_CONVERTER,
+        include: APPLY_SITES,
+        allow: (rel) => DELEGATING_WRAPPERS.has(rel),
+      },
+    ]);
+  });
+
+  it('оба новых правила краснеют на умышленном нарушении', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'screens', 'fake'), { recursive: true });
+      const rules = [
+        {
+          name: 'no-second-criteria-model',
+          description: '',
+          pattern: OWN_MODEL_NAMES,
+          include: APPLY_SITES,
+          allow: (rel: string, line: string) =>
+            DELEGATING_WRAPPERS.has(rel) || line.includes('extends FilterCriteriaState'),
+        },
+        {
+          name: 'no-second-wire-converter',
+          description: '',
+          pattern: OWN_CONVERTER,
+          include: APPLY_SITES,
+          allow: (rel: string) => DELEGATING_WRAPPERS.has(rel),
+        },
+      ];
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'panel.ts'),
+        [
+          'export interface ChronicleFilterState {',
+          '  keywords: string;',
+          '}',
+          'export function toDefinition(state: ChronicleFilterState): unknown {',
+          '  return state;',
+          '}',
+        ].join('\n'),
+        'utf8',
+      );
+      const names = new Set(collectViolations(dir, rules).map((v) => v.rule));
+      assert.ok(names.has('no-second-criteria-model'), 'своя модель обязана попадать в нарушение');
+      assert.ok(names.has('no-second-wire-converter'), 'свой конвертер обязана попадать в нарушение');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -54,7 +54,13 @@ import {
   setSavedFilterId,
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
-import { fromDefinition, parseChronicleState, toDefinition } from './state.js';
+import { parseChronicleState } from './state.js';
+// Критерии отбора «Хроники» читает и пишет единый конструктор
+// (`lib/filter-builder.ts`) — собственных парсера и конвертера у экрана нет.
+import {
+  buildChronicleWire as toDefinition,
+  parseChronicleCriteria as fromDefinition,
+} from '../../lib/filter-builder.js';
 
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}` so the

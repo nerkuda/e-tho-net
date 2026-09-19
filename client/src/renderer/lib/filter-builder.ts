@@ -341,6 +341,9 @@ export function parseFilterDefinition(def: unknown): FilterCriteriaState {
   } else if (Array.isArray(parsed['created_by'])) {
     next.authorIds = (parsed['created_by'] as string[]).slice();
     next.authorOp = (parsed['created_by_op'] as StructureAuthorOp | undefined) ?? 'in';
+  } else if (parsed['created_by_op'] === 'empty' || parsed['created_by_op'] === 'not_empty') {
+    // Условие «не заполнено»/«заполнено» едет одним оператором, без значения.
+    next.authorOp = parsed['created_by_op'];
   }
   if (typeof parsed['updated_by'] === 'string') {
     next.editorId = parsed['updated_by'];
@@ -348,6 +351,8 @@ export function parseFilterDefinition(def: unknown): FilterCriteriaState {
   } else if (Array.isArray(parsed['updated_by'])) {
     next.editorIds = (parsed['updated_by'] as string[]).slice();
     next.editorOp = (parsed['updated_by_op'] as StructureAuthorOp | undefined) ?? 'in';
+  } else if (parsed['updated_by_op'] === 'empty' || parsed['updated_by_op'] === 'not_empty') {
+    next.editorOp = parsed['updated_by_op'];
   }
   if (typeof parsed['created_after'] === 'string') next.createdAfter = parsed['created_after'];
   if (typeof parsed['created_before'] === 'string') next.createdBefore = parsed['created_before'];
@@ -425,15 +430,24 @@ export function buildWireFilter(
   if (state.trashed) out.trashed = true;
 
   // Задача 59119797: оператор + значение (id или массив id).
+  // `empty`/`not_empty` несут только оператор: значение не выставляется
+  // (иначе выбранное «не заполнено» молча терялось бы — ошибка, найденная
+  // тестом единого конвертера, задача 3742dd59).
   const authorWire = buildAuthorWireValue(state.authorOp, state.authorId, state.authorIds);
-  if (authorWire !== undefined) {
-    out.created_by = authorWire;
-    if (state.authorOp !== 'eq') out.created_by_op = state.authorOp;
+  if (authorWire !== undefined) out.created_by = authorWire;
+  if (
+    state.authorOp !== 'eq' &&
+    authorFilterActive(state.authorOp, state.authorId, state.authorIds)
+  ) {
+    out.created_by_op = state.authorOp;
   }
   const editorWire = buildAuthorWireValue(state.editorOp, state.editorId, state.editorIds);
-  if (editorWire !== undefined) {
-    out.updated_by = editorWire;
-    if (state.editorOp !== 'eq') out.updated_by_op = state.editorOp;
+  if (editorWire !== undefined) out.updated_by = editorWire;
+  if (
+    state.editorOp !== 'eq' &&
+    authorFilterActive(state.editorOp, state.editorId, state.editorIds)
+  ) {
+    out.updated_by_op = state.editorOp;
   }
 
   // Задача 7032e55a: пустая строка → граница не выставляется.

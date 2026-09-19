@@ -19,17 +19,6 @@ import {
 /** Критерии отбора «Хроники» — общая модель конструктора. */
 export type ChronicleFilterState = ChronicleCriteriaState;
 
-/** Пустой отбор (все мысли сети). */
-export const DEFAULT_FILTER: ChronicleFilterState = defaultChronicleCriteriaState();
-
-/** Сериализация критериев в wire-определение — конвертер конструктора. */
-export const toDefinition = buildChronicleWire;
-
-/** Чтение сохранённого определения (в т.ч. до 0.8.2) — парсер конструктора. */
-export function fromDefinition(definition: Partial<ChronicleFilterDefinition>): ChronicleFilterState {
-  return parseChronicleCriteria(definition);
-}
-
 /** Parsed persisted L4 `chronicle_state` (unknown input, safe defaults). */
 export interface PersistedChronicleState {
   filter: ChronicleFilterDefinition;
@@ -46,7 +35,7 @@ export function parseChronicleState(raw: string): PersistedChronicleState {
       savedFilterId: string | null;
     }>;
     return {
-      filter: toDefinition(fromDefinition(parsed.filter ?? {})),
+      filter: buildChronicleWire(parseChronicleCriteria(parsed.filter ?? {})),
       offset:
         typeof parsed.offset === 'number' && Number.isFinite(parsed.offset) && parsed.offset >= 0
           ? Math.floor(parsed.offset)
@@ -54,6 +43,10 @@ export function parseChronicleState(raw: string): PersistedChronicleState {
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
     };
   } catch {
-    return { filter: toDefinition(fromDefinition({})), offset: 0, savedFilterId: null };
+    return {
+      filter: buildChronicleWire(defaultChronicleCriteriaState()),
+      offset: 0,
+      savedFilterId: null,
+    };
   }
 }

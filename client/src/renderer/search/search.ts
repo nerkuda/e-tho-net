@@ -674,6 +674,12 @@ function renderResults(response: SearchResponse | null): void {
         info.append(snippet);
         row.append(info);
         hit.markPreview(row);
+        // Мысль активируется облачком (у него свои действия), а строки связи
+        // и хронологии — кликом по строке: тот же обработчик обслуживает и
+        // Enter в списке (`row.el.click()`). Ошибка 65382113: после перевода
+        // на фабрику облачка обработчик клика перестал доставаться этим
+        // строкам — связь и хронология не открывались ни мышью, ни Enter.
+        if (!hit.isThought) row.addEventListener('click', activateHit(hit.key, hit.open));
         body.append(row);
       }
     }

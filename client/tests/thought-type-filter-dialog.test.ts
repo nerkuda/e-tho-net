@@ -646,9 +646,11 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const wire = module.buildWireDefinition(state, registry);
     assert.deepEqual(wire.created_by, ['u1', 'u2']);
     assert.equal(wire.created_by_op, 'in');
-    // not_empty emits nothing for updated_by, but the op hint is also omitted.
+    // `not_empty` не несёт значения, но ОПЕРАТОР обязан доехать до запроса —
+    // иначе выбранное «заполнено» молча терялось (дефект, найденный тестом
+    // единого конвертера, задача 3742dd59).
     assert.equal(wire.updated_by, undefined);
-    assert.equal(wire.updated_by_op, undefined);
+    assert.equal(wire.updated_by_op, 'not_empty');
   });
 
   it('wire format: date bounds are trimmed and emitted only when non-empty', () => {
