@@ -6,8 +6,8 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, TYPES_LIST_BUDGET_PREVIEW_CHARS, TYPES_LIST_SCOPES } from '@etn/shared';
+
+import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, TYPES_LIST_BUDGET_PREVIEW_CHARS } from '@etn/shared';
 import type { McpTypesListMeta, McpTypesListResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { TypesList } from '../../contracts.js';
@@ -17,55 +17,10 @@ import { shrinkTypesListToBudget } from '../types-list-budget.js';
 import { sanitizeIcon } from '../catalogs.js';
 import { listThoughtTypes } from '../../domain/thought-type-service.js';
 import { listLinkTypes } from '../../domain/link-type-service.js';
-import { listThoughtTypeViewsByType, runViewForThought } from '../../domain/thought-type-views-service.js';
+import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
-import { NetworkId, ThoughtId } from './shared.js';
 
 export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
-  const TypesListSchema = z.object({
-    network_id: NetworkId,
-    /**
-     * Task O16 — restrict the catalogue to the type ids that are actually
-     * used inside a thought's subtree (active thoughts + active links whose
-     * both endpoints lie in the subtree). Used together with
-     * `etn.networks.structure` to drill from a section into a context-aware
-     * type catalogue without paying for the whole network's worth of types.
-     */
-    in_subtree_of: ThoughtId.optional(),
-    /** Override the default subtree depth cap (task O16). */
-    max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
-    /**
-     * Which catalogue(s) to return: `"thoughts"` / `"links"` for a single
-     * catalogue, `"all"` (default) for both. On large networks the full
-     * response (thought types with effective property lists first) can
-     * exceed a client response limit and the `link_types` tail never
-     * arrives — fetch the link catalogue separately with
-     * `scope: "links"`.
-     */
-    scope: z.enum(TYPES_LIST_SCOPES).optional(),
-    /**
-     * Page size — number of entries per catalogue returned by this call.
-     * Applied AFTER `in_subtree_of` filtering, BEFORE the `max_chars` budget
-     * pass. With `offset` forms a classic `(limit, offset)` window over the
-     * (filtered) catalogue ordered by name. Defaults to no limit — full
-     * catalogue as before. Capped at 500 to keep individual responses sane.
-     */
-    limit: z.number().int().min(1).max(500).optional(),
-    /** Pagination offset (number of entries to skip from the head of each
-     *  catalogue). Defaults to 0. */
-    offset: z.number().int().min(0).optional(),
-    /**
-     * Soft cap on the JSON-encoded response size (characters), task f9c7dbc5
-     * (0.7.4). When the response exceeds the budget the server first shrinks
-     * every type `description` down to {@link TYPES_LIST_BUDGET_PREVIEW_CHARS}
-     * and, if that is still not enough, additionally drops whole entries from
-     * the tail of each catalogue (`thought_types` before `link_types`).
-     * Surfaces diagnostics via `meta.truncated` + `meta.reason`. When the
-     * caller does not set this parameter — the old behaviour is preserved
-     * verbatim (no trimming, no `meta` block).
-     */
-    max_chars: z.number().int().min(1000).optional(),
-  });
   mcp.registerTool(
     'etn.types.list',
     {

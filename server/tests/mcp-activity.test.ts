@@ -38,7 +38,6 @@ import {
   setPropertiesViaWrite,
   toolJson,
   toolText,
-  upsertPermanentViaWrite,
   type McpTestContext,
 } from './mcp-helpers.js';
 
@@ -244,7 +243,6 @@ describe(
               comment: { body_md: 'Второе тело комментария.' },
             },
           ]);
-          const thoughtId = created.items[0]!.id;
           const commentId = created.items[0]!.comment!.id;
 
           // Прямой comments.update.

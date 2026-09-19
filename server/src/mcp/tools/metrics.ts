@@ -6,25 +6,14 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import type { McpMetricsReadsResult, McpMetricsToolsResult, Network } from '@etn/shared';
-import { search } from '../../domain/search-service.js';
+import type { McpMetricsReadsResult, McpMetricsToolsResult } from '@etn/shared';
 import { MetricsReads, MetricsTools } from '../../contracts.js';
 import { clampReadMetricsParams, getColdReads, getTopReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
-import { subgraph } from '../../domain/graph-traversal.js';
 import { assertNetworkAccess, openMemberNetwork, runTool } from '../context.js';
-import { NetworkId } from './shared.js';
 
 export function registerMetricsTools(mcp: McpServer, rt: McpRuntime): void {
-  const MetricsReadsSchema = z.object({
-    network_id: NetworkId,
-    kind: z.enum(['top', 'cold']).optional(),
-    since: z.string().min(1).optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-    include_inactive: z.boolean().optional(),
-  });
   mcp.registerTool(
     'etn.metrics.reads',
     {
@@ -74,13 +63,6 @@ export function registerMetricsTools(mcp: McpServer, rt: McpRuntime): void {
   // `errors_count / calls_count > 0.5` has an unclear contract/description.
   // Admin sees every row; a regular member sees only the rows of their own
   // networks plus their own network-less calls.
-  const MetricsToolsSchema = z.object({
-    network_id: NetworkId.optional(),
-    from_ms: z.number().int().nonnegative().optional(),
-    to_ms: z.number().int().nonnegative().optional(),
-    group_by: z.enum(['tool', 'tool+network', 'tool+key']).optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-  });
   mcp.registerTool(
     'etn.metrics.tools',
     {

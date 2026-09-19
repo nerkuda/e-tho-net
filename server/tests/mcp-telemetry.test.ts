@@ -25,7 +25,6 @@ import { MCP_TOOL_NAMES } from '@etn/shared';
 
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
-import { createTypeProperty } from '../src/domain/property-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';

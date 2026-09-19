@@ -6,13 +6,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import {
-  COMMENT_KINDS,
-  COMMENT_OWNER_TYPES,
-  COMMENT_TARGETS_MAX,
-  MCP_TOOL_ANNOTATIONS,
-} from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
@@ -37,18 +31,8 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId, ThoughtId, ExpectedVersion } from './shared.js';
 
 export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
-  const GetCommentSchema = z
-    .object({
-      network_id: NetworkId,
-      comment_id: z.string().min(1).optional(),
-      thought_id: ThoughtId.optional(),
-    })
-    .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
-      message: 'provide exactly one of comment_id or thought_id',
-    });
   mcp.registerTool(
     'etn.comments.get',
     {
@@ -84,20 +68,6 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
 }
 
 export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void {
-  const CommentChanges = z
-    .object({
-      title: z.string().nullable().optional(),
-      body_md: z.string().min(1).optional(),
-      valid_from: z.string().min(1).optional(),
-      valid_to: z.string().nullable().optional(),
-    })
-    .refine((c) => Object.keys(c).length > 0, { message: 'changes must not be empty' });
-  const UpdateCommentSchema = z.object({
-    network_id: NetworkId,
-    comment_id: z.string().min(1),
-    changes: CommentChanges,
-    expected_version: ExpectedVersion,
-  });
   mcp.registerTool(
     'etn.comments.update',
     {
@@ -152,34 +122,6 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
   // транзакцией. Поддерживает append / prepend / replace_section /
   // delete_section; адресация секций — по тексту markdown-заголовка
   // (виртуальная первая строка для текстов без `#`).
-  const EditAppendOp = z.object({ op: z.literal('append'), text: z.string().min(1) });
-  const EditPrependOp = z.object({ op: z.literal('prepend'), text: z.string().min(1) });
-  const EditReplaceSectionOp = z.object({
-    op: z.literal('replace_section'),
-    section: z.string().min(1),
-    text: z.string().min(1),
-  });
-  const EditDeleteSectionOp = z.object({
-    op: z.literal('delete_section'),
-    section: z.string().min(1),
-  });
-  const EditOpSchema = z.discriminatedUnion('op', [
-    EditAppendOp,
-    EditPrependOp,
-    EditReplaceSectionOp,
-    EditDeleteSectionOp,
-  ]);
-  const EditCommentSchema = z
-    .object({
-      network_id: NetworkId,
-      comment_id: z.string().min(1).optional(),
-      thought_id: ThoughtId.optional(),
-      expected_version: ExpectedVersion,
-      ops: z.array(EditOpSchema).min(1),
-    })
-    .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
-      message: 'provide exactly one of comment_id or thought_id',
-    });
   mcp.registerTool(
     'etn.comments.edit',
     {
@@ -263,12 +205,6 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         };
       }),
   );
-
-  const DeleteCommentSchema = z.object({
-    network_id: NetworkId,
-    comment_id: z.string().min(1),
-    expected_version: ExpectedVersion,
-  });
   mcp.registerTool(
     'etn.comments.delete',
     {

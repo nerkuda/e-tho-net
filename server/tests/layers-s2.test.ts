@@ -24,7 +24,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { BASE_LAYER_ID } from '@etn/shared';
 
 import { runMigrations } from '../src/db/migrator.js';
-import { createInMemoryNetworkDb, type NetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
+import { createInMemoryNetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import { createComment } from '../src/domain/comment-service.js';
 import { createLink, deleteLink, checkLinkDeletion } from '../src/domain/link-service.js';

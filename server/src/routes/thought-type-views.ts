@@ -28,9 +28,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  STRUCTURES_QUERY_MAX_LIMIT,
-  STRUCTURE_SORTS,
-  SORT_ORDERS,
   type EffectiveThoughtTypeView,
   type StructureSort,
   type SortOrder,

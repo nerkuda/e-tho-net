@@ -14,7 +14,6 @@ import { EtnError, type ResolvedLinkProperty, type ResolvedPropertyValue } from 
 import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
-import type { NetworkDb } from '../src/db/network-db.js';
 import {
   computeThoughtCardWarnings,
   createTypeProperty,

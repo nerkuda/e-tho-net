@@ -30,7 +30,6 @@ import { BASE_LAYER_ID, EtnError, MCP_DEFAULTS } from '@etn/shared';
 import type { ThoughtQueryRequest } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
-import { checkLayerIntegrity } from '../src/domain/layer-integrity.js';
 import { createComment } from '../src/domain/comment-service.js';
 import { createLink } from '../src/domain/link-service.js';
 import { subgraph, findPath } from '../src/domain/graph-traversal.js';

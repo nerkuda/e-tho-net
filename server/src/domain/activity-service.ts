@@ -24,7 +24,6 @@
 import { randomUUID } from 'node:crypto';
 
 import {
-  ACTIVITY_TITLE_MAX,
   type ActivityAction,
   type ActivityEntityType,
   type ActivityListParams,

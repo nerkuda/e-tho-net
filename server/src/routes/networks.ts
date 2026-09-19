@@ -23,14 +23,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 
-import type {
-  AddMemberInput,
-  CreateNetworkInput,
-  Network,
-  NetworkMember,
-  UpdateMemberInput,
-  UpdateNetworkInput,
-} from '@etn/shared';
+import type { Network, NetworkMember, UpdateNetworkInput } from '@etn/shared';
 
 import { EtnError, PREF_KEY, validateTypeRoles } from '@etn/shared';
 
@@ -48,23 +41,6 @@ import { updateNetwork } from '../domain/network-write-service.js';
 import { sendEtnError } from '../http/errors.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import { emitDomainEvent } from '../realtime/emit.js';
-
-/** Route params carrying a network id. */
-interface NetworkIdParams {
-  networkId: string;
-}
-
-/** Route params for a network + target member. */
-interface MemberParams {
-  networkId: string;
-  uid: string;
-}
-
-/** Route params for a preference key. */
-interface PreferenceKeyParams {
-  networkId: string;
-  key: string;
-}
 
 /** Keys accepted by `PUT /networks/:id/preferences/:key` (11-settings-and-state.md §2.1 L3). */
 const SUPPORTED_PREFERENCE_KEYS = new Set<string>([

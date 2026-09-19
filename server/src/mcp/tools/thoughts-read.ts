@@ -6,8 +6,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import { FOCUS_DIRS, MCP_TOOL_ANNOTATIONS, SEARCH_SCOPES, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { checkThoughtDeletion, countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
 import { ThoughtsBacklinks, ThoughtsDeletionCheck, ThoughtsFindDuplicates, ThoughtsGet, ThoughtsMentions, ThoughtsNeighbors, ThoughtsPath, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
@@ -20,36 +19,13 @@ import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
-import { linkTypeCatalog, linkTypeCatalogCompact, sanitizeIcon, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
+import { linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
 import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
-import { NetworkId, ThoughtId, View, LinkFilter, TYPE_ID_TYPE_CONFLICT, PROPERTY_ID_PROPERTY_CONFLICT } from './shared.js';
 
 export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void {
-  const SearchSchema = z
-    .object({
-      network_id: NetworkId,
-      query: z.string().min(1),
-      scope: z.enum(SEARCH_SCOPES).optional(),
-      in_subtree_of: ThoughtId.optional(),
-      type_id: ThoughtId.nullable().optional(),
-      // Задача d5ab1630 — фильтр по типу через имя (case-insensitive, `name_key`).
-      // Резолвится в `type_id` через `resolveThoughtTypeIdByName`; NOT_FOUND
-      // если такого имени нет, VALIDATION_ERROR + candidates при неоднозначности.
-      // Взаимоисключающе с `type_id`.
-      type: z.string().min(1).optional(),
-      // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-      // создавшего (`author_id`) или последним изменившего (`editor_id`)
-      // мысль. Применяется к by_names, by_texts и by_chrono (для thoughts);
-      // для by_links пропускается. Пустая строка трактуется как отсутствие.
-      author_id: z.string().optional(),
-      editor_id: z.string().optional(),
-      limit: z.number().int().min(1).max(200).optional(),
-      offset: z.number().int().min(0).optional(),
-    })
-    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   mcp.registerTool(
     'etn.thoughts.search',
     {
@@ -112,74 +88,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-
-  const QueryPropertySchema = z
-    .object({
-      // Задача d5ab1630: `property_id` (registry id) или `property` (имя из
-      // реестра). Взаимоисключающе — XOR, иначе 422.
-      property_id: z.string().min(1).optional(),
-      property: z.string().min(1).optional(),
-      // Задача 20effcbd (0.8.1): `any_of`/`all_of`/`none_of` — операторы для
-      // наборов значений (свойство-связь + `config.multiple` url); их
-      // `value` — непустой массив id/строк.
-      operator: z.enum([
-        'eq',
-        'ne',
-        'contains',
-        'gt',
-        'gte',
-        'lt',
-        'lte',
-        'any_of',
-        'all_of',
-        'none_of',
-      ]),
-      value: z.union([
-        z.string(),
-        z.number(),
-        z.boolean(),
-        z.array(z.string().min(1)).min(1),
-      ]),
-    })
-    .refine(
-      (v) => v.property_id === undefined || v.property === undefined,
-      { message: PROPERTY_ID_PROPERTY_CONFLICT },
-    );
-  const QuerySchema = z
-    .object({
-      network_id: NetworkId,
-      in_subtree_of: ThoughtId.optional(),
-      max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
-      type_id: z.array(z.string().min(1)).optional(),
-      // Задача d5ab1630: фильтр по типам через имена (case-insensitive,
-      // `name_key`); резолвится в `type_id[]` через `etn.types.list`.
-      // NOT_FOUND если имени нет, VALIDATION_ERROR + candidates при
-      // неоднозначности. Взаимоисключающе с `type_id`.
-      type: z.array(z.string().min(1)).optional(),
-      active: z.enum(['true', 'false', 'any']).optional(),
-      trashed: z.enum(['true', 'false', 'any']).optional(),
-      keywords: z.string().min(1).optional(),
-      properties: z.array(QueryPropertySchema).optional(),
-      created_after: z.string().min(1).optional(),
-      created_before: z.string().min(1).optional(),
-      updated_after: z.string().min(1).optional(),
-      updated_before: z.string().min(1).optional(),
-      // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-      // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
-      author_id: z.string().optional(),
-      editor_id: z.string().optional(),
-      // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра,
-      // по которым `in_subtree_of` спускается вниз.
-      link_filter: LinkFilter,
-      sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
-      order: z.enum(['asc', 'desc']).optional(),
-      limit: z.number().int().min(1).max(200).optional(),
-      offset: z.number().int().min(0).optional(),
-    })
-    .refine(
-      (v) => v.type_id === undefined || v.type === undefined,
-      { message: TYPE_ID_TYPE_CONFLICT },
-    );
   mcp.registerTool(
     'etn.thoughts.query',
     {
@@ -284,8 +192,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-
-  const GetSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId, view: View });
   mcp.registerTool(
     'etn.thoughts.get',
     {
@@ -341,11 +247,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   // Возвращает карточки в порядке первого появления id в запросе плюс
   // `missing[]` для отсутствующих. Лимит по размеру пачки —
   // `rt.limits.maxNodesPerSubgraph` (тот же, что у `etn.thoughts.subgraph`).
-  const ResolveSchema = z.object({
-    network_id: NetworkId,
-    thought_ids: z.array(ThoughtId).min(1).max(rt.limits.maxNodesPerSubgraph),
-    view: View,
-  });
   mcp.registerTool(
     'etn.thoughts.resolve',
     {
@@ -420,17 +321,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         return { items, missing: result.missing, thought_types: thoughtTypes };
       }),
   );
-
-  const NeighborsSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    dir: z.enum(FOCUS_DIRS),
-    depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
-    // Фильтр обхода по типам связей (задача c965ad03): сосед держится за фокус
-    // только связью, прошедшей фильтр (для depth > 1 — весь BFS-обход).
-    link_filter: LinkFilter,
-    view: View,
-  });
   mcp.registerTool(
     'etn.thoughts.neighbors',
     {
@@ -578,28 +468,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-
-  const SubgraphSchema = z.object({
-    network_id: NetworkId,
-    seed_ids: z.array(ThoughtId).min(1).max(50),
-    radius: z.number().int().min(0).max(TRAVERSAL_DEFAULTS.MAX_DEPTH),
-    max_nodes: z.number().int().min(1).optional(),
-    /**
-     * Task O13 — soft cap on the JSON-encoded response size (characters).
-     * The server first shortens every comment preview body down to
-     * {@link SUBGRAPH_BUDGET_PREVIEW_CHARS} and then drops the farthest
-     * nodes (BFS level) until the response fits. Surfaces diagnostics via
-     * `truncated` and `reason` (`"max_chars_preview"` /
-     * `"max_chars_nodes"`). The hard `max_nodes` cap still wins — when it
-     * fires, budget trimming is skipped and `reason` is `"max_nodes"`.
-     */
-    max_chars: z.number().int().min(1).optional(),
-    include_comments: z.boolean().optional(),
-    // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра,
-    // по которым строится подграф (и рёбра ответа — те же типы).
-    link_filter: LinkFilter,
-    view: View,
-  });
   mcp.registerTool(
     'etn.thoughts.subgraph',
     {
@@ -634,9 +502,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const nodes = result.nodes.map((id) => withSanitizedIcon(getThoughtOrThrow(ndb, id)));
         // `meta.views` (задача c1fa71d4) — эффективный набор отборов только
         // для seed-узлов: для остальных узлов агент может прочитать карточку
-        // через `etn.thoughts.get` отдельно. SeedSet вычисляем один раз —
-        // O(N) проверок по id.
-        const seedSet = new Set(args.seed_ids);
+        // через `etn.thoughts.get` отдельно.
         const seedViews = new Map<string, ReturnType<typeof getEffectiveViewsForThought>>();
         for (const seedId of args.seed_ids) {
           const seed = nodes.find((n) => n.id === seedId);
@@ -760,16 +626,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-
-  const PathSchema = z.object({
-    network_id: NetworkId,
-    from_id: ThoughtId,
-    to_id: ThoughtId,
-    max_depth: z.number().int().min(1).max(100).optional(),
-    // Фильтр обхода по типам связей (задача c965ad03): путь ищется только по
-    // рёбрам, прошедшим фильтр.
-    link_filter: LinkFilter,
-  });
   mcp.registerTool(
     'etn.thoughts.path',
     {
@@ -809,8 +665,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-
-  const MentionsSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
   mcp.registerTool(
     'etn.thoughts.mentions',
     {
@@ -826,8 +680,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         return findMentions(ndb, args.thought_id);
       }),
   );
-
-  const BacklinksSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
   mcp.registerTool(
     'etn.thoughts.backlinks',
     {
@@ -846,8 +698,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         return findBacklinks(ndb, args.thought_id);
       }),
   );
-
-  const UsageSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId, view: View });
   mcp.registerTool(
     'etn.thoughts.usage',
     {
@@ -895,11 +745,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-
-  const DeletionCheckThoughtsSchema = z.object({
-    network_id: NetworkId,
-    thought_ids: z.array(ThoughtId).min(1).max(200),
-  });
   mcp.registerTool(
     'etn.thoughts.deletion_check',
     {
@@ -925,11 +770,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
 }
 
 export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void {
-  const FindDuplicatesSchema = z.object({
-    network_id: NetworkId,
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-  });
   mcp.registerTool(
     'etn.thoughts.find_duplicates',
     {

@@ -6,7 +6,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
+
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { EditAcquiredData, EditReleasedData } from '@etn/shared';
 import {
@@ -26,14 +26,8 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId } from './shared.js';
 
 export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
-  const LocksAcquireSchema = z.object({
-    network_id: NetworkId,
-    entity_type: z.string().min(1),
-    entity_id: z.string().min(1),
-  });
   mcp.registerTool(
     'etn.locks.acquire',
     {
@@ -84,11 +78,6 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
         } satisfies LockRow & { request_id: string };
       }),
   );
-
-  const LocksReleaseSchema = z.object({
-    network_id: NetworkId,
-    lock_id: z.string().min(1),
-  });
   mcp.registerTool(
     'etn.locks.release',
     {
@@ -132,11 +121,6 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
         };
       }),
   );
-
-  const LocksClearSchema = z.object({
-    network_id: NetworkId,
-    user_id: z.string().min(1),
-  });
   mcp.registerTool(
     'etn.locks.clear',
     {
@@ -182,12 +166,6 @@ export function registerLocksTools(mcp: McpServer, rt: McpRuntime): void {
         };
       }),
   );
-
-  const LocksListSchema = z.object({
-    network_id: NetworkId,
-    user_id: z.string().min(1).nullable().optional(),
-    client_id: z.string().min(1).nullable().optional(),
-  });
   mcp.registerTool(
     'etn.locks.list',
     {

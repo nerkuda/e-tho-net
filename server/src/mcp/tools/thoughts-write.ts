@@ -11,10 +11,10 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
-import { z } from 'zod';
+
 import type { NetworkDb } from '../../db/network-db.js';
 import {
+  BULK_UPDATE_OP_VALUES,
   LinksRestore,
   ThoughtsBulkUpdate,
   ThoughtsDelete,
@@ -35,22 +35,8 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId, ThoughtId, LinkId, ExpectedVersion, TYPE_ID_TYPE_CONFLICT } from './shared.js';
 
 export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void {
-  const BULK_UPDATE_OPS = [
-    'set_type',
-    'clear_type',
-    'set_active',
-    'set_inactive',
-    'trash',
-    'link_parents',
-    'link_children',
-    'set_only_parents',
-    'unlink_parents',
-    'unlink_children',
-  ] as const;
-
   /**
    * Разбор `args` для `etn.thoughts.bulk_update`. Возвращает нормализованный
    * объект подмножества `ThoughtBatchArgs`, пригодный для вызова
@@ -61,7 +47,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
    */
   function normalizeBulkUpdateArgs(
     ndb: NetworkDb,
-    op: (typeof BULK_UPDATE_OPS)[number],
+    op: (typeof BULK_UPDATE_OP_VALUES)[number],
     args: {
       type?: string;
       type_id?: string | null;
@@ -109,34 +95,6 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
   // Аргументы массовых операций: минимальный, жёсткий контракт.
   // Запрещаем смешение `type`/`type_id`, `link_type`/`link_type_id` —
   // схемой `.refine()` (задача 77351f03).
-  const BulkUpdateArgs = z
-    .object({
-      // set_type
-      type: z.string().min(1).optional(),
-      type_id: z.string().min(1).nullable().optional(),
-      // link_parents / set_only_parents / unlink_parents
-      parent_ids: z.array(ThoughtId).min(1).optional(),
-      // link_children / unlink_children
-      child_ids: z.array(ThoughtId).min(1).optional(),
-      // link_parents / link_children / set_only_parents
-      link_type: z.string().min(1).optional(),
-      link_type_id: z.string().min(1).nullable().optional(),
-    })
-    .refine((v) => v.type === undefined || v.type_id === undefined, {
-      message: TYPE_ID_TYPE_CONFLICT,
-    })
-    .refine((v) => v.link_type === undefined || v.link_type_id === undefined, {
-      message: 'provide at most one of link_type_id or link_type',
-    })
-    .refine((v) => Object.keys(v).length > 0, { message: 'args must not be empty when provided' })
-    .optional();
-
-  const BulkUpdateSchema = z.object({
-    network_id: NetworkId,
-    ids: z.array(ThoughtId).min(1),
-    op: z.enum(BULK_UPDATE_OPS),
-    args: BulkUpdateArgs,
-  });
   mcp.registerTool(
     'etn.thoughts.bulk_update',
     {
@@ -180,12 +138,6 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         return { affected: result.affected, failures: result.failures };
       }),
   );
-
-  const DeleteThoughtSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    expected_version: ExpectedVersion,
-  });
   mcp.registerTool(
     'etn.thoughts.delete',
     {
@@ -230,12 +182,6 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         } satisfies McpMutationResult;
       }),
   );
-
-  const TrashThoughtSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    trashed: z.boolean(),
-  });
   mcp.registerTool(
     'etn.thoughts.trash',
     {
@@ -291,11 +237,6 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         } satisfies McpMutationResult;
       }),
   );
-
-  const RestoreLinkSchema = z.object({
-    network_id: NetworkId,
-    link_id: LinkId,
-  });
   mcp.registerTool(
     'etn.links.restore',
     {

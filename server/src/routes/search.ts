@@ -18,8 +18,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  ETNX_SUBTREE_DEPTH_MAX,
-  EXPORT_FORMATS,
   PREF_KEY,
   type ExportEtnxOptions,
   type ExportFormat,
@@ -34,10 +32,6 @@ import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery }
 import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findMentionsInTexts, search } from '../domain/search-service.js';
 
-/** `POST /mentions/scan` payload limits (03-server-api.md §21). */
-const MENTIONS_SCAN_MAX_TEXTS = 50;
-const MENTIONS_SCAN_MAX_TOTAL_CHARS = 20_000;
-
 /** Map a stored export MIME type to the recommended download filename extension. */
 function extensionFor(contentType: string): string {
   if (contentType.includes('html')) return 'html';
@@ -46,32 +40,12 @@ function extensionFor(contentType: string): string {
   return 'bin';
 }
 
-/** Route params for a network id. */
-interface NetworkIdParams {
-  networkId: string;
-}
-
-/** Route params for a job id. */
-interface JobIdParams {
-  jobId: string;
-}
-
 /** Legacy `scope` values of 03-server-api.md §12 mapped to granular scopes. */
 const LEGACY_SCOPE_MAP: Record<string, SearchScope[]> = {
   thoughts: ['names', 'texts'],
   links: ['links'],
   chronology: ['chronology'],
 };
-
-/** Every accepted `scope` value (granular shared values + legacy ones). */
-const ACCEPTED_SCOPES = new Set<string>([
-  'names',
-  'texts',
-  'links',
-  'chronology',
-  'all',
-  'thoughts',
-]);
 
 /** Merge two search responses (used for the legacy `thoughts` scope). */
 function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchResponse {

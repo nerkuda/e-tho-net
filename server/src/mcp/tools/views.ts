@@ -6,15 +6,13 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import { EtnError, MCP_TOOL_ANNOTATIONS, REALTIME_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ViewsRun } from '../../contracts.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
-import { NetworkId, ThoughtId } from './shared.js';
 
 export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -29,21 +27,6 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
   // `queryThoughts` с фильтром. Read-only: бюджет записи не тратит,
   // `audit_log` не пишет.
   // =========================================================================
-
-  const ViewsRunSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    /** Имя отбора из `meta.views` карточки мысли (нормализованное
-     *  сравнение — регистр не важен) или его id. */
-    view_name: z.string().min(1),
-    /** Лимит найденных мыслей (по умолчанию 100, потолок — лимит
-     *  `queryThoughts`). */
-    limit: z.number().int().min(1).optional(),
-    /** Смещение пагинации. */
-    offset: z.number().int().min(0).optional(),
-    /** Направление сортировки. */
-    order: z.enum(['asc', 'desc']).optional(),
-  });
   mcp.registerTool(
     'etn.views.run',
     {

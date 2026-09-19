@@ -6,7 +6,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
+
 import { openNetworkDb } from '../../db/network-db.js';
 import { NetworksDelete, NetworksStructure, NetworksWrite } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
@@ -14,15 +14,14 @@ import type { Network } from '@etn/shared';
 import { getPermanentPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getPropertyValuesResolved } from '../../domain/property-service.js';
 import { emitDomainEvent } from '../../realtime/emit.js';
-import { search } from '../../domain/search-service.js';
+
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
-import { assertNetworkAccess, auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
+import { assertNetworkAccess, auditAgentCall, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { updateNetwork } from '../../domain/network-write-service.js';
 import { listTocSections } from '../../domain/network-structure-service.js';
-import { NetworkId } from './shared.js';
 
 export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
@@ -67,10 +66,6 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
   // conditional `instructions_ref` hint when the network has set the
   // `instructions` role (ADR 717f04df «инструкции-витриной» — agents are
   // told to call `etn.instructions` to read the network's prompt instructions).
-  const NetworksStructureSchema = z.object({
-    network_id: NetworkId,
-    include_examples: z.boolean().optional(),
-  });
   mcp.registerTool(
     'etn.networks.structure',
     {
@@ -194,17 +189,6 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
 }
 
 export function registerNetworksWriteTools(mcp: McpServer, rt: McpRuntime): void {
-  const NetworksWriteSchema = z
-    .object({
-      network_id: NetworkId.optional(),
-      display_name: z.string().min(1).optional(),
-      description: z.string().nullable().optional(),
-      when_to_use: z.string().nullable().optional(),
-      conventions: z.string().nullable().optional(),
-      examples: z.string().nullable().optional(),
-      type_roles: z.record(z.string(), z.string().nullable()).optional(),
-    })
-    .strict();
   mcp.registerTool(
     'etn.networks.write',
     {
@@ -372,12 +356,6 @@ export function registerNetworksWriteTools(mcp: McpServer, rt: McpRuntime): void
   // этон.networks.delete — destructive; admin only; дополнительно требует
   // `confirm: true` (как для человека).
   // ---------------------------------------------------------------------------
-  const NetworksDeleteSchema = z
-    .object({
-      network_id: NetworkId,
-      confirm: z.literal(true),
-    })
-    .strict();
   mcp.registerTool(
     'etn.networks.delete',
     {

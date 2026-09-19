@@ -42,18 +42,6 @@ import {
   updateLink,
 } from '../domain/link-service.js';
 
-/** Route params for a network + link id. */
-interface LinkIdParams {
-  networkId: string;
-  id: string;
-}
-
-/** Route params for a network + thought id (grouped listing). */
-interface ThoughtIdParams {
-  networkId: string;
-  id: string;
-}
-
 /** `/api/v1/networks*` link routes plugin factory. */
 export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {

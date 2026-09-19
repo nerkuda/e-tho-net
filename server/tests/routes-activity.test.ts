@@ -22,7 +22,6 @@ import {
   authHeaders,
   buildRestContext,
   closeRestContext,
-  createPlainUser,
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
@@ -33,8 +32,6 @@ import {
   createThoughtViaWrite,
   toolJson,
   toolText,
-  type McpClientHandle,
-  type McpTestContext,
 } from './mcp-helpers.js';
 
 interface ActivityResponse {

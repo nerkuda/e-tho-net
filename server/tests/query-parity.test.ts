@@ -221,7 +221,7 @@ describe(
           created_at: '2024-02-05T00:00:00.000Z',
           updated_at: '2024-02-06T00:00:00.000Z',
         });
-        const t3 = insertThought(ndb, 'Смета', {
+        insertThought(ndb, 'Смета', {
           created_at: '2024-03-05T00:00:00.000Z',
           created_by: 'u-other',
         });

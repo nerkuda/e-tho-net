@@ -6,24 +6,15 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
 import { openNetworkDb } from '../../db/network-db.js';
 import { ChangesList } from '../../contracts.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../../domain/layer-service.js';
 import { isEventVisibleInLayer } from '../../realtime/layer-visibility.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, REALTIME_DEFAULTS } from '@etn/shared';
-import type { McpChangeEntry, McpChangesListResult, Network } from '@etn/shared';
-import { search } from '../../domain/search-service.js';
-import { recordReads } from '../../domain/read-metrics-service.js';
-import { assertNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
-import { NetworkId } from './shared.js';
+import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import type { McpChangeEntry, McpChangesListResult } from '@etn/shared';
+import { assertNetworkAccess, mcpLayerClientId, runTool } from '../context.js';
 
 export function registerChangesListTool(mcp: McpServer, rt: McpRuntime): void {
-  const ChangesListSchema = z.object({
-    network_id: NetworkId,
-    since_seq: z.number().int().min(0),
-    limit: z.number().int().min(1).max(REALTIME_DEFAULTS.EVENT_LOG_MAX_ROWS).optional(),
-  });
   const DEFAULT_CHANGES_LIMIT = 1000;
   mcp.registerTool(
     'etn.changes.list',

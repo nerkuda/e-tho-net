@@ -11,20 +11,10 @@
 
 import type {
   AttachmentKind,
-  AttachmentOwnerType,
-  CommentKind,
-  CommentOwnerType,
-  ExportFormat,
-  FocusDir,
   LinkStyle,
-  McpViewMode,
-  PropertyOwnerType,
   RealtimeAudience,
-  SearchScope,
 } from '../enums.js';
-import type { CommentUpdateInput } from './comment.js';
 import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
-import type { ActivityRow } from './activity.js';
 import type { RealtimeEventType } from './realtime.js';
 import type {
   ThoughtBundleMatchKind,
@@ -436,59 +426,6 @@ export interface McpTypesListResult {
   meta?: McpTypesListMeta;
 }
 
-// ---------------------------------------------------------------------------
-// Reused tool parameter shapes (subset — the MCP task adds the rest)
-// ---------------------------------------------------------------------------
-
-/** Parameters of `etn.thoughts.create` (05-mcp-server.md §4.2). */
-export interface McpCreateThoughtParams {
-  network_id: string;
-  title: string;
-  synonyms?: string[];
-  type_id?: string | null;
-  active?: boolean;
-  link?: {
-    /**
-     * Role of `target_thought_id` for the NEW thought:
-     * `parent` — attach the new thought UNDER the target (target becomes its
-     * parent); `child` — the NEW thought becomes the parent of the target.
-     * Unified with the REST `create_link.direction` (03-server-api.md §6.3) —
-     * both layers share the same semantics, no translation at any boundary.
-     */
-    direction: 'parent' | 'child';
-    target_thought_id: string;
-    type_id?: string | null;
-  };
-}
-
-/** Parameters of `etn.thoughts.search` (05-mcp-server.md §4.1). */
-export interface McpSearchParams {
-  network_id: string;
-  query: string;
-  scope?: SearchScope;
-  in_subtree_of?: string;
-  type_id?: string | null;
-  limit?: number;
-}
-
-/** Parameters of `etn.thoughts.subgraph` (05-mcp-server.md §4.1). */
-export interface McpSubgraphParams {
-  network_id: string;
-  seed_ids: string[];
-  radius: number;
-  max_nodes?: number;
-  /**
-   * Task O13 — soft cap on the JSON-encoded response size (in characters).
-   * When the subgraph would exceed the budget, the server first shortens
-   * comment previews (`SUBGRAPH_BUDGET_PREVIEW_CHARS`) and then drops the
-   * farthest nodes (BFS level) until it fits, reporting the truncation via
-   * `truncated: true` and a `reason` in
-   * `{ "max_nodes" | "max_chars_preview" | "max_chars_nodes" }`.
-   */
-  max_chars?: number;
-  include_comments?: boolean;
-}
-
 /**
  * Reason the server had to truncate an `etn.thoughts.subgraph` response
  * (task O13). `max_nodes` — the hard `max_nodes_per_subgraph` cap fired first.
@@ -502,180 +439,6 @@ export type McpSubgraphTruncationReason =
   | 'max_chars_preview'
   | 'max_chars_nodes';
 
-/** Parameters of `etn.export.subgraph` (05-mcp-server.md §4.1). */
-export interface McpExportSubgraphParams {
-  network_id: string;
-  seed_ids: string[];
-  radius: number;
-  format?: ExportFormat;
-}
-
-/** Parameters of `etn.comments.upsert` (05-mcp-server.md §4.2). */
-export interface McpCommentsUpsertParams {
-  network_id: string;
-  owner_type: CommentOwnerType;
-  owner_id: string;
-  kind: CommentKind;
-  title?: string | null;
-  body_md: string;
-  valid_from?: string;
-  valid_to?: string | null;
-}
-
-/** Parameters of `etn.comments.update` (05-mcp-server.md §4.2). */
-export interface McpCommentsUpdateParams {
-  network_id: string;
-  comment_id: string;
-  changes: CommentUpdateInput;
-  expected_version?: number;
-}
-
-/** Одна операция секционной правки в {@link McpCommentsEditParams.ops}. */
-export type McpCommentsEditOp =
-  | { op: 'append'; text: string }
-  | { op: 'prepend'; text: string }
-  | { op: 'replace_section'; section: string; text: string }
-  | { op: 'delete_section'; section: string };
-
-/**
- * Parameters of `etn.comments.edit` (05-mcp-server.md §4.2, задача d28abe04,
- * версия 0.7.2). Частичная правка комментария ops-ами одной транзакцией.
- * `comment_id` XOR `thought_id`: первый адресует любой комментарий, второй —
- * постоянный комментарий мысли. Ops применяются последовательно; ошибка
- * откатывает весь вызов.
- */
-export interface McpCommentsEditParams {
-  network_id: string;
-  comment_id?: string;
-  thought_id?: string;
-  expected_version?: number;
-  ops: McpCommentsEditOp[];
-}
-
-/** Parameters of `etn.comments.delete` (05-mcp-server.md §4.2). */
-export interface McpCommentsDeleteParams {
-  network_id: string;
-  comment_id: string;
-  expected_version?: number;
-}
-
-/** Parameters of `etn.attachments.add` (05-mcp-server.md §4.2). */
-export interface McpAttachmentsAddParams {
-  network_id: string;
-  owner_type: AttachmentOwnerType;
-  owner_id: string;
-  kind: AttachmentKind;
-  url?: string | null;
-  file_path?: string | null;
-  title?: string | null;
-  description?: string | null;
-}
-
-/**
- * Parameters of `etn.attachments.copy` (05-mcp-server.md §4.2, workplan L25).
- * Each `target_owner_ids[i]` receives a new attachment row with the same
- * visible fields as the source; duplicates in a target thought are skipped
- * silently. Returns one `McpMutationResult` per created row.
- */
-export interface McpAttachmentsCopyParams {
-  network_id: string;
-  attachment_id: string;
-  target_owner_type: AttachmentOwnerType;
-  target_owner_ids: string[];
-}
-
-/** Parameters of `etn.attachments.search` (05-mcp-server.md §4.2, workplan L25). */
-export interface McpAttachmentsSearchParams {
-  network_id: string;
-  q: string;
-  kind?: AttachmentKind;
-  exclude_owner_type?: AttachmentOwnerType;
-  exclude_owner_id?: string;
-  limit?: number;
-  offset?: number;
-}
-
-/** Parameters of `etn.properties.set` (05-mcp-server.md §4.2). */
-export interface McpPropertiesSetParams {
-  network_id: string;
-  owner_type: PropertyOwnerType;
-  owner_id: string;
-  /** Single-property form (backward compatible): write/clear one key. */
-  key?: string;
-  value?: PropertyValueValue;
-  /** Bulk form (task O2): write a set of keys in one transaction. */
-  values?: Record<string, PropertyValueValue>;
-}
-
-/** Result of `etn.properties.set` (05-mcp-server.md §4.2). */
-export interface McpPropertiesSetResult {
-  /** Id of the single stored value (`key`/`value` form); absent for `values`. */
-  id?: string;
-  version: number;
-  /** Per-key stored value ids, returned for the `values` form. */
-  values?: Record<string, { id: string }>;
-  request_id?: string;
-}
-
-/** Parameters of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */
-export interface McpUpsertBundleParams {
-  network_id: string;
-  /** Existing thought to augment in-place; mutually exclusive with `thought`
-   *  being the sole way to address a target (exactly one of the two required). */
-  thought_id?: string;
-  thought?: {
-    title: string;
-    synonyms?: string[];
-    type_id?: string | null;
-    active?: boolean;
-  };
-  /** Only consulted when `thought_id` is absent and `find_duplicates` matches. */
-  on_duplicate?: ThoughtBundleOnDuplicate;
-  /** Always the owner's permanent comment (create-or-update). */
-  comment?: {
-    title?: string | null;
-    body_md: string;
-    valid_from?: string;
-    valid_to?: string | null;
-  };
-  properties?: Record<string, PropertyValueValue>;
-  links?: Array<{
-    /**
-     * Role of `target_thought_id` for the bundle thought:
-     * `parent` — attach the bundle thought UNDER the target (target becomes
-     * its parent); `child` — the bundle thought becomes the parent of the
-     * target. Unified with the domain/REST direction — no translation at any
-     * boundary.
-     */
-    direction: 'parent' | 'child';
-    target_thought_id: string;
-    type_id?: string | null;
-  }>;
-  attachments?: Array<{
-    kind: AttachmentKind;
-    url?: string | null;
-    file_path?: string | null;
-    title?: string | null;
-    description?: string | null;
-  }>;
-}
-
-/** Result of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */
-export interface McpUpsertBundleResult extends McpMutationResult {
-  thought_action: ThoughtBundleThoughtAction;
-  matched_on: ThoughtBundleMatchKind | null;
-  comment?: { id: string; version: number };
-  properties?: Record<string, { id: string }>;
-  links?: Array<{ id: string; version: number }>;
-  attachments?: Array<{ id: string }>;
-  /**
-   * "Card completeness" warnings (task O6) — always an array, possibly empty.
-   * Overrides the optional {@link McpMutationResult.warnings} for this tool so
-   * callers can rely on the field being present.
-   */
-  warnings: ThoughtCardWarning[];
-}
-
 // ---------------------------------------------------------------------------
 // `etn.thoughts.write` (task 053751b5, версия 0.7.2) — батч-запись связанных
 // единиц знания одной транзакцией. Поглощённые инструменты
@@ -684,8 +447,7 @@ export interface McpUpsertBundleResult extends McpMutationResult {
 // удалены в 0.8.2 (задача 937480ca).
 // ---------------------------------------------------------------------------
 
-/** Один элемент хронологической записи в `etn.thoughts.write` (см. также
- *  `McpCommentsUpsertParams` с `kind: 'chronological'`). */
+/** Один элемент хронологической записи в `etn.thoughts.write`. */
 export interface McpThoughtWriteChronicleItem {
   title?: string | null;
   body_md: string;
@@ -819,31 +581,7 @@ export interface McpThoughtWriteResult {
 }
 
 /** `dir` parameter shared by read tools that accept a direction. */
-export type McpNeighborDir = FocusDir;
 
-// ---------------------------------------------------------------------------
-// `etn.changes.list` (task O9, 05-mcp-server.md §4.1) — delta feed over the
-// real-time event_log for long-lived agents with their own cache. The agent
-// passes the highest `seq` it has already consumed; the server replays events
-// with `seq > since_seq` (ascending) and signals `truncated` when the requested
-// position falls outside the retained buffer window.
-// ---------------------------------------------------------------------------
-
-/** Parameters of `etn.changes.list` (05-mcp-server.md §4.1). */
-export interface McpChangesListParams {
-  network_id: string;
-  /**
-   * Exclusive lower bound: return only events with `seq > since_seq`. `0`
-   * means «from the start of the buffer».
-   */
-  since_seq: number;
-  /**
-   * Hard cap on returned events (ascending). Defaults to a safe value when
-   * omitted; agents tailing the feed should keep `limit` reasonable to avoid
-   * one huge response on the first call after a long offline period.
-   */
-  limit?: number;
-}
 
 /**
  * One row of the `etn.changes.list` response — the same event envelope the
@@ -911,33 +649,10 @@ export interface McpChangesListResult {
 // ---------------------------------------------------------------------------
 
 /** Parameters of `etn.activity.list` (05-mcp-server.md §4.1). */
-export interface McpActivityListParams {
-  network_id: string;
-  /** Lower bound on `occurred_at_ms` (inclusive). */
-  from_ms?: number;
-  /** Upper bound on `occurred_at_ms` (inclusive). */
-  to_ms?: number;
-  /** Оставить только записи конкретного исполнителя. */
-  user_id?: string;
-  /** Оставить только записи по сущностям указанного вида. */
-  entity_type?: string;
-  /** Оставить только записи по конкретной сущности (требует `entity_type`). */
-  entity_id?: string;
-  /** Размер страницы (default 50, max 200). */
-  limit?: number;
-  /** Смещение для пагинации. */
-  offset?: number;
-}
+
 
 /** Result of `etn.activity.list` — те же данные, что отдаёт REST `GET /activity`. */
-export interface McpActivityListResult {
-  data: ActivityRow[];
-  meta: {
-    total: number;
-    offset: number;
-    limit: number;
-  };
-}
+
 
 // ---------------------------------------------------------------------------
 // `etn.metrics.reads` (task O10, 05-mcp-server.md §5.1) — usage analytics
@@ -950,35 +665,7 @@ export interface McpActivityListResult {
 export type McpMetricsReadsKind = 'top' | 'cold';
 
 /** Parameters of `etn.metrics.reads` (05-mcp-server.md §5.1). */
-export interface McpMetricsReadsParams {
-  network_id: string;
-  /**
-   * Selection:
-   *  - `'top'` (default) — thoughts with the highest `reads_count`, ordered
-   *    by `(reads_count DESC, last_read_at DESC)`. Useful for «hot spots».
-   *  - `'cold'` — thoughts that have not been read by MCP tools in the
-   *    selected window. Without `since`: never read at all (zero
-   *    `reads_count`). With `since`: `last_read_at < since` (or never
-   *    read). Ordered by `updated_at DESC` so the freshest nodes surface
-   *    first — the typical «dead zone» the owner cares about.
-   */
-  kind?: McpMetricsReadsKind;
-  /**
-   * ISO-8601 timestamp. Only consulted for `kind: 'cold'`: keeps thoughts
-   * whose `last_read_at` is `null` or older than this value. Ignored for
-   * `kind: 'top'`.
-   */
-  since?: string;
-  /**
-   * Maximum number of items returned. Default 20, hard cap 200.
-   */
-  limit?: number;
-  /**
-   * When `false` (default), only active thoughts (`active = 1`) are
-   * considered. Pass `true` to include inactive nodes in the result.
-   */
-  include_inactive?: boolean;
-}
+
 
 /** One row of `etn.metrics.reads`. `title`/`type_id` come from `thoughts`
  *  joined to the aggregate row. `reads_count` is `0` for never-read rows
@@ -1024,19 +711,7 @@ export interface McpMetricsReadsResult {
 export type McpMetricsToolsGroupBy = 'tool' | 'tool+network' | 'tool+key';
 
 /** Parameters of `etn.metrics.tools` (05-mcp-server.md §5.1). */
-export interface McpMetricsToolsParams {
-  /** Restrict the aggregate to one network; omit for all networks. */
-  network_id?: string;
-  /** Lower bound on `last_call_at` (ms epoch, inclusive). The table is an
-   *  aggregate, so the window can only bound the observed interval. */
-  from_ms?: number;
-  /** Upper bound on `last_call_at` (ms epoch, inclusive). */
-  to_ms?: number;
-  /** Grouping grain; default `'tool'`. */
-  group_by?: McpMetricsToolsGroupBy;
-  /** Maximum number of rows; default 50, hard cap 200. */
-  limit?: number;
-}
+
 
 /** One row of `etn.metrics.tools`. `network_id` is `null` for network-less
  *  calls (`etn.networks.list` & co) and always `null` under `group_by: 'tool'`;
@@ -1155,15 +830,7 @@ export interface CompactThoughtUsage
  * two projections — callers can safely ignore `view` and only inspect the
  * fields they need.
  */
-export interface McpReadViewParam {
-  /**
-   * Response projection. `compact` (default for MCP) drops visual/service
-   * fields that the agent never consumes — saves a meaningful share of tokens
-   * on large `etn.thoughts.subgraph` responses. `full` returns the legacy
-   * shape unchanged.
-   */
-  view?: McpViewMode;
-}
+
 
 // ---------------------------------------------------------------------------
 // `etn.thoughts.copy_subtree` (задача e488f4c1, версия 0.7.2) — копирование
@@ -1182,90 +849,11 @@ export type McpCopySubtreeInclude =
   | 'comments'
   | 'attachments';
 
-/** Parameters of `etn.thoughts.copy_subtree`. */
-export interface McpCopySubtreeParams {
-  /** Исходная сеть (откуда читается подграф). */
-  source_network_id: string;
-  /** Целевая сеть (куда записывается). Может совпадать с `source_network_id`. */
-  target_network_id: string;
-  /** Корни подграфа — мысли, от которых начинается BFS по связям. */
-  root_thought_ids: string[];
-  /** Глубина обхода вниз по активным связям. По умолчанию 5, потолок 20. */
-  max_depth?: number;
-  /** Подмножество переносимых частей. Пусто / не задано — все. */
-  include?: McpCopySubtreeInclude[];
-  /** Политика коллизий по title+synonyms (см. {@link McpCopySubtreePolicy}). */
-  duplicate_policy?: McpCopySubtreePolicy;
-  /**
-   * Если `true` (по умолчанию) — вернуть `thought_id_map`/`link_id_map`
-   * для переписывания wiki-ссылок `[[#oldId]]` → `[[#newId]]` в комментариях.
-   */
-  id_remap?: boolean;
-  /**
-   * Куда подвесить вновь созданные корневые мысли (если хоть одна). Если не
-   * задано — мысли без входящей копируемой связи остаются «висячими» в
-   * целевой сети (подцепятся к HOME).
-   */
-  target_parent_thought_id?: string;
-}
-
-/** Сводка по результатам копирования. */
-export interface McpCopySubtreeResult {
-  /** Кол-во новых мыслей в целевой сети. */
-  thoughts_created: number;
-  /** Кол-во переиспользованных (по duplicate_policy=reuse). */
-  thoughts_reused: number;
-  /** Кол-во пропущенных (по duplicate_policy=skip). */
-  thoughts_skipped: number;
-  /** Кол-во созданных связей в целевой сети. */
-  links_created: number;
-  /** Карта `source_thought_id → target_thought_id` для переписывания ссылок. */
-  thought_id_map?: Record<string, string>;
-  /** Карта `source_link_id → target_link_id` (составной ключ source:target:type). */
-  link_id_map?: Record<string, string>;
-  /** Список конфликтов при `duplicate_policy=fail`. */
-  conflicts?: Array<{ source_thought_id: string; target_thought_id: string; title: string }>;
-  /** Идентификатор слоя (для эха). */
-  layer: { id: string; title: string };
-  /** Сквозной request_id (для трассировки). */
-  request_id?: string;
-}
-
 // ---------------------------------------------------------------------------
 // `etn.thoughts.mentions_scan` (задача e488f4c1, версия 0.7.2) — поиск
 // упоминаний мыслей в тексте: FTS по названиям и синонимам + опциональное
 // создание связей по результату.
 // ---------------------------------------------------------------------------
-
-/** Parameters of `etn.thoughts.mentions_scan`. */
-export interface McpMentionsScanParams {
-  network_id: string;
-  /** Прямой текст для сканирования. Ровно одно из `text` / `source`. */
-  text?: string;
-  /** Адрес существующего комментария сети. Ровно одно из `text` / `source`. */
-  source?: { comment_id?: string; thought_id?: string };
-  /** Учитывать регистр. По умолчанию `false`. */
-  case_sensitive?: boolean;
-  /** Учитывать синонимы. По умолчанию `true`. */
-  use_synonyms?: boolean;
-  /** Разрешать `*`-инфикс в шаблонах названий/синонимов. По умолчанию `true`. */
-  use_wildcards?: boolean;
-  /** Порог уверенности 0.0–1.0; совпадения ниже отбрасываются. */
-  min_confidence?: number;
-  /** Если `true` — создать связи по результату. По умолчанию `false`. */
-  create_links?: boolean;
-  /** Тип создаваемой связи (по имени или id). */
-  link_type?: string;
-  /** Направление создаваемой связи: `out` = source = комментарий. */
-  link_direction?: 'out' | 'in';
-  /**
-   * Мысль-источник для создаваемых связей (обязательна при
-   * `create_links: true` и `source` отсутствует). Концы связей — от неё к
-   * найденным. Если `source.comment_id`/`source.thought_id` заданы — id
-   * владельца комментария используется автоматически.
-   */
-  source_thought_id?: string;
-}
 
 /** Один матч из отчёта `etn.thoughts.mentions_scan`. */
 export interface McpMentionsScanMatch {
@@ -1279,83 +867,5 @@ export interface McpMentionsScanMatch {
   link_created?: boolean;
 }
 
-/** Result of `etn.thoughts.mentions_scan`. */
-export interface McpMentionsScanResult {
-  matches: McpMentionsScanMatch[];
-  /** Число созданных связей. */
-  links_created?: number;
-  request_id?: string;
-}
-
-// ---------------------------------------------------------------------------
-// `etn.import.dry_run` / `etn.import.subgraph` (задача e488f4c1, версия
-// 0.7.2) — импорт `.etnx` через MCP. Источник — файл на диске либо base64.
-// ---------------------------------------------------------------------------
-
-/** Источник `.etnx`-архива для импорта. */
-export type McpImportSource =
-  | { kind: 'etnx_file'; path: string }
-  | { kind: 'etnx_base64'; content_base64: string };
-
 /** Политика коллизий импорта. */
 export type McpImportPolicy = 'fail' | 'rename' | 'skip' | 'overwrite';
-
-/** Parameters of `etn.import.dry_run` (read-only preview). */
-export interface McpImportDryRunParams {
-  network_id: string;
-  source: McpImportSource;
-  /** Политика разрешения коллизий для плана. */
-  collision_policy?: McpImportPolicy;
-}
-
-/** Parameters of `etn.import.subgraph` (destructive). */
-export interface McpImportSubgraphParams extends McpImportDryRunParams {
-  /** Подтверждение деструктивной операции — обязательно `true`. */
-  confirm: true;
-  /** Куда подвесить корневые мысли (обязательно при наличии). */
-  parent_thought_id?: string;
-}
-
-/** Превью импорта — содержимое `.etnx` без изменений целевой сети. */
-export interface McpImportDryRunResult {
-  ok: true;
-  manifest_version: string;
-  source_network_name?: string;
-  /** Какие мысли создадутся / переиспользуются / пропустятся. */
-  plan: {
-    thoughts_to_create: number;
-    thoughts_to_reuse: number;
-    thoughts_to_skip: number;
-    links_to_create: number;
-    attachments_to_import: number;
-    thought_types_to_create: number;
-    thought_types_to_reuse: number;
-    link_types_to_create: number;
-    link_types_to_reuse: number;
-  };
-  /** Конфликты title/synonym при `collision_policy: fail`. */
-  conflicts?: Array<{ kind: string; title?: string; id?: string; reason: string }>;
-}
-
-/** Result of `etn.import.subgraph`. */
-export interface McpImportSubgraphResult {
-  imported: {
-    thoughts_created: number;
-    thoughts_updated: number;
-    thoughts_reused: number;
-    links_created: number;
-    permanent_comments_updated: number;
-    chronological_comments_added: number;
-    property_values_set: number;
-    attachments_imported: number;
-    thought_types_created: number;
-    thought_types_reused: number;
-    link_types_created: number;
-    link_types_reused: number;
-  };
-  conflicts?: Array<{ kind: string; title?: string; id?: string; reason: string }>;
-  manifest_version: string;
-  layer: { id: string; title: string };
-  request_id?: string;
-}
-

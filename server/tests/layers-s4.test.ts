@@ -24,7 +24,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,7 +47,7 @@ import {
   getAttachment,
 } from '../src/domain/attachment-service.js';
 import { getPermanentPreview, listComments } from '../src/domain/comment-service.js';
-import { checkLinkDeletion, deleteLink, getLink } from '../src/domain/link-service.js';
+import { deleteLink, getLink } from '../src/domain/link-service.js';
 import {
   checkThoughtDeletion,
   createThought,

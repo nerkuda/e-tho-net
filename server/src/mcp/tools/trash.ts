@@ -11,7 +11,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
+
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { TrashList, TrashPurge } from '../../contracts.js';
@@ -24,10 +24,8 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId } from './shared.js';
 
 export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
-  const TrashListSchema = z.object({ network_id: NetworkId });
   mcp.registerTool(
     'etn.trash.list',
     {
@@ -47,7 +45,6 @@ export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
 }
 
 export function registerTrashPurgeTool(mcp: McpServer, rt: McpRuntime): void {
-  const TrashPurgeSchema = z.object({ network_id: NetworkId });
   mcp.registerTool(
     'etn.trash.purge',
     {

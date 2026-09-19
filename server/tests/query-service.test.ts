@@ -534,7 +534,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       });
       const a = seedThought(ndb, 'A');
       const b = seedThought(ndb, 'B');
-      const c = seedThought(ndb, 'C');
+      seedThought(ndb, 'C');
       seedLink(ndb, a, b, lt); // A --зависит от--> B
 
       const eqB = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: b }] });
@@ -553,7 +553,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       });
       const a = seedThought(ndb, 'A');
       const b = seedThought(ndb, 'B');
-      const c = seedThought(ndb, 'C');
+      seedThought(ndb, 'C');
       seedLink(ndb, a, b, lt);
 
       const hasLink = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: true }] });
@@ -681,7 +681,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       const project = seedThought(ndb, 'Проект');
       const member1 = seedThought(ndb, 'Участник 1');
       const member2 = seedThought(ndb, 'Участник 2');
-      const control = seedThought(ndb, 'Без значения');
+      seedThought(ndb, 'Без значения');
       seedPropertyValue(ndb, member1, teamDef, 'thought_ref', JSON.stringify([project, member2]));
       seedPropertyValue(ndb, member2, teamDef, 'thought_ref', member2);
       // `control` has no property_values row at all for this property.

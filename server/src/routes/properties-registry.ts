@@ -18,8 +18,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  LINK_STYLES,
-  PROPERTY_VALUE_TYPES,
   type LinkStyle,
   type NetworkProperty,
   type NetworkPropertyInput,

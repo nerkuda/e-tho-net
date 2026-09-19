@@ -6,11 +6,9 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { z } from 'zod';
-import { MCP_TOOL_ANNOTATIONS, PROPERTY_OWNER_TYPES } from '@etn/shared';
-import type { McpMutationResult } from '@etn/shared';
-import { getThoughtOrThrow, getThought } from '../../domain/thought-service.js';
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
   PropertiesAdd,
   PropertiesRemove,
@@ -30,7 +28,6 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId, ThoughtId } from './shared.js';
 
 export const PropertyValueSchema = z.union([
   z.string(),
@@ -42,14 +39,6 @@ export const PropertyValueSchema = z.union([
 export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
   // 0.8.1 (b3ce5014): операции над набором свойства-связи — добавить/убрать одну
   // цель, без чтения текущего набора. `add` принимает необязательный комментарий.
-  const AddPropertySchema = z.object({
-    network_id: NetworkId,
-    owner_type: z.enum(PROPERTY_OWNER_TYPES),
-    owner_id: z.string().min(1),
-    key: z.string().min(1),
-    value: z.string().min(1),
-    comment: z.string().min(1).optional(),
-  });
   mcp.registerTool(
     'etn.properties.add',
     {
@@ -103,14 +92,6 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
         };
       }),
   );
-
-  const RemovePropertySchema = z.object({
-    network_id: NetworkId,
-    owner_type: z.enum(PROPERTY_OWNER_TYPES),
-    owner_id: z.string().min(1),
-    key: z.string().min(1),
-    value: z.string().min(1),
-  });
   mcp.registerTool(
     'etn.properties.remove',
     {
@@ -171,10 +152,6 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
 }
 
 export function registerUsageClearTool(mcp: McpServer, rt: McpRuntime): void {
-  const UsageClearSchema = z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-  });
   mcp.registerTool(
     'etn.thoughts.usage_clear',
     {

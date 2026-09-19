@@ -8,12 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { z } from 'zod';
-import {
-  ICON_KINDS,
-  MCP_TOOL_ANNOTATIONS,
-  PROPERTY_VALUE_TYPES,
-  TYPE_OWNER_TYPES,
-} from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type {
   OntologyDeleteParams,
   OntologyDeleteResult,
@@ -42,100 +37,10 @@ import {
 import { NetworkId } from './shared.js';
 
 export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
-  const OntologyWriteThoughtTypeSchema = z
-    .object({
-      ref: z.string().min(1).optional(),
-      id: z.string().min(1).nullable().optional(),
-      name: z.string().min(1).optional(),
-      parent: z.string().min(1).nullable().optional(),
-      parent_ref: z.string().min(1).nullable().optional(),
-      description: z.string().nullable().optional(),
-      icon: z.string().nullable().optional(),
-      icon_kind: z.enum(ICON_KINDS).optional(),
-      fg_color: z.string().nullable().optional(),
-      bg_color: z.string().nullable().optional(),
-      font_bold: z.boolean().nullable().optional(),
-      font_italic: z.boolean().nullable().optional(),
-      font_underline: z.boolean().nullable().optional(),
-      font_strike: z.boolean().nullable().optional(),
-      comment_template_md: z.string().nullable().optional(),
-    })
-    .strict();
-  const OntologyWriteLinkTypeSchema = z
-    .object({
-      ref: z.string().min(1).optional(),
-      id: z.string().min(1).nullable().optional(),
-      name_forward: z.string().min(1).optional(),
-      name_reverse: z.string().min(1).optional(),
-      parent: z.string().min(1).nullable().optional(),
-      parent_ref: z.string().min(1).nullable().optional(),
-      color: z.string().nullable().optional(),
-      style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),
-      width: z.number().int().min(1).max(20).nullable().optional(),
-      description: z.string().nullable().optional(),
-    })
-    .strict();
-  const OntologyWritePropertySchema = z
-    .object({
-      ref: z.string().min(1).optional(),
-      id: z.string().min(1).nullable().optional(),
-      name: z.string().min(1).optional(),
-      value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
-      config: z.record(z.string(), z.unknown()).nullable().optional(),
-      description: z.string().nullable().optional(),
-      // Единый жизненный цикл свойства-связи ↔ link_type (0.8.1, требование
-      // 09f692ff): при `value_type="link"` и непустом `name_forward`+
-      // `name_reverse` сервер сам создаёт тип связи. Остальные поля —
-      // оформление нового типа. Для скалярных свойств игнорируются.
-      name_forward: z.string().min(1).optional(),
-      name_reverse: z.string().min(1).optional(),
-      parent_link_type_id: z.string().min(1).nullable().optional(),
-      link_color: z.string().nullable().optional(),
-      link_style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),
-      link_width: z.number().int().min(1).max(20).nullable().optional(),
-    })
-    .strict();
-  const OntologyWriteTypePropertySchema = z
-    .object({
-      owner: z.enum(TYPE_OWNER_TYPES),
-      type: z.string().min(1).optional(),
-      type_ref: z.string().min(1).optional(),
-      property: z.string().min(1).optional(),
-      property_ref: z.string().min(1).optional(),
-      required: z.boolean().optional(),
-      position: z.number().int().min(0).optional(),
-      // Сторона привязки свойства-связи (0.8.1, задача d7177d1d): `source`/
-      // `target`. Для скалярных и структурных свойств игнорируется.
-      side: z.enum(['source', 'target']).nullable().optional(),
-    })
-    .strict();
   // `type_views[]` (задача c1fa71d4, 0.7.3, ADR 5c44f6a7). Правка отборов
   // идёт тем же батчем онтологии: `action: create|update|delete`,
   // `thought_type` XOR `thought_type_ref`, `id` XOR `ref_for_update` для
   // update/delete.
-  const OntologyWriteTypeViewSchema = z
-    .object({
-      ref: z.string().min(1).optional(),
-      action: z.enum(['create', 'update', 'delete']),
-      id: z.string().min(1).optional(),
-      ref_for_update: z.string().min(1).optional(),
-      thought_type: z.string().min(1).optional(),
-      thought_type_ref: z.string().min(1).optional(),
-      name: z.string().min(1).optional(),
-      description: z.string().nullable().optional(),
-      definition: z.string().min(1).optional(),
-      position: z.number().int().min(0).optional(),
-      is_default: z.boolean().optional(),
-    })
-    .strict();
-  const OntologyWriteSchema = z.object({
-    network_id: NetworkId,
-    thought_types: z.array(OntologyWriteThoughtTypeSchema).optional(),
-    link_types: z.array(OntologyWriteLinkTypeSchema).optional(),
-    properties: z.array(OntologyWritePropertySchema).optional(),
-    type_properties: z.array(OntologyWriteTypePropertySchema).optional(),
-    type_views: z.array(OntologyWriteTypeViewSchema).optional(),
-  });
   mcp.registerTool(
     'etn.ontology.write',
     {

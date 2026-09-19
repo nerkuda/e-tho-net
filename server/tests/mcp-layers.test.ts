@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { Layer, LayerMergeReport, McpMutationResult } from '@etn/shared';
+import type { Layer, LayerMergeReport } from '@etn/shared';
 
 import { buildMcpContext, callWrite, closeMcpContext, connectMcpClient, nativeAvailable, toolJson } from './mcp-helpers.js';
 

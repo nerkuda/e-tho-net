@@ -25,10 +25,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import {
-  BASE_LAYER_ID,
-  type AnyRealtimeEvent,
-} from '@etn/shared';
+import type { AnyRealtimeEvent } from '@etn/shared';
 
 import {
   authHeaders,
@@ -794,7 +791,7 @@ describe(
         const ctx = await buildRestContext();
         try {
           const h = authHeaders(ctx);
-          const typeId = await createThoughtType(ctx, 'task');
+          await createThoughtType(ctx, 'task');
           const ctxThought = await createChild(ctx, 'Контекст');
           const res = await ctx.app.inject({
             method: 'POST',

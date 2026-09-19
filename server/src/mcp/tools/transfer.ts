@@ -7,7 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
-import { z } from 'zod';
+
 import { openNetworkDb } from '../../db/network-db.js';
 import {
   ImportDryRun,
@@ -18,7 +18,6 @@ import {
 import { MCP_MAX_THOUGHTS_PER_WRITE, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { getHomeThoughtId, getThoughtOrThrow } from '../../domain/thought-service.js';
 import { getLink } from '../../domain/link-service.js';
-import { subgraph } from '../../domain/graph-traversal.js';
 import { copySubtree as copySubtreeFn } from '../../domain/thought-subtree-copy-service.js';
 import {
   importFromBuffer,
@@ -35,21 +34,9 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId, ThoughtId, executeMentionsScan } from './shared.js';
+import { executeMentionsScan } from './shared.js';
 
 export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
-  const CopySubtreeSchema = z.object({
-    source_network_id: NetworkId,
-    target_network_id: NetworkId,
-    root_thought_ids: z.array(ThoughtId).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
-    max_depth: z.number().int().min(0).max(20).optional(),
-    include: z
-      .array(z.enum(['thought', 'links', 'properties', 'comments', 'attachments']))
-      .optional(),
-    duplicate_policy: z.enum(['fail', 'reuse', 'skip', 'create_always']).optional(),
-    id_remap: z.boolean().optional(),
-    target_parent_thought_id: ThoughtId.optional(),
-  });
   mcp.registerTool(
     'etn.thoughts.copy_subtree',
     {
@@ -151,34 +138,6 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
         };
       }),
   );
-
-  const MentionsScanSchema = z
-    .object({
-      network_id: NetworkId,
-      text: z.string().min(1).optional(),
-      source: z
-        .object({
-          comment_id: z.string().min(1).optional(),
-          thought_id: z.string().min(1).optional(),
-        })
-        .optional(),
-      case_sensitive: z.boolean().optional(),
-      use_synonyms: z.boolean().optional(),
-      use_wildcards: z.boolean().optional(),
-      min_confidence: z.number().min(0).max(1).optional(),
-      create_links: z.boolean().optional(),
-      link_type: z.string().min(1).optional(),
-      link_direction: z.enum(['out', 'in']).optional(),
-      /**
-       * Мысль-источник для создаваемых связей (обязательна при
-       * `create_links: true` без `source`). Если задан `source` — id
-       * владельца комментария используется автоматически.
-       */
-      source_thought_id: ThoughtId.optional(),
-    })
-    .refine((v) => (v.text !== undefined) !== (v.source !== undefined), {
-      message: 'provide exactly one of `text` or `source`',
-    });
   mcp.registerTool(
     'etn.thoughts.mentions_scan',
     {
@@ -236,15 +195,6 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
       });
     },
   );
-
-  const ImportDryRunSchema = z.object({
-    network_id: NetworkId,
-    source: z.union([
-      z.object({ kind: z.literal('etnx_file'), path: z.string().min(1) }),
-      z.object({ kind: z.literal('etnx_base64'), content_base64: z.string().min(1) }),
-    ]),
-    collision_policy: z.enum(['fail', 'rename', 'skip', 'overwrite']).optional(),
-  });
   mcp.registerTool(
     'etn.import.dry_run',
     {
@@ -268,17 +218,6 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
         };
       }),
   );
-
-  const ImportSubgraphSchema = z.object({
-    network_id: NetworkId,
-    source: z.union([
-      z.object({ kind: z.literal('etnx_file'), path: z.string().min(1) }),
-      z.object({ kind: z.literal('etnx_base64'), content_base64: z.string().min(1) }),
-    ]),
-    collision_policy: z.enum(['fail', 'rename', 'skip', 'overwrite']).optional(),
-    confirm: z.literal(true),
-    parent_thought_id: ThoughtId.optional(),
-  });
   mcp.registerTool(
     'etn.import.subgraph',
     {

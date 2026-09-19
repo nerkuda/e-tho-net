@@ -24,7 +24,6 @@ import {
   connectMcpClient,
   nativeAvailable,
   toolJson,
-  toolText,
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createComment } from '../src/domain/comment-service.js';
@@ -586,38 +585,4 @@ async function handleUpsertComment(
     },
     ctx.adminId,
   );
-}
-
-/** Дёрнуть `etn.attachments.add` через клиента. */
-async function handleUpsertAttachment(
-  ctx: Awaited<ReturnType<typeof buildMcpContext>>,
-  args: {
-    owner_type: 'thought' | 'link';
-    owner_id: string;
-    kind: 'url' | 'file';
-    url?: string;
-    file_path?: string;
-    title?: string;
-  },
-): Promise<void> {
-  const handle = await connectMcpClient(ctx, ctx.adminKey);
-  try {
-    const result = await handle.client.callTool({
-      name: 'etn.attachments.add',
-      arguments: {
-        network_id: ctx.networkId,
-        owner_type: args.owner_type,
-        owner_id: args.owner_id,
-        kind: args.kind,
-        ...(args.url ? { url: args.url } : {}),
-        ...(args.file_path ? { file_path: args.file_path } : {}),
-        ...(args.title ? { title: args.title } : {}),
-      },
-    });
-    if (result.isError) {
-      throw new Error(`etn.attachments.add failed: ${toolText(result)}`);
-    }
-  } finally {
-    await handle.close();
-  }
 }

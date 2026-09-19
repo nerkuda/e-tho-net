@@ -6,8 +6,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import { ATTACHMENT_KINDS, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
 import {
   copyAttachment,
@@ -24,7 +23,6 @@ import {
   AttachmentsSearch,
   AttachmentsUpdate,
 } from '../../contracts.js';
-import { search } from '../../domain/search-service.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -34,19 +32,8 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId } from './shared.js';
 
 export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
-  const AddAttachmentSchema = z.object({
-    network_id: NetworkId,
-    owner_type: z.enum(['thought', 'link']),
-    owner_id: z.string().min(1),
-    kind: z.enum(ATTACHMENT_KINDS),
-    url: z.string().min(1).nullable().optional(),
-    file_path: z.string().min(1).nullable().optional(),
-    title: z.string().nullable().optional(),
-    description: z.string().nullable().optional(),
-  });
   mcp.registerTool(
     'etn.attachments.add',
     {
@@ -95,13 +82,6 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
         } satisfies McpMutationResult;
       }),
   );
-
-  const CopyAttachmentSchema = z.object({
-    network_id: NetworkId,
-    attachment_id: z.string().min(1),
-    target_owner_type: z.enum(['thought', 'link']),
-    target_owner_ids: z.array(z.string().min(1)).min(1),
-  });
   mcp.registerTool(
     'etn.attachments.copy',
     {
@@ -152,16 +132,6 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
         })) satisfies McpMutationResult[];
       }),
   );
-
-  const SearchAttachmentsSchema = z.object({
-    network_id: NetworkId,
-    q: z.string().min(1),
-    kind: z.enum(ATTACHMENT_KINDS).optional(),
-    exclude_owner_type: z.enum(['thought', 'link']).optional(),
-    exclude_owner_id: z.string().min(1).optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-    offset: z.number().int().min(0).optional(),
-  });
   mcp.registerTool(
     'etn.attachments.search',
     {
@@ -194,14 +164,6 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
   // MCP↔REST `PATCH /attachments/{id}`). Last-write-wins по метаданным
   // (title/description/url/file_path); kind неизменяем после создания.
   // =========================================================================
-  const UpdateAttachmentSchema = z.object({
-    network_id: NetworkId,
-    attachment_id: z.string().min(1),
-    title: z.string().nullable().optional(),
-    description: z.string().nullable().optional(),
-    url: z.string().nullable().optional(),
-    file_path: z.string().nullable().optional(),
-  });
   mcp.registerTool(
     'etn.attachments.update',
     {
@@ -257,10 +219,6 @@ export function registerAttachmentsTools(mcp: McpServer, rt: McpRuntime): void {
   // `deleteAttachment` (S4, 13-layers.md §5.3) решает судьбу файла по
   // оставшимся ссылкам.
   // =========================================================================
-  const DeleteAttachmentSchema = z.object({
-    network_id: NetworkId,
-    attachment_id: z.string().min(1),
-  });
   mcp.registerTool(
     'etn.attachments.delete',
     {

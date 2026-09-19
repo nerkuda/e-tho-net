@@ -641,7 +641,7 @@ function resolveTypeViews(
       }
       viewId = existing.id;
     }
-    let refForUpdate: string | null = item.ref_for_update ?? null;
+    const refForUpdate: string | null = item.ref_for_update ?? null;
     if (refForUpdate !== null && !tvRefs.has(refForUpdate)) {
       throw new EtnError(
         'VALIDATION_ERROR',

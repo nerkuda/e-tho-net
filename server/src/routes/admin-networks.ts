@@ -24,11 +24,6 @@ interface NetworkIdParams {
   id: string;
 }
 
-interface MemberParams {
-  id: string;
-  uid: string;
-}
-
 /** Admin network routes factory. */
 export function createAdminNetworksRoutes(networkService: NetworkService): FastifyPluginAsync {
   return async (app: FastifyInstance) => {

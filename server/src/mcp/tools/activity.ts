@@ -6,10 +6,8 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import { MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import {
-  ACTIVITY_LIMIT_MAX,
   listActivity,
   rollupActivity,
   truncateActivity,
@@ -24,19 +22,8 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import { NetworkId } from './shared.js';
 
 export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
-  const ActivityListSchema = z.object({
-    network_id: NetworkId,
-    from_ms: z.number().int().nonnegative().optional(),
-    to_ms: z.number().int().nonnegative().optional(),
-    user_id: z.string().min(1).optional(),
-    entity_type: z.string().min(1).optional(),
-    entity_id: z.string().min(1).optional(),
-    limit: z.number().int().positive().max(ACTIVITY_LIMIT_MAX).optional(),
-    offset: z.number().int().nonnegative().optional(),
-  });
   mcp.registerTool(
     'etn.activity.list',
     {
@@ -77,11 +64,6 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
   // ---- activity.rollup / activity.truncate (задача 6bcccd2b, требование
   // 76443b7e «свёртка» и 9921a32b «обрезка», стандарт 9e5cff3f — паритет
   // с REST `POST /activity/rollup` и `POST /activity/truncate`).
-
-  const ActivityRollupSchema = z.object({
-    network_id: NetworkId,
-    until_ms: z.number().int().nonnegative(),
-  });
   mcp.registerTool(
     'etn.activity.rollup',
     {
@@ -114,11 +96,6 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
         return { ...result, request_id: String(extra.requestId) };
       }),
   );
-
-  const ActivityTruncateSchema = z.object({
-    network_id: NetworkId,
-    until_ms: z.number().int().nonnegative(),
-  });
   mcp.registerTool(
     'etn.activity.truncate',
     {

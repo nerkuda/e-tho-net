@@ -141,9 +141,6 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
   };
 }
 
-/** Type alias for the `slices` parameter of `importFromEtnx`. */
-type ImportSlices = NonNullable<Parameters<typeof importFromEtnx>[2]['slices']>;
-
 /**
  * Decode a base64 archive string and check its size against the configured
  * maximum. The actual archive parsing (zip layout, manifest schema) happens

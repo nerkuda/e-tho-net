@@ -30,14 +30,7 @@ import {
   runWrite,
   runWriteTool,
 } from '../context.js';
-import {
-  NetworkId,
-  ThoughtId,
-  TYPE_ID_TYPE_CONFLICT,
-  LinkDirection,
-  effectiveThoughtTypeId,
-  effectiveLinkTypeId,
-} from './shared.js';
+import { NetworkId, TYPE_ID_TYPE_CONFLICT, LinkDirection } from './shared.js';
 
 export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   const BundleThoughtSchema = z

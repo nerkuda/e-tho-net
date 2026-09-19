@@ -10,11 +10,15 @@
 
 import type { NetworkDb } from '../../db/network-db.js';
 import { EtnError } from '@etn/shared';
-import type { McpMentionsScanParams } from '@etn/shared';
+import { z } from 'zod';
 import { getComment, getPermanentFull } from '../../domain/comment-service.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
 import { scanMentions } from '../../domain/mentions-scan-service.js';
+import { ThoughtsMentionsScan } from '../../contracts.js';
+
+/** Форма аргументов `etn.thoughts.mentions_scan` — единый контракт входа. */
+type MentionsScanArgs = z.infer<typeof ThoughtsMentionsScan.schema>;
 
 // Ре-экспорт единых zod-кусков контрактов (веха 8).
 export {
@@ -68,7 +72,7 @@ export function effectiveLinkTypeId(
  */
 export function executeMentionsScan(
   ndb: NetworkDb,
-  args: McpMentionsScanParams,
+  args: MentionsScanArgs,
   actorUserId: string,
 ): { matches: { thought_id: string; title: string; confidence: number; matched_on: 'title' | 'synonym' | 'wildcard' }[]; links_created: number } {
   let text = args.text ?? '';

@@ -1384,7 +1384,7 @@ describe(
             type_id: taskType,
             created_at: '2024-02-15T00:00:00Z',
           });
-          const c = seedThought(ndb, {
+          seedThought(ndb, {
             title: 'C',
             created_at: '2024-02-20T00:00:00Z',
           });

@@ -6,13 +6,12 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
+
 import { openNetworkDb } from '../../db/network-db.js';
 import { Instructions } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { assertNetworkAccess, runTool } from '../context.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
-import { NetworkId } from './shared.js';
 
 export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   // ---------------------------------------------------------------------------
@@ -38,23 +37,6 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   // на исходную схему), поэтому расхождение было видно только в витрине.
   // Взаимоисключение режимов выражено `.refine()`: в zod 4 он возвращает тот
   // же `ZodObject`, `shape` не теряется и схема публикуется целиком.
-
-  const InstructionsSchema = z
-    .object({
-      network_id: NetworkId,
-      instruction_id: z.string().min(1).optional(),
-      keywords: z.string().min(1).optional(),
-      limit: z.number().int().min(1).max(200).optional(),
-      offset: z.number().int().min(0).optional(),
-    })
-    .strict()
-    .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
-      message: 'instruction_id и keywords взаимоисключимы',
-    })
-    .refine(
-      (v) => v.instruction_id === undefined || (v.limit === undefined && v.offset === undefined),
-      { message: 'limit/offset применимы только к режимам перечня, не к instruction_id' },
-    );
   mcp.registerTool(
     'etn.instructions',
     {

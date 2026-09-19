@@ -6,35 +6,15 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
-import { EXPORT_FORMATS, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+
+import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { ExportFormat } from '@etn/shared';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../../domain/export-service.js';
 import { ExportSubgraph } from '../../contracts.js';
 import { subgraph } from '../../domain/graph-traversal.js';
 import { openMemberNetwork, runTool } from '../context.js';
-import { NetworkId, ThoughtId } from './shared.js';
 
 export function registerExportTool(mcp: McpServer, rt: McpRuntime): void {
-  const ExportSchema = z.object({
-    network_id: NetworkId,
-    seed_ids: z.array(ThoughtId).min(1).max(50),
-    radius: z.number().int().min(0).max(TRAVERSAL_DEFAULTS.MAX_DEPTH),
-    format: z.enum(EXPORT_FORMATS).optional(),
-    /**
-     * Options for `format: "etnx"` (задача e488f4c1, 0.7.2). For markdown/html
-     * the field is ignored.
-     */
-    etnx_options: z
-      .object({
-        include_types: z.boolean().optional(),
-        include_attachments: z.boolean().optional(),
-        include_chronology: z.boolean().optional(),
-        include_subtree: z.boolean().optional(),
-        subtree_depth: z.number().int().min(1).max(20).optional(),
-      })
-      .optional(),
-  });
   mcp.registerTool(
     'etn.export.subgraph',
     {

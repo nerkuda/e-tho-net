@@ -22,7 +22,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  LINK_PROPERTY_SIDES,
   type LinkPropertySide,
   type LinkTypeUpdateInput,
   type PropertyConfig,
@@ -426,7 +425,6 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as TypeIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
-        const query = req.query as Record<string, unknown>;
         const force = parseRest(RestForceQuery, req).force === true;
         // Task ba024a45 / 0.7.2 (ADR 46d17a91): the type is used by THIS
         // network in any of its `type_roles` roles? Refuse even with `force` —

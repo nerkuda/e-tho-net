@@ -22,7 +22,6 @@ import {
   buildRestContext,
   closeRestContext,
   nativeAvailable,
-  type RestTestContext,
 } from './rest-helpers.js';
 
 describe(

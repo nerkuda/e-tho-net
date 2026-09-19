@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';

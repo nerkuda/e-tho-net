@@ -17,13 +17,10 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  SAVED_FILTER_VIEWS,
   STRUCTURES_EDGES_MAX_IDS,
   STRUCTURES_PAGE_SIZE,
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
-  STRUCTURE_SORTS,
-  SORT_ORDERS,
   type SavedFilterView,
   type StructureQueryRequest,
   type StructureSort,
@@ -69,12 +66,6 @@ import { getEdgesAmong } from '../domain/link-service.js';
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
   networkId: string;
-}
-
-/** Route params for a network + thought id. */
-interface ThoughtIdParams {
-  networkId: string;
-  id: string;
 }
 
 /** Route params for a network + saved-filter id. */

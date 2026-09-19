@@ -6,14 +6,12 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { z } from 'zod';
+
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
-import { NetworkId } from './shared.js';
 import { MembersList } from '../../contracts.js';
 
 export function registerMembersListTool(mcp: McpServer, rt: McpRuntime): void {
-  const MembersListSchema = z.object({ network_id: NetworkId });
   mcp.registerTool(
     'etn.members.list',
     {

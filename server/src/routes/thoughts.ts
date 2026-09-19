@@ -23,10 +23,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  FOCUS_DIRS,
   PREF_KEY,
-  SORT_KINDS,
-  SORT_ORDERS,
   computeDefaultCanvasLinkFilter,
   parseStoredCanvasLinkFilter,
   type FocusDir,
@@ -168,9 +165,6 @@ function toSynonymArray(value: string[] | string | undefined): string[] | undefi
   }
   return Array.isArray(value) ? value : value.split(',');
 }
-
-/** UUID shape used to validate the `source_id` extension on each snapshot. */
-const UUID_RE_FOR_SOURCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Parse and validate the body of `POST /thoughts/copy-batch`. The shape is
