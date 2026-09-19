@@ -9,16 +9,16 @@
  * «Автор / Редактор», «Даты») — сворачиваемые, по умолчанию свёрнуты; заголовок
  * любой группы, чьи условия не пусты, подсвечивается и помечается `*`.
  *
- * Значения условий редактируются единым компонентом (задача 27472616,
- * `value-combo.ts`): комбобокс с живым поиском по подстроке среди
- * токенов-кандидатов (собранных по типу, которому принадлежит отбор — поля
- * мысли + свойства типа и его предков + `$today`/`$now`/`$user`) И
- * произвольным текстом; для списочных условий (в списке/не в списке) и для
- * «Родительские мысли»/«Типы мыслей»/«Типы связей» — chip-модель: несколько
- * литералов и токенов свободно смешиваются в одном списке, а чек-лист/поиск
- * мыслей (кнопка «выбрать…») ДОБАВЛЯЕТ к чипам, а не подменяет их. Список
- * токенов ограничен операцией условия: списочные токены предлагаются только
- * в «в списке» и «не в списке».
+ * Значения условий редактирует ОБЩИЙ редактор значения
+ * (`editor/value-editor.ts`, стандарт S2): вид значения выбирает он, а
+ * токены-кандидаты (поля мысли + свойства типа и его предков + `$today`/
+ * `$now`/`$user`, собранные по типу отбора) вызывающий передаёт источником
+ * подсказок (`extraSuggest`). Список токенов ограничен операцией условия:
+ * списочные токены предлагаются только в «в списке» и «не в списке».
+ * «Родительские мысли»/«Типы мыслей»/«Типы связей» и списки автора/редактора
+ * строит общий чип-лист сущностей (`lib/entity-picker.ts`) с тем же
+ * источником токенов: несколько литералов и токенов свободно смешиваются, а
+ * чек-лист/поиск (кнопка «выбрать…») ДОБАВЛЯЕТ к чипам, а не подменяет их.
  *
  * Сохранение: `etn.thoughtTypeViews.create`/`.update` через IPC. Пустой отбор
  * (ни одного условия) сохранить нельзя — ошибка показывается под формой.
@@ -27,7 +27,7 @@
  * (задача 48b59d00, веха 5 версии 0.8.2): модель состояния, словарь
  * операторов, наборы сортировок/направлений, конвертер в wire и строка
  * условия «автор/редактор» импортируются оттуда; диалог держит только
- * редакторы значения с токенами (value-combo).
+ * кандидатов-токены и раскладку групп.
  */
 
 import {
@@ -61,9 +61,18 @@ import {
   type AuthorRowEditors,
 } from '../../lib/filter-builder.js';
 import { notice } from '../../lib/notice.js';
-import { pickEntitiesModal } from '../../lib/entity-picker.js';
-import { orderedTypeRows } from '../../lib/type-tree.js';
+import {
+  buildEntityChipField,
+  pickEntitiesModal,
+  thoughtEntityOption,
+  thoughtTypeEntityOptions,
+  linkTypeEntityOptions,
+  type EntityOption,
+} from '../../lib/entity-picker.js';
+import { wireSuggest, type SuggestEntry, type SuggestSource } from '../../lib/suggest-dropdown.js';
+import { type ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
+import { buildValueEditor } from '../../editor/value-editor.js';
 import { store } from '../../state.js';
 
 import {
@@ -80,13 +89,6 @@ import {
   type DialogPropertyCondition,
   type ViewToken,
 } from './filter-dialog-pure.js';
-import {
-  buildChipListField,
-  replaceComboValue,
-  replaceTrailingWord,
-  trailingWordQuery,
-  wireTokenCombo,
-} from './value-combo.js';
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -520,17 +522,22 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
     touch();
   });
   // Составное поле (несколько слов) — живой поиск фильтрует по последнему
-  // «слову» у каретки, а выбор токена заменяет только его, не всё значение.
-  wireTokenCombo({
-    input: kwInput,
-    getOptions: (query) => getTokenOptions({ kind: 'keywords' }, query),
-    onPick: (token) => {
-      replaceTrailingWord(kwInput, token, (v) => {
+  // «слову» у каретки, а выбор токена заменяет только его, не всё значение
+  // (общая выпадашка, источник — её параметр).
+  wireSuggest(kwInput, {
+    sources: [
+      {
+        when: 'always',
+        load: () => comboToEntries(getTokenOptions({ kind: 'keywords' }, trailingWordQuery(kwInput))),
+      },
+    ],
+    pickFirstOnEnter: false,
+    onPick: (entry) => {
+      replaceTrailingWord(kwInput, entry.value, (v) => {
         state.keywords = v;
         touch();
       });
     },
-    queryOf: trailingWordQuery,
   });
   const kwClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
   kwClear.type = 'button';
@@ -545,37 +552,43 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   kw.body.append(buildKeywordScopeRow(state, touch));
 
   // --- Родительские мысли -----------------------------------------------
-  // Chip-список (задача 27472616): живой поиск мыслей + токен `$thought`
-  // добавляют чипы по мере ввода; кнопка «выбрать…» открывает диалог поиска
-  // мыслей и ДОБАВЛЯЕТ его результат к уже набранным чипам, а не подменяет
-  // список целиком.
+  // Общий чип-лист сущностей (инструкция «Использовать унифицированные поля
+  // выбора ссылок в диалогах»): чипы — мини-облачка, живой поиск мыслей общим
+  // пикером-выпадашкой, токены (`$thought`) — источник вызывающего, кнопка
+  // «выбрать…» ДОБАВЛЯЕТ результат к уже набранным, а не подменяет список.
   const pt = block('Родительские мысли');
   markers.push({ head: pt.head, star: pt.star, isNonEmpty: () => state.parentIds.length > 0 });
-  const parentField = buildChipListField({
+  const parentField = buildEntityChipField({
     getValues: () => state.parentIds,
     onChange: (values) => {
       state.parentIds = values;
       touch();
     },
-    getOptions: (query) => parentComboOptions(networkId, query),
-    renderLabel: (value) => resolveParentChipLabel(networkId, value),
+    loadOptions: (query) => parentThoughtOptions(networkId, query),
+    optionsHeader: 'Мысли',
+    extraSources: [tokenSourceFor({ kind: 'parent' })],
+    cloudOf: (value) => (value.startsWith('$') ? null : (parentClouds.get(value) ?? null)),
     placeholder: 'Название мысли или токен…',
     picker: { label: 'выбрать…', open: (managed) => pickParentThoughts(networkId, managed) },
   });
   setTooltip(parentField.root, 'Ограничить отбор мыслями, подчинёнными указанным');
   pt.body.append(parentField.root);
+  // Догрузить облачка уже выбранных мыслей (в каталоге живого поиска их нет).
+  void resolveParentClouds(networkId, state.parentIds).then(() => parentField.refresh());
 
   // --- Типы мыслей --------------------------------------------------------
   const tt = block('Типы мыслей');
   markers.push({ head: tt.head, star: tt.star, isNonEmpty: () => state.typeIds.length > 0 });
-  const typeField = buildChipListField({
+  const typeField = buildEntityChipField({
     getValues: () => state.typeIds,
     onChange: (values) => {
       state.typeIds = values;
       touch();
     },
-    getOptions: (query) => typeComboOptions('thought', query),
-    renderLabel: (value) => typeChipLabel('thought', value),
+    loadOptions: (query) =>
+      filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
+    optionsHeader: 'Типы мыслей',
+    extraSources: [tokenSourceFor({ kind: 'thought_type' })],
     placeholder: 'Название типа или токен…',
     picker: { label: 'список типов…', open: (managed) => openThoughtTypesPicker(networkId, managed) },
   });
@@ -584,14 +597,16 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   // --- Типы связей ----------------------------------------------------------
   const lt = block('Типы связей');
   markers.push({ head: lt.head, star: lt.star, isNonEmpty: () => state.linkTypeIds.length > 0 });
-  const linkTypeField = buildChipListField({
+  const linkTypeField = buildEntityChipField({
     getValues: () => state.linkTypeIds,
     onChange: (values) => {
       state.linkTypeIds = values;
       touch();
     },
-    getOptions: (query) => typeComboOptions('link', query),
-    renderLabel: (value) => typeChipLabel('link', value),
+    loadOptions: (query) =>
+      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
+    optionsHeader: 'Типы связей',
+    extraSources: [tokenSourceFor({ kind: 'link_type' })],
     placeholder: 'Название типа или токен…',
     picker: { label: 'список типов…', open: (managed) => openLinkTypesPicker(networkId, managed) },
   });
@@ -743,12 +758,12 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   const dates = collapsibleBlock('Даты', () => datesCollapsed, (v) => (datesCollapsed = v));
   markers.push({ head: dates.head, star: dates.star, isNonEmpty: () => builderDatesActive(state) });
   dates.body.append(
-    buildDateRangeRow('Создано', state.createdAfter, state.createdBefore, (from, to) => {
+    buildDateRangeRow(networkId, 'Создано', state.createdAfter, state.createdBefore, (from, to) => {
       state.createdAfter = from;
       state.createdBefore = to;
       touch();
     }),
-    buildDateRangeRow('Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
+    buildDateRangeRow(networkId, 'Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
       state.updatedAfter = from;
       state.updatedBefore = to;
       touch();
@@ -930,6 +945,17 @@ interface ConditionValueOpts {
   touch: () => void;
 }
 
+/**
+ * Редактор значения условия — ОБЩИЙ редактор значения
+ * (`editor/value-editor.ts`, стандарт S2): вид значения выбирает он, а
+ * вызывающий даёт список токенов источником подсказок (`extraSuggest`) —
+ * так токены (`$today`, `$user`, `$thought`, `$thought.<ключ>`) сохраняются
+ * ровно там, где были, и не появляются у number/bool. `thought_ref` — legacy-
+ * вид с тем же значением (id мысли), поэтому ведётся редактором связи.
+ * Состояние условия хранит строки, редактор связи отдаёт массив id —
+ * переходник сводит массив к строкам; списочная операция включает
+ * `config.multiple` (чипы), скалярная — одиночное поле.
+ */
 function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
   const { networkId, cond, index, state, registryById, touch } = opts;
   const def = registryById.get(cond.propertyId);
@@ -943,138 +969,92 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
   }
 
   const live = (): DialogPropertyCondition => state.properties[index] ?? cond;
-  const setValue = (i: number, v: string): void => {
-    const current = live();
-    const values = [...current.values];
-    while (values.length <= i) values.push('');
-    values[i] = v;
-    state.properties[index] = { ...current, values };
+  const setValues = (values: string[]): void => {
+    state.properties[index] = { ...live(), values: values.length > 0 ? values : [''] };
     touch();
   };
 
-  const buildScalar = (i: number): HTMLElement => {
-    if (valueType === 'number') {
-      return buildScalarInput('number', live().values[i] ?? '', (v) => setValue(i, v));
-    }
-    if (valueType === 'date') {
-      return buildDateValueRow(networkId, live().values[i] ?? '', cond.op, (v) => setValue(i, v));
-    }
-    if (valueType === 'bool') {
-      return buildBoolSelect(live().values[i] ?? '', (v) => setValue(i, v));
-    }
-    // text/url: free input + token button.
-    return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => setValue(i, v));
-  };
+  const current = live();
+  const editorType: PropertyValueType = valueType === 'thought_ref' ? 'link' : valueType;
+  const stored = current.values.filter((v) => v !== '');
+  const raw = current.values[0] ?? '';
+  // Скаляр — одно значение в родном типе редактора; связь и списочная
+  // операция — набор. Без ветвления по виду значения: диспетчер по виду —
+  // только в общем редакторе (стандарт S2).
+  const scalar: unknown =
+    valueType === 'bool'
+      ? (raw === '' ? null : raw === 'true')
+      : valueType === 'number'
+        ? (raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : '')
+        : raw;
+  const value: unknown = editorType === 'link' || isList ? stored : scalar;
+  // Токены — только у видов, где они были (text/url/date/link/thought_ref).
+  const withTokens =
+    editorType === 'link' || valueType === 'text' || valueType === 'url' || valueType === 'date';
 
-  if (!isList) {
-    box.append(buildScalar(0));
-    return box;
-  }
-
-  // List editor: chip-модель (задача 27472616) — несколько литералов и
-  // токенов свободно смешиваются.
-  const chipField = buildChipListField({
-    getValues: () => live().values.filter((v) => v !== ''),
-    onChange: (values) => {
-      const current = live();
-      state.properties[index] = { ...current, values: values.length > 0 ? values : [''] };
-      touch();
-    },
-    getOptions: (query) => propertyValueComboOptions(networkId, valueType, cond.op, def, query),
-    renderLabel: (value) => propertyValueChipLabel(networkId, valueType, value),
-    placeholder: 'Добавить значение…',
-  });
-  box.append(chipField.root);
+  box.append(
+    buildValueEditor({
+      networkId,
+      definition: {
+        value_type: editorType,
+        config: isList ? { ...(def?.config ?? {}), multiple: true } : (def?.config ?? null),
+        required: false,
+        default_value: null,
+      },
+      value,
+      commitOn: 'change',
+      boolTriState: valueType === 'bool',
+      extraSuggest: withTokens
+        ? [tokenSourceFor({ kind: 'property', valueType, op: cond.op })]
+        : [],
+      ...(valueType === 'date' ? { placeholder: 'YYYY-MM-DD или токен ($today+7d)…' } : {}),
+      save: (next) => {
+        if (Array.isArray(next)) {
+          setValues(next.map((v) => String(v)));
+        } else if (next === null || next === undefined || next === '') {
+          setValues(['']);
+        } else {
+          setValues([String(next)]);
+        }
+        return true;
+      },
+    }),
+  );
   return box;
 }
 
-function buildScalarInput(
-  type: 'text' | 'number' | 'date',
-  value: string,
-  onChange: (v: string) => void,
-): HTMLInputElement {
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = type;
-  input.value = value;
-  input.addEventListener('input', () => onChange(input.value));
-  return input;
-}
+// ---------------------------------------------------------------------------
+// Кандидаты «Родительские мысли» (живой поиск мыслей) — общий пикер
+// ---------------------------------------------------------------------------
 
-function buildBoolSelect(value: string, onChange: (v: string) => void): HTMLSelectElement {
-  const select = el('select', 'st-f-input') as HTMLSelectElement;
-  const yes = el('option', '', 'да') as HTMLOptionElement;
-  yes.value = 'true';
-  const no = el('option', '', 'нет') as HTMLOptionElement;
-  no.value = 'false';
-  select.append(yes, no);
-  select.value = value === 'false' ? 'false' : 'true';
-  select.addEventListener('change', () => onChange(select.value));
-  return select;
-}
+/** Облачка выбранных мыслей «Родительских мыслей» (id → данные облачка). */
+const parentClouds = new Map<string, ThoughtCloudInput>();
 
-function buildTextValueRow(
-  networkId: string,
-  value: string,
-  valueType: PropertyValueType,
-  op: StructurePropertyOp,
-  onChange: (v: string) => void,
-): HTMLElement {
-  const row = div('st-f-value-row');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.value = value;
-  input.addEventListener('input', () => onChange(input.value));
-  wireTokenCombo({
-    input,
-    getOptions: (query) => getTokenOptions({ kind: 'property', valueType, op }, query),
-    onPick: (token) => replaceComboValue(input, token, onChange),
-  });
-  row.append(input);
-  return row;
-}
-
-/** Кэш id → название мысли для отображения ссылочных значений (e8365d29). */
-const refTitleCache = new Map<string, string>();
-
-/** Live-search кандидаты мыслей для комбобоксов (задача 27472616):
- *  найденные заголовки резолвятся в `refTitleCache`, а сам поиск честно
- *  ищет по подстроке — тот же движок, что у «выбрать». */
-async function findThoughtCandidates(
-  networkId: string,
-  query: string,
-  typeIds: string[],
-): Promise<ComboOption[]> {
+/** Live-search кандидаты мыслей для чип-листа «Родительские мысли». */
+async function parentThoughtOptions(networkId: string, query: string): Promise<EntityOption[]> {
+  const needle = query.trim();
+  if (needle === '') return [];
   try {
-    const hits = await etn.thoughts.findDuplicates(networkId, query, [], typeIds);
-    return hits.map((h) => {
-      refTitleCache.set(h.id, h.title);
-      return { value: h.id, label: h.title, section: 'Мысли' };
+    const hits = await etn.thoughts.findDuplicates(networkId, needle, [], []);
+    return hits.map((hit) => {
+      parentClouds.set(hit.id, { ...hit });
+      return thoughtEntityOption(hit);
     });
   } catch {
     return [];
   }
 }
 
-/** Value editor for `date` conditions: literal ISO date or token with ±Nd. */
-function buildDateValueRow(
-  networkId: string,
-  value: string,
-  op: StructurePropertyOp,
-  onChange: (v: string) => void,
-): HTMLElement {
-  const row = div('st-f-value-row');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.value = value;
-  input.placeholder = 'YYYY-MM-DD или токен ($today+7d)…';
-  input.addEventListener('input', () => onChange(input.value));
-  wireTokenCombo({
-    input,
-    getOptions: (query) => getTokenOptions({ kind: 'property', valueType: 'date', op }, query),
-    onPick: (token) => replaceComboValue(input, token, onChange),
-  });
-  row.append(input);
-  return row;
+/** Дозаполняет облачка уже выбранных родительских мыслей (резолв по id). */
+async function resolveParentClouds(networkId: string, ids: readonly string[]): Promise<void> {
+  const missing = ids.filter((id) => !id.startsWith('$') && !parentClouds.has(id));
+  if (missing.length === 0) return;
+  try {
+    const refs = await etn.thoughts.resolve(networkId, [...missing]);
+    for (const ref of refs) parentClouds.set(ref.id, { ...ref });
+  } catch {
+    // Оффлайн — чипы останутся с сырым id.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,12 +1101,17 @@ function buildAuthorSingleEditor(
   input.value = currentId === '' || currentId.startsWith('$') ? currentId : (resolveUserName(currentId) ?? currentId);
   input.placeholder = 'Пользователь, id или токен…';
   input.addEventListener('input', () => onChange(input.value));
-  wireTokenCombo({
-    input,
-    getOptions: (query) => authorComboOptions(field, query),
-    onPick: (value) => {
-      input.value = value.startsWith('$') ? value : (resolveUserName(value) ?? value);
-      onChange(value);
+  // Живой поиск — общая выпадашка (источник вариантов — её параметр):
+  // выбранная строка подставляется в поле, свободный текст фиксирует
+  // `input`-обработчик выше.
+  wireSuggest(input, {
+    sources: [
+      { when: 'always', load: (query) => comboToEntries(authorComboOptions(field, query)) },
+    ],
+    pickFirstOnEnter: false,
+    onPick: (entry) => {
+      input.value = entry.value.startsWith('$') ? entry.value : (resolveUserName(entry.value) ?? entry.value);
+      onChange(entry.value);
       input.focus();
     },
   });
@@ -1157,30 +1142,69 @@ function authorComboOptions(field: 'author' | 'editor', query: string): ComboOpt
 }
 
 /**
- * Chip-редактор списка автора/редактора (задача 27472616): чипы выбранных
+ * Чип-редактор списка автора/редактора (задача 27472616): чипы выбранных
  * значений (имена пользователей или тексты токенов) + живой поиск,
- * смешивающий пользователей сети и токены в одном поле ввода.
+ * смешивающий пользователей сети и токены в одном поле ввода. Чипы строит
+ * общий чип-лист сущностей (`lib/entity-picker.ts`).
  */
 function buildAuthorListEditor(
   field: 'author' | 'editor',
   currentIds: string[],
   onChange: (ids: string[]) => void,
 ): HTMLElement {
-  const fieldEl = buildChipListField({
-    getValues: () => currentIds,
-    onChange,
-    getOptions: (query) => authorComboOptions(field, query),
-    renderLabel: (value) => (value.startsWith('$') ? value : (resolveUserName(value) ?? value)),
+  // Локальная копия — владелец состояния обновится через `onChange`, а чипы
+  // обязаны перерисоваться сразу (замкнутый массив к этому моменту устарел).
+  let ids = [...currentIds];
+  const fieldEl = buildEntityChipField({
+    getValues: () => ids,
+    onChange: (values) => {
+      ids = values;
+      onChange(values);
+    },
+    loadOptions: () => usersEntityOptions(),
+    optionsHeader: 'Пользователи',
+    extraSources: [
+      { when: 'always', load: (query) => comboToEntries(authorTokenOptions(field, query)) },
+    ],
+    cloudOf: (value) =>
+      value.startsWith('$')
+        ? null
+        : { id: value, title: resolveUserName(value) ?? value, icon: '👤', icon_kind: 'emoji' },
     placeholder: 'Пользователь или токен…',
   });
   return fieldEl.root;
+}
+
+/** Варианты пользователей сети для чип-листа автора/редактора. */
+function usersEntityOptions(): EntityOption[] {
+  return listUsers().map((u) => ({
+    id: u.id,
+    title: `${u.display_name ?? u.username} (${u.username})`,
+    selectable: true,
+    cloud: { id: u.id, title: u.display_name ?? u.username, icon: '👤', icon_kind: 'emoji' },
+  }));
+}
+
+/** Токен-кандидаты полей «Автор»/«Редактор» (без пользователей). */
+function authorTokenOptions(field: 'author' | 'editor', query: string): ComboOption[] {
+  return filterComboOptions(
+    tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], field), null),
+    query,
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Date range row
 // ---------------------------------------------------------------------------
 
+/**
+ * Строка «от / до» одной временной группы. Поля строит общий редактор
+ * значения (вид «дата» + источник токенов вызывающего): у поля есть «✕»
+ * очистки, живой поиск токенов (`$today`, `$thought.created`) заменяет
+ * значение целиком; пустая строка — граница не выставлена.
+ */
 function buildDateRangeRow(
+  networkId: string,
   label: string,
   from: string,
   to: string,
@@ -1191,17 +1215,20 @@ function buildDateRangeRow(
 
   const buildField = (value: string, set: (v: string) => void): HTMLElement => {
     const wrap = div('st-f-date-field');
-    const input = el('input', 'st-f-input st-f-date-input') as HTMLInputElement;
-    input.type = 'text';
-    input.value = value;
-    input.placeholder = 'YYYY-MM-DD или токен…';
-    input.addEventListener('input', () => set(input.value));
-    wireTokenCombo({
-      input,
-      getOptions: (query) => getTokenOptions({ kind: 'property', valueType: 'date', op: null }, query),
-      onPick: (token) => replaceComboValue(input, token, set),
-    });
-    wrap.append(input);
+    wrap.append(
+      buildValueEditor({
+        networkId,
+        definition: { value_type: 'date', config: null, required: false, default_value: null },
+        value,
+        commitOn: 'change',
+        placeholder: 'YYYY-MM-DD или токен…',
+        extraSuggest: [tokenSourceFor({ kind: 'property', valueType: 'date', op: null })],
+        save: (next) => {
+          set(next === null || next === undefined ? '' : String(next));
+          return true;
+        },
+      }),
+    );
     return wrap;
   };
 
@@ -1218,24 +1245,23 @@ function buildDateRangeRow(
 // (lib/filter-builder.ts); здесь не объявляется повторно.
 
 // ---------------------------------------------------------------------------
-// Pickers (parent / thought types / link types) — задача 27472616: каждый
-// возвращает `Promise<string[] | null>` (`null` — отменено) над УПРАВЛЯЕМЫМ
-// подмножеством чипов, а не над всем списком, — см. {@link ChipPickerOptions}
-// в `value-combo.ts` для того, как это сочетается с токенами.
+// Pickers (parent / thought types / link types) — каждый возвращает
+// `Promise<string[] | null>` (`null` — отменено) над УПРАВЛЯЕМЫМ подмножеством
+// значений чип-листа; чипы-токены сохраняются (см. `buildEntityChipField`).
 // ---------------------------------------------------------------------------
 
-async function pickParentThoughts(networkId: string, managedIds: string[]): Promise<string[] | null> {
+async function pickParentThoughts(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
   const result = await pickThoughtsDialog({
     networkId,
     allowCreate: false,
     allowLinkType: false,
-    selectedIds: managedIds,
+    selectedIds: [...managedIds],
   });
   if (result === null) return null;
   return pickedThoughtIds(result);
 }
 
-async function openThoughtTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
+async function openThoughtTypesPicker(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
   return pickEntitiesModal({
     networkId,
     kind: 'thought-types',
@@ -1244,7 +1270,7 @@ async function openThoughtTypesPicker(networkId: string, managedIds: string[]): 
   });
 }
 
-async function openLinkTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
+async function openLinkTypesPicker(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
   return pickEntitiesModal({
     networkId,
     kind: 'link-types',
@@ -1254,12 +1280,14 @@ async function openLinkTypesPicker(networkId: string, managedIds: string[]): Pro
 }
 
 // ---------------------------------------------------------------------------
-// Value-combo wiring — кандидаты и подписи чипов для каждого поля условия
-// (задача 27472616). Формат хранимых значений не меняется: строка (литерал
-// или `$token`); резолвер токенов на сервере не трогается.
+// Токены и кандидаты полей (задача 27472616). Формат хранимых значений НЕ
+// меняется: строка (литерал или `$token`) для скалярных условий, массив строк
+// для списочных; резолвер токенов на сервере не трогается. Токены — источник
+// подсказок вызывающего: их получает либо общий редактор значения
+// (`extraSuggest`), либо общий чип-лист сущностей (`extraSources`).
 // ---------------------------------------------------------------------------
 
-/** Поле, к которому пристёгнут комбобокс значения условия. */
+/** Поле, к которому пристёгнут источник токенов. */
 type TokenPickerField =
   | { kind: 'property'; valueType: PropertyValueType; op: StructurePropertyOp | null }
   | { kind: 'keywords' }
@@ -1287,75 +1315,62 @@ function getTokenOptions(field: TokenPickerField, query: string): ComboOption[] 
   return filterComboOptions(tokenOptions(field), query);
 }
 
-/** Живой поиск для «Родительские мысли»: токен `$thought` + мысли сети. */
-async function parentComboOptions(networkId: string, query: string): Promise<ComboOption[]> {
-  const tokenOpts = getTokenOptions({ kind: 'parent' }, query);
-  if (query.trim() === '') return tokenOpts;
-  return [...tokenOpts, ...(await findThoughtCandidates(networkId, query, []))];
+/** Строка общей выпадашки по кандидату-токену. */
+function comboToEntries(options: readonly ComboOption[]): SuggestEntry[] {
+  return options.map((o) => ({
+    value: o.value,
+    label: o.label,
+    ...(o.section !== undefined ? { section: o.section } : {}),
+    ...(o.disabled === true ? { disabled: true } : {}),
+  }));
 }
 
-/** Подпись чипа «Родительские мысли»: название мысли или текст токена. */
-async function resolveParentChipLabel(networkId: string, value: string): Promise<string> {
-  if (value.startsWith('$')) return value;
-  const cached = refTitleCache.get(value);
-  if (cached !== undefined) return cached;
+/** Источник подсказок «токены поля» — параметр общего редактора/пикера. */
+function tokenSourceFor(field: TokenPickerField): SuggestSource {
+  return {
+    when: 'always',
+    load: (query) => comboToEntries(getTokenOptions(field, query)),
+  };
+}
+
+/** Кандидаты-сущности, отфильтрованные по подстроке (пустой запрос — все). */
+function filterEntityOptions(options: readonly EntityOption[], query: string): EntityOption[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...options];
+  return options.filter(
+    (o) =>
+      o.title.toLowerCase().includes(needle) ||
+      (o.searchText ?? '').toLowerCase().includes(needle),
+  );
+}
+
+/** Извлекает слово у каретки — запрос составного поля («Ключевые слова»). */
+function trailingWordQuery(input: HTMLInputElement): string {
+  const caret = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, caret);
+  return /(\S*)$/.exec(before)?.[1] ?? '';
+}
+
+/** Заменяет слово у каретки токеном, оставляя остальной текст, и возвращает
+ *  каретку сразу после токена (составное поле «Ключевые слова»). */
+function replaceTrailingWord(
+  input: HTMLInputElement,
+  token: string,
+  onChange: (v: string) => void,
+): void {
+  const caret = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, caret);
+  const after = input.value.slice(caret);
+  const wordLen = /(\S*)$/.exec(before)?.[1]?.length ?? 0;
+  const wordStart = caret - wordLen;
+  const next = input.value.slice(0, wordStart) + token + after;
+  input.value = next;
+  onChange(next);
+  input.focus();
+  const newCaret = wordStart + token.length;
   try {
-    const [ref] = await etn.thoughts.resolve(networkId, [value]);
-    if (ref === undefined) return '(не найдено)';
-    refTitleCache.set(ref.id, ref.title);
-    return ref.title;
+    input.setSelectionRange(newCaret, newCaret);
   } catch {
-    return '(не найдено)';
+    /* ignore */
   }
-}
-
-/** Живой поиск для «Типы мыслей»/«Типы связей»: токены цепочки типов +
- *  сам каталог типов, отфильтрованный по названию. */
-function typeComboOptions(kind: 'thought' | 'link', query: string): ComboOption[] {
-  const tokenOpts = tokenOptions(kind === 'thought' ? { kind: 'thought_type' } : { kind: 'link_type' });
-  const section = kind === 'thought' ? 'Типы мыслей' : 'Типы связей';
-  // Separate branches keep `orderedTypeRows`'s generic bound to one concrete
-  // type — a union array (`ThoughtType[] | LinkType[]`) fails inference.
-  const typeOpts: ComboOption[] =
-    kind === 'thought'
-      ? orderedTypeRows(store.state.thoughtTypes)
-          .filter((row) => !row.type.is_root)
-          .map((row) => ({ value: row.type.id, label: row.type.name, section }))
-      : orderedTypeRows(store.state.linkTypes)
-          .filter((row) => !row.type.is_root)
-          .map((row) => ({ value: row.type.id, label: row.type.name_forward, section }));
-  return filterComboOptions([...tokenOpts, ...typeOpts], query);
-}
-
-/** Подпись чипа «Типы мыслей»/«Типы связей»: название типа или токен. */
-function typeChipLabel(kind: 'thought' | 'link', value: string): string {
-  if (value.startsWith('$')) return value;
-  const catalogue = kind === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
-  const t = catalogue.find((x) => x.id === value);
-  if (t === undefined) return value;
-  return 'name' in t ? t.name : t.name_forward;
-}
-
-/** Живой поиск для списочных условий по свойству (`in`/`not_in`): токены +
- *  свойства со списочными операторами). */
-async function propertyValueComboOptions(
-  networkId: string,
-  valueType: PropertyValueType,
-  op: StructurePropertyOp,
-  def: NetworkProperty | undefined,
-  query: string,
-): Promise<ComboOption[]> {
-  void def;
-  return getTokenOptions({ kind: 'property', valueType, op }, query);
-}
-
-/** Подпись чипа списочного условия: значение как есть. */
-function propertyValueChipLabel(
-  networkId: string,
-  valueType: PropertyValueType,
-  value: string,
-): string | Promise<string> {
-  void networkId;
-  void valueType;
-  return value;
 }

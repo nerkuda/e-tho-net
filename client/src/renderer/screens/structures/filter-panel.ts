@@ -1341,16 +1341,19 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
 }
 
 /**
- * Box значений условия (§15.3). Скалярные виды (text/url/number/date) строит
- * ОБЩИЙ редактор `buildValueEditor` (`editor/value-editor.ts`, стандарт S2):
- * у полей ввода справа «✕» очистки одним кликом (ошибка a8e9eef1), для text
- * с закрытым списком — общая выпадашка вариантов. Локальными остаются только
- * `bool` (селект «да/нет», не поле ввода) и `link`/`thought_ref` — конструктор
- * условий ещё не перевёл их на общий редактор (задача 48b59d00, веха 5):
- * условие хранит сырые id целей, их вводит текстовая строка. Каждый обработчик
- * читает ТЕКУЩУЮ строку условия из состояния (`live()`), а не замкнутую —
- * кнопка «+ значение» не должна терять значения, введённые в более ранние
- * строки.
+ * Box значений условия (§15.3). Любой вид значения строится ОБЩИМ редактором
+ * `buildValueEditor` (`editor/value-editor.ts`, стандарт S2): у поля справа
+ * «✕» очистки одним кликом (ошибка a8e9eef1), для text с закрытым списком —
+ * общая выпадашка вариантов, для `bool` — трёхзначное поле, для
+ * `link`/`thought_ref` — чипы-облачка целей с живым поиском (облачко, значки,
+ * цвета, бледность, отбор по типам). `thought_ref` — legacy-вид с тем же
+ * значением (id мысли), поэтому ведётся редактором связи. Состояние условия
+ * хранит строки, редактор связи отдаёт массив id — переходник сводит массив
+ * к строкам; wire-конвертер (`lib/filter-builder.ts`) ждёт `'true'`/`'false'`
+ * строками у bool и первое значение у скалярной операции.
+ *
+ * Каждый обработчик читает ТЕКУЩУЮ строку условия из состояния (`live()`), а
+ * не замкнутую, — перерисовка строки не должна терять введённое.
  */
 function buildConditionValueBox(
   cond: PropertyConditionState,
@@ -1365,90 +1368,57 @@ function buildConditionValueBox(
   // (bug fix 0.6.3).
   const isPresence = cond.op === 'is_empty' || cond.op === 'not_empty';
   const live = (): PropertyConditionState => state.properties[index] ?? cond;
-  const setValue = (i: number, v: string): void => {
-    const current = live();
-    const values = [...current.values];
-    while (values.length <= i) values.push('');
-    values[i] = v;
-    state.properties[index] = { ...current, values };
+  const setValues = (values: string[]): void => {
+    state.properties[index] = { ...live(), values: values.length > 0 ? values : [''] };
     touch();
-  };
-
-  const addScalar = (i: number): HTMLElement => {
-    if (valueType === 'bool') {
-      const select = el('select', 'st-f-input') as HTMLSelectElement;
-      const yes = el('option', '', 'да') as HTMLOptionElement;
-      yes.value = 'true';
-      const no = el('option', '', 'нет') as HTMLOptionElement;
-      no.value = 'false';
-      select.append(yes, no);
-      select.value = live().values[i] === 'false' ? 'false' : 'true';
-      select.addEventListener('change', () => setValue(i, select.value));
-      return select;
-    }
-    if (valueType === 'link' || valueType === 'thought_ref') {
-      const input = el('input', 'st-f-input') as HTMLInputElement;
-      input.type = 'text';
-      input.value = live().values[i] ?? '';
-      input.addEventListener('input', () => setValue(i, input.value));
-      return input;
-    }
-    return buildValueEditor({
-      networkId: requireNetworkId(),
-      definition: {
-        value_type: valueType,
-        config: def?.config ?? null,
-        required: false,
-        default_value: null,
-      },
-      value: live().values[i] ?? '',
-      commitOn: 'change',
-      save: (next) => {
-        setValue(i, next === null ? '' : String(next));
-        return true;
-      },
-    });
   };
 
   if (isPresence) {
     box.append(el('span', 'st-f-value-hint', 'значение не требуется'));
     return box;
   }
-  if (!isList) {
-    box.append(addScalar(0));
-    return box;
-  }
 
-  // List editor: one row per value + the «+» button (OR inside the list).
-  const renderList = (): void => {
-    clear(box);
-    const values = live().values.length > 0 ? live().values : [''];
-    values.forEach((_, i) => {
-      const line = div('st-f-value-row');
-      line.append(addScalar(i));
-      const rm = el('button', 'st-f-remove', '×');
-      rm.type = 'button';
-      rm.addEventListener('click', () => {
-        const current = live();
-        const next = current.values.filter((_, j) => j !== i);
-        state.properties[index] = { ...current, values: next.length > 0 ? next : [''] };
-        touch();
-        renderList();
-      });
-      line.append(rm);
-      box.append(line);
-    });
-    const add = el('button', 'st-f-add', '+ значение');
-    add.type = 'button';
-    add.addEventListener('click', () => {
-      const current = live();
-      state.properties[index] = { ...current, values: [...current.values, ''] };
-      touch();
-      renderList();
-    });
-    box.append(add);
-  };
-  renderList();
+  const current = live();
+  const editorType: PropertyValueType = valueType === 'thought_ref' ? 'link' : valueType;
+  const stored = current.values.filter((v) => v !== '');
+  const raw = current.values[0] ?? '';
+  // Скаляр — одно значение в родном типе редактора (число — число, bool —
+  // boolean/null); связь и списочная операция — набор. Без ветвления по виду
+  // значения: диспетчер по виду — только в общем редакторе (стандарт S2).
+  const scalar: unknown =
+    valueType === 'bool'
+      ? (raw === '' ? null : raw === 'true')
+      : valueType === 'number'
+        ? (raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : '')
+        : raw;
+  const value: unknown = editorType === 'link' || isList ? stored : scalar;
+  const config = isList ? { ...(def?.config ?? {}), multiple: true } : (def?.config ?? null);
+
+  box.append(
+    buildValueEditor({
+      networkId: requireNetworkId(),
+      definition: {
+        value_type: editorType,
+        config,
+        required: false,
+        default_value: null,
+      },
+      value,
+      commitOn: 'change',
+      // bool — трёхзначное поле: «—» (пусто) не задаёт условие.
+      boolTriState: valueType === 'bool',
+      save: (next) => {
+        if (Array.isArray(next)) {
+          setValues(next.map((v) => String(v)));
+        } else if (next === null || next === undefined || next === '') {
+          setValues(['']);
+        } else {
+          setValues([String(next)]);
+        }
+        return true;
+      },
+    }),
+  );
   return box;
 }
 

@@ -29,9 +29,8 @@ import { setFocus } from '../app.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
-import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { openLinkInEditor } from '../editor/editor.js';
-import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
+import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
@@ -739,27 +738,21 @@ function buildOptionsRow(row: HTMLElement): void {
   });
   subtreeLabel.append(subtreeCheck, span('только в подчинённых мыслях'));
 
-  const subrootButton = button(
-    'подкорень: —',
-    () => {
-      void pickThoughtsDialog({
-        networkId: requireNetworkId(),
-        allowCreate: false,
-        allowLinkType: false,
-      }).then((result) => {
-        const id = firstPickedThoughtId(result);
-        if (id !== null) {
-          options = { ...options, subrootId: id };
-          rebuildOptionsRow();
-          persistState();
-          refreshSearchIfVisible();
-        }
-      });
+  // «Только в подчинённых мыслях»: поле выбора мысли общим комбо пикера —
+  // облачко выбранной мысли, живой поиск, сброс крестиком в «текущий фокус»
+  // (`null` — без подкорня, берётся фокус).
+  const subrootCombo = buildEntityCombo({
+    networkId: requireNetworkId(),
+    kind: 'thoughts',
+    value: options.subrootId,
+    emptyLabel: 'текущий фокус',
+    placeholder: 'Мысль…',
+    onChange: (id) => {
+      options = { ...options, subrootId: id };
+      persistState();
+      refreshSearchIfVisible();
     },
-    'btn small',
-  );
-  const subrootTitle = store.state.focus?.focused.title ?? 'текущий фокус';
-  subrootButton.textContent = `подкорень: ${options.subrootId !== null ? options.subrootId.slice(0, 8) : subrootTitle.slice(0, 14)}`;
+  });
 
   const mkGroupCheck = (
     label: string,
@@ -854,7 +847,7 @@ function buildOptionsRow(row: HTMLElement): void {
 
   row.append(
     subtreeLabel,
-    subrootButton,
+    subrootCombo.root,
     mkGroupCheck('мысли', 'onlyThoughts'),
     mkGroupCheck('связи', 'onlyLinks'),
     mkGroupCheck('хронологию', 'onlyChrono'),

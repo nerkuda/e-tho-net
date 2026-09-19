@@ -56,6 +56,7 @@
 import type {
   AnyRealtimeEvent,
   EffectiveTypeProperty,
+  LinkPropertyValueItem,
   LinkType,
   LinkStyle,
   NetworkProperty,
@@ -88,10 +89,8 @@ import {
   expandTypeIdsToSubtree,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
-import { buildChipListField } from './thought-type/value-combo.js';
-import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { buildEntityCombo, pickEntitiesModal } from '../lib/entity-picker.js';
-import { buildValueEditor } from '../editor/value-editor.js';
+import { buildLinkValueEditor, buildValueEditor } from '../editor/value-editor.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -1251,44 +1250,17 @@ export function openPropertyManagerEditor(
     // привязки правится в колонке «Значение по умолчанию» таблиц ниже
     // (override). Единое чип-поле выбора целей (инструкция a47947c8).
     const defaultHost = div('form-stack');
-    const linkGlobalDefaults = buildChipListField({
-      getValues: () =>
-        Array.isArray(draft.defaultValue) ? (draft.defaultValue as string[]) : [],
-      onChange: (values) => {
-        draft.defaultValue = values.length > 0 ? values : null;
-      },
-      getOptions: async (query) => {
-        const trimmed = query.trim();
-        if (trimmed === '') return [];
-        try {
-          const hits = await etn.thoughts.findDuplicates(networkId, trimmed, undefined, undefined);
-          return hits.map((h) => ({ value: h.id, label: h.title }));
-        } catch {
-          return [];
-        }
-      },
-      renderLabel: async (id) => {
-        try {
-          const t = await etn.thoughts.get(networkId, id);
-          return t.title;
-        } catch {
-          return `${id.slice(0, 8)}…`;
-        }
-      },
-      placeholder: 'Заголовок мысли-цели…',
-      picker: {
-        label: 'выбрать…',
-        open: async (managed) => {
-          const result = await pickThoughtsDialog({
-            networkId,
-            allowCreate: false,
-            allowLinkType: false,
-            selectedIds: managed,
-            title: 'Выбрать мысли',
-            applyLabel: 'Выбрать',
-          });
-          return result === null ? null : pickedThoughtIds(result);
-        },
+    const linkGlobalDefaults = buildLinkValueEditor({
+      networkId,
+      // Общее значение справочника: отбор целей по типам не задан — цели
+      // любые (создавать новые разрешено: тип/направление известны из
+      // определения свойства).
+      definition: { config: {}, required: false },
+      values: defaultLinkValues(draft.defaultValue),
+      save: async (next) => {
+        const ids = Array.isArray(next) ? (next as string[]) : [];
+        draft.defaultValue = ids.length > 0 ? ids : null;
+        return true;
       },
     });
       defaultHost.append(
@@ -1297,7 +1269,7 @@ export function openPropertyManagerEditor(
           'muted',
           'Общее значение по умолчанию: создаётся для собственных привязок всех типов. Переопределение для отдельного типа — в колонке «Значение по умолчанию» таблиц.',
         ),
-        linkGlobalDefaults.root,
+        linkGlobalDefaults,
       );
       globalDefaultHost = defaultHost;
       linkBodyHost.append(defaultHost);
@@ -1446,55 +1418,24 @@ export function openPropertyManagerEditor(
             const filterIds = oppositeIds.length > 0
               ? expandTypeIdsToSubtree(store.state.thoughtTypes, oppositeIds)
               : [];
-            const linkDefaults = buildChipListField({
-              getValues: () =>
-                Array.isArray(row.defaultValue) ? (row.defaultValue as string[]) : [],
-              onChange: (values) => {
-                row.defaultValue = values.length > 0 ? values : null;
+            // Частное значение по умолчанию — набор целей (bb67e546) чип-полем
+            // общего редактора значения-связи; отбор целей — по типам
+            // противоположной стороны с раскрытием иерархии (L21).
+            const linkDefaults = buildLinkValueEditor({
+              networkId,
+              definition: {
+                config: filterIds.length > 0 ? { allowed_target_type_ids: filterIds } : {},
+                required: false,
+              },
+              values: defaultLinkValues(row.defaultValue),
+              save: async (next) => {
+                const ids = Array.isArray(next) ? (next as string[]) : [];
+                row.defaultValue = ids.length > 0 ? ids : null;
                 row.dirty = true;
-              },
-              getOptions: async (query) => {
-                const trimmed = query.trim();
-                if (trimmed === '') return [];
-                try {
-                  const hits = await etn.thoughts.findDuplicates(
-                    networkId,
-                    trimmed,
-                    undefined,
-                    filterIds.length > 0 ? filterIds : undefined,
-                  );
-                  return hits.map((h) => ({ value: h.id, label: h.title }));
-                } catch {
-                  return [];
-                }
-              },
-              renderLabel: async (id) => {
-                try {
-                  const t = await etn.thoughts.get(networkId, id);
-                  return t.title;
-                } catch {
-                  return `${id.slice(0, 8)}…`;
-                }
-              },
-              placeholder: 'Заголовок мысли-цели…',
-              picker: {
-                label: 'выбрать…',
-                open: async (managed) => {
-                  const result = await pickThoughtsDialog({
-                    networkId,
-                    allowCreate: false,
-                    allowLinkType: false,
-                    searchTypeIds: filterIds.length > 0 ? filterIds : undefined,
-                    defaultNewThoughtTypeId: filterIds[0] ?? null,
-                    selectedIds: managed,
-                    title: 'Выбрать мысли',
-                    applyLabel: 'Выбрать',
-                  });
-                  return result === null ? null : pickedThoughtIds(result);
-                },
+                return true;
               },
             });
-            host.append(linkDefaults.root);
+            host.append(linkDefaults);
           } else {
             host.append(
               buildValueEditor({
@@ -2049,7 +1990,11 @@ export function buildConfig(
   },
   link: LinkConfigDraft,
 ): PropertyConfig | null {
-  if (valueType === 'link') {
+  // Сравнения вида значения — данные конфигурации, не построение поля ввода
+  // (диспетчер по виду значения живёт только в общем редакторе, S2).
+  const isLink = valueType === 'link';
+  const isText = valueType === 'text';
+  if (isLink) {
     const config: PropertyConfig = { direction: link.direction };
     if (link.structural) {
       config.structural = true;
@@ -2071,7 +2016,7 @@ export function buildConfig(
   if (defaultValue !== null && defaultValue !== undefined) {
     config.default_value = defaultValue as string | number | boolean;
   }
-  if (valueType === 'text' && options.choiceOn) {
+  if (isText && options.choiceOn) {
     const list = options.optionsText
       .split(/\r?\n/)
       .map((s) => s.trim())
@@ -2087,6 +2032,24 @@ export function buildConfig(
 // ---------------------------------------------------------------------------
 // Value-type-specific default-value input
 // ---------------------------------------------------------------------------
+
+/**
+ * Значение по умолчанию свойства-связи как рёбра редактора: черновик хранит
+ * набор id целей (`string[] | null`), общий редактор значения-связи работает
+ * с формой `LinkPropertyValueItem[]` (подписи догружаются резолвом).
+ */
+function defaultLinkValues(value: unknown): LinkPropertyValueItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === 'string' && v !== '')
+    .map((id) => ({
+      link_id: '',
+      target_id: id,
+      target_title: null,
+      target_type_id: null,
+      comment: null,
+    }));
+}
 
 /**
  * Заглушка определения свойства для поля «Значение по умолчанию» черновика

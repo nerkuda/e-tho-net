@@ -102,6 +102,23 @@ export interface ValueEditorOptions {
   historyPropertyId?: string;
   /** Трёхзначное поле «да/нет»: `null` — «не задано» (панель выбранных). */
   boolTriState?: boolean;
+  /**
+   * Дополнительные источники подсказок, заданные вызывающим, — прежде всего
+   * токены отбора (`$today+7d`, `$focus`, `$thought.<ключ>`). Источник (или
+   * несколько) приходит снаружи, как в общей выпадашке: сам редактор о
+   * существовании отборов и о смысле токенов не знает — он лишь добавляет
+   * переданные строки в список подсказок и подставляет их значение.
+   * Участвуют у текстовых видов (text/url), даты и свойства-связи; выбор
+   * строки-токена заменяет значение целиком (как `config.options`).
+   * Виды number/bool источников не принимают — у них токенов нет.
+   */
+  extraSuggest?: readonly SuggestSource[];
+  /**
+   * Подсказка-заполнитель поля ввода. У text/url/даты переопределяет
+   * умолчание редактора (у даты с `extraSuggest` поле становится текстовым —
+   * токен не влезает в `<input type="date">`).
+   */
+  placeholder?: string;
 }
 
 /**
@@ -151,6 +168,7 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
         save: (next) =>
           Promise.resolve(opts.save(next)).then((ok) => ok === true),
         historyPropertyId: opts.historyPropertyId,
+        extraSuggest: opts.extraSuggest,
       });
     case 'thought_ref':
     default:
@@ -379,6 +397,7 @@ function buildMultiTextChipsEditor(opts: {
   definition: Pick<EffectiveTypeProperty, 'config'>;
   save: (next: unknown | null) => Promise<boolean> | boolean;
   historyPropertyId?: string;
+  extraSuggest?: readonly SuggestSource[];
 }): HTMLElement {
   const { kind, definition } = opts;
   let items = [...opts.items];
@@ -430,6 +449,8 @@ function buildMultiTextChipsEditor(opts: {
         sources.push(optionsSuggestSource(options, { header: 'Варианты' }));
       }
     }
+    // Источники вызывающего (токены отбора) — общий список подсказок.
+    if (opts.extraSuggest !== undefined) sources.push(...opts.extraSuggest);
     let handle: SuggestHandle | null = null;
     if (sources.length > 0) {
       handle = wireSuggest(input, {
@@ -486,8 +507,10 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   input.autocomplete = 'off';
   input.value = stored;
   if (kind === 'url') {
-    input.placeholder = 'https://… или путь к файлу';
+    input.placeholder = opts.placeholder ?? 'https://… или путь к файлу';
     input.title = 'URL или путь к файлу';
+  } else if (opts.placeholder !== undefined) {
+    input.placeholder = opts.placeholder;
   }
 
   const commitOn = opts.commitOn ?? 'blur';
@@ -540,6 +563,9 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
       sources.push(optionsSuggestSource(options, { header: 'Варианты' }));
     }
   }
+  // Источники вызывающего (токены отбора) — в том же списке подсказок
+  // (инструкция «Пикер … источник вариантов — её параметр»).
+  if (opts.extraSuggest !== undefined) sources.push(...opts.extraSuggest);
   let handle: SuggestHandle | null = null;
   if (sources.length > 0) {
     handle = wireSuggest(input, {
@@ -599,6 +625,7 @@ function buildTextEditor(opts: ValueEditorOptions): HTMLElement {
       save: opts.save,
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
+      extraSuggest: opts.extraSuggest,
     });
   }
   return buildScalarTextEditor(opts, 'text');
@@ -614,6 +641,7 @@ function buildUrlEditor(opts: ValueEditorOptions): HTMLElement {
       save: opts.save,
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
+      extraSuggest: opts.extraSuggest,
     });
   }
   return buildScalarTextEditor(opts, 'url');
@@ -665,8 +693,13 @@ function buildNumberEditor(opts: ValueEditorOptions): HTMLElement {
   return wrapClearable(input, clearNow);
 }
 
-/** Одиночная дата: blur-коммит с baseline (ошибки cefb4db0, 7d094c26). */
+/** Одиночная дата: blur-коммит с baseline (ошибки cefb4db0, 7d094c26). При
+ *  источниках подсказок вызывающего (токены отбора) — текстовое поле: токен
+ *  `$today+7d` в `<input type="date">` не помещается. */
 function buildDateEditor(opts: ValueEditorOptions): HTMLElement {
+  if (opts.extraSuggest !== undefined && opts.extraSuggest.length > 0) {
+    return buildScalarTextEditor(opts, 'text');
+  }
   const stored = typeof opts.value === 'string' ? opts.value.slice(0, 10) : null;
   const input = el('input', 'text-input prop-editor') as HTMLInputElement;
   input.type = 'date';
@@ -964,6 +997,9 @@ export function buildLinkValueEditor(opts: {
   save: (next: unknown) => Promise<boolean>;
   /** Подключает историю последних целей (требование f6399882). */
   historyPropertyId?: string;
+  /** Источники подсказок вызывающего (токены отбора) — см.
+   *  {@link ValueEditorOptions.extraSuggest}. */
+  extraSuggest?: readonly SuggestSource[];
 }): HTMLElement {
   const { networkId, ownerType, ownerId, definition } = opts;
   let current: string[] = opts.values.map((edge) => edge.target_id);
@@ -1147,6 +1183,9 @@ export function buildLinkValueEditor(opts: {
     if (opts.historyPropertyId !== undefined) {
       sources.push(linkHistorySource(networkId, opts.historyPropertyId));
     }
+    // Токены отбора — источник вызывающего: выбор строки кладёт токен в
+    // значение как обычную цель строкой (резолвер токенов — на сервере).
+    if (opts.extraSuggest !== undefined) sources.push(...opts.extraSuggest);
     sources.push(linkSearchSource(networkId, filterIds));
     const handle = wireSuggest(addInput, {
       sources,

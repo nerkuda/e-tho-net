@@ -288,7 +288,8 @@ function isListOp(op: StructurePropertyOp | null): boolean {
 // Value combo — live-search candidate list (задача 27472616)
 // ---------------------------------------------------------------------------
 
-/** One candidate row of the unified value-combo (see `value-combo.ts`). */
+/** One candidate row of a token/value combo (общий редактор значения и
+ *  общий чип-лист сущностей; см. `filter-dialog.ts`). */
 export interface ComboOption {
   /** Text stored in the field when the row is picked (token or literal id). */
   value: string;

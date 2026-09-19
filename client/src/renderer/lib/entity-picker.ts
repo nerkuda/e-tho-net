@@ -599,6 +599,160 @@ export async function pickEntitiesModal(
 }
 
 // ---------------------------------------------------------------------------
+// Множественный выбор сущностей чипами (общий чип-лист критериев)
+// ---------------------------------------------------------------------------
+
+/** Параметры {@link buildEntityChipField}. */
+export interface EntityChipFieldOptions {
+  /** Текущие значения (id сущностей или `$`-токены) — читаются при отрисовке. */
+  getValues: () => string[];
+  /** Запись нового набора значений. */
+  onChange: (values: string[]) => void;
+  /**
+   * Кандидаты для живого поиска (и для облачков уже выбранных значений).
+   * Пустой запрос — весь каталог (типы) либо пусто (мысли).
+   */
+  loadOptions: (query: string) => EntityOption[] | Promise<EntityOption[]>;
+  /** Когда источник кандидатов участвует в списке (по умолчанию `always`). */
+  optionsWhen?: 'always' | 'typed';
+  /** Заголовок группы кандидатов. */
+  optionsHeader?: string;
+  /** Источники подсказок вызывающего (токены) — общий список выпадашки. */
+  extraSources?: readonly SuggestSource[];
+  /** Данные облачка значения; `null` — сырой текст (нет данных). */
+  cloudOf?: (value: string) => ThoughtCloudInput | null;
+  placeholder?: string;
+  /**
+   * Модальный пикер поверх нетокенных значений: получает управляемое
+   * подмножество, возвращает его замену (`null` — отмена); чипы-токены
+   * сохраняются.
+   */
+  picker?: { label: string; open(managed: readonly string[]): Promise<string[] | null> };
+}
+
+/** Собранный чип-лист сущностей. */
+export interface EntityChipField {
+  root: HTMLElement;
+  /** Перерисовывает чипы (вызывающий догрузил облачка). */
+  refresh(): void;
+}
+
+/** Строка выпадашки по варианту сущности: облачко, отступ дерева, свотч линии. */
+function entityEntry(opt: EntityOption): SuggestEntry {
+  const entry: SuggestEntry = { value: opt.id, label: opt.title, thought: opt.cloud };
+  if (opt.depth !== undefined) entry.indent = typeRowIndentSteps(opt.depth);
+  if (opt.line != null) entry.swatch = opt.line;
+  return entry;
+}
+
+/**
+ * Чип-лист множественного выбора сущностей: выбранные значения — мини-облачка
+ * общей фабрики (значок, цвета, бледность неактуальной, метка корзины;
+ * инструкция «Использовать унифицированные поля выбора ссылок в диалогах»),
+ * поле ввода — живой поиск общей выпадашкой, необязательная кнопка модального
+ * пикера. Свободный текст и токены (строки `$…`) добавляются как значения —
+ * так поля критериев («Родительские мысли», «Типы мыслей», «Типы связей»,
+ * автор/редактор) сохраняют смешение литералов и токенов. Отдельная сборка
+ * чипов вне общих модулей запрещена сторожем `guard-value-editor`.
+ */
+export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
+  const root = div('entity-chip-field st-f-fieldrow');
+  const field = div('st-f-chipfield entity-chip-field-inner');
+  const input = el('input', 'text-input entity-chip-input') as HTMLInputElement;
+  input.type = 'text';
+  input.autocomplete = 'off';
+  input.placeholder = opts.placeholder ?? 'Добавить значение…';
+
+  /** Каталог, накопленный источником: по нему рисуются облачка значений. */
+  const byId = new Map<string, EntityOption>();
+
+  const commit = (raw: string): void => {
+    const value = raw.trim();
+    if (value === '') return;
+    input.value = '';
+    if (opts.getValues().includes(value)) return;
+    opts.onChange([...opts.getValues(), value]);
+    renderChips();
+  };
+
+  const source: SuggestSource = {
+    when: opts.optionsWhen ?? 'always',
+    ...(opts.optionsHeader !== undefined ? { header: opts.optionsHeader } : {}),
+    load: (query) =>
+      Promise.resolve(opts.loadOptions(query)).then((options) => {
+        for (const opt of options) byId.set(opt.id, opt);
+        return options.map(entityEntry);
+      }),
+  };
+  const sources: SuggestSource[] = [source, ...(opts.extraSources ?? [])];
+  wireSuggest(input, {
+    sources,
+    // Свободный текст фиксирует обработчик `keydown` ниже; Enter над
+    // выделенной строкой выбирает её (общая выпадашка гасит событие).
+    pickFirstOnEnter: false,
+    onPick: (entry) => commit(entry.value),
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.defaultPrevented) {
+      event.preventDefault();
+      commit(input.value);
+    }
+  });
+  field.addEventListener('click', (event) => {
+    if (event.target === field) input.focus();
+  });
+
+  function renderChips(): void {
+    const chips: HTMLElement[] = [];
+    for (const value of opts.getValues()) {
+      const cloud = opts.cloudOf?.(value) ?? byId.get(value)?.cloud ?? { id: value, title: value };
+      chips.push(
+        createThoughtCloud(cloud, {
+          profile: 'chip',
+          width: 'container',
+          actions: {
+            onRemove: () => {
+              opts.onChange(opts.getValues().filter((v) => v !== value));
+              renderChips();
+            },
+          },
+        }),
+      );
+    }
+    // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
+    field.replaceChildren(...chips, input);
+  }
+
+  field.append(input);
+  renderChips();
+  root.append(field);
+
+  // Первичная загрузка каталога — облачка уже выбранных значений (типы,
+  // пользователи) видны до первого фокуса в поле.
+  if ((opts.optionsWhen ?? 'always') === 'always') {
+    void Promise.resolve(source.load('')).then(() => renderChips());
+  }
+
+  if (opts.picker !== undefined) {
+    const { picker } = opts;
+    const managed = (): string[] => opts.getValues().filter((v) => !v.startsWith('$'));
+    const pickBtn = el('button', 'btn small entity-chip-pick', picker.label) as HTMLButtonElement;
+    pickBtn.type = 'button';
+    pickBtn.addEventListener('click', () => {
+      void picker.open(managed()).then((next) => {
+        if (next === null) return;
+        const kept = opts.getValues().filter((v) => v.startsWith('$'));
+        opts.onChange([...kept, ...next]);
+        renderChips();
+      });
+    });
+    root.append(pickBtn);
+  }
+
+  return { root, refresh: renderChips };
+}
+
+// ---------------------------------------------------------------------------
 // Встроенное комбо
 // ---------------------------------------------------------------------------
 
@@ -708,6 +862,20 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       return;
     }
     const opt = byId.get(current);
+    // Мысль ищется на сервере по запросу и в каталог не попадает: облачко
+    // начального значения догружаем резолвом (иначе чип показывал бы сырой id).
+    if (currentCloud === null && opt === undefined && opts.kind === 'thoughts') {
+      void etn.thoughts
+        .resolve(opts.networkId, [current])
+        .then((refs) => {
+          const ref = refs[0];
+          if (ref !== undefined && current === ref.id && currentCloud === null) {
+            currentCloud = { ...ref };
+            if (root.isConnected) renderValue();
+          }
+        })
+        .catch(() => undefined);
+    }
     const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: current };
     valueHost.append(
       createThoughtCloud(cloud, {

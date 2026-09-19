@@ -21,6 +21,7 @@ import { type ChronicleSavedFilter, type ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
+import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
 // Чипы мыслей в поле отбора строит общая фабрика облачка (профиль `chip`):
 // значок, цвета, начертание и бледность — как в любом списке клиента.
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
@@ -32,11 +33,16 @@ import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
 import { pickEntitiesModal } from '../../lib/entity-picker.js';
 import { buildAuthorConditionRow } from '../../lib/filter-builder.js';
+import { historySuggestSource, wireSuggest } from '../../lib/suggest-dropdown.js';
+import { wrapClearable } from '../../editor/value-editor.js';
 import { store } from '../../state.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
 
 export type { ChronicleFilterState } from './state.js';
+
+/** Ключ истории ввода строки поиска Хроники (общий механизм recent-values). */
+const KEYWORDS_HISTORY_KEY = 'chronicle.keywords';
 
 const LINK_SCOPE_LABELS: Record<ChronicleFilterState['linkScope'], string> = {
   sources: 'только источники связей',
@@ -208,6 +214,11 @@ function repaintControls(): void {
   if (dateFromInput !== null) dateFromInput.value = filter.dateFrom;
   if (dateToInput !== null) dateToInput.value = filter.dateTo;
   if (orderSelect !== null) orderSelect.value = filter.order;
+  // Крестики очистки (`wrapClearable`) следят за видимостью по событиям
+  // поля — после программной установки значения обновляем их вручную.
+  for (const input of [dateFromInput, dateToInput, keywordsInput]) {
+    input?.dispatchEvent(new Event('input'));
+  }
   repaintChips();
   refreshTypeButtons();
   refreshSavedSelect();
@@ -358,14 +369,55 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   keywordsInput.addEventListener('input', () => {
     filter = { ...filter, keywords: keywordsInput!.value };
   });
+  // История ввода — общий механизм последних значений (как у полей значения:
+  // подсказка на пустом поле); запись — по уходу фокуса.
+  const keywordsHistory = historySuggestSource({
+    load: () => {
+      try {
+        return loadRecentValues(requireNetworkId(), KEYWORDS_HISTORY_KEY).map((value) => ({
+          value,
+          label: value,
+        }));
+      } catch {
+        return [];
+      }
+    },
+  });
+  wireSuggest(keywordsInput, {
+    sources: [keywordsHistory],
+    onPick: (entry) => {
+      keywordsInput!.value = entry.value;
+      filter = { ...filter, keywords: entry.value };
+    },
+  });
+  keywordsInput.addEventListener('blur', () => {
+    const value = keywordsInput!.value.trim();
+    if (value !== '') {
+      try {
+        recordRecentValue(requireNetworkId(), KEYWORDS_HISTORY_KEY, value);
+      } catch {
+        // нет сети — история не критична
+      }
+    }
+  });
+  // У каждого поля — крестик очистки (тот же, что у полей значения).
   row1.append(
     span('Сохранённые отборы:', 'chron-label'),
     savedSelect,
     span('Период с', 'chron-label'),
-    dateFromInput,
+    wrapClearable(dateFromInput, () => {
+      dateFromInput!.value = '';
+      filter = { ...filter, dateFrom: '' };
+    }),
     span('по', 'chron-label'),
-    dateToInput,
-    keywordsInput,
+    wrapClearable(dateToInput, () => {
+      dateToInput!.value = '';
+      filter = { ...filter, dateTo: '' };
+    }),
+    wrapClearable(keywordsInput, () => {
+      keywordsInput!.value = '';
+      filter = { ...filter, keywords: '' };
+    }),
   );
 
   // Row 2: thoughts (chips + picker dialog + clear) + subtree ---------------
