@@ -48,8 +48,8 @@ const VALUE_TYPE_IF =
 /** Цепочка из двух таких `if` в пределах окна — форма диспетчера. */
 const IF_DISPATCH_WINDOW = 700;
 
-/** Легаси-чипы полей критериев панели «Структур» — до задачи 3742dd59. */
-const LEGACY_CHIP_SITES = new Set(['screens/structures/filter-panel.ts']);
+/** Легаси-исключений нет: панель «Структур» переведена задачей 3742dd59. */
+const LEGACY_CHIP_SITES = new Set<string>();
 
 const RULES: GuardRule[] = [
   {

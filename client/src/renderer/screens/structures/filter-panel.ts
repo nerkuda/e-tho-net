@@ -1,45 +1,63 @@
 /**
  * Filter panel of the «Структуры мыслей» view (L15, 08-ui-spec.md §15.3).
  *
- * Every group is a single compact line in its collapsed shape: keywords with
- * a history dropdown, a «Родительские мысли» scope field, «Типы мыслей» and
- * «Типы связей» comma-fields that open a checkbox-picker dialog, a
- * collapsible «Свойства» condition editor, a collapsible «Дополнительно»
- * tri-state group and sort. A sticky footer (Применить/Очистить + saved
- * filters) sits below the scrollable criteria list. The panel owns the
- * filter DOM and the string→wire value conversion; the host module
- * (`structures.ts`) owns the query lifecycle and persists the state (L4
- * `structures_state`).
+ * Каркас формы (блоки с маркером, ключевые слова с областью поиска, чип-поля
+ * сущностей, условия по свойствам, «Дополнительно», автор/редактор, даты,
+ * сортировка, футер) строит общий модуль `lib/filter-form.ts`, а условия —
+ * единый конструктор `lib/filter-builder.ts` (ADR «условия отбора строит один
+ * конструктор с одной моделью состояния», стандарт S4). Панель держит только
+ * свои критерии (обход по связям, ширина, id сохранённого отбора) и жизненный
+ * цикл отбора.
  *
- * Условия отбора строит единый конструктор `lib/filter-builder.ts`
- * (задача 48b59d00, веха 5 версии 0.8.2): модель состояния, словарь
- * операторов, наборы сортировок/направлений, конвертер в wire и строка
- * условия «автор/редактор» импортируются оттуда — панель держит только
- * свои критерии (обход по связям) и жизненный цикл отбора.
+ * Задача 3742dd59: собственный каркас панели, собственные чипы и собственные
+ * строки условий убраны — панель собирает те же секции, что диалог отбора
+ * типа мысли, «Хроника», «События» и строка поиска карты.
  */
 
 import {
   type LinkTypeFilterInput,
   type NetworkProperty,
-  type PropertyConfig,
-  type PropertyValueType,
   type SavedFilter,
-  type SortOrder,
-  type StructureAuthorOp,
   type StructureFilter,
   type StructureKeywordScope,
   type StructurePropertyCondition,
-  type StructurePropertyOp,
-  type StructureSort,
-  type ThoughtRef,
 } from '@etn/shared';
 
+import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
+import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
+import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
+import { etn } from '../../lib/etn.js';
 import {
-  FILTER_ORDERS,
-  FILTER_SORTS,
-  OPS_BY_TYPE,
+  buildEntityChipField,
+  linkTypeEntityOptions,
+  pickEntitiesModal,
+  thoughtEntityOption,
+  thoughtTypeEntityOptions,
+  type EntityOption,
+} from '../../lib/entity-picker.js';
+import {
+  buildAuthorshipSection,
+  buildConditionsSection,
+  buildDatesSection,
+  buildEntityChipSection,
+  buildExtrasSection,
+  buildFilterBlock,
+  buildFilterFooterButtons,
+  buildFilterForm,
+  buildKeywordsSection,
+  buildSortSection,
+  type FilterFormContext,
+  type FilterSection,
+} from '../../lib/filter-form.js';
+import { showMenuAt, type MenuItem } from '../../lib/menu.js';
+import { notice } from '../../lib/notice.js';
+import type { SuggestSource } from '../../lib/suggest-dropdown.js';
+import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
+import { store } from '../../state.js';
+import { requireNetworkId } from '../../app.js';
+
+import {
   authorFilterActive,
-  buildAuthorConditionRow,
   buildConditionsWire,
   buildKeywordScope as builderKeywordScope,
   buildWireFilter,
@@ -47,24 +65,7 @@ import {
   defaultFilterCriteriaState,
   parseFilterDefinition,
   type FilterCriteriaState,
-  type PropertyConditionState,
-  type TriState,
 } from '../../lib/filter-builder.js';
-
-// Чипы мыслей в панели отбора строит общая фабрика облачка; `applyCloudStyle`
-// стилизует подписи чипов типов связей (у типов связей нет своей фабрики).
-import { applyCloudStyle, createThoughtCloud } from '../../lib/thought-cloud.js';
-import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { buildValueEditor, wrapClearable } from '../../editor/value-editor.js';
-import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
-import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
-import { etn } from '../../lib/etn.js';
-import { showMenuAt, type MenuItem } from '../../lib/menu.js';
-import { notice } from '../../lib/notice.js';
-import { pickEntitiesModal } from '../../lib/entity-picker.js';
-import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
-import { store } from '../../state.js';
-import { requireNetworkId } from '../../app.js';
 
 /** Filter-panel width limits, px (the splitter drag clamps to this range). */
 export const FILTER_W_MIN = 230;
@@ -101,12 +102,6 @@ export interface FilterPanelCallbacks {
   onCommands(anchor: HTMLElement): void;
 }
 
-/**
- * Operators per property value type (03-server-api.md §6.10) — единый
- * экземпляр живёт в `lib/filter-builder.ts` (задача 48b59d00, веха 5).
- * Здесь OPS_BY_TYPE не объявляется и не переписывается.
- */
-
 /** Default panel state: empty filter → HOME only (§15.3). */
 function defaultState(): FilterState {
   return {
@@ -126,37 +121,22 @@ let host: HTMLElement | null = null;
 let callbacks: FilterPanelCallbacks | null = null;
 let state: FilterState = defaultState();
 
-/** Property registry: id → registry row. 0.6.5: one property, one id — the
- *  picker no longer walks every thought type (task 171a438e). */
+/** Property registry: id → registry row (0.6.5: one property, one id). */
 const propertyDefs = new Map<string, NetworkProperty>();
-/** Thought-ref titles for value chips (resolved lazily). */
-const refTitles = new Map<string, string>();
-/** Resolved metadata of the «Родительские мысли» chips (icon/style, lazy). */
-const parentRefs = new Map<string, ThoughtRef>();
+/** Облачка выбранных родительских мыслей (id → данные облачка, лениво). */
+const parentClouds = new Map<string, ThoughtCloudInput>();
 let savedFilters: SavedFilter[] = [];
 /** Signature of the catalogues the panel depends on (rebuild on change). */
 let catalogueSignature = '';
 
-// DOM anchors rebuilt in renderPanel().
-let keywordsInput: HTMLInputElement | null = null;
-let parentFieldBox: HTMLElement | null = null;
-let typeFieldBox: HTMLElement | null = null;
-let linkTypeFieldBox: HTMLElement | null = null;
-let linkFilterFieldBox: HTMLElement | null = null;
-let conditionsBox: HTMLElement | null = null;
-let sortSelect: HTMLSelectElement | null = null;
-let orderSelect: HTMLSelectElement | null = null;
-let saveNameInput: HTMLInputElement | null = null;
-let savedListBox: HTMLElement | null = null;
-
-/** Collapse state of the two collapsible groups (transient, not persisted). */
+/** Collapse state of the collapsible groups (transient, not persisted). */
 let propertiesCollapsed = true;
 let extraCollapsed = true;
 /**
- * Свёрнута ли группа «Даты» (задача 7032e55a). По умолчанию свёрнута — это
- * новая группа, существующий отбор её не касается; временное состояние, в
- * L4 `structures_state` не сохраняется.
+ * «Автор / Редактор» — своя переменная сворачивания. Задача 3742dd59: раньше
+ * группа делила её с «Дополнительно», и обе схлопывались вместе.
  */
+let authorCollapsed = true;
 let datesCollapsed = true;
 
 // ---------------------------------------------------------------------------
@@ -172,13 +152,8 @@ export function getFilterState(): FilterState {
 export function setFilterState(next: FilterState): void {
   state = { ...defaultState(), ...next };
   propertiesCollapsed = state.properties.length === 0;
-  extraCollapsed =
-    state.hasProperties === null &&
-    state.hasComment === null &&
-    state.hasAttachments === null &&
-    state.hasChronology === null &&
-    state.trashed === false &&
-    state.active === null &&
+  extraCollapsed = !extrasActive(state);
+  authorCollapsed =
     !authorFilterActive(state.authorOp, state.authorId, state.authorIds) &&
     !authorFilterActive(state.editorOp, state.editorId, state.editorIds);
   datesCollapsed = !datesActive(state);
@@ -258,8 +233,7 @@ export function buildExtraFilter(): Pick<
 
 /**
  * Wire `link_filter` обхода (задача c965ad03): ограничивает рёбра, по которым
- * `parent_ids` раскрывается в поддерево. `undefined` — без ограничения (обход
- * по всем рёбрам, прежнее поведение).
+ * `parent_ids` раскрывается в поддерево. `undefined` — без ограничения.
  */
 export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
   if (state.linkFilterTypeIds.length === 0 && !state.linkFilterStructural) return undefined;
@@ -269,16 +243,21 @@ export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
   return out;
 }
 
-/**
- * Строки условия авторства, словарь операторов, помощники активности и
- * конвертеры значений автора — единые экземпляры конструктора
- * `lib/filter-builder.ts` (задача 48b59d00, веха 5). Здесь они не
- * объявляются повторно.
- */
-
 /** Reloads the saved-filter list (called on `saved-filter.*` realtime events). */
 export function invalidateSavedFilters(): void {
   void loadSavedFilters();
+}
+
+/** Признаки «Дополнительно» заполнены («Корзина» — независимый флаг). */
+function extrasActive(s: FilterCriteriaState): boolean {
+  return (
+    s.hasProperties !== null ||
+    s.hasComment !== null ||
+    s.hasAttachments !== null ||
+    s.hasChronology !== null ||
+    (s.active !== null && store.state.showInactive) ||
+    s.trashed
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -305,9 +284,7 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
 
 /**
  * Loads the property registry of the network (0.6.5 — task 171a438e): one
- * REST call replaces the per-type walk the panel used to do. A registry
- * property is one row per network; the picker no longer cares which types
- * attach it, so the same condition matches thoughts of different types.
+ * REST call replaces the per-type walk the panel used to do.
  */
 async function loadPropertyDefs(): Promise<void> {
   const networkId = store.state.networkId;
@@ -348,13 +325,14 @@ function clearAllCriteria(): void {
   state = { ...defaultState(), sort: state.sort, order: state.order, panelWidth: state.panelWidth };
   propertiesCollapsed = true;
   extraCollapsed = true;
+  authorCollapsed = true;
   datesCollapsed = true;
   renderPanel();
-  touch();
+  callbacks?.onStatePersist();
 }
 
 // ---------------------------------------------------------------------------
-// Keywords history (client-local, §15.3)
+// Keywords history (client-local, §15.3) — источник подсказок общего поля
 // ---------------------------------------------------------------------------
 
 const KW_HISTORY_MAX = 10;
@@ -385,6 +363,14 @@ function pushKwHistory(value: string): void {
   }
 }
 
+/** Источник подсказок «Ключевые слова»: история ввода этого клиента. */
+function keywordsHistorySource(): SuggestSource {
+  return {
+    when: 'always',
+    load: () => loadKwHistory().map((word) => ({ value: word, label: word })),
+  };
+}
+
 /** A small absolutely-positioned dropdown anchored right after `anchor`. */
 let openDropdownBox: HTMLElement | null = null;
 function closeFieldDropdown(): void {
@@ -410,649 +396,206 @@ function openFieldDropdown(anchor: HTMLElement, options: Array<{ label: string; 
 }
 
 // ---------------------------------------------------------------------------
-// Panel DOM
+// Panel DOM — общий каркас
 // ---------------------------------------------------------------------------
 
-/** Section block with a title; the title element is exposed for the uniform
- *  «group has values» marking (§15.3). */
-function block(title: string): { box: HTMLElement; body: HTMLElement; head: HTMLElement } {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title', title);
-  const body = div('st-f-body');
-  box.append(head, body);
-  return { box, body, head };
+let saveNameInput: HTMLInputElement | null = null;
+let savedListBox: HTMLElement | null = null;
+
+/** Догружает облачка уже выбранных родительских мыслей (по id). */
+function resolveParentClouds(): void {
+  const networkId = store.state.networkId;
+  const missing = state.parentIds.filter((id) => !parentClouds.has(id));
+  if (networkId === null || missing.length === 0) return;
+  void etn.thoughts
+    .resolve(networkId, missing)
+    .then((refs) => {
+      for (const ref of refs) parentClouds.set(ref.id, { ...ref });
+      renderPanel();
+    })
+    .catch(() => undefined);
 }
 
-/**
- * The «наименование/синонимы/комментарий» checkbox row under the keywords
- * field (§15.3, bug fix 0.5.5): one line, three checkboxes. Unchecking the
- * last checked box auto-reverts to the default pair («наименование» +
- * «синонимы») instead of leaving the search scope empty.
- */
-function buildKeywordScopeRow(): HTMLElement {
-  const row = div('st-f-kw-scope');
-  const items: Array<{
-    label: string;
-    tooltip: string;
-    get: () => boolean;
-    set: (v: boolean) => void;
-    input: HTMLInputElement | null;
-  }> = [
-    {
-      label: 'наименование',
-      tooltip: 'Искать в наименованиях мыслей',
-      get: () => state.keywordInTitle,
-      set: (v) => (state.keywordInTitle = v),
-      input: null,
-    },
-    {
-      label: 'синонимы',
-      tooltip: 'Искать в синонимах мыслей',
-      get: () => state.keywordInSynonyms,
-      set: (v) => (state.keywordInSynonyms = v),
-      input: null,
-    },
-    {
-      label: 'комментарий',
-      tooltip: 'Искать в постоянном комментарии мыслей',
-      get: () => state.keywordInComment,
-      set: (v) => (state.keywordInComment = v),
-      input: null,
-    },
-  ];
-    for (const item of items) {
-      const lbl = el('label', 'checkbox-row st-f-kw-scope-item');
-      const input = el('input') as HTMLInputElement;
-      input.type = 'checkbox';
-      input.checked = item.get();
-      item.input = input;
-      setTooltip(lbl, item.tooltip);
-      input.addEventListener('change', () => {
-        item.set(input.checked);
-        // Cleared all three — revert to the default pair (§15.3 proposal).
-        if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
-          state.keywordInTitle = true;
-          state.keywordInSynonyms = true;
-        }
-        for (const other of items) other.input!.checked = other.get();
-        touch();
-      });
-      lbl.append(input, span(item.label));
-      row.append(lbl);
-    }
-    return row;
+/** Live-search кандидаты мыслей для чип-листа «Родительские мысли». */
+async function parentThoughtOptions(query: string): Promise<EntityOption[]> {
+  const needle = query.trim();
+  if (needle === '') return [];
+  try {
+    const hits = await etn.thoughts.findDuplicates(requireNetworkId(), needle, [], []);
+    return hits.map((hit) => {
+      parentClouds.set(hit.id, { ...hit });
+      return thoughtEntityOption(hit);
+    });
+  } catch {
+    return [];
   }
-
-/**
- * Строка «от / до» одной временной группы (задача 7032e55a). Использует
- * `<input type="datetime-local">` — нативный пикер даты/времени без
- * зависимостей; формат значения `YYYY-MM-DDTHH:MM` совместим с ISO-8601,
- * который сервер уже принимает (`created_after`/`created_before`/…).
- * Пустая строка — граница не выставлена. У каждого поля — общий крестик
- * «✕» очистки одним кликом (`wrapClearable`, ошибка a8e9eef1).
- */
-function buildDateBoundRow(
-  label: string,
-  opts: {
-    after: string;
-    before: string;
-    onAfterChange: (v: string) => void;
-    onBeforeChange: (v: string) => void;
-  },
-): HTMLElement {
-  const row = div('st-f-date-row');
-  row.append(el('span', 'st-f-date-label', label));
-  const afterWrap = div('st-f-date-field');
-  afterWrap.append(el('span', 'st-f-date-tag', 'от'));
-  const afterInput = el('input', 'st-f-input') as HTMLInputElement;
-  afterInput.type = 'datetime-local';
-  afterInput.step = '1';
-  afterInput.value = opts.after;
-  setTooltip(afterInput, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
-  afterInput.addEventListener('input', () => opts.onAfterChange(afterInput.value));
-  afterWrap.append(
-    wrapClearable(afterInput, () => {
-      afterInput.value = '';
-      opts.onAfterChange('');
-    }),
-  );
-  row.append(afterWrap);
-
-  const beforeWrap = div('st-f-date-field');
-  beforeWrap.append(el('span', 'st-f-date-tag', 'до'));
-  const beforeInput = el('input', 'st-f-input') as HTMLInputElement;
-  beforeInput.type = 'datetime-local';
-  beforeInput.step = '1';
-  beforeInput.value = opts.before;
-  setTooltip(beforeInput, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
-  beforeInput.addEventListener('input', () => opts.onBeforeChange(beforeInput.value));
-  beforeWrap.append(
-    wrapClearable(beforeInput, () => {
-      beforeInput.value = '';
-      opts.onBeforeChange('');
-    }),
-  );
-  row.append(beforeWrap);
-  return row;
-  }
-
-// Group-title elements of the current panel (refreshGroupTitles toggles them).
-let kwTitle: HTMLElement | null = null;
-let parentTitle: HTMLElement | null = null;
-let ttTitle: HTMLElement | null = null;
-let ltTitle: HTMLElement | null = null;
-let lftTitle: HTMLElement | null = null;
-let propsTitle: HTMLElement | null = null;
-let extraTitle: HTMLElement | null = null;
-let datesTitle: HTMLElement | null = null;
-
-/**
- * Uniform «group carries values» marking (§15.3): EVERY group whose criteria
- * are set — collapsible or not — gets a bold, accent-colored title, so a
- * collapsed group visibly holds settings. «Сортировка» always has a value and
- * is never marked.
- */
-function refreshGroupTitles(): void {
-  kwTitle?.classList.toggle('st-f-title-active', state.keywords.trim() !== '');
-  parentTitle?.classList.toggle('st-f-title-active', state.parentIds.length > 0);
-  ttTitle?.classList.toggle('st-f-title-active', state.typeIds.length > 0);
-  ltTitle?.classList.toggle('st-f-title-active', state.linkTypeIds.length > 0);
-  lftTitle?.classList.toggle(
-    'st-f-title-active',
-    state.linkFilterTypeIds.length > 0 || state.linkFilterStructural,
-  );
-  propsTitle?.classList.toggle('st-f-title-active', state.properties.length > 0);
-  extraTitle?.classList.toggle(
-    'st-f-title-active',
-    state.hasProperties !== null ||
-      state.hasComment !== null ||
-      state.hasAttachments !== null ||
-      state.hasChronology !== null ||
-      (state.active !== null && store.state.showInactive),
-  );
-  // Задача 7032e55a: маркер «Даты» заполнен, если задана хотя бы одна граница.
-  datesTitle?.classList.toggle('st-f-title-active', datesActive(state));
 }
 
-/** Persists the state (L4) and refreshes the uniform group-title marking. */
-function touch(): void {
-  callbacks?.onStatePersist();
-  refreshGroupTitles();
-}
-
-/**
- * A collapsible section block: clicking the header toggles the body. The
- * header carries the uniform «group has values» marking (bold + accent,
- * §15.3) — same rule as the always-open groups, collapsed or not.
- */
-function collapsibleBlock(
-  title: string,
-  getCollapsed: () => boolean,
-  setCollapsed: (v: boolean) => void,
-  isNonEmpty: () => boolean,
-): { box: HTMLElement; body: HTMLElement; head: HTMLElement; refresh: () => void } {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title st-f-collapsible-title');
-  const caret = el('span', 'st-f-caret', getCollapsed() ? '▸' : '▾');
-  head.append(caret, el('span', '', title));
-  const body = div('st-f-body');
-  box.append(head, body);
-  const refresh = (): void => {
-    const collapsed = getCollapsed();
-    body.classList.toggle('hidden', collapsed);
-    caret.textContent = collapsed ? '▸' : '▾';
-    head.classList.toggle('st-f-title-active', isNonEmpty());
-  };
-  head.addEventListener('click', () => {
-    setCollapsed(!getCollapsed());
-    refresh();
+/** Ограничение обхода по связям (задача c965ad03) — панельное дополнение. */
+function buildTraversalSection(ctx: FilterFormContext): FilterSection {
+  const section = buildFilterBlock('Обход по связям', {
+    isNonEmpty: () => state.linkFilterTypeIds.length > 0 || state.linkFilterStructural,
   });
-  refresh();
-  return { box, body, head, refresh };
+  const field = buildEntityChipField({
+    getValues: () => [...state.linkFilterTypeIds],
+    onChange: (values) => {
+      state.linkFilterTypeIds = values;
+      ctx.touch();
+    },
+    loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+    optionsHeader: 'Типы связей',
+    placeholder: 'Тип связи…',
+    picker: {
+      label: 'список типов…',
+      open: () =>
+        pickEntitiesModal({
+          networkId: requireNetworkId(),
+          kind: 'link-types',
+          title: 'Обход по связям',
+          currentIds: state.linkFilterTypeIds,
+        }),
+    },
+    cloudOf: (id) => {
+      const type = store.state.linkTypes.find((t) => t.id === id);
+      return type === undefined ? null : { id: type.id, title: type.name_forward };
+    },
+  });
+  setTooltip(field.root, 'Ограничить рёбра, по которым раскрывается отбор');
+  const structural = div('st-f-tri-row');
+  const structuralLabel = el('label', 'checkbox-row') as HTMLLabelElement;
+  const structuralCheck = el('input') as HTMLInputElement;
+  structuralCheck.type = 'checkbox';
+  structuralCheck.checked = state.linkFilterStructural;
+  setTooltip(structuralLabel, 'Включить нетипизированные (структурные) связи в обход');
+  structuralCheck.addEventListener('change', () => {
+    state.linkFilterStructural = structuralCheck.checked;
+    ctx.touch();
+  });
+  structuralLabel.append(structuralCheck, span('структурные связи'));
+  structural.append(el('span', 'st-f-tri-label', 'Структура'), structuralLabel);
+  section.body.append(field.root, structural);
+  return section;
 }
 
-/** Rebuilds the whole panel from `state`. */
+/** Rebuilds the whole panel from `state` — секции общего каркаса. */
 function renderPanel(): void {
   if (host === null) return;
   clear(host);
   applyPanelWidth();
   host.classList.add('st-f-layout');
 
-  const scroll = div('st-f-scroll');
-  host.append(scroll);
-
-  // --- keywords ---------------------------------------------------------
-  const kw = block('Ключевые слова');
-  kwTitle = kw.head;
-  const kwWrap = div('st-f-kw-wrap');
-  keywordsInput = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
-  keywordsInput.type = 'text';
-  keywordsInput.value = state.keywords;
-  keywordsInput.placeholder = 'счет* -вод*';
-  setTooltip(
-    keywordsInput,
-    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. Поиск по названию и синонимам.',
-  );
-  keywordsInput.addEventListener('input', () => {
-    state.keywords = keywordsInput?.value ?? '';
-    touch();
-  });
-  keywordsInput.addEventListener('focus', () => {
-    if (keywordsInput === null) return;
-    openFieldDropdown(
-      kwWrap,
-      loadKwHistory().map((word) => ({
-        label: word,
-        onPick: () => {
-          if (keywordsInput !== null) {
-            keywordsInput.value = word;
-            state.keywords = word;
-            touch();
-          }
-        },
-      })),
-    );
-  });
-  keywordsInput.addEventListener('blur', () => window.setTimeout(closeFieldDropdown, 150));
-  keywordsInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') triggerApply();
-    if (event.key === 'Escape') closeFieldDropdown();
-  });
-  const kwClear = el('button', 'st-f-clear-inline', '×');
-  kwClear.type = 'button';
-  setTooltip(kwClear, 'Очистить');
-  kwClear.addEventListener('click', () => {
-    state.keywords = '';
-    if (keywordsInput !== null) keywordsInput.value = '';
-    touch();
-  });
-  kwWrap.append(keywordsInput, kwClear);
-  kw.body.append(kwWrap);
-  kw.body.append(buildKeywordScopeRow());
-  scroll.append(kw.box);
-
-  // --- parent thoughts (scope, §15.3) ------------------------------------
-  const pt = block('Родительские мысли');
-  parentTitle = pt.head;
-  parentFieldBox = div('st-f-chipfield');
-  parentFieldBox.tabIndex = 0;
-  setTooltip(parentFieldBox, 'Ограничить отбор мыслями, подчинёнными указанным (клик — выбрать)');
-  parentFieldBox.addEventListener('click', () => void openParentPicker());
-  parentFieldBox.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void openParentPicker();
-  });
-  const ptClear = el('button', 'st-f-clear-inline', '×');
-  ptClear.type = 'button';
-  setTooltip(ptClear, 'Очистить');
-  ptClear.addEventListener('click', (event) => {
-    event.stopPropagation();
-    state.parentIds = [];
-    touch();
-    renderParentField();
-  });
-  const ptRow = div('st-f-fieldrow');
-  ptRow.append(parentFieldBox, ptClear);
-  pt.body.append(ptRow);
-  scroll.append(pt.box);
-  renderParentField();
-
-  // --- thought types ------------------------------------------------------
-  const tt = block('Типы мыслей');
-  ttTitle = tt.head;
-  typeFieldBox = div('st-f-chipfield');
-  typeFieldBox.tabIndex = 0;
-  typeFieldBox.addEventListener('click', () => void openThoughtTypesPicker());
-  typeFieldBox.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void openThoughtTypesPicker();
-  });
-  const ttClear = el('button', 'st-f-clear-inline', '×');
-  ttClear.type = 'button';
-  setTooltip(ttClear, 'Очистить');
-  ttClear.addEventListener('click', (event) => {
-    event.stopPropagation();
-    state.typeIds = [];
-    touch();
-    renderThoughtTypeField();
-  });
-  const ttRow = div('st-f-fieldrow');
-  ttRow.append(typeFieldBox, ttClear);
-  tt.body.append(ttRow);
-  scroll.append(tt.box);
-  renderThoughtTypeField();
-
-  // --- link types -----------------------------------------------------------
-  const lt = block('Типы связей');
-  ltTitle = lt.head;
-  linkTypeFieldBox = div('st-f-chipfield');
-  linkTypeFieldBox.tabIndex = 0;
-  linkTypeFieldBox.addEventListener('click', () => void openLinkTypesPicker());
-  linkTypeFieldBox.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void openLinkTypesPicker();
-  });
-  const ltClear = el('button', 'st-f-clear-inline', '×');
-  ltClear.type = 'button';
-  setTooltip(ltClear, 'Очистить');
-  ltClear.addEventListener('click', (event) => {
-    event.stopPropagation();
-    state.linkTypeIds = [];
-    touch();
-    renderLinkTypeField();
-  });
-  const ltRow = div('st-f-fieldrow');
-  ltRow.append(linkTypeFieldBox, ltClear);
-  lt.body.append(ltRow);
-  scroll.append(lt.box);
-  renderLinkTypeField();
-
-  // --- обход по связям (задача c965ad03) -------------------------------------
-  // Ограничивает рёбра, по которым `parent_ids` раскрывается в поддерево:
-  // перечисленные типы связей (+ структурные по флагу). Не путать с «Типы
-  // связей» выше — тот отбирает мысли, у которых есть связь этих типов.
-  const lf = block('Обход по связям');
-  lftTitle = lf.head;
-  linkFilterFieldBox = div('st-f-chipfield');
-  linkFilterFieldBox.tabIndex = 0;
-  setTooltip(linkFilterFieldBox, 'Ограничить рёбра, по которым раскрывается отбор (клик — выбрать)');
-  linkFilterFieldBox.addEventListener('click', () => void openLinkFilterPicker());
-  linkFilterFieldBox.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void openLinkFilterPicker();
-  });
-  const lfClear = el('button', 'st-f-clear-inline', '×');
-  lfClear.type = 'button';
-  setTooltip(lfClear, 'Очистить');
-  lfClear.addEventListener('click', (event) => {
-    event.stopPropagation();
-    state.linkFilterTypeIds = [];
-    touch();
-    renderLinkFilterField();
-  });
-  const lfRow = div('st-f-fieldrow');
-  lfRow.append(linkFilterFieldBox, lfClear);
-  lf.body.append(lfRow);
-
-  const lfStructRow = div('st-f-tri-row');
-  const lfStructLabel = el('label', 'checkbox-row');
-  const lfStructCheck = el('input');
-  lfStructCheck.type = 'checkbox';
-  lfStructCheck.checked = state.linkFilterStructural;
-  setTooltip(lfStructLabel, 'Включить нетипизированные (структурные) связи в обход');
-  lfStructCheck.addEventListener('change', () => {
-    state.linkFilterStructural = lfStructCheck.checked;
-    touch();
-  });
-  lfStructLabel.append(lfStructCheck, span('структурные связи'));
-  lfStructRow.append(el('span', 'st-f-tri-label', 'Структура'), lfStructLabel);
-  lf.body.append(lfStructRow);
-
-  scroll.append(lf.box);
-  renderLinkFilterField();
-
-  // --- property conditions (collapsible, §15.3) ------------------------------
-  // --- authorship (задача 59119797, эволюция операторов) -------------------
-  // Автор/Редактор — оператор eq/ne/in/not_in/empty/not_empty + селектор
-  // пользователя (одиночный или мульти в зависимости от оператора). Условия
-  // AND-комбинируются как и остальные.
-  const authorship = collapsibleBlock(
-    'Автор / Редактор',
-    () => extraCollapsed,
-    (v) => {
-      extraCollapsed = v;
-    },
-    () => authorFilterActive(state.authorOp, state.authorId, state.authorIds) ||
-      authorFilterActive(state.editorOp, state.editorId, state.editorIds),
-  );
-  authorship.body.append(
-    buildAuthorConditionRow({
-      label: 'Автор',
-      op: state.authorOp,
-      singleId: state.authorId,
-      listIds: state.authorIds,
-      onOpChange: (op) => {
-        state.authorOp = op;
-        // При смене оператора чистим значение, если оно несовместимо.
-        if (op !== 'eq' && op !== 'ne') state.authorId = '';
-        if (op !== 'in' && op !== 'not_in') state.authorIds = [];
-        touch();
-        authorship.refresh();
-        renderPanel();
-      },
-      onSingleChange: (id) => {
-        state.authorId = id;
-        touch();
-        authorship.refresh();
-      },
-      onListChange: (ids) => {
-        state.authorIds = ids;
-        touch();
-        authorship.refresh();
-      },
-    }),
-    buildAuthorConditionRow({
-      label: 'Редактор',
-      op: state.editorOp,
-      singleId: state.editorId,
-      listIds: state.editorIds,
-      onOpChange: (op) => {
-        state.editorOp = op;
-        if (op !== 'eq' && op !== 'ne') state.editorId = '';
-        if (op !== 'in' && op !== 'not_in') state.editorIds = [];
-        touch();
-        authorship.refresh();
-        renderPanel();
-      },
-      onSingleChange: (id) => {
-        state.editorId = id;
-        touch();
-        authorship.refresh();
-      },
-      onListChange: (ids) => {
-        state.editorIds = ids;
-        touch();
-        authorship.refresh();
-      },
-    }),
-  );
-  scroll.append(authorship.box);
-
-  const props = collapsibleBlock(
-    'Свойства',
-    () => propertiesCollapsed,
-    (v) => {
-      propertiesCollapsed = v;
-    },
-    () => state.properties.length > 0,
-  );
-  propsTitle = props.head;
-  conditionsBox = div('st-f-conds');
-  renderConditions();
-  const addCond = el('button', 'st-f-add', '+ условие');
-  addCond.type = 'button';
-  addCond.addEventListener('click', () => {
-    const first = [...propertyDefs.values()][0];
-    state.properties = [
-      ...state.properties,
-      first
-        ? { propertyId: first.id, op: OPS_BY_TYPE[first.value_type][0]!.op, values: [''] }
-        : { propertyId: '', op: 'eq', values: [''] },
-    ];
-    touch();
-    renderConditions();
-    props.refresh();
-  });
-  props.body.append(conditionsBox, addCond);
-  scroll.append(props.box);
-
-  // --- Даты (задача 7032e55a): сворачиваемая группа «Создано»/«Изменено»,
-  // две пары полей «от»/«до». По умолчанию свёрнута, существующий отбор
-  // её не касается.
-  const dates = collapsibleBlock(
-    'Даты',
-    () => datesCollapsed,
-    (v) => {
-      datesCollapsed = v;
-    },
-    () => datesActive(state),
-  );
-  datesTitle = dates.head;
-  dates.body.append(
-    buildDateBoundRow('Создано', {
-      after: state.createdAfter,
-      before: state.createdBefore,
-      onAfterChange: (v) => {
-        state.createdAfter = v;
-        touch();
-        dates.refresh();
-      },
-      onBeforeChange: (v) => {
-        state.createdBefore = v;
-        touch();
-        dates.refresh();
-      },
-    }),
-    buildDateBoundRow('Изменено', {
-      after: state.updatedAfter,
-      before: state.updatedBefore,
-      onAfterChange: (v) => {
-        state.updatedAfter = v;
-        touch();
-        dates.refresh();
-      },
-      onBeforeChange: (v) => {
-        state.updatedBefore = v;
-        touch();
-        dates.refresh();
-      },
-    }),
-  );
-  scroll.append(dates.box);
-
-  // --- «Дополнительно» (collapsible tri-state group, §15.3) ------------------
-  const extra = collapsibleBlock(
-    'Дополнительно',
-    () => extraCollapsed,
-    (v) => {
-      extraCollapsed = v;
-    },
-    () =>
-      state.hasProperties !== null ||
-      state.hasComment !== null ||
-      state.hasAttachments !== null ||
-      state.hasChronology !== null ||
-      state.trashed === true ||
-      (state.active !== null && store.state.showInactive),
-  );
-  extraTitle = extra.head;
-  const triRow = (
-    label: string,
-    get: () => TriState,
-    set: (v: TriState) => void,
-    options?: { yes: string; no: string; disabled?: boolean; tooltip?: string },
-  ): HTMLElement => {
-    const row = div('st-f-tri-row');
-    row.append(el('span', 'st-f-tri-label', label));
-    const select = el('select', 'st-f-input') as HTMLSelectElement;
-    const opts = [
-      { v: '', label: 'не важно' },
-      { v: 'yes', label: options?.yes ?? 'есть' },
-      { v: 'no', label: options?.no ?? 'нет' },
-    ];
-    for (const opt of opts) {
-      const o = el('option', '', opt.label) as HTMLOptionElement;
-      o.value = opt.v;
-      select.append(o);
-    }
-    select.value = get() === null ? '' : get() === true ? 'yes' : 'no';
-    if (options?.disabled === true) {
-      select.disabled = true;
-      if (options.tooltip !== undefined) setTooltip(select, options.tooltip);
-    }
-    select.addEventListener('change', () => {
-      set(select.value === '' ? null : select.value === 'yes');
-      touch();
-      extra.refresh();
-    });
-    row.append(select);
-    return row;
+  const sections: FilterSection[] = [];
+  const touch = (): void => {
+    callbacks?.onStatePersist();
+    for (const section of sections) section.refresh();
   };
-  extra.body.append(
-    triRow('Свойства', () => state.hasProperties, (v) => (state.hasProperties = v)),
-    triRow('Комментарий', () => state.hasComment, (v) => (state.hasComment = v)),
-    triRow('Вложения', () => state.hasAttachments, (v) => (state.hasAttachments = v)),
-    triRow('Хроника', () => state.hasChronology, (v) => (state.hasChronology = v)),
-    triRow('Актуальность', () => state.active, (v) => (state.active = v), {
-      yes: 'актуальные',
-      no: 'не актуальные',
-      // Only meaningful while inactive thoughts are in the candidate set at
-      // all — i.e. the client setting «Показывать неактуальное» is on (§15.3).
-      disabled: !store.state.showInactive,
-      tooltip: 'Доступно при включённой настройке «Показывать неактуальное» (Вид → Неактуальные)',
+  const ctx: FilterFormContext = {
+    networkId: requireNetworkId(),
+    getState: () => state,
+    registry: propertyDefs,
+    touch,
+  };
+
+  sections.push(
+    buildKeywordsSection(ctx, {
+      tooltip: 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
+      showScope: true,
+      suggestSource: keywordsHistorySource(),
+      onEnter: triggerApply,
     }),
+    buildEntityChipSection(ctx, {
+      title: 'Родительские мысли',
+      getValues: () => state.parentIds,
+      setValues: (values) => {
+        state.parentIds = values;
+      },
+      loadOptions: (query) => parentThoughtOptions(query),
+      optionsHeader: 'Мысли',
+      cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
+      placeholder: 'Название мысли…',
+      tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
+      picker: {
+        label: 'выбрать…',
+        open: async () => {
+          const result = await pickThoughtsDialog({
+            networkId: requireNetworkId(),
+            allowCreate: false,
+            allowLinkType: false,
+            selectedIds: state.parentIds,
+            title: 'Родительские мысли',
+            applyLabel: 'Применить',
+          });
+          return result === null ? null : pickedThoughtIds(result);
+        },
+      },
+    }),
+    buildEntityChipSection(ctx, {
+      title: 'Типы мыслей',
+      getValues: () => state.typeIds,
+      setValues: (values) => {
+        state.typeIds = values;
+      },
+      loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+      optionsHeader: 'Типы мыслей',
+      placeholder: 'Название типа…',
+      picker: {
+        label: 'список типов…',
+        open: () =>
+          pickEntitiesModal({
+            networkId: requireNetworkId(),
+            kind: 'thought-types',
+            title: 'Типы мыслей',
+            currentIds: state.typeIds,
+          }),
+      },
+    }),
+    buildEntityChipSection(ctx, {
+      title: 'Типы связей',
+      getValues: () => state.linkTypeIds,
+      setValues: (values) => {
+        state.linkTypeIds = values;
+      },
+      loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+      optionsHeader: 'Типы связей',
+      placeholder: 'Название типа…',
+      picker: {
+        label: 'список типов…',
+        open: () =>
+          pickEntitiesModal({
+            networkId: requireNetworkId(),
+            kind: 'link-types',
+            title: 'Типы связей',
+            currentIds: state.linkTypeIds,
+          }),
+      },
+    }),
+    buildTraversalSection(ctx),
+    buildConditionsSection(ctx, { get: () => propertiesCollapsed, set: (v) => (propertiesCollapsed = v) }),
+    buildAuthorshipSection(ctx, { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) }),
+    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }, { mode: 'datetime' }),
+    buildExtrasSection(
+      ctx,
+      { get: () => extraCollapsed, set: (v) => (extraCollapsed = v) },
+      {
+        activeDisabled: !store.state.showInactive,
+        activeTooltip:
+          'Доступно при включённой настройке «Показывать неактуальное» (Вид → Неактуальные)',
+      },
+    ),
+    buildSortSection(ctx),
   );
-
-  // S13: marked-for-deletion is an independent on/off checkbox, not a tri-state
-  // (§5a.5, §15.3): off (default) hides marked thoughts, on includes them.
-  const trashedRow = div('st-f-tri-row');
-  const trashedLabel = el('label', 'checkbox-row');
-  const trashedCheck = el('input');
-  trashedCheck.type = 'checkbox';
-  trashedCheck.checked = state.trashed;
-  trashedCheck.addEventListener('change', () => {
-    state.trashed = trashedCheck.checked;
-    touch();
-    extra.refresh();
-  });
-  trashedLabel.append(trashedCheck, span('помеченные на удаление'));
-  trashedRow.append(el('span', 'st-f-tri-label', 'Корзина'), trashedLabel);
-  extra.body.append(trashedRow);
-  scroll.append(extra.box);
-
-  // --- sort -----------------------------------------------------------------
-  // Наборы сортировок и направлений — единые экземпляры конструктора
-  // (`lib/filter-builder.ts`), тот же набор, что принимает исполнитель.
-  const sortBlock = block('Сортировка');
-  const sortRow = div('st-f-sort');
-  sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of FILTER_SORTS) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    sortSelect.append(o);
-  }
-  sortSelect.value = state.sort;
-  sortSelect.addEventListener('change', () => {
-    state.sort = sortSelect?.value as StructureSort;
-    touch();
-  });
-  orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of FILTER_ORDERS) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    orderSelect.append(o);
-  }
-  orderSelect.value = state.order;
-  orderSelect.addEventListener('change', () => {
-    state.order = orderSelect?.value as SortOrder;
-    touch();
-  });
-  sortRow.append(sortSelect, orderSelect);
-  sortBlock.body.append(sortRow);
-  scroll.append(sortBlock.box);
 
   // --- sticky footer: Применить/Очистить + saved filters (§15.3) -------------
-  const footer = div('st-f-footer');
-
-  const btnRow = div('st-f-btnrow');
-  const apply = el('button', 'st-f-apply', 'Применить');
-  apply.type = 'button';
-  apply.addEventListener('click', () => triggerApply());
-  const clearBtn = el('button', 'st-f-clear', 'Очистить');
-  clearBtn.type = 'button';
-  clearBtn.addEventListener('click', () => clearAllCriteria());
   const commandsBtn = el('button', 'st-f-commands', 'Команды ▾');
   commandsBtn.type = 'button';
   setTooltip(commandsBtn, 'Команды над всеми мыслями отбора (без учёта пагинации)');
   commandsBtn.addEventListener('click', () => callbacks?.onCommands(commandsBtn));
-  btnRow.append(apply, clearBtn, commandsBtn);
-  footer.append(btnRow);
+
+  const btnRow = buildFilterFooterButtons({
+    onApply: triggerApply,
+    onClear: clearAllCriteria,
+    extra: [commandsBtn],
+  });
 
   const saveRow = div('st-f-saverow');
   const saveNameWrap = div('st-f-kw-wrap');
@@ -1073,353 +616,14 @@ function renderPanel(): void {
   deleteBtn.type = 'button';
   deleteBtn.addEventListener('click', () => void deleteNamedFilter());
   saveRow.append(saveNameWrap, saveBtn, deleteBtn);
-  footer.append(saveRow);
 
   savedListBox = div('st-f-savedlist');
-  footer.append(savedListBox);
-  host.append(footer);
+
+  buildFilterForm({ sections, footer: [btnRow, saveRow, savedListBox], mount: host });
+
   renderSavedList();
-  refreshGroupTitles();
-}
-
-// ---------------------------------------------------------------------------
-// Chip fields (родительские мысли / типы мыслей / типы связей, §15.3)
-// ---------------------------------------------------------------------------
-
-/** Renders a comma-separated row of styled chips (or a placeholder). */
-/** Renders ready-made chips separated by commas (empty → «не выбрано»). */
-function renderChips(container: HTMLElement, chips: HTMLElement[]): void {
-  clear(container);
-  if (chips.length === 0) {
-    container.append(el('span', 'st-f-chip-empty', 'не выбрано'));
-    return;
-  }
-  chips.forEach((chipEl, index) => {
-    container.append(chipEl);
-    if (index < chips.length - 1) container.append(el('span', 'st-f-chip-sep', ', '));
-  });
-}
-
-/** Чип типа связи: подпись в цвете типа связи (иконок у типов связей нет). */
-function linkTypeChip(label: string, fg: string | null): HTMLElement {
-  const chip = el('span', 'st-f-chip');
-  const text = el('span', 'st-f-chip-label', label);
-  applyCloudStyle(text, {
-    fg,
-    bg: null,
-    bold: false,
-    italic: false,
-    underline: false,
-    strike: false,
-  });
-  chip.append(text);
-  return chip;
-}
-
-/** Renders the «Родительские мысли» chips, resolving unknown titles lazily. */
-function renderParentField(): void {
-  if (parentFieldBox === null) return;
-  const networkId = store.state.networkId;
-  const missing = state.parentIds.filter((id) => !parentRefs.has(id));
-  if (networkId !== null && missing.length > 0) {
-    void etn.thoughts
-      .resolve(networkId, missing)
-      .then((refs) => {
-        for (const ref of refs) parentRefs.set(ref.id, ref);
-        renderParentField();
-      })
-      .catch(() => undefined);
-  }
-  // Чипы мыслей — общей фабрикой облачка (профиль `chip`): значок, цвета,
-  // начертание, бледность и метка корзины — как в любом списке клиента.
-  renderChips(
-    parentFieldBox,
-    state.parentIds.map((id) => {
-      const ref = parentRefs.get(id);
-      const chip = createThoughtCloud(ref ?? { id, title: '…' }, { profile: 'chip', width: 'container' });
-      chip.classList.add('st-f-chip');
-      return chip;
-    }),
-  );
-}
-
-/** Opens the multi-thought picker for the «Родительские мысли» scope. */
-async function openParentPicker(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const result = await pickThoughtsDialog({
-    networkId,
-    allowCreate: false,
-    allowLinkType: false,
-    selectedIds: state.parentIds,
-    title: 'Родительские мысли',
-    applyLabel: 'Применить',
-  });
-  if (result === null) return;
-  state.parentIds = pickedThoughtIds(result);
-  touch();
-  renderParentField();
-}
-
-/** Renders the «Типы мыслей» chips. */
-function renderThoughtTypeField(): void {
-  if (typeFieldBox === null) return;
-  // Чипы типов — той же фабрикой облачка: она резолвит значок и стиль по
-  // `type_id` (своя иконка отсутствует — берётся типовая по цепочке предков).
-  renderChips(
-    typeFieldBox,
-    state.typeIds.flatMap((id) => {
-      const type = store.state.thoughtTypes.find((t) => t.id === id);
-      if (type === undefined) return [];
-      const chip = createThoughtCloud(
-        { id: type.id, title: type.name },
-        { profile: 'chip', width: 'container' },
-      );
-      chip.classList.add('st-f-chip');
-      return [chip];
-    }),
-  );
-}
-
-/** Renders the «Типы связей» chips (link types have no icon in the data model). */
-function renderLinkTypeField(): void {
-  if (linkTypeFieldBox === null) return;
-  renderChips(
-    linkTypeFieldBox,
-    state.linkTypeIds.flatMap((id) => {
-      const type = store.state.linkTypes.find((t) => t.id === id);
-      if (type === undefined) return [];
-      const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
-      return [linkTypeChip(type.name_forward, visual.color)];
-    }),
-  );
-}
-
-async function openThoughtTypesPicker(): Promise<void> {
-  const picked = await pickEntitiesModal({
-    networkId: requireNetworkId(),
-    kind: 'thought-types',
-    title: 'Типы мыслей',
-    currentIds: state.typeIds,
-  });
-  if (picked === null) return;
-  state.typeIds = picked;
-  touch();
-  renderThoughtTypeField();
-}
-
-async function openLinkTypesPicker(): Promise<void> {
-  const picked = await pickEntitiesModal({
-    networkId: requireNetworkId(),
-    kind: 'link-types',
-    title: 'Типы связей',
-    currentIds: state.linkTypeIds,
-  });
-  if (picked === null) return;
-  state.linkTypeIds = picked;
-  touch();
-  renderLinkTypeField();
-}
-
-/** Renders the «Обход по связям» chips (задача c965ad03). */
-function renderLinkFilterField(): void {
-  if (linkFilterFieldBox === null) return;
-  renderChips(
-    linkFilterFieldBox,
-    state.linkFilterTypeIds.flatMap((id) => {
-      const type = store.state.linkTypes.find((t) => t.id === id);
-      if (type === undefined) return [];
-      const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
-      return [linkTypeChip(type.name_forward, visual.color)];
-    }),
-  );
-}
-
-/** Opens the link-type picker for the traversal filter (задача c965ad03). */
-async function openLinkFilterPicker(): Promise<void> {
-  const picked = await openLinkFilterPickerLib();
-  if (picked === null) return;
-  state.linkFilterTypeIds = picked;
-  touch();
-  renderLinkFilterField();
-}
-
-async function openLinkFilterPickerLib(): Promise<string[] | null> {
-  return pickEntitiesModal({
-    networkId: requireNetworkId(),
-    kind: 'link-types',
-    title: 'Обход по связям',
-    currentIds: state.linkFilterTypeIds,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Property conditions (§15.3, unchanged editor logic)
-// ---------------------------------------------------------------------------
-
-/** Renders the property condition rows. */
-function renderConditions(): void {
-  if (conditionsBox === null) return;
-  clear(conditionsBox);
-  if (state.properties.length === 0) {
-    conditionsBox.append(el('div', 'st-f-empty', 'Условий нет'));
-    return;
-  }
-  state.properties.forEach((cond, index) => {
-    conditionsBox?.append(buildConditionRow(cond, index));
-  });
-}
-
-/** Builds one `[property][op][value(s)]` row with the × remove button. */
-function buildConditionRow(cond: PropertyConditionState, index: number): HTMLElement {
-  const row = div('st-f-cond');
-  const def = propertyDefs.get(cond.propertyId);
-
-  // Property picker: registry rows — labels are the property names. The
-  // picker no longer carries a «Тип · » prefix because one registry id
-  // already addresses the property on every attaching type (0.6.5).
-  const propSelect = el('select', 'st-f-input st-f-prop') as HTMLSelectElement;
-  if (!propertyDefs.has(cond.propertyId)) {
-    const placeholder = el('option', '', cond.propertyId === '' ? '— свойство —' : '?') as HTMLOptionElement;
-    placeholder.value = cond.propertyId;
-    propSelect.append(placeholder);
-  }
-  for (const [id, entry] of propertyDefs) {
-    const option = el('option', '', entry.name) as HTMLOptionElement;
-    option.value = id;
-    propSelect.append(option);
-  }
-  propSelect.value = cond.propertyId;
-  propSelect.addEventListener('change', () => {
-    const nextId = propSelect.value;
-    const nextType = propertyDefs.get(nextId)?.value_type ?? 'text';
-    const ops = OPS_BY_TYPE[nextType];
-    // A different property starts with one empty value.
-    state.properties[index] = {
-      propertyId: nextId,
-      op: ops.some((o) => o.op === cond.op) ? cond.op : ops[0]!.op,
-      values: [''],
-    };
-    touch();
-    renderConditions();
-  });
-
-  // Operator picker (per value type).
-  const opSelect = el('select', 'st-f-input st-f-op') as HTMLSelectElement;
-  const ops = OPS_BY_TYPE[def?.value_type ?? 'text'];
-  for (const op of ops) {
-    const option = el('option', '', op.label) as HTMLOptionElement;
-    option.value = op.op;
-    opSelect.append(option);
-  }
-  if (!ops.some((o) => o.op === cond.op)) {
-    cond.op = ops[0]!.op;
-  }
-  opSelect.value = cond.op;
-  opSelect.addEventListener('change', () => {
-    // The row may have been edited since this closure was built — read the
-    // live state as the base (a different op starts with one empty value).
-    const live = state.properties[index] ?? cond;
-    state.properties[index] = { ...live, op: opSelect.value as StructurePropertyOp, values: [''] };
-    touch();
-    renderConditions();
-  });
-
-  // Value editor.
-  const valueBox = buildConditionValueBox(cond, def, index);
-
-  const remove = el('button', 'st-f-remove', '×');
-  remove.type = 'button';
-  remove.addEventListener('click', () => {
-    state.properties = state.properties.filter((_, i) => i !== index);
-    touch();
-    renderConditions();
-  });
-
-  row.append(propSelect, opSelect, valueBox, remove);
-  return row;
-}
-
-/**
- * Box значений условия (§15.3). Любой вид значения строится ОБЩИМ редактором
- * `buildValueEditor` (`editor/value-editor.ts`, стандарт S2): у поля справа
- * «✕» очистки одним кликом (ошибка a8e9eef1), для text с закрытым списком —
- * общая выпадашка вариантов, для `bool` — трёхзначное поле, для
- * `link`/`thought_ref` — чипы-облачка целей с живым поиском (облачко, значки,
- * цвета, бледность, отбор по типам). `thought_ref` — legacy-вид с тем же
- * значением (id мысли), поэтому ведётся редактором связи. Состояние условия
- * хранит строки, редактор связи отдаёт массив id — переходник сводит массив
- * к строкам; wire-конвертер (`lib/filter-builder.ts`) ждёт `'true'`/`'false'`
- * строками у bool и первое значение у скалярной операции.
- *
- * Каждый обработчик читает ТЕКУЩУЮ строку условия из состояния (`live()`), а
- * не замкнутую, — перерисовка строки не должна терять введённое.
- */
-function buildConditionValueBox(
-  cond: PropertyConditionState,
-  def: { value_type: PropertyValueType; config?: PropertyConfig | null } | undefined,
-  index: number,
-): HTMLElement {
-  const valueType = def?.value_type ?? 'text';
-  const box = div('st-f-values');
-  const isList = cond.op === 'in' || cond.op === 'not_in';
-  // `is_empty` / `not_empty` test for the presence of a value at all —
-  // the value editor is replaced with a hint so the row stays balanced
-  // (bug fix 0.6.3).
-  const isPresence = cond.op === 'is_empty' || cond.op === 'not_empty';
-  const live = (): PropertyConditionState => state.properties[index] ?? cond;
-  const setValues = (values: string[]): void => {
-    state.properties[index] = { ...live(), values: values.length > 0 ? values : [''] };
-    touch();
-  };
-
-  if (isPresence) {
-    box.append(el('span', 'st-f-value-hint', 'значение не требуется'));
-    return box;
-  }
-
-  const current = live();
-  const editorType: PropertyValueType = valueType === 'thought_ref' ? 'link' : valueType;
-  const stored = current.values.filter((v) => v !== '');
-  const raw = current.values[0] ?? '';
-  // Скаляр — одно значение в родном типе редактора (число — число, bool —
-  // boolean/null); связь и списочная операция — набор. Без ветвления по виду
-  // значения: диспетчер по виду — только в общем редакторе (стандарт S2).
-  const scalar: unknown =
-    valueType === 'bool'
-      ? (raw === '' ? null : raw === 'true')
-      : valueType === 'number'
-        ? (raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : '')
-        : raw;
-  const value: unknown = editorType === 'link' || isList ? stored : scalar;
-  const config = isList ? { ...(def?.config ?? {}), multiple: true } : (def?.config ?? null);
-
-  box.append(
-    buildValueEditor({
-      networkId: requireNetworkId(),
-      definition: {
-        value_type: editorType,
-        config,
-        required: false,
-        default_value: null,
-      },
-      value,
-      commitOn: 'change',
-      // bool — трёхзначное поле: «—» (пусто) не задаёт условие.
-      boolTriState: valueType === 'bool',
-      save: (next) => {
-        if (Array.isArray(next)) {
-          setValues(next.map((v) => String(v)));
-        } else if (next === null || next === undefined || next === '') {
-          setValues(['']);
-        } else {
-          setValues([String(next)]);
-        }
-        return true;
-      },
-    }),
-  );
-  return box;
+  for (const section of sections) section.refresh();
+  resolveParentClouds();
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,19 +676,9 @@ function renderSavedList(): void {
     item.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       const items: MenuItem[] = [
-        {
-          label: 'Применить',
-          onClick: () => applySavedFilter(filter),
-        },
-        {
-          label: 'Переименовать…',
-          onClick: () => void renameSavedFilter(filter),
-        },
-        {
-          label: 'Удалить',
-          danger: true,
-          onClick: () => void removeSavedFilter(filter),
-        },
+        { label: 'Применить', onClick: () => applySavedFilter(filter) },
+        { label: 'Переименовать…', onClick: () => void renameSavedFilter(filter) },
+        { label: 'Удалить', danger: true, onClick: () => void removeSavedFilter(filter) },
       ];
       showMenuAt(event.clientX, event.clientY, items);
     });
@@ -1532,19 +726,10 @@ async function saveCurrentFilter(): Promise<void> {
     const created = await etn.savedFilters.create(networkId, { name, definition });
     state.savedFilterId = created.id;
   } catch (err) {
-    if (
-      typeof err === 'object' &&
-      err !== null &&
-      (err as { code?: string }).code === 'DUPLICATE'
-    ) {
-      // Same name — update the existing filter in place.
-      const existing = savedFilters.find(
-        (f) => f.name.toLowerCase() === name.toLowerCase(),
-      );
+    if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'DUPLICATE') {
+      const existing = savedFilters.find((f) => f.name.toLowerCase() === name.toLowerCase());
       if (existing !== undefined) {
-        const updated = await etn.savedFilters.update(networkId, existing.id, {
-          definition,
-        });
+        const updated = await etn.savedFilters.update(networkId, existing.id, { definition });
         state.savedFilterId = updated.id;
       }
     } else {
@@ -1552,7 +737,7 @@ async function saveCurrentFilter(): Promise<void> {
       return;
     }
   }
-  touch();
+  callbacks?.onStatePersist();
   await loadSavedFilters();
   renderSavedList();
   notice(`Отбор «${name}» сохранён`);
@@ -1577,11 +762,7 @@ async function renameSavedFilter(filter: SavedFilter): Promise<void> {
 async function removeSavedFilter(filter: SavedFilter): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const confirmed = await confirmDialog(
-    'Удалить отбор',
-    `Удалить сохранённый отбор «${filter.name}»?`,
-    true,
-  );
+  const confirmed = await confirmDialog('Удалить отбор', `Удалить сохранённый отбор «${filter.name}»?`, true);
   if (!confirmed) return;
   try {
     await etn.savedFilters.remove(networkId, filter.id);
@@ -1591,7 +772,7 @@ async function removeSavedFilter(filter: SavedFilter): Promise<void> {
   }
   if (state.savedFilterId === filter.id) {
     state.savedFilterId = null;
-    touch();
+    callbacks?.onStatePersist();
   }
   await loadSavedFilters();
 }

@@ -977,6 +977,8 @@ export interface FilterFormLayout {
 /**
  * Собирает форму отбора из готовых секций: вертикальный список с
  * прокруткой + футер. Единый каркас всех пяти мест применения конструктора.
+ * `mount` — готовый хост (панель со своими размерами/flex); иначе создаётся
+ * обёртка `st-f-layout`.
  */
 export function buildFilterForm(opts: {
   sections: FilterSection[];
@@ -985,13 +987,15 @@ export function buildFilterForm(opts: {
   /** Узлы футера (кнопки, сохранённые отборы). */
   footer?: HTMLElement[];
   className?: string;
+  /** Готовый хост: прокрутка и футер кладутся прямо в него. */
+  mount?: HTMLElement;
 }): FilterFormLayout {
-  const root = div(opts.className ?? 'st-f-layout');
   const scroll = div('st-f-scroll');
   if (opts.header !== undefined) scroll.append(...opts.header);
   for (const section of opts.sections) scroll.append(section.box);
   const footer = div('st-f-footer');
   if (opts.footer !== undefined) footer.append(...opts.footer);
+  const root = opts.mount ?? div(opts.className ?? 'st-f-layout');
   root.append(scroll, footer);
   return {
     root,
