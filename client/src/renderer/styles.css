@@ -7495,7 +7495,8 @@ table.activity-table thead th {
   min-width: 120px;
 }
 /* Поле ввода с угловым «✕» очистки значения (приёмка 0.8.1) — обёртка
- * любого одиночного поля таблицы свойств (text/number/date/url). */
+ * любого одиночного поля (text/number/date/url таблицы свойств; поля дат
+ * панели фильтра «Структур» — ошибка a8e9eef1). */
 .clearable-field {
   position: relative;
   flex: 1 1 auto;
@@ -7504,6 +7505,9 @@ table.activity-table thead th {
 }
 .clearable-field .text-input {
   width: 100%;
+  padding-right: 22px;
+}
+.clearable-field .st-f-input {
   padding-right: 22px;
 }
 .clearable-clear {

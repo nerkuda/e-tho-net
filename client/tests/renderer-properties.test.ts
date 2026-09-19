@@ -29,6 +29,7 @@ class ShimElement {
   placeholder = '';
   readOnly = false;
   disabled = false;
+  hidden = false;
   isConnected = true;
   tabIndex = -1;
   role = '';
@@ -895,7 +896,7 @@ describe('editor properties — внетиповые свойства-связи
   });
 });
 
-describe('property value autocomplete helpers (pure)', () => {
+describe('property value helpers (pure)', () => {
   /** Imports the modules (once) with the DOM shims installed. */
   async function loadPropsModule(): Promise<any> {
     if (loadedModule === null) {
@@ -923,24 +924,6 @@ describe('property value autocomplete helpers (pure)', () => {
     return loadedValueEditor;
   }
 
-  it('autocompleteFragment: whole input in single mode, tail after the last comma otherwise', async () => {
-    const { autocompleteFragment } = await loadValueEditorModule();
-    assert.equal(autocompleteFragment('Москва', false), 'москва');
-    assert.equal(autocompleteFragment('  СПб ', false), 'спб');
-    assert.equal(autocompleteFragment('Москва,  СПб', true), 'спб');
-    assert.equal(autocompleteFragment('Москва,', true), '');
-    assert.equal(autocompleteFragment('Москва', true), 'москва');
-  });
-
-  it('filterOptionsByFragment: case-insensitive substring, empty fragment shows all', async () => {
-    const { filterOptionsByFragment } = await loadValueEditorModule();
-    const options = ['Москва', 'СПб', 'Нижний Новгород'];
-    assert.deepEqual(filterOptionsByFragment(options, ''), options);
-    assert.deepEqual(filterOptionsByFragment(options, 'спб'), ['СПб']);
-    assert.deepEqual(filterOptionsByFragment(options, 'ниж'), ['Нижний Новгород']);
-    assert.deepEqual(filterOptionsByFragment(options, 'нет такого'), []);
-  });
-
   it('splitMultiValue keeps trimmed non-empty parts only', async () => {
     const { splitMultiValue } = await loadValueEditorModule();
     assert.deepEqual(splitMultiValue('a, b ,, в '), ['a', 'b', 'в']);
@@ -956,47 +939,79 @@ describe('property value autocomplete helpers (pure)', () => {
     assert.equal(propertyHint({ description: '   ' }), null);
     assert.equal(propertyHint({}), null);
   });
+});
 
-  /** Extracts the option labels currently rendered in the dropdown list. */
-  function visibleRowLabels(list: ShimElement): string[] {
-    return list.children
-      .filter((row) => row.className === 'type-combo-item')
-      .map((row) => row.children[row.children.length - 1]?.textContent ?? '');
+describe('value-editor: кнопка «✕» очистки значения (ошибка a8e9eef1)', () => {
+  /** Загружает общий редактор с DOM-шимами (модуль кешируется на файл). */
+  async function loadValueEditor(): Promise<any> {
+    if (loadedValueEditor === null) {
+      shimDocument();
+      (globalThis as any).window = {
+        etn: {},
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      loadedValueEditor = await import('../src/renderer/editor/value-editor.js');
+    }
+    return loadedValueEditor;
   }
 
-  it('buildValueOptionsCaret: caret click on a filled field shows the whole catalogue, typing narrows it (defect 19105687)', async () => {
-    const { buildValueOptionsCaret } = await loadValueEditorModule();
-    (globalThis as any).window = {
-      etn: {},
-      innerWidth: 1024,
-      innerHeight: 768,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
+  interface FieldFixture {
+    root: ShimElement;
+    input: ShimElement;
+    btn: ShimElement;
+    saved: unknown[];
+  }
+
+  /** Собирает скалярное поле общего редактора и отдаёт корень/инпут/кнопку. */
+  async function buildField(valueType: string, value: unknown): Promise<FieldFixture> {
+    const { buildValueEditor } = await loadValueEditor();
+    const saved: unknown[] = [];
+    const root = buildValueEditor({
+      networkId: 'n',
+      definition: { value_type: valueType, config: null, required: false, default_value: null },
+      value,
+      commitOn: 'change',
+      save: (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as ShimElement;
+    return {
+      root,
+      input: root.children[0] as ShimElement,
+      btn: root.children[root.children.length - 1] as ShimElement,
+      saved,
     };
+  }
 
-    const input = new ShimElement('input') as unknown as HTMLInputElement;
-    (input as unknown as ShimElement).value = 'Москва';
-    const options = ['Москва', 'СПб', 'Нижний Новгород'];
-    const caret = buildValueOptionsCaret(
-      input,
-      options,
-      false,
-      () => undefined,
-      () => undefined,
-    ) as unknown as ShimElement;
+  it('дата очищается одним кликом крестика; после очистки крестик скрыт', async () => {
+    const { input, btn, saved } = await buildField('date', '2026-09-18');
+    assert.equal(btn.textContent, '✕');
+    assert.equal(btn.hidden, false, 'крестик виден у заполненного поля');
+    btn.dispatch('click', { stopPropagation: () => undefined });
+    assert.equal(input.value, '');
+    assert.deepEqual(saved, [null]);
+    assert.equal(btn.hidden, true, 'после очистки крестик скрыт');
+  });
 
-    // Explicit open via the caret button (no typing) must show every option,
-    // not just the one matching the field's current value.
-    caret.dispatch('click');
-    const body = (globalThis as any).document.body as ShimElement;
-    const list = body.children[body.children.length - 1];
-    assert.ok(list !== undefined, 'options list must be mounted');
-    assert.deepEqual(visibleRowLabels(list), options);
+  it('у пустого поля крестик скрыт (date/number/text)', async () => {
+    for (const valueType of ['date', 'number', 'text']) {
+      const { btn } = await buildField(valueType, '');
+      assert.equal(btn.hidden, true, `${valueType}: крестик скрыт у пустого поля`);
+    }
+  });
 
-    // Typing narrows the already-open list down to the typed fragment.
-    (input as unknown as ShimElement).value = 'моск';
-    (input as unknown as ShimElement).dispatch('input');
-    assert.deepEqual(visibleRowLabels(list), ['Москва']);
+  it('число и строка очищаются одним кликом', async () => {
+    const num = await buildField('number', 42);
+    num.btn.dispatch('click', { stopPropagation: () => undefined });
+    assert.equal(num.input.value, '');
+    assert.deepEqual(num.saved, [null]);
+
+    const text = await buildField('text', 'привет');
+    text.btn.dispatch('click', { stopPropagation: () => undefined });
+    assert.equal(text.input.value, '');
+    assert.deepEqual(text.saved, [null]);
   });
 });
 

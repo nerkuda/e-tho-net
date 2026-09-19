@@ -55,7 +55,7 @@ import {
 // стилизует подписи чипов типов связей (у типов связей нет своей фабрики).
 import { applyCloudStyle, createThoughtCloud } from '../../lib/thought-cloud.js';
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { buildValueOptionsCaret } from '../../editor/value-editor.js';
+import { buildValueEditor, wrapClearable } from '../../editor/value-editor.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -488,7 +488,8 @@ function buildKeywordScopeRow(): HTMLElement {
  * `<input type="datetime-local">` — нативный пикер даты/времени без
  * зависимостей; формат значения `YYYY-MM-DDTHH:MM` совместим с ISO-8601,
  * который сервер уже принимает (`created_after`/`created_before`/…).
- * Пустая строка — граница не выставлена.
+ * Пустая строка — граница не выставлена. У каждого поля — общий крестик
+ * «✕» очистки одним кликом (`wrapClearable`, ошибка a8e9eef1).
  */
 function buildDateBoundRow(
   label: string,
@@ -509,7 +510,12 @@ function buildDateBoundRow(
   afterInput.value = opts.after;
   setTooltip(afterInput, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
   afterInput.addEventListener('input', () => opts.onAfterChange(afterInput.value));
-  afterWrap.append(afterInput);
+  afterWrap.append(
+    wrapClearable(afterInput, () => {
+      afterInput.value = '';
+      opts.onAfterChange('');
+    }),
+  );
   row.append(afterWrap);
 
   const beforeWrap = div('st-f-date-field');
@@ -520,7 +526,12 @@ function buildDateBoundRow(
   beforeInput.value = opts.before;
   setTooltip(beforeInput, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
   beforeInput.addEventListener('input', () => opts.onBeforeChange(beforeInput.value));
-  beforeWrap.append(beforeInput);
+  beforeWrap.append(
+    wrapClearable(beforeInput, () => {
+      beforeInput.value = '';
+      opts.onBeforeChange('');
+    }),
+  );
   row.append(beforeWrap);
   return row;
   }
@@ -1312,7 +1323,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
   });
 
   // Value editor.
-  const valueBox = buildValueEditor(cond, def, index);
+  const valueBox = buildConditionValueBox(cond, def, index);
 
   const remove = el('button', 'st-f-remove', '×');
   remove.type = 'button';
@@ -1327,14 +1338,18 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
 }
 
 /**
- * Builds the value editor for the condition's current value type (§15.3).
- *
- * The editor mirrors the thought editor (§6.3): text properties with
- * predefined options get the options dropdown. Every handler reads the CURRENT
- * condition row from the state (`live()`), never the closure-captured one —
- * the «+ значение» button must not lose values typed into earlier rows.
+ * Box значений условия (§15.3). Скалярные виды (text/url/number/date) строит
+ * ОБЩИЙ редактор `buildValueEditor` (`editor/value-editor.ts`, стандарт S2):
+ * у полей ввода справа «✕» очистки одним кликом (ошибка a8e9eef1), для text
+ * с закрытым списком — общая выпадашка вариантов. Локальными остаются только
+ * `bool` (селект «да/нет», не поле ввода) и `link`/`thought_ref` — конструктор
+ * условий ещё не перевёл их на общий редактор (задача 48b59d00, веха 5):
+ * условие хранит сырые id целей, их вводит текстовая строка. Каждый обработчик
+ * читает ТЕКУЩУЮ строку условия из состояния (`live()`), а не замкнутую —
+ * кнопка «+ значение» не должна терять значения, введённые в более ранние
+ * строки.
  */
-function buildValueEditor(
+function buildConditionValueBox(
   cond: PropertyConditionState,
   def: { value_type: PropertyValueType; config?: PropertyConfig | null } | undefined,
   index: number,
@@ -1357,20 +1372,6 @@ function buildValueEditor(
   };
 
   const addScalar = (i: number): HTMLElement => {
-    if (valueType === 'number') {
-      const input = el('input', 'st-f-input') as HTMLInputElement;
-      input.type = 'number';
-      input.value = live().values[i] ?? '';
-      input.addEventListener('input', () => setValue(i, input.value));
-      return input;
-    }
-    if (valueType === 'date') {
-      const input = el('input', 'st-f-input') as HTMLInputElement;
-      input.type = 'date';
-      input.value = live().values[i] ?? '';
-      input.addEventListener('input', () => setValue(i, input.value));
-      return input;
-    }
     if (valueType === 'bool') {
       const select = el('select', 'st-f-input') as HTMLSelectElement;
       const yes = el('option', '', 'да') as HTMLOptionElement;
@@ -1382,30 +1383,28 @@ function buildValueEditor(
       select.addEventListener('change', () => setValue(i, select.value));
       return select;
     }
-    const input = el('input', 'st-f-input') as HTMLInputElement;
-    input.type = 'text';
-    input.value = live().values[i] ?? '';
-    input.addEventListener('input', () => setValue(i, input.value));
-    // Text properties with predefined options get the picker dropdown — an
-    // input aid, never a restriction (same as the thought editor, §6.3).
-    const options = (def?.config?.options ?? []).filter((o) => o !== '');
-    if (options.length > 0) {
-      const row = div('st-f-value-row');
-      row.append(
-        input,
-        buildValueOptionsCaret(
-          input,
-          options,
-          false,
-          (value) => setValue(i, value),
-          () => {
-            input.value = live().values[i] ?? '';
-          },
-        ),
-      );
-      return row;
+    if (valueType === 'link' || valueType === 'thought_ref') {
+      const input = el('input', 'st-f-input') as HTMLInputElement;
+      input.type = 'text';
+      input.value = live().values[i] ?? '';
+      input.addEventListener('input', () => setValue(i, input.value));
+      return input;
     }
-    return input;
+    return buildValueEditor({
+      networkId: requireNetworkId(),
+      definition: {
+        value_type: valueType,
+        config: def?.config ?? null,
+        required: false,
+        default_value: null,
+      },
+      value: live().values[i] ?? '',
+      commitOn: 'change',
+      save: (next) => {
+        setValue(i, next === null ? '' : String(next));
+        return true;
+      },
+    });
   };
 
   if (isPresence) {

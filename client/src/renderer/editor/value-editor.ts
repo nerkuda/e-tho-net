@@ -28,8 +28,11 @@
  *    держит baseline последнего УСПЕШНО сохранённого значения и пишет через
  *    `save` по blur (карточка 7d094c26 — rollback при неудаче, «пусто» на уже
  *    пустом поле не шлёт запрос — ошибка cefb4db0);
- *  - `commitOn: 'change'` (черновики диалогов): каждое изменение читается в
- *    состояние вызывающего через `save` без сети.
+ *  - `commitOn: 'change'` (черновики диалогов и конструктор условий отборов):
+ *    каждое изменение читается в состояние вызывающего через `save` без сети.
+ *
+ * У каждого скалярного поля справа — «✕» очистки значения одним кликом
+ * (`wrapClearable`); у пустого поля кнопка скрыта (ошибка a8e9eef1).
  *
  * История последних значений подключается опцией `historyPropertyId`
  * (networkId + property id — ключ `recent-values.ts`): источник `empty` у
@@ -45,7 +48,7 @@ import type {
 } from '@etn/shared';
 
 import { store } from '../state.js';
-import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
+import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
@@ -76,8 +79,13 @@ export interface ValueEditorOptions {
    *  Без владельца (дефолт в редакторе свойства/типа) меню не выводится. */
   ownerType?: 'thought' | 'link';
   ownerId?: string;
-  /** Определение свойства: вид значения, `config`, `required`, `default_value`. */
-  definition: EffectiveTypeProperty;
+  /**
+   * Определение свойства: вид значения, `config`, `required`, `default_value`.
+   * Намеренно сужено до используемых полей — конструктор условий отборов
+   * («Структуры», отбор типа) собирает определение на лету по реестру,
+   * без фейковых `id`/`owner_*` привязки.
+   */
+  definition: Pick<EffectiveTypeProperty, 'value_type' | 'config' | 'required' | 'default_value'>;
   /**
    * Текущее значение: скаляр (`string`/`number`/`boolean`, `string[]` для
    * множественного `url`) либо рёбра `LinkPropertyValueItem[]` для вида
@@ -178,30 +186,53 @@ export function valueTypeName(valueType: string): string {
 /**
  * Оборачивает поле ввода с кнопкой «✕» очистки значения в правом верхнем
  * углу (приёмка пользователя 0.8.1): у любого поля ввода должен быть
- * однозначный способ убрать значение целиком.
+ * однозначный способ убрать значение целиком. У пустого поля кнопка скрыта —
+ * очищать нечего (ошибка a8e9eef1); видимость следит за событиями
+ * `input`/`change` и за самой очисткой.
+ *
+ * Экспортирована: поля дат «Создано/Изменено» панели фильтра «Структур»
+ * (`datetime-local`, не значение свойства) используют тот же крестик.
  */
-function wrapClearable(input: HTMLElement, onClear: () => void): HTMLElement {
+export function wrapClearable(input: HTMLElement, onClear: () => void): HTMLElement {
   const wrap = div('clearable-field');
   wrap.append(input);
   const btn = el('button', 'clearable-clear', '✕');
   btn.type = 'button';
   btn.title = 'Очистить';
+  const sync = (): void => {
+    const node = input as HTMLInputElement;
+    btn.hidden = typeof node.value === 'string' && node.value === '';
+  };
   btn.addEventListener('click', (event) => {
     event.stopPropagation();
     onClear();
+    sync();
   });
+  input.addEventListener('input', sync);
+  input.addEventListener('change', sync);
+  sync();
   wrap.append(btn);
   return wrap;
 }
 
 /**
- * Очистка полей с blur-коммитом: пустое значение + программный blur —
- * переиспользует существующие обработчики поля (пустое → `null` → удаление
- * значения на сервере, с rollback baseline при неудаче).
+ * Очистка крестиком «✕»: change-режим пишет `null` напрямую (blur-обработчика
+ * в нём нет), blur-режим переиспользует существующий blur-коммит с baseline
+ * (пустое → `null` → удаление значения на сервере, с rollback при неудаче).
  */
-function clearViaBlur(input: HTMLInputElement): void {
-  input.value = '';
-  input.dispatchEvent(new Event('blur'));
+function makeClearNow(
+  input: HTMLInputElement,
+  commitOn: 'blur' | 'change',
+  save: (next: unknown | null) => Promise<boolean> | boolean,
+): () => void {
+  return () => {
+    input.value = '';
+    if (commitOn === 'change') {
+      void save(null);
+    } else {
+      input.dispatchEvent(new Event('blur'));
+    }
+  };
 }
 
 /**
@@ -335,7 +366,7 @@ function buildMultiTextChipsEditor(opts: {
   kind: 'text' | 'url';
   networkId: string;
   items: string[];
-  definition: EffectiveTypeProperty;
+  definition: Pick<EffectiveTypeProperty, 'config'>;
   save: (next: unknown | null) => Promise<boolean> | boolean;
   historyPropertyId?: string;
 }): HTMLElement {
@@ -450,6 +481,7 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   }
 
   const commitOn = opts.commitOn ?? 'blur';
+  const clearNow = makeClearNow(input, commitOn, opts.save);
   if (commitOn === 'change') {
     input.addEventListener('input', () => {
       const next = input.value.trim() === '' ? null : input.value;
@@ -518,7 +550,7 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
     const row = div('form-row');
     row.style.marginBottom = '0';
     row.append(
-      wrapClearable(input, () => clearViaBlur(input)),
+      wrapClearable(input, clearNow),
       button('▾', () => handle?.open(), 'btn small', 'Выбрать значение из списка'),
     );
     return row;
@@ -530,12 +562,21 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
     };
     input.addEventListener('input', syncOpenBtn);
     syncOpenBtn();
+    const clearUrl = (): void => {
+      input.value = '';
+      syncOpenBtn();
+      if (commitOn === 'change') {
+        void opts.save(null);
+      } else {
+        input.dispatchEvent(new Event('blur'));
+      }
+    };
     const row = div('form-row');
     row.style.marginBottom = '0';
-    row.append(wrapClearable(input, () => clearViaBlur(input)), openBtn);
+    row.append(wrapClearable(input, clearUrl), openBtn);
     return row;
   }
-  return wrapClearable(input, () => clearViaBlur(input));
+  return wrapClearable(input, clearNow);
 }
 
 /** Поле текстового свойства: multiple — чипы, иначе одиночное поле. */
@@ -580,6 +621,7 @@ function buildNumberEditor(opts: ValueEditorOptions): HTMLElement {
   input.value = stored === null ? '' : String(stored);
 
   const commitOn = opts.commitOn ?? 'blur';
+  const clearNow = makeClearNow(input, commitOn, opts.save);
   if (commitOn === 'change') {
     input.addEventListener('input', () => {
       const next = input.value === '' ? null : Number(input.value);
@@ -610,7 +652,7 @@ function buildNumberEditor(opts: ValueEditorOptions): HTMLElement {
         });
     });
   }
-  return wrapClearable(input, () => clearViaBlur(input));
+  return wrapClearable(input, clearNow);
 }
 
 /** Одиночная дата: blur-коммит с baseline (ошибки cefb4db0, 7d094c26). */
@@ -621,6 +663,7 @@ function buildDateEditor(opts: ValueEditorOptions): HTMLElement {
   input.value = stored ?? '';
 
   const commitOn = opts.commitOn ?? 'blur';
+  const clearNow = makeClearNow(input, commitOn, opts.save);
   if (commitOn === 'change') {
     input.addEventListener('change', () => {
       void opts.save(input.value === '' ? null : input.value);
@@ -639,7 +682,7 @@ function buildDateEditor(opts: ValueEditorOptions): HTMLElement {
         });
     });
   }
-  return wrapClearable(input, () => clearViaBlur(input));
+  return wrapClearable(input, clearNow);
 }
 
 /** Да/нет: checkbox (change-коммит); опционально трёхзначный select. */
@@ -903,7 +946,7 @@ export function buildLinkValueEditor(opts: {
   networkId: string;
   ownerType?: 'thought' | 'link';
   ownerId?: string;
-  definition: EffectiveTypeProperty;
+  definition: Pick<EffectiveTypeProperty, 'config' | 'required'>;
   values: LinkPropertyValueItem[];
   save: (next: unknown) => Promise<boolean>;
   /** Подключает историю последних целей (требование f6399882). */
@@ -1144,148 +1187,4 @@ export function splitMultiValue(value: string): string[] {
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part !== '');
-}
-
-/**
- * The fragment the user is currently typing: the whole input in single mode,
- * the part after the last comma in multiple mode. Lowercased for matching.
- */
-export function autocompleteFragment(text: string, multiple: boolean): string {
-  const fragment = multiple ? text.slice(Math.max(text.lastIndexOf(',') + 1, 0)) : text;
-  return fragment.trim().toLowerCase();
-}
-
-/**
- * Options containing the typed fragment (case-insensitive); an empty fragment
- * shows the full catalogue.
- */
-export function filterOptionsByFragment(options: string[], fragment: string): string[] {
-  if (fragment === '') return options;
-  return options.filter((option) => option.toLowerCase().includes(fragment));
-}
-
-/**
- * Устаревший пикер закрытого списка вариантов текстового поля (08-ui-spec.md
- * §6.3) — остался только для панели фильтра «Структур»
- * (`screens/structures/filter-panel.ts`), пока веха 5 не переведёт её на
- * общий конструктор условий; новые места используют общую выпадашку внутри
- * {@link buildValueEditor}.
- */
-export function buildValueOptionsCaret(
-  input: HTMLInputElement,
-  options: string[],
-  multiple: boolean,
-  commit: (value: string) => void,
-  revert: () => void,
-  suppressOnEmpty = false,
-): HTMLElement {
-  let list: HTMLDivElement | null = null;
-
-  const detach = (): void => {
-    if (list === null) return;
-    list.remove();
-    list = null;
-    window.removeEventListener('mousedown', onOutside, true);
-  };
-
-  const close = (mode: 'commit' | 'revert'): void => {
-    if (list === null) return;
-    detach();
-    if (mode === 'revert') revert();
-    else commit(input.value);
-  };
-
-  const onOutside = (event: MouseEvent): void => {
-    if (
-      list !== null &&
-      event.target instanceof Node &&
-      !list.contains(event.target) &&
-      event.target !== input
-    ) {
-      close('commit');
-    }
-  };
-
-  function renderRows(showAll: boolean): void {
-    if (list === null) return;
-    const fragment = showAll ? '' : autocompleteFragment(input.value, multiple);
-    const visible = filterOptionsByFragment(options, fragment);
-    const selected = new Set(multiple ? splitMultiValue(input.value) : []);
-    list.replaceChildren();
-    for (const option of visible) {
-      const row = div('type-combo-item');
-      if (multiple) {
-        const check = el('input');
-        check.type = 'checkbox';
-        check.checked = selected.has(option);
-        row.append(check);
-      }
-      row.append(el('span', 'type-combo-label', option));
-      // Keep the focus (and selection highlight) in the input — no blur-commit
-      // while the user works inside the dropdown.
-      row.addEventListener('mousedown', (event) => event.preventDefault());
-      row.addEventListener('click', () => {
-        if (!multiple) {
-          input.value = option;
-          close('commit');
-          return;
-        }
-        if (selected.has(option)) selected.delete(option);
-        else selected.add(option);
-        const check = row.querySelector('input');
-        if (check !== null) check.checked = selected.has(option);
-        input.value = options.filter((o) => selected.has(o)).join(', ');
-      });
-      list.append(row);
-    }
-    if (visible.length === 0) {
-      list.append(el('p', 'muted type-combo-empty', 'Совпадений нет.'));
-    }
-    if (multiple) {
-      const done = button('Готово', () => close('commit'), 'btn small');
-      done.style.margin = '4px';
-      list.append(done);
-    }
-  }
-
-  const openList = (showAll: boolean): void => {
-    if (list !== null) {
-      renderRows(showAll);
-      return;
-    }
-    list = div('type-combo-list');
-    renderRows(showAll);
-    document.body.append(list);
-    positionBodyDropdown(list, input);
-    window.addEventListener('mousedown', onOutside, true);
-  };
-
-  // Typing (re)opens the list with rows narrowed to the typed fragment; the
-  // caret shows the full catalogue regardless of the current input value.
-  // Clearing the field with `suppressOnEmpty` just hides the list (the
-  // recent-values dropdown owns the emptied field); the pending empty value
-  // still commits on blur as usual.
-  input.addEventListener('input', () => {
-    if (suppressOnEmpty && input.value === '') {
-      detach();
-      return;
-    }
-    openList(false);
-  });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && list !== null) {
-      event.stopPropagation();
-      close('revert');
-    }
-  });
-
-  return button(
-    '▾',
-    () => {
-      if (list !== null) close('commit');
-      else openList(true);
-    },
-    'btn small',
-    multiple ? 'Выбрать несколько значений' : 'Выбрать значение из списка',
-  );
 }
