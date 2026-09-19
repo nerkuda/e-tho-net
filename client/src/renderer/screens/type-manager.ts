@@ -1024,25 +1024,19 @@ function buildStagedPropertySection(opts: {
   const label = el('p', 'muted', 'Свойства');
   label.style.margin = '8px 0 2px';
   box.append(label, tableWrap, errorLine);
-  // Кнопки добавления свойства. Двусторонняя вкладка (задача 935ec90e):
-  // обе кнопки сначала спрашивают сторону привязки (источник/назначение),
-  // затем открывают соответствующий поток — пикер реестра («Добавить…»)
-  // или единый диалог свойства/связи («Создать…»).
+  // Кнопка добавления свойства (ошибка 4251fbe5): сторона привязки
+  // спрашивается ПОСЛЕ выбора свойства-связи внутри диалога «Добавить
+  // свойство», а не заранее; «Создать свойство» — кнопка самого диалога
+  // выбора, отдельной кнопки вкладки больше нет.
   const actions = div('form-row');
   actions.style.gap = '8px';
   actions.style.flexWrap = 'wrap';
   actions.append(
     button(
       'Добавить свойство…',
-      () => void askSideThen('attach'),
+      () => void openAttachPropertyDialog(),
       'btn small',
-      'Подключить существующее свойство из справочника сети',
-    ),
-    button(
-      'Создать свойство…',
-      () => void askSideThen('create'),
-      'btn small',
-      'Создать новое свойство через единый диалог свойства/связи',
+      'Подключить свойство из справочника сети (новое создаётся кнопкой «Создать свойство» в диалоге выбора)',
     ),
   );
   box.append(actions);
@@ -1069,10 +1063,11 @@ function buildStagedPropertySection(opts: {
    * «Добавить свойство» dialog: pick an existing registry property (или
    * создать новое в общем редакторе свойства и затем выбрать его). Returns
    * the staged row the caller appends to {@link ownDraft} (or `null` when
-   * the user cancelled). `side` — сторона привязки (`source`/`target`)
-   * для свойств-связей; `null` для скаляров (сторона неприменима).
+   * the user cancelled). Сторона привязки для свойства-связи спрашивается
+   * ПОСЛЕ выбора свойства внутри диалога (ошибка 4251fbe5) — сюда диалог
+   * возвращает уже готовую строку с заполненным `side`.
    */
-  async function openAttachPropertyDialog(side: 'source' | 'target' | null): Promise<void> {
+  async function openAttachPropertyDialog(): Promise<void> {
     // The warning's «descendants» check needs the edited type's id and name;
     // both exist only for an already-created type.
     const editedType =
@@ -1081,6 +1076,17 @@ function buildStagedPropertySection(opts: {
         : ownerType === 'thought_type'
           ? store.state.thoughtTypes.find((t) => t.id === typeId) ?? null
           : store.state.linkTypes.find((t) => t.id === typeId) ?? null;
+    // Занятые стороны подключённых свойств-связей (проверка дубля стороны в
+    // диалоге выбора; скаляр — пустой набор сторон).
+    const existingSides = new Map<string, Set<'source' | 'target'>>();
+    for (const d of ownDraft) {
+      let set = existingSides.get(d.property_id);
+      if (set === undefined) {
+        set = new Set<'source' | 'target'>();
+        existingSides.set(d.property_id, set);
+      }
+      if (d.side === 'source' || d.side === 'target') set.add(d.side);
+    }
     const picked = await openAttachDialog({
       networkId,
       ownerType,
@@ -1092,13 +1098,8 @@ function buildStagedPropertySection(opts: {
           : 'name' in editedType
             ? editedType.name
             : editedType.name_forward,
-      existingPropertyIds: new Set(
-        ownDraft
-          .filter((d) => side === null || d.side === side)
-          .map((d) => d.property_id),
-      ),
+      existingSides,
       inheritedPropertyIds: new Set(inherited.map((d) => d.property_id)),
-      side,
     });
     if (picked === null) return;
     // Merge the picked property into the section's own registry snapshot
@@ -1111,92 +1112,6 @@ function buildStagedPropertySection(opts: {
     ownDraft = [...ownDraft, picked.draft];
     draftTouched = true;
     render();
-  }
-
-  /**
-   * Диалог выбора стороны привязки для «Добавить свойство…» / «Создать
-   * свойство…» (задача 935ec90e — двусторонняя вкладка «Свойства»).
-   * Скалярные свойства не имеют стороны — для них поток не меняется.
-   *
-   * Поведение:
-   *   * `kind === 'attach'` — после выбора стороны открывает пикер реестра
-   *     ({@link openAttachPropertyDialog}) с указанной стороной.
-   *   * `kind === 'create'` — после выбора стороны открывает единый диалог
-   *     свойства/связи ({@link openPropertyManagerEditor}) с предзаполненной
-   *     таблицей текущей стороны.
-   */
-  async function askSideThen(kind: 'attach' | 'create'): Promise<void> {
-    const side = await pickBindingSide();
-    if (side === 'cancel') return;
-    if (kind === 'attach') {
-      await openAttachPropertyDialog(side);
-    } else {
-      if (typeId === null) {
-        // Новый тип ещё не имеет id — единый диалог всё равно примет
-        // initialThoughtTypeId, но он будет бесполезен до apply. Делегируем
-        // тот же поток, что и для attach — пикер реестра; пользователь
-        // сможет выбрать существующее свойство или создать новое через
-        // «Добавить…» внутри пикера.
-        await openAttachPropertyDialog(side);
-        return;
-      }
-      openPropertyManagerEditor(
-        null,
-        () => void reload(),
-        undefined,
-        { initialThoughtTypeId: typeId, initialSide: side },
-      );
-    }
-  }
-
-  /**
-   * Маленький диалог «с какой стороны подключить свойство-связь»:
-   * «Источник» / «Назначение» / «Отмена». Возвращает выбранную сторону
-   * или `'cancel'`. Для скалярных свойств (`value_type !== 'link'`) шаг
-   * не имеет смысла, но единая точка входа сейчас этого не различает —
-   * диалог короткий, а при создании скаляра пользователь всё равно
-   * проходит мимо лишней кнопки (выбор запоминается как `null`).
-   */
-  function pickBindingSide(): Promise<'source' | 'target' | 'cancel'> {
-    return new Promise((resolve) => {
-      const errorLine = span('', 'error-text');
-      const hint = el(
-        'p',
-        'muted',
-        'Для свойства-связи выберите сторону привязки к этому типу: ' +
-          '«Источник» — имя `name_forward`, «Назначение» — имя `name_reverse`.',
-      );
-      hint.style.margin = '0 0 8px';
-      const body = div('form-stack');
-      body.append(hint, errorLine);
-      const choose = (side: 'source' | 'target' | null): void => {
-        close();
-        if (side === null) resolve('cancel');
-        else resolve(side);
-      };
-      const close = showDialog({
-        title: 'Сторона привязки',
-        body,
-        width: 460,
-        buttons: [
-          {
-            label: 'Отмена',
-            onClick: () => choose(null),
-          },
-          {
-            label: 'Источник',
-            keepOpen: true,
-            onClick: () => choose('source'),
-          },
-          {
-            label: 'Назначение',
-            primary: true,
-            keepOpen: true,
-            onClick: () => choose('target'),
-          },
-        ],
-      });
-    });
   }
 
   /** The list of types that the «already bound to a descendant» warning
@@ -1639,6 +1554,73 @@ function buildStagedPropertySection(opts: {
 }
 
 /**
+ * Маленький диалог «с какой стороны подключить свойство-связь»: «Источник» /
+ * «Назначение» / «Отмена». Возвращает выбранную сторону или `'cancel'`.
+ * Вызывается ПОСЛЕ выбора свойства-связи в диалоге «Добавить свойство»
+ * (ошибка 4251fbe5) — скалярные свойства этого шага не видят вовсе.
+ */
+function pickBindingSide(): Promise<'source' | 'target' | 'cancel'> {
+  return new Promise((resolve) => {
+    const hint = el(
+      'p',
+      'muted',
+      'Для свойства-связи выберите сторону привязки к этому типу: ' +
+        '«Источник» — имя `name_forward`, «Назначение» — имя `name_reverse`.',
+    );
+    hint.style.margin = '0 0 8px';
+    const body = div('form-stack');
+    body.append(hint);
+    const choose = (side: 'source' | 'target' | null): void => {
+      close();
+      if (side === null) resolve('cancel');
+      else resolve(side);
+    };
+    const close = showDialog({
+      title: 'Сторона привязки',
+      body,
+      width: 460,
+      buttons: [
+        {
+          label: 'Отмена',
+          onClick: () => choose(null),
+        },
+        {
+          label: 'Источник',
+          keepOpen: true,
+          onClick: () => choose('source'),
+        },
+        {
+          label: 'Назначение',
+          primary: true,
+          keepOpen: true,
+          onClick: () => choose('target'),
+        },
+      ],
+    });
+  });
+}
+
+/**
+ * Решение о стороне привязки для подключаемого свойства (ошибка 4251fbe5):
+ * скалярное свойство стороны не имеет (`null`), для свойства-связи сторону
+ * спрашивают у пользователя (`'ask'`). Чистая — юнит-тест
+ * type-manager-attach-side.test.ts.
+ */
+export function attachSideDecision(valueType: PropertyValueType): 'ask' | 'none' {
+  return valueType === 'link' ? 'ask' : 'none';
+}
+
+/** Занята ли уже стороной `side` привязка свойства-связи (дубль стороны —
+ *  ошибка сервера b9562306; клиент проверяет заранее, ошибка 4251fbe5).
+ *  Чистая — юнит-тест. */
+export function isSideAlreadyBound(
+  existing: ReadonlySet<'source' | 'target'> | undefined,
+  side: 'source' | 'target',
+): boolean {
+  return existing !== undefined && existing.has(side);
+}
+
+/**
  * Result of the «Добавить свойство» dialog: a new draft row the caller
  * appends to its own-bindings list (or `null` when the user cancelled).
  * The row is fully resolved — the registry id (`property_id`) and the
@@ -1657,20 +1639,27 @@ interface AttachDialogResult {
 
 /**
  * «Добавить свойство» dialog (0.6.5, переработан по итогам приёмки — ошибка
- * «Диалог "Добавить свойство" в редакторе типа: непонятный интерфейс»).
+ * «Диалог "Добавить свойство" в редакторе типа: непонятный интерфейс»;
+ * ошибка 4251fbe5 — сторона привязки спрашивается ПОСЛЕ выбора свойства).
  *
- * One pick list over the network property registry, one search box, two
+ * One pick list over the network property registry, one search box, three
  * bottom buttons:
  *   * **Выбрать** — attach the highlighted registry property (double-click on
- *     the row and Ctrl+Enter do the same). Properties the type already
- *     carries — own or inherited — stay VISIBLE but marked «подключено» /
- *     «унаследовано» and cannot be picked (the duplicate check up front; the
- *     server re-checks on attach);
- *   * **Добавить** — open the SHARED property editor (the exact dialog the
- *     property manager uses) to create a brand-new registry row; after
- *     «Записать и закрыть» the list refreshes and the fresh property is the
- *     highlighted row, ready to be picked. One editor everywhere — nothing
- *     is created inline any more.
+ *     the row and Ctrl+Enter do the same). Для свойства-связи сразу после
+ *     выбора спрашивается сторона привязки («Сторона привязки»); скалярные
+ *     свойства подключаются без вопроса.
+ *   * **Создать свойство** — open the SHARED property editor (the exact
+ *     dialog the property manager uses) to create a brand-new registry row;
+ *     after «Применить и закрыть» the list refreshes and the fresh property
+ *     is the highlighted row, ready to be picked. One editor everywhere —
+ *     nothing is created inline any more.
+ *   * **Отмена** — закрыть без изменений.
+ *
+ * Properties the type already carries — own or inherited — stay VISIBLE but
+ * marked «подключено» / «унаследовано» and cannot be picked (the duplicate
+ * check up front; the server re-checks on attach). A link-property bound on
+ * ONE side only stays pickable for the other side and shows which side is
+ * taken.
  *
  * Attaching a property some DESCENDANT of the edited type already carries
  * asks first — naming the concrete types and what exactly happens (their own
@@ -1689,17 +1678,15 @@ async function openAttachDialog(opts: {
   typeId: string | null;
   /** The edited type's display name for warning texts (null for a new type). */
   editedTypeName: string | null;
-  /** Property ids the type already carries (own bindings + this session's
-   *  staged rows) — shown as «подключено», not pickable. */
-  existingPropertyIds: ReadonlySet<string>;
+  /** Занятые стороны собственных привязок типа: property_id → стороны
+   *  (пустой набор — скалярное свойство). Блокирует повторный выбор той же
+   *  стороны свойства-связи. */
+  existingSides: ReadonlyMap<string, ReadonlySet<'source' | 'target'>>;
   /** Property ids inherited from the type's ancestors (or the picked parent's
    *  whole set for a new type) — shown as «унаследовано», not pickable. */
   inheritedPropertyIds: ReadonlySet<string>;
-  /** Side of the binding (`source`/`target`) for link-properties; `null`
-   *  for scalar properties or when the dialog is opened generically. */
-  side: 'source' | 'target' | null;
 }): Promise<AttachDialogResult | null> {
-  const { networkId, ownerType, types, typeId, editedTypeName, existingPropertyIds, inheritedPropertyIds, side } = opts;
+  const { networkId, ownerType, types, typeId, editedTypeName, existingSides, inheritedPropertyIds } = opts;
   let registryRows: RegistryRow[];
   try {
     registryRows = await etn.propertyRegistry.list(networkId);
@@ -1719,13 +1706,25 @@ async function openAttachDialog(opts: {
     /** The highlighted registry row (a PICKABLE one), or null. */
     let selected: RegistryRow | null = null;
 
-    /** Why a row cannot be picked, or null when it can. */
-    const blockReason = (row: RegistryRow): string | null =>
-      existingPropertyIds.has(row.id)
-        ? 'подключено'
-        : inheritedPropertyIds.has(row.id)
-          ? 'унаследовано'
-          : null;
+    /** Why a row cannot be picked, or null when it can. Свойство-связь,
+     *  подключённое с ОДНОЙ стороны, остаётся выбираемым — для другой
+     *  стороны (ошибка 4251fbe5). */
+    const blockReason = (row: RegistryRow): string | null => {
+      if (inheritedPropertyIds.has(row.id)) return 'унаследовано';
+      const sides = existingSides.get(row.id);
+      if (sides === undefined) return null;
+      if (row.value_type !== 'link') return 'подключено';
+      return sides.size >= 2 ? 'подключено' : null;
+    };
+
+    /** Информационная пометка строки (не блокирует выбор): какая сторона
+     *  свойства-связи уже занята — вторую ещё можно выбрать. */
+    const rowNote = (row: RegistryRow): string | null => {
+      if (row.value_type !== 'link') return null;
+      const sides = existingSides.get(row.id);
+      if (sides === undefined || sides.size === 0 || sides.size >= 2) return null;
+      return sides.has('source') ? 'подключено: источник' : 'подключено: назначение';
+    };
 
     /** The registry rows matching the current search query, alphabetical. */
     const visibleRows = (): RegistryRow[] => {
@@ -1792,10 +1791,14 @@ async function openAttachDialog(opts: {
         const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]);
         const countCell = el('td', 'muted', `в ${row.types_count} типах`);
         countCell.style.textAlign = 'right';
-        const markCell = el('td', 'muted', blocked ?? '');
+        const note = rowNote(row);
+        const markCell = el('td', 'muted', blocked ?? note ?? '');
         markCell.style.whiteSpace = 'nowrap';
         tr.append(nameCell, typeCell, markCell, countCell);
         if (blocked === null) {
+          if (note !== null) {
+            setTooltip(tr, 'Эта сторона свойства-связи уже подключена — можно подключить другую сторону.');
+          }
           tr.addEventListener('click', () => {
             selected = row;
             applySelection();
@@ -1834,9 +1837,11 @@ async function openAttachDialog(opts: {
       }
     });
 
-    /** Resolves the dialog with the highlighted pickable row. */
+    /** Resolves the dialog with the highlighted pickable row. Для свойства-
+     *  связи сначала спрашивает сторону привязки (ошибка 4251fbe5). */
     async function choose(): Promise<void> {
       if (selected === null) return;
+      errorLine.textContent = '';
       const warning = await warnDescendantBindings(networkId, selected, {
         ownerType,
         types,
@@ -1847,12 +1852,25 @@ async function openAttachDialog(opts: {
         const ok = await confirmDialog('Подключить свойство', warning, true);
         if (!ok) return;
       }
+      let side: 'source' | 'target' | null = null;
+      if (attachSideDecision(selected.value_type) === 'ask') {
+        const picked = await pickBindingSide();
+        if (picked === 'cancel') return;
+        if (isSideAlreadyBound(existingSides.get(selected.id), picked)) {
+          errorLine.textContent =
+            `Свойство-связь «${selected.name}» уже подключено к этому типу с этой стороны.`;
+          rerenderResults();
+          return;
+        }
+        side = picked;
+      }
       close();
       resolve({ draft: attachDraftFromExisting(selected, side), registry: selected });
     }
 
+    const errorLine = span('', 'error-text');
     const body = div('form-stack');
-    body.append(searchInput, resultsWrap);
+    body.append(searchInput, resultsWrap, errorLine);
     rerenderResults();
 
     /** Re-fetches the registry (after the shared editor created a row) and
@@ -1874,7 +1892,7 @@ async function openAttachDialog(opts: {
       buttons: [
         { label: 'Отмена' },
         {
-          label: 'Добавить…',
+          label: 'Создать свойство',
           keepOpen: true,
           onClick: () => {
             openPropertyManagerEditor(
@@ -1898,9 +1916,10 @@ async function openAttachDialog(opts: {
 }
 
 /** Builds the draft row for «attach existing» — `property_id` set, nature
- *  snapshot copied from the registry row. `side` — выбранная сторона
- *  (`source`/`target`) для свойств-связей; `null` для скаляров. */
-function attachDraftFromExisting(row: RegistryRow, side: 'source' | 'target' | null): DraftProperty {
+ *  snapshot copied from the registry row. `side` — сторона привязки
+ *  (`source`/`target`), выбранная после выбора свойства-связи (ошибка
+ *  4251fbe5); `null` для скаляров. Экспортирована для юнит-теста. */
+export function attachDraftFromExisting(row: RegistryRow, side: 'source' | 'target' | null): DraftProperty {
   return {
     id: nextDraftPropertyId(),
     isNew: true,
