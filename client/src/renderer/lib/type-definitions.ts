@@ -1,6 +1,6 @@
 /**
- * Определения свойств типа ↔ набор свойств открытого редактора
- * (ошибки 74b94c26 и 98aa0889).
+ * Тип показанной сущности ↔ открытый редактор: определения свойств и сам тип
+ * (ошибки 74b94c26, 98aa0889, 94b28014).
  *
  * Вкладка «Свойства» открытого редактора показывает таблицу по ЭФФЕКТИВНОМУ
  * набору определений типа показанной сущности — привязки её типа и всех
@@ -39,6 +39,13 @@
  * её покрытие (списки допустимых типов свойства-связи, `config`) берётся из
  * тела правки, а не из определения: у накрытого типа меняется зеркало, и
  * перечитать набор нужно даже когда самого свойства в таблице нет.
+ *
+ * Меняется и САМ ТИП (94b28014): смена родителя сдвигает наследование (набор
+ * свойств), удаление убирает тип из цепочки, правка подписи/оформления видна в
+ * шапке редактора. Событийная часть — {@link typeChangeFacts} и
+ * {@link isTypeChangeEventType}; удалённые типы запоминаются
+ * ({@link markTypeDeleted}), потому что каталог store перезагружается
+ * асинхронно и отстаёт от события.
  */
 
 import type { TypeOwnerType } from '@etn/shared';
@@ -313,6 +320,108 @@ function coverageTypeIdsOf(config: unknown): readonly string[] | null {
     ...(asStringArray(cfg['allowed_source_type_ids']) ?? []),
   ];
   return ids.length > 0 ? ids : null;
+}
+
+// ---------------------------------------------------------------------------
+// Тип показанной сущности: родитель, оформление, удаление (ошибка 94b28014)
+// ---------------------------------------------------------------------------
+
+/**
+ * Изменения ТИПА, на которые реагирует открытый редактор. Только мыслей
+ * (`thought-type.*`): симметричный случай типов связей (`link-type.*`) карточкой
+ * 94b28014 не покрыт.
+ */
+export type TypeChangeEventType = 'thought-type.updated' | 'thought-type.deleted';
+
+const TYPE_CHANGE_EVENT_TYPES: readonly string[] = [
+  'thought-type.updated',
+  'thought-type.deleted',
+];
+
+/** Сужает имя realtime-события до {@link TypeChangeEventType}. */
+export function isTypeChangeEventType(type: string): type is TypeChangeEventType {
+  return TYPE_CHANGE_EVENT_TYPES.includes(type);
+}
+
+/**
+ * Что известно об изменении типа. Вкладка «Свойства» зависит от ЭФФЕКТИВНОГО
+ * набора определений цепочки типов, поэтому перечитывается при сдвиге
+ * наследования (смена родителя) и при исчезновении типа; шапка редактора
+ * резолвит подпись и оформление типа по цепочке — при их правке шапка
+ * перерисовывается.
+ */
+export interface TypeChangeFacts {
+  owner: DefinitionOwner;
+  /** Тип удалён: в цепочке показанной сущности его больше нет. */
+  deleted: boolean;
+  /** Эффективный (наследуемый) набор свойств сдвинулся — смена родителя. */
+  setChanged: boolean;
+  /** Изменены подпись или оформление типа (их резолвит цепочка типов). */
+  visualChanged: boolean;
+}
+
+/** Поля типа, от которых зависит его отображение в шапке редактора. */
+const TYPE_VISUAL_KEYS: readonly string[] = [
+  'name',
+  'icon',
+  'icon_kind',
+  'fg_color',
+  'bg_color',
+  'font_bold',
+  'font_italic',
+  'font_underline',
+  'font_strike',
+];
+
+/** Факты об изменении типа из `data` realtime-события; `null` — событие
+ *  непригодно (нет id). */
+export function typeChangeFacts(
+  type: TypeChangeEventType,
+  data: unknown,
+): TypeChangeFacts | null {
+  const payload = asRecord(data);
+  if (payload === null) return null;
+  const id = asString(payload['id']);
+  if (id === null) return null;
+  const owner: DefinitionOwner = { ownerType: 'thought_type', ownerId: id };
+  if (type === 'thought-type.deleted') {
+    return { owner, deleted: true, setChanged: true, visualChanged: true };
+  }
+  const changes = asRecord(payload['changes']);
+  return {
+    owner,
+    deleted: false,
+    setChanged: changes !== null && 'parent_id' in changes,
+    visualChanged: changes !== null && TYPE_VISUAL_KEYS.some((key) => key in changes),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Типы, удалённые realtime-событием в этой сессии
+// ---------------------------------------------------------------------------
+
+/**
+ * Типы, удалённые событиями `*-type.deleted` (ошибка 94b28014). Каталог типов
+ * в store перезагружается асинхронно (`reloadTypeCatalogues`), а открытому
+ * редактору уже сейчас нужно знать, что своего типа у показанной сущности нет:
+ * иначе вкладка «Свойства» запросит набор исчезнувшего типа и покажет ошибку
+ * вместо набора корневого типа (L21). Id типов — UUID, повторно не выдаются,
+ * поэтому запись живёт до конца сессии.
+ */
+const deletedTypes = new Set<string>();
+
+/** Помечает тип удалённым (`thought_type`/`link_type` + id). */
+export function markTypeDeleted(owner: DefinitionOwner): void {
+  deletedTypes.add(typeKey(owner));
+}
+
+/** Удалён ли тип этим клиентом/сессией. */
+export function isTypeDeleted(owner: DefinitionOwner): boolean {
+  return deletedTypes.has(typeKey(owner));
+}
+
+function typeKey(owner: DefinitionOwner): string {
+  return `${owner.ownerType}:${owner.ownerId}`;
 }
 
 /** Изменены ли сами списки допустимых типов (граница покрытия сдвинулась). */

@@ -71,11 +71,15 @@ import {
   definitionChangeAffectsShown,
   definitionChangeFacts,
   isDefinitionEventType,
+  isTypeChangeEventType,
+  markTypeDeleted,
   onPropertyRegistryChanged,
   onTypeDefinitionsChanged,
+  typeChangeFacts,
   type DefinitionChangeFacts,
   type DefinitionOwner,
   type ShownTypeChain,
+  type TypeChangeFacts,
 } from '../lib/type-definitions.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { patchFocusEdge, store } from '../state.js';
@@ -451,12 +455,16 @@ let storeUnsubscribe: (() => void) | null = null;
  * both layers — its properties can differ through shadow overrides, and
  * ETN error dc4e0c07 made the editor keep the old layer's header + a
  * raw 404 in the property list. The render signature guard is still the
- * authoritative filter for an actual rebuild.
+ * authoritative filter for an actual rebuild. The `typeId` leg (ETN error
+ * 94b28014) covers a type detached server-side (its type was deleted): the
+ * thought's version does not change, but its type — and with it the header
+ * and the «Свойства» table — does.
  */
 let liveRenderedKey: {
   ownerId: string;
   layerId: string | null;
   version: string | number;
+  typeId: string | null;
 } | null = null;
 
 /** Badge spans of the current render, per counted tab (for refreshTabCount). */
@@ -568,8 +576,18 @@ export function mountEditor(editorHost: HTMLElement): void {
       // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
       // показанной сущности этой сети не относится.
       if (evt.network_id !== store.state.networkId) return;
-      if (!isDefinitionEventType(evt.type)) return;
-      applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
+      if (isDefinitionEventType(evt.type)) {
+        applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
+        return;
+      }
+      // Изменение самого ТИПА показанной сущности (ошибка 94b28014): смена
+      // родителя сдвигает наследование, удаление убирает тип из цепочки, а
+      // подпись/оформление типа видны в шапке.
+      if (!isTypeChangeEventType(evt.type)) return;
+      const facts = typeChangeFacts(evt.type, evt.data);
+      if (facts === null) return;
+      if (facts.deleted) markTypeDeleted(facts.owner);
+      applyTypeChange(facts);
     });
     onTypeDefinitionsChanged((owner) => {
       applyDefinitionChange({ owner, allowedTypeIds: null, coverageBoundaryUnknown: false });
@@ -605,7 +623,8 @@ export function mountEditor(editorHost: HTMLElement): void {
       liveRenderedKey !== null &&
       liveRenderedKey.ownerId === ctx.ownerId &&
       liveRenderedKey.layerId === liveLayerId &&
-      liveRenderedKey.version === (liveVersion ?? '')
+      liveRenderedKey.version === (liveVersion ?? '') &&
+      liveRenderedKey.typeId === ctxTypeId(ctx)
     ) {
       return;
     }
@@ -816,6 +835,50 @@ function applyDefinitionChange(facts: DefinitionChangeFacts): void {
   invalidateDefinitionDependentPanes();
 }
 
+/**
+ * Применяет изменение ТИПА показанной сущности (ошибка 94b28014). Гейт — тот
+ * же: изменённый тип обязан быть в цепочке показанной сущности (сам тип или
+ * предок). Дополнительно сверяется собственный тип сущности: при удалении типа
+ * каталог store ещё может его содержать (перезагружается асинхронно), и цепочка
+ * на момент события строится по устаревшему каталогу.
+ *
+ *  - смена родителя (`setChanged`) сдвигает наследование — таблица «Свойства»
+ *    перечитывается; свой тип сущности по-прежнему валиден, и набор резолвит
+ *    сервер (вкладка запрашивает определения по нему);
+ *  - удаление типа (`deleted`) — {@link markTypeDeleted} уже отметил его как
+ *    исчезнувший, поэтому вкладка прочитает набор по корневому типу (L21), а не
+ *    по удалённому;
+ *  - правка подписи/оформления (`visualChanged`) видна в шапке редактора — она
+ *    резолвит значок и цвета по цепочке типов; пересобирается только шапка,
+ *    кэш вкладок (и CodeMirror «Комментария») не трогается.
+ */
+function applyTypeChange(facts: TypeChangeFacts): void {
+  const ctx = renderCtx;
+  if (ctx === null) return;
+  const shown = shownTypeChainFor(facts.owner.ownerType);
+  if (shown === null) return;
+  const ownTypeId =
+    ctx.ownerType === 'thought' ? (ctx.thought?.type_id ?? null) : (ctx.link?.type_id ?? null);
+  if (!shown.ids.has(facts.owner.ownerId) && ownTypeId !== facts.owner.ownerId) return;
+  if (facts.setChanged) invalidateDefinitionDependentPanes();
+  if (facts.visualChanged) repaintEditorHeader();
+}
+
+/**
+ * Перерисовывает шапку редактора тем же путём, что и сохранение поля сущности
+ * (`patchHeader`): заново резолвятся значок, цвета и подпись типа из цепочки
+ * типов каталога. Кэш вкладок при этом не сбрасывается — оформление типа их
+ * содержимого не меняет. Живую сущность берём из store, а не из `renderCtx`:
+ * событие могло прийти между обновлениями store.
+ */
+function repaintEditorHeader(): void {
+  const prev = renderCtx;
+  if (headerEl === null || prev === null) return;
+  const live = currentEditorContext();
+  if (live === null || live.ownerType !== prev.ownerType || live.ownerId !== prev.ownerId) return;
+  patchHeader(live);
+}
+
 /** Updates the panel title text + trash marker for the current context. */
 function updateTitleEl(ctx: EditorContext | null): void {
   if (titleEl === null) return;
@@ -878,6 +941,15 @@ function patchHeader(ctx: EditorContext): void {
   if (typeChanged) invalidateTypeDependentPanes();
 }
 
+/**
+ * Type id of the entity the context shows (`null` — untyped or no entity):
+ * part of the render signature and of the store-gate key (ETN error 94b28014).
+ */
+function ctxTypeId(ctx: EditorContext): string | null {
+  if (ctx.ownerType === 'thought') return ctx.thought?.type_id ?? null;
+  return ctx.link?.type_id ?? null;
+}
+
 /** Renders the editor for the current target (signature-guarded). */
 async function render(): Promise<void> {
   if (host === null || scrollBox === null || positionButton === null) return;
@@ -890,14 +962,20 @@ async function render(): Promise<void> {
   // purpose (ETN error dc4e0c07): a layer switch must rebuild even when the
   // focused thought is the same id+version in both layers — its properties
   // can differ through shadow overrides, and the editor must not keep the
-  // old layer's header + property cache.
+  // old layer's header + property cache. The entity's TYPE belongs to
+  // `fullSignature` only (ETN error 94b28014): a server-side detach (the type
+  // was deleted) changes `type_id` without bumping the version, and the header
+  // plus the «Свойства» set must follow it. It must NOT enter
+  // `identitySignature` — that would turn every type change into a full
+  // teardown instead of the cheap `patchHeader` (bug 206e33a1: the rebuild
+  // destroys the comment's CodeMirror).
   const layerId = store.state.currentLayer?.id ?? '';
   const identitySignature =
     ctx === null ? 'null' : `${ctx.ownerType}|${ctx.ownerId}|${store.state.editorPosition}|${layerId}`;
   const fullSignature =
     ctx === null
       ? 'null'
-      : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}`;
+      : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${ctxTypeId(ctx) ?? ''}`;
   if (fullSignature === lastSignature) return;
 
   // A version-only change of the SAME already-rendered, already-loaded
@@ -940,6 +1018,7 @@ async function render(): Promise<void> {
             ctx.ownerType === 'thought'
               ? (ctx.thought?.version ?? '')
               : (ctx.link?.version ?? ''),
+          typeId: ctxTypeId(ctx),
         };
 
   if (canPatch) {

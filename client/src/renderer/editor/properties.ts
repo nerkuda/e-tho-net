@@ -41,7 +41,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
-import { rememberShownDefinitions } from '../lib/type-definitions.js';
+import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
@@ -147,10 +147,14 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
  * type, or the root type «основной тип» for an owner without one (its
  * settings apply to every element without a type). `null` when the catalogue
  * has no root (mid-migration edge).
+ *
+ * Тип, удалённый realtime-событием (ошибка 94b28014), за своего не считается:
+ * каталог store перезагружается асинхронно, и запрос набора по уже
+ * несуществующему типу вернул бы ошибку вместо набора корневого типа.
  */
 function resolveEditorTypeId(ctx: EditorContext): string | null {
   const own = ctx.ownerType === 'thought' ? ctx.thought?.type_id : ctx.link?.type_id;
-  if (own != null) return own;
+  if (own != null && !isTypeDeleted({ ownerType: ownerTypeOf(ctx), ownerId: own })) return own;
   return rootTypeIdFor(ctx.ownerType);
 }
 
