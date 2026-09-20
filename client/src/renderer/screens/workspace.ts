@@ -65,12 +65,11 @@ export interface WorkspaceHandles {
   activityViewButton: HTMLButtonElement;
   /** Pinned-thoughts panel host in the toolbar (L18). */
   pinnedHost: HTMLElement;
-  /** Search row of the map view (L18): input + gear, under the top bar. */
+  /** Search row of the map view (L18): the search input, under the top bar. */
   searchRow: HTMLElement;
   /** Search input (H13, lives in the map-view search row). */
   searchInput: HTMLInputElement;
-  searchOptionsButton: HTMLButtonElement;
-  /** Drop panel under the search row for search results (H13). */
+  /** Drop panel under the search row: search results + settings zone (H13). */
   searchHost: HTMLElement;
   /** Left selection panel (H16). */
   selectionHost: HTMLElement;
@@ -192,13 +191,10 @@ export function buildWorkspace(): HTMLElement {
   searchInput.placeholder = 'Поиск… (Ctrl+F)';
   setTooltip(searchInput, 'Поиск по сети');
 
-  const searchOptionsButton = el('button', 'tb-btn tb-icon', '');
-  searchOptionsButton.type = 'button';
-  searchOptionsButton.append(svgIcon('settings'));
-  setTooltip(searchOptionsButton, 'Опции поиска');
-
+  // The drop-panel settings gear used to sit here (задача a3247f84, 0.8.2);
+  // it moved into the panel as the funnel toggle in its top corner.
   const searchRow = div('search-row');
-  searchRow.append(searchInput, searchOptionsButton);
+  searchRow.append(searchInput);
 
   const userMenuButton = el('button', 'tb-btn', '');
   userMenuButton.type = 'button';
@@ -336,7 +332,6 @@ export function buildWorkspace(): HTMLElement {
     pinnedHost,
     searchRow,
     searchInput,
-    searchOptionsButton,
     searchHost,
     selectionHost,
     canvasHost,
@@ -368,7 +363,7 @@ export function buildWorkspace(): HTMLElement {
   mountEditorResizer(editorResizer, body);
   mountSelectionResizer(selectionResizer, body);
   mountEventAreaResizer(eventAreaResizer, statusbar);
-  mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
+  mountSearch({ input: searchInput, host: searchHost });
   mountSelection(selectionHost);
   mountStructures(structuresHost);
   mountChronicle(chronicleHost);

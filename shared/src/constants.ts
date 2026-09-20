@@ -164,6 +164,10 @@ export const UI_STATE_KEY = {
   CLOUD_WIDTH: 'cloud_width',
   CLOUD_GAP: 'cloud_gap',
   SEARCH_STATE: 'search_state',
+  /** Нажатость переключателя-лейки «Настройки поиска» в выпадающей панели
+   *  строки поиска карты (задача a3247f84, 0.8.2): видна/скрыта зона настроек.
+   *  Хранится локально на клиенте (L4 `ui_state`), как `search_state`. */
+  SEARCH_SETTINGS_OPEN: 'search_settings_open',
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   EDITOR_LIST_HEIGHTS: 'editor_list_heights',

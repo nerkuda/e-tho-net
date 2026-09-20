@@ -41,6 +41,7 @@ import {
   parseFilterDefinition,
   parseSearchCriteria,
   searchCriteriaToStored,
+  searchSubtreeRoots,
 } from '../src/renderer/lib/filter-builder.js';
 
 const EMPTY_REGISTRY = new Map<string, NetworkProperty>();
@@ -137,7 +138,7 @@ describe('единая модель состояния переживает со
     const state = {
       ...defaultSearchCriteriaState(),
       subtree: true,
-      subrootId: 'root-1',
+      subrootIds: ['root-1', 'root-2'],
       onlyLinks: true,
       typeIds: ['t1', 't2'],
       linkTypeIds: ['l1'],
@@ -146,6 +147,38 @@ describe('единая модель состояния переживает со
     };
     const back = parseSearchCriteria(searchCriteriaToStored(state));
     assert.deepEqual(back, state, 'записанное читается тем же парсером');
+  });
+
+  it('строка поиска карты: одиночный `subrootId` прошлых версий читается набором', () => {
+    const back = parseSearchCriteria({ subtree: true, subrootId: 'root-1' });
+    assert.equal(back.subtree, true);
+    assert.deepEqual(back.subrootIds, ['root-1'], 'старый ключ — набор из одной мысли');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. Мысли-подкорни запроса поиска (задача a3247f84)
+// ---------------------------------------------------------------------------
+
+describe('мысли-подкорни запроса поиска', () => {
+  it('выключенный флажок — поиск без подкорня', () => {
+    const state = { ...defaultSearchCriteriaState(), subrootIds: ['a', 'b'] };
+    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), [null]);
+  });
+
+  it('пустой набор при включённом флажке — запасной вариант «текущий фокус»', () => {
+    const state = { ...defaultSearchCriteriaState(), subtree: true };
+    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), ['focus-1']);
+    assert.deepEqual(searchSubtreeRoots(state, null), [null]);
+  });
+
+  it('выбранные мысли — по запросу на каждую (объединение поддеревьев)', () => {
+    const state = {
+      ...defaultSearchCriteriaState(),
+      subtree: true,
+      subrootIds: ['a', 'b'],
+    };
+    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), ['a', 'b']);
   });
 });
 

@@ -628,6 +628,8 @@ export interface EntityChipFieldOptions {
    * сохраняются.
    */
   picker?: { label: string; open(managed: readonly string[]): Promise<string[] | null> };
+  /** Начальное состояние «поле недоступно» (поле ввода и кнопка пикера). */
+  disabled?: boolean;
 }
 
 /** Собранный чип-лист сущностей. */
@@ -635,6 +637,8 @@ export interface EntityChipField {
   root: HTMLElement;
   /** Перерисовывает чипы (вызывающий догрузил облачка). */
   refresh(): void;
+  /** Включает/выключает поле: поле ввода, кнопка пикера, снятие чипов. */
+  setDisabled(value: boolean): void;
 }
 
 /** Строка выпадашки по варианту сущности: облачко, отступ дерева, свотч линии. */
@@ -666,9 +670,14 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   /** Каталог, накопленный источником: по нему рисуются облачка значений. */
   const byId = new Map<string, EntityOption>();
 
+  /** Заблокировано ли поле (выключатель зоны настроек поиска, задача a3247f84). */
+  let disabled = opts.disabled === true;
+  /** Кнопка модального пикера — создаётся ниже, если пикер задан. */
+  let pickBtn: HTMLButtonElement | null = null;
+
   const commit = (raw: string): void => {
     const value = raw.trim();
-    if (value === '') return;
+    if (value === '' || disabled) return;
     input.value = '';
     if (opts.getValues().includes(value)) return;
     opts.onChange([...opts.getValues(), value]);
@@ -710,17 +719,26 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
         createThoughtCloud(cloud, {
           profile: 'chip',
           width: 'container',
-          actions: {
-            onRemove: () => {
-              opts.onChange(opts.getValues().filter((v) => v !== value));
-              renderChips();
-            },
-          },
+          actions: disabled
+            ? {}
+            : {
+                onRemove: () => {
+                  opts.onChange(opts.getValues().filter((v) => v !== value));
+                  renderChips();
+                },
+              },
         }),
       );
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
     field.replaceChildren(...chips, input);
+  }
+
+  /** Приводит поле ввода, кнопку пикера и рамку к состоянию `disabled`. */
+  function applyDisabled(): void {
+    input.disabled = disabled;
+    if (pickBtn !== null) pickBtn.disabled = disabled;
+    root.classList.toggle('disabled', disabled);
   }
 
   field.append(input);
@@ -736,9 +754,10 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   if (opts.picker !== undefined) {
     const { picker } = opts;
     const managed = (): string[] => opts.getValues().filter((v) => !v.startsWith('$'));
-    const pickBtn = el('button', 'btn small entity-chip-pick', picker.label) as HTMLButtonElement;
+    pickBtn = el('button', 'btn small entity-chip-pick', picker.label) as HTMLButtonElement;
     pickBtn.type = 'button';
     pickBtn.addEventListener('click', () => {
+      if (disabled) return;
       void picker.open(managed()).then((next) => {
         if (next === null) return;
         const kept = opts.getValues().filter((v) => v.startsWith('$'));
@@ -749,7 +768,19 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     root.append(pickBtn);
   }
 
-  return { root, refresh: renderChips };
+  applyDisabled();
+
+  return {
+    root,
+    refresh: renderChips,
+    setDisabled: (value: boolean): void => {
+      if (value === disabled) return;
+      disabled = value;
+      applyDisabled();
+      // Снятие чипа возможно только у активного поля — перерисовываем.
+      renderChips();
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

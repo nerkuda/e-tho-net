@@ -844,3 +844,36 @@ export interface SearchPanelTapLayers {
 export function searchPanelClosesOnTap(layers: SearchPanelTapLayers): boolean {
   return !layers.insidePanel && !layers.insideSuggest && !layers.insideDialog;
 }
+
+// ---------------------------------------------------------------------------
+// Строка поиска карты: зона «Настройки поиска» (задача a3247f84, 0.8.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Минимальная ширина окна, при которой зона «Настройки поиска» размещается
+ * справа от результатов. Уже неё (≤ этого значения) настройки встают сверху
+ * над результатами — иначе обеим зонам не хватает ширины.
+ */
+export const SEARCH_SETTINGS_SIDE_MIN_WIDTH = 1000;
+
+/** Положение зоны настроек в выпадающей панели поиска. */
+export type SearchSettingsPlacement = 'side' | 'top';
+
+/**
+ * Куда класть «Настройки поиска» при данной ширине окна: шире порога
+ * {@link SEARCH_SETTINGS_SIDE_MIN_WIDTH} — справа от результатов (`side`),
+ * иначе — сверху (`top`). Чистая функция: клиент вызывает её заново на каждом
+ * ресайзе окна, поэтому переключение положения не требует перезапуска.
+ */
+export function searchSettingsPlacement(windowWidth: number): SearchSettingsPlacement {
+  return windowWidth > SEARCH_SETTINGS_SIDE_MIN_WIDTH ? 'side' : 'top';
+}
+
+/**
+ * Читает сохранённую нажатость переключателя «Настройки поиска» из L4
+ * `ui_state`. По умолчанию (нет записи, мусор) — отжат (`false`): впервые
+ * открытая панель показывает только результаты.
+ */
+export function isSearchSettingsOpenStored(raw: string | null): boolean {
+  return raw === '1' || raw === 'true';
+}

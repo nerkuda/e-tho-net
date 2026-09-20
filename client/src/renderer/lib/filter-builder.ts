@@ -991,7 +991,12 @@ export function activityRowPasses(state: ActivityCriteriaState, plan: ActivityQu
  */
 export interface SearchCriteriaState extends FilterCriteriaState {
   subtree: boolean;
-  subrootId: string | null;
+  /**
+   * Мысли-подкорни: поиск идёт среди потомков ЛЮБОЙ из них (объединение
+   * результатов). Пустой набор при `subtree` — прежнее поведение: подкорень =
+   * текущий фокус (задача a3247f84; до неё хранился один `subrootId`).
+   */
+  subrootIds: string[];
   onlyThoughts: boolean;
   onlyLinks: boolean;
   onlyChrono: boolean;
@@ -1004,7 +1009,7 @@ export function defaultSearchCriteriaState(): SearchCriteriaState {
   return {
     ...defaultFilterCriteriaState(),
     subtree: false,
-    subrootId: null,
+    subrootIds: [],
     onlyThoughts: false,
     onlyLinks: false,
     onlyChrono: false,
@@ -1013,16 +1018,22 @@ export function defaultSearchCriteriaState(): SearchCriteriaState {
 }
 
 /**
- * Читает сохранённые настройки поиска (`search_state`), в т.ч. записанные до
- * 0.8.2 со старыми ключами (`subrootId`, `typeIds`, `linkTypeIds`,
- * `showInactive`, `authorId`, `editorId`) — формат хранения не меняется.
+ * Читает сохранённые настройки поиска (`search_state`), в т.ч. записанные
+ * ранее со старыми ключами (`subrootId`, `typeIds`, `linkTypeIds`,
+ * `showInactive`, `authorId`, `editorId`) — одиночный `subrootId` прошлых
+ * версий читается как набор из одной мысли.
  */
 export function parseSearchCriteria(raw: unknown): SearchCriteriaState {
   const next = defaultSearchCriteriaState();
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return next;
   const o = raw as Record<string, unknown>;
   if (o['subtree'] === true) next.subtree = true;
-  if (typeof o['subrootId'] === 'string') next.subrootId = o['subrootId'];
+  if (Array.isArray(o['subrootIds'])) {
+    next.subrootIds = (o['subrootIds'] as string[]).slice();
+  } else if (typeof o['subrootId'] === 'string') {
+    // Совместимость с `search_state`, записанным до 0.8.2.
+    next.subrootIds = [o['subrootId']];
+  }
   if (o['onlyThoughts'] === true) next.onlyThoughts = true;
   if (o['onlyLinks'] === true) next.onlyLinks = true;
   if (o['onlyChrono'] === true) next.onlyChrono = true;
@@ -1033,6 +1044,20 @@ export function parseSearchCriteria(raw: unknown): SearchCriteriaState {
   if (typeof o['authorId'] === 'string') next.authorId = o['authorId'];
   if (typeof o['editorId'] === 'string') next.editorId = o['editorId'];
   return next;
+}
+
+/**
+ * Мысли-подкорни, по которым пойдёт серверный поиск: при включённом `subtree`
+ * — выбранные пользователем, а если их не выбрали — текущий фокус (прежнее
+ * поведение); без ограничения — один `null` («без подкорня»). Чистая функция:
+ * строку поиска с несколькими подкорнями обслуживает объединение запросов.
+ */
+export function searchSubtreeRoots(
+  state: SearchCriteriaState,
+  focusId: string | null,
+): Array<string | null> {
+  if (!state.subtree) return [null];
+  return state.subrootIds.length > 0 ? state.subrootIds.slice() : [focusId];
 }
 
 /** Часть параметров серверного поиска, вырастающая из критериев отбора. */
@@ -1061,12 +1086,14 @@ export function buildSearchCriteriaWire(state: SearchCriteriaState): SearchCrite
 /**
  * Конвертер критериев поиска в сохраняемый L4-набор `search_state` — те же
  * ключи, что писал клиент до 0.8.2 (совместимость чтения сохранённого без
- * миграции).
+ * миграции). Подкорней теперь набор (`subrootIds`); одиночный `subrootId`
+ * прошлых версий пишется первым элементом набора — старый клиент прочтёт его.
  */
 export function searchCriteriaToStored(state: SearchCriteriaState): Record<string, unknown> {
   return {
     subtree: state.subtree,
-    subrootId: state.subrootId,
+    subrootIds: state.subrootIds.slice(),
+    subrootId: state.subrootIds[0] ?? null,
     onlyThoughts: state.onlyThoughts,
     onlyLinks: state.onlyLinks,
     onlyChrono: state.onlyChrono,
