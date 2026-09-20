@@ -173,6 +173,12 @@ export async function ensureActivityInitialised(): Promise<void> {
       filter = parsed.filter;
       offset = parsed.offset;
       panelWidth = parsed.panelWidth;
+      // Восстановленный отбор показывает заполненные группы раскрытыми
+      // (пустые — свёрнутыми), как «Структуры» при входе в вид.
+      periodCollapsed = filter.createdAfter === '' && filter.createdBefore === '';
+      authorCollapsed = filter.authorId === '' && filter.authorIds.length === 0;
+      entitiesCollapsed = filter.entityTypes.length === 0;
+      actionsCollapsed = filter.actions.length === 0;
       renderFilterPanel();
       // Миграционное значение прежнего снимка подхватывает каркас панели.
       activityFrame?.apply();
@@ -282,6 +288,16 @@ export function mountActivity(hostEl: HTMLElement): void {
 /** Хост панели отбора (нужен для перерисовки из состояния). */
 let filterPanelHost: HTMLElement | null = null;
 
+/**
+ * Сворачивание групп панели отбора (задача 2ebe4206): «События» повторяют
+ * принцип эталона «Структур» — группы сворачиваются. Состояние временное (не
+ * персистится), как у «Структур»; по умолчанию свёрнуты, пока группы пусты.
+ */
+let periodCollapsed = true;
+let authorCollapsed = true;
+let entitiesCollapsed = true;
+let actionsCollapsed = true;
+
 /** Перестраивает панель отбора из состояния — секции общего каркаса. */
 function renderFilterPanel(): void {
   const area = filterPanelHost;
@@ -307,7 +323,7 @@ function renderFilterPanel(): void {
     }),
     buildDatesSection(
       ctx,
-      { get: () => false, set: () => undefined },
+      { get: () => periodCollapsed, set: (v) => (periodCollapsed = v) },
       {
         title: "Период",
         ranges: [
@@ -330,6 +346,7 @@ function renderFilterPanel(): void {
       title: "Пользователь",
       label: "Пользователь",
       field: "author",
+      collapse: { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) },
     }),
     // Словари панели: значения и подписи — параметры общей секции
     // флажков-пилюль; флажки строит каркас и сразу показывает ими
@@ -346,6 +363,7 @@ function renderFilterPanel(): void {
       set: (next) => {
         filter.entityTypes = next;
       },
+      collapse: { get: () => entitiesCollapsed, set: (v) => (entitiesCollapsed = v) },
     }),
     buildPillGroupSection<ActionFilter>(ctx, {
       title: "Действие",
@@ -354,6 +372,7 @@ function renderFilterPanel(): void {
       set: (next) => {
         filter.actions = next;
       },
+      collapse: { get: () => actionsCollapsed, set: (v) => (actionsCollapsed = v) },
     }),
   );
 
@@ -364,6 +383,10 @@ function renderFilterPanel(): void {
         onApply: () => void applyQuery(),
         onClear: () => {
           filter = { ...DEFAULT_FILTER };
+          periodCollapsed = true;
+          authorCollapsed = true;
+          entitiesCollapsed = true;
+          actionsCollapsed = true;
           renderFilterPanel();
           void applyQuery();
         },

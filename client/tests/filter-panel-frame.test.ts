@@ -189,6 +189,59 @@ describe('размер панели перетаскиванием границ�
   });
 });
 
+describe('свёртываемость групп как в эталоне «Структур» (задача 2ebe4206)', () => {
+  it('«Хроника»: группа «Период» сворачивается', () => {
+    const src = readText(resolve(RENDERER, 'screens', 'chronicle', 'filter-panel.ts'));
+    assert.match(
+      src,
+      /\{ get: \(\) => periodCollapsed, set: \(v\) => \(periodCollapsed = v\) \}/,
+      'период получает своё состояние сворачивания',
+    );
+    assert.match(src, /let periodCollapsed = true;/, 'по умолчанию свёрнута');
+    assert.match(
+      src,
+      /periodCollapsed = next\.dateFrom === '' && next\.dateTo === '';/,
+      'состояние пересчитывается при восстановлении отбора',
+    );
+  });
+
+  it('«События»: период, пользователь и два словаря сворачиваются', () => {
+    const src = readText(ACTIVITY_TS);
+    for (const [name, varName] of [
+      ['Период', 'periodCollapsed'],
+      ['Пользователь', 'authorCollapsed'],
+      ['Тип сущности', 'entitiesCollapsed'],
+      ['Действие', 'actionsCollapsed'],
+    ] as const) {
+      assert.match(
+        src,
+        new RegExp(`get: \\(\\) => ${varName}, set: \\(v\\) => \\(${varName} = v\\)`),
+        `группа «${name}» получает своё состояние сворачивания`,
+      );
+      assert.match(src, new RegExp(`let ${varName} = true;`), `«${name}» по умолчанию свёрнута`);
+    }
+    // Словари-пилюли получают состояние параметром сборки `collapse`.
+    for (const varName of ['entitiesCollapsed', 'actionsCollapsed'] as const) {
+      assert.match(
+        src,
+        new RegExp(`collapse: \\{ get: \\(\\) => ${varName}, set: \\(v\\) => \\(${varName} = v\\) \\}`),
+        `словарь сворачивается параметром collapse (${varName})`,
+      );
+    }
+  });
+
+  it('каркас формы умеет сворачивать группу-словарь (параметр сборки)', () => {
+    const src = readText(resolve(RENDERER, 'lib', 'filter-form.ts'));
+    assert.match(
+      src,
+      /collapse\?: \{ get: \(\) => boolean; set: \(value: boolean\) => void \};/,
+      'у секции-словаря есть параметр сворачивания',
+    );
+    const pill = /export function buildPillGroupSection[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    assert.match(pill, /collapsible: true/, 'с переданным состоянием группа сворачивается');
+  });
+});
+
 describe('однообразие: три экрана на одном каркасе (задача 2ebe4206)', () => {
   it('каждый экран монтирует общий каркас со своим ключом состояния', () => {
     const cases: Array<[string, RegExp]> = [

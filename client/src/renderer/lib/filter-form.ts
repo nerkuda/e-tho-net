@@ -986,6 +986,12 @@ export interface PillGroupOptions<Value extends string> {
   get: () => readonly Value[];
   /** Запись выбора в модель состояния. */
   set: (next: Value[]) => void;
+  /**
+   * Сворачиваемость группы (задача 2ebe4206): эталон «Структур» сворачивает
+   * группы, «События» повторяют этот принцип. Без параметра группа не
+   * сворачивается.
+   */
+  collapse?: { get: () => boolean; set: (value: boolean) => void };
 }
 
 /**
@@ -1006,6 +1012,13 @@ export function buildPillGroupSection<Value extends string>(
   opts: PillGroupOptions<Value>,
 ): FilterSection {
   const section = buildFilterBlock(opts.title, {
+    ...(opts.collapse !== undefined
+      ? {
+          collapsible: true,
+          getCollapsed: opts.collapse.get,
+          setCollapsed: opts.collapse.set,
+        }
+      : {}),
     isNonEmpty: () => opts.get().length > 0,
   });
   const box = div('st-f-pills');

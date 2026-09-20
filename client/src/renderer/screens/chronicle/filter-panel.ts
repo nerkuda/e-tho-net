@@ -80,6 +80,12 @@ let panel: HTMLElement | null = null;
 let thoughtsField: EntityChipSection | null = null;
 /** Сворачивание группы «Автор / Редактор» (по умолчанию раскрыта). */
 let authorCollapsed = false;
+/**
+ * Сворачивание группы «Период» (задача 2ebe4206): «Хроника» повторяет принцип
+ * эталона «Структур» — группа сворачивается; по умолчанию свёрнута, пока
+ * период пуст.
+ */
+let periodCollapsed = true;
 
 /** Actions the panel delegates to the host module. */
 interface PanelActions {
@@ -97,6 +103,7 @@ export function getFilterState(): FilterState {
 /** Replaces the filter state and repaints the panel (L4 restore / saved filter). */
 export function setFilterState(next: FilterState): void {
   filter = { ...next };
+  periodCollapsed = next.dateFrom === '' && next.dateTo === '';
   renderPanel();
 }
 
@@ -179,6 +186,7 @@ function applySavedFilterEntry(entry: SavedFilterEntry): void {
   filter = parseChronicleCriteria(entry.definition as ChronicleFilterDefinition);
   savedFilterId = entry.id;
   filterName = entry.name;
+  periodCollapsed = filter.dateFrom === '' && filter.dateTo === '';
   renderPanel();
   actions.apply();
 }
@@ -188,6 +196,7 @@ export function clearFilter(): void {
   filter = defaultChronicleCriteriaState();
   savedFilterId = null;
   filterName = '';
+  periodCollapsed = true;
   renderPanel();
 }
 
@@ -268,11 +277,11 @@ function buildLinkScopeSection(ctx: FilterFormContext): FilterSection {
   return section;
 }
 
-/** Секция «Даты»: период хроно-комментариев. */
+/** Секция «Даты»: период хроно-комментариев (сворачиваемая, как в «Структурах»). */
 function periodSection(ctx: FilterFormContext): FilterSection {
   return buildDatesSection(
     ctx,
-    { get: () => false, set: () => undefined },
+    { get: () => periodCollapsed, set: (v) => (periodCollapsed = v) },
     {
       title: 'Период',
       ranges: [
