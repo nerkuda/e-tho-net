@@ -74,13 +74,15 @@ import {
   setFilterState,
   type FilterState,
 } from './filter-panel.js';
-import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
+import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
 
 let host: HTMLElement | null = null;
+/** Рукоятка общего каркаса панели отбора (скрытость/положение/размер). */
+let structuresFrame: FilterPanelFrameHandle | null = null;
 let resultsHost: HTMLElement | null = null;
 
 /** Filter-result roots in sort order (the visible page, grows with «Показать ещё»). */
@@ -167,6 +169,10 @@ export async function ensureStructuresInitialised(): Promise<void> {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
     }
     if (raw !== null && raw !== '') setFilterState(parseFilterState(raw));
+    // Миграционное значение прежней ширины панели (`structures_state`) —
+    // каркас читает его геттером, поэтому переприменяем состояние после
+    // восстановления снимка (если в `ui_state` своего размера ещё нет).
+    structuresFrame?.apply();
   } catch {
     // Fall back to the empty filter (HOME).
   }
@@ -504,7 +510,7 @@ export function mountStructures(hostEl: HTMLElement): void {
   // Общий каркас панели отбора (задача 2ebe4206): скрываемость плавающей
   // кнопкой, положение по ширине полотна (слева/вверху), перетаскивание
   // границы; состояние — локально в `ui_state.structures_filter_panel`.
-  mountFilterPanelFrame({
+  structuresFrame = mountFilterPanelFrame({
     container: host,
     panel,
     splitter,
