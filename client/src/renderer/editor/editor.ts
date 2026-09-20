@@ -43,7 +43,7 @@ import { applyThoughtIcon, resolveCloudStyle } from '../lib/thought-cloud.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';
-import { inNeighbourhood } from '../realtime-ui.js';
+import { inNeighbourhood, reloadTypeCatalogues } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
@@ -580,9 +580,10 @@ export function mountEditor(editorHost: HTMLElement): void {
         applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
         return;
       }
-      // Изменение самого ТИПА показанной сущности (ошибка 94b28014): смена
-      // родителя сдвигает наследование, удаление убирает тип из цепочки, а
-      // подпись/оформление типа видны в шапке.
+      // Изменение самого ТИПА показанной сущности (ошибки 94b28014 — тип
+      // мысли, 34a9ef10 — тип связи): смена родителя сдвигает наследование,
+      // удаление убирает тип из цепочки, а подпись/оформление типа видны в
+      // шапке.
       if (!isTypeChangeEventType(evt.type)) return;
       const facts = typeChangeFacts(evt.type, evt.data);
       if (facts === null) return;
@@ -836,32 +837,99 @@ function applyDefinitionChange(facts: DefinitionChangeFacts): void {
 }
 
 /**
- * Применяет изменение ТИПА показанной сущности (ошибка 94b28014). Гейт — тот
- * же: изменённый тип обязан быть в цепочке показанной сущности (сам тип или
- * предок). Дополнительно сверяется собственный тип сущности: при удалении типа
- * каталог store ещё может его содержать (перезагружается асинхронно), и цепочка
- * на момент события строится по устаревшему каталогу.
+ * Применяет изменение ТИПА показанной сущности (ошибки 94b28014 — тип мысли,
+ * 34a9ef10 — тип связи).
  *
  *  - смена родителя (`setChanged`) сдвигает наследование — таблица «Свойства»
  *    перечитывается; свой тип сущности по-прежнему валиден, и набор резолвит
- *    сервер (вкладка запрашивает определения по нему);
+ *    сервер (вкладка запрашивает определения по нему). У связи вкладки
+ *    «Свойства» нет, поэтому там смена родителя видимого эффекта не имеет:
+ *    вид линии резолвится по цепочке (`resolveLinkTypeVisual`) на каждом
+ *    построении списка выбора типа и диалога ⚙;
  *  - удаление типа (`deleted`) — {@link markTypeDeleted} уже отметил его как
  *    исчезнувший, поэтому вкладка прочитает набор по корневому типу (L21), а не
- *    по удалённому;
+ *    по удалённому; если удалён СОБСТВЕННЫЙ тип показанной сущности, её нужно
+ *    перечитать (см. {@link refreshShownEntityAfterTypeDetach});
  *  - правка подписи/оформления (`visualChanged`) видна в шапке редактора — она
- *    резолвит значок и цвета по цепочке типов; пересобирается только шапка,
- *    кэш вкладок (и CodeMirror «Комментария») не трогается.
+ *    резолвит значок, цвета и подпись типа по цепочке типов; пересобирается
+ *    только шапка, кэш вкладок (и CodeMirror «Комментария») не трогается.
  */
 function applyTypeChange(facts: TypeChangeFacts): void {
   const ctx = renderCtx;
-  if (ctx === null) return;
-  const shown = shownTypeChainFor(facts.owner.ownerType);
-  if (shown === null) return;
-  const ownTypeId =
-    ctx.ownerType === 'thought' ? (ctx.thought?.type_id ?? null) : (ctx.link?.type_id ?? null);
-  if (!shown.ids.has(facts.owner.ownerId) && ownTypeId !== facts.owner.ownerId) return;
+  if (ctx === null || !typeChangeAffectsShown(facts)) return;
+  const ownTypeId = ctxTypeId(ctx);
+  // Удалён собственный тип показанной сущности: сервер отвязал саму сущность
+  // (`type_id = NULL`, `version + 1`), но события о ней не прислал — снимок в
+  // store устарел, и шапка (после перезагрузки каталога) показала бы сырой id
+  // исчезнувшего типа вместо «без типа».
+  if (facts.deleted && ownTypeId !== null && ownTypeId === facts.owner.ownerId) {
+    refreshShownEntityAfterTypeDetach();
+  }
   if (facts.setChanged) invalidateDefinitionDependentPanes();
-  if (facts.visualChanged) repaintEditorHeader();
+  // Шапка резолвит подпись и оформление типа из КАТАЛОГА типов, а он приезжает
+  // в store асинхронно (realtime-ui перечитывает его этим же событием):
+  // перерисовка сразу после применения фактов повторила бы прежний вид. Ждём
+  // тот же перезапрос (параллельные вызовы делят один запрос) — `setChanged`
+  // и пометка удалённого типа применены выше и от каталога не зависят.
+  if (facts.visualChanged) void reloadTypeCatalogues().then(() => repaintEditorHeader());
+}
+
+/**
+ * Касается ли изменение типа показанной сущности: изменённый тип обязан быть в
+ * цепочке её типов (сам тип или предок). Дополнительно сверяется СОБСТВЕННЫЙ
+ * тип сущности: при удалении типа каталог store ещё может его содержать
+ * (перезагружается асинхронно), и цепочка на момент события строится по
+ * устаревшему каталогу.
+ */
+function typeChangeAffectsShown(facts: TypeChangeFacts): boolean {
+  const ctx = renderCtx;
+  if (ctx === null) return false;
+  const shown = shownTypeChainFor(facts.owner.ownerType);
+  if (shown === null) return false;
+  return shown.ids.has(facts.owner.ownerId) || ctxTypeId(ctx) === facts.owner.ownerId;
+}
+
+/**
+ * Перечитывает с сервера сущность, у которой удалили её СОБСТВЕННЫЙ тип
+ * (ошибки 94b28014, 34a9ef10). Удаление типа отвязывает ссылающиеся мысли и
+ * связи серверным `type_id = NULL` с бампом версии, но отдельных событий
+ * (`thought.updated` / `link.updated`) на каждую из них не шлёт: сервер
+ * сообщает только о самом типе. Сущность, показанная из `editorTarget`,
+ * держится в store снимком и фокус-рефрешем не обновляется, поэтому её
+ * перечитываем сами — свежие `type_id` и `version` (версия важна и для
+ * следующего сохранения с `If-Match`). Мысль в фокусе (без `editorTarget`)
+ * обновляет штатный `refreshFocus` по тому же событию (realtime-ui), поэтому
+ * здесь не трогается.
+ */
+function refreshShownEntityAfterTypeDetach(): void {
+  const networkId = store.state.networkId;
+  const target = store.state.editorTarget;
+  if (networkId === null || target === null) return;
+  if (target.kind === 'link') {
+    void etn.links
+      .get(networkId, target.id)
+      .then((link) => {
+        const live = store.state.editorTarget;
+        if (live !== null && live.kind === 'link' && live.id === link.id) {
+          store.update({ editorTarget: { kind: 'link', id: link.id, link } });
+        }
+      })
+      .catch(() => undefined);
+    return;
+  }
+  void etn.thoughts
+    .get(networkId, target.id)
+    .then((thought) => {
+      const live = store.state.editorTarget;
+      if (live !== null && live.kind === 'thought' && live.id === thought.id) {
+        store.update({
+          editorTarget: { kind: 'thought', id: thought.id, thought },
+          structuresActiveThought: thought,
+          structuresActiveThoughtId: thought.id,
+        });
+      }
+    })
+    .catch(() => undefined);
 }
 
 /**

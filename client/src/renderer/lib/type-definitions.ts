@@ -40,12 +40,21 @@
  * тела правки, а не из определения: у накрытого типа меняется зеркало, и
  * перечитать набор нужно даже когда самого свойства в таблице нет.
  *
- * Меняется и САМ ТИП (94b28014): смена родителя сдвигает наследование (набор
- * свойств), удаление убирает тип из цепочки, правка подписи/оформления видна в
- * шапке редактора. Событийная часть — {@link typeChangeFacts} и
+ * Меняется и САМ ТИП (94b28014 — типы мыслей, 34a9ef10 — симметричный случай
+ * типов связей): смена родителя сдвигает наследование (набор свойств),
+ * удаление убирает тип из цепочки, правка подписи/оформления видна в шапке
+ * редактора. Событийная часть — {@link typeChangeFacts} и
  * {@link isTypeChangeEventType}; удалённые типы запоминаются
  * ({@link markTypeDeleted}), потому что каталог store перезагружается
  * асинхронно и отстаёт от события.
+ *
+ * У типа СВЯЗИ нет своих свойств, а у редактора связи — вкладки «Свойства»
+ * (08-ui-spec.md §6.3): типозависимая поверхность редактора связи это шапка —
+ * пара имён типа в поле выбора и наследуемый вид линии (в списке выбора типа
+ * и в диалоге ⚙, `resolveLinkTypeVisual`). Удаление типа связи сервер
+ * отвязывает от показанной связи (`type_id = NULL`, `version + 1`), не присылая
+ * события о самой связи, — поэтому редактор перечитывает её сам (см.
+ * `refreshShownEntityAfterTypeDetach` в `editor/editor.ts`).
  */
 
 import type { TypeOwnerType } from '@etn/shared';
@@ -323,19 +332,26 @@ function coverageTypeIdsOf(config: unknown): readonly string[] | null {
 }
 
 // ---------------------------------------------------------------------------
-// Тип показанной сущности: родитель, оформление, удаление (ошибка 94b28014)
+// Тип показанной сущности: родитель, оформление, удаление
+// (ошибки 94b28014, 34a9ef10)
 // ---------------------------------------------------------------------------
 
 /**
- * Изменения ТИПА, на которые реагирует открытый редактор. Только мыслей
- * (`thought-type.*`): симметричный случай типов связей (`link-type.*`) карточкой
- * 94b28014 не покрыт.
+ * Изменения ТИПА, на которые реагирует открытый редактор: тип мыслей
+ * (`thought-type.*`, ошибка 94b28014) и симметричный случай типа связи
+ * (`link-type.*`, ошибка 34a9ef10 — редактор показанной СВЯЗИ).
  */
-export type TypeChangeEventType = 'thought-type.updated' | 'thought-type.deleted';
+export type TypeChangeEventType =
+  | 'thought-type.updated'
+  | 'thought-type.deleted'
+  | 'link-type.updated'
+  | 'link-type.deleted';
 
 const TYPE_CHANGE_EVENT_TYPES: readonly string[] = [
   'thought-type.updated',
   'thought-type.deleted',
+  'link-type.updated',
+  'link-type.deleted',
 ];
 
 /** Сужает имя realtime-события до {@link TypeChangeEventType}. */
@@ -360,8 +376,8 @@ export interface TypeChangeFacts {
   visualChanged: boolean;
 }
 
-/** Поля типа, от которых зависит его отображение в шапке редактора. */
-const TYPE_VISUAL_KEYS: readonly string[] = [
+/** Поля типа МЫСЛИ, от которых зависит его отображение в шапке редактора. */
+const THOUGHT_TYPE_VISUAL_KEYS: readonly string[] = [
   'name',
   'icon',
   'icon_kind',
@@ -373,8 +389,47 @@ const TYPE_VISUAL_KEYS: readonly string[] = [
   'font_strike',
 ];
 
-/** Факты об изменении типа из `data` realtime-события; `null` — событие
- *  непригодно (нет id). */
+/**
+ * Поля типа СВЯЗИ, видимые в редакторе связи: пара имён рисуется облачком
+ * типа в поле выбора шапки, а цвет/штрих/толщина линии — видом линии в списке
+ * выбора типа и в диалоге ⚙ (наследуются по цепочке типов,
+ * `resolveLinkTypeVisual`).
+ */
+const LINK_TYPE_VISUAL_KEYS: readonly string[] = [
+  'name_forward',
+  'name_reverse',
+  'color',
+  'style',
+  'width',
+];
+
+/** Владелец изменённого типа по имени realtime-события: вид каталога — из имени. */
+function typeOwnerOfEvent(type: TypeChangeEventType, id: string): DefinitionOwner {
+  return {
+    ownerType: type.startsWith('link-type.') ? 'link_type' : 'thought_type',
+    ownerId: id,
+  };
+}
+
+/** Факты об изменении типа из тела правки (`PATCH /thought-types|link-types/{id}`). */
+function typeUpdateFacts(owner: DefinitionOwner, changes: object): TypeChangeFacts {
+  const patch = changes as Record<string, unknown>;
+  const visualKeys =
+    owner.ownerType === 'link_type' ? LINK_TYPE_VISUAL_KEYS : THOUGHT_TYPE_VISUAL_KEYS;
+  return {
+    owner,
+    deleted: false,
+    setChanged: 'parent_id' in patch,
+    visualChanged: visualKeys.some((key) => key in patch),
+  };
+}
+
+/**
+ * Факты об изменении типа из `data` realtime-события; `null` — событие
+ * непригодно (нет id). Вид каталога берётся из имени события, набор «визуальных»
+ * полей — из вида владельца (у типа связи нет иконки и цветов, зато есть пара
+ * имён и параметры линии).
+ */
 export function typeChangeFacts(
   type: TypeChangeEventType,
   data: unknown,
@@ -383,17 +438,14 @@ export function typeChangeFacts(
   if (payload === null) return null;
   const id = asString(payload['id']);
   if (id === null) return null;
-  const owner: DefinitionOwner = { ownerType: 'thought_type', ownerId: id };
-  if (type === 'thought-type.deleted') {
+  const owner = typeOwnerOfEvent(type, id);
+  if (type === 'thought-type.deleted' || type === 'link-type.deleted') {
     return { owner, deleted: true, setChanged: true, visualChanged: true };
   }
   const changes = asRecord(payload['changes']);
-  return {
-    owner,
-    deleted: false,
-    setChanged: changes !== null && 'parent_id' in changes,
-    visualChanged: changes !== null && TYPE_VISUAL_KEYS.some((key) => key in changes),
-  };
+  return changes === null
+    ? { owner, deleted: false, setChanged: false, visualChanged: false }
+    : typeUpdateFacts(owner, changes);
 }
 
 // ---------------------------------------------------------------------------

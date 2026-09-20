@@ -41,20 +41,37 @@ function invalidateWikiLinkCacheById(thoughtId: string): void {
   invalidateWikiLinkCache(thoughtId);
 }
 
-/** Reloads both type catalogues into the store (L21 — the hierarchy changed). */
-export async function reloadTypeCatalogues(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  try {
-    const [thoughtTypes, linkTypes] = await Promise.all([
-      etn.types.listThoughtTypes(networkId),
-      etn.types.listLinkTypes(networkId),
-    ]);
-    store.update({ thoughtTypes, linkTypes });
-  } catch {
-    // The network may have just been closed — ignore.
-  }
+/**
+ * Reloads both type catalogues into the store (L21 — the hierarchy changed).
+ *
+ * Параллельные перезапросы (одно realtime-событие о типе уведомляет несколько
+ * слушателей, и редактору нужен именно ОБНОВЛЁННЫЙ каталог) делят один запрос:
+ * пока перезапрос в полёте, повторный вызов возвращает тот же промис. Так
+ * потребитель может дождаться свежего каталога, не порождая второй запрос.
+ */
+export function reloadTypeCatalogues(): Promise<void> {
+  if (typeCataloguesReload !== null) return typeCataloguesReload;
+  const pending = (async () => {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    try {
+      const [thoughtTypes, linkTypes] = await Promise.all([
+        etn.types.listThoughtTypes(networkId),
+        etn.types.listLinkTypes(networkId),
+      ]);
+      store.update({ thoughtTypes, linkTypes });
+    } catch {
+      // The network may have just been closed — ignore.
+    }
+  })().finally(() => {
+    typeCataloguesReload = null;
+  });
+  typeCataloguesReload = pending;
+  return pending;
 }
+
+/** In-flight перезапрос каталогов (см. {@link reloadTypeCatalogues}). */
+let typeCataloguesReload: Promise<void> | null = null;
 
 /** True when the thought id participates in the current focus neighbourhood. */
 export function inNeighbourhood(id: string): boolean {

@@ -86,8 +86,11 @@ describe('гейт изменений типа показанной сущнос
     assert.equal(isTypeChangeEventType('thought-type.updated'), true);
     assert.equal(isTypeChangeEventType('thought-type.deleted'), true);
     assert.equal(isTypeChangeEventType('thought-type.created'), false);
-    // Типы связей карточкой 94b28014 не покрыты (симметричный случай — отдельно).
-    assert.equal(isTypeChangeEventType('link-type.updated'), false);
+    // Типы связей — симметричный случай, закрытый ошибкой 34a9ef10: редактор
+    // показанной СВЯЗИ разбирает `link-type.*` тем же контрактом.
+    assert.equal(isTypeChangeEventType('link-type.updated'), true);
+    assert.equal(isTypeChangeEventType('link-type.deleted'), true);
+    assert.equal(isTypeChangeEventType('link-type.created'), false);
     assert.equal(isTypeChangeEventType('property-definition.updated'), false);
 
     // Удалённый тип запоминается: каталог store перезагружается асинхронно, а
