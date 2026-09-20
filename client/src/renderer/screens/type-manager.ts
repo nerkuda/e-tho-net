@@ -103,7 +103,7 @@ import {
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 // Локальное уведомление открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26): своё realtime-эхо до рендерера не доходит.
-import { notifyTypeDefinitionsChanged } from '../lib/type-definitions.js';
+import { notifyTypeChanged, notifyTypeDefinitionsChanged, typeUpdateFacts } from '../lib/type-definitions.js';
 import {
   cacheAttachedRegistryRow,
   canReorderBinding,
@@ -1048,6 +1048,10 @@ export function showThoughtTypeEditor(
     }
     const description = descArea.value.trim();
     const nextTemplate = templateMd.trim() === '' ? null : templateMd;
+    // Поля САМОГО типа, ушедшие на сервер этой записью (ошибка 8dd5dfed): из
+    // них строятся факты локального уведомления открытого редактора. При
+    // создании типа уведомлять нечего — его ещё никто не показывает.
+    let savedTypeFields: object | null = null;
     try {
       if (current === null) {
         // New type: one create carries every staged field at once. The
@@ -1066,6 +1070,7 @@ export function showThoughtTypeEditor(
         const input = buildTypePatchInput(current, draft, description, nextTemplate);
         if (Object.keys(input).length > 0) {
           current = await etn.types.updateThoughtType(networkId, current.id, input, current.version);
+          savedTypeFields = input;
         }
       }
       // Staged property definitions go after the type itself exists.
@@ -1077,6 +1082,15 @@ export function showThoughtTypeEditor(
       notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: current.id });
       await refreshThoughtTypes();
       scheduleRefresh();
+      // Оформление и подпись САМОГО типа (ошибка 8dd5dfed): шапка открытого
+      // редактора мысли этого типа резолвит их из цепочки типов, а каталог
+      // перечитан строкой выше — значит, шапку можно перерисовать сразу и по
+      // свежим данным. Своё realtime-эхо до рендерера не доходит (G8 applier).
+      if (savedTypeFields !== null) {
+        notifyTypeChanged(
+          typeUpdateFacts({ ownerType: 'thought_type', ownerId: current.id }, savedTypeFields),
+        );
+      }
       // Содержимое диалога, зависевшее от записи, обновляется: шапка,
       // «Метаданные» (у нового типа появились id/даты) и вкладка «Отборы»
       // (её getTypeId() теперь отдаёт id). Список типов получает id

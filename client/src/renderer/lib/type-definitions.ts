@@ -19,7 +19,10 @@
  *    (G8 applier), поэтому производители уведомляют подписчиков сами:
  *    {@link notifyTypeDefinitionsChanged} (владелец — тип) и
  *    {@link notifyPropertyRegistryChanged} (правка реестра адресует только
- *    id свойства).
+ *    id свойства). ИЗМЕНЕНИЕ САМОГО ТИПА этим клиентом идёт своим каналом
+ *    {@link notifyTypeChanged} — подпись и оформление типа резолвятся из
+ *    каталога, который производитель к моменту уведомления уже перечитал
+ *    (ошибка 8dd5dfed).
  *
  * Гейт отсекает изменения ЧУЖИХ типов: перечитывается только набор,
  * зависящий от изменённого определения. Формула «тип накрыт» повторяет
@@ -180,6 +183,34 @@ export function notifyPropertyRegistryChanged(
     changes === undefined || changes === null ? null : (changes as Record<string, unknown>),
   );
   for (const listener of localRegistryListeners) listener(facts);
+}
+
+const localTypeListeners = new Set<(facts: TypeChangeFacts) => void>();
+
+/**
+ * Подписка на локальное изменение САМОГО типа (ошибка 8dd5dfed):
+ * `screens/type-manager.ts` пишет `PATCH /thought-types/{id}` и перечитывает
+ * каталог типов сам, а своё realtime-эхо до рендерера не доходит (G8 applier).
+ * Отличие от {@link onTypeDefinitionsChanged}: тот канал несёт только владельца
+ * и говорит про НАБОР определений свойств типа («Свойства» редактора), а этот —
+ * про подпись и оформление самого типа (шапка редактора) и его место в дереве.
+ */
+export function onTypeChanged(listener: (facts: TypeChangeFacts) => void): () => void {
+  localTypeListeners.add(listener);
+  return () => {
+    localTypeListeners.delete(listener);
+  };
+}
+
+/**
+ * Уведомляет подписчиков: САМ тип изменён ЭТИМ клиентом (`facts` строит
+ * {@link typeUpdateFacts} из тела правки). Каталог типов к этому моменту уже
+ * перечитан производителем, поэтому открытый редактор перерисовывает шапку
+ * сразу — без ожидания перезапроса каталога (realtime-путь, см.
+ * `applyTypeChange` в `editor/editor.ts`).
+ */
+export function notifyTypeChanged(facts: TypeChangeFacts): void {
+  for (const listener of localTypeListeners) listener(facts);
 }
 
 // ---------------------------------------------------------------------------
@@ -411,8 +442,13 @@ function typeOwnerOfEvent(type: TypeChangeEventType, id: string): DefinitionOwne
   };
 }
 
-/** Факты об изменении типа из тела правки (`PATCH /thought-types|link-types/{id}`). */
-function typeUpdateFacts(owner: DefinitionOwner, changes: object): TypeChangeFacts {
+/**
+ * Факты об изменении типа из тела правки (`PATCH /thought-types|link-types/{id}`).
+ * Используется и realtime-путём (`typeChangeFacts` разбирает `changes` из
+ * события), и локальным каналом `notifyTypeChanged` (`screens/type-manager.ts`
+ * знает поля, которые сам отправил).
+ */
+export function typeUpdateFacts(owner: DefinitionOwner, changes: object): TypeChangeFacts {
   const patch = changes as Record<string, unknown>;
   const visualKeys =
     owner.ownerType === 'link_type' ? LINK_TYPE_VISUAL_KEYS : THOUGHT_TYPE_VISUAL_KEYS;

@@ -74,6 +74,7 @@ import {
   isTypeChangeEventType,
   markTypeDeleted,
   onPropertyRegistryChanged,
+  onTypeChanged,
   onTypeDefinitionsChanged,
   typeChangeFacts,
   type DefinitionChangeFacts,
@@ -598,6 +599,12 @@ export function mountEditor(editorHost: HTMLElement): void {
     onPropertyRegistryChanged((facts) => {
       applyDefinitionChange(facts);
     });
+    // Локальная правка САМОГО типа (ошибка 8dd5dfed): редактор типа в этом же
+    // клиенте перечитывает каталог сам и уведомляет подписчиков — шапка
+    // открытого редактора перерисовывается сразу.
+    onTypeChanged((facts) => {
+      applyLocalTypeChange(facts);
+    });
   }
 
   // Re-mounting replaces the host — drop the previous mount's subscription
@@ -887,6 +894,18 @@ function typeChangeAffectsShown(facts: TypeChangeFacts): boolean {
   const shown = shownTypeChainFor(facts.owner.ownerType);
   if (shown === null) return false;
   return shown.ids.has(facts.owner.ownerId) || ctxTypeId(ctx) === facts.owner.ownerId;
+}
+
+/**
+ * Локальная правка типа ЭТИМ клиентом (ошибка 8dd5dfed, канал
+ * `lib/type-definitions.ts` → `onTypeChanged`): редактор типа уведомляет
+ * подписчиков после того, как сам перечитал каталог типов, поэтому шапка
+ * перерисовывается сразу и по свежим данным — в отличие от realtime-пути
+ * ({@link applyTypeChange}), который обновлённого каталога дожидается.
+ */
+function applyLocalTypeChange(facts: TypeChangeFacts): void {
+  if (!typeChangeAffectsShown(facts)) return;
+  if (facts.visualChanged) repaintEditorHeader();
 }
 
 /**
