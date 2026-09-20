@@ -41,11 +41,24 @@ function focusCombo(combo: HTMLElement): void {
 
 /**
  * Asks for a link type. Resolves the chosen type id, `null` for "no type", or
- * `undefined` when cancelled. The pick also becomes the add-dialog default
- * (`last_used_link_type_id`, L4).
+ * `undefined` when cancelled — including dismissal by any close path
+ * («Отмена», Esc, ×, backdrop click). The pick also becomes the add-dialog
+ * default (`last_used_link_type_id`, L4).
  */
 export function pickLinkType(title: string): Promise<string | null | undefined> {
   return new Promise((resolve) => {
+    /**
+     * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
+     * каркаса (ошибка a68bacff): кнопки завершают его явно, а Esc, × и клик
+     * по подложке — через `onClose`. Флаг `settled` не даёт позднему событию
+     * `remove` переиграть уже принятое решение.
+     */
+    let settled = false;
+    const finish = (value: string | null | undefined): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     const combo = buildEntityCombo({
       networkId: requireNetworkId(),
       kind: 'link-types',
@@ -59,17 +72,20 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
       body: combo.root,
       width: 420,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(undefined) },
+        { label: 'Отмена', onClick: () => finish(undefined) },
         {
           label: 'OK',
           primary: true,
           onClick: () => {
             const id = combo.value();
             store.update({ lastUsedLinkTypeId: id });
-            resolve(id);
+            finish(id);
           },
         },
       ],
+      // Esc, × и клик по подложке — отмена: контракт «`undefined` on cancel»,
+      // ровно как по кнопке «Отмена» (ошибка a68bacff).
+      onClose: () => finish(undefined),
       onMount: () => focusCombo(combo.root),
     });
   });
@@ -81,10 +97,18 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
 
 /**
  * Asks for a thought type. Resolves the chosen type id, `null` to clear the
- * type, or `undefined` when cancelled.
+ * type, or `undefined` when cancelled — including dismissal by any close path
+ * («Отмена», Esc, ×, backdrop click).
  */
 export function pickThoughtType(initial: string | null): Promise<string | null | undefined> {
   return new Promise((resolve) => {
+    /** Единственная точка завершения промиса — см. {@link pickLinkType}. */
+    let settled = false;
+    const finish = (value: string | null | undefined): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     const combo = buildEntityCombo({
       networkId: requireNetworkId(),
       kind: 'thought-types',
@@ -98,13 +122,16 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
       body: combo.root,
       width: 420,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(undefined) },
+        { label: 'Отмена', onClick: () => finish(undefined) },
         {
           label: 'OK',
           primary: true,
-          onClick: () => resolve(combo.value()),
+          onClick: () => finish(combo.value()),
         },
       ],
+      // Esc, × и клик по подложке — отмена: контракт «`undefined` on cancel»,
+      // ровно как по кнопке «Отмена» (ошибка a68bacff).
+      onClose: () => finish(undefined),
       onMount: () => focusCombo(combo.root),
     });
   });
