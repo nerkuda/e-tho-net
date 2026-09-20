@@ -36,6 +36,7 @@ import {
   listEffectiveTypeProperties,
   setPropertyValue,
   setTypePropertyDefaultOverride,
+  setTypePropertyDescriptionOverride,
 } from '../src/domain/property-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -225,18 +226,28 @@ describe(
         assert.equal(reset.default_value, 'мужской');
         assert.equal(reset.overridden_here, false);
 
-        // An own definition cannot be overridden (edit its config instead)…
+        // 0.8.2: дефолт задаётся и на СОБСТВЕННОЙ привязке (редактор значения
+        // в строке таблицы типов) — запрет 422 остался только для описаний.
         const ownCabinet = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id).find(
           (d) => d.key === 'кабинет',
         )!;
+        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, ownCabinet.id, 'каб. 5', USER);
+        const ownOverridden = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id).find(
+          (d) => d.key === 'кабинет',
+        )!;
+        assert.equal(ownOverridden.default_value, 'каб. 5');
+        assert.equal(ownOverridden.overridden_here, true);
+        // …описание собственной привязки по-прежнему правится в справочнике.
         assert.throws(
           () =>
-            setTypePropertyDefaultOverride(
+            setTypePropertyDescriptionOverride(
               ndb,
               'thought_type',
               colleague.id,
               ownCabinet.id,
-              'x', USER),
+              'x',
+              USER,
+            ),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
         // …while a root-level property (an ancestor) can be overridden.

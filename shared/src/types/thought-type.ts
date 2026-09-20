@@ -213,8 +213,20 @@ export interface PropertyConfig {
    * Default value applied to future items of the type. Scalar kinds use
    * string/number/boolean; a link property uses `string[]` — the default set
    * of target thought ids, applied by creating edges (0.8.1, bb67e546).
+   *
+   * Для свойства-связи это общее значение стороны **источников**: привязка
+   * со стороной `source` получает эти цели (0.8.2, ADR «дефолт свойства
+   * живёт на привязке»).
    */
   default_value?: string | number | boolean | string[];
+  /**
+   * For `value_type = 'link'` only: общее значение по умолчанию для стороны
+   * **назначений** (0.8.2, ADR «дефолт свойства живёт на привязке») — массив
+   * id мыслей-источников. При создании мысли типа, привязанного со стороной
+   * `target`, рёбра создаются канонически (источник → новая мысль).
+   * Отсутствие ключа (или пустой массив) — значения нет.
+   */
+  default_value_target?: string[] | null;
   /**
    * For `value_type = 'link'`: тип связи, обязательный. Проекция —
    * рёбра этого типа.

@@ -457,6 +457,12 @@ function validateLinkConfig(
   if (cfg.default_value !== undefined && cfg.default_value !== null) {
     normalizeLinkDefaultValue(ndb, { id: '', name: field, value_type: 'link', config: cfg }, cfg.default_value);
   }
+  // Дефолт стороны назначений (0.8.2): набор источников. Валидируется
+  // существование id; отбор по типам назначений не применяется — значения
+  // относятся к стороне источников.
+  if (cfg.default_value_target !== undefined && cfg.default_value_target !== null) {
+    normalizeLinkDefaultValueTarget(ndb, field, cfg.default_value_target);
+  }
   return cfg;
 }
 
@@ -849,6 +855,50 @@ function normalizeLinkDefaultValue(
 }
 
 /**
+ * Дефолт стороны назначений свойства-связи (0.8.2, ADR «дефолт свойства живёт
+ * на привязке»): массив id мыслей-источников. В отличие от `default_value`
+ * отбор `allowed_target_type_ids` НЕ применяется — значения принадлежат
+ * стороне источников. Проверяется существование, дедупликация, пустой набор
+ * приводится к `null`.
+ */
+function normalizeLinkDefaultValueTarget(
+  ndb: NetworkDb,
+  field: string,
+  value: unknown,
+): string[] | null {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || id === '')) {
+    throw new EtnError('VALIDATION_ERROR', 'default_value_target — массив id мыслей', {
+      field: `${field}.default_value_target`,
+    });
+  }
+  const ids = [...new Set(value)];
+  for (const id of ids) {
+    const row = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(id);
+    if (!row) {
+      throw new EtnError('VALIDATION_ERROR', `мысль ${id} не найдена`, {
+        field: `${field}.default_value_target`,
+        id,
+      });
+    }
+  }
+  return ids.length > 0 ? ids : null;
+}
+
+/**
+ * Отфильтровать источники target-дефолта, применимые СЕЙЧАС (0.8.2): живые
+ * (не помеченные на удаление) и существующие. Отбор по типам не применяется —
+ * протухший источник молча пропускается, создание мысли не падает.
+ */
+export function filterApplicableLinkDefaultSources(ndb: NetworkDb, ids: string[]): string[] {
+  return ids.filter((id) => {
+    const row = ndb
+      .prepare('SELECT marked_for_deletion FROM thoughts_v WHERE id = ?')
+      .get(id) as { marked_for_deletion: number } | undefined;
+    return row !== undefined && row.marked_for_deletion === 0;
+  });
+}
+
+/**
  * Отфильтровать цели link-дефолта, применимые СЕЙЧАС: живые (не удалённые и не
  * в корзине) и проходящие отбор по типам цели. Применение дефолта при создании
  * мысли не должно падать из-за цели, исчезнувшей или сменившей тип после
@@ -998,6 +1048,45 @@ function setLinkPropertyTargets(
     result.push(targetId);
   });
   return result;
+}
+
+/**
+ * Заполнить свойство-связь со стороны НАЗНАЧЕНИЙ (0.8.2, ADR «дефолт свойства
+ * живёт на привязке»): `ownerId` — цель, `sourceIds` — источники; рёбра
+ * создаются канонически (источник → владелец). Применяется при создании мысли
+ * типа с привязкой `side = 'target'`. Валидация целей — существование и
+ * живость (отбор `allowed_type_ids` не применяется: значения — сторона
+ * источников). Самосвязь молча пропускается. Полная замена набора:
+ * недостающие рёбра создаются, лишние помечаются на удаление.
+ */
+export function setLinkPropertySourcesForTarget(
+  ndb: NetworkDb,
+  ownerId: string,
+  prop: PropertyLike,
+  sourceIds: string[],
+  actorUserId: string,
+): string[] {
+  return ndb.transaction(() => {
+    const cfg = prop.config ?? {};
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    // owner — цель: рёбра ищем направлением `in`, противоположный конец — источник.
+    const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in');
+    const wanted = new Set(sourceIds);
+    for (const [sourceId, link] of existing) {
+      if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
+    }
+    const result: string[] = [];
+    for (const sourceId of sourceIds) {
+      if (sourceId === ownerId) continue;
+      if (existing.has(sourceId)) {
+        result.push(sourceId);
+        continue;
+      }
+      insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId);
+      result.push(sourceId);
+    }
+    return result;
+  });
 }
 
 /** Переставить ребро на позицию `position` (структурный порядок детей). */
@@ -1257,6 +1346,7 @@ export function createNetworkProperty(
           linkPropertyDirection(config),
         );
   } else {
+    assertNoTargetDefaultForScalar(config);
     name = validateKey(input.name);
   }
   const configJson = config === null ? null : JSON.stringify(config);
@@ -1374,6 +1464,8 @@ export function updateNetworkProperty(
       );
       linkTypeIdForUpdate = validatedConfig.link_type_id as string;
     }
+  } else if (changes.config !== undefined) {
+    assertNoTargetDefaultForScalar(finalConfig);
   }
 
   // Единый жизненный цикл свойства-связи (0.8.1, требование 09f692ff):
@@ -1669,15 +1761,53 @@ function getOverrideRow(
 }
 
 /**
+ * `config.default_value_target` осмыслен только для свойства-связи (0.8.2):
+ * у скаляра единственная сторона — `default_value`.
+ */
+function assertNoTargetDefaultForScalar(config: PropertyConfig | null): void {
+  if (
+    config !== null &&
+    config.default_value_target !== undefined &&
+    config.default_value_target !== null
+  ) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'config.default_value_target допустим только для свойства-связи',
+      { field: 'config.default_value_target' },
+    );
+  }
+}
+
+/**
+ * Общее значение по умолчанию стороны привязки свойства (0.8.2, ADR «дефолт
+ * свойства живёт на привязке»): у свойства-связи со стороной `target` — ключ
+ * `config.default_value_target` (набор источников), в остальных случаях —
+ * `config.default_value` (единственная сторона скаляра либо сторона
+ * источников). Отсутствие ключа — `null`.
+ */
+function commonSideDefaultValue(def: PropertyDefinition): PropertyValueValue {
+  if (def.value_type !== 'link') return def.config?.default_value ?? null;
+  const side = def.side ?? linkPropertySideFromConfig(def.value_type, def.config);
+  if (side === 'target') return def.config?.default_value_target ?? null;
+  return def.config?.default_value ?? null;
+}
+
+/**
  * Effective properties of a type (L21 + 0.6.5, docs/02-data-model.md §3.4.1):
  * the type's own bindings plus everything inherited from its ancestors,
  * ordered from the root down to the type. One property appears once in the
  * chain — ancestors win by position, and the «attach to ancestor drops
  * descendants' bindings» rule keeps the invariant on write.
  *
- * `default_value` and `description` are override-aware and transitive: the
- * deepest type between the defining type and this one that stored an override
- * wins, until a deeper type overrides it again.
+ * `description` is override-aware and transitive: the deepest type between the
+ * defining type and this one that stored an override wins, until a deeper type
+ * overrides it again.
+ *
+ * `default_value` (0.8.2, ADR «дефолт свойства живёт на привязке»): только
+ * override-строка САМОГО типа, без транзитивности, иначе — общее значение
+ * стороны привязки (`config.default_value` для стороны источников,
+ * `config.default_value_target` для стороны назначений). `overridden_here` —
+ * у самого типа есть строка override с дефолтом.
  */
 export function listEffectiveTypeProperties(
   ndb: NetworkDb,
@@ -1690,30 +1820,32 @@ export function listEffectiveTypeProperties(
   for (const typeId of chainRootFirst) {
     for (const def of listTypeProperties(ndb, ownerType, typeId)) {
       const inherited = typeId !== ownerId;
-      // Transitive overrides: walk from the type itself up to (excluding) the
-      // defining type; the first override row found wins (02-data-model.md
-      // §3.4.1 «Транзитивность»).
-      let override: PropertyValueValue = null;
+      // Дефолт привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+      // override-строка САМОГО типа, БЕЗ транзитивности — пусто означает общее
+      // значение стороны привязки, а не дефолт предка.
+      const ownOverrideRow = getOverrideRow(ndb, ownerType, ownerId, def.property_id);
+      const ownOverrideDefault = ownOverrideRow === null ? null : ownOverrideRow.default_value;
+      // Описания остаются транзитивными: идём от типа вверх до (не включая)
+      // определяющий тип; первая строка с описанием побеждает
+      // (02-data-model.md §3.4.1 «Транзитивность»).
       let descOverride: string | null = null;
-      let overriddenHere = false;
       let descriptionOverridden = false;
       if (inherited) {
         for (const t of chainSelfFirst) {
           if (t === typeId) break;
           const row = getOverrideRow(ndb, ownerType, t, def.property_id);
           if (row === null) continue;
-          if (override === null && row.default_value !== null) {
-            override = row.default_value;
-            overriddenHere = t === ownerId;
-          }
           if (descOverride === null && row.description !== null) {
             descOverride = row.description;
             descriptionOverridden = t === ownerId;
           }
-          if (override !== null && descOverride !== null) break;
+          if (descOverride !== null) break;
         }
       }
-      const ownDefault = def.config?.default_value ?? null;
+      // Общее значение стороны привязки: у стороны назначений — свой ключ
+      // `config.default_value_target`, иначе `config.default_value`.
+      const ownDefault = commonSideDefaultValue(def);
+      const overriddenHere = ownOverrideDefault !== null;
       // Направление для отображения имени (0.8.1): привязка source/target
       // через `type_properties.side` имеет приоритет над `config.direction`.
       // Для встречных свойств, созданных до миграции 041, `side` может быть
@@ -1738,7 +1870,7 @@ export function listEffectiveTypeProperties(
         inherited,
         defined_on: typeId,
         defined_on_name: ownerTypeName(ndb, ownerType, typeId),
-        default_value: inherited ? (override ?? ownDefault) : ownDefault,
+        default_value: ownOverrideDefault !== null ? ownOverrideDefault : ownDefault,
         overridden_here: overriddenHere,
         description: inherited ? (descOverride ?? def.description) : def.description,
         description_overridden: descriptionOverridden,
@@ -1765,6 +1897,10 @@ export function listEffectiveTypeProperties(
  * не добавляется (та же свёртка, что в `listThoughtLinkProperties`).
  * Структурные свойства («Родители»/«Потомки») зеркал не порождают: у
  * нетипизированных рёбер обратная сторона уже покрыта парой самих свойств.
+ *
+ * Дефолт зеркала (0.8.2): только общее значение для назначений
+ * (`config.default_value_target`) — пер-типового override у зеркальной записи
+ * нет, привязки как таковой не существует.
  */
 function appendMirroredLinkProperties(
   ndb: NetworkDb,
@@ -1817,7 +1953,7 @@ function appendMirroredLinkProperties(
       inherited: defining !== ownerId,
       defined_on: defining,
       defined_on_name: ownerTypeName(ndb, 'thought_type', defining),
-      default_value: null,
+      default_value: cfg.default_value_target ?? null,
       overridden_here: false,
       description_overridden: false,
     });
@@ -1828,19 +1964,27 @@ function appendMirroredLinkProperties(
  * Shared guard of both override setters (default value, description): the type
  * must resolve in the connection's layer context, and the addressed property
  * (by binding id OR registry property id — legacy REST clients address the
- * ancestor's binding, new ones the registry property) must be **inherited from
- * an ancestor** — a property attached by the type itself is edited in the
- * registry (its default and description apply to everyone).
+ * ancestor's binding, new ones the registry property) must be attached in the
+ * type's chain.
+ *
+ * `requireInherited` различает сеттеры: описание правится только у
+ * **унаследованной** привязки (собственная — в справочнике, 422), а дефолт
+ * (0.8.2, ADR «дефолт свойства живёт на привязке») допускается и на
+ * собственной привязке.
+ *
+ * Returns the registry property plus the side of the nearest binding in the
+ * chain (for a link property — `source`/`target`, иначе `null`).
  *
  * Throws `NOT_FOUND` (404) for a missing type/property and `VALIDATION_ERROR`
- * (422) for an own or out-of-chain property.
+ * (422) for an own property when `requireInherited`, or an out-of-chain one.
  */
-function assertOverridableInheritedProperty(
+function assertOverridableProperty(
   ndb: NetworkDb,
   ownerType: TypeOwnerType,
   ownerId: string,
   propertyId: string,
-): PropertyLike {
+  options: { requireInherited: boolean },
+): { prop: PropertyLike; side: LinkPropertySide | null } {
   validateTypeOwnerType(ownerType);
   // S5 (13-layers.md §13): the owner must resolve in the connection's layer
   // context — the `_v` view hides types tombstoned in this chain and keeps
@@ -1865,38 +2009,51 @@ function assertOverridableInheritedProperty(
     });
   }
   const chain = visibleTypeChain(ndb, ownerType, ownerId);
+  let bindingSide: string | null = null;
+  let foundInChain = false;
   for (const typeId of chain) {
     const own = ndb
       .prepare(
-        'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        'SELECT id, side FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
       )
-      .get(ownerType, typeId, registryId) as { id: string } | undefined;
+      .get(ownerType, typeId, registryId) as { id: string; side: string | null } | undefined;
     if (!own) continue;
-    if (typeId === ownerId) {
+    if (typeId === ownerId && options.requireInherited) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'собственные свойства правятся в справочнике — дефолт и описание сразу для всех типов',
+        'собственные свойства правятся в справочнике — описание сразу для всех типов',
         { entity: 'type_property', id: registryId, owner_id: ownerId },
       );
     }
-    break; // found on the nearest chain member — inheritance confirmed
+    bindingSide = own.side;
+    foundInChain = true;
+    break; // nearest chain member — the binding whose side applies
   }
   // Not attached anywhere in the chain at all → cannot be overridden here.
-  const attached = ndb
-    .prepare(
-      `SELECT 1 FROM type_properties_v
+  if (!foundInChain) {
+    const attached = ndb
+      .prepare(
+        `SELECT 1 FROM type_properties_v
        WHERE owner_type = ? AND property_id = ? AND owner_id IN (${chain.map(() => '?').join(', ')})
        LIMIT 1`,
-    )
-    .get(ownerType, registryId, ...chain);
-  if (!attached) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'переопределять можно только свойства, подключённые предками этого типа',
-      { entity: 'type_property', id: registryId, owner_id: ownerId },
-    );
+      )
+      .get(ownerType, registryId, ...chain);
+    if (!attached) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'переопределять можно только свойства, подключённые предками этого типа',
+        { entity: 'type_property', id: registryId, owner_id: ownerId },
+      );
+    }
   }
-  return { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config };
+  return {
+    prop: { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config },
+    side: linkPropertySideFromBinding({
+      side: bindingSide,
+      value_type: prop.value_type,
+      config: prop.config,
+    }),
+  };
 }
 
 /** The visible override rows of (type, property) — ids plus both payloads. */
@@ -1918,14 +2075,17 @@ function listOverrideRows(
 }
 
 /**
- * Set or clear a type's default-value override of an inherited property
- * (docs/03-server-api.md §8). `value = null` resets the default back to the
- * registry's own — an override row that also carries a description override
- * survives with `default_value = 'null'` (JSON null: "no default override").
+ * Set or clear a type's default-value override (0.8.2, ADR «дефолт свойства
+ * живёт на привязке»). Разрешено для **любой** привязки в цепочке типа — и
+ * унаследованной, и собственной; `value = null` снимает дефолт (действует
+ * общее значение стороны привязки).
+ *
+ * Для свойства-связи значение нормализуется по стороне привязки: сторона
+ * `source` — набор целей (`normalizeLinkDefaultValue`), сторона `target` —
+ * набор источников (`normalizeLinkDefaultValueTarget`, без отбора по типам).
  *
  * Throws `NOT_FOUND` (404) when the property or the type does not exist, and
- * `VALIDATION_ERROR` (422) when the property is attached by the type itself
- * or does not come from an ancestor.
+ * `VALIDATION_ERROR` (422) when the property is not attached in the chain.
  */
 export function setTypePropertyDefaultOverride(
   ndb: NetworkDb,
@@ -1936,14 +2096,19 @@ export function setTypePropertyDefaultOverride(
   actorUserId: string,
 ): void {
   ndb.transaction(() => {
-    const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
-    // Дефолт свойства-связи — набор целей (bb67e546): нормализация (дедуп +
-    // валидация каждой цели) вместо скалярной coerce; пустой набор = сброс.
+    const { prop, side } = assertOverridableProperty(ndb, ownerType, ownerId, propertyId, {
+      requireInherited: false,
+    });
+    // Дефолт свойства-связи — набор целей (bb67e546) либо источников
+    // (0.8.2, сторона назначений): нормализация (дедуп + валидация каждого id)
+    // вместо скалярной coerce; пустой набор = сброс.
     const normalized =
       value === null
         ? null
         : prop.value_type === 'link'
-          ? normalizeLinkDefaultValue(ndb, prop, value)
+          ? side === 'target'
+            ? normalizeLinkDefaultValueTarget(ndb, prop.name, value)
+            : normalizeLinkDefaultValue(ndb, prop, value)
           : (validateAndCoerce(ndb, prop, value), value);
     const now = new Date().toISOString();
     if (normalized === null) {
@@ -2007,7 +2172,9 @@ export function setTypePropertyDescriptionOverride(
 ): void {
   const normalized = normalizeDescription(description);
   ndb.transaction(() => {
-    const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
+    const { prop } = assertOverridableProperty(ndb, ownerType, ownerId, propertyId, {
+      requireInherited: true,
+    });
     const now = new Date().toISOString();
     if (normalized === null) {
       // Reset the description only: a row that still carries a default-value

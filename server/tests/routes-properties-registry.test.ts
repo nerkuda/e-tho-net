@@ -877,5 +877,61 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('PATCH …/properties принимает config.default_value_target (0.8.2, задача eb24beed)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const sourceThought = await createChild(ctx, 'Потенциальный источник');
+
+        const propRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/properties`,
+          headers: h,
+          payload: {
+            name: 'общий-дефолт-назначений',
+            value_type: 'link',
+            name_forward: 'общий-дефолт-назначений',
+            name_reverse: 'обратно-общий-дефолт-назначений',
+          },
+        });
+        assert.equal(propRes.statusCode, 201, propRes.body?.toString());
+        const prop = propRes.json().data as { id: string; config: { link_type_id: string } | null };
+        const ltId = prop.config?.link_type_id;
+        assert.ok(ltId, 'свойство-связь получило тип связи');
+
+        // Валидный target-дефолт: массив id источников.
+        const patchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${prop.id}`,
+          headers: h,
+          payload: { config: { link_type_id: ltId, default_value_target: [sourceThought] } },
+        });
+        assert.equal(patchRes.statusCode, 200, patchRes.body?.toString());
+        const updated = patchRes.json().data as { config: { default_value_target?: string[] } | null };
+        assert.deepEqual(updated.config?.default_value_target, [sourceThought]);
+
+        // Несуществующий id — 422.
+        const badRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${prop.id}`,
+          headers: h,
+          payload: { config: { link_type_id: ltId, default_value_target: ['00000000-0000-4000-8000-0000000000ff'] } },
+        });
+        assert.equal(badRes.statusCode, 422);
+
+        // У скаляра ключ недопустим.
+        const scalar = await createRegistryProperty(ctx, { name: 'скаляр-цель-дефолта', value_type: 'text' });
+        const scalarBad = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${scalar.id}`,
+          headers: h,
+          payload: { config: { default_value_target: [sourceThought] } },
+        });
+        assert.equal(scalarBad.statusCode, 422);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

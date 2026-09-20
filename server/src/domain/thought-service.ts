@@ -49,9 +49,12 @@ import {
 } from './owner-cleanup.js';
 import {
   countThoughtRefUsages,
+  filterApplicableLinkDefaultSources,
   filterApplicableLinkDefaultTargets,
   getPropertyValuesResolved,
+  linkPropertySideFromConfig,
   listEffectiveTypeProperties,
+  setLinkPropertySourcesForTarget,
   setPropertyValueById,
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
@@ -792,16 +795,30 @@ export function createThought(
     if (input.type_id !== undefined && input.type_id !== null) {
       for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
         if (def.default_value === null) continue;
-        // Дефолт свойства-связи — набор целей (bb67e546): применение создаёт
-        // рёбра. Цели, ставшие неприменимыми после установки дефолта
-        // (удалены, в корзине, сменили тип), молча пропускаются — создание
-        // мысли не должно падать из-за протухшего дефолта.
+        // Дефолт свойства-связи (bb67e546, 0.8.2): применение создаёт рёбра с
+        // учётом СТОРОНЫ привязки. Сторона источников — новая мысль источник,
+        // значение — набор целей; сторона назначений — новая мысль назначение,
+        // значение — набор источников (рёбра источник → новая мысль). Цели,
+        // ставшие неприменимыми после установки дефолта (удалены, в корзине,
+        // сменили тип), молча пропускаются — создание мысли не должно падать
+        // из-за протухшего дефолта.
         if (def.value_type === 'link') {
-          const ids = filterApplicableLinkDefaultTargets(
-            ndb,
-            def.config ?? null,
-            Array.isArray(def.default_value) ? def.default_value : [],
-          );
+          const values = Array.isArray(def.default_value) ? def.default_value : [];
+          const side = def.side ?? linkPropertySideFromConfig('link', def.config ?? null);
+          if (side === 'target') {
+            const sources = filterApplicableLinkDefaultSources(ndb, values);
+            if (sources.length > 0) {
+              setLinkPropertySourcesForTarget(
+                ndb,
+                id,
+                { id: def.property_id, name: def.key, value_type: 'link', config: def.config },
+                sources,
+                actorUserId,
+              );
+            }
+            continue;
+          }
+          const ids = filterApplicableLinkDefaultTargets(ndb, def.config ?? null, values);
           if (ids.length > 0) {
             setPropertyValueById(ndb, 'thought', id, def.property_id, ids, actorUserId);
           }

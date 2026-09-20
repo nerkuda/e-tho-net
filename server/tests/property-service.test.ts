@@ -1322,7 +1322,7 @@ describe(
       }
     });
 
-    it('default-value overrides are transitive down the chain until re-overridden', () => {
+    it('default-value overrides do NOT traverse the chain: an empty override falls back to the side default (0.8.2)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const root = createThoughtType(ndb, { name: 'Верх' }, USER);
@@ -1334,19 +1334,23 @@ describe(
           config: { default_value: 1 },
         }, USER);
 
-        // The middle type overrides; the leaf inherits the override.
+        // Дефолт предка НЕ прыгает на потомка: у Листа своя override-строка
+        // отсутствует → действует общее значение привязки (1), не 5.
         setTypePropertyDefaultOverride(ndb, 'thought_type', mid.id, def.id, 5, USER);
+        const midEff = scalarProps(ndb, 'thought_type', mid.id);
+        assert.equal(midEff[0]!.default_value, 5);
+        assert.equal(midEff[0]!.overridden_here, true);
         let eff = scalarProps(ndb, 'thought_type', leaf.id);
-        assert.equal(eff[0]!.default_value, 5);
-        assert.equal(eff[0]!.overridden_here, false, 'stored on the ancestor, not the leaf');
+        assert.equal(eff[0]!.default_value, 1, 'без транзитивности: общее значение стороны, не дефолт предка');
+        assert.equal(eff[0]!.overridden_here, false);
 
-        // The leaf re-overrides for itself.
+        // Лист переопределяет для себя.
         setTypePropertyDefaultOverride(ndb, 'thought_type', leaf.id, def.id, 9, USER);
         eff = scalarProps(ndb, 'thought_type', leaf.id);
         assert.equal(eff[0]!.default_value, 9);
         assert.equal(eff[0]!.overridden_here, true);
 
-        // The middle keeps its own view.
+        // Середина сохраняет свой вид.
         eff = scalarProps(ndb, 'thought_type', mid.id);
         assert.equal(eff[0]!.default_value, 5);
         assert.equal(eff[0]!.overridden_here, true);
