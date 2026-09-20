@@ -71,6 +71,7 @@ import {
   definitionChangeAffectsShown,
   definitionChangeFacts,
   isDefinitionEventType,
+  onPropertyRegistryChanged,
   onTypeDefinitionsChanged,
   type DefinitionChangeFacts,
   type DefinitionOwner,
@@ -554,11 +555,14 @@ export function mountEditor(editorHost: HTMLElement): void {
     });
 
     // Изменение ОПРЕДЕЛЕНИЙ СВОЙСТВ типа показанной сущности перечитывает
-    // вкладку «Свойства» (ошибка 74b94c26). Два источника:
-    //  * realtime — другой клиент или MCP `etn.ontology.write`;
+    // вкладку «Свойства» (ошибки 74b94c26 и 98aa0889). Два источника:
+    //  * realtime — другой клиент или MCP `etn.ontology.write`: события
+    //    `property-definition.*` (привязка свойства у типа) и
+    //    `property-registry.*` (само свойство реестра);
     //  * локальный — правка в редакторе типа / менеджере свойств: своё
     //    realtime-эхо до рендерера не доходит (главный процесс его
-    //    отбрасывает, G8 applier), поэтому производители уведомляют сами.
+    //    отбрасывает, G8 applier), поэтому производители уведомляют сами —
+    //    владельцем (типом) либо id реестрового свойства.
     // Гейт по цепочке типов показанной сущности — в lib/type-definitions.ts.
     onRealtimeEvent((evt) => {
       // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
@@ -569,6 +573,11 @@ export function mountEditor(editorHost: HTMLElement): void {
     });
     onTypeDefinitionsChanged((owner) => {
       applyDefinitionChange({ owner, allowedTypeIds: null, coverageBoundaryUnknown: false });
+    });
+    // Реестровое свойство адресуется только своим id — владельца показанного
+    // набора находит индекс определений внутри `registryChangeFacts`.
+    onPropertyRegistryChanged((facts) => {
+      applyDefinitionChange(facts);
     });
   }
 
@@ -770,6 +779,10 @@ function invalidateTypeDependentPanes(): void {
 function invalidateDefinitionDependentPanes(): void {
   invalidatePanes(['properties']);
 }
+
+// Правка реестрового свойства (ошибка 98aa0889) идёт тем же путём: сеть/слой
+// фильтрует realtime-транспорт, гейт — по цепочке типов показанной сущности и
+// спискам покрытия свойства-связи, сброс кэша — только «Свойства».
 
 /**
  * Цепочка типов показанной сущности (сам тип + предки) для вида владельца

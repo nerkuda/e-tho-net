@@ -1,23 +1,25 @@
 /**
  * Определения свойств типа ↔ набор свойств открытого редактора
- * (ошибка 74b94c26 «Открытый редактор не перечитывает свойства при изменении
- * определений свойств типа»).
+ * (ошибки 74b94c26 и 98aa0889).
  *
  * Вкладка «Свойства» открытого редактора показывает таблицу по ЭФФЕКТИВНОМУ
  * набору определений типа показанной сущности — привязки её типа и всех
  * предков (L21), плюс зеркальные свойства-связи (требование dde92461).
  * Набор меняется двумя путями:
  *
- *  - **realtime** — события `property-definition.created/updated/deleted` от
- *    другого клиента или от MCP `etn.ontology.write`; сеть/слой фильтрует
- *    транспорт, а «касается ли это показанной сущности» решает
- *    {@link definitionChangeAffectsShown};
+ *  - **realtime** — события `property-definition.*` (привязка/отвязка свойства
+ *    у типа) и `property-registry.*` (само свойство реестра: имя, вид
+ *    значения, `config`, описание) от другого клиента или от MCP
+ *    `etn.ontology.write`; сеть/слой фильтрует транспорт, а «касается ли это
+ *    показанной сущности» решает {@link definitionChangeAffectsShown};
  *  - **локально** — правка определений в редакторе типа
- *    (`screens/type-manager.ts`) или привязок свойства из менеджера свойств
- *    (`screens/property-manager.ts`). Своё realtime-эхо до рендерера не
- *    доходит — главный процесс его отбрасывает (G8 applier), поэтому
- *    производители уведомляют подписчиков сами через
- *    {@link notifyTypeDefinitionsChanged}.
+ *    (`screens/type-manager.ts`), привязок свойства и самого реестрового
+ *    свойства из менеджера свойств (`screens/property-manager.ts`). Своё
+ *    realtime-эхо до рендерера не доходит — главный процесс его отбрасывает
+ *    (G8 applier), поэтому производители уведомляют подписчиков сами:
+ *    {@link notifyTypeDefinitionsChanged} (владелец — тип) и
+ *    {@link notifyPropertyRegistryChanged} (правка реестра адресует только
+ *    id свойства).
  *
  * Гейт отсекает изменения ЧУЖИХ типов: перечитывается только набор,
  * зависящий от изменённого определения. Формула «тип накрыт» повторяет
@@ -32,6 +34,11 @@
  * брать из того, что реально отрисовано в таблице. Неизвестный id означает,
  * что определения в таблице нет: устаревать нечему, вкладка прочитает набор
  * заново при следующем построении.
+ *
+ * Правка РЕЕСТРОВОГО свойства (98aa0889) приходит только с id свойства, поэтому
+ * её покрытие (списки допустимых типов свойства-связи, `config`) берётся из
+ * тела правки, а не из определения: у накрытого типа меняется зеркало, и
+ * перечитать набор нужно даже когда самого свойства в таблице нет.
  */
 
 import type { TypeOwnerType } from '@etn/shared';
@@ -40,12 +47,21 @@ import type { TypeOwnerType } from '@etn/shared';
 export type DefinitionEventType =
   | 'property-definition.created'
   | 'property-definition.updated'
-  | 'property-definition.deleted';
+  | 'property-definition.deleted'
+  | 'property-registry.created'
+  | 'property-registry.updated'
+  | 'property-registry.deleted';
 
 const DEFINITION_EVENT_TYPES: readonly string[] = [
   'property-definition.created',
   'property-definition.updated',
   'property-definition.deleted',
+  // Реестровое свойство — то же определение, только «каноническое»: привязки
+  // ссылаются на него, поэтому его правка меняет и таблицу «Свойства»
+  // (ошибка 98aa0889).
+  'property-registry.created',
+  'property-registry.updated',
+  'property-registry.deleted',
 ];
 
 /** Сужает имя realtime-события до {@link DefinitionEventType}. */
@@ -117,6 +133,39 @@ export function notifyTypeDefinitionsChanged(owner: DefinitionOwner): void {
   for (const listener of localListeners) listener(owner);
 }
 
+const localRegistryListeners = new Set<(facts: DefinitionChangeFacts) => void>();
+
+/**
+ * Подписка на локальную правку РЕЕСТРОВОГО свойства (ошибка 98aa0889):
+ * `screens/property-manager.ts` пишет `PATCH /properties/{id}` и `DELETE
+ * /properties/{id}`, своё realtime-эхо до рендерера не доходит (G8 applier).
+ */
+export function onPropertyRegistryChanged(
+  listener: (facts: DefinitionChangeFacts) => void,
+): () => void {
+  localRegistryListeners.add(listener);
+  return () => {
+    localRegistryListeners.delete(listener);
+  };
+}
+
+/**
+ * Уведомляет подписчиков: реестровое свойство изменено ЭТИМ клиентом.
+ * `changes` — тело правки (`PATCH /properties/{id}`) или `null` при удалении:
+ * из него берётся новое покрытие зеркалом, а владельца показанного набора
+ * находит {@link registryChangeFacts} по индексу таблицы.
+ */
+export function notifyPropertyRegistryChanged(
+  propertyId: string,
+  changes?: object | null,
+): void {
+  const facts = registryChangeFacts(
+    propertyId,
+    changes === undefined || changes === null ? null : (changes as Record<string, unknown>),
+  );
+  for (const listener of localRegistryListeners) listener(facts);
+}
+
 // ---------------------------------------------------------------------------
 // Индекс определений, показанных таблицей «Свойства» открытого редактора
 // ---------------------------------------------------------------------------
@@ -170,10 +219,15 @@ export function definitionChangeAffectsShown(
 ): boolean {
   if (facts.coverageBoundaryUnknown) return true;
   const owner = facts.owner;
-  if (owner === null) return false;
+  // Владельца может не быть, а покрытие — быть: правка реестрового свойства
+  // (98aa0889) адресует только id свойства, но у накрытого ею типа зеркало
+  // появляется или исчезает, и набор надо перечитать. Зеркала порождают
+  // только свойства-связи типов МЫСЛЕЙ (серверный
+  // `appendMirroredLinkProperties`), поэтому без владельца ветвь — мысль.
+  const branch = owner?.ownerType ?? 'thought_type';
   // Разные ветви каталогов (мысль ↔ связь) свойств друг другу не отдают.
-  if (owner.ownerType !== shown.ownerType) return false;
-  if (shown.ids.has(owner.ownerId)) return true;
+  if (branch !== shown.ownerType) return false;
+  if (owner !== null && shown.ids.has(owner.ownerId)) return true;
   return facts.allowedTypeIds !== null && facts.allowedTypeIds.some((id) => shown.ids.has(id));
 }
 
@@ -202,7 +256,16 @@ export function definitionChangeFacts(
     };
   }
 
+  if (type === 'property-registry.created') {
+    // Новое свойство реестра: привязок у него ещё нет (они приезжают своими
+    // `property-definition.created`), на показанный набор оно не влияет.
+    return NEUTRAL_FACTS;
+  }
+
   const id = asString(payload['id']);
+  if (type === 'property-registry.updated' || type === 'property-registry.deleted') {
+    return registryChangeFacts(id, asRecord(payload['changes']));
+  }
   if (type === 'property-definition.updated') {
     const changes = asRecord(payload['changes']);
     return {
@@ -216,6 +279,40 @@ export function definitionChangeFacts(
     allowedTypeIds: null,
     coverageBoundaryUnknown: false,
   };
+}
+
+/**
+ * Факты об изменении РЕЕСТРОВОГО свойства (ошибка 98aa0889). `changes` —
+ * тело правки (`PATCH /properties/{id}`) либо `null`: у `updated` в нём лежит
+ * новый `config` со списками допустимых типов, у `deleted` покрытие снимается
+ * вместе со свойством, но у накрытого типа остаётся зеркало в показанном
+ * наборе — его находит индекс по id свойства.
+ */
+export function registryChangeFacts(
+  propertyId: string | null,
+  changes: Readonly<Record<string, unknown>> | null,
+): DefinitionChangeFacts {
+  return {
+    owner: propertyId === null ? null : shownDefinitionOwner(propertyId),
+    allowedTypeIds: changes === null ? null : coverageTypeIdsOf(changes['config']),
+    coverageBoundaryUnknown: false,
+  };
+}
+
+/**
+ * Типы мыслей, накрытые свойством-связью: из `config` берутся списки
+ * допустимых типов (серверный `appendMirroredLinkProperties` смотрит
+ * `allowed_target_type_ids`; `allowed_source_type_ids` — наследие модели,
+ * объединяем: лишняя пересборка дешевле пропуска).
+ */
+function coverageTypeIdsOf(config: unknown): readonly string[] | null {
+  const cfg = asRecord(config);
+  if (cfg === null) return null;
+  const ids = [
+    ...(asStringArray(cfg['allowed_target_type_ids']) ?? []),
+    ...(asStringArray(cfg['allowed_source_type_ids']) ?? []),
+  ];
+  return ids.length > 0 ? ids : null;
 }
 
 /** Изменены ли сами списки допустимых типов (граница покрытия сдвинулась). */

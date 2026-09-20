@@ -104,7 +104,10 @@ import {
 import { onRealtimeEvent } from '../realtime.js';
 // Локальное уведомление открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26): своё realtime-эхо до рендерера не доходит.
-import { notifyTypeDefinitionsChanged } from '../lib/type-definitions.js';
+import {
+  notifyPropertyRegistryChanged,
+  notifyTypeDefinitionsChanged,
+} from '../lib/type-definitions.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import {
@@ -265,6 +268,11 @@ export function showPropertyManagerDialog(): void {
     if (!ok) return;
     try {
       const result = await etn.propertyRegistry.remove(networkId, property.id);
+      // Свойство реестра исчезло (ошибка 98aa0889): открытый редактор мысли
+      // обязан перечитать набор — свойство могло быть привязано к типу или
+      // покрывать его зеркалом. Своё realtime-эхо до рендерера не доходит
+      // (G8 applier), поэтому уведомляем локально.
+      notifyPropertyRegistryChanged(property.id);
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
       // для скаляров) — тостом подтверждаем выполнение.
@@ -1626,6 +1634,12 @@ export function openPropertyManagerEditor(
           types_count: current.types_count,
           values_count: current.values_count,
         };
+        // Правка самого свойства реестра — имя, вид значения, `config`
+        // (в т.ч. списки допустимых типов свойства-связи) — меняет таблицу
+        // «Свойства» у ВСЕХ типов, где оно показано, а не только у привязок
+        // этого диалога (ошибка 98aa0889). Редактор находит владельца по id
+        // свойства в индексе показанных определений.
+        notifyPropertyRegistryChanged(current.id, changes);
         if (changes.value_type !== undefined) {
           notice(
             result.dropped > 0 || result.converted > 0
