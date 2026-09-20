@@ -39,14 +39,19 @@
  *    type that binds it and lives in the registry; the table's «✎» button
  *    jumps to the property manager dialog with a banner warning about the
  *    network-wide impact.
- *  - «Унаследованные свойства» — read-only bindings inherited from the
- *    ancestors; only the default value and description may be overridden per
- *    type (and the override can be reset back to the ancestor's value). The
- *    override dialogs keep their own explicit «Применить» and write
- *    immediately. `required` is NOT editable on inherited bindings — it
- *    belongs to the type that attached the binding, the inherited view is a
- *    preview of the effective value. For a type that is still being created
- *    the section previews what the picked parent will pass down.
+ *  - «Унаследованные свойства» — bindings inherited from the ancestors. The
+ *    default value of a binding is editable right in the table (0.8.2, ADR
+ *    «дефолт свойства живёт на привязке»): filled = the default of THIS
+ *    binding, empty = the common value of the binding's side (tooltip in the
+ *    empty cell); clearing the field resets the override. No
+ *    «(общее)»/«частное»/«сбросить» modes. Черновик дефолтов пишется одним
+ *    набором `setPropertyDefaultOverride` на «Применить и закрыть», как и
+ *    остальные правки вкладки. The description override keeps its own small
+ *    dialog with an explicit «Применить» and writes immediately.
+ *    `required` is NOT editable on inherited bindings — it belongs to the
+ *    type that attached the binding, the inherited view is a preview of the
+ *    effective value. For a type that is still being created the section
+ *    previews what the picked parent will pass down.
  *
  * Link-type editor: forward/reverse names, ⚙ (line-style dialog, type mode —
  * a reset inherits the parent's style since L21), description and the same
@@ -56,7 +61,9 @@
 import type {
   EffectiveTypeProperty,
   IconKind,
+  LinkPropertySide,
   LinkType,
+  PropertyConfig,
   PropertyDefinition,
   PropertyValueType,
   ThoughtType,
@@ -65,7 +72,7 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
-import { buildValueEditor } from '../editor/value-editor.js';
+import { buildLinkValueEditor, buildValueEditor } from '../editor/value-editor.js';
 import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
@@ -102,7 +109,12 @@ import {
   type DraftProperty,
 } from '../lib/type-property-draft.js';
 import {
+  defaultLinkValues,
+  emptyDefaultHint,
+  isEmptyDefault,
+  linkDefaultPayload,
   openPropertyManagerEditor,
+  scalarDefaultPayload,
   type RegistryRow,
 } from './property-manager.js';
 import { buildViewsTab } from './thought-type/views-tab.js';
@@ -527,9 +539,9 @@ export interface TypeEditorExtras {
  * comment template, parent and the own property definitions are editable
  * right away — nothing is inert — and nothing touches the server until
  * «Применить и закрыть» is pressed. «Отмена» (also Esc/×/backdrop) closes the
- * dialog discarding the whole draft; no type is created on that path. The
- * inherited-default overrides of an existing type keep their own explicit
- * «Применить»/«Сбросить» buttons inside their small dialog (as before).
+ * dialog discarding the whole draft; no type is created on that path. Дефолт
+ * привязки (0.8.2) правится прямо в колонке «По умолчанию» и тоже уезжает на
+ * «Применить и закрыть»; override описания сохраняет свой маленький диалог.
  * Reparenting validation is unchanged: the parent picker filters
  * cycles/depth client-side and the server re-checks on apply.
  *
@@ -1120,23 +1132,85 @@ function buildStagedPropertySection(opts: {
     return ownerType === 'thought_type' ? store.state.thoughtTypes : store.state.linkTypes;
   }
 
-  /** Opens the default-override dialog of an inherited property (L21) —
-   *  unchanged instant behaviour, the small dialog owns its «Применить». */
-  function showOverrideDialog(def: EffectiveTypeProperty): void {
-    openDefaultOverrideDialog({
-      networkId,
-      ownerType,
-      typeId: typeId as string,
-      def,
-      onDone: () => {
-        onOverrideApplied?.();
-        void reload();
-      },
-    });
+  /** Черновики дефолтов привязок (0.8.2): ключ — registry `property_id`;
+   *  значения уезжают на «Применить и закрыть» одним набором
+   *  `setPropertyDefaultOverride`. Живут рядом с `ownDraft` и переживают
+   *  перерисовку вкладки. */
+  const bindingDefaults = new Map<string, BindingDefaultDraft>();
+
+  /** Ленивый черновик дефолта привязки: `initial` фиксируется при первом
+   *  рендере поля и дальше не меняется — по нему считается diff при apply. */
+  function bindingDefaultDraft(
+    propertyId: string,
+    valueType: PropertyValueType,
+    initial: unknown,
+  ): BindingDefaultDraft {
+    let draftEntry = bindingDefaults.get(propertyId);
+    if (draftEntry === undefined) {
+      draftEntry = { propertyId, valueType, initial, value: initial };
+      bindingDefaults.set(propertyId, draftEntry);
+    }
+    return draftEntry;
   }
 
-  /** Opens the description-override dialog of an inherited property — the
-   *  description analogue of {@link showOverrideDialog}. */
+  /**
+   * Ячейка «По умолчанию» привязки (0.8.2, ADR «дефолт свойства живёт на
+   * привязке»): редактор значения без режимов — заполнено = дефолт этой
+   * привязки, пусто = общее значение стороны (подсказка в тултипе пустой
+   * ячейки). Значение копится в черновике и пишется на «Применить и закрыть»
+   * (`setPropertyDefaultOverride(значение | null)`); очистка поля снимает
+   * override. Общая для собственной и унаследованной таблиц.
+   */
+  function buildBindingDefaultCell(opts: {
+    propertyId: string;
+    valueType: PropertyValueType;
+    config: PropertyConfig | null;
+    side: LinkPropertySide | null;
+    /** Дефолт привязки на сервере; `null` — его нет (общее стороны). */
+    initial: unknown;
+  }): HTMLElement {
+    const cell = div('prop-default-cell');
+    const draftEntry = bindingDefaultDraft(opts.propertyId, opts.valueType, opts.initial);
+    const write = async (next: unknown): Promise<boolean> => {
+      draftEntry.value = next;
+      render();
+      return true;
+    };
+    if (opts.valueType === 'link') {
+      const filterIds = defaultPickerTypeIds(opts.side, opts.config);
+      cell.append(
+        buildLinkValueEditor({
+          networkId,
+          // Отбор целей — по типам противоположной стороны привязки
+          // (иерархию раскрывает сам редактор); пусто — цели любые.
+          definition: {
+            config: filterIds.length > 0 ? { allowed_target_type_ids: filterIds } : {},
+            required: false,
+          },
+          values: defaultLinkValues(draftEntry.value),
+          save: (next) => write(next),
+        }),
+      );
+    } else {
+      cell.append(
+        buildValueEditor({
+          networkId,
+          definition: {
+            value_type: opts.valueType,
+            config: opts.config,
+            required: false,
+            default_value: null,
+          },
+          value: draftEntry.value ?? null,
+          save: (next) => write(next),
+        }),
+      );
+    }
+    if (isEmptyDefault(draftEntry.value)) cell.append(emptyDefaultHint());
+    return cell;
+  }
+
+  /** Opens the description-override dialog of an inherited property. */
   function showDescriptionOverrideDialog(def: EffectiveTypeProperty): void {
     openDescriptionOverrideDialog({
       networkId,
@@ -1271,36 +1345,36 @@ function buildStagedPropertySection(opts: {
           ? `зеркало · ${def.defined_on_name}`
           : def.defined_on_name;
         row.append(el('td', 'muted', sourceLabel));
-        row.append(
-          el(
-            'td',
-            'muted',
-            formatDefault(def.default_value) +
-              (def.overridden_here ? ' ●' : '') +
-              (def.description_overridden ? ' ◆' : ''),
-          ),
-        );
+        // Колонка «По умолчанию» — редактор дефолта привязки (0.8.2): без
+        // режимов, заполнено/пусто; пусто = общее значение стороны. У
+        // зеркальной записи (mirrored) физической привязки нет — только
+        // показ эффективного значения.
+        const overridable = def.mirrored !== true;
+        const dvCell = el('td');
+        if (overridable) {
+          dvCell.append(
+            buildBindingDefaultCell({
+              propertyId: def.property_id,
+              valueType: def.value_type,
+              config: def.config,
+              side: def.side ?? null,
+              initial: def.overridden_here === true ? def.default_value ?? null : null,
+            }),
+          );
+        } else {
+          dvCell.append(el('span', 'muted', formatDefault(def.default_value)));
+        }
+        row.append(dvCell);
         const actions = el('td');
         actions.style.whiteSpace = 'nowrap';
-        // Override buttons exist only for an already-created type: the
-        // override row needs a server id to attach to. A mirrored link
-        // property (dde92461) has no physical binding to override at all —
-        // its nature lives in the source property's config. Own (non-mirror)
-        // link properties carry a target-set default (bb67e546).
-        const overridable = typeId !== null && def.mirrored !== true;
-        if (overridable) {
-          actions.append(
-            button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
-          );
-        }
+        // Кнопка дефолта/«сбросить» убрана (0.8.2): значение правится прямо в
+        // колонке «По умолчанию», очистка поля снимает override — режимов нет.
+        // Override описания сохраняет свой маленький диалог (транзитивность
+        // описаний не менялась). Зеркальная запись (dde92461) не имеет
+        // физической привязки — переопределять нечего.
         if (typeId !== null && def.mirrored !== true) {
           actions.append(
             button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
-          );
-        }
-        if (typeId !== null && def.overridden_here) {
-          actions.append(
-            button('сбросить', () => void clearOverride(def), 'btn small', 'Сбросить переопределение'),
           );
         }
         if (typeId !== null && def.description_overridden) {
@@ -1356,7 +1430,20 @@ function buildStagedPropertySection(opts: {
       });
       requiredCell.append(requiredCheck);
       tr.append(requiredCell);
-      tr.append(el('td', 'muted', formatDefault(row.config?.default_value ?? null)));
+      // Колонка «По умолчанию» — тот же редактор без режимов (0.8.2):
+      // значение копится в черновике и уезжает на «Применить и закрыть» (для
+      // только что добавляемой привязки — после её создания).
+      const dvCell = el('td');
+      dvCell.append(
+        buildBindingDefaultCell({
+          propertyId: row.property_id,
+          valueType: row.value_type,
+          config: row.config,
+          side: row.side,
+          initial: row.defaultValue ?? null,
+        }),
+      );
+      tr.append(dvCell);
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
       // Порядок (▲/▼) — в пределах стороны источника, как сейчас
@@ -1405,17 +1492,6 @@ function buildStagedPropertySection(opts: {
     if (side === 'source') return 'источник';
     if (side === 'target') return 'назначение';
     return '—';
-  }
-
-  /** Drops the type's default-value override (back to the ancestor default). */
-  async function clearOverride(def: EffectiveTypeProperty): Promise<void> {
-    try {
-      await etn.types.setPropertyDefaultOverride(networkId, ownerType, typeId as string, def.id, null);
-      onOverrideApplied?.();
-      await reload();
-    } catch (err) {
-      errorDialog('Сбросить переопределение', err);
-    }
   }
 
   /** Loads (or reloads) the bindings from the server, plus the registry
@@ -1530,6 +1606,30 @@ function buildStagedPropertySection(opts: {
         errorLine.textContent = errText(err);
         return false;
       }
+    }
+    // Дефолты привязок (0.8.2): пишутся после attach/reorder — сервер требует,
+    // чтобы свойство было привязано к типу (для только что добавленных строк
+    // это верно лишь сейчас). Пустое значение — сброс override.
+    const attachedPropertyIds = new Set<string>([
+      ...ownDraft.map((d) => d.property_id),
+      ...inherited.map((d) => d.property_id),
+    ]);
+    for (const write of collectBindingDefaultWrites([...bindingDefaults.values()], attachedPropertyIds)) {
+      try {
+        await etn.types.setPropertyDefaultOverride(
+          networkId,
+          ownerType,
+          targetId,
+          write.propertyId,
+          write.value,
+        );
+      } catch (err) {
+        errorLine.textContent = errText(err);
+        render();
+        return false;
+      }
+      const draftEntry = bindingDefaults.get(write.propertyId);
+      if (draftEntry !== undefined) draftEntry.initial = draftEntry.value;
     }
     deletedIds = [];
     errorLine.textContent = '';
@@ -2003,150 +2103,94 @@ function formatDefault(value: unknown): string {
 }
 
 /**
- * Builds an input for a "default value" field matching a value type, reading
- * its current value into `read()`. Поле строит общий редактор значения
- * `editor/value-editor.ts` (стандарт S2, задача 77e7cafd): вид значения,
- * `config.multiple`, `config.options`; для связи — допустимые типы цели из
- * определения (`linkContext.def`). Thought-ref defaults are not supported —
- * a default target makes no sense across thoughts. Shared with the inherited
- * default-override dialog (L21).
+ * Тело `setPropertyDefaultOverride` для колонки «По умолчанию» привязки
+ * (0.8.2, ADR «дефолт свойства живёт на привязке»): свойство-связь — набор id
+ * целей (`string[]`), скаляр — значение по виду свойства; пусто — `null`
+ * (override снимается, действует общее значение стороны). Чистая — юнит-тест
+ * (`type-manager-default.test.ts`).
  */
-function defaultInputFor(
+export function bindingDefaultPayload(
   valueType: PropertyValueType,
-  current: unknown,
-  read: (value: unknown) => void,
-  linkContext?: { networkId: string; def: EffectiveTypeProperty },
-): HTMLElement {
-  // Дефолт свойства-связи — набор целей (bb67e546): чип-поле общего
-  // редактора. Без определения (нет сети/типа) связь не задаётся.
-  if (valueType === 'link' && linkContext === undefined) {
-    return span('не задаётся', 'muted');
-  }
-  const definition: EffectiveTypeProperty =
-    valueType === 'link'
-      ? linkContext!.def
-      : {
-          id: '',
-          property_id: '',
-          owner_type: 'thought_type',
-          owner_id: '',
-          key: 'default',
-          value_type: valueType,
-          config: null,
-          required: false,
-          position: 0,
-          description: null,
-          inherited: false,
-          defined_on: '',
-          defined_on_name: '',
-          default_value: null,
-          overridden_here: false,
-          description_overridden: false,
-        };
-  return buildValueEditor({
-    networkId: linkContext?.networkId ?? '',
-    definition,
-    value: current,
-    save: async (next) => {
-      read(next);
-      return true;
-    },
-    commitOn: 'change',
-  });
+  value: unknown,
+): string | number | boolean | string[] | null {
+  return valueType === 'link' ? linkDefaultPayload(value) : scalarDefaultPayload(value);
 }
 
 /**
- * The default-value override dialog (L21): sets the effective default of an
- * inherited property for this type, or resets the override.
+ * Отбор типов для чип-пикера дефолта привязки типа мысли (0.8.2): у привязки
+ * со стороны источника цели ограничены `allowed_target_type_ids`, у привязки
+ * со стороны назначения источники — `allowed_source_type_ids`; пусто —
+ * фильтра нет. Иерархию раскрывает сам редактор значения
+ * (`buildLinkValueEditor`). Чистая — юнит-тест.
  */
-function openDefaultOverrideDialog(opts: {
-  networkId: string;
-  ownerType: TypeOwnerType;
-  typeId: string;
-  def: EffectiveTypeProperty;
-  onDone: () => void;
-}): void {
-  const { networkId, ownerType, typeId, def, onDone } = opts;
-  const errorLine = span('', 'error-text');
-  let value: unknown = def.default_value;
-  const defaultHost = div('form-row');
-  const renderDefault = (): void => {
-    defaultHost.replaceChildren(
-      defaultInputFor(def.value_type, value, (v) => {
-        value = v;
-      }, { networkId, def }),
-    );
-  };
-  renderDefault();
+export function defaultPickerTypeIds(
+  side: LinkPropertySide | null,
+  config: PropertyConfig | null,
+): string[] {
+  const raw =
+    side === 'target' ? config?.allowed_source_type_ids : config?.allowed_target_type_ids;
+  return Array.isArray(raw) ? raw.filter((id) => id !== '') : [];
+}
 
-  const body = div('form-stack');
-  const hint = el(
-    'p',
-    'muted',
-    `Свойство «${def.key}» наследуется от типа «${def.defined_on_name}». ` +
-      'Здесь задаётся значение по умолчанию только для этого типа.',
-  );
-  hint.style.margin = '0';
-  body.append(hint, defaultHost, errorLine);
+/**
+ * Черновик дефолта одной привязки в редакторе типа (0.8.2): вкладка
+ * «Свойства» ничего не пишет на сервер до «Применить и закрыть», поэтому
+ * значение колонки «По умолчанию» копится здесь и уезжает одной пачкой
+ * `setPropertyDefaultOverride`.
+ */
+export interface BindingDefaultDraft {
+  /** Registry `property_id` привязки — сервер принимает его наравне с id
+   *  самой привязки (`type_properties.id`). */
+  propertyId: string;
+  valueType: PropertyValueType;
+  /** Снимок дефолта привязки на момент открытия редактора (для diff). */
+  initial: unknown;
+  /** Текущее значение поля «По умолчанию»; `null` — пусто (общее стороны). */
+  value: unknown;
+}
 
-  /** Applies the override (or clears it when the field is empty). */
-  async function apply(close: () => void): Promise<void> {
-    try {
-      await etn.types.setPropertyDefaultOverride(
-        networkId,
-        ownerType,
-        typeId,
-        def.id,
-        (value ?? null) as string | number | boolean | string[] | null,
-      );
-      onDone();
-      close();
-    } catch (err) {
-      errorLine.textContent = errText(err);
-    }
+/** Запись дефолта привязки, уезжающая на «Применить и закрыть». */
+export interface BindingDefaultWrite {
+  propertyId: string;
+  /** Тело `setPropertyDefaultOverride`: значение или `null` (сброс override). */
+  value: string | number | boolean | string[] | null;
+}
+
+/**
+ * Отбирает дефолты привязок, которые надо записать на «Применить и закрыть»
+ * (0.8.2): только реально изменившиеся, и только для привязок, которые сейчас
+ * есть в таблицах вкладки (`attached` — registry `property_id` собственных и
+ * унаследованных строк). Пустое значение (`null`) — сброс override, при
+ * создании мысли тогда действует общее значение стороны. Чистая — юнит-тест
+ * (`type-manager-default.test.ts`).
+ */
+export function collectBindingDefaultWrites(
+  drafts: readonly BindingDefaultDraft[],
+  attached: ReadonlySet<string>,
+): BindingDefaultWrite[] {
+  const writes: BindingDefaultWrite[] = [];
+  for (const draftEntry of drafts) {
+    if (!attached.has(draftEntry.propertyId)) continue;
+    const next = bindingDefaultPayload(draftEntry.valueType, draftEntry.value);
+    const before = bindingDefaultPayload(draftEntry.valueType, draftEntry.initial);
+    if (sameDefaultPayload(next, before)) continue;
+    writes.push({ propertyId: draftEntry.propertyId, value: next });
   }
+  return writes;
+}
 
-  showDialog({
-    title: `Значение по умолчанию — «${def.key}»`,
-    body,
-    width: 460,
-    buttons: [
-      { label: 'Отменить' },
-      ...(def.overridden_here
-        ? [
-            {
-              label: 'Сбросить переопределение',
-              keepOpen: true,
-              onClick: (close: () => void): void => {
-                void (async () => {
-                  try {
-                    await etn.types.setPropertyDefaultOverride(
-                      networkId,
-                      ownerType,
-                      typeId,
-                      def.id,
-                      null,
-                    );
-                    onDone();
-                    close();
-                  } catch (err) {
-                    errorLine.textContent = errText(err);
-                  }
-                })();
-              },
-            } satisfies DialogButton,
-          ]
-        : []),
-      { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
-    ],
-  });
+/** Одинаковы ли два тела `setPropertyDefaultOverride` (порядок набора целей
+ *  значим — как его отдаёт редактор чипов). */
+function sameDefaultPayload(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 /**
  * The description-override dialog (task «Добавить описание (description) к
- * определениям свойств типов»): the description analogue of {@link
- * openDefaultOverrideDialog} — sets the effective description of an inherited
+ * определениям свойств типов»): sets the effective description of an inherited
  * property for this type, or resets the override. Empty field = no override.
+ * Дефолт значения такой диалог больше не имеет (0.8.2): он правится прямо в
+ * колонке «По умолчанию» вкладки «Свойства».
  */
 function openDescriptionOverrideDialog(opts: {
   networkId: string;

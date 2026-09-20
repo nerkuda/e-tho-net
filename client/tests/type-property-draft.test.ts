@@ -95,6 +95,7 @@ describe('draftPropertiesFrom', () => {
         value_type: 'text',
         config: null,
         description: null,
+        defaultValue: null,
       },
       {
         id: 'p2',
@@ -106,6 +107,7 @@ describe('draftPropertiesFrom', () => {
         value_type: 'number',
         config: { default_value: 3 },
         description: null,
+        defaultValue: null,
       },
     ]);
   });
@@ -130,6 +132,23 @@ describe('draftPropertiesFrom', () => {
     const draft = draftPropertiesFrom(own);
     assert.equal(draft[0]!.side, 'source');
     assert.equal(draft[1]!.side, 'target');
+  });
+
+  it('берёт дефолт привязки только при наличии override (0.8.2)', () => {
+    // Эффективная строка с override — собственный дефолт привязки;
+    // эффективное значение без override (общее значение стороны) в колонку
+    // «По умолчанию» не подставляется — пусто означает «общее стороны».
+    const withOverride = def('p1', 'A', {
+      overridden_here: true,
+      default_value: ['t-1'],
+    } as Partial<PropertyDefinition>);
+    const withoutOverride = def('p2', 'B', {
+      overridden_here: false,
+      default_value: ['t-2'],
+    } as Partial<PropertyDefinition>);
+    const draft = draftPropertiesFrom([withOverride, withoutOverride]);
+    assert.deepEqual(draft[0]!.defaultValue, ['t-1']);
+    assert.equal(draft[1]!.defaultValue, null);
   });
 });
 

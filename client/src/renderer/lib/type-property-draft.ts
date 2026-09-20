@@ -65,6 +65,15 @@ export interface DraftProperty {
   value_type: PropertyValueType;
   config: PropertyConfig | null;
   description: string | null;
+  /**
+   * Дефолт ЭТОЙ привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+   * `type_property_overrides.default_value` — набор id целей у свойства-связи,
+   * значение по виду у скаляра; `null` — собственного дефолта нет, при создании
+   * мысли действует общее значение стороны привязки. Заполняется снимком
+   * эффективного списка при загрузке; запись идёт НЕ через план diff, а сразу
+   * `setPropertyDefaultOverride` (колонка «По умолчанию» вкладки «Свойства»).
+   */
+  defaultValue?: unknown;
 }
 
 let draftCounter = 0;
@@ -76,8 +85,15 @@ export function nextDraftPropertyId(): string {
 }
 
 /** Builds the initial staged list from a type's own (non-inherited)
- *  bindings, ordered as the server returns them (`position`, then `key`). */
-export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftProperty[] {
+ *  bindings, ordered as the server returns them (`position`, then `key`).
+ *
+ *  Принимает и эффективные определения (`EffectiveTypeProperty`): из них
+ *  берётся дефолт привязки — `default_value` читается только когда строка
+ *  override есть у самой привязки (`overridden_here`), иначе `null`
+ *  («действует общее значение стороны»). */
+export function draftPropertiesFrom(
+  own: readonly (PropertyDefinition & { default_value?: unknown; overridden_here?: boolean })[],
+): DraftProperty[] {
   return own.map((d) => ({
     id: d.id,
     isNew: false,
@@ -88,6 +104,7 @@ export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftPr
     value_type: d.value_type,
     config: d.config,
     description: d.description,
+    defaultValue: d.overridden_here === true ? d.default_value ?? null : null,
   }));
 }
 

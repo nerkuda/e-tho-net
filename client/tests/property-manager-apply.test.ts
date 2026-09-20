@@ -1,23 +1,21 @@
 /**
  * Regression tests for the unified «Свойство / связь» dialog apply path
- * (карточка ошибки 9f579e69 — «Не сохраняется комментарий свойства»).
+ * (карточка ошибки 9f579e69 — «Не сохраняется комментарий свойства»;
+ * модель дефолтов 0.8.2 — тех.проект 43870285).
  *
- * Три слома, покрытые здесь со стороны клиента (серверную часть —
- * приём `name_forward`/`name_reverse` в PATCH /properties и `side` в
- * POST …/types/{id}/properties — покрывают серверные тесты):
+ * Покрытие:
  *
  * 1. Поле «Описание» не зеркалило ввод в черновик — PATCH уходил со старым
  *    описанием. Теперь textarea строит {@link buildDescriptionField}, и его
  *    слушатель копирует ввод в `draft.description` на каждый `input`.
  * 2. Тело PATCH собиралось инлайн в `apply` — перенесено в чистую
- *    {@link buildUpdateChanges}, которую можно проверить юнитом: описание,
- *    имена сторон и оформление попадают в changes ровно тогда, когда
+ *    {@link buildUpdateChanges}: описание, имена сторон, оформление и оба
+ *    общих значения свойства-связи попадают в changes ровно тогда, когда
  *    изменились.
- * 3. `applyTypeRows` вызывал `setPropertyDefaultOverride` для СОБСТВЕННОЙ
- *    привязки — сервер отвечает 422 «собственные свойства правятся в
- *    справочнике», apply падал и кнопка «Применить и закрыть» не давала
- *    эффекта. Предикат {@link shouldSetLinkDefaultOverride} разрешает
- *    override только для унаследованных строк.
+ * 3. Дефолты привязок (0.8.2): приёмочный пример тех.проекта — чистая
+ *    {@link collectDefaultOverrideOps} конвертирует черновик в операции
+ *    `setPropertyDefaultOverride` (заполненные строки → значение, пустые →
+ *    ничего, снятое значение существующей строки → `null`).
  */
 
 import assert from 'node:assert/strict';
@@ -28,9 +26,10 @@ import type { LinkStyle, LinkType } from '@etn/shared';
 import {
   buildDescriptionField,
   buildUpdateChanges,
+  collectDefaultOverrideOps,
   defaultValueChanged,
+  isEmptyDefault,
   scalarDefaultPayload,
-  shouldSetLinkDefaultOverride,
   syncLinkTypeParent,
   type PropertyDraft,
   type RegistryRow,
@@ -61,6 +60,7 @@ function makeDraft(overrides: Partial<PropertyDraft> = {}): PropertyDraft {
     showOnMap: false,
     blocksTargetDeletion: false,
     defaultValue: null,
+    defaultValueTarget: null,
     typeRows: [],
     ...overrides,
   };
@@ -89,9 +89,7 @@ function makeRow(overrides: Partial<TypeRowDraft> = {}): TypeRowDraft {
     required: false,
     defaultValue: null,
     side: 'source',
-    definedOn: 'tt-1',
     dirty: false,
-    overriddenHere: false,
     ...overrides,
   };
 }
@@ -229,29 +227,159 @@ describe('buildUpdateChanges — тело PATCH из черновика (9f579e6
 });
 
 // ---------------------------------------------------------------------------
-// Дефолт целей: override допустим только для унаследованных привязок
+// Дефолты привязок: черновик → операции (0.8.2, тех.проект 43870285)
 // ---------------------------------------------------------------------------
 
-describe('shouldSetLinkDefaultOverride — только для унаследованных привязок (9f579e69)', () => {
-  it('собственная привязка (definedOn === тип) — false', () => {
-    assert.equal(
-      shouldSetLinkDefaultOverride(makeRow({ thoughtTypeId: 'tt-1', definedOn: 'tt-1' })),
-      false,
+describe('collectDefaultOverrideOps — дефолты привязок из черновика (0.8.2)', () => {
+  it('приёмочный пример тех.проекта: свойство-связь «версия → работы версии»', () => {
+    // Источники: задача — «99.99.99», ошибка — пусто, техпроект — «99.99.99»;
+    // общее источников — пусто. Назначения: версия — три задачи в работах.
+    const rows: TypeRowDraft[] = [
+      makeRow({
+        id: 'bind-task',
+        thoughtTypeId: 'tt-task',
+        side: 'source',
+        defaultValue: ['v-99'],
+        initialDefaultValue: null,
+        dirty: true,
+      }),
+      makeRow({
+        id: 'bind-err',
+        thoughtTypeId: 'tt-error',
+        side: 'source',
+        defaultValue: null,
+        initialDefaultValue: null,
+        dirty: false,
+      }),
+      makeRow({
+        id: 'bind-tp',
+        thoughtTypeId: 'tt-techproject',
+        side: 'source',
+        defaultValue: ['v-99'],
+        initialDefaultValue: null,
+        dirty: true,
+      }),
+      makeRow({
+        id: 'bind-version',
+        thoughtTypeId: 'tt-version',
+        side: 'target',
+        defaultValue: ['t-1', 't-2', 't-3'],
+        initialDefaultValue: null,
+        dirty: true,
+      }),
+    ];
+    const ops = collectDefaultOverrideOps(rows, /* isLink */ true);
+    assert.deepEqual(
+      ops.map((op) => [op.row.thoughtTypeId, op.value]),
+      [
+        ['tt-task', ['v-99']],
+        ['tt-techproject', ['v-99']],
+        ['tt-version', ['t-1', 't-2', 't-3']],
+      ],
     );
   });
 
-  it('унаследованная привязка (definedOn — другой тип) — true', () => {
-    assert.equal(
-      shouldSetLinkDefaultOverride(makeRow({ thoughtTypeId: 'tt-1', definedOn: 'tt-ancestor' })),
+  it('пустые и незатронутые строки операций не порождают', () => {
+    const untouched = makeRow({ id: 'bind-1', initialDefaultValue: null, dirty: false });
+    const requiredOnly = makeRow({
+      id: 'bind-2',
+      initialDefaultValue: null,
+      defaultValue: null,
+      dirty: true,
+    });
+    assert.deepEqual(collectDefaultOverrideOps([untouched, requiredOnly], true), []);
+  });
+
+  it('снятое значение существующей привязки даёт null (сброс override)', () => {
+    const ops = collectDefaultOverrideOps(
+      [makeRow({ id: 'bind-1', defaultValue: null, initialDefaultValue: ['t-1'], dirty: true })],
       true,
     );
+    assert.deepEqual(ops.map((op) => [op.row.id, op.value]), [['bind-1', null]]);
   });
 
-  it('новая, ещё не сохранённая строка (definedOn: null) — false', () => {
-    assert.equal(
-      shouldSetLinkDefaultOverride(makeRow({ id: null, definedOn: null })),
-      false,
+  it('новая строка без id: заполненный дефолт — операция, пустой — нет', () => {
+    const filled = makeRow({ id: null, thoughtTypeId: 'tt-a', defaultValue: ['t-1'], dirty: true });
+    const empty = makeRow({ id: null, thoughtTypeId: 'tt-b', defaultValue: null, dirty: true });
+    const ops = collectDefaultOverrideOps([filled, empty], true);
+    assert.deepEqual(
+      ops.map((op) => [op.row.thoughtTypeId, op.value]),
+      [['tt-a', ['t-1']]],
     );
+  });
+
+  it('скаляр: значение по виду свойства, снятое значение — null', () => {
+    const ops = collectDefaultOverrideOps(
+      [
+        makeRow({ id: 'bind-1', defaultValue: 'Москва', initialDefaultValue: null, dirty: true }),
+        makeRow({ id: 'bind-2', defaultValue: null, initialDefaultValue: 'Питер', dirty: true }),
+      ],
+      /* isLink */ false,
+    );
+    assert.deepEqual(
+      ops.map((op) => [op.row.id, op.value]),
+      [
+        ['bind-1', 'Москва'],
+        ['bind-2', null],
+      ],
+    );
+  });
+});
+
+describe('isEmptyDefault — пустая ячейка колонки дефолта (0.8.2)', () => {
+  it('null, undefined, пустая строка и пустой набор — пусто', () => {
+    assert.equal(isEmptyDefault(null), true);
+    assert.equal(isEmptyDefault(undefined), true);
+    assert.equal(isEmptyDefault(''), true);
+    assert.equal(isEmptyDefault([]), true);
+  });
+
+  it('заполненное скалярное значение и непустой набор — не пусто', () => {
+    assert.equal(isEmptyDefault('Москва'), false);
+    assert.equal(isEmptyDefault(0), false);
+    assert.equal(isEmptyDefault(false), false);
+    assert.equal(isEmptyDefault(['t-1']), false);
+  });
+});
+
+describe('общие значения сторон в PATCH /properties (0.8.2)', () => {
+  it('свойство-связь: источники → config.default_value, назначения → config.default_value_target', () => {
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'версия',
+      nameForward: 'версия',
+      nameReverse: 'работы версии',
+      defaultValue: ['v-1'],
+      defaultValueTarget: ['t-1', 't-2'],
+    });
+    const changes = buildUpdateChanges(
+      draft,
+      makeCurrent({ value_type: 'link', config: { direction: 'out', link_type_id: 'lt-1' } }),
+    );
+    assert.deepEqual(changes.config?.default_value, ['v-1']);
+    assert.deepEqual(changes.config?.default_value_target, ['t-1', 't-2']);
+  });
+
+  it('очищенные общие значения в конфиг не пишутся (PATCH заменяет конфиг целиком)', () => {
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'версия',
+      nameForward: 'версия',
+      nameReverse: 'работы версии',
+      defaultValue: null,
+      defaultValueTarget: null,
+    });
+    const changes = buildUpdateChanges(
+      draft,
+      makeCurrent({
+        value_type: 'link',
+        config: { direction: 'out', link_type_id: 'lt-1', default_value: ['v-1'], default_value_target: ['t-1'] },
+      }),
+    );
+    assert.equal('default_value' in (changes.config ?? {}), false);
+    assert.equal('default_value_target' in (changes.config ?? {}), false);
   });
 });
 
@@ -259,12 +387,16 @@ describe('shouldSetLinkDefaultOverride — только для унаследо�
 // Находки вехи 0, закрытые в вехе 4 (задача 77e7cafd)
 // ---------------------------------------------------------------------------
 
-describe('scalarDefaultPayload — скалярный дефолт для override (2d4b43df)', () => {
+describe('scalarDefaultPayload — скалярный дефолт для override', () => {
   it('строки, числа и булевы проходят; null — сброс', () => {
     assert.equal(scalarDefaultPayload('Москва'), 'Москва');
     assert.equal(scalarDefaultPayload(42), 42);
     assert.equal(scalarDefaultPayload(false), false);
     assert.equal(scalarDefaultPayload(null), null);
+  });
+
+  it('пустая строка — тоже сброс (осмысленного дефолта не несёт)', () => {
+    assert.equal(scalarDefaultPayload(''), null);
   });
 
   it('массивы, объекты и undefined — null (недопустимое значение)', () => {
@@ -274,7 +406,7 @@ describe('scalarDefaultPayload — скалярный дефолт для overri
   });
 });
 
-describe('defaultValueChanged — override только при реальном изменении (2d4b43df)', () => {
+describe('defaultValueChanged — override только при реальном изменении', () => {
   it('изменённое значение — true', () => {
     assert.equal(
       defaultValueChanged(makeRow({ defaultValue: 'Москва', initialDefaultValue: null })),

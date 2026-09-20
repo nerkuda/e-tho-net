@@ -37,6 +37,16 @@
  * — с подтверждением по правилу единого жизненного цикла
  * (`links_becoming_structural`).
  *
+ * Колонка «Значение по умолчанию» каждой строки таблиц — редактор значения
+ * (0.8.2, ADR «дефолт свойства живёт на привязке», тех.проект 43870285):
+ * заполнено — дефолт этой привязки (`type_property_overrides.default_value`,
+ * `setPropertyDefaultOverride`), пусто — при создании мысли действует общее
+ * значение стороны (подсказка — в тултипе пустой ячейки). Режимов
+ * «(общее)»/«частное» больше нет. Общие значения — под колонками: у скаляра
+ * одно поле «Значение по умолчанию» (`config.default_value`), у свойства-связи
+ * два — «Общее для источников» (`config.default_value`) и «Общее для
+ * назначений» (`config.default_value_target`).
+ *
  * Deletion paths:
  *   * scalar property — refused with 409 while bound or filled; the editor
  *     shows `types_count` / `values_count` and a hint about the cleanup
@@ -86,7 +96,6 @@ import {
   resolveLinkTypeVisual,
   typeSearchVisibleIds,
   type FlatTypeRow,
-  expandTypeIdsToSubtree,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
@@ -575,34 +584,23 @@ export interface TypeRowDraft {
   id: string | null;
   thoughtTypeId: string;
   required: boolean;
+  /** Дефолт ЭТОЙ привязки (`type_property_overrides.default_value`; 0.8.2):
+   *  для свойства-связи — набор id целей, для скаляра — значение по виду
+   *  свойства. `null` — собственного дефолта нет, при создании мысли
+   *  действует общее значение стороны привязки. */
   defaultValue: unknown;
   /** Сторона привязки для свойства-связи (`source`/`target`) — для скаляра
    *  всегда `null`. Сохраняется в `type_properties.side`. */
   side: 'source' | 'target' | null;
-  /** Id типа, НА КОТОРОМ определена привязка (`defined_on` эффективного
-   *  списка). Равен `thoughtTypeId` — собственная привязка; иной id —
-   *  унаследованная (её per-type дефолт правится через
-   *  `setPropertyDefaultOverride`); `null` — строка ещё не сохранена
-   *  (собственная после apply). */
-  definedOn: string | null;
   /** Снимок текущего состояния на сервере — для отслеживания изменений
    *  при `apply`. */
   dirty: boolean;
   /**
-   * Снимок значения по умолчанию на момент загрузки строки (ошибка 2d4b43df):
-   * per-type override шлётся только когда дефолт реально менялся. Не задан у
-   * строк, добавленных вручную (они только создаются — override для них не
-   * существует).
+   * Снимок дефолта привязки на момент загрузки строки: override шлётся только
+   * когда дефолт реально менялся. Не задан у строк, добавленных вручную
+   * (они только создаются — override для них ещё не существует).
    */
   initialDefaultValue?: unknown;
-  /**
-   * Задан ли частный (per-type) дефолт на сервере (`overridden_here`
-   * эффективного списка; ошибка e6d92dbf). Режим колонки «Значение по
-   * умолчанию»: `false` — «(общее)» (глобальное значение справочника),
-   * `true` — «частное» (редактор значения + сброс). Имеет смысл только для
-   * унаследованных привязок — у собственных частного дефолта не существует.
-   */
-  overriddenHere: boolean;
 }
 
 /** Единый черновик единого диалога (задача 09201bd4, спека 465495a9). */
@@ -631,9 +629,12 @@ export interface PropertyDraft {
   linkWidth: number | null;
   showOnMap: boolean;
   blocksTargetDeletion: boolean;
-  /** Значение по умолчанию для скаляра (`unknown`, см. типы `PropertyConfig.default_value`)
-   *  и для свойства-связи (`string[] | null`). */
+  /** Общее значение стороны **источников** (для скаляра — единственное):
+   *  `config.default_value` справочника (0.8.2). */
   defaultValue: unknown;
+  /** Общее значение стороны **назначений** свойства-связи —
+   *  `config.default_value_target` (0.8.2); у скаляра не используется. */
+  defaultValueTarget: unknown;
   /** Строки таблиц «Типы мыслей» / «Типы источников» / «Типы назначений». */
   typeRows: TypeRowDraft[];
 }
@@ -649,20 +650,11 @@ function applyLinkTypeToDraft(lt: LinkType, draft: PropertyDraft): void {
   draft.linkWidth = lt.width ?? null;
 }
 
-/** True, когда привязка строки УНАСЛЕДОВАНА (определена на типе-предке) и её
- *  per-type дефолт целей можно править через `setPropertyDefaultOverride`.
- *  Собственные привязки — включая только что созданные (`definedOn: null`) —
- *  сервер отклоняет с 422 «собственные свойства правятся в справочнике»
- *  (ошибка 9f579e69: безусловный вызов ронял apply). */
-export function shouldSetLinkDefaultOverride(row: TypeRowDraft): boolean {
-  return row.definedOn !== null && row.definedOn !== row.thoughtTypeId;
-}
-
 /**
- * Изменилось ли значение по умолчанию строки относительно серверного снимка
- * (ошибка 2d4b43df): override шлётся только при реальном изменении — правка
- * одного «обязательного» не должна создавать лишний override. Без снимка
- * (строка добавлена вручную) — изменений по определению нет.
+ * Изменился ли дефолт строки относительно серверного снимка: override шлётся
+ * только при реальном изменении — правка одного «обязательного» не должна
+ * создавать лишний override. Без снимка (строка добавлена вручную) —
+ * изменений по определению нет: у неё нет серверного состояния.
  */
 export function defaultValueChanged(row: TypeRowDraft): boolean {
   if (row.initialDefaultValue === undefined) return false;
@@ -672,34 +664,49 @@ export function defaultValueChanged(row: TypeRowDraft): boolean {
   );
 }
 
-/** Режим колонки «Значение по умолчанию» (ошибка e6d92dbf): «(общее)» —
- *  действует глобальный дефолт справочника, «частное» — per-type override.
- *  Чистая — юнит-тест property-manager-apply.test.ts. */
-export type DefaultMode = 'common' | 'private';
-
-export function defaultModeFor(row: TypeRowDraft): DefaultMode {
-  return row.overriddenHere ? 'private' : 'common';
+/**
+ * Операция записи дефолта привязки (`etn.types.setPropertyDefaultOverride`,
+ * 0.8.2). Строка несёт id типа и (для сохранённых привязок) id привязки: у
+ * новой строки (`row.id === null`) override пишется после `attach`.
+ */
+export interface DefaultOverrideOp {
+  row: TypeRowDraft;
+  /** Тело `setPropertyDefaultOverride`: `string[]` целей для связи, скаляр
+   *  по виду значения, либо `null` — сброс override. */
+  value: string | number | boolean | string[] | null;
 }
 
 /**
- * Переключает режим дефолта строки (ошибка e6d92dbf). «(общее)» сбрасывает
- * значение в `null` (apply отправляет `null` → сброс override) и помечает
- * строку грязной; «частное» оставляет текущее значение как старт редактора
- * (override создаётся только если значение реально изменилось — см.
- * {@link defaultValueChanged}).
+ * Операции записи дефолтов привязок из черновика (0.8.2, ADR «дефолт свойства
+ * живёт на привязке»): пишется только то, что реально меняется — у загруженных
+ * строк по снимку {@link defaultValueChanged}, у новых (id ещё нет) лишь
+ * заполненный дефолт — сразу после создания привязки. Строка «обязательное»
+ * без правки дефолта операции не порождает. Чистая — юнит-тест
+ * (`property-manager-apply.test.ts`, приёмочный пример тех.проекта 43870285).
  */
-export function setDefaultMode(row: TypeRowDraft, mode: DefaultMode): void {
-  row.overriddenHere = mode === 'private';
-  if (mode === 'common') {
-    row.defaultValue = null;
+export function collectDefaultOverrideOps(
+  rows: readonly TypeRowDraft[],
+  isLink: boolean,
+): DefaultOverrideOp[] {
+  const payloadOf = (row: TypeRowDraft): string | number | boolean | string[] | null =>
+    isLink ? linkDefaultPayload(row.defaultValue) : scalarDefaultPayload(row.defaultValue);
+  const ops: DefaultOverrideOp[] = [];
+  for (const row of rows) {
+    if (row.id === null) {
+      const value = payloadOf(row);
+      if (value !== null) ops.push({ row, value });
+      continue;
+    }
+    if (!defaultValueChanged(row)) continue;
+    ops.push({ row, value: payloadOf(row) });
   }
-  row.dirty = true;
+  return ops;
 }
 
 /**
  * Добавляет к строкам таблицы привязок новые строки для `picked` типов
- * (ошибка e6d92dbf — мультивыбор в пикере «Добавить тип»): дубли той же
- * стороны пропускаются. Чистая — юнит-тест.
+ * (мультивыбор в пикере «Добавить тип»): дубли той же стороны пропускаются.
+ * Чистая — юнит-тест.
  */
 export function mergePickedTypeRows(
   existing: readonly TypeRowDraft[],
@@ -717,9 +724,7 @@ export function mergePickedTypeRows(
       required: false,
       defaultValue: null,
       side,
-      definedOn: null,
       dirty: true,
-      overriddenHere: false,
     });
   }
   return fresh;
@@ -728,8 +733,7 @@ export function mergePickedTypeRows(
 /**
  * Преобразует черновое значение колонки «Значение по умолчанию» в формат
  * `etn.types.setPropertyDefaultOverride` для свойства-связи: `string[]`
- * (набор id целей) или `null` (очистить/сброс override). Экспортирована для
- * юнит-теста (ошибка e6d92dbf — режим «(общее)» сбрасывает override).
+ * (набор id целей) или `null` (пусто/сброс override).
  */
 export function linkDefaultPayload(value: unknown): string[] | null {
   if (Array.isArray(value)) {
@@ -740,53 +744,14 @@ export function linkDefaultPayload(value: unknown): string[] | null {
 }
 
 /**
- * Человекочитаемое глобальное значение дефолта для подписи режима «(общее)»
- * (ошибка e6d92dbf): `null`, когда значения нет; набор целей — со склонением.
- * Чистая — юнит-тест.
- */
-export function formatGlobalDefault(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (Array.isArray(value)) {
-    const n = value.length;
-    const form =
-      n % 10 === 1 && n % 100 !== 11
-        ? 'цель'
-        : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)
-          ? 'цели'
-          : 'целей';
-    return `${n} ${form}`;
-  }
-  if (typeof value === 'boolean') return value ? 'да' : 'нет';
-  return String(value);
-}
-
-/**
- * Read-only подпись колонки «Значение по умолчанию» для собственной привязки
- * (ошибка 2d4b43df): действует глобальное значение справочника, колонка
- * показывает его и подсказкой называет поле, которым оно правится.
- */
-function buildOwnDefaultLabel(value: unknown, tooltip: string): HTMLElement {
-  const text =
-    value === null || value === undefined
-      ? '(общее)'
-      : Array.isArray(value)
-        ? `(${value.length} — общее)`
-        : typeof value === 'boolean'
-          ? `${value ? 'да' : 'нет'} (общее)`
-          : `${String(value)} (общее)`;
-  const label = span(text, 'muted prop-default-own');
-  setTooltip(label, tooltip);
-  return label;
-}
-
-/**
- * Значение скалярного дефолта для `setPropertyDefaultOverride` (2d4b43df):
- * string/number/boolean или null (сброс); прочее — null.
+ * Значение скалярного дефолта для `setPropertyDefaultOverride`:
+ * string/number/boolean или null (пусто/сброс); пустая строка — тоже пусто
+ * (осмысленного дефолта она не несёт, а override с `''` подавил бы общее
+ * значение стороны); прочее — null.
  */
 export function scalarDefaultPayload(value: unknown): string | number | boolean | null {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
+  if (typeof value === 'string') return value === '' ? null : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
   return null;
 }
 
@@ -818,11 +783,12 @@ export async function syncLinkTypeParent(
   await etn.types.updateLinkType(networkId, ltId, { parent_id: nextParent }, lt.version);
 }
 
-/** Кросс-фильтр типов для поля «Значение по умолчанию» свойства-связи:
+/** Кросс-фильтр типов для колонки «Значение по умолчанию» свойства-связи:
  *  список `thoughtTypeId` из **противоположной** стороны таблицы привязок.
  *  Пустой массив означает «фильтр не задан» (противоположная таблица пуста —
- *  можно выбирать любые мысли). Раскрытие иерархии делает вызывающий код
- *  через `expandTypeIdsToSubtree(store.state.thoughtTypes, …)`. */
+ *  можно выбирать любые мысли). Иерархию раскрывает сам чип-редактор
+ *  (`buildLinkValueEditor` → `expandTypeIdsToSubtree`), поэтому здесь
+ *  возвращаются «сырые» id типов. */
 function collectOppositeSideTypeIds(
   rows: readonly TypeRowDraft[],
   side: 'source' | 'target' | null,
@@ -999,10 +965,6 @@ export function openPropertyManagerEditor(
   const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
-  // Хост поля общего значения по умолчанию (скаляр — блок «Скалярное
-  // свойство», связь — блок «Свойство-связь»). Кнопка «править общее…» в
-  // колонке собственных привязок скроллит к нему (ошибка e6d92dbf).
-  let globalDefaultHost: HTMLElement | null = null;
 
   // Initial category — locked after the first write (требование 5a82c709).
   const lockedCategory: ValueCategory | null = lockCategoryFor(property?.value_type ?? null);
@@ -1026,6 +988,7 @@ export function openPropertyManagerEditor(
     showOnMap: false,
     blocksTargetDeletion: false,
     defaultValue: null,
+    defaultValueTarget: null,
     typeRows: [],
   };
 
@@ -1050,6 +1013,9 @@ export function openPropertyManagerEditor(
     draft.defaultValue = Array.isArray(property?.config?.default_value)
       ? [...(property?.config?.default_value as string[])]
       : null;
+    draft.defaultValueTarget = Array.isArray(property?.config?.default_value_target)
+      ? [...(property?.config?.default_value_target as string[])]
+      : null;
   } else {
     draft.choiceOn = draft.valueType === 'text' && (draft.config?.options?.length ?? 0) > 0;
     draft.optionsText = draft.choiceOn ? (draft.config?.options ?? []).join('\n') : '';
@@ -1069,9 +1035,7 @@ export function openPropertyManagerEditor(
         required: false,
         defaultValue: null,
         side: options.initialSide ?? null,
-        definedOn: null,
         dirty: true,
-        overriddenHere: false,
       },
     ];
   }
@@ -1191,7 +1155,6 @@ export function openPropertyManagerEditor(
         commitOn: 'change',
       })),
     );
-    globalDefaultHost = defaultsHost;
 
     const grid = twoColumns(typesHost, optionsHost);
     mainBodyHost.append(grid, defaultsHost);
@@ -1248,35 +1211,43 @@ export function openPropertyManagerEditor(
     parentRow.append(parentCombo.root, styleBtn);
     linkBodyHost.append(field('Родительский тип связи', parentRow));
 
-    // Глобальное значение по умолчанию свойства-связи (ошибка 2d4b43df):
-    // действует на СОБСТВЕННЫЕ привязки всех типов (сервер читает его из
-    // `config.default_value` справочника); per-type дефолт унаследованной
-    // привязки правится в колонке «Значение по умолчанию» таблиц ниже
-    // (override). Единое чип-поле выбора целей (инструкция a47947c8).
-    const defaultHost = div('form-stack');
-    const linkGlobalDefaults = buildLinkValueEditor({
-      networkId,
-      // Общее значение справочника: отбор целей по типам не задан — цели
-      // любые (создавать новые разрешено: тип/направление известны из
-      // определения свойства).
-      definition: { config: {}, required: false },
-      values: defaultLinkValues(draft.defaultValue),
-      save: async (next) => {
-        const ids = Array.isArray(next) ? (next as string[]) : [];
-        draft.defaultValue = ids.length > 0 ? ids : null;
-        return true;
-      },
-    });
-      defaultHost.append(
-        el(
-          'p',
-          'muted',
-          'Общее значение по умолчанию: создаётся для собственных привязок всех типов. Переопределение для отдельного типа — в колонке «Значение по умолчанию» таблиц.',
-        ),
-        linkGlobalDefaults,
-      );
-      globalDefaultHost = defaultHost;
-      linkBodyHost.append(defaultHost);
+    // Общие значения по сторонам (0.8.2): «Общее для источников» —
+    // `config.default_value`, «Общее для назначений» — `config.default_value_target`
+    // (только связь, без отбора по типам). Единое чип-поле выбора целей
+    // (инструкция a47947c8). Дефолт отдельной привязки правится в колонке
+    // «Значение по умолчанию» таблиц выше.
+    const sourceDefaultsHost = div('form-stack');
+    sourceDefaultsHost.append(
+      field(
+        'Общее для источников',
+        buildLinkValueEditor({
+          networkId,
+          // Отбор целей по типам не задан — цели любые.
+          definition: { config: {}, required: false },
+          values: defaultLinkValues(draft.defaultValue),
+          save: async (next) => {
+            draft.defaultValue = linkDefaultPayload(next);
+            return true;
+          },
+        }),
+      ),
+    );
+    const targetDefaultsHost = div('form-stack');
+    targetDefaultsHost.append(
+      field(
+        'Общее для назначений',
+        buildLinkValueEditor({
+          networkId,
+          definition: { config: {}, required: false },
+          values: defaultLinkValues(draft.defaultValueTarget),
+          save: async (next) => {
+            draft.defaultValueTarget = linkDefaultPayload(next);
+            return true;
+          },
+        }),
+      ),
+    );
+    linkBodyHost.append(twoColumns(sourceDefaultsHost, targetDefaultsHost));
 
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
@@ -1378,106 +1349,51 @@ export function openPropertyManagerEditor(
       reqCell.append(reqCheck);
       tr.append(reqCell);
 
-      // Значение по умолчанию (ошибка 2d4b43df — не сохранялось; ошибка
-      // e6d92dbf — режим «(общее)»/«частное» не был явным):
-      //  - унаследованная привязка (`definedOn` ≠ тип строки) — явный выбор
-      //    режима: «(общее)» (глобальный дефолт справочника) или «частное»
-      //    (per-type override через `setPropertyDefaultOverride` на apply);
-      //    для свойства-связи — унифицированный чип-пикер целей (инструкция
-      //    a47947c8, требование 3181389d), для скаляра — общий редактор
-      //    значения;
-      //  - собственная привязка — частного дефолта не существует (сервер
-      //    отвечает 422 на override): режим только «(общее)»; колонка честно
-      //    показывает глобальное значение справочника (`config.default_value`)
-      //    и кнопкой ведёт к полю, которым оно правится.
-      //  Фильтр по типам целей — из **противоположной** таблицы (с раскрытием
-      //  иерархии): типы «источников» ограничивают поиск целей в строках
-      //  «назначений», и наоборот. Если противоположная таблица пуста — фильтра
-      //  нет (можно выбирать любые мысли).
+      // Колонка «Значение по умолчанию» — редактор значения без режимов
+      // (0.8.2, ADR «дефолт свойства живёт на привязке»): заполнено — дефолт
+      // ЭТОЙ привязки (`setPropertyDefaultOverride` на apply), пусто — при
+      // создании мысли действует общее значение соответствующей стороны
+      // (подсказка в тултипе пустой ячейки). Свойство-связь — унифицированный
+      // чип-пикер целей (инструкция a47947c8): отбор целей по типам
+      // **противоположной** таблицы с раскрытием иерархии (раскрывает сам
+      // редактор; пустая противоположная таблица — цели любые). Скаляр —
+      // общий редактор значения.
       const dvCell = el('td');
-      if (shouldSetLinkDefaultOverride(row)) {
-        if (defaultModeFor(row) === 'common') {
-          // «(общее)»: глобальный дефолт справочника + переход в «частное».
-          const common = div('prop-default-mode');
-          const label = span('(общее)', 'muted prop-default-own');
-          const globalText = formatGlobalDefault(draft.defaultValue);
-          if (globalText !== null) label.append(span(` ${globalText}`, 'muted'));
-          setTooltip(
-            label,
-            'Унаследованная привязка: действует общее значение справочника. «Частное…» задаст значение только для этого типа.',
-          );
-          common.append(
-            label,
-            button('частное…', () => {
-              setDefaultMode(row, 'private');
-              renderTable();
-            }, 'btn small', 'Задать частное значение по умолчанию для этого типа'),
-          );
-          dvCell.append(common);
-        } else {
-          // «Частное»: редактор значения + возврат к «(общее)».
-          const host = div('prop-default-mode');
-          if (isLink) {
-            const oppositeIds = collectOppositeSideTypeIds(draft.typeRows, side);
-            const filterIds = oppositeIds.length > 0
-              ? expandTypeIdsToSubtree(store.state.thoughtTypes, oppositeIds)
-              : [];
-            // Частное значение по умолчанию — набор целей (bb67e546) чип-полем
-            // общего редактора значения-связи; отбор целей — по типам
-            // противоположной стороны с раскрытием иерархии (L21).
-            const linkDefaults = buildLinkValueEditor({
-              networkId,
-              definition: {
-                config: filterIds.length > 0 ? { allowed_target_type_ids: filterIds } : {},
-                required: false,
-              },
-              values: defaultLinkValues(row.defaultValue),
-              save: async (next) => {
-                const ids = Array.isArray(next) ? (next as string[]) : [];
-                row.defaultValue = ids.length > 0 ? ids : null;
-                row.dirty = true;
-                return true;
-              },
-            });
-            host.append(linkDefaults);
-          } else {
-            host.append(
-              buildValueEditor({
-                networkId,
-                definition: scalarDefaultDefinition(draft),
-                value: row.defaultValue,
-                save: async (next) => {
-                  row.defaultValue = next;
-                  row.dirty = true;
-                  return true;
-                },
-                commitOn: 'change',
-              }),
-            );
-          }
-          host.append(
-            button('общее', () => {
-              setDefaultMode(row, 'common');
-              renderTable();
-            }, 'btn small', 'Вернуть общее значение справочника (сбросить частное)'),
-          );
-          dvCell.append(host);
-        }
+      const defaultHost = div('prop-default-cell');
+      if (isLink) {
+        const oppositeIds = collectOppositeSideTypeIds(draft.typeRows, side);
+        defaultHost.append(
+          buildLinkValueEditor({
+            networkId,
+            definition: {
+              config: oppositeIds.length > 0 ? { allowed_target_type_ids: oppositeIds } : {},
+              required: false,
+            },
+            values: defaultLinkValues(row.defaultValue),
+            save: async (next) => {
+              row.defaultValue = linkDefaultPayload(next);
+              row.dirty = true;
+              return true;
+            },
+          }),
+        );
       } else {
-        // Собственная привязка: режим только «(общее)».
-        const own = div('prop-default-mode');
-        const label = buildOwnDefaultLabel(
-          draft.defaultValue,
-          'Собственная привязка: значение по умолчанию — общее значение справочника. Правится полем «Значение по умолчанию» блока ниже.',
+        defaultHost.append(
+          buildValueEditor({
+            networkId,
+            definition: scalarDefaultDefinition(draft),
+            value: row.defaultValue,
+            save: async (next) => {
+              row.defaultValue = next;
+              row.dirty = true;
+              return true;
+            },
+            commitOn: 'change',
+          }),
         );
-        own.append(
-          label,
-          button('править общее…', () => {
-            globalDefaultHost?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }, 'btn small', 'Общее значение правится полем «Значение по умолчанию» блока ниже'),
-        );
-        dvCell.append(own);
       }
+      if (isEmptyDefault(row.defaultValue)) defaultHost.append(emptyDefaultHint());
+      dvCell.append(defaultHost);
       tr.append(dvCell);
 
       // Удалить строку
@@ -1547,7 +1463,9 @@ export function openPropertyManagerEditor(
   /** Загрузка строк таблицы привязок для существующего свойства: список
    *  типов мыслей сети + для каждого типа запрос `listTypeProperties`
    *  фильтрует по нашему `property_id`. Для свойства-связи — две стороны
-   *  (`source`/`target`) согласно `type_properties.side`. */
+   *  (`source`/`target`) согласно `type_properties.side`. Зеркальные записи
+   *  (`mirrored`) пропускаются: у них нет физической привязки, к которой
+   *  писался бы override. */
   async function loadTypeRowsFor(propertyId: string): Promise<void> {
     const types = store.state.thoughtTypes;
     if (types.length === 0) return;
@@ -1558,16 +1476,20 @@ export function openPropertyManagerEditor(
           const defs = await etn.types.listTypeProperties(networkId, 'thought_type', tt.id);
           for (const def of defs) {
             if (def.property_id !== propertyId) continue;
+            if (def.mirrored === true) continue;
+            // Колонка показывает СОБСТВЕННЫЙ дефолт привязки: пусто — при
+            // создании мысли действует общее значение стороны (тултип
+            // пустой ячейки), поэтому эффективный дефолт без override сюда
+            // не подставляется.
+            const ownDefault = def.overridden_here === true ? def.default_value ?? null : null;
             collected.push({
               id: def.id,
               thoughtTypeId: tt.id,
               required: def.required === true,
-              defaultValue: def.default_value ?? null,
+              defaultValue: ownDefault,
               side: (def.side ?? null) as 'source' | 'target' | null,
-              definedOn: def.defined_on ?? null,
               dirty: false,
-              initialDefaultValue: def.default_value ?? null,
-              overriddenHere: def.overridden_here === true,
+              initialDefaultValue: ownDefault,
             });
           }
         } catch {
@@ -1760,24 +1682,24 @@ export function openPropertyManagerEditor(
   }
 
   /** Сохранение строк таблицы привязок. На входе — черновик; на выходе —
-   *  строки применены через `etn.types.createTypeProperty/updateTypeProperty/
-   *  removeTypeProperty`. Для свойства-связи дополнительно — `default_value`
-   *  через `etn.types.setPropertyDefaultOverride` (требование 3181389d,
-   *  инструкция a47947c8): набор целей `string[]` хранится в
-   *  `type_properties.default_value` и применяется созданием рёбер при
-   *  создании мысли. */
+   *  строки применены через `etn.types.createTypeProperty/updateTypeProperty`.
+   *  Дефолты привязок пишутся отдельными `etn.types.setPropertyDefaultOverride`
+   *  (0.8.2, ADR «дефолт свойства живёт на привязке»): чистой функцией
+   *  {@link collectDefaultOverrideOps} отбираются только реально изменившиеся
+   *  значения, а для добавленных строк — заполненный дефолт сразу после
+   *  создания привязки. Общие значения сторон уезжают в `PATCH /properties`
+   *  (тело собирает {@link buildUpdateChanges}). */
   async function applyTypeRows(propertyId: string): Promise<void> {
     if (draft.typeRows.length === 0 && !hasRemovedRows()) return;
     const isLink = draft.valueType === 'link';
+    const overrideByRow = new Map(
+      collectDefaultOverrideOps(draft.typeRows, isLink).map((op) => [op.row, op.value] as const),
+    );
     const ops: Promise<unknown>[] = [];
-    const created = new Map<string, TypeRowDraft>();
     for (const row of draft.typeRows) {
       if (row.id === null) {
-        // Создание собственной привязки. Per-type дефолт через
-        // `setPropertyDefaultOverride` здесь НЕ вызывается: сервер отвечает
-        // 422 «собственные свойства правятся в справочнике» (override — только
-        // для унаследованных). Прежний безусловный вызов ронял apply, и кнопка
-        // «Применить и закрыть» не давала эффекта (ошибка 9f579e69).
+        // Создание собственной привязки; её дефолт (если задан) пишется
+        // вторым вызовом — id привязки известен только после создания.
         ops.push(
           (async (): Promise<void> => {
             const def = await etn.types.createTypeProperty(
@@ -1791,10 +1713,19 @@ export function openPropertyManagerEditor(
                 ...(row.side !== null ? { side: row.side } : {}),
               },
             );
-            created.set(def.id, row);
+            const value = overrideByRow.get(row);
+            if (value !== undefined) {
+              await etn.types.setPropertyDefaultOverride(
+                networkId,
+                'thought_type',
+                row.thoughtTypeId,
+                def.id,
+                value,
+              );
+            }
           })(),
         );
-      } else if (row.dirty) {
+      } else if (row.dirty || overrideByRow.has(row)) {
         ops.push(
           (async (): Promise<void> => {
             await etn.types.updateTypeProperty(
@@ -1804,29 +1735,21 @@ export function openPropertyManagerEditor(
               row.id as string,
               { required: row.required },
             );
-            // Per-type дефолт — только для унаследованной привязки, и только
-            // если дефолт реально менялся (ошибка 2d4b43df): свойство-связь —
-            // набор целей, скаляр — значение по виду свойства; собственная
-            // привязка правится в справочнике (см. {@link
-            // shouldSetLinkDefaultOverride}).
-            if (shouldSetLinkDefaultOverride(row) && defaultValueChanged(row)) {
+            const value = overrideByRow.get(row);
+            if (value !== undefined) {
               await etn.types.setPropertyDefaultOverride(
                 networkId,
                 'thought_type',
                 row.thoughtTypeId,
                 row.id as string,
-                isLink
-                  ? linkDefaultPayload(row.defaultValue)
-                  : scalarDefaultPayload(row.defaultValue),
+                value,
               );
             }
           })(),
         );
       }
     }
-    await Promise.all(ops).catch((err) => {
-      throw err;
-    });
+    await Promise.all(ops);
   }
 
   /** Возвращает `true`, если среди исходных строк есть удалённые (мы их
@@ -1937,9 +1860,14 @@ function linkConfigFromDraft(draft: PropertyDraft, current?: PropertyConfig | nu
   cfg.direction = 'out';
   if (draft.showOnMap) cfg.show_on_map = true;
   if (draft.blocksTargetDeletion) cfg.blocks_target_deletion = true;
-  if (Array.isArray(draft.defaultValue) && draft.defaultValue.length > 0) {
-    cfg.default_value = [...new Set(draft.defaultValue as string[])];
-  }
+  // Общие значения сторон (0.8.2, ADR «дефолт свойства живёт на привязке»):
+  // «Общее для источников» — `config.default_value`, «Общее для назначений» —
+  // `config.default_value_target`. Пусто — ключ не пишется (PATCH config
+  // заменяет конфиг целиком, поэтому очистка поля снимает общее значение).
+  const sources = linkDefaultPayload(draft.defaultValue);
+  if (sources !== null) cfg.default_value = [...new Set(sources)];
+  const targets = linkDefaultPayload(draft.defaultValueTarget);
+  if (targets !== null) cfg.default_value_target = [...new Set(targets)];
   return cfg;
 }
 
@@ -2037,12 +1965,31 @@ export function buildConfig(
 // Value-type-specific default-value input
 // ---------------------------------------------------------------------------
 
+/** Пусто ли значение колонки «Значение по умолчанию» (0.8.2): `null`,
+ *  `undefined`, пустая строка или пустой набор целей. Пустое значение —
+ *  «действует общее значение стороны привязки». Чистая — юнит-тест. */
+export function isEmptyDefault(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value === '';
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/** Подпись пустой ячейки «Значение по умолчанию» (0.8.2): при создании мысли
+ *  берётся общее значение соответствующей стороны привязки. Общая для обоих
+ *  редакторов (диалог свойства и вкладка «Свойства» редактора типа). */
+export function emptyDefaultHint(): HTMLElement {
+  const hint = span('—', 'muted prop-default-hint');
+  setTooltip(hint, 'Пусто — при создании мысли используется общее значение стороны привязки.');
+  return hint;
+}
+
 /**
  * Значение по умолчанию свойства-связи как рёбра редактора: черновик хранит
  * набор id целей (`string[] | null`), общий редактор значения-связи работает
  * с формой `LinkPropertyValueItem[]` (подписи догружаются резолвом).
  */
-function defaultLinkValues(value: unknown): LinkPropertyValueItem[] {
+export function defaultLinkValues(value: unknown): LinkPropertyValueItem[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((v): v is string => typeof v === 'string' && v !== '')
