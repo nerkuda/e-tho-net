@@ -96,11 +96,24 @@ export interface DialogOptions {
   onMount?: (close: () => void) => void;
   /**
    * Called once when the dialog closes by ANY path — Esc, the × button, a
-   * footer button, or `closeDialog()` popping the stack: it fires from the
-   * backdrop's `remove` event, so removing the backdrop from the DOM by any
-   * means triggers it exactly once.
+   * footer button, a backdrop click, or `closeDialog()` popping the stack: it
+   * fires from the backdrop's `remove` event, so removing the backdrop from the
+   * DOM by any means triggers it exactly once.
    */
   onClose?: () => void;
+  /**
+   * Закрывать ли диалог кликом по подложке — по затемнённой области вне тела
+   * диалога (`.dialog-box`). По умолчанию `true`: клик мимо — такой же штатный
+   * путь закрытия, как Esc и ×, и снимает только верхний диалог стека
+   * (08-ui-spec.md §8.5 — «Esc и клик по подложке закрывают, как у остальных
+   * диалогов»). `false` — диалог закрывается только Esc, × и кнопками: для
+   * модальных окон, которые нельзя смахнуть случайным кликом.
+   *
+   * Клик по телу диалога (сам бокс и его содержимое) не закрывает диалог
+   * никогда; клик по подложке не всплывает дальше — панели, закрывающиеся
+   * кликом вне себя, его не видят.
+   */
+  closeOnBackdrop?: boolean;
   /**
    * Identity of the ENTITY this dialog edits (`thought-type:<id>`,
    * `property:<id>`; for an entity not created yet — the session key
@@ -350,6 +363,22 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onCtrlShiftEnter);
 
+  // Клик по подложке мимо тела диалога — штатное закрытие, как Esc (ошибка
+  // cc28ee10): снимается только верхний диалог стека. Клик по самому боксу и
+  // его содержимому доходит как `target`, отличный от подложки, и диалог не
+  // закрывает. Событие гасится и не всплывает к холсту/панелям, закрывающимся
+  // кликом вне себя: иначе клик по подложке закрыл бы ещё и панель под
+  // диалогом (`isInsideDialog` видит узел, уже снятый со стека).
+  const onBackdropClick = (event: MouseEvent): void => {
+    if (opts.closeOnBackdrop === false) return;
+    if (event.target !== backdrop) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  };
+  backdrop.addEventListener('click', onBackdropClick);
+
   backdrop.append(box);
   document.body.append(backdrop);
   stack.push(backdrop);
@@ -360,6 +389,7 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onConfirm);
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
+    backdrop.removeEventListener('click', onBackdropClick);
     opts.onClose?.();
   });
   opts.onMount?.(close);
