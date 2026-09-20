@@ -22,7 +22,10 @@
  *    id свойства). ИЗМЕНЕНИЕ САМОГО ТИПА этим клиентом идёт своим каналом
  *    {@link notifyTypeChanged} — подпись и оформление типа резолвятся из
  *    каталога, который производитель к моменту уведомления уже перечитал
- *    (ошибка 8dd5dfed).
+ *    (ошибки 8dd5dfed, 7dfad7d4). Удаление типа ({@link typeDeletedFacts})
+ *    шлётся тем же каналом: редактор типов мыслей удаляет тип сам, а
+ *    менеджер свойств — тип связи вместе со свойством-связью
+ *    (`DELETE /properties/{id}`, единый жизненный цикл 0.8.1).
  *
  * Гейт отсекает изменения ЧУЖИХ типов: перечитывается только набор,
  * зависящий от изменённого определения. Формула «тип накрыт» повторяет
@@ -188,12 +191,16 @@ export function notifyPropertyRegistryChanged(
 const localTypeListeners = new Set<(facts: TypeChangeFacts) => void>();
 
 /**
- * Подписка на локальное изменение САМОГО типа (ошибка 8dd5dfed):
- * `screens/type-manager.ts` пишет `PATCH /thought-types/{id}` и перечитывает
- * каталог типов сам, а своё realtime-эхо до рендерера не доходит (G8 applier).
- * Отличие от {@link onTypeDefinitionsChanged}: тот канал несёт только владельца
- * и говорит про НАБОР определений свойств типа («Свойства» редактора), а этот —
- * про подпись и оформление самого типа (шапка редактора) и его место в дереве.
+ * Подписка на локальное изменение САМОГО типа (ошибки 8dd5dfed, 7dfad7d4):
+ * производители — `screens/type-manager.ts` (`PATCH /thought-types/{id}`,
+ * удаление типа мысли) и `screens/property-manager.ts` (`PATCH /properties/{id}`
+ * и `DELETE /properties/{id}` свойства-связи правят/удаляют связанный
+ * `link_type`; `PATCH /link-types/{id}` — смена родителя). Каталог типов каждый
+ * производитель перечитывает сам, а своё realtime-эхо до рендерера не доходит
+ * (G8 applier). Отличие от {@link onTypeDefinitionsChanged}: тот канал несёт
+ * только владельца и говорит про НАБОР определений свойств типа («Свойства»
+ * редактора), а этот — про подпись и оформление самого типа (шапка редактора),
+ * его место в дереве и удаление.
  */
 export function onTypeChanged(listener: (facts: TypeChangeFacts) => void): () => void {
   localTypeListeners.add(listener);
@@ -203,11 +210,11 @@ export function onTypeChanged(listener: (facts: TypeChangeFacts) => void): () =>
 }
 
 /**
- * Уведомляет подписчиков: САМ тип изменён ЭТИМ клиентом (`facts` строит
- * {@link typeUpdateFacts} из тела правки). Каталог типов к этому моменту уже
- * перечитан производителем, поэтому открытый редактор перерисовывает шапку
- * сразу — без ожидания перезапроса каталога (realtime-путь, см.
- * `applyTypeChange` в `editor/editor.ts`).
+ * Уведомляет подписчиков: САМ тип изменён или удалён ЭТИМ клиентом (`facts`
+ * строит {@link typeUpdateFacts} из тела правки либо {@link typeDeletedFacts}).
+ * Каталог типов к этому моменту уже перечитан производителем, поэтому открытый
+ * редактор перерисовывает шапку сразу — без ожидания перезапроса каталога
+ * (realtime-путь, см. `applyTypeChange` в `editor/editor.ts`).
  */
 export function notifyTypeChanged(facts: TypeChangeFacts): void {
   for (const listener of localTypeListeners) listener(facts);
@@ -458,6 +465,44 @@ export function typeUpdateFacts(owner: DefinitionOwner, changes: object): TypeCh
     setChanged: 'parent_id' in patch,
     visualChanged: visualKeys.some((key) => key in patch),
   };
+}
+
+/**
+ * Поля ТИПА СВЯЗИ в теле `PATCH /properties/{id}` свойства-связи (ошибка
+ * 7dfad7d4): единый жизненный цикл 0.8.1 пишет пару имён и оформление линии в
+ * связанный `link_type` (серверный `updateNetworkProperty`, блок `linkUpdate`).
+ * Имена ключей запроса свойства не совпадают с `PATCH /link-types/{id}`
+ * (`link_color`/`link_style`/`link_width` против `color`/`style`/`width`) —
+ * приводим к каноническим, чтобы {@link typeUpdateFacts} увидел те же
+ * «визуальные» поля. Ключа нет в теле — поле не менялось.
+ */
+export function linkTypeFieldsFromPropertyChanges(changes: object): Record<string, unknown> {
+  const patch = changes as Record<string, unknown>;
+  const rename: ReadonlyArray<readonly [string, string]> = [
+    ['name_forward', 'name_forward'],
+    ['name_reverse', 'name_reverse'],
+    ['link_color', 'color'],
+    ['link_style', 'style'],
+    ['link_width', 'width'],
+  ];
+  const fields: Record<string, unknown> = {};
+  for (const [from, to] of rename) {
+    if (from in patch) fields[to] = patch[from];
+  }
+  return fields;
+}
+
+/**
+ * Факты об удалении типа ЭТИМ клиентом (ошибка 7dfad7d4): локальные пути
+ * удаления типа мысли (`screens/type-manager.ts`, `removeRow`) и типа связи
+ * вместе с его свойством-связью (`screens/property-manager.ts`, `DELETE
+ * /properties`). Совпадают с realtime-`*-type.deleted`
+ * ({@link typeChangeFacts}): вместе с типом уходит место в цепочке наследования
+ * (`setChanged`) и его подпись/оформление (`visualChanged`). Каталог типов к
+ * моменту уведомления производителем уже перечитан — удалённого типа в нём нет.
+ */
+export function typeDeletedFacts(owner: DefinitionOwner): TypeChangeFacts {
+  return { owner, deleted: true, setChanged: true, visualChanged: true };
 }
 
 /**

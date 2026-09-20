@@ -435,11 +435,17 @@ describe('проводка локального канала изменения 
 
     const editor = read('editor/editor.ts');
     assert.ok(
-      /onTypeChanged\(\(facts\) => \{\s*applyLocalTypeChange\(facts\);\s*\}\);/.test(editor),
+      /onTypeChanged\(\(facts\) => \{[\s\S]{0,120}?applyLocalTypeChange\(facts\);\s*\}\);/.test(editor),
       'редактор подписан на локальное изменение типа',
     );
+    // Канал расширен удалением типа (ошибка 7dfad7d4): подписчик сначала
+    // помечает тип исчезнувшим (как realtime-путь), затем применяет факты.
     assert.ok(
-      /function applyLocalTypeChange\(facts: TypeChangeFacts\): void \{[\s\S]{0,400}?repaintEditorHeader\(\)/.test(
+      /onTypeChanged\(\(facts\) => \{\s*if \(facts\.deleted\) markTypeDeleted\(facts\.owner\);/.test(editor),
+      'локальное удаление типа помечается до применения фактов',
+    );
+    assert.ok(
+      /function applyLocalTypeChange\(facts: TypeChangeFacts\): void \{[\s\S]{0,700}?repaintEditorHeader\(\)/.test(
         editor,
       ),
       'локальная правка перерисовывает шапку',

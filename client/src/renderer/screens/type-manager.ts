@@ -101,9 +101,15 @@ import {
   type FlatTypeRow,
 } from '../lib/type-tree.js';
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
-// Локальное уведомление открытого редактора об изменении набора свойств типа
-// (ошибка 74b94c26): своё realtime-эхо до рендерера не доходит.
-import { notifyTypeChanged, notifyTypeDefinitionsChanged, typeUpdateFacts } from '../lib/type-definitions.js';
+// Локальные уведомления открытого редактора об изменении набора свойств типа
+// (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
+// realtime-эхо до рендерера не доходит (G8 applier).
+import {
+  notifyTypeChanged,
+  notifyTypeDefinitionsChanged,
+  typeDeletedFacts,
+  typeUpdateFacts,
+} from '../lib/type-definitions.js';
 import {
   cacheAttachedRegistryRow,
   canReorderBinding,
@@ -518,6 +524,13 @@ export function showThoughtTypesDialog(): void {
       await etn.types.removeThoughtType(networkId, type.id, type.version, true);
       await refreshThoughtTypes();
       scheduleRefresh();
+      // Удалённый тип уходит из цепочки типов показанной сущности (ошибка
+      // 7dfad7d4): открытый редактор обязан пометить тип исчезнувшим,
+      // перечитать «Свойства» и отвязать показанную сущность. Своё
+      // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+      // локально — каталог перечитан строкой выше, значит шапку можно
+      // перерисовать сразу и по свежим данным.
+      notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: type.id }));
       // Удалённый тип не может остаться текущей строкой.
       if (currentRowId === type.id) currentRowId = null;
       onChanged();

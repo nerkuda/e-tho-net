@@ -599,10 +599,13 @@ export function mountEditor(editorHost: HTMLElement): void {
     onPropertyRegistryChanged((facts) => {
       applyDefinitionChange(facts);
     });
-    // Локальная правка САМОГО типа (ошибка 8dd5dfed): редактор типа в этом же
-    // клиенте перечитывает каталог сам и уведомляет подписчиков — шапка
-    // открытого редактора перерисовывается сразу.
+    // Локальная правка САМОГО типа (ошибки 8dd5dfed, 7dfad7d4): редактор типа
+    // в этом же клиенте перечитывает каталог сам и уведомляет подписчиков —
+    // шапка открытого редактора перерисовывается сразу. Удаление типа (тип
+    // мыслей или тип связи вместе со свойством-связью) приходит тем же каналом
+    // с `deleted: true` — помечаем тип исчезнувшим, как и realtime-путь.
     onTypeChanged((facts) => {
+      if (facts.deleted) markTypeDeleted(facts.owner);
       applyLocalTypeChange(facts);
     });
   }
@@ -897,14 +900,26 @@ function typeChangeAffectsShown(facts: TypeChangeFacts): boolean {
 }
 
 /**
- * Локальная правка типа ЭТИМ клиентом (ошибка 8dd5dfed, канал
- * `lib/type-definitions.ts` → `onTypeChanged`): редактор типа уведомляет
+ * Локальная правка/удаление типа ЭТИМ клиентом (ошибки 8dd5dfed, 7dfad7d4,
+ * канал `lib/type-definitions.ts` → `onTypeChanged`): производитель уведомляет
  * подписчиков после того, как сам перечитал каталог типов, поэтому шапка
  * перерисовывается сразу и по свежим данным — в отличие от realtime-пути
- * ({@link applyTypeChange}), который обновлённого каталога дожидается.
+ * ({@link applyTypeChange}), который обновлённого каталога дожидается. Состав
+ * реакции тот же, кроме этого ожидания: смена родителя перечитывает
+ * «Свойства», удаление собственного типа перечитывает отвязанную сущность,
+ * правка оформления перерисовывает шапку.
  */
 function applyLocalTypeChange(facts: TypeChangeFacts): void {
-  if (!typeChangeAffectsShown(facts)) return;
+  const ctx = renderCtx;
+  if (ctx === null || !typeChangeAffectsShown(facts)) return;
+  const ownTypeId = ctxTypeId(ctx);
+  // Удалён собственный тип показанной сущности: сервер отвязал саму сущность
+  // (`type_id = NULL`, `version + 1`) без отдельного события о ней — снимок в
+  // store устарел (см. {@link refreshShownEntityAfterTypeDetach}).
+  if (facts.deleted && ownTypeId !== null && ownTypeId === facts.owner.ownerId) {
+    refreshShownEntityAfterTypeDetach();
+  }
+  if (facts.setChanged) invalidateDefinitionDependentPanes();
   if (facts.visualChanged) repaintEditorHeader();
 }
 

@@ -102,11 +102,18 @@ import {
   type FlatTypeRow,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
-// Локальное уведомление открытого редактора об изменении набора свойств типа
-// (ошибка 74b94c26): своё realtime-эхо до рендерера не доходит.
+import { reloadTypeCatalogues } from '../realtime-ui.js';
+// Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
+// доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
+// правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
+// СВЯЗАННОГО ТИПА СВЯЗИ единым жизненным циклом свойства-связи (7dfad7d4).
 import {
+  linkTypeFieldsFromPropertyChanges,
   notifyPropertyRegistryChanged,
+  notifyTypeChanged,
   notifyTypeDefinitionsChanged,
+  typeDeletedFacts,
+  typeUpdateFacts,
 } from '../lib/type-definitions.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
@@ -233,12 +240,15 @@ export function showPropertyManagerDialog(): void {
     // `links_becoming_structural` ответа DELETE и пере-озвучивается тостом.
     let linksBecoming = 0;
     let linkEstimateOk = false;
+    // Тип связи, который уйдёт вместе со свойством (единый жизненный цикл
+    // 0.8.1): он нужен и для оценки числа рёбер, и для локального уведомления
+    // открытого редактора после удаления (ошибка 7dfad7d4).
+    const linkTypeId = isLink ? property.config?.link_type_id : undefined;
     if (isLink) {
       try {
         const counts = await etn.types.getLinkTypeCounts(networkId);
-        const ltId = property.config?.link_type_id;
-        if (ltId !== undefined && ltId !== null && ltId !== '') {
-          linksBecoming = counts[ltId] ?? 0;
+        if (linkTypeId !== undefined && linkTypeId !== null && linkTypeId !== '') {
+          linksBecoming = counts[linkTypeId] ?? 0;
           linkEstimateOk = true;
         }
       } catch {
@@ -248,9 +258,8 @@ export function showPropertyManagerDialog(): void {
     let prompt: string;
     if (isLink) {
       const lt = (() => {
-        const ltId = property.config?.link_type_id;
-        return ltId !== undefined && ltId !== null && ltId !== ''
-          ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
+        return linkTypeId !== undefined && linkTypeId !== null && linkTypeId !== ''
+          ? store.state.linkTypes.find((t) => t.id === linkTypeId) ?? null
           : null;
       })();
       const names = lt !== null ? `«${lt.name_forward} / ${lt.name_reverse}»` : `«${property.name}»`;
@@ -273,6 +282,23 @@ export function showPropertyManagerDialog(): void {
       // покрывать его зеркалом. Своё realtime-эхо до рендерера не доходит
       // (G8 applier), поэтому уведомляем локально.
       notifyPropertyRegistryChanged(property.id);
+      // Свойство-связь уносит и связанный тип связи (единый жизненный цикл
+      // 0.8.1, серверный `deleteProperty` → `deleteLinkType` с force). Открытый
+      // редактор показанной СВЯЗИ этого типа обязан пометить тип исчезнувшим и
+      // перечитать саму связь (её `type_id` сервер обнулил, отдельного события
+      // о связи не шлёт) — ошибка 7dfad7d4. Каталог типов перечитываем ДО
+      // уведомления: шапка редактора резолвит подпись и линию из него, а своё
+      // realtime-эхо (которое перечитало бы каталог) отброшено. Признак
+      // реального удаления типа — числовой `links_becoming_structural` в ответе
+      // (сервер считает его только для удалённого link_type).
+      if (
+        typeof result.links_becoming_structural === 'number' &&
+        typeof linkTypeId === 'string' &&
+        linkTypeId !== ''
+      ) {
+        await reloadTypeCatalogues();
+        notifyTypeChanged(typeDeletedFacts({ ownerType: 'link_type', ownerId: linkTypeId }));
+      }
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
       // для скаляров) — тостом подтверждаем выполнение.
@@ -597,26 +623,31 @@ export function scalarDefaultPayload(value: unknown): string | number | boolean 
  * но не `parent_id` — иерархия типов связей правится отдельным служебным
  * `PATCH /link-types/{id}` (0.8.1, задача d7177d1d). При создании свойства
  * родитель уходит в `POST /properties` (`parent_link_type_id`).
+ *
+ * Возвращает `true`, когда `PATCH /link-types/{id}` действительно отправлен:
+ * вызывающий код строит по этому факту локальное уведомление открытого
+ * редактора об изменении типа связи (ошибка 7dfad7d4).
  */
 export async function syncLinkTypeParent(
   networkId: string,
   property: RegistryRow,
   draft: PropertyDraft,
-): Promise<void> {
-  if (draft.valueType !== 'link') return;
+): Promise<boolean> {
+  if (draft.valueType !== 'link') return false;
   const ltId = property.config?.link_type_id;
-  if (ltId === undefined || ltId === null || ltId === '') return;
+  if (ltId === undefined || ltId === null || ltId === '') return false;
   let lt = store.state.linkTypes.find((t) => t.id === ltId) ?? null;
   if (lt === null) {
     try {
       lt = await etn.types.getLinkType(networkId, ltId);
     } catch {
-      return;
+      return false;
     }
   }
   const nextParent = draft.parentLinkTypeId;
-  if ((lt.parent_id ?? null) === (nextParent ?? null)) return;
+  if ((lt.parent_id ?? null) === (nextParent ?? null)) return false;
   await etn.types.updateLinkType(networkId, ltId, { parent_id: nextParent }, lt.version);
+  return true;
 }
 
 /** Кросс-фильтр типов для колонки «Значение по умолчанию» свойства-связи:
@@ -1649,7 +1680,28 @@ export function openPropertyManagerEditor(
         }
         // Родительский тип связи (ошибка d56c1ae4): PATCH /properties его не
         // принимает — иерархия правится отдельным PATCH /link-types/{id}.
-        await syncLinkTypeParent(networkId, current, draft);
+        const parentChanged = await syncLinkTypeParent(networkId, current, draft);
+        // Тип связи свойства-связи — часть единого жизненного цикла (0.8.1):
+        // PATCH /properties применил пару имён и оформление линии к связанному
+        // `link_type`, а родителя — `syncLinkTypeParent` строкой выше. Открытый
+        // редактор показанной СВЯЗИ этого типа обязан перерисовать шапку —
+        // ошибка 7dfad7d4 (симметрично правке самого типа, 5d41589). Своё
+        // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+        // локально, а каталог типов перечитываем ДО уведомления: шапка
+        // резолвит подпись и вид линии из него.
+        const linkTypeFields = linkTypeFieldsFromPropertyChanges(changes);
+        if (parentChanged) linkTypeFields.parent_id = draft.parentLinkTypeId;
+        const linkTypeId = current.config?.link_type_id;
+        if (
+          Object.keys(linkTypeFields).length > 0 &&
+          typeof linkTypeId === 'string' &&
+          linkTypeId !== ''
+        ) {
+          await reloadTypeCatalogues();
+          notifyTypeChanged(
+            typeUpdateFacts({ ownerType: 'link_type', ownerId: linkTypeId }, linkTypeFields),
+          );
+        }
         // Применим привязки к типам мыслей.
         await applyTypeRows(current.id);
       }
