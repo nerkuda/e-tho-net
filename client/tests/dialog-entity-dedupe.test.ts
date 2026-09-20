@@ -1,7 +1,8 @@
 /**
  * Тесты защиты от повторного открытия редактора одной сущности
- * (ошибка c2d243bb «Двойной клик по строке типа открывает два редактора
- * одного типа»).
+ * (ошибки c2d243bb «Двойной клик по строке типа открывает два редактора
+ * одного типа» и 74d9b4ed «Повторный клик по «Добавить» открывает два
+ * редактора новой сущности»).
  *
  * Что закрепляем:
  *   1. Механизм каркаса диалогов (`lib/dialog.ts`): диалог с `dedupeKey`
@@ -13,9 +14,13 @@
  *      подключение в `showThoughtTypeEditor` / `openPropertyManagerEditor` —
  *      проверка повторного открытия стоит до сборки тела диалога, а сам факт
  *      открытия регистрируется через `dedupeKey`.
- *   3. Регрессии: клик по строке списка по-прежнему открывает редактор
- *      переданного типа; «новый тип»/«новое свойство» (id ещё нет) не
- *      дедуплицируются; понятие текущей строки списка типов (`currentRowId`)
+ *   3. Редактор ЕЩЁ НЕ созданной сущности тоже дедуплицируется (74d9b4ed):
+ *      `thought-type:new` / `property:new` — сеансовый ключ на все точки
+ *      создания; повторный вход поднимает открытый редактор, после закрытия
+ *      ключ свободен, разные виды сосуществуют, «Записать» (keepOpen) ключ не
+ *      снимает.
+ *   4. Регрессии: клик по строке списка по-прежнему открывает редактор
+ *      переданного типа; понятие текущей строки списка типов (`currentRowId`)
  *      не затронуто.
  *
  * Дом — минимальный шим (конвенция соседних тестов, см. `add-dialog.test.ts`):
@@ -312,11 +317,105 @@ describe('raiseOpenDialog — повторное открытие редакто
   });
 });
 
-describe('ключи редакторов сущностей (c2d243bb)', () => {
+describe('ключи редакторов сущностей (c2d243bb, 74d9b4ed)', () => {
   it('ключ типа мысли и свойства — по id сущности', () => {
     assert.equal(thoughtTypeDialogKey('abc'), 'thought-type:abc');
     assert.equal(propertyDialogKey('xyz'), 'property:xyz');
     assert.notEqual(thoughtTypeDialogKey('abc'), propertyDialogKey('abc'));
+  });
+
+  it('ключ ещё не созданной сущности — сеансовый ключ вида', () => {
+    assert.equal(thoughtTypeDialogKey(null), 'thought-type:new');
+    assert.equal(propertyDialogKey(null), 'property:new');
+    assert.notEqual(thoughtTypeDialogKey(null), propertyDialogKey(null));
+    assert.notEqual(thoughtTypeDialogKey(null), thoughtTypeDialogKey('abc'));
+  });
+});
+
+describe('raiseOpenDialog — редактор ещё не созданной сущности (74d9b4ed)', () => {
+  it('повторное «Добавить» при открытом редакторе создания второй не создаёт', () => {
+    openDialog(thoughtTypeDialogKey(null), 'Новый тип мысли');
+    assert.equal(backdrops().length, 1, 'открыт ровно один редактор создания');
+
+    // Второй клик по «Добавить»/«Создать новый»: вызывающий сначала спрашивает
+    // каркас — диалог уже открыт, второй не создаётся.
+    assert.equal(
+      raiseOpenDialog(thoughtTypeDialogKey(null)),
+      true,
+      'открытый редактор создания поднят',
+    );
+    assert.equal(backdrops().length, 1, 'второй редактор создания не создан');
+    closeDialog();
+    assert.equal(backdrops().length, 0);
+  });
+
+  it('после закрытия ключ свободен — следующее «Добавить» открывает свежий редактор', () => {
+    openDialog(thoughtTypeDialogKey(null), 'Новый тип мысли');
+    closeDialog();
+    assert.equal(
+      raiseOpenDialog(thoughtTypeDialogKey(null)),
+      false,
+      'после закрытия редактора создания ключ снят',
+    );
+  });
+
+  it('редакторы разных видов (новый тип + новое свойство) сосуществуют', () => {
+    openDialog(thoughtTypeDialogKey(null), 'Новый тип мысли');
+    assert.equal(
+      raiseOpenDialog(propertyDialogKey(null)),
+      false,
+      'новый тип и новое свойство — разные ключи',
+    );
+    openDialog(propertyDialogKey(null), 'Новое свойство');
+    assert.equal(backdrops().length, 2, 'оба редактора создания открыты одновременно');
+    closeDialog();
+    closeDialog();
+    assert.equal(backdrops().length, 0);
+  });
+
+  it('ключ создания не мешает редактору существующей сущности', () => {
+    openDialog(thoughtTypeDialogKey(null), 'Новый тип мысли');
+    assert.equal(raiseOpenDialog(thoughtTypeDialogKey('t1')), false);
+    openDialog(thoughtTypeDialogKey('t1'), 'Тип t1');
+    assert.equal(backdrops().length, 2, 'редактор существующего типа открылся поверх создания');
+    closeDialog();
+    closeDialog();
+  });
+
+  it('«Записать» (keepOpen) не снимает ключ — он живёт до закрытия диалога', () => {
+    let clicks = 0;
+    const dialogBody = new ShimElement('div', 'dialog-body');
+    showDialog({
+      title: 'Новый тип мысли',
+      body: dialogBody as unknown as HTMLElement,
+      dedupeKey: thoughtTypeDialogKey(null),
+      buttons: [
+        { label: 'Отмена' },
+        {
+          label: 'Записать',
+          keepOpen: true,
+          onClick: () => {
+            clicks += 1;
+          },
+        },
+        { label: 'Применить и закрыть', primary: true, keepOpen: true },
+      ],
+    });
+    const backdrop = backdrops()[backdrops().length - 1]!;
+    const save = backdrop
+      .querySelectorAll('button')
+      .find((btn) => btn.textContent === 'Записать');
+    assert.ok(save !== undefined, 'кнопка «Записать» есть в диалоге');
+    (save as unknown as { emit: (type: string) => void }).emit('click');
+    assert.equal(clicks, 1, '«Записать» вызвала запись');
+    assert.equal(backdrops().length, 1, 'диалог остался открыт после «Записать»');
+    assert.equal(
+      raiseOpenDialog(thoughtTypeDialogKey(null)),
+      true,
+      'ключ создания остаётся занятым до закрытия',
+    );
+    closeDialog();
+    assert.equal(raiseOpenDialog(thoughtTypeDialogKey(null)), false, 'после закрытия ключ снят');
   });
 });
 
@@ -341,37 +440,38 @@ function source(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-describe('защита подключена в редакторах (c2d243bb)', () => {
+describe('защита подключена в редакторах (c2d243bb, 74d9b4ed)', () => {
   it('редактор типа мысли проверяет повторное открытие и регистрирует ключ', () => {
     const src = source(TYPE_MANAGER_SOURCE);
-    // Проверка стоит в начале функции — до захвата блокировки и сборки тела.
-    const guardIdx = src.indexOf('raiseOpenDialog(thoughtTypeDialogKey(type.id))');
+    // Проверка стоит в начале функции — до захвата блокировки и сборки тела,
+    // и работает в т.ч. для ещё не созданного типа (ключ `thought-type:new`).
+    const guardIdx = src.indexOf('raiseOpenDialog(thoughtTypeDialogKey(type?.id ?? null))');
     const lockIdx = src.indexOf("acquireOrShowBlocked('thought_type'", guardIdx);
     assert.ok(guardIdx > 0, 'нет проверки повторного открытия редактора типа');
     assert.ok(lockIdx > guardIdx, 'проверка должна стоять до захвата блокировки');
     assert.ok(
-      src.includes('dedupeKey: type !== null ? thoughtTypeDialogKey(type.id) : undefined'),
-      'диалог не регистрирует ключ сущности',
+      src.includes('dedupeKey: thoughtTypeDialogKey(type?.id ?? null)'),
+      'диалог не регистрирует ключ сущности (в т.ч. для нового типа)',
     );
     assert.ok(
-      src.includes('if (type !== null && raiseOpenDialog'),
-      'новый тип (без id) должен открываться свободно — условие только для существующего',
+      !src.includes('type !== null ? thoughtTypeDialogKey(type.id) : undefined'),
+      'новый тип не должен оставаться без ключа',
     );
   });
 
   it('редактор свойства проверяет повторное открытие и регистрирует ключ', () => {
     const src = source(PROPERTY_MANAGER_SOURCE);
-    const guardIdx = src.indexOf('raiseOpenDialog(propertyDialogKey(property.id))');
+    const guardIdx = src.indexOf('raiseOpenDialog(propertyDialogKey(property?.id ?? null))');
     const lockIdx = src.indexOf("acquireOrShowBlocked('property'", guardIdx);
     assert.ok(guardIdx > 0, 'нет проверки повторного открытия редактора свойства');
     assert.ok(lockIdx > guardIdx, 'проверка должна стоять до захвата блокировки');
     assert.ok(
-      src.includes('dedupeKey: property !== null ? propertyDialogKey(property.id) : undefined'),
-      'диалог свойства не регистрирует ключ сущности',
+      src.includes('dedupeKey: propertyDialogKey(property?.id ?? null)'),
+      'диалог свойства не регистрирует ключ сущности (в т.ч. для нового)',
     );
     assert.ok(
-      src.includes('if (property !== null && raiseOpenDialog'),
-      'новое свойство (без id) должно открываться свободно',
+      !src.includes('property !== null ? propertyDialogKey(property.id) : undefined'),
+      'новое свойство не должно оставаться без ключа',
     );
   });
 

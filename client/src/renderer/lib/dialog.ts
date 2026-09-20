@@ -103,12 +103,14 @@ export interface DialogOptions {
   onClose?: () => void;
   /**
    * Identity of the ENTITY this dialog edits (`thought-type:<id>`,
-   * `property:<id>`). Registered on the stack so {@link raiseOpenDialog} can
-   * find the already-open dialog of the same entity; the duplicate-open guard
-   * itself lives in the callers (they call `raiseOpenDialog(key)` BEFORE
-   * building the body, taking a lock or creating a promise — see
-   * `showThoughtTypeEditor` / `openPropertyManagerEditor`, ошибка c2d243bb).
-   * Dialogs without an entity identity leave it unset and always stack.
+   * `property:<id>`; for an entity not created yet — the session key
+   * `thought-type:new` / `property:new`, ошибка 74d9b4ed). Registered on the
+   * stack so {@link raiseOpenDialog} can find the already-open dialog of the
+   * same entity; the duplicate-open guard itself lives in the callers (they
+   * call `raiseOpenDialog(key)` BEFORE building the body, taking a lock or
+   * creating a promise — see `showThoughtTypeEditor` /
+   * `openPropertyManagerEditor`, ошибки c2d243bb / 74d9b4ed). Dialogs without
+   * an entity identity leave it unset and always stack.
    */
   dedupeKey?: string;
 }
