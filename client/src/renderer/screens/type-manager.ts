@@ -94,6 +94,7 @@ import {
   resolveLinkTypeVisual,
   resolveThoughtTypeVisual,
   subtreeTypeIds,
+  typeChainOf,
   typeDepth,
   subtreeHeight,
   typeSearchVisibleIds,
@@ -217,6 +218,61 @@ export function buildCreateTypeInput(
   return input;
 }
 
+/**
+ * Builds the minimal `PATCH /thought-types/{id}` payload from the staged draft:
+ * only the fields that actually differ from the last server-side state go out
+ * (If-Match uses that state's version). Consistent with
+ * {@link buildCreateTypeInput}: the trimmed description and the template are
+ * normalised to `null` when empty, so an emptied field clears the value.
+ *
+ * Used by BOTH save paths of the editor — «Записать» (save, stay open) and
+ * «Применить и закрыть»: the two differ only in whether the dialog closes,
+ * the payload is identical.
+ */
+export function buildTypePatchInput(
+  current: ThoughtType,
+  draft: ThoughtTypeDraft,
+  descriptionRaw: string,
+  nextTemplate: string | null,
+): ThoughtTypeUpdateInput {
+  const input: ThoughtTypeUpdateInput = {};
+  const name = draft.name.trim();
+  if (name !== current.name) input.name = name;
+  if (draft.parent_id !== (current.parent_id ?? null)) input.parent_id = draft.parent_id;
+  if (draft.icon !== current.icon) {
+    input.icon = draft.icon;
+    input.icon_kind = draft.icon_kind;
+  }
+  if (draft.fg_color !== current.fg_color) input.fg_color = draft.fg_color;
+  if (draft.bg_color !== current.bg_color) input.bg_color = draft.bg_color;
+  if (draft.font_bold !== current.font_bold) input.font_bold = draft.font_bold;
+  if (draft.font_italic !== current.font_italic) input.font_italic = draft.font_italic;
+  if (draft.font_underline !== current.font_underline) input.font_underline = draft.font_underline;
+  if (draft.font_strike !== current.font_strike) input.font_strike = draft.font_strike;
+  const description = descriptionRaw.trim() === '' ? null : descriptionRaw.trim();
+  if (description !== (current.description ?? null)) input.description = description;
+  if (nextTemplate !== (current.comment_template_md ?? null)) {
+    input.comment_template_md = nextTemplate;
+  }
+  return input;
+}
+
+/**
+ * Ids of the ancestors that must be expanded for the row of `typeId` to be
+ * visible in a type tree. The edited type itself is excluded (its own row is
+ * shown once its ancestors are open). Used by the type list to reveal the
+ * «current row» right after a save (ошибка 51732f9b): a freshly created type
+ * under a collapsed parent was otherwise invisible and had to be searched for.
+ */
+export function typeRowRevealIds(
+  types: readonly ThoughtType[],
+  typeId: string | null,
+): string[] {
+  return typeChainOf(types, typeId)
+    .slice(1)
+    .map((t) => t.id);
+}
+
 // ---------------------------------------------------------------------------
 // Tree rows for the catalogue dialogs (L21): expand/collapse per dialog.
 // ---------------------------------------------------------------------------
@@ -279,8 +335,19 @@ export function showThoughtTypesDialog(): void {
   // expanding/collapsing/typing does not flicker or jump the scroll position.
   let cachedTypes: ThoughtType[] | null = null;
   let cachedCounts: Record<string, number> | null = null;
+  // «Текущая строка» списка: тип, который пользователь только что
+  // отредактировал (или создал) в открытом отсюда редакторе. Строка
+  // подсвечивается, её цепочка родителей разворачивается, и список
+  // прокручивается к ней — иначе новый тип приходилось искать вручную
+  // (ошибка 51732f9b).
+  let currentRowId: string | null = null;
 
-  const onChanged = (): void => void reload();
+  // Редактор сообщает id записанного типа («Применить и закрыть» и «Записать»)
+  // вторым аргументом — он и становится текущей строкой.
+  const onChanged = (appliedTypeId?: string): void => {
+    if (appliedTypeId !== undefined) currentRowId = appliedTypeId;
+    void reload();
+  };
 
   async function reload(useCache = false): Promise<void> {
     const scrollTop = tableWrap.scrollTop;
@@ -312,9 +379,19 @@ export function showThoughtTypesDialog(): void {
     // Searching shows every matched branch fully expanded (task's «ветви до
     // совпадений разворачиваются автоматически»); otherwise the manual
     // expand/collapse state applies as before.
-    const rows = (
+    let rows = (
       searching ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id))) : visibleRows(types, expanded)
     ).filter((row) => keepIds.has(row.type.id));
+    // Текущая строка обязана быть видна: если её цепочка родителей свёрнута,
+    // разворачиваем её (при поиске ветви и так раскрыты). Иначе после создания
+    // типа с нестандартным родителем строку пришлось бы искать вручную.
+    if (currentRowId !== null && !searching && !rows.some((row) => row.type.id === currentRowId)) {
+      const reveal = typeRowRevealIds(types, currentRowId);
+      if (reveal.some((id) => !expanded.has(id))) {
+        expanded = new Set([...expanded, ...reveal]);
+        rows = visibleRows(types, expanded).filter((row) => keepIds.has(row.type.id));
+      }
+    }
     const table = el('table', 'table-list');
     const head = el('thead');
     const headRow = el('tr');
@@ -334,10 +411,15 @@ export function showThoughtTypesDialog(): void {
       emptyRow.append(emptyCell);
       tbody.append(emptyRow);
     }
+    let currentTr: HTMLElement | null = null;
     for (const row of rows) {
       const type = row.type;
       const tr = el('tr');
       if (type.is_root) tr.classList.add('type-tree-root');
+      if (type.id === currentRowId) {
+        tr.classList.add('selected');
+        currentTr = tr;
+      }
       const nameCell = el('td');
       nameCell.style.whiteSpace = 'nowrap';
       const nameWrap = span('', 'type-tree-name');
@@ -382,6 +464,9 @@ export function showThoughtTypesDialog(): void {
     table.append(tbody);
     tableWrap.replaceChildren(table);
     tableWrap.scrollTop = scrollTop;
+    // Список прокручивается к текущей строке — она может быть ниже видимой
+    // части (высота обёртки ограничена).
+    currentTr?.scrollIntoView({ block: 'nearest' });
   }
 
   /** Expands/collapses a node and re-renders from the cache (no round-trip). */
@@ -421,6 +506,8 @@ export function showThoughtTypesDialog(): void {
       await etn.types.removeThoughtType(networkId, type.id, type.version, true);
       await refreshThoughtTypes();
       scheduleRefresh();
+      // Удалённый тип не может остаться текущей строкой.
+      if (currentRowId === type.id) currentRowId = null;
       onChanged();
     } catch (err) {
       errorDialog('Удалить тип', err);
@@ -537,13 +624,20 @@ export interface TypeEditorExtras {
  * One and the same form for a new and an existing type (task «Улучшить диалог
  * редактирования типов мыслей и связей»): the icon, colours/font style,
  * comment template, parent and the own property definitions are editable
- * right away — nothing is inert — and nothing touches the server until
- * «Применить и закрыть» is pressed. «Отмена» (also Esc/×/backdrop) closes the
+ * right away — nothing is inert — and nothing touches the server until a save
+ * button is pressed. Two save buttons (ошибка 51732f9b): «Записать» commits
+ * the draft and KEEPS the dialog open, refreshing everything that depended on
+ * the write (the «Отборы» tab of a just-created type becomes live, «Метаданные»
+ * shows the real id/dates, the title stops saying «Новый»), and «Применить и
+ * закрыть» commits and closes. «Отмена» (also Esc/×/backdrop) closes the
  * dialog discarding the whole draft; no type is created on that path. Дефолт
  * привязки (0.8.2) правится прямо в колонке «По умолчанию» и тоже уезжает на
- * «Применить и закрыть»; override описания сохраняет свой маленький диалог.
+ * запись; override описания сохраняет свой маленький диалог.
  * Reparenting validation is unchanged: the parent picker filters
  * cycles/depth client-side and the server re-checks on apply.
+ *
+ * `onChanged` is called after every successful save with the id of the type
+ * written in this session — the type list uses it to make that row «current».
  *
  * `extras.initialName` prefills the name of a new type (the entity combo's
  * «Создать новый» row). The returned promise resolves when the dialog closes:
@@ -552,7 +646,7 @@ export interface TypeEditorExtras {
  */
 export function showThoughtTypeEditor(
   type: ThoughtType | null,
-  onChanged: () => void,
+  onChanged: (appliedTypeId?: string) => void,
   extras?: TypeEditorExtras,
 ): Promise<string | null> {
   const networkId = requireNetworkId();
@@ -633,6 +727,10 @@ export function showThoughtTypeEditor(
   const DUP_NAME_MSG = 'Тип с таким именем уже существует.';
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
+  let saveBtn: HTMLButtonElement | null = null;
+  /** Заголовок диалога — после первой записи «Новый тип мысли» становится
+   *  «Тип мысли»: содержимое диалога обновилось, шапка не должна врать. */
+  let dialogTitleEl: HTMLElement | null = null;
 
   // ---- The staged draft: every editable field, applied only on demand ----
   const draft = {
@@ -766,14 +864,17 @@ export function showThoughtTypeEditor(
   propertiesPane.append(props.root);
 
   // Вкладка «Метаданные» — автор, даты, id сущности (задача 04cd9794). Для
-  // нового типа показываем подсказку «id будет присвоен при сохранении».
-  if (type !== null) {
-    metadataPane.append(buildMetadataRowsFromType(type));
-  } else {
-    metadataPane.append(
-      el('p', 'muted', 'id появится после первой записи типа.'),
+  // нового типа до первой записи показываем подсказку «id будет присвоен при
+  // сохранении»; после «Записать» вкладка перерисовывается настоящими
+  // метаданными (ошибка 51732f9b: раньше подсказка оставалась до переоткрытия).
+  function renderMetadataPane(): void {
+    metadataPane.replaceChildren(
+      current !== null
+        ? buildMetadataRowsFromType(current)
+        : el('p', 'muted', 'id появится после первой записи типа.'),
     );
   }
+  renderMetadataPane();
 
   // Вкладка «Отборы» — собственная подписка на realtime-события
   // (thought-type-view.{created,updated,deleted}); диалог вызывает dispose()
@@ -798,15 +899,16 @@ export function showThoughtTypeEditor(
     );
   }
 
-  /** Live duplicate check on the name field: warn + disable the apply button. */
+  /** Live duplicate check on the name field: warn + disable both save buttons. */
   function revalidateName(): void {
-    if (nameClash(nameInput.value) !== null) {
+    const clash = nameClash(nameInput.value) !== null;
+    if (clash) {
       errorLine.textContent = DUP_NAME_MSG;
-      if (applyBtn !== null) applyBtn.disabled = true;
-    } else {
-      if (errorLine.textContent === DUP_NAME_MSG) errorLine.textContent = '';
-      if (applyBtn !== null) applyBtn.disabled = false;
+    } else if (errorLine.textContent === DUP_NAME_MSG) {
+      errorLine.textContent = '';
     }
+    if (applyBtn !== null) applyBtn.disabled = clash;
+    if (saveBtn !== null) saveBtn.disabled = clash;
   }
 
   // Fresh catalogue for the live duplicate check (the server re-checks anyway).
@@ -837,8 +939,18 @@ export function showThoughtTypeEditor(
     draft.description = descArea.value;
   });
 
-  /** Applies the whole draft to the server, then closes the dialog. */
-  async function apply(close: () => void): Promise<void> {
+  /**
+   * Saves the whole draft to the server.
+   *
+   * The payload is identical for both save buttons — `mode` only decides what
+   * happens after a successful write: `'close'` («Применить и закрыть»)
+   * dismisses the dialog, `'stay'` («Записать») keeps it open and refreshes
+   * everything that depended on the write — the title, «Метаданные», the
+   * «Отборы» tab (`getTypeId()` starts returning the id of a freshly created
+   * type) and the type list's current row. A failed save keeps the dialog open
+   * on both paths, showing the error.
+   */
+  async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
     const name = nameInput.value.trim();
     if (name === '') {
       errorLine.textContent = 'Название типа обязательно.';
@@ -865,25 +977,7 @@ export function showThoughtTypeEditor(
         createdId = current.id;
       } else {
         // Existing type: patch only the changed fields (If-Match version).
-        const input: ThoughtTypeUpdateInput = {};
-        if (name !== current.name) input.name = name;
-        if (draft.parent_id !== (current.parent_id ?? null)) input.parent_id = draft.parent_id;
-        if (draft.icon !== current.icon) {
-          input.icon = draft.icon;
-          input.icon_kind = draft.icon_kind;
-        }
-        if (draft.fg_color !== current.fg_color) input.fg_color = draft.fg_color;
-        if (draft.bg_color !== current.bg_color) input.bg_color = draft.bg_color;
-        if (draft.font_bold !== current.font_bold) input.font_bold = draft.font_bold;
-        if (draft.font_italic !== current.font_italic) input.font_italic = draft.font_italic;
-        if (draft.font_underline !== current.font_underline) input.font_underline = draft.font_underline;
-        if (draft.font_strike !== current.font_strike) input.font_strike = draft.font_strike;
-        if ((description === '' ? null : description) !== current.description) {
-          input.description = description === '' ? null : description;
-        }
-        if (nextTemplate !== (current.comment_template_md ?? null)) {
-          input.comment_template_md = nextTemplate;
-        }
+        const input = buildTypePatchInput(current, draft, description, nextTemplate);
         if (Object.keys(input).length > 0) {
           current = await etn.types.updateThoughtType(networkId, current.id, input, current.version);
         }
@@ -892,11 +986,24 @@ export function showThoughtTypeEditor(
       if (!(await props.applyChanges(current.id))) return; // error shown, dialog stays
       await refreshThoughtTypes();
       scheduleRefresh();
-      onChanged();
-      close();
+      // Содержимое диалога, зависевшее от записи, обновляется: шапка,
+      // «Метаданные» (у нового типа появились id/даты) и вкладка «Отборы»
+      // (её getTypeId() теперь отдаёт id). Список типов получает id
+      // записанного типа — строка становится текущей.
+      syncDialogTitle();
+      renderMetadataPane();
+      void viewsTab.refresh();
+      onChanged(current.id);
+      if (mode === 'close') close();
     } catch (err) {
       errorLine.textContent = errText(err);
     }
+  }
+
+  /** Шапка диалога: «Новый тип мысли» пока тип не записан, дальше — «Тип мысли». */
+  function syncDialogTitle(): void {
+    if (dialogTitleEl === null) return;
+    dialogTitleEl.textContent = current === null ? 'Новый тип мысли' : 'Тип мысли';
   }
 
   function openStyle(): void {
@@ -932,7 +1039,7 @@ export function showThoughtTypeEditor(
   }
 
   // The promise resolves on dialog close (`onClose` fires from the backdrop's
-  // remove event — Esc, × and both footer buttons all land there).
+  // remove event — Esc, × and every footer button all land there).
   return new Promise<string | null>((resolve) => {
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
@@ -940,17 +1047,35 @@ export function showThoughtTypeEditor(
       width: 600,
       buttons: [
         { label: 'Отмена' },
+        // «Записать» — запись без закрытия: диалог остаётся открытым, а его
+        // содержимое обновляется (отборы нового типа становятся доступны,
+        // «Метаданные» показывают id/даты) — ошибка 51732f9b.
+        {
+          label: 'Записать',
+          keepOpen: true,
+          onClick: (close) => void apply('stay', close),
+          ref: (btn) => {
+            saveBtn = btn;
+          },
+        },
         {
           label: 'Применить и закрыть',
           primary: true,
           keepOpen: true,
-          onClick: (close) => void apply(close),
+          onClick: (close) => void apply('close', close),
           ref: (btn) => {
             applyBtn = btn;
           },
         },
       ],
-      onMount: () => nameInput.focus(),
+      onMount: () => {
+        // Шапку диалога можно переписать после первой записи: находим её от
+        // тела диалога (оба уже в DOM к моменту onMount).
+        dialogTitleEl =
+          body.closest('.dialog-box')?.querySelector<HTMLElement>('.dialog-title') ?? null;
+        syncDialogTitle();
+        nameInput.focus();
+      },
       onClose: () => {
         viewsTab.dispose();
         void releaseHeld(editLock);
