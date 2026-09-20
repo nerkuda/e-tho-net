@@ -62,7 +62,21 @@ import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
-import { resolveLinkTypeVisual } from '../lib/type-tree.js';
+import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
+// Набор свойств показанной сущности зависит от определений свойств её типа
+// (ошибка 74b94c26): realtime-события `property-definition.*` и локальные
+// уведомления редактора типа/менеджера свойств обязаны перечитать вкладку
+// «Свойства» — гейт по цепочке типов живёт в lib/type-definitions.ts.
+import {
+  definitionChangeAffectsShown,
+  definitionChangeFacts,
+  isDefinitionEventType,
+  onTypeDefinitionsChanged,
+  type DefinitionChangeFacts,
+  type DefinitionOwner,
+  type ShownTypeChain,
+} from '../lib/type-definitions.js';
+import { onRealtimeEvent } from '../realtime.js';
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -538,6 +552,24 @@ export function mountEditor(editorHost: HTMLElement): void {
         refreshTabCount('attachments');
       }
     });
+
+    // Изменение ОПРЕДЕЛЕНИЙ СВОЙСТВ типа показанной сущности перечитывает
+    // вкладку «Свойства» (ошибка 74b94c26). Два источника:
+    //  * realtime — другой клиент или MCP `etn.ontology.write`;
+    //  * локальный — правка в редакторе типа / менеджере свойств: своё
+    //    realtime-эхо до рендерера не доходит (главный процесс его
+    //    отбрасывает, G8 applier), поэтому производители уведомляют сами.
+    // Гейт по цепочке типов показанной сущности — в lib/type-definitions.ts.
+    onRealtimeEvent((evt) => {
+      // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
+      // показанной сущности этой сети не относится.
+      if (evt.network_id !== store.state.networkId) return;
+      if (!isDefinitionEventType(evt.type)) return;
+      applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
+    });
+    onTypeDefinitionsChanged((owner) => {
+      applyDefinitionChange({ owner, allowedTypeIds: null, coverageBoundaryUnknown: false });
+    });
   }
 
   // Re-mounting replaces the host — drop the previous mount's subscription
@@ -690,6 +722,18 @@ function activateEditorTab(id: EditorTabId): void {
 }
 
 /**
+ * Drops the given cached panes so they rebuild from the current `ctx` on next
+ * activation. If the shown tab was dropped it is re-displayed right away, so
+ * the user sees the new content without switching tabs. Panes outside the list
+ * keep their cache — and their CodeMirror instances.
+ */
+function invalidatePanes(ids: readonly EditorTabId[]): void {
+  const shownWasDropped = ids.includes(shownTab) ? builtPanes.delete(shownTab) : false;
+  for (const id of ids) builtPanes.delete(id);
+  if (shownWasDropped) displayTab(shownTab);
+}
+
+/**
  * Drops the panes whose content depends on the owner's TYPE so they rebuild
  * from the current `ctx` on next activation (bug 6b757336; ошибка 786bcd69).
  *
@@ -704,16 +748,59 @@ function activateEditorTab(id: EditorTabId): void {
  *     screen — ошибка 786bcd69).
  *
  * The remaining tabs (attachments/chrono/links/graph/metadata) do not depend
- * on the type and keep their cache — and their CodeMirror instances. If the
- * shown tab was dropped it is re-displayed right away, so the user sees the
- * new set without switching tabs. Runs only on an actual type change, not on
+ * on the type and keep their cache. Runs only on an actual type change, not on
  * every header save.
  */
 function invalidateTypeDependentPanes(): void {
-  const shownWasDropped = builtPanes.delete(shownTab);
-  builtPanes.delete('main');
-  builtPanes.delete('properties');
-  if (shownWasDropped) displayTab(shownTab);
+  invalidatePanes(['main', 'properties']);
+}
+
+/**
+ * Перечитывает набор свойств открытого редактора, когда изменились
+ * ОПРЕДЕЛЕНИЯ СВОЙСТВ типа показанной сущности (ошибка 74b94c26): таблица
+ * «Свойства» держит эффективный набор привязок типа и всех предков, а
+ * realtime-событие `property-definition.*`/локальная правка в редакторе типа
+ * версию САМОЙ мысли не меняют — гейт редактора («владелец + слой + версия»)
+ * такую правку не пропускает, и прежняя таблица живёт до смены сущности.
+ *
+ * Сбрасывается только вкладка «Свойства»: определения свойств не касаются
+ * постоянного комментария («Комментарий» держит его CodeMirror, а его
+ * разрушение — это bug 206e33a1 «Бессмысленное обновление редактора»).
+ */
+function invalidateDefinitionDependentPanes(): void {
+  invalidatePanes(['properties']);
+}
+
+/**
+ * Цепочка типов показанной сущности (сам тип + предки) для вида владельца
+ * `ownerType`; `null` — сущности этого вида в редакторе нет. Мысль без типа
+ * показывает свойства корневого типа (L21) — `typeChainOf` с `null` даёт его
+ * цепочку.
+ */
+function shownTypeChainFor(ownerType: DefinitionOwner['ownerType']): ShownTypeChain | null {
+  const ctx = renderCtx;
+  if (ctx === null) return null;
+  if ((ctx.ownerType === 'thought' ? 'thought_type' : 'link_type') !== ownerType) return null;
+  // Каталоги разные по типу — цепочка каждого вида считается своим вызовом.
+  if (ownerType === 'thought_type') {
+    const chain = typeChainOf(store.state.thoughtTypes, ctx.thought?.type_id ?? null);
+    return { ownerType, ids: new Set(chain.map((t) => t.id)) };
+  }
+  const chain = typeChainOf(store.state.linkTypes, ctx.link?.type_id ?? null);
+  return { ownerType, ids: new Set(chain.map((t) => t.id)) };
+}
+
+/** Применяет изменение определений свойств к открытому редактору: касается
+ *  цепочки типов показанной сущности — вкладка «Свойства» перечитывается. */
+function applyDefinitionChange(facts: DefinitionChangeFacts): void {
+  const ctx = renderCtx;
+  if (ctx === null) return;
+  // Цепочка строится от показанной сущности; чужой вид владельца
+  // (мысль ↔ связь) гейт отсекает сам.
+  const shown = shownTypeChainFor(ctx.ownerType === 'thought' ? 'thought_type' : 'link_type');
+  if (shown === null) return;
+  if (!definitionChangeAffectsShown(facts, shown)) return;
+  invalidateDefinitionDependentPanes();
 }
 
 /** Updates the panel title text + trash marker for the current context. */

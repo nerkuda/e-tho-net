@@ -41,6 +41,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
+import { rememberShownDefinitions } from '../lib/type-definitions.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
@@ -547,6 +548,10 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
       return;
     }
     if (box.isConnected) everMounted = true;
+    // Индекс показанных определений (ошибка 74b94c26): realtime-события
+    // `property-definition.updated/deleted` несут только id привязки, поэтому
+    // владельца для гейта берут из того, что реально отрисовано сейчас.
+    rememberShownDefinitions(definitions);
     if (definitions.length === 0) {
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
       return;

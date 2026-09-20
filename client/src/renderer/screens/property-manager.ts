@@ -102,6 +102,9 @@ import {
   type FlatTypeRow,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
+// Локальное уведомление открытого редактора об изменении набора свойств типа
+// (ошибка 74b94c26): своё realtime-эхо до рендерера не доходит.
+import { notifyTypeDefinitionsChanged } from '../lib/type-definitions.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import {
@@ -1668,6 +1671,12 @@ export function openPropertyManagerEditor(
       removed.push(snap);
     }
     if (draft.typeRows.length === 0 && removed.length === 0) return;
+    // Типы, чей набор свойств правится этим проходом (снятые и черновые
+    // строки) — после записи они обязаны уведомить открытый редактор
+    // (ошибка 74b94c26): свой realtime-эхо до рендерера не доходит.
+    const touchedTypeIds = new Set<string>();
+    for (const snap of removed) touchedTypeIds.add(snap.thoughtTypeId);
+    for (const row of draft.typeRows) touchedTypeIds.add(row.thoughtTypeId);
     // Снятия — первыми: освобождённая пара (тип, сторона) не должна
     // столкнуться с созданием новой привязки в этом же проходе.
     for (const snap of removed) {
@@ -1738,6 +1747,9 @@ export function openPropertyManagerEditor(
       }
     }
     await Promise.all(ops);
+    for (const thoughtTypeId of touchedTypeIds) {
+      notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: thoughtTypeId });
+    }
   }
 
   showDialog({

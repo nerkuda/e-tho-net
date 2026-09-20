@@ -101,6 +101,9 @@ import {
   type FlatTypeRow,
 } from '../lib/type-tree.js';
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
+// Локальное уведомление открытого редактора об изменении набора свойств типа
+// (ошибка 74b94c26): своё realtime-эхо до рендерера не доходит.
+import { notifyTypeDefinitionsChanged } from '../lib/type-definitions.js';
 import {
   cacheAttachedRegistryRow,
   canReorderBinding,
@@ -1067,6 +1070,11 @@ export function showThoughtTypeEditor(
       }
       // Staged property definitions go after the type itself exists.
       if (!(await props.applyChanges(current.id))) return; // error shown, dialog stays
+      // Набор свойств типа изменился (ошибка 74b94c26): открытый редактор
+      // мысли этого типа (или его потомка) обязан перечитать таблицу
+      // «Свойства». Своё realtime-эхо до рендерера не доходит, поэтому
+      // редактор уведомляется локально.
+      notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: current.id });
       await refreshThoughtTypes();
       scheduleRefresh();
       // Содержимое диалога, зависевшее от записи, обновляется: шапка,
