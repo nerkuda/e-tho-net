@@ -689,29 +689,6 @@ async function loadLinkTypeIntoDraft(
   }
 }
 
-/** Поведение `etn.types.getLinkType` с локальным кешем в `store.linkTypes`.
- *  Используется из плоского списка, чтобы дотянуть имена сторон
- *  (`forward / reverse`) для свойств-ссылок, чей link_type ещё не пришёл
- *  realtime-ом. При успехе — дополняем каталог и обновляем заглушку в
- *  строке; при ошибке — оставляем «(загрузка…)». */
-async function fetchLinkTypeForRow(
-  networkId: string,
-  pending: { ltId: string; nameSpan: HTMLElement; tr: HTMLElement },
-): Promise<void> {
-  try {
-    const lt = await etn.types.getLinkType(networkId, pending.ltId);
-    // Дополняем каталог — следующий перерендер уже возьмёт из store.
-    const exists = store.state.linkTypes.some((t) => t.id === lt.id);
-    if (!exists) store.state.linkTypes.push(lt);
-    if (!pending.nameSpan.isConnected) return;
-    pending.nameSpan.textContent = `  (${lt.name_forward} / ${lt.name_reverse})`;
-  } catch {
-    if (pending.nameSpan.isConnected) {
-      pending.nameSpan.textContent = '  (нет данных)';
-    }
-  }
-}
-
 /** Идентификатор значения категории `value_type`. После первой записи
  *  категория зафиксирована (требование 5a82c709). */
 function lockCategoryFor(existing: PropertyValueType | null): ValueCategory | null {

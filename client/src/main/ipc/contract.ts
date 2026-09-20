@@ -65,7 +65,6 @@ import type {
   EffectiveTypeProperty,
   AttachPropertyInput,
   PropertyDefinition,
-  PropertyDefinitionInput,
   PropertyDefinitionUpdateInput,
   PropertyValue,
   PropertyValueType,
