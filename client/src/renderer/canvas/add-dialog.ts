@@ -253,7 +253,8 @@ async function insertIntoCanvas(
 /**
  * The universal dialog itself. Accumulates existing/new thoughts in a list
  * (Enter / candidate click adds; multi-line paste batches new lines) and
- * resolves with the whole list on «Добавить»/«Выбрать» or Ctrl+Enter.
+ * resolves with the whole list on «Добавить»/«Выбрать» or Ctrl+Enter, or with
+ * `null` when dismissed (any close path — «Отмена», Esc, ×, backdrop click).
  */
 export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtPickResult | null> {
   const networkId = opts.networkId;
@@ -740,7 +741,17 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       });
     }
 
+    /**
+     * Единственная точка завершения промиса. Промис обязан резолвиться на
+     * ЛЮБОМ пути закрытия диалога (ошибка 5069a508): кнопки завершают его
+     * явно, а Esc, × и клик по подложке — через `onClose` каркаса. Флаг
+     * `settled` не даёт позднему событию `remove` переиграть уже принятое
+     * решение.
+     */
+    let settled = false;
     const finish = (result: ThoughtPickResult | null): void => {
+      if (settled) return;
+      settled = true;
       resolve(result);
       closeSelf();
     };
@@ -812,6 +823,11 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       extraShortcuts: {
         ctrlShiftEnter: () => apply(true),
       },
+      // Esc, × и клик по подложке — отмена: промис резолвится `null`, ровно
+      // как по кнопке «Отмена», иначе `await` вызывающего висит вечно
+      // (ошибка 5069a508). При завершении кнопкой `finish` уже выставил
+      // `settled`, поэтому позднее событие `remove` ничего не переигрывает.
+      onClose: () => finish(null),
       onMount: () => {
         renderLines();
         // Prefill lands in the input as if typed (карточка ETN 34ffbd75): the

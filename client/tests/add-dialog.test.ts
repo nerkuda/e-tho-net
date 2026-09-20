@@ -120,6 +120,11 @@ class ShimElement {
     const index = this.parent.children.indexOf(this);
     if (index >= 0) this.parent.children.splice(index, 1);
     this.parent = null;
+    // Снятие узла из DOM — путь закрытия диалога (`showDialog` вешает на него
+    // событие `remove`, по которому снимает слушатели клавиш и зовёт `onClose`).
+    // Шим повторяет контракт: узел без родителя не снимается и события не даёт,
+    // поэтому повторный `remove()` не переигрывает `onClose`.
+    this.emit('remove');
   }
 
   contains(node: ShimElement | null): boolean {
@@ -206,6 +211,17 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
 /** Duplicate-search calls received by the fake `window.etn`. */
 const dupQueries: Array<{ title: string; synonyms: string[] }> = [];
 
+/** Слушатели `window` — каркас диалога вешает сюда Esc и Ctrl+Enter. */
+const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
+
+/** Нажатие Esc — реальный путь каркаса: его `keydown`-слушатель закрывает диалог. */
+function pressEscape(): void {
+  const event = key('Escape');
+  for (const { type, listener } of [...windowListeners]) {
+    if (type === 'keydown') listener(event);
+  }
+}
+
 /**
  * Installs the DOM/window shims ONCE (lib/etn.ts keeps a live reference) and
  * returns per-dialog accessors. `window.setTimeout` runs synchronously so the
@@ -226,8 +242,13 @@ function installShim(): void {
       return 1;
     },
     clearTimeout: () => undefined,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
+    addEventListener: (type: string, listener: (event: any) => void) => {
+      windowListeners.push({ type, listener });
+    },
+    removeEventListener: (type: string, listener: (event: any) => void) => {
+      const index = windowListeners.findIndex((l) => l.type === type && l.listener === listener);
+      if (index >= 0) windowListeners.splice(index, 1);
+    },
     etn: {
       thoughts: {
         findDuplicates: async (_networkId: string, title: string, synonyms: string[]) => {
@@ -492,5 +513,101 @@ describe('pickThoughtsDialog prefillText (карточка ETN 34ffbd75, при�
     assert.deepEqual(ui.lineTitles(), ['Имя'], 'the prefilled name can be queued in multi mode');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Отмена диалога добавления/выбора мыслей резолвит промис (ошибка 5069a508)
+// ---------------------------------------------------------------------------
+
+/** Подложка открытого диалога (единственный ребёнок `document.body`). */
+function openBackdrop(): ShimElement {
+  const backdrop = ((globalThis as any).document.body as ShimElement).children.find((c) =>
+    c.className.split(/\s+/).includes('dialog-backdrop'),
+  );
+  assert.ok(backdrop !== undefined, 'диалог смонтирован');
+  return backdrop!;
+}
+
+/** Кнопка футера по подписи. */
+function footerButton(backdrop: ShimElement, label: string): ShimElement {
+  const btn = backdrop.querySelectorAll('button').find((b) => b.textContent === label);
+  assert.ok(btn !== undefined, `в футере есть кнопка «${label}»`);
+  return btn!;
+}
+
+/** Клик по подложке мимо тела диалога. */
+function clickBackdrop(backdrop: ShimElement): void {
+  backdrop.emit('click', {
+    target: backdrop,
+    preventDefault: () => undefined,
+    stopPropagation: () => undefined,
+  });
+}
+
+/** Клик по × в заголовке. */
+function clickClose(backdrop: ShimElement): void {
+  const closeBtn = backdrop.querySelector('.dialog-close');
+  assert.ok(closeBtn !== null, 'в заголовке есть ×');
+  closeBtn!.click();
+}
+
+async function resolvesTo<T>(
+  promise: Promise<T>,
+): Promise<{ value: T | undefined; settled: boolean }> {
+  let value: T | undefined;
+  let settled = false;
+  void promise.then((v) => {
+    value = v;
+    settled = true;
+  });
+  await settle();
+  return { value, settled };
+}
+
+describe('pickThoughtsDialog: отмена любым путём закрытия (ошибка 5069a508)', () => {
+  it('Esc резолвит null и снимает диалог', async () => {
+    const ui = await openDialog();
+    pressEscape();
+    const { value, settled } = await resolvesTo(ui.promise);
+    assert.equal(settled, true, 'промис завершён, а не висит');
+    assert.equal(value, null, 'Esc — отмена');
+    assert.equal(((globalThis as any).document.body as ShimElement).children.length, 0, 'диалог закрыт');
+  });
+
+  it('× в заголовке резолвит null', async () => {
+    const ui = await openDialog();
+    clickClose(openBackdrop());
+    const { value } = await resolvesTo(ui.promise);
+    assert.equal(value, null, '× — отмена');
+  });
+
+  it('клик по подложке резолвит null', async () => {
+    const ui = await openDialog();
+    clickBackdrop(openBackdrop());
+    const { value } = await resolvesTo(ui.promise);
+    assert.equal(value, null, 'клик мимо — отмена');
+  });
+
+  it('«Отмена» резолвит null', async () => {
+    const ui = await openDialog();
+    footerButton(openBackdrop(), 'Отмена').click();
+    const { value } = await resolvesTo(ui.promise);
+    assert.equal(value, null, 'кнопка отмены — null');
+  });
+
+  it('применение списка отдаёт его и не переигрывается поздним onClose', async () => {
+    const ui = await openDialog();
+    checkRadio(ui.multiRadio, ui.singleRadio);
+    ui.input.value = 'Раз';
+    ui.input.emit('keydown', key('Enter'));
+    footerButton(openBackdrop(), 'Добавить').click();
+    const { value } = await resolvesTo(ui.promise);
+    assert.deepEqual(
+      value?.items.map((item: any) => item.title),
+      ['Раз'],
+      'основной путь отдал применённый список',
+    );
+    assert.equal(((globalThis as any).document.body as ShimElement).children.length, 0, 'диалог закрыт');
   });
 });
