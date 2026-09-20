@@ -42,10 +42,12 @@
  * заполнено — дефолт этой привязки (`type_property_overrides.default_value`,
  * `setPropertyDefaultOverride`), пусто — при создании мысли действует общее
  * значение стороны (подсказка — в тултипе пустой ячейки). Режимов
- * «(общее)»/«частное» больше нет. Общие значения — под колонками: у скаляра
- * одно поле «Значение по умолчанию» (`config.default_value`), у свойства-связи
- * два — «Общее для источников» (`config.default_value`) и «Общее для
- * назначений» (`config.default_value_target`).
+ * «(общее)»/«частное» больше нет. Общие значения — под своими таблицами: у
+ * скаляра одно поле «Значение по умолчанию» (`config.default_value`), у
+ * свойства-связи два поля «Значение по умолчанию для всех типов» — под
+ * «Типами источников» (`config.default_value`) и под «Типами назначений»
+ * (`config.default_value_target`), каждое с отбором целей по типам
+ * противоположной таблицы (задача 99312ffa).
  *
  * Deletion paths:
  *   * scalar property — refused with 409 while bound or filled; the editor
@@ -821,6 +823,44 @@ function collectOppositeSideTypeIds(
   return out;
 }
 
+/** Подпись поля общего дефолта стороны свойства-связи (задача 99312ffa):
+ *  у обеих сторон одна и та же — «Значение по умолчанию для всех типов».
+ *  Поле стоит в колонке своей таблицы, поэтому «для источников»/«для
+ *  назначений» читается из контекста (тултип уточняет сторону). */
+export const COMMON_SIDE_DEFAULT_LABEL = 'Значение по умолчанию для всех типов';
+
+/** Ограничения и подсказка общего дефолта стороны свойства-связи (задача
+ *  99312ffa): подпись, дословный тултип и набор допустимых типов-кандидатов.
+ *  Ограничение берётся из **противоположной** таблицы живого черновика — та
+ *  же модель (a6513df0), что у колонки «Значение по умолчанию» строк таблиц
+ *  (у источника допустимые цели = типы стороны `target`, и наоборот). Пусто —
+ *  без ограничений. Чистая — юнит-тест. */
+export function commonSideDefaultSpec(
+  rows: readonly TypeRowDraft[],
+  side: 'source' | 'target',
+): { label: string; tooltip: string; allowedTypeIds: string[] } {
+  const tooltip =
+    side === 'source'
+      ? 'Значение по умолчанию для источников любых типов. Может быть переопределено значениями в строках таблицы выше'
+      : 'Значение по умолчанию для назначений любых типов. Может быть переопределено значениями в строках таблицы выше';
+  return {
+    label: COMMON_SIDE_DEFAULT_LABEL,
+    tooltip,
+    allowedTypeIds: linkAllowedTypeIds(collectOppositeSideTypeIds(rows, side)),
+  };
+}
+
+/** Порядок частей колонки стороны свойства-связи (задача 99312ffa): имя
+ *  стороны, таблица типов, общий дефолт — **сразу под своей таблицей**.
+ *  Вынесен ради юнит-теста компоновки (рендер использует его же). */
+export function linkSideColumnParts(parts: {
+  nameField: HTMLElement;
+  tableHost: HTMLElement;
+  commonDefaultHost: HTMLElement;
+}): HTMLElement[] {
+  return [parts.nameField, parts.tableHost, parts.commonDefaultHost];
+}
+
 /**
  * Догрузить link_type по id и применить к draft. Вызывается, когда в
  * `store.state.linkTypes` нужной записи нет (realtime-канал отстаёт, либо
@@ -913,6 +953,15 @@ function twoColumns(left: HTMLElement, right: HTMLElement): HTMLElement {
   row.style.display = 'grid';
   row.style.gridTemplateColumns = '1fr 1fr';
   row.style.gap = '16px';
+  return row;
+}
+
+/** Поле с тултипом на подписи (задача 99312ffa): `field()` несёт только
+ *  текст подписи, а подсказке нужен `title` на элементе подписи. */
+function fieldWithTooltip(label: string, tooltip: string, control: HTMLElement): HTMLElement {
+  const row = field(label, control);
+  const labelEl = row.querySelector('.field-label');
+  if (labelEl !== null) setTooltip(labelEl as HTMLElement, tooltip);
   return row;
 }
 
@@ -1194,16 +1243,37 @@ export function openPropertyManagerEditor(
       draft.nameReverse = nameReverseInput.value;
     });
     // Свойство-связь: name в реестре — одно из имён (см. требование ниже).
-    const leftCol = div('form-stack');
-    leftCol.append(field('Имя в источнике', nameForwardInput));
+    // Колонка стороны — имя стороны, таблица типов, общий дефолт стороны
+    // **сразу под своей таблицей** (задача 99312ffa; порядок частей —
+    // linkSideColumnParts). Общий дефолт пересобирается при правке строк
+    // таблиц: его отбор берётся из живого черновика противоположной таблицы.
     const leftTypesHost = div('form-stack');
-    buildTypeRowsTable(leftTypesHost, /* isLink */ true, /* side */ 'source');
-    leftCol.append(leftTypesHost);
-    const rightCol = div('form-stack');
-    rightCol.append(field('Имя в назначении', nameReverseInput));
     const rightTypesHost = div('form-stack');
-    buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target');
-    rightCol.append(rightTypesHost);
+    const sourceDefaultsHost = div('form-stack');
+    const targetDefaultsHost = div('form-stack');
+    const refreshCommonDefaults = (): void => {
+      sourceDefaultsHost.replaceChildren(buildCommonSideDefaultField('source'));
+      targetDefaultsHost.replaceChildren(buildCommonSideDefaultField('target'));
+    };
+    refreshCommonDefaults();
+    buildTypeRowsTable(leftTypesHost, /* isLink */ true, /* side */ 'source', refreshCommonDefaults);
+    buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target', refreshCommonDefaults);
+    const leftCol = div('form-stack');
+    for (const part of linkSideColumnParts({
+      nameField: field('Имя в источнике', nameForwardInput),
+      tableHost: leftTypesHost,
+      commonDefaultHost: sourceDefaultsHost,
+    })) {
+      leftCol.append(part);
+    }
+    const rightCol = div('form-stack');
+    for (const part of linkSideColumnParts({
+      nameField: field('Имя в назначении', nameReverseInput),
+      tableHost: rightTypesHost,
+      commonDefaultHost: targetDefaultsHost,
+    })) {
+      rightCol.append(part);
+    }
     linkBodyHost.append(twoColumns(leftCol, rightCol));
 
     // Родительский тип связи + кнопка «Оформление»
@@ -1225,47 +1295,40 @@ export function openPropertyManagerEditor(
     parentRow.append(parentCombo.root, styleBtn);
     linkBodyHost.append(field('Родительский тип связи', parentRow));
 
-    // Общие значения по сторонам (0.8.2): «Общее для источников» —
-    // `config.default_value`, «Общее для назначений» — `config.default_value_target`
-    // (только связь, без отбора по типам). Единое чип-поле выбора целей
-    // (инструкция a47947c8). Дефолт отдельной привязки правится в колонке
-    // «Значение по умолчанию» таблиц выше.
-    const sourceDefaultsHost = div('form-stack');
-    sourceDefaultsHost.append(
-      field(
-        'Общее для источников',
-        buildLinkValueEditor({
-          networkId,
-          // Отбор целей по типам не задан — цели любые.
-          definition: { config: {}, required: false },
-          values: defaultLinkValues(draft.defaultValue),
-          save: async (next) => {
-            draft.defaultValue = linkDefaultPayload(next);
-            return true;
-          },
-        }),
-      ),
-    );
-    const targetDefaultsHost = div('form-stack');
-    targetDefaultsHost.append(
-      field(
-        'Общее для назначений',
-        buildLinkValueEditor({
-          networkId,
-          definition: { config: {}, required: false },
-          values: defaultLinkValues(draft.defaultValueTarget),
-          save: async (next) => {
-            draft.defaultValueTarget = linkDefaultPayload(next);
-            return true;
-          },
-        }),
-      ),
-    );
-    linkBodyHost.append(twoColumns(sourceDefaultsHost, targetDefaultsHost));
-
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
     draft.name = draft.nameForward;
+  }
+
+  /**
+   * Поле общего дефолта стороны свойства-связи (задача 99312ffa): единое
+   * чип-поле целей «Значение по умолчанию для всех типов» сразу под своей
+   * таблицей типов. `config.default_value` — общий дефолт источников,
+   * `config.default_value_target` — назначений (0.8.2, ADR «дефолт свойства
+   * живёт на привязке»). Отбор кандидатов — по типам противоположной таблицы
+   * живого черновика (`commonSideDefaultSpec`, та же модель a6513df0, что у
+   * строк таблиц); пусто — без ограничений. Пересобирается при правке строк
+   * (`refreshCommonDefaults`), поэтому фильтр не отстаёт от черновика.
+   */
+  function buildCommonSideDefaultField(side: 'source' | 'target'): HTMLElement {
+    const spec = commonSideDefaultSpec(draft.typeRows, side);
+    const isSource = side === 'source';
+    const picker = buildLinkValueEditor({
+      networkId,
+      definition: {
+        config: {},
+        required: false,
+        allowed_opposite_type_ids: spec.allowedTypeIds,
+      },
+      values: defaultLinkValues(isSource ? draft.defaultValue : draft.defaultValueTarget),
+      save: async (next) => {
+        const payload = linkDefaultPayload(next);
+        if (isSource) draft.defaultValue = payload;
+        else draft.defaultValueTarget = payload;
+        return true;
+      },
+    });
+    return fieldWithTooltip(spec.label, spec.tooltip, picker);
   }
 
   function buildScalarOptionsBlock(): HTMLElement {
@@ -1303,7 +1366,12 @@ export function openPropertyManagerEditor(
   }
 
   // ---- Таблица «Типы мыслей» / «Источники» / «Назначения» --------------
-  function buildTypeRowsTable(host: HTMLElement, isLink: boolean, side: 'source' | 'target' | null): void {
+  function buildTypeRowsTable(
+    host: HTMLElement,
+    isLink: boolean,
+    side: 'source' | 'target' | null,
+    onRowsChanged?: () => void,
+  ): void {
     host.append(sectionLabel(isLink ? (side === 'source' ? 'Типы источников' : 'Типы назначений') : 'Типы мыслей'));
     const tableWrap = div('admin-table-wrap');
     tableWrap.style.maxHeight = '160px';
@@ -1427,6 +1495,9 @@ export function openPropertyManagerEditor(
     function removeRow(row: TypeRowDraft): void {
       draft.typeRows = draft.typeRows.filter((r) => r !== row);
       renderTable();
+      // Противоположная таблица изменилась — общий дефолт пересобирает отбор
+      // по её живому черновику (задача 99312ffa).
+      onRowsChanged?.();
     }
 
     async function addRow(): Promise<void> {
@@ -1475,6 +1546,9 @@ export function openPropertyManagerEditor(
       if (fresh.length === 0) return;
       draft.typeRows = [...draft.typeRows, ...fresh];
       renderTable();
+      // Обе стороны общего дефолта зависят от строк обеих таблиц — отбор
+      // пересобирается по живому черновику (задача 99312ffa).
+      onRowsChanged?.();
     }
 
     host.append(
@@ -1914,9 +1988,10 @@ function linkConfigFromDraft(draft: PropertyDraft, current?: PropertyConfig | nu
   if (draft.showOnMap) cfg.show_on_map = true;
   if (draft.blocksTargetDeletion) cfg.blocks_target_deletion = true;
   // Общие значения сторон (0.8.2, ADR «дефолт свойства живёт на привязке»):
-  // «Общее для источников» — `config.default_value`, «Общее для назначений» —
-  // `config.default_value_target`. Пусто — ключ не пишется (PATCH config
-  // заменяет конфиг целиком, поэтому очистка поля снимает общее значение).
+  // «Значение по умолчанию для всех типов» под «Типами источников» —
+  // `config.default_value`, под «Типами назначений» — `config.default_value_target`.
+  // Пусто — ключ не пишется (PATCH config заменяет конфиг целиком, поэтому
+  // очистка поля снимает общее значение).
   const sources = linkDefaultPayload(draft.defaultValue);
   if (sources !== null) cfg.default_value = [...new Set(sources)];
   const targets = linkDefaultPayload(draft.defaultValueTarget);
