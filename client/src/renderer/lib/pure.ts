@@ -32,6 +32,7 @@ import {
   EVENT_AREA_W_DEFAULT_RATIO,
   EVENT_AREA_W_MAX_RATIO,
   EVENT_AREA_W_MIN,
+  parseFilterKeywords,
   REALTIME_EVENT_TYPES,
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
@@ -876,4 +877,81 @@ export function searchSettingsPlacement(windowWidth: number): SearchSettingsPlac
  */
 export function isSearchSettingsOpenStored(raw: string | null): boolean {
   return raw === '1' || raw === 'true';
+}
+
+// ---------------------------------------------------------------------------
+// Подсветка совпадений в заголовках результатов поиска (задача a1766c7d, 0.8.2)
+// ---------------------------------------------------------------------------
+
+/** Отрезок заголовка: подсвеченное совпадение (`hit`) либо обычный текст. */
+export interface HighlightRun {
+  text: string;
+  /** true — отрезок попал в один из термов подсветки. */
+  hit: boolean;
+}
+
+/**
+ * Термы подсветки заголовков по запросу строки поиска. Правило — то же, что у
+ * серверного сниппета (`server/src/domain/search-service.ts`): берутся только
+ * include-слова мини-синтаксиса (исключения `-слово` не подсвечиваются),
+ * `*` разворачивается в разделитель, слова чистятся от кавычек и пробелов и
+ * повторно не берутся.
+ *
+ * Сниппеты приходят от сервера уже с `<mark>`, а название мысли — нет: клиент
+ * подсвечивает в нём ровно те же вхождения, что сервер подсветил бы в тексте.
+ */
+export function searchHighlightTerms(query: string): string[] {
+  const terms: string[] = [];
+  for (const word of parseFilterKeywords(query).include) {
+    for (const raw of word.replace(/\*/g, ' ').split(/\s+/)) {
+      const term = raw.replace(/"/g, '').trim();
+      if (term === '') continue;
+      const key = term.toLowerCase();
+      if (terms.some((t) => t.toLowerCase() === key)) continue;
+      terms.push(term);
+    }
+  }
+  return terms;
+}
+
+/**
+ * Режет текст на отрезки по всем вхождениям любого терма без учёта регистра
+ * (все вхождения, каждое — один отрезок `hit`). Пересекающиеся совпадения
+ * сливаются в один отрезок; пустые термы игнорируются. Совпадений нет —
+ * один отрезок `hit: false` с исходным текстом.
+ *
+ * Чистая функция: DOM-обёртка — {@link renderHighlightedText} в `lib/dom.ts`.
+ */
+export function splitHighlightRuns(text: string, terms: readonly string[]): HighlightRun[] {
+  const lower = text.toLowerCase();
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const term of terms) {
+    const needle = term.toLowerCase();
+    if (needle === '') continue;
+    let idx = lower.indexOf(needle);
+    while (idx >= 0) {
+      spans.push({ start: idx, end: idx + needle.length });
+      idx = lower.indexOf(needle, idx + needle.length);
+    }
+  }
+  if (spans.length === 0) return [{ text, hit: false }];
+  spans.sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && span.start <= last.end) {
+      last.end = Math.max(last.end, span.end);
+      continue;
+    }
+    merged.push({ start: span.start, end: span.end });
+  }
+  const runs: HighlightRun[] = [];
+  let pos = 0;
+  for (const span of merged) {
+    if (span.start > pos) runs.push({ text: text.slice(pos, span.start), hit: false });
+    runs.push({ text: text.slice(span.start, span.end), hit: true });
+    pos = span.end;
+  }
+  if (pos < text.length) runs.push({ text: text.slice(pos), hit: false });
+  return runs;
 }

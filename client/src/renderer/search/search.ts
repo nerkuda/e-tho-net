@@ -14,9 +14,15 @@
  *   and resolves the thought via `thoughts.get` into a single
  *   «Мысль по ID» section (absent thought → explicit notice);
  * - empty result groups render collapsed; ↑/↓ walk group headers and hits,
- *   Ctrl+↑/↓ jump to the first/last row, Enter (or Ctrl+Enter) toggles a group
- *   header or activates a hit (hiding the panel); the next activation
- *   re-highlights the last chosen hit;
+ *   Ctrl+↑/↓ jump to the first/last row, Enter activates the selected row
+ *   exactly like a click on it (group header — collapse/expand, thought hit —
+ *   focus, link hit — editor) and reruns the search when no row is selected;
+ *   the next activation re-highlights the last chosen hit;
+ * - the query is highlighted inside the result clouds' titles
+ *   (`searchHighlightTerms` + the factory's `highlightTerms` option): every
+ *   case-insensitive occurrence of any query term is wrapped in `<mark>`, the
+ *   same look the server snippets use; a hit whose match is in its text or
+ *   synonyms keeps an unhighlighted title (задача a1766c7d);
  * - the panel is a bordered dropdown: left edge aligned with the search input
  *   (JS-anchored), right margin 10% and max height 50% of the window;
  * - the «настройки поиска» zone sits right of the results (30% of the panel
@@ -51,6 +57,7 @@ import {
   isNotFoundError,
   isSearchSettingsOpenStored,
   parseThoughtIdQuery,
+  searchHighlightTerms,
   searchPanelClosesOnTap,
   searchSettingsPlacement,
 } from '../lib/pure.js';
@@ -120,6 +127,16 @@ let lastSelectedKey: string | null = null;
 /** Flat navigation index over group headers + hits of expanded groups. */
 let cursor: number | null = null;
 
+/**
+ * Активация строки результата — ровно то, что выполнит клик по ней (одна
+ * функция на строку). Enter берёт действие отсюда, а не синтезирует
+ * `element.click()` по строке: у хита-мысли обработчик живёт на
+ * облачке-ребёнке, и синтетический клик по строке до него не доходит —
+ * кнопка Enter молча ничего не делала (задача a1766c7d). Реестр на строку,
+ * а не на ключ: строки перерисовываются, старые записи собирает GC.
+ */
+const rowActivations = new WeakMap<HTMLElement, () => void>();
+
 /** Облачка уже выбранных мыслей-подкорней (догружаются по id). */
 const subrootClouds = new Map<string, ThoughtCloudInput>();
 /** Id, по которым догрузка облачков уже запускалась (защита от цикла
@@ -188,8 +205,11 @@ export function mountSearch(next: SearchChrome): void {
       const rows = collectNavRows();
       const row = cursor === null ? undefined : rows[cursor];
       if (row !== undefined) {
-        row.el.click();
+        // Действие строки — то же, что клик по ней (см. activateRow).
+        row.activate();
       } else {
+        // Ни одна строка не выбрана: Enter — команда поиска (документация
+        // рекомендует её для крупных сетей).
         void run();
       }
     } else if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
@@ -347,6 +367,24 @@ export function refreshSearchIfVisible(): void {
 interface NavRow {
   el: HTMLElement;
   kind: 'header' | 'hit';
+  /**
+   * Действие строки — то же, что клик по ней. Заголовок сворачивает/разворачивает
+   * группу, хит выполняет свою активацию (мысль — в фокус, связь/хронология —
+   * хит открывается).
+   */
+  activate: () => void;
+}
+
+/**
+ * Запускает действие строки так же, как это сделал бы клик по ней. Хиты берут
+ * зарегистрированную активацию — ту же функцию обслуживает и клик; строки без
+ * записи (например, собранные вне рендера результатов) падают на обычный
+ * `click()`, который сворачивает/разворачивает группу или всплывает к строке.
+ */
+function activateRow(el: HTMLElement): void {
+  const activate = rowActivations.get(el);
+  if (activate !== undefined) activate();
+  else el.click();
 }
 
 /** Collects navigable rows from the results DOM (headers + visible hits). */
@@ -359,10 +397,14 @@ function collectNavRows(): NavRow[] {
     if (!(group instanceof HTMLElement)) continue;
     const header = group.querySelector<HTMLElement>(':scope > .search-group-header');
     const body = group.querySelector<HTMLElement>(':scope > .search-group-body');
-    if (header !== null) rows.push({ el: header, kind: 'header' });
+    if (header !== null) {
+      rows.push({ el: header, kind: 'header', activate: () => activateRow(header) });
+    }
     if (body !== null && !body.classList.contains('hidden')) {
       for (const hit of Array.from(body.querySelectorAll(':scope > .search-hit'))) {
-        if (hit instanceof HTMLElement) rows.push({ el: hit, kind: 'hit' });
+        if (hit instanceof HTMLElement) {
+          rows.push({ el: hit, kind: 'hit', activate: () => activateRow(hit) });
+        }
       }
     }
   }
@@ -604,16 +646,17 @@ function renderIdResult(thought: Thought | null): void {
     // so its full DTO carries every cloud-style field. The row shows the same
     // factory-built cloud as the canvas (08-ui-spec.md §2.2) with the id as
     // the snippet.
+    // Клик и Enter выполняют одну и ту же активацию строки (задача a1766c7d).
+    const activate = activateHit(key, () => void setFocus(thought.id));
+    rowActivations.set(row, activate);
     row.append(
       createThoughtCloud(thought, {
         profile: 'tree',
         // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
         // многоточием по списку, а не по холстовым 200px.
         width: 'container',
-        actions: {
-          onClick: activateHit(key, () => void setFocus(thought.id)),
-          onCtrlClick: () => activateHit(key, () => void setFocus(thought.id))(),
-        },
+        highlightTerms: currentHighlightTerms(),
+        actions: { onClick: activate, onCtrlClick: activate },
       }),
     );
     const info = div('search-hit-info');
@@ -636,7 +679,8 @@ function renderIdResult(thought: Thought | null): void {
 /**
  * Активация хитов поиска (единая для всех групп): запоминает выбранный хит,
  * подсвечивает его, прячет панель и возвращает фокус инпуту поиска — затем
- * выполняет действие хита.
+ * выполняет действие хита. Возвращённая функция — и обработчик клика, и
+ * действие записанной строки для Enter (см. {@link rowActivations}).
  */
 function activateHit(key: string, open: () => void): () => void {
   return () => {
@@ -648,6 +692,16 @@ function activateHit(key: string, open: () => void): () => void {
     if (chrome !== null) chrome.input.blur();
     open();
   };
+}
+
+/**
+ * Термы подсветки названий результатов — из текущего запроса строки поиска.
+ * Совпадение в названии подсвечивается прямо в облачке (фабричная опция
+ * `highlightTerms`); хит, совпавший только по тексту или синониму, остаётся
+ * с названием без подсветки — так и должно быть (задача a1766c7d).
+ */
+function currentHighlightTerms(): string[] {
+  return chrome === null ? [] : searchHighlightTerms(chrome.input.value);
 }
 
 /** Renders the four result groups. */
@@ -663,6 +717,9 @@ function renderResults(response: SearchResponse | null): void {
   // Группы результатов. Для мыслей иконка, название, цвета и начертание
   // приходят из общей фабрики облачка (мысли выглядят как на холсте); строки
   // связей и хронологии не несут мысли и остаются простыми строками.
+  // Термы подсветки — из текущего запроса: совпадения в названии подсвечены
+  // прямо в облачке (задача a1766c7d).
+  const highlightTerms = currentHighlightTerms();
   const groups: Array<{
     key: 'names' | 'texts' | 'links' | 'chronology';
     title: string;
@@ -680,7 +737,12 @@ function renderResults(response: SearchResponse | null): void {
       snippet: string;
       /** Stable row key for selection restore + keyboard navigation. */
       key: string;
-      open: () => void;
+      /**
+       * Активация хита — одна функция на клик и на Enter (задача a1766c7d):
+       * у хита-мысли её же исполняют жесты облачка, у простой строки — её
+       * обработчик клика.
+       */
+      activate: () => void;
       /** Stage 3: Ctrl+hover on the row shows the owner's permanent comment
        *  (no per-indicator icons in this list). */
       markPreview: (row: HTMLElement) => void;
@@ -689,76 +751,91 @@ function renderResults(response: SearchResponse | null): void {
     {
       key: 'names',
       title: 'Найдено по именам',
-      hits: response.by_names.map((hit) => ({
-        lead: createThoughtCloud(
-          { ...hit, id: hit.thought_id },
-          {
-            profile: 'tree',
-            // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
-            // многоточием по списку, а не по холстовым 200px.
-            width: 'container',
-            actions: {
-              onClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
-              onCtrlClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
+      hits: response.by_names.map((hit) => {
+        const key = `thought:${hit.thought_id}`;
+        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        return {
+          lead: createThoughtCloud(
+            { ...hit, id: hit.thought_id },
+            {
+              profile: 'tree',
+              // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+              // многоточием по списку, а не по холстовым 200px.
+              width: 'container',
+              highlightTerms,
+              actions: { onClick: activate, onCtrlClick: activate },
             },
-          },
-        ),
-        isThought: true,
-        snippet: hit.snippet,
-        key: `thought:${hit.thought_id}`,
-        open: () => void setFocus(hit.thought_id),
-        markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
-      })),
+          ),
+          isThought: true,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
+        };
+      }),
     },
     {
       key: 'texts',
       title: 'Найдено по текстам',
-      hits: response.by_texts.map((hit) => ({
-        lead: createThoughtCloud(
-          { ...hit, id: hit.thought_id },
-          {
-            profile: 'tree',
-            // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
-            // многоточием по списку, а не по холстовым 200px.
-            width: 'container',
-            actions: {
-              onClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
-              onCtrlClick: activateHit(`thought:${hit.thought_id}`, () => void setFocus(hit.thought_id)),
+      hits: response.by_texts.map((hit) => {
+        const key = `thought:${hit.thought_id}`;
+        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        return {
+          lead: createThoughtCloud(
+            { ...hit, id: hit.thought_id },
+            {
+              profile: 'tree',
+              // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+              // многоточием по списку, а не по холстовым 200px.
+              width: 'container',
+              // Совпадение только в тексте — название остаётся без подсветки,
+              // если запроса в нём нет.
+              highlightTerms,
+              actions: { onClick: activate, onCtrlClick: activate },
             },
-          },
-        ),
-        isThought: true,
-        snippet: hit.snippet,
-        key: `thought:${hit.thought_id}`,
-        open: () => void setFocus(hit.thought_id),
-        markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
-      })),
+          ),
+          isThought: true,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
+        };
+      }),
     },
     {
       key: 'links',
       title: 'Найдено связей',
-      hits: response.by_links.map((hit) => ({
-        lead: span('🔗'),
-        title: hit.type_name,
-        isThought: false,
-        snippet: hit.snippet,
-        key: `link:${hit.link_id}`,
-        open: () => void openLinkHit(hit.link_id),
-        markPreview: (row) => markCommentPreview(row, 'link', hit.link_id, hit.type_name),
-      })),
+      hits: response.by_links.map((hit) => {
+        const key = `link:${hit.link_id}`;
+        const activate = activateHit(key, () => void openLinkHit(hit.link_id));
+        return {
+          lead: span('🔗'),
+          title: hit.type_name,
+          isThought: false,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) => markCommentPreview(row, 'link', hit.link_id, hit.type_name),
+        };
+      }),
     },
     {
       key: 'chronology',
       title: 'Найдено в хронологии',
-      hits: response.by_chrono.map((hit) => ({
-        lead: span('📅'),
-        title: hit.valid_from.slice(0, 10),
-        isThought: false,
-        snippet: hit.snippet,
-        key: `chrono:${hit.owner}:${hit.owner_id}`,
-        open: () => void openChronoHit(hit.owner, hit.owner_id),
-        markPreview: (row) => markCommentPreview(row, hit.owner, hit.owner_id, hit.valid_from.slice(0, 10)),
-      })),
+      hits: response.by_chrono.map((hit) => {
+        const key = `chrono:${hit.owner}:${hit.owner_id}`;
+        const activate = activateHit(key, () => void openChronoHit(hit.owner, hit.owner_id));
+        return {
+          lead: span('📅'),
+          title: hit.valid_from.slice(0, 10),
+          isThought: false,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) =>
+            markCommentPreview(row, hit.owner, hit.owner_id, hit.valid_from.slice(0, 10)),
+        };
+      }),
     },
   ];
 
@@ -784,6 +861,9 @@ function renderResults(response: SearchResponse | null): void {
       for (const hit of group.hits) {
         const row = div('search-hit');
         row.dataset['key'] = hit.key;
+        // Активация строки для Enter — та же функция, что обслуживает клик
+        // (задача a1766c7d).
+        rowActivations.set(row, hit.activate);
         // Хит-мысль — облачко на всю ширину списка и snippet под ним
         // (ошибка 265cdb5f); строки связи/хронологии остаются в одну строку
         // с глифом-иконкой.
@@ -800,12 +880,12 @@ function renderResults(response: SearchResponse | null): void {
         info.append(snippet);
         row.append(info);
         hit.markPreview(row);
-        // Мысль активируется облачком (у него свои действия), а строки связи
-        // и хронологии — кликом по строке: тот же обработчик обслуживает и
-        // Enter в списке (`row.el.click()`). Ошибка 65382113: после перевода
-        // на фабрику облачка обработчик клика перестал доставаться этим
-        // строкам — связь и хронология не открывались ни мышью, ни Enter.
-        if (!hit.isThought) row.addEventListener('click', activateHit(hit.key, hit.open));
+        // Мысль активируется облачком (у него свои действия) и записью в
+        // реестре строк; строки связи и хронологии — своим кликом. Ошибка
+        // 65382113: после перевода на фабрику облачка обработчик клика
+        // перестал доставаться этим строкам — связь и хронология не
+        // открывались ни мышью, ни Enter.
+        if (!hit.isThought) row.addEventListener('click', hit.activate);
         body.append(row);
       }
     }

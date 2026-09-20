@@ -7,6 +7,8 @@
  * those paths use {@link renderHtml} and are documented at call sites.
  */
 
+import { splitHighlightRuns } from './pure.js';
+
 /** Creates an element with an optional class and text. */
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -61,6 +63,33 @@ export function renderHtml(node: HTMLElement, html: string): void {
 /** Sets the native tooltip (full text shown on hover). */
 export function setTooltip(node: HTMLElement, text: string): void {
   node.title = text;
+}
+
+/**
+ * Рисует текст с подсветкой совпадений: отрезки, попавшие в термы
+ * ({@link splitHighlightRuns}), оборачиваются в `<mark>` — тем же видом, что
+ * серверные сниппеты поиска, — остальное идёт текстовыми узлами. Термов нет
+ * (или совпадений нет) — обычный текст; `innerHTML` не используется.
+ */
+export function renderHighlightedText(
+  node: HTMLElement,
+  text: string,
+  terms: readonly string[],
+): void {
+  const runs = splitHighlightRuns(text, terms);
+  if (!runs.some((run) => run.hit)) {
+    // Совпадений нет — текст как есть, без разметки (и без лишних узлов).
+    node.textContent = text;
+    return;
+  }
+  node.replaceChildren();
+  for (const run of runs) {
+    if (run.hit) {
+      node.append(el('mark', undefined, run.text));
+    } else {
+      node.append(document.createTextNode(run.text));
+    }
+  }
 }
 
 /** Converts any thrown value into a readable Russian message. */

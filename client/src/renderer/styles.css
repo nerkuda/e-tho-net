@@ -4130,7 +4130,11 @@ body.cloud-dragging * {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.search-hit mark {
+/* Подсветка совпадений запроса: `<mark>` серверных сниппетов и такая же
+   подсветка в названии облачка результата (опция `highlightTerms` фабрики,
+   задача a1766c7d) выглядят одинаково. */
+.search-hit mark,
+.cloud-title mark {
   background: var(--mark-bg);
   color: var(--text);
   padding: 0 1px;

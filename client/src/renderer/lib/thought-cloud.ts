@@ -33,7 +33,7 @@
 import type { IconKind, ThoughtRef } from '@etn/shared';
 
 import { store } from '../state.js';
-import { div, el, setTooltip, span } from './dom.js';
+import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
 import { svgIcon } from './icons.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
@@ -343,6 +343,15 @@ export interface ThoughtCloudOptions {
   actions?: ThoughtCloudActions;
   /** Признак захвата — индикация блокировки; `null`/не задано — индикации нет. */
   lock?: ThoughtCloudLock | null;
+  /**
+   * Термы подсветки совпадений в названии (задача a1766c7d): каждое вхождение
+   * терма без учёта регистра оборачивается в `<mark>` — тем же видом, что
+   * серверные сниппеты. Термы даёт {@link searchHighlightTerms}
+   * (`lib/pure.ts`) из запроса строки поиска. Не задано/пусто — название как
+   * есть. Профиль тут ни при чём: подсветка — украшение содержимого названия,
+   * применимое в любом профиле.
+   */
+  highlightTerms?: readonly string[];
 }
 
 /** Подсказка метки корзины (S13). */
@@ -365,9 +374,17 @@ const SINGLE_LINE_PROFILES: ReadonlySet<CloudProfile> = new Set(['tree', 'chip',
  * на холсте — CSS-кламп по строкам, в однострочных профилях — `nowrap` +
  * `text-overflow: ellipsis` (ADR «Обрезка текста в интерфейсе…»).
  */
-function buildTitle(profile: CloudProfile, title: string): HTMLElement {
+function buildTitle(
+  profile: CloudProfile,
+  title: string,
+  highlightTerms: readonly string[],
+): HTMLElement {
   const spec = PROFILE_DOM[profile];
-  const node = el(spec.titleTag, spec.title, title);
+  const node = el(spec.titleTag, spec.title);
+  // Термы подсветки (поиск по карте, задача a1766c7d): совпадения запроса
+  // оборачиваются в `<mark>` внутри названия. Это не раскладка, а украшение
+  // содержимого — потому опция, а не отдельный профиль.
+  renderHighlightedText(node, title, highlightTerms);
   setTooltip(node, title);
   if (SINGLE_LINE_PROFILES.has(profile)) {
     // Перебиваем `-webkit-box` из `.cloud-title`, чтобы ellipsis работал
@@ -501,7 +518,7 @@ export function createThoughtCloud(
     icon_attachment_id: input.icon_attachment_id ?? null,
   });
 
-  const titleEl = buildTitle(profile, input.title);
+  const titleEl = buildTitle(profile, input.title, options.highlightTerms ?? []);
 
   if (profile === 'canvas' || profile === 'tree') {
     const main = div('cloud-main');
