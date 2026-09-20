@@ -72,7 +72,7 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
-import { buildLinkValueEditor, buildValueEditor } from '../editor/value-editor.js';
+import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
@@ -2366,15 +2366,15 @@ export function bindingDefaultPayload(
  * со стороны источника цели ограничены `allowed_target_type_ids`, у привязки
  * со стороны назначения источники — `allowed_source_type_ids`; пусто —
  * фильтра нет. Иерархию раскрывает сам редактор значения
- * (`buildLinkValueEditor`). Чистая — юнит-тест.
+ * (`buildLinkValueEditor`). Правило «сторона → ключ конфига» — общее с
+ * редактором значения ({@link linkAllowedTypeIds}); здесь только адаптер к
+ * чистой сигнатуре колонки «По умолчанию». Чистая — юнит-тест.
  */
 export function defaultPickerTypeIds(
   side: LinkPropertySide | null,
   config: PropertyConfig | null,
 ): string[] {
-  const raw =
-    side === 'target' ? config?.allowed_source_type_ids : config?.allowed_target_type_ids;
-  return Array.isArray(raw) ? raw.filter((id) => id !== '') : [];
+  return linkAllowedTypeIds(side, config);
 }
 
 /**

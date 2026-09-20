@@ -9,8 +9,9 @@
  * {@link buildValueEditor} — ЕДИНСТВЕННОЕ место клиента, где поле ввода
  * значения строится свитчем по `value_type`. Строится по определению
  * свойства (`EffectiveTypeProperty`): вид значения, `config.multiple`,
- * `config.options`; для вида «связь» — допустимые типы цели
- * (`config.allowed_target_type_ids`, с поддеревьями — L21), обязательность и
+ * `config.options`; для вида «связь» — допустимые типы противоположной стороны
+ * привязки (по `side`: цели — `config.allowed_target_type_ids`, источники —
+ * `config.allowed_source_type_ids`; иерархию раскрывает L21), обязательность и
  * значение по умолчанию (`default_value` используется как начальное значение,
  * только когда вызывающий передал `value: undefined`, а не `null`).
  *
@@ -43,7 +44,9 @@
 
 import type {
   EffectiveTypeProperty,
+  LinkPropertySide,
   LinkPropertyValueItem,
+  PropertyConfig,
   ThoughtRef,
 } from '@etn/shared';
 
@@ -85,7 +88,10 @@ export interface ValueEditorOptions {
    * («Структуры», отбор типа) собирает определение на лету по реестру,
    * без фейковых `id`/`owner_*` привязки.
    */
-  definition: Pick<EffectiveTypeProperty, 'value_type' | 'config' | 'required' | 'default_value'>;
+  definition: Pick<
+    EffectiveTypeProperty,
+    'value_type' | 'config' | 'required' | 'default_value' | 'side'
+  >;
   /**
    * Текущее значение: скаляр (`string`/`number`/`boolean`, `string[]` для
    * множественного `url`) либо рёбра `LinkPropertyValueItem[]` для вида
@@ -972,6 +978,27 @@ export function buildOutsideReadonlyEdgeChip(
 }
 
 /**
+ * Допустимые типы противоположной стороны привязки свойства-связи — ключ
+ * `config` зависит от стороны привязки (0.8.1, требование b9562306, задача
+ * d7177d1d): у привязки со стороны источника ограничены ЦЕЛИ
+ * (`config.allowed_target_type_ids`), у привязки со стороны назначения —
+ * ИСТОЧНИКИ (`config.allowed_source_type_ids`). Пусто — ограничений нет
+ * (кандидаты — любые мысли). Иерархию типов раскрывает вызывающий
+ * (`expandTypeIdsToSubtree`, L21). Чистая — юнит-тест.
+ *
+ * ЕДИНСТВЕННЫЙ источник правила «сторона → ключ конфига» для пикеров клиента:
+ * `screens/type-manager.ts` делегирует сюда свой `defaultPickerTypeIds`.
+ */
+export function linkAllowedTypeIds(
+  side: LinkPropertySide | null | undefined,
+  config: PropertyConfig | null | undefined,
+): string[] {
+  const raw =
+    side === 'target' ? config?.allowed_source_type_ids : config?.allowed_target_type_ids;
+  return Array.isArray(raw) ? raw.filter((id) => id !== '') : [];
+}
+
+/**
  * Чип-поле набора целей свойства-связи (задача 8ab775d9, паттерн a47947c8;
  * правки — инструкция «Использовать унифицированные поля выбора ссылок»).
  *
@@ -981,8 +1008,9 @@ export function buildOutsideReadonlyEdgeChip(
  * живого поиска на ОБЩЕЙ выпадашке (история последних целей на пустом поле —
  * ошибка 880c3add, живой поиск при вводе) + кнопка «выбрать»
  * (`pickThoughtsDialog` в режиме «несколько», предзаполнен; можно создавать
- * мысли). Отбор по типам цели — из `config.allowed_target_type_ids` с
- * поддеревьями (L21), только при поиске.
+ * мысли). Отбор кандидатов по типам противоположной стороны привязки —
+ * {@link linkAllowedTypeIds} + поддеревья (L21), применяется и к живому
+ * поиску поля, и к диалогу «выбрать» (ошибка cfbf3855).
  *
  * `ownerType`/`ownerId` заданы — чип получает контекстное меню операций над
  * ребром владельца; без владельца (дефолт свойства в редакторе типа/реестре,
@@ -992,7 +1020,7 @@ export function buildLinkValueEditor(opts: {
   networkId: string;
   ownerType?: 'thought' | 'link';
   ownerId?: string;
-  definition: Pick<EffectiveTypeProperty, 'config' | 'required'>;
+  definition: Pick<EffectiveTypeProperty, 'config' | 'required' | 'side'>;
   values: LinkPropertyValueItem[];
   save: (next: unknown) => Promise<boolean>;
   /** Подключает историю последних целей (требование f6399882). */
@@ -1004,14 +1032,13 @@ export function buildLinkValueEditor(opts: {
   const { networkId, ownerType, ownerId, definition } = opts;
   let current: string[] = opts.values.map((edge) => edge.target_id);
 
-  // Отбор по типам — input aid из конфига свойства-связи: список
-  // `allowed_target_type_ids` расширяется до поддеревьев типов (L21) —
+  // Отбор по типам — input aid из конфига свойства-связи: ключ конфига зависит
+  // от стороны привязки (цели — allowed_target_type_ids, источники —
+  // allowed_source_type_ids), список расширяется до поддеревьев типов (L21) —
   // зеркало серверной валидации; сохранённые значения фильтром не трогаются.
   const filterIds = expandTypeIdsToSubtree(
     store.state.thoughtTypes,
-    ((definition.config?.allowed_target_type_ids as string[] | undefined) ?? []).filter(
-      (id) => id !== '',
-    ),
+    linkAllowedTypeIds(definition.side ?? null, definition.config ?? null),
   );
 
   // Кеш метаданных целей: подписи есть в рёбрах, значок/цвета/флаги —
