@@ -6,6 +6,9 @@
  *    «Типы назначений»: общий пикер работает в режиме чек-листа, применение
  *    — кнопкой «Применить и закрыть»; чистый хелпер {@link mergePickedTypeRows}
  *    превращает выбранный набор id в новые строки таблицы без дублей.
+ *    Пикер открывается с предзаполнением — чистый хелпер
+ *    {@link currentTypeRowIds} отдаёт уже выбранные типы своей стороны
+ *    (ошибка 4e9ad1a0: галочки уже выбранных типов при открытии диалога).
  * 2. Дефолты привязок (0.8.2, ADR «дефолт свойства живёт на привязке»):
  *    колонка «Значение по умолчанию» — редактор значения без режимов
  *    «(общее)»/«частное». {@link linkDefaultPayload} конвертирует набор целей
@@ -20,6 +23,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  currentTypeRowIds,
   linkDefaultPayload,
   mergePickedTypeRows,
   type TypeRowDraft,
@@ -71,6 +75,44 @@ describe('mergePickedTypeRows — мультивыбор «Добавить ти
 
   it('пустые id отбрасываются', () => {
     assert.equal(mergePickedTypeRows([], ['', 'tt-a'], 'source').length, 1);
+  });
+});
+
+describe('currentTypeRowIds — предзаполнение пикера «Добавить тип»', () => {
+  it('возвращает типы своей стороны в порядке строк', () => {
+    const rows = [
+      makeRow({ thoughtTypeId: 'tt-a', side: 'source' }),
+      makeRow({ thoughtTypeId: 'tt-b', side: 'source' }),
+    ];
+    assert.deepEqual(currentTypeRowIds(rows, 'source'), ['tt-a', 'tt-b']);
+  });
+
+  it('чужие стороны не попадают: таблицы «Типы источников» и «Типы назначений» независимы', () => {
+    const rows = [
+      makeRow({ thoughtTypeId: 'tt-src', side: 'source' }),
+      makeRow({ thoughtTypeId: 'tt-dst', side: 'target' }),
+    ];
+    assert.deepEqual(currentTypeRowIds(rows, 'source'), ['tt-src']);
+    assert.deepEqual(currentTypeRowIds(rows, 'target'), ['tt-dst']);
+  });
+
+  it('у скаляра сторона null — предзаполняется вся таблица «Типы мыслей»', () => {
+    const rows = [
+      makeRow({ thoughtTypeId: 'tt-a', side: null }),
+      makeRow({ thoughtTypeId: 'tt-b', side: 'source' }),
+    ];
+    assert.deepEqual(currentTypeRowIds(rows, null), ['tt-a']);
+  });
+
+  it('пустая таблица — пустое предзаполнение (ни одна галочка не отмечена)', () => {
+    assert.deepEqual(currentTypeRowIds([], 'source'), []);
+  });
+
+  it('повторное применение с предзаполнением не добавляет дублей (ошибка 4e9ad1a0)', () => {
+    const existing = [makeRow({ thoughtTypeId: 'tt-a', side: 'source' })];
+    const prefill = currentTypeRowIds(existing, 'source');
+    const fresh = mergePickedTypeRows(existing, prefill, 'source');
+    assert.deepEqual(fresh, []);
   });
 });
 

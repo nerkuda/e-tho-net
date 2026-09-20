@@ -704,6 +704,20 @@ export function collectDefaultOverrideOps(
 }
 
 /**
+ * Id типов, уже стоящих в таблице привязок этой стороны, — предзаполнение
+ * пикера «Добавить тип» (ошибка 4e9ad1a0): при открытии диалога уже выбранные
+ * типы отмечены чек-боксами. Сторона — та же, что у таблицы (у скаляра
+ * `null`), поэтому набор совпадает со строками, показанными в ней. Чистая —
+ * юнит-тест.
+ */
+export function currentTypeRowIds(
+  rows: readonly TypeRowDraft[],
+  side: 'source' | 'target' | null,
+): string[] {
+  return rows.filter((r) => r.side === side).map((r) => r.thoughtTypeId);
+}
+
+/**
  * Добавляет к строкам таблицы привязок новые строки для `picked` типов
  * (мультивыбор в пикере «Добавить тип»): дубли той же стороны пропускаются.
  * Чистая — юнит-тест.
@@ -1423,6 +1437,10 @@ export function openPropertyManagerEditor(
         networkId,
         kind: 'thought-types',
         title,
+        // Уже выбранные типы этой таблицы отмечены чек-боксами при открытии
+        // диалога (ошибка 4e9ad1a0); повторный выбор дублей не создаёт
+        // (mergePickedTypeRows их пропускает).
+        currentIds: currentTypeRowIds(draft.typeRows, side),
         allowEmpty: false,
         applyLabel: 'Применить и закрыть',
         searchButtons: (ctx) => [
