@@ -1057,6 +1057,12 @@ async function refreshEdges(): Promise<void> {
   const signature = `${store.state.showInactive ? 1 : 0}|${ids.slice().sort().join(',')}`;
   if (signature === edgesSignature) return;
   edgesSignature = signature;
+  if (ids.length === 0) {
+    // §6.12 requires a non-empty ids list; an empty tree just drops the lines.
+    edges.clear();
+    drawLinks();
+    return;
+  }
   try {
     const list = await etn.structures.edges(networkId, ids, store.state.showInactive);
     edges.clear();
