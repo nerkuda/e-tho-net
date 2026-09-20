@@ -131,6 +131,28 @@ export interface SuggestHandle {
   dispose(): void;
 }
 
+/**
+ * Открытые списки-подсказчики: слой живёт в `document.body` (позиционируется
+ * `positionBodyDropdown`), а не внутри поля. Панели, содержащие такое поле
+ * (строка поиска карты), должны узнавать клик по этому слою как «свой» —
+ * иначе нажатие закрывает панель, поле теряет фокус, список исчезает и выбор
+ * не доезжает до `onPick` (ошибка 72a06e01).
+ */
+const openLists = new Set<HTMLElement>();
+
+/**
+ * Принадлежит ли узел открытой выпадашке подсказок. Общий слой для панелей,
+ * которые закрываются кликом вне себя: клик по подсказке — клик «внутри»
+ * такого поля (ошибка 72a06e01).
+ */
+export function isInsideSuggestDropdown(node: Node | null): boolean {
+  if (node === null) return false;
+  for (const list of openLists) {
+    if (list.contains(node)) return true;
+  }
+  return false;
+}
+
 /** Выполняется ли условие показа источника при данном тексте поля. */
 function matchesWhen(when: SuggestWhen, query: string): boolean {
   if (when === 'empty') return query === '';
@@ -177,6 +199,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
 
   const close = (): void => {
     if (list !== null) {
+      openLists.delete(list);
       list.remove();
       list = null;
     }
@@ -303,6 +326,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       }
     }
     if (fresh) {
+      openLists.add(box);
       document.body.append(box);
       positionBodyDropdown(box, input);
     }

@@ -128,6 +128,19 @@ export function closeDialog(): void {
 }
 
 /**
+ * Принадлежит ли узел открытому модальному диалогу. Нужно панелям, которые
+ * закрываются кликом вне себя (строка поиска карты): клик внутри диалога,
+ * открытого ИЗ этой панели, — не клик «вне панели» (ошибка 72a06e01).
+ */
+export function isInsideDialog(node: Node | null): boolean {
+  if (node === null) return false;
+  for (const backdrop of stack) {
+    if (backdrop.contains(node)) return true;
+  }
+  return false;
+}
+
+/**
  * Shows a modal dialog. Returns its close function. Opening while another
  * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */

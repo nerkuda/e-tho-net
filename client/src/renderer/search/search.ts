@@ -32,8 +32,10 @@ import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { isInsideDialog } from '../lib/dialog.js';
+import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
+import { isNotFoundError, parseThoughtIdQuery, searchPanelClosesOnTap } from '../lib/pure.js';
 import {
   buildEntityChipField,
   buildEntityCombo,
@@ -161,11 +163,21 @@ export function mountSearch(next: SearchChrome): void {
 
   // Close the panel on any click outside it (the input and the gear keep it
   // open) and on Escape while it is visible, even if the input lost focus.
+  // Клик по всплывающему слою, открытому ИЗ панели, — не «вне панели»:
+  // общая выпадашка подсказок и модальный диалог живут в `document.body`.
+  // Иначе нажатие на строку подсказки прячет панель, поле теряет фокус,
+  // список подсказок закрывается до `click` — выбранный тип (фокус, тип
+  // связи) не доезжает до отбора (ошибка 72a06e01).
   document.addEventListener('pointerdown', (event) => {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
     if (!(target instanceof Node)) return;
-    if (host.contains(target) || input.contains(target) || optionsButton.contains(target)) {
+    if (!searchPanelClosesOnTap({
+      insidePanel:
+        host.contains(target) || input.contains(target) || optionsButton.contains(target),
+      insideSuggest: isInsideSuggestDropdown(target),
+      insideDialog: isInsideDialog(target),
+    })) {
       return;
     }
     hidePanel();

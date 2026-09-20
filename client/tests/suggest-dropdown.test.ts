@@ -20,6 +20,7 @@ import { describe, it } from 'node:test';
 
 import {
   historySuggestSource,
+  isInsideSuggestDropdown,
   searchSuggestSource,
   optionsSuggestSource,
   wireSuggest,
@@ -878,5 +879,62 @@ describe('suggest-dropdown: строка-мысль — облачко обще�
     input.emit('keydown', key('ArrowDown'));
     input.emit('keydown', key('Enter'));
     assert.deepEqual(picked, [{ value: 'a', label: 'А' }], 'выделенная строка выбирается');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Слой выпадашки как «свой» для панелей, закрывающихся кликом вне себя
+// (ошибка 72a06e01: строка поиска карты пряталась от клика по подсказке)
+// ---------------------------------------------------------------------------
+
+describe('слой выпадашки подсказок виден панелям-владельцам', () => {
+  it('открытый список опознаётся по своему узлу, закрытый — нет', async () => {
+    const w = wire({ when: 'always', load: () => [{ value: 'a', label: 'А' }] });
+    assert.equal(
+      isInsideSuggestDropdown(w.input as unknown as Node),
+      false,
+      'до открытия списка его строк ещё нет',
+    );
+
+    await openBy(() => w.input.emit('focus'));
+    const list = openList(w.body);
+    assert.ok(list !== undefined, 'список открыт');
+    assert.equal(
+      isInsideSuggestDropdown(list.children[0] as unknown as Node),
+      true,
+      'строка подсказки — внутри слоя (клик по ней не «вне» панели-владельца)',
+    );
+    assert.equal(
+      isInsideSuggestDropdown(list as unknown as Node),
+      true,
+      'сам список — тоже слой',
+    );
+    assert.equal(
+      isInsideSuggestDropdown(w.input as unknown as Node),
+      false,
+      'поле ввода — не слой выпадашки (панель проверяет его сама)',
+    );
+    assert.equal(isInsideSuggestDropdown(null), false);
+
+    w.handle.close();
+    assert.equal(
+      isInsideSuggestDropdown(list.children[0] as unknown as Node),
+      false,
+      'строка закрытого списка слоем больше не считается',
+    );
+  });
+
+  it('выбор строки закрывает слой (строка выбирается тем же кликом)', async () => {
+    const w = wire({ when: 'always', load: () => [{ value: 'a', label: 'А' }] });
+    await openBy(() => w.input.emit('focus'));
+    const row = itemRows(w.body)[0];
+    assert.ok(row !== undefined);
+    row.click();
+    assert.deepEqual(w.picked, [{ value: 'a', label: 'А' }]);
+    assert.equal(
+      isInsideSuggestDropdown(row as unknown as Node),
+      false,
+      'после выбора список снят — слой пуст',
+    );
   });
 });

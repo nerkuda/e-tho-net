@@ -812,3 +812,35 @@ export function neighborsPreviewBounds(canvasRect: { width: number; height: numb
 export function sortRefsByTitle<T extends { title: string }>(refs: readonly T[]): T[] {
   return [...refs].sort((a, b) => a.title.localeCompare(b.title));
 }
+
+// ---------------------------------------------------------------------------
+// Строка поиска карты: политика закрытия выпадающей панели
+// (08-ui-spec.md §3; ошибка 72a06e01)
+// ---------------------------------------------------------------------------
+
+/**
+ * Куда пришлось нажатие относительно выпадающей панели поиска.
+ *
+ * `insidePanel` — сама панель (оболочка, строка поиска, шестерёнка опций);
+ * `insideSuggest` — открытая общая выпадашка подсказок (живёт в
+ * `document.body`, см. `lib/suggest-dropdown.ts`); `insideDialog` — открытый
+ * модальный диалог (`lib/dialog.ts`).
+ */
+export interface SearchPanelTapLayers {
+  insidePanel: boolean;
+  insideSuggest: boolean;
+  insideDialog: boolean;
+}
+
+/**
+ * Закрывать ли панель поиска по нажатию. Панель скрывается только кликом
+ * вне себя — вне самой панели и вне всплывающих слоёв, открытых ИЗ неё
+ * (выпадашка подсказок, модальный диалог). Клик по подсказке или по диалогу
+ * панель не закрывает: иначе поле теряет фокус, список подсказок исчезает до
+ * `click`, и выбранный тип (фокус, тип связи) не доезжает до отбора
+ * (ошибка 72a06e01). `Escape` — отдельный путь закрытия, политика его не
+ * касается.
+ */
+export function searchPanelClosesOnTap(layers: SearchPanelTapLayers): boolean {
+  return !layers.insidePanel && !layers.insideSuggest && !layers.insideDialog;
+}
