@@ -347,12 +347,14 @@ describe(
           assert.equal(p1.position, 0);
           assert.equal(p2.position, 1);
 
-          // Duplicate key rejected.
-          assert.throws(
-            () =>
-              createTypeProperty(ndb, 'thought_type', tt.id, { key: 'author', value_type: 'text' }, USER),
-            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
-          );
+          // Повторная привязка того же свойства к тому же типу идемпотентна
+          // (ошибка 0bfd7180): та же строка привязки, порядок не переезжает.
+          const again = createTypeProperty(ndb, 'thought_type', tt.id, {
+            key: 'author',
+            value_type: 'text',
+          }, USER);
+          assert.equal(again.id, p1.id);
+          assert.equal(again.position, p1.position);
 
           // Update flips required and stores config as JSON.
           const updated = updateTypeProperty(ndb, p1.id, {

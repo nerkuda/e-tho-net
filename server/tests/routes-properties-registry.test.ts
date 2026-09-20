@@ -539,6 +539,87 @@ describe(
       }
     });
 
+    it('re-attaching a property the same type already binds is idempotent (ошибка 0bfd7180)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const type = (
+          await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types`,
+            headers: h,
+            payload: { name: 'Категория софта' },
+          })
+        ).json().data as { id: string };
+
+        // Шаг «Создать свойство» из диалога редактора типа: форма
+        // `{ key, value_type }` создаёт запись справочника и сразу привязывает
+        // её к типу.
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { key: 'категория', value_type: 'text' },
+        });
+        assert.equal(created.statusCode, 201);
+        const first = created.json().data as {
+          id: string;
+          property_id: string;
+          position: number;
+        };
+
+        // Шаг «Применить и закрыть» шлёт attach того же свойства: повтор
+        // идемпотентен — та же строка привязки, никакого 409 DUPLICATE.
+        const repeat = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { property_id: first.property_id },
+        });
+        assert.equal(repeat.statusCode, 201);
+        const second = repeat.json().data as {
+          id: string;
+          property_id: string;
+          position: number;
+        };
+        assert.equal(second.id, first.id, 'привязка переиспользуется, а не создаётся заново');
+        assert.equal(second.property_id, first.property_id);
+        assert.equal(second.position, first.position, 'порядок без явного position не переезжает');
+
+        // В эффективном списке ровно одна собственная привязка «категория».
+        const listRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+        });
+        const listed = (
+          listRes.json().data as Array<{
+            id: string;
+            key: string;
+            inherited: boolean;
+            mirrored?: boolean;
+          }>
+        ).filter((p) => p.key === 'категория');
+        assert.equal(listed.length, 1);
+        assert.equal(listed[0]!.id, first.id);
+        assert.equal(listed[0]!.inherited, false);
+
+        // Явно переданная роль применяется к той же строке, а не к новой.
+        const withRole = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { property_id: first.property_id, required: true },
+        });
+        assert.equal(withRole.statusCode, 201);
+        const updated = withRole.json().data as { id: string; required: boolean };
+        assert.equal(updated.id, first.id);
+        assert.equal(updated.required, true);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('POST { key, value_type } with a name already taken returns 409 + property_id of the holder', async () => {
       const ctx = await buildRestContext();
       try {

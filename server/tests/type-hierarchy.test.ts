@@ -269,20 +269,24 @@ describe(
       }
     });
 
-    it('rejects duplicate property keys inside the ancestor chain / subtree', () => {
+    it('rejects a property key bound by an ancestor; a same-type repeat stays idempotent', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const parent = createThoughtType(ndb, { name: 'Родитель' }, USER);
         const child = createThoughtType(ndb, { name: 'Ребёнок', parent_id: parent.id }, USER);
-        createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }, USER);
+        const onParent = createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }, USER);
+        // Свойство, подключённое предком, потомку подключать не нужно — 409.
         assert.throws(
           () => createTypeProperty(ndb, 'thought_type', child.id, { key: 'пол', value_type: 'text' }, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
         );
-        // …and in the other direction: a child's key cannot appear on an ancestor.
-        assert.throws(
-          () => createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }, USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+        // Повторная привязка к ТОМУ ЖЕ типу идемпотентна (ошибка 0bfd7180):
+        // та же строка привязки, второй не появляется.
+        const again = createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }, USER);
+        assert.equal(again.id, onParent.id);
+        assert.equal(
+          listEffectiveTypeProperties(ndb, 'thought_type', parent.id).filter((d) => d.key === 'пол').length,
+          1,
         );
       } finally {
         ndb.close();

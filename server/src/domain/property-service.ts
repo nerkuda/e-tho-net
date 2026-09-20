@@ -2402,7 +2402,10 @@ function materializeMirroredTargetBindings(
  *
  * Then the binding is created with the given `required`/`position`/`side`.
  * Attaching to a type whose ANCESTOR already binds the property is rejected
- * with `DUPLICATE` — the property is already inherited. Attaching to a type
+ * with `DUPLICATE` — the property is already inherited. Re-attaching a
+ * property the type ALREADY binds is **idempotent** (ошибка `0bfd7180`):
+ * the existing binding is updated in place (same row, same logical id) —
+ * never a second row and never `DUPLICATE`. Attaching to a type
  * drops the same property's redundant bindings across the type's whole
  * SUBTREE in the same transaction (02-data-model.md §3.4.1); values are never
  * touched — they address the property, not the binding.
@@ -2450,23 +2453,28 @@ export function createTypeProperty(
     }
 
     // A binding on an ancestor means the property is already inherited — the
-    // effective list must keep exactly one entry per property per chain. A
-    // visible binding on the type itself is a duplicate attach.
+    // effective list must keep exactly one entry per property per chain, so
+    // that stays `DUPLICATE`.
+    //
+    // A visible binding on the type ITSELF is a repeat attach, and a repeat is
+    // idempotent (ошибка `0bfd7180`; прецедент — MCP `etn.ontology.write`
+    // `type_properties[].action` `unchanged`/`updated` и `on_duplicate: reuse`
+    // у `etn.thoughts.write`): привязка не дублируется и не пересоздаётся,
+    // а до-писывается тем же upsert ниже (`ON CONFLICT … DO UPDATE`), сохраняя
+    // исходный логический id. Порядок при этом не переезжает: без явного
+    // `position` берётся позиция существующей привязки, а не «в конец».
     const chain = visibleTypeChain(ndb, ownerType, ownerId);
+    let existingOwnPosition: number | null = null;
     for (const typeId of chain) {
       const clash = ndb
         .prepare(
-          'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+          'SELECT id, position FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
         )
-        .get(ownerType, typeId, prop.id) as { id: string } | undefined;
+        .get(ownerType, typeId, prop.id) as { id: string; position: number } | undefined;
       if (!clash) continue;
       if (typeId === ownerId) {
-        throw new EtnError('DUPLICATE', `свойство «${key}» уже подключено к этому типу`, {
-          owner_type: ownerType,
-          owner_id: ownerId,
-          key,
-          clash_owner_id: typeId,
-        });
+        existingOwnPosition = clash.position;
+        continue;
       }
       throw new EtnError(
         'DUPLICATE',
@@ -2482,6 +2490,8 @@ export function createTypeProperty(
 
     // Уникальность пары (тип связи + сторона) в наборе собственных свойств
     // типа (требование b9562306). Совпадение с внетиповым свойством — не ошибка.
+    // Собственная привязка этого же свойства исключается: при повторном
+    // attach она и есть обновляемая строка, а не соперник (ошибка 0bfd7180).
     if (prop.value_type === 'link') {
       assertLinkPropertyPairUnique(
         ndb,
@@ -2489,7 +2499,7 @@ export function createTypeProperty(
         ownerId,
         linkPropertyLinkTypeId(prop.config),
         finalSide,
-        null,
+        prop.id,
       );
     }
 
@@ -2511,6 +2521,7 @@ export function createTypeProperty(
 
     const position =
       input.position ??
+      existingOwnPosition ??
       (
         ndb
           .prepare(

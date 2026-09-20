@@ -1209,6 +1209,65 @@ describe(
       }
     });
 
+    it('re-attaching the same property to the same type is idempotent (ошибка 0bfd7180)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Идемпотентность' }, USER);
+        const first = createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: 'категория', value_type: 'text' },
+          USER,
+        );
+
+        // Повторный attach того же свойства: ни DUPLICATE, ни второй строки —
+        // та же привязка (её id) и тот же порядок.
+        const again = createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: 'категория', value_type: 'text' },
+          USER,
+        );
+        assert.equal(again.id, first.id, 'повтор использует существующую привязку');
+        assert.equal(again.position, first.position, 'порядок без явного position не переезжает');
+        const own = listEffectiveTypeProperties(ndb, 'thought_type', tt.id).filter(
+          (d) => d.key === 'категория' && d.inherited !== true,
+        );
+        assert.equal(own.length, 1, 'собственная привязка ровно одна');
+
+        // Явно переданная роль применяется к существующей строке.
+        const withRole = createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: 'категория', value_type: 'text', required: true, position: 5 },
+          USER,
+        );
+        assert.equal(withRole.id, first.id);
+        assert.equal(withRole.required, true);
+        assert.equal(withRole.position, 5);
+
+        // Привязка предка по-прежнему отвергается: свойство и так наследуется.
+        const child = createThoughtType(ndb, { name: 'Потомок', parent_id: tt.id }, USER);
+        assert.throws(
+          () =>
+            createTypeProperty(
+              ndb,
+              'thought_type',
+              child.id,
+              { key: 'категория', value_type: 'text' },
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          'привязка предка остаётся 409 DUPLICATE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('registry deletion is blocked by bindings and values with both counters (409)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
