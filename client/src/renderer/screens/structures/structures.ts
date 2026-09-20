@@ -63,7 +63,6 @@ import {
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
 import { openFilterCommandsMenu } from './commands.js';
 import {
-  applyPanelWidth,
   buildConditions,
   buildExtraFilter,
   buildKeywordScope,
@@ -73,9 +72,9 @@ import {
   getFilterState,
   mountFilterPanel,
   setFilterState,
-  setPanelWidth,
   type FilterState,
 } from './filter-panel.js';
+import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -502,8 +501,18 @@ export function mountStructures(hostEl: HTMLElement): void {
   const results = div('st-results');
   host.append(panel, splitter, results);
   resultsHost = results;
-  applyPanelWidth();
-  wirePanelSplitter(splitter, panel);
+  // Общий каркас панели отбора (задача 2ebe4206): скрываемость плавающей
+  // кнопкой, положение по ширине полотна (слева/вверху), перетаскивание
+  // границы; состояние — локально в `ui_state.structures_filter_panel`.
+  mountFilterPanelFrame({
+    container: host,
+    panel,
+    splitter,
+    stateKey: UI_STATE_KEY.STRUCTURES_FILTER_PANEL,
+    minSize: FILTER_W_MIN,
+    maxSize: FILTER_W_MAX,
+    legacySize: () => getFilterState().panelWidth,
+  });
   initStructuresKbdNav(results, {
     openThought: (id) => void openStructuresThought(id),
     toggleExpand: toggleExpandFor,
@@ -561,52 +570,6 @@ export function mountStructures(hostEl: HTMLElement): void {
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
-}
-
-/**
- * Draggable splitter on the panel/results seam (§15.2): pointer drag resizes
- * the filter panel (clamped to {@link FILTER_W_MIN}..{@link FILTER_W_MAX}),
- * the result tree takes the rest. The width is kept in the filter state and
- * persisted to L4 `structures_state` via the panel's persist callback.
- */
-function wirePanelSplitter(splitter: HTMLElement, panel: HTMLElement): void {
-  let dragging = false;
-  let startX = 0;
-  let startW = 0;
-
-  const onMove = (event: PointerEvent): void => {
-    if (!dragging) return;
-    const width = Math.min(FILTER_W_MAX, Math.max(FILTER_W_MIN, startW + (event.clientX - startX)));
-    panel.style.setProperty('--st-filter-w', `${width}px`);
-    setPanelWidth(width);
-  };
-  const onUp = (event: PointerEvent): void => {
-    if (!dragging) return;
-    dragging = false;
-    splitter.classList.remove('dragging');
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onUp);
-    try {
-      splitter.releasePointerCapture(event.pointerId);
-    } catch {
-      /* capture already released */
-    }
-  };
-
-  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    dragging = true;
-    startX = event.clientX;
-    startW = getFilterState().panelWidth ?? panel.clientWidth;
-    splitter.classList.add('dragging');
-    try {
-      splitter.setPointerCapture(event.pointerId);
-    } catch {
-      /* capture unavailable — window listeners still track the drag */
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  });
 }
 
 /** Signature of the inputs the tree rendering depends on (redundant rebuilds). */

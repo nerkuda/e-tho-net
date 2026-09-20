@@ -51,6 +51,7 @@ import { openLayerPropsDialog } from '../layers.js';
 import { showThoughtTypeEditor } from '../type-manager.js';
 import { openPropertyManagerEditor } from '../property-manager.js';
 
+import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
@@ -106,8 +107,11 @@ let querySeq = 0;
 let cursorRow = -1;
 /** Индекс строки, по которой кликнули — отметка «выбрано» (запоминается между отрисовками). */
 let selectedRowIdx = -1;
-/** Ширина панели отборов (px), заданная сплиттером. `null` — дефолт 33%. */
+/** Ширина из ПРЕЖНЕГО пер-экранного снимка `activity_state` (задача 2ebe4206):
+ *  миграционное значение для каркаса панели; размером владеет каркас. */
 let panelWidth: number | null = null;
+/** Рукоятка общего каркаса панели отбора (скрытость/положение/размер). */
+let activityFrame: FilterPanelFrameHandle | null = null;
 /** Границы ширины панели (px), как в Структурах мыслей. */
 const PANEL_W_MIN = 260;
 const PANEL_W_MAX = 480;
@@ -170,6 +174,8 @@ export async function ensureActivityInitialised(): Promise<void> {
       offset = parsed.offset;
       panelWidth = parsed.panelWidth;
       renderFilterPanel();
+      // Миграционное значение прежнего снимка подхватывает каркас панели.
+      activityFrame?.apply();
     }
   } catch {
     // Fall back to the empty filter.
@@ -177,7 +183,6 @@ export async function ensureActivityInitialised(): Promise<void> {
   // `EnsureLoaded` triggers an async `users` fetch; rows rendered before it
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
-  applyPanelWidth();
   await applyQuery();
 }
 
@@ -192,100 +197,31 @@ function persistState(): void {
     .catch(() => undefined);
 }
 
-/** Persists the splitter-dragged panel width (замечание пользователя). */
-function setPanelWidth(width: number): void {
-  panelWidth = width;
-  persistPanelWidth();
-}
-
-/** Mirrors the structures pattern — пишет ширину в L4. */
-function persistPanelWidth(): void {
-  const tabId = store.state.activeTabId;
-  if (tabId === null) return;
-  void etn.tabs
-    .updateState(tabId, {
-      activity_state: JSON.stringify({
-        filter,
-        offset,
-        panelWidth: panelWidth ?? undefined,
-      }),
-    })
-    .catch(() => undefined);
-}
-
-/** Применяет сохранённую/дефолтную ширину панели к DOM. */
-function applyPanelWidth(): void {
-  if (host === null) return;
-  const panel = host.querySelector<HTMLElement>('.activity-filter');
-  if (panel === null) return;
-  if (panelWidth === null) panel.style.removeProperty('--act-filter-w');
-  else panel.style.setProperty('--act-filter-w', `${Math.round(panelWidth)}px`);
-}
-
-/**
- * Панель-сплиттер: меняет ширину `.activity-filter` через CSS-переменную
- * `--act-filter-w` (как `wirePanelSplitter` в Структурах мыслей).
- */
-function wirePanelSplitter(splitter: HTMLElement, panel: HTMLElement): void {
-  let dragging = false;
-  let startX = 0;
-  let startW = 0;
-  const onMove = (event: PointerEvent): void => {
-    if (!dragging) return;
-    const width = Math.min(
-      PANEL_W_MAX,
-      Math.max(PANEL_W_MIN, startW + (event.clientX - startX)),
-    );
-    panel.style.setProperty('--act-filter-w', `${width}px`);
-    panelWidth = width;
-  };
-  const onUp = (event: PointerEvent): void => {
-    if (!dragging) return;
-    dragging = false;
-    splitter.classList.remove('dragging');
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onUp);
-    persistPanelWidth();
-    try {
-      splitter.releasePointerCapture(event.pointerId);
-    } catch {
-      /* capture already released */
-    }
-  };
-  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    dragging = true;
-    startX = event.clientX;
-    startW = panelWidth ?? panel.clientWidth;
-    splitter.classList.add('dragging');
-    try {
-      splitter.setPointerCapture(event.pointerId);
-    } catch {
-      /* capture unavailable — window listeners still track the drag */
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  });
-}
-
 /** Mounts the view into the host element; called once from workspace.ts. */
 export function mountActivity(hostEl: HTMLElement): void {
   host = hostEl;
   host.replaceChildren();
 
-  // Layout: filter panel on the left + table on the right (как в
-  // «Структурах мыслей» — замечание пользователя, п. 5). Между ними —
-  // сплиттер для изменения ширины панели (замечание пользователя:
-  // «невозможно изменить ширину панели»).
+  // Layout: панель отбора + таблица. Размер и скрытость панели ведёт общий
+  // каркас (задача 2ebe4206): положение по ширине полотна (слева/вверху) и
+  // перетаскивание границы; состояние — `ui_state.activity_filter_panel`.
   const panel = div('activity-filter');
   const splitter = div('activity-splitter');
   const results = div('activity-results');
   hostEl.append(panel, splitter, results);
-  wirePanelSplitter(splitter, panel);
-  applyPanelWidth();
+  activityFrame = mountFilterPanelFrame({
+    container: hostEl,
+    panel,
+    splitter,
+    stateKey: UI_STATE_KEY.ACTIVITY_FILTER_PANEL,
+    minSize: PANEL_W_MIN,
+    maxSize: PANEL_W_MAX,
+    minSizeTop: 80,
+    maxSizeTop: 600,
+    legacySize: () => panelWidth,
+  });
 
   mountFilterPanel(panel);
-
   // Maintenance commands + pager live inside the results column so destructive
   // actions stay visibly apart from the table.
   const toolbar = div('activity-toolbar');

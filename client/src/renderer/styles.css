@@ -4270,13 +4270,10 @@ body.cloud-dragging * {
   overflow: hidden;
 }
 
-/* Left: filter panel (~33% of the view, 08-ui-spec.md §15.2). The width is
- * set by the splitter drag via --st-filter-w (persisted to L4), and falls
- * back to 33% of the view when the variable is absent. */
+/* Left: панель отбора «Структур мыслей» (§15.2). Положение (слева/вверху) и
+ * размер (ширина слева, высота вверху) задаёт общий каркас панели отбора
+ * (`.fp-host`, задача 2ebe4206) — здесь только вид самой панели. */
 .st-filter {
-  flex: 0 0 var(--st-filter-w, 33%);
-  min-width: 230px;
-  max-width: 420px;
   overflow: hidden;
   padding: 12px;
   display: flex;
@@ -4898,35 +4895,171 @@ body.cloud-dragging * {
   background: var(--accent-strong);
 }
 
-.st-f-saverow {
-  display: flex;
-  gap: 6px;
+.st-f-empty {
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
-.st-f-save {
-  padding: 4px 10px;
+/* ---------------------------------------------------------------------------
+ * Общий каркас панели отбора (задача 2ebe4206): плавающая кнопка
+ * «скрыть/показать», положение по ширине полотна (слева/вверху), размер
+ * перетаскиванием границы, строка сохранённых отборов и диалог их выбора.
+ * Один каркас на «Структуры мыслей», «Хронику» и «События».
+ * ------------------------------------------------------------------------- */
+
+.fp-host {
+  position: relative;
+}
+
+/* Положение панели: слева от результатов — строка, сверху — колонка. */
+.fp-host.fp-side {
+  flex-direction: row;
+}
+
+.fp-host.fp-top {
+  flex-direction: column;
+}
+
+/* Панель: размер задаёт каркас inline-`flex-basis`; прежние per-экранные
+ * ограничения ширины/высоты и внутренние границы сняты — границу рисует
+ * положение. `padding-top` освобождает место плавающей кнопке в углу. */
+.fp-host > .fp-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+  min-height: 0;
+  max-height: none;
+  padding-top: 34px;
+}
+
+.fp-host.fp-side > .fp-panel {
+  flex-basis: var(--fp-size-side, 300px);
+  border-right: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.fp-host.fp-top > .fp-panel {
+  flex-basis: var(--fp-size-top, 240px);
+  border-bottom: 1px solid var(--border);
+  border-right: none;
+}
+
+.fp-host.fp-hidden > .fp-panel,
+.fp-host.fp-hidden > .fp-splitter {
+  display: none;
+}
+
+/* Разделитель размера: направление перетаскивания — по положению панели.
+ * Селектор с `>` перебивает per-экранные `.st-splitter`/`.chron-splitter`/
+ * `.activity-splitter` (они объявлены ниже по файлу). */
+.fp-host > .fp-splitter {
+  flex: 0 0 4px;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s;
+  /* Прежний гриф «⣿» строкового сплиттера каркасу не нужен. */
+  font-size: 0;
+}
+
+.fp-host > .fp-splitter.fp-side {
+  cursor: col-resize;
+}
+
+.fp-host > .fp-splitter.fp-top {
+  cursor: row-resize;
+}
+
+.fp-host > .fp-splitter:hover,
+.fp-host > .fp-splitter.dragging {
+  background: var(--warn);
+}
+
+/* Плавающая кнопка в левом верхнем углу полотна: нажата — панель видна. */
+.fp-toggle {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 6;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.fp-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.fp-toggle.pressed {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Строка сохранённых отборов: имя + дискета + крестик + «…». */
+.sfb-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sfb-row .st-f-kw-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sfb-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  color: var(--text-dim);
   cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  white-space: nowrap;
 }
 
-.st-f-save:hover {
+.sfb-btn:hover {
   background: var(--surface-2);
+  color: var(--accent);
 }
 
-.st-f-savedlist {
+.sfb-more {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Диалог выбора сохранённого отбора: поиск сверху, список с прокруткой. */
+.sfd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 300px;
+}
+
+.sfd-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
-.st-f-saved {
+.sfd-row {
   text-align: left;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -4936,19 +5069,19 @@ body.cloud-dragging * {
   cursor: pointer;
 }
 
-.st-f-saved:hover {
+.sfd-row:hover {
   background: var(--surface-2);
 }
 
-.st-f-saved.active {
+.sfd-row.cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.sfd-row.active {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
-}
-
-.st-f-empty {
-  font-size: 12px;
-  color: var(--text-faint);
 }
 
 /* Right: results tree on the same dot-grid backdrop as the canvas. */
@@ -6548,9 +6681,9 @@ body.cloud-dragging * {
 
 /* Filter area: общий каркас отбора (lib/filter-form.ts) — прокручиваемый
  * список секций + приклеенный футер; область даёт высоту и границу. */
+/* Область панели отбора «Хроники»: размер и скрытость ведёт общий каркас
+ * панели отбора (`.fp-host`, задача 2ebe4206); здесь только вид области. */
 .chron-filter-area {
-  flex: 0 0 auto;
-  max-height: 46%;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -7147,9 +7280,6 @@ table.chron-table thead th {
 /* Layout: левая панель отборов + правая колонка (замечание пользователя —
  * «использовать компоновку экрана Структуры мыслей»). */
 .activity-filter {
-  flex: 0 0 var(--act-filter-w, 320px);
-  min-width: 260px;
-  max-width: 480px;
   display: flex;
   flex-direction: column;
   padding: 12px 14px;

@@ -955,3 +955,135 @@ export function splitHighlightRuns(text: string, terms: readonly string[]): High
   if (pos < text.length) runs.push({ text: text.slice(pos), hit: false });
   return runs;
 }
+
+// ---------------------------------------------------------------------------
+// Общий каркас панелей отбора: скрываемость, положение, размер
+// (задача 2ebe4206, 0.8.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Минимальная ширина ПОЛОТНА вида (окно приложения минус панель редактора), при
+ * которой панель отбора размещается слева от результатов. Уже неё панель встаёт
+ * сверху: слева ей и результатам не хватит ширины вместе.
+ *
+ * Порог задан пользователем: «если ширина меньше 1000 пикселей, размещать панель
+ * отбора вверху, иначе — слева». Ровно 1000 px — уже «слева» (меньше порога только
+ * строго меньшая ширина).
+ */
+export const FILTER_PANEL_SIDE_MIN_WIDTH = 1000;
+
+/** Положение панели отбора на полотне вида. */
+export type FilterPanelPlacement = 'side' | 'top';
+
+/**
+ * Куда класть панель отбора при данной ширине полотна: меньше порога
+ * {@link FILTER_PANEL_SIDE_MIN_WIDTH} — сверху (`top`), иначе — слева (`side`).
+ * Чистая функция: экран вызывает её заново на каждом ресайзе, поэтому смена
+ * положения не требует перезапуска.
+ */
+export function filterPanelPlacement(canvasWidth: number): FilterPanelPlacement {
+  return canvasWidth < FILTER_PANEL_SIDE_MIN_WIDTH ? 'top' : 'side';
+}
+
+/** Сохранённое локально (L4 `ui_state`) состояние панели отбора. */
+export interface FilterPanelState {
+  /** Панель скрыта плавающей кнопкой. */
+  hidden: boolean;
+  /** Ширина панели в боковом положении, px (null — пользователь ещё не тянул). */
+  width: number | null;
+  /** Высота панели в верхнем положении, px (null — не тянул). */
+  height: number | null;
+}
+
+/** Пустое состояние панели: видна, размер по умолчанию (CSS). */
+export const DEFAULT_FILTER_PANEL_STATE: FilterPanelState = {
+  hidden: false,
+  width: null,
+  height: null,
+};
+
+/** Положительное конечное число пикселей или null. */
+function positivePxOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+/**
+ * Читает сохранённое состояние панели из L4 `ui_state`. Устойчив к мусору:
+ * нет записи, не JSON, чужие поля — видимая панель без заданного размера.
+ */
+export function parseFilterPanelState(raw: string | null): FilterPanelState {
+  if (raw === null || raw === '') return { ...DEFAULT_FILTER_PANEL_STATE };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...DEFAULT_FILTER_PANEL_STATE };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ...DEFAULT_FILTER_PANEL_STATE };
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    hidden: record['hidden'] === true,
+    width: positivePxOrNull(record['width']),
+    height: positivePxOrNull(record['height']),
+  };
+}
+
+/** Сериализует состояние панели для L4 `ui_state` (обратен парсеру). */
+export function serializeFilterPanelState(state: FilterPanelState): string {
+  return JSON.stringify({
+    hidden: state.hidden,
+    width: state.width,
+    height: state.height,
+  });
+}
+
+/** Ограничивает размер панели диапазоном перетаскивания (px). */
+export function clampFilterPanelSize(value: number, min: number, max: number): number {
+  const rounded = Math.round(value);
+  if (!Number.isFinite(rounded)) return Math.round(min);
+  return Math.min(max, Math.max(min, rounded));
+}
+
+// ---------------------------------------------------------------------------
+// Сохранённые отборы: поиск по именам, копия, навигация (задача 2ebe4206)
+// ---------------------------------------------------------------------------
+
+/**
+ * Фильтрует сохранённые отборы по подстроке имени (регистр не важен). Пустой
+ * запрос возвращает весь список — строка поиска в диалоге выбора отбора.
+ */
+export function filterSavedByName<T extends { name: string }>(
+  entries: readonly T[],
+  query: string,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...entries];
+  return entries.filter((entry) => entry.name.toLowerCase().includes(needle));
+}
+
+/**
+ * Имя копии сохранённого отбора: к исходному имени добавляется « (копия)».
+ * Если такое имя уже занято, добавляется числовой суффикс — имена уникальны
+ * (сервер отвергает дубль), поэтому копия обязана получить свободное имя.
+ */
+export function duplicateFilterName(name: string, existingNames: readonly string[]): string {
+  const taken = new Set(existingNames.map((n) => n.toLowerCase()));
+  const base = `${name} (копия)`;
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = `${name} (копия ${i})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return base;
+}
+
+/**
+ * Сдвиг курсора в списке диалога выбора отбора на `delta` строк (↑/↓) с
+ * зажимом в границы. Пустой список — курсор -1.
+ */
+export function moveSavedFilterCursor(index: number, count: number, delta: number): number {
+  if (count <= 0) return -1;
+  return Math.min(count - 1, Math.max(0, index + delta));
+}

@@ -36,6 +36,7 @@ import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js
 import { applyGroupClamp } from '../../editor/list-heights.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
 import { rowSplitter } from '../../editor/splitter.js';
+import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { button, div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -61,6 +62,14 @@ import {
   buildChronicleWire as toDefinition,
   parseChronicleCriteria as fromDefinition,
 } from '../../lib/filter-builder.js';
+
+/**
+ * Границы размера панели отбора «Хроники» (задача 2ebe4206): слева — ширина,
+ * вверху (узкое полотно) — высота. Прежний сплиттер высоты тянулся от 80 px;
+ * ширину панель раньше не имела вовсе.
+ */
+const CHRONICLE_FILTER_MIN_W = 230;
+const CHRONICLE_FILTER_MAX_W = 480;
 
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}` so the
@@ -154,20 +163,22 @@ export function mountChronicle(hostEl: HTMLElement): void {
   hostEl.replaceChildren();
 
   const filterArea = div('chron-filter-area');
-  // Horizontal grab strip between the filter panel and the table: dragging
-  // changes the panel's exact fixed height (rowSplitter), the rest flows
-  // below. The drag is remembered as the panel's fixed height (ee745368, L4
-  // `chronicle_list_heights`) — the value is applied inline at mount and on
-  // drag end, because the area element lives for the whole mount (only its
-  // content changes).
-  const splitter = rowSplitter(() => filterArea, {
-    min: 80,
-    persistKey: 'chronicle.filters',
-  });
-  splitter.classList.add('chron-splitter');
-  applyGroupClamp(filterArea, 'chronicle.filters');
+  // Размер и скрытость панели отбора ведёт общий каркас (задача 2ebe4206):
+  // положение по ширине полотна (слева/вверху), перетаскивание границы —
+  // ширина слева, высота вверху; состояние — `ui_state.chronicle_filter_panel`.
+  const splitter = div('chron-splitter');
   const main = div('chron-main');
   hostEl.append(filterArea, splitter, main);
+  mountFilterPanelFrame({
+    container: hostEl,
+    panel: filterArea,
+    splitter,
+    stateKey: UI_STATE_KEY.CHRONICLE_FILTER_PANEL,
+    minSize: CHRONICLE_FILTER_MIN_W,
+    maxSize: CHRONICLE_FILTER_MAX_W,
+    minSizeTop: 80,
+    maxSizeTop: 800,
+  });
 
   mountChronicleFilterPanel(filterArea, { apply: () => void applyQuery(true) });
 

@@ -168,6 +168,14 @@ export const UI_STATE_KEY = {
    *  строки поиска карты (задача a3247f84, 0.8.2): видна/скрыта зона настроек.
    *  Хранится локально на клиенте (L4 `ui_state`), как `search_state`. */
   SEARCH_SETTINGS_OPEN: 'search_settings_open',
+  /** Состояние панели отбора вида «Структуры мыслей» (задача 2ebe4206):
+   *  `{ hidden, width, height }` — скрытость плавающей кнопкой и размер,
+   *  заданный перетаскиванием границы. Хранится локально (L4 `ui_state`). */
+  STRUCTURES_FILTER_PANEL: 'structures_filter_panel',
+  /** То же для панели отбора вида «Хроника» (задача 2ebe4206). */
+  CHRONICLE_FILTER_PANEL: 'chronicle_filter_panel',
+  /** То же для панели отбора вида «События» (задача 2ebe4206). */
+  ACTIVITY_FILTER_PANEL: 'activity_filter_panel',
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   EDITOR_LIST_HEIGHTS: 'editor_list_heights',
