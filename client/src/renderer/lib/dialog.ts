@@ -397,7 +397,8 @@ export function showDialog(opts: DialogOptions): () => void {
 }
 
 /**
- * Simple text prompt dialog. Resolves the entered text or `null` on cancel.
+ * Simple text prompt dialog. Resolves the entered text, or `null` when the
+ * dialog is dismissed (any close path — «Отмена», Esc, ×, backdrop click).
  */
 export function promptDialog(title: string, label: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
@@ -410,10 +411,21 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
     const body = div('form-stack');
     body.append(row);
 
+    /** Закрывающая функция каркаса — нужна обработчику Enter. */
+    let closeSelf: (() => void) | null = null;
+    let settled = false;
+    /**
+     * Единственная точка завершения промиса. Промис обязан резолвиться на
+     * ЛЮБОМ пути закрытия диалога (ошибка e0360076): кнопки завершают его
+     * явно, а Esc, × и клик по подложке — через `onClose`. Флаг `settled` не
+     * даёт позднему событию `remove` переиграть уже принятое решение.
+     */
     const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
       resolve(value);
     };
-    showDialog({
+    closeSelf = showDialog({
       title,
       body,
       buttons: [
@@ -424,6 +436,9 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
           onClick: () => finish(input.value),
         },
       ],
+      // Esc, × и клик по подложке — отмена: контракт «`null` on cancel»,
+      // ровно как по кнопке «Отмена» (ошибка e0360076).
+      onClose: () => finish(null),
       onMount: () => {
         input.focus();
         input.select();
@@ -431,7 +446,7 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
           if (event.key === 'Enter') {
             event.preventDefault();
             finish(input.value);
-            closeDialog();
+            closeSelf?.();
           }
         });
       },
@@ -440,11 +455,17 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
 }
 
 /**
- * Confirmation dialog with a message. Resolves `true` on confirm.
+ * Confirmation dialog with a message. Resolves `true` on confirm and `false`
+ * when the dialog is dismissed (any close path — «Отмена», Esc, ×, backdrop
+ * click).
  */
 export function confirmDialog(title: string, message: string, danger = false): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false;
+    /** Единственная точка завершения промиса — см. {@link promptDialog}. */
     const finish = (value: boolean): void => {
+      if (settled) return;
+      settled = true;
       resolve(value);
     };
     showDialog({
@@ -460,6 +481,9 @@ export function confirmDialog(title: string, message: string, danger = false): P
           onClick: () => finish(true),
         },
       ],
+      // Esc, × и клик по подложке — отказ: контракт «`false` on cancel»,
+      // ровно как по кнопке «Отмена» (ошибка e0360076).
+      onClose: () => finish(false),
     });
   });
 }
