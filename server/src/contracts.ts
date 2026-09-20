@@ -2921,11 +2921,16 @@ export const RestHierarchyQuery = defineContract(
   },
 );
 
-/** Тело POST /thoughts/edges — { ids, show_inactive }. */
+/** Тело POST /thoughts/edges — { ids, show_inactive } (+ network_id из params). */
 export const RestEdgesBody = defineContract(
   'rest:structures.edges-body',
-  z.object({ ids: z.array(z.string()).min(1), show_inactive: z.boolean().optional() }),
+  z.object({
+    network_id: NetworkId,
+    ids: z.array(z.string()).min(1),
+    show_inactive: z.boolean().optional(),
+  }),
   {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
     ids: { from: { kind: 'body' }, msg: 'ids должен быть массивом строк.' },
     show_inactive: { from: { kind: 'body' } },
   },
