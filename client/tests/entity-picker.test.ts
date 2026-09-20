@@ -343,17 +343,51 @@ function cloudIds(body: ShimElement): string[] {
     .filter((id): id is string => id !== undefined);
 }
 
-/** Части комбо-поля. */
+/** Рекурсивный поиск первого элемента по классу (поле выбора вложено в рамку
+ *  `.entity-combo-field`, поэтому прямой перебор детей корня не годится). */
+function findByClass(root: ShimElement, cls: string): ShimElement | undefined {
+  if (root.classList.contains(cls)) return root;
+  for (const child of root.children) {
+    const found = findByClass(child, cls);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** Все элементы с классом (для проверки отсутствия/наличия частей). */
+function findAllByClass(root: ShimElement, cls: string): ShimElement[] {
+  const out: ShimElement[] = [];
+  if (root.classList.contains(cls)) out.push(root);
+  for (const child of root.children) out.push(...findAllByClass(child, cls));
+  return out;
+}
+
+/** Части поля одиночного выбора. */
 function parts(combo: { root: HTMLElement }): {
   input: ShimElement;
   caret: ShimElement;
+  pick: ShimElement;
+  field: ShimElement;
+  valueHost: ShimElement;
 } {
   const root = combo.root as unknown as ShimElement;
-  const input = root.children.find((c) => c.classList.contains('entity-combo-input'));
-  const caret = root.children.find((c) => c.classList.contains('entity-combo-caret'));
+  const input = findByClass(root, 'entity-combo-input');
+  const caret = findByClass(root, 'entity-combo-caret');
+  const pick = findByClass(root, 'entity-combo-pick');
+  const field = findByClass(root, 'entity-combo-field');
+  const valueHost = findByClass(root, 'entity-combo-value');
   assert.ok(input !== undefined, 'в комбо есть строка ввода');
   assert.ok(caret !== undefined, 'в комбо есть каретка');
-  return { input, caret };
+  assert.ok(pick !== undefined, 'в комбо есть кнопка «…»');
+  assert.ok(field !== undefined, 'в комбо есть рамка поля');
+  assert.ok(valueHost !== undefined, 'в комбо есть хост значения');
+  return { input, caret, pick, field, valueHost };
+}
+
+/** Облачко значения в поле (класс `.prop-ref-cloud`), или `undefined`. */
+function valueCloud(combo: { root: HTMLElement }): ShimElement | undefined {
+  const root = combo.root as unknown as ShimElement;
+  return findByClass(root, 'prop-ref-cloud');
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +519,114 @@ describe('entity-picker: встроенное комбо', () => {
     assert.ok(
       !itemRows(body).some((r) => r.classList.contains('type-combo-create')),
       'при совпадениях создание не предлагается',
+    );
+  });
+});
+
+describe('entity-picker: поле одиночного выбора — заполнено = только просмотр (ba2f57d3)', () => {
+  it('пустое значение: строка живого поиска и каретка видны, облачка нет', () => {
+    installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: null,
+      emptyLabel: 'без типа',
+      placeholder: 'без типа',
+      onChange: () => undefined,
+    });
+    const { input, caret } = parts(combo);
+    assert.equal(input.classList.contains('hidden'), false, 'пусто — строка ввода доступна');
+    assert.equal(caret.classList.contains('hidden'), false, 'пусто — каретка доступна');
+    assert.equal(valueCloud(combo), undefined, 'пусто — облачка значения нет');
+  });
+
+  it('заполненное значение: облачко прямо в поле, ввод и каретка недоступны', () => {
+    installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: 'a',
+      onChange: () => undefined,
+    });
+    const { input, caret, field } = parts(combo);
+    const cloud = valueCloud(combo);
+    assert.ok(cloud !== undefined, 'значение показано облачком в поле');
+    assert.equal(cloud!.dataset['id'], 'a');
+    assert.ok(field.contains(cloud!), 'облачко лежит ВНУТРИ рамки поля');
+    assert.equal(
+      input.classList.contains('hidden'),
+      true,
+      'заполнено — строка ввода недоступна (нет второго поля рядом с облачком)',
+    );
+    assert.equal(caret.classList.contains('hidden'), true, 'заполнено — каретка скрыта');
+  });
+
+  it('крестик на облачке очищает значение и возвращает ввод', () => {
+    installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const changes: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: 'a',
+      onChange: (id) => changes.push(id),
+    });
+    const { input, caret } = parts(combo);
+    const remove = findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline');
+    assert.ok(remove !== undefined, 'у облачка значения есть крестик очистки');
+    remove!.emit('click', { stopPropagation: () => undefined });
+    assert.deepEqual(changes, [null], 'крестик очистил значение');
+    assert.equal(valueCloud(combo), undefined, 'облачко убрано');
+    assert.equal(input.classList.contains('hidden'), false, 'поле снова принимает ввод');
+    assert.equal(caret.classList.contains('hidden'), false, 'каретка вернулась');
+    assert.equal(combo.value(), null);
+  });
+
+  it('кнопка «…» открывает диалог одиночного выбора и применяет выбранное', async () => {
+    const { body } = installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const changes: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: 'a',
+      onChange: (id) => changes.push(id),
+    });
+    const { pick } = parts(combo);
+    pick.click();
+    await flush();
+    await flush();
+    const rows = findAllByClass(body, 'entity-pick-row');
+    assert.ok(rows.length > 0, 'диалог «…» показал каталог типов');
+    const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
+    assert.ok(target !== undefined, 'в диалоге есть строка типа c');
+    target!.click();
+    await flush();
+    assert.deepEqual(changes, ['c'], 'диалог применил выбранный единственный тип');
+    assert.equal(combo.value(), 'c');
+    assert.equal(valueCloud(combo)?.dataset['id'], 'c', 'новое значение показано в поле');
+  });
+
+  it('disabled: «…» не открывает диалог и крестика очистки нет', () => {
+    installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const changes: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: 'a',
+      disabled: true,
+      onChange: (id) => changes.push(id),
+    });
+    const { pick, input } = parts(combo);
+    assert.equal(pick.disabled, true, 'кнопка «…» выключена');
+    assert.equal(input.disabled, true, 'строка ввода выключена');
+    assert.equal(
+      findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline'),
+      undefined,
+      'у выключенного поля крестика очистки нет',
     );
   });
 });

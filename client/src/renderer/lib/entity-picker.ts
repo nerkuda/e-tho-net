@@ -24,10 +24,12 @@
  *   - {@link pickEntitiesModal} — модальный чек-лист: одиночный или
  *     множественный выбор, раскрытие иерархии типов, поиск, «Очистить» и
  *     дополнительные кнопки вызывающего;
- *   - {@link buildEntityCombo} — встроенное комбо-поле: одиночный выбор,
- *     облачко выбранного (чип с крестиком), выпадашка живого поиска, дерево
- *     типов с отступами и раскрытием (`expandAll`), свотч линии, быстрое
- *     создание типа (`onCreateNew`) — всё, ради чего существовал прежний
+ *   - {@link buildEntityCombo} — встроенное поле ОДИНОЧНОГО выбора: пусто —
+ *     строка живого поиска с кареткой; заполнено — облачко значения прямо в
+ *     поле, ввод недоступен, крестик очищает, кнопка «…» открывает диалог
+ *     выбора единственного значения (ошибка ba2f57d3). Дерево типов с
+ *     отступами и раскрытием (`expandAll`), свотч линии, быстрое создание
+ *     типа (`onCreateNew`) — всё, ради чего существовал прежний
  *     `lib/type-combobox.ts` (поглощён и удалён, веха 3 версии 0.8.2).
  *
  * Зависимости — только `lib/*`, `state.ts` и типы `@etn/shared` /
@@ -253,6 +255,12 @@ export interface EntityPickerModalOptions {
    */
   single?: boolean;
   /**
+   * Каталог вариантов, ЗАМЕНЯЮЩИЙ чтение из store (родительский пикер типа
+   * отдаёт отфильтрованный список: без себя и потомков, с учётом предела
+   * глубины). Не задан — каталог строится по `kind` из store.
+   */
+  catalogue?: readonly EntityOption[];
+  /**
    * Синтетические варианты помимо каталога (например, строка «Структура»
    * фильтра типов связей на карте) — рисуются после каталога.
    */
@@ -291,11 +299,13 @@ export async function pickEntitiesModal(
   const single = opts.single === true;
   const allowEmpty = opts.allowEmpty !== false;
   const catalogue: EntityOption[] =
-    opts.kind === 'thought-types'
-      ? thoughtTypeEntityOptions(await thoughtTypesOf(opts.networkId))
-      : opts.kind === 'link-types'
-        ? linkTypeEntityOptions(await linkTypesOf(opts.networkId))
-        : [];
+    opts.catalogue !== undefined
+      ? [...opts.catalogue]
+      : opts.kind === 'thought-types'
+        ? thoughtTypeEntityOptions(await thoughtTypesOf(opts.networkId))
+        : opts.kind === 'link-types'
+          ? linkTypeEntityOptions(await linkTypesOf(opts.networkId))
+          : [];
   const options = [...catalogue, ...(opts.extraOptions ?? [])];
 
   return new Promise((resolve) => {
@@ -793,13 +803,22 @@ export interface EntityComboOptions {
   kind: EntityKind;
   /** Текущее значение (id сущности; `null` — пусто). */
   value: string | null;
-  /** Подпись пустого значения (строка «пусто» в выпадашке и в поле). */
+  /**
+   * Подпись пустой строки в выпадашке живого поиска: её выбор очищает
+   * значение. В самом поле пустое значение показывает `placeholder`, а не
+   * эту подпись (поле ввода пусто, пока значение не выбрано).
+   */
   emptyLabel?: string;
   placeholder?: string;
-  /** Заблокированное поле (без поиска и очистки). */
+  /** Заблокированное поле (без поиска, «…» и очистки). */
   disabled?: boolean;
   /** Типы мыслей, сужающие живой поиск (только для `thoughts`). */
   searchTypeIds?: readonly string[];
+  /**
+   * Заголовок диалога «…» (выбор единственного значения). По умолчанию —
+   * «Выбрать тип мысли / тип связи / мысль».
+   */
+  pickerTitle?: string;
   /**
    * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
    * редактора типа). По умолчанию раскрыт только верхний уровень.
@@ -808,6 +827,8 @@ export interface EntityComboOptions {
   /**
    * Свой каталог вариантов вместо чтения типа из store (родительский пикер
    * фильтрует кандидатов: без себя, потомков и с учётом предела глубины).
+   * Тот же каталог отдаётся и диалогу «…», чтобы выбор в нём не предлагал
+   * запрещённые варианты.
    */
   options?: () => EntityOption[];
   /**
@@ -820,7 +841,7 @@ export interface EntityComboOptions {
   onChange: (id: string | null) => void;
 }
 
-/** Встроенное комбо пикера. */
+/** Встроенное поле одиночного выбора сущности. */
 export interface EntityCombo {
   root: HTMLElement;
   /** Текущее значение (`null` — пусто). */
@@ -844,11 +865,26 @@ export function normalizeParentTypeId(
   return parentId === rootId ? null : parentId;
 }
 
+/** Заголовок диалога «…» по виду выбираемой сущности (см. {@link buildEntityCombo}). */
+const PICKER_TITLES: Record<EntityKind, string> = {
+  'thought-types': 'Выбрать тип мысли',
+  'link-types': 'Выбрать тип связи',
+  thoughts: 'Выбрать мысль',
+};
+
 /**
- * Собирает встроенное комбо-поле пикера: облачко выбранного (чип с
- * крестиком), строка живого поиска с общей выпадашкой и каретка ▾ для
- * полного списка. Одиночный выбор: выбранная строка (или «пусто») становится
- * значением через `onChange`.
+ * Собирает встроенное комбо-поле пикера — единый компонент поля ОДИНОЧНОГО
+ * выбора сущности (тип мысли, тип связи, мысль).
+ *
+ * Два состояния поля (ошибка ba2f57d3):
+ *   - значение пусто — обычное поле ввода с живым поиском (общая выпадашка) и
+ *     кареткой ▾ для полного списка;
+ *   - значение заполнено — облачко выбранного лежит прямо в поле, строка
+ *     ввода и каретка скрыты (ввод недоступен до очистки), крестик на облачке
+ *     очищает значение и возвращает ввод.
+ * В поле всегда есть компактная кнопка «…» — диалог выбора единственного
+ * значения (`pickEntitiesModal` в одиночном режиме), как кнопка «выбрать» у
+ * поля значения свойства-связи.
  *
  * Режим типов — дерево с отступами и раскрытием (`expandAll` раскрывает всё);
  * строки — те же облачка, что в модальном чек-листе (значок, цвета и
@@ -889,6 +925,12 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     expanded.get(opt.id) ?? (opts.expandAll === true && opt.hasChildren === true);
 
   const root = div('entity-combo');
+  // Поле — единая рамка (как у поля значения свойства-связи): облачко
+  // выбранного лежит ВНУТРИ поля, а строка живого поиска показывается, только
+  // пока значение пусто. Заполненное поле ввод не принимает — смена значения
+  // идёт кнопкой «…» (диалог выбора единственного значения), очистка — «✕» на
+  // облачке (ошибка ba2f57d3 «Неправильное поле ввода типа в редакторе мысли»).
+  const field = div('st-f-chipfield entity-combo-field');
   const valueHost = div('entity-combo-value');
   const input = el('input', 'text-input entity-combo-input') as HTMLInputElement;
   input.type = 'text';
@@ -898,16 +940,29 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   input.disabled = opts.disabled === true;
   const caret = span('', 'type-combo-caret entity-combo-caret');
   caret.append(svgIcon('chevron-down', 12));
-  root.append(valueHost, input, caret);
+  const pickBtn = button(
+    '…',
+    () => openPicker(),
+    'entity-combo-pick',
+    opts.pickerTitle ?? PICKER_TITLES[opts.kind],
+  );
+  pickBtn.type = 'button';
+  field.append(valueHost, input, caret, pickBtn);
+  root.append(field);
 
-  /** Облачко выбранного значения или подпись пустого. */
+  /** Облачко выбранного значения (пусто — поле ввода без подписи). */
   const renderValue = (): void => {
     valueHost.replaceChildren();
-    if (current === null) {
-      if (opts.emptyLabel !== undefined) valueHost.append(span(opts.emptyLabel, 'muted'));
-      return;
+    if (current === null) return;
+    let opt = byId.get(current);
+    // Каталог типов мог прийти позже создания поля (realtime). Заполненное
+    // поле выпадашку не открывает, поэтому обновляем каталог здесь — иначе
+    // значение рисовалось бы сырым id. Для мыслей каталог набирается живым
+    // поиском, перечитывать нечего.
+    if (opt === undefined && opts.kind !== 'thoughts') {
+      reloadOptions();
+      opt = byId.get(current);
     }
-    const opt = byId.get(current);
     // Мысль ищется на сервере по запросу и в каталог не попадает: облачко
     // начального значения догружаем резолвом (иначе чип показывал бы сырой id).
     if (currentCloud === null && opt === undefined && opts.kind === 'thoughts') {
@@ -945,10 +1000,45 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     current = id;
     const opt = id !== null ? byId.get(id) : undefined;
     currentCloud = opt?.cloud ?? null;
-    input.value = opt?.title ?? '';
-    opts.onChange(id);
+    input.value = '';
     renderValue();
+    renderMode();
+    opts.onChange(id);
   };
+
+  /**
+   * Показ поля по состоянию значения: пусто — строка живого поиска с
+   * кареткой; заполнено — только облачко значения и кнопка «…», ввод
+   * недоступен до очистки (требование ошибки ba2f57d3).
+   */
+  const renderMode = (): void => {
+    const filled = current !== null;
+    root.classList.toggle('entity-combo-filled', filled);
+    valueHost.classList.toggle('hidden', !filled);
+    input.classList.toggle('hidden', filled);
+    caret.classList.toggle('hidden', filled);
+    pickBtn.disabled = opts.disabled === true;
+  };
+
+  /**
+   * Кнопка «…»: диалог выбора ЕДИНСТВЕННОГО значения. Каталог диалога — тот
+   * же, что у живого поиска (свой `options()` у родительского пикера), поэтому
+   * запрещённые варианты в диалоге не предлагаются.
+   */
+  function openPicker(): void {
+    if (opts.disabled === true) return;
+    void pickEntitiesModal({
+      networkId: opts.networkId,
+      kind: opts.kind,
+      title: opts.pickerTitle ?? PICKER_TITLES[opts.kind],
+      single: true,
+      ...(opts.searchTypeIds !== undefined ? { searchTypeIds: opts.searchTypeIds } : {}),
+      ...(opts.options !== undefined ? { catalogue: opts.options() } : {}),
+    }).then((ids) => {
+      if (ids === null) return;
+      setValue(ids[0] ?? null);
+    });
+  }
 
   /** Строка выпадашки по варианту каталога типов: облачко типа (значок,
    *  цвета, начертание), отступ дерева, свотч линии, тоггл раскрытия. */
@@ -1038,15 +1128,14 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     });
   }
 
-  // Фокус на поле с выбранным значением показывает весь каталог: подпись
-  // выбранного очищается из строки поиска, по blur — возвращается обратно.
-  // Регистрируется ДО `wireSuggest`: его focus-обработчик обновляет список по
-  // тексту поля и должен увидеть уже очищенную строку.
-  input.addEventListener('focus', () => {
-    if (current !== null && opts.disabled !== true) input.value = '';
-  });
+  // Набранный текст сам по себе значение не меняет — только явный выбор из
+  // выпадашки; по потере фокуса строка поиска очищается. Поле принимает ввод
+  // лишь пока значение пусто (иначе строка ввода скрыта).
   input.addEventListener('blur', () => {
-    input.value = current !== null ? (byId.get(current)?.title ?? current) : '';
+    input.value = '';
+  });
+  field.addEventListener('click', (event) => {
+    if (event.target === field && current === null && opts.disabled !== true) input.focus();
   });
 
   let handle: SuggestHandle | null = null;
@@ -1097,6 +1186,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   });
 
   renderValue();
+  renderMode();
   return {
     root,
     value: () => current,

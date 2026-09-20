@@ -6186,39 +6186,86 @@ body.cloud-dragging * {
   font-weight: 600;
 }
 
-/* Общий пикер сущностей (0.8.2, веха 3): встроенное комбо-поле —
- * облачко выбранного + строка живого поиска + каретка полного списка. */
+/* Общий пикер сущностей (0.8.2): поле ОДИНОЧНОГО выбора сущности.
+ * Пусто — строка живого поиска с кареткой; заполнено — облачко значения
+ * лежит прямо в поле, ввод и каретка скрыты, крестик на облачке очищает,
+ * «…» открывает диалог выбора единственного значения (ошибка ba2f57d3). */
 .entity-combo {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
   min-width: 0;
   width: 100%;
+}
+
+.entity-combo-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Однострочное поле (в отличие от многострочного чип-поля значений
+   * свойства-связи): ввод и облачко значения не переносятся. */
+  flex-wrap: nowrap;
+  /* Полоса под кнопку «…» в правом углу поля. */
+  padding-right: 28px;
 }
 
 .entity-combo-value {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: none;
-  max-width: 55%;
+  flex: 1 1 auto;
   min-width: 0;
-}
-
-.entity-combo-value .muted {
-  font-size: 12px;
-  color: var(--text-dim);
+  max-width: 100%;
 }
 
 .entity-combo-input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  /* Поле ввода живёт ВНУТРИ рамки `.st-f-chipfield` — собственной рамки и
+   * фона не рисует. */
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.entity-combo-input:focus {
+  outline: none;
 }
 
 .entity-combo-caret {
   color: var(--text-faint);
   flex: none;
+}
+
+/* «…» — диалог выбора единственного значения (как угловая кнопка поля
+ * значения свойства-связи): компактная, в правом углу поля, ширину не
+ * отъедает. */
+.entity-combo-pick {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.entity-combo-pick:hover {
+  background: rgba(127, 127, 127, 0.18);
+  color: var(--text);
+}
+
+.entity-combo-pick:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* Модальный чек-лист пикера: чипы выбранных мыслей. */

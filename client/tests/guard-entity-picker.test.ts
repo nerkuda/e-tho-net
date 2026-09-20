@@ -17,6 +17,10 @@
  *    модулем выпадашки `lib/suggest-dropdown.ts`: оба пикера (общее комбо и
  *    прежний `type-combobox`) обязаны делегировать строки ему, а не рисовать
  *    собственную копию (задача ae0d4ffb, веха 3 версии 0.8.2).
+ * 4. Рамка поля ОДИНОЧНОГО выбора сущности (`entity-combo-field`) собирается
+ *    только `lib/entity-picker.ts`: собственное поле выбора типа мысли/связи
+ *    вне общего компонента — это второй ввод рядом с облачком значения
+ *    (баг ba2f57d3).
  *
  * Сторож вводится зелёным — в том же изменении, которое переводит все
  * модальные чек-листы типов и голые `<select>` на общий пикер
@@ -54,6 +58,20 @@ const ITEM_BUILD_RULE: GuardRule = {
     'запрещена (S3, ADR «одна выпадашка-подсказчик»).',
   pattern: /\b(?:div|el)\(\s*(?:'(?:[^'\\]|\\.)*'\s*,\s*)?'[^']*\btype-combo-item\b/,
   allow: (rel) => rel === 'lib/suggest-dropdown.ts',
+};
+
+/** Рамка поля ОДИНОЧНОГО выбора сущности (`entity-combo-field`) собирается
+ *  только общим пикером: собственная копия поля выбора типа мысли/связи вне
+ *  него — это второй ввод рядом с облачком значения (баг ba2f57d3). */
+const FIELD_BUILD_RULE: GuardRule = {
+  name: 'no-own-entity-combo-field',
+  description:
+    'Рамка поля одиночного выбора сущности (класс entity-combo-field) собирается ' +
+    'только общим пикером lib/entity-picker.ts: собственная копия поля выбора типа ' +
+    'мысли/связи вне него запрещена (баг ba2f57d3, ADR «выбор сущности — один пикер ' +
+    'на типы мыслей, типы связей и мысли»).',
+  pattern: /\b(?:div|el)\(\s*(?:'(?:[^'\\]|\\.)*'\s*,\s*)?'[^']*\bentity-combo-field\b/,
+  allow: (rel) => rel === 'lib/entity-picker.ts',
 };
 
 describe('guard: выбор сущности делается только общим пикером', () => {
@@ -101,6 +119,10 @@ describe('guard: выбор сущности делается только об�
     assertGuardClean(RENDERER_ROOT, [ITEM_BUILD_RULE]);
   });
 
+  it('рамка поля одиночного выбора сущности собирается только общим пикером', () => {
+    assertGuardClean(RENDERER_ROOT, [FIELD_BUILD_RULE]);
+  });
+
   it('правило про type-combo-item краснеет на умышленно добавленной копии', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
     try {
@@ -117,6 +139,28 @@ describe('guard: выбор сущности делается только об�
       assert.ok(
         violations.some((v) => v.rule === 'no-own-type-combo-item'),
         'собственная копия строки списка типов обязана попадать в нарушение',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('правило про entity-combo-field краснеет на умышленно добавленной копии', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'fake-field.ts'),
+        [
+          "import { div } from './lib/dom.js';",
+          "const field = div('st-f-chipfield entity-combo-field');",
+          'void field;',
+        ].join('\n'),
+        'utf8',
+      );
+      const violations = collectViolations(dir, [FIELD_BUILD_RULE]);
+      assert.ok(
+        violations.some((v) => v.rule === 'no-own-entity-combo-field'),
+        'собственная копия рамки поля одиночного выбора обязана попадать в нарушение',
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
