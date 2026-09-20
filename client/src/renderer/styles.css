@@ -3949,7 +3949,12 @@ body.cloud-dragging * {
   /* left/top are anchored to the search input from JS (positionPanel). */
   right: 10%;
   max-height: 50%;
-  overflow-y: auto;
+  /* Прокрутка живёт у зон, а не у панели: общий `overflow-y` скроллил
+     результаты и настройки одной полосой (ошибка aa5d0aff). Панель —
+     flex-колонка: тело забирает остаток высоты и раздаёт его зонам. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -3973,16 +3978,23 @@ body.cloud-dragging * {
   color: var(--accent);
 }
 
-/* Две зоны выпадающей панели: «результаты поиска» и «настройки поиска». */
+/* Две зоны выпадающей панели: «результаты поиска» и «настройки поиска».
+   Тело — единственный «сжимаемый» слой панели: `min-height: 0` позволяет ему
+   ужаться под `max-height` панели, а зоны растягиваются на его высоту
+   (`align-items: stretch` по умолчанию) и прокручиваются каждая своей полосой. */
 .search-panel-body {
   display: flex;
   gap: 12px;
-  align-items: flex-start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .search-results {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .search-settings {
@@ -3990,6 +4002,8 @@ body.cloud-dragging * {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Ширина окна > 1000px: настройки справа от результатов — 30% ширины панели.
@@ -3999,6 +4013,8 @@ body.cloud-dragging * {
   flex: 0 0 30%;
   border-left: 1px solid var(--border);
   padding-left: 12px;
+  /* Боковая зона растянута на высоту тела — своя вертикальная прокрутка. */
+  overflow-y: auto;
 }
 
 /* Ширина окна ≤ 1000px: настройки сверху над результатами. */
@@ -4006,12 +4022,26 @@ body.cloud-dragging * {
   flex-direction: column;
 }
 
+/* В колонке настройки не растягиваются и не сжимаются (`flex: 0 0 auto`):
+   высоту им задаёт содержимое, но не выше `max-height` — иначе три строки
+   настроек съедали бы результаты, а результаты получали нулевую высоту.
+   Сверх предела настройки прокручиваются своей полосой, остаток высоты
+   панели забирают результаты.
+   Предел задан в определённых единицах (`px`/`vh`): процент от высоты тела
+   не разрешается — тело получает высоту флексингом, и Chromium считает её
+   неопределённой, поэтому `max-height: 45%` молча превращался в `none`
+   (проверено зондом). Панель занимает не больше 50% высоты окна, поэтому
+   `25vh` — это примерно половина панели: настройки получают её лишь при
+   крайне низком окне, а остаток (не меньше 240px в обычном окне) остаётся
+   результатам. */
 .search-panel.search-settings-top .search-settings {
   order: -1;
   flex: 0 0 auto;
   width: 100%;
+  max-height: min(240px, 25vh);
   border-bottom: 1px solid var(--border);
   padding-bottom: 10px;
+  overflow-y: auto;
 }
 
 /* Одна «строка» настроек. При нехватке ширины элементы строки укладываются

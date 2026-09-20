@@ -174,6 +174,46 @@ describe('положение зоны настроек по ширине окн�
   });
 });
 
+describe('прокрутка зон независима (ошибка aa5d0aff)', () => {
+  it('панель сама не прокручивается — прокрутка живёт у зон', () => {
+    const css = readText(STYLES_CSS);
+    assert.match(
+      css,
+      /\.search-panel \{[^}]*max-height: 50%;[\s\S]*?overflow: hidden;/,
+      'панель обрезает содержимое, но не даёт общей полосы прокрутки',
+    );
+    assert.ok(
+      !/\.search-panel \{[^}]*overflow-y: auto;/.test(css),
+      'у самой панели нет вертикальной прокрутки — иначе зоны скроллятся вместе',
+    );
+  });
+
+  it('у каждой зоны — своя вертикальная прокрутка', () => {
+    const css = readText(STYLES_CSS);
+    assert.match(css, /\.search-results \{[^}]*overflow-y: auto;/, 'результаты прокручиваются своей полосой');
+    assert.match(css, /\.search-settings \{[^}]*overflow-y: auto;/, 'настройки прокручиваются своей полосой');
+    assert.match(
+      css,
+      /\.search-panel\.search-settings-side \.search-settings \{[^}]*overflow-y: auto;/,
+      'в боковом положении настройки прокручиваются сами',
+    );
+  });
+
+  it('сверху высота настроек ограничена, остаток высоты уходит результатам', () => {
+    const css = readText(STYLES_CSS);
+    assert.match(
+      css,
+      /\.search-panel\.search-settings-top \.search-settings \{[^}]*max-height: min\(240px, 25vh\);/,
+      'настройки сверху не выше разумного предела — не съедают результаты',
+    );
+    assert.match(
+      css,
+      /\.search-panel\.search-settings-top \.search-settings \{[^}]*overflow-y: auto;/,
+      'сверх предела настройки прокручиваются своей полосой',
+    );
+  });
+});
+
 describe('компоновка зоны настроек — три строки (задача a3247f84)', () => {
   it('строки: подкорни, места поиска, ограничения', () => {
     const search = readText(SEARCH_TS);
