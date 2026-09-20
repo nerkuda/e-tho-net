@@ -1808,6 +1808,10 @@ function commonSideDefaultValue(def: PropertyDefinition): PropertyValueValue {
  * стороны привязки (`config.default_value` для стороны источников,
  * `config.default_value_target` для стороны назначений). `overridden_here` —
  * у самого типа есть строка override с дефолтом.
+ *
+ * `allowed_opposite_type_ids` (0.8.2, ошибка a6513df0): у свойств-связей —
+ * типы привязок этого свойства с ПРОТИВОПОЛОЖНОЙ стороны (`type_properties.side`),
+ * вычисляются по реестру привязок (см. {@link attachAllowedOppositeTypeIds}).
  */
 export function listEffectiveTypeProperties(
   ndb: NetworkDb,
@@ -1880,7 +1884,75 @@ export function listEffectiveTypeProperties(
   if (ownerType === 'thought_type') {
     appendMirroredLinkProperties(ndb, ownerId, out);
   }
+  attachAllowedOppositeTypeIds(ndb, out);
   return out;
+}
+
+/**
+ * Проставить эффективным определениям свойства-связи допустимые типы значения
+ * (0.8.2, ошибка a6513df0): это типы ПРОТИВОПОЛОЖНОЙ стороны реестра привязок
+ * этого свойства (`type_properties.side`), а не `config` владельца. У привязки
+ * со стороны источника ограничены цели (типы привязок со стороны назначения),
+ * у привязки со стороны назначения — источники. Пусто — ограничения нет.
+ *
+ * Реестр привязок — единственный источник истины ограничения: `config`-ключи
+ * `allowed_*_type_ids` моделью 0.8.1 не предусмотрены и UI не пишутся.
+ * Поддеревья типов раскрывает клиент (L21).
+ */
+function attachAllowedOppositeTypeIds(ndb: NetworkDb, out: EffectiveTypeProperty[]): void {
+  const linkPropIds = [
+    ...new Set(
+      out
+        .filter((d) => d.value_type === 'link' && !isStructuralLinkProperty(d.config))
+        .map((d) => d.property_id),
+    ),
+  ];
+  if (linkPropIds.length === 0) return;
+  const bySide = loadBindingTypesBySide(ndb, linkPropIds);
+  for (const def of out) {
+    if (def.value_type !== 'link' || isStructuralLinkProperty(def.config)) continue;
+    const side = def.side ?? linkPropertySideFromConfig(def.value_type, def.config);
+    const entry = bySide.get(def.property_id);
+    def.allowed_opposite_type_ids =
+      side === 'source'
+        ? [...(entry?.target ?? [])]
+        : side === 'target'
+          ? [...(entry?.source ?? [])]
+          : [];
+  }
+}
+
+/**
+ * Типы мыслей, к которым свойство привязано по сторонам (`type_properties.side`)
+ * — карта `property_id → { source, target }`. Одна подготовленная выборка на
+ * набор свойств: зеркальные записи физических привязок не имеют и не влияют
+ * (их `property_id` — это же свойство реестра, а сторона зеркала вычисляется
+ * вызывающим).
+ */
+function loadBindingTypesBySide(
+  ndb: NetworkDb,
+  propertyIds: readonly string[],
+): Map<string, { source: string[]; target: string[] }> {
+  const map = new Map<string, { source: string[]; target: string[] }>();
+  const rows = ndb
+    .prepare(
+      `SELECT DISTINCT property_id, side, owner_id
+         FROM type_properties_v
+        WHERE property_id IN (${propertyIds.map(() => '?').join(', ')})
+          AND owner_type = 'thought_type'
+          AND side IS NOT NULL`,
+    )
+    .all(...propertyIds) as Array<{ property_id: string; side: string; owner_id: string }>;
+  for (const row of rows) {
+    let entry = map.get(row.property_id);
+    if (entry === undefined) {
+      entry = { source: [], target: [] };
+      map.set(row.property_id, entry);
+    }
+    if (row.side === 'source') entry.source.push(row.owner_id);
+    else if (row.side === 'target') entry.target.push(row.owner_id);
+  }
+  return map;
 }
 
 /**

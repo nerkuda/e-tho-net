@@ -586,5 +586,88 @@ describe(
         ndb.close();
       }
     });
+
+    it('allowed_opposite_type_ids: допустимые типы из привязок противоположной стороны (a6513df0)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'версия', name_reverse: 'включает работы' },
+          USER,
+        );
+        const srcA = createThoughtType(ndb, { name: 'Работа' }, USER);
+        const srcB = createThoughtType(ndb, { name: 'Задача' }, USER);
+        const tgt = createThoughtType(ndb, { name: 'Версия' }, USER);
+        const config = { link_type_id: lt.id, direction: 'out' as const };
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          srcA.id,
+          { key: 'версия', value_type: 'link', config, side: 'source' },
+          USER,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          srcB.id,
+          { key: 'версия', value_type: 'link', config, side: 'source' },
+          USER,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          tgt.id,
+          { key: 'версия', value_type: 'link', config, side: 'target' },
+          USER,
+        );
+
+        // Сторона источника: допустимые ЦЕЛИ — типы привязок со стороны назначения.
+        const ofSource = listEffectiveTypeProperties(ndb, 'thought_type', srcA.id).find(
+          (p) => p.value_type === 'link' && p.key === 'версия',
+        );
+        assert.deepEqual(ofSource?.allowed_opposite_type_ids, [tgt.id]);
+
+        // Сторона назначения: допустимые ИСТОЧНИКИ — типы со стороны источника.
+        const ofTarget = listEffectiveTypeProperties(ndb, 'thought_type', tgt.id).find(
+          (p) => p.value_type === 'link' && p.key === 'включает работы',
+        );
+        assert.deepEqual(
+          [...(ofTarget?.allowed_opposite_type_ids ?? [])].sort(),
+          [srcA.id, srcB.id].sort(),
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('allowed_opposite_type_ids пуст без привязок противоположной стороны (a6513df0)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'версия', name_reverse: 'включает работы' },
+          USER,
+        );
+        const src = createThoughtType(ndb, { name: 'Работа' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          src.id,
+          {
+            key: 'версия',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out' },
+            side: 'source',
+          },
+          USER,
+        );
+        const effective = listEffectiveTypeProperties(ndb, 'thought_type', src.id).find(
+          (p) => p.value_type === 'link' && p.key === 'версия',
+        );
+        assert.deepEqual(effective?.allowed_opposite_type_ids, []);
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
