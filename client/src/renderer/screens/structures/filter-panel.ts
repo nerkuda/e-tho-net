@@ -17,7 +17,7 @@
 import {
   type LinkTypeFilterInput,
   type NetworkProperty,
-  type SavedFilter,
+  type SavedFilterDefinition,
   type StructureFilter,
   type StructureKeywordScope,
   type StructurePropertyCondition,
@@ -25,7 +25,6 @@ import {
 
 import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
-import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import {
   buildEntityChipField,
@@ -49,8 +48,12 @@ import {
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
-import { showMenuAt, type MenuItem } from '../../lib/menu.js';
-import { notice } from '../../lib/notice.js';
+import {
+  buildSavedFilterBar,
+  type SavedFilterBarHandle,
+  type SavedFilterEntry,
+  type SavedFilterStore,
+} from '../../lib/saved-filter-bar.js';
 import type { SuggestSource } from '../../lib/suggest-dropdown.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
@@ -94,7 +97,12 @@ export interface FilterState extends FilterCriteriaState {
   /** Включить нетипизированные (структурные) связи в обход. */
   linkFilterStructural: boolean;
   savedFilterId: string | null;
-  /** Panel width set by the splitter drag (px), null until first drag. */
+  /**
+   * Ширина панели из ПРЕЖНЕГО пер-экранного снимка `structures_state`
+   * (задача 2ebe4206): читается как миграционное значение для каркаса панели,
+   * пока в локальном `ui_state.structures_filter_panel` своего размера нет.
+   * Сама панель ширину больше не пишет — размером владеет каркас.
+   */
   panelWidth: number | null;
 }
 
@@ -134,7 +142,10 @@ let state: FilterState = defaultState();
 const propertyDefs = new Map<string, NetworkProperty>();
 /** Облачка выбранных родительских мыслей (id → данные облачка, лениво). */
 const parentClouds = new Map<string, ThoughtCloudInput>();
-let savedFilters: SavedFilter[] = [];
+/** Строка сохранённых отборов (общий модуль `lib/saved-filter-bar.ts`). */
+let savedBar: SavedFilterBarHandle | null = null;
+/** Имя отбора в поле строки — переживает перерисовку панели. */
+let filterName = '';
 /** Signature of the catalogues the panel depends on (rebuild on change). */
 let catalogueSignature = '';
 
@@ -169,21 +180,13 @@ export function setFilterState(next: FilterState): void {
   renderPanel();
 }
 
-/** Records the splitter-dragged panel width for the L4 persist. */
-export function setPanelWidth(width: number): void {
-  state.panelWidth = width;
-}
-
 /**
- * Applies the persisted/splitter panel width to the DOM: sets the `--st-filter-w`
- * variable the CSS uses, or clears it to fall back to the default 33%.
+ * Размер панели (ширина/высота) и её скрытость теперь принадлежат общему
+ * каркасу панели отбора (`lib/filter-panel-frame.ts`, задача 2ebe4206) — они
+ * живут в локальном `ui_state.structures_filter_panel` и переживают перезапуск.
+ * Панель отдаёт только миграционное значение прежнего снимка `structures_state`
+ * через `getFilterState().panelWidth`.
  */
-export function applyPanelWidth(): void {
-  if (host === null) return;
-  const width = state.panelWidth;
-  if (width === null) host.style.removeProperty('--st-filter-w');
-  else host.style.setProperty('--st-filter-w', `${Math.round(width)}px`);
-}
 
 /** Wire `keyword_scope` from the panel checkboxes (bug fix 0.5.5) — единый
  *  конвертер конструктора (`lib/filter-builder.ts`). */
@@ -271,7 +274,7 @@ export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
 
 /** Reloads the saved-filter list (called on `saved-filter.*` realtime events). */
 export function invalidateSavedFilters(): void {
-  void loadSavedFilters();
+  void savedBar?.reload();
 }
 
 /** Признаки «Дополнительно» заполнены («Корзина» — независимый флаг). */
@@ -295,7 +298,6 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
   host = panelHost;
   callbacks = cb;
   renderPanel();
-  void loadSavedFilters();
 
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
@@ -324,18 +326,6 @@ async function loadPropertyDefs(): Promise<void> {
   }
 }
 
-/** Loads the user's saved filters and re-renders the list. */
-async function loadSavedFilters(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  try {
-    savedFilters = await etn.savedFilters.list(networkId);
-  } catch {
-    return;
-  }
-  if (savedListBox !== null) renderSavedList();
-}
-
 // ---------------------------------------------------------------------------
 // Apply / clear
 // ---------------------------------------------------------------------------
@@ -349,6 +339,7 @@ function triggerApply(): void {
 /** «Очистить»: drops every criterion but keeps «Сортировка» (§15.3). */
 function clearAllCriteria(): void {
   state = { ...defaultState(), sort: state.sort, order: state.order, panelWidth: state.panelWidth };
+  filterName = '';
   propertiesCollapsed = true;
   extraCollapsed = true;
   authorCollapsed = true;
@@ -397,36 +388,9 @@ function keywordsHistorySource(): SuggestSource {
   };
 }
 
-/** A small absolutely-positioned dropdown anchored right after `anchor`. */
-let openDropdownBox: HTMLElement | null = null;
-function closeFieldDropdown(): void {
-  openDropdownBox?.remove();
-  openDropdownBox = null;
-}
-function openFieldDropdown(anchor: HTMLElement, options: Array<{ label: string; onPick: () => void }>): void {
-  closeFieldDropdown();
-  if (options.length === 0) return;
-  const box = div('st-f-dropdown');
-  for (const opt of options) {
-    const item = el('div', 'st-f-dropdown-item', opt.label);
-    item.addEventListener('mousedown', (event) => {
-      // Keep the field focused so the click registers before any blur-close.
-      event.preventDefault();
-      opt.onPick();
-      closeFieldDropdown();
-    });
-    box.append(item);
-  }
-  openDropdownBox = box;
-  anchor.insertAdjacentElement('afterend', box);
-}
-
 // ---------------------------------------------------------------------------
 // Panel DOM — общий каркас
 // ---------------------------------------------------------------------------
-
-let saveNameInput: HTMLInputElement | null = null;
-let savedListBox: HTMLElement | null = null;
 
 /** Догружает облачка уже выбранных родительских мыслей (по id). */
 function resolveParentClouds(): void {
@@ -523,7 +487,6 @@ function buildTraversalSection(ctx: FilterFormContext): FilterSection {
 function renderPanel(): void {
   if (host === null) return;
   clear(host);
-  applyPanelWidth();
   host.classList.add('st-f-layout');
 
   const sections: FilterSection[] = [];
@@ -630,7 +593,7 @@ function renderPanel(): void {
     buildSortSection(ctx),
   );
 
-  // --- sticky footer: Применить/Очистить + saved filters (§15.3) -------------
+  // --- sticky footer: Применить/Очистить + строка сохранённых отборов (§15.3) -
   const commandsBtn = el('button', 'st-f-commands', 'Команды ▾');
   commandsBtn.type = 'button';
   setTooltip(commandsBtn, 'Команды над всеми мыслями отбора (без учёта пагинации)');
@@ -642,182 +605,93 @@ function renderPanel(): void {
     extra: [commandsBtn],
   });
 
-  const saveRow = div('st-f-saverow');
-  const saveNameWrap = div('st-f-kw-wrap');
-  saveNameInput = el('input', 'st-f-input') as HTMLInputElement;
-  saveNameInput.type = 'text';
-  saveNameInput.placeholder = 'имя отбора';
-  saveNameInput.addEventListener('focus', () => renderSaveDropdown());
-  saveNameInput.addEventListener('input', () => renderSaveDropdown());
-  saveNameInput.addEventListener('blur', () => window.setTimeout(closeFieldDropdown, 150));
-  saveNameInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeFieldDropdown();
+  // Строка сохранённых отборов — общий модуль (`lib/saved-filter-bar.ts`):
+  // поле имени, дискета (записать), крестик (удалить), «…» (диалог выбора).
+  savedBar = buildSavedFilterBar({
+    store: savedFilterStore(),
+    getName: () => filterName,
+    setName: (name) => {
+      filterName = name;
+    },
+    buildDefinition: () => buildSavedDefinition(),
+    applyEntry: (entry) => applySavedFilterEntry(entry),
+    selectedId: () => state.savedFilterId,
+    setSelectedId: (id) => {
+      state.savedFilterId = id;
+    },
+    onPersist: () => callbacks?.onStatePersist(),
   });
-  saveNameWrap.append(saveNameInput);
-  const saveBtn = el('button', 'st-f-save', 'Сохранить');
-  saveBtn.type = 'button';
-  saveBtn.addEventListener('click', () => void saveCurrentFilter());
-  const deleteBtn = el('button', 'st-f-save', 'Удалить');
-  deleteBtn.type = 'button';
-  deleteBtn.addEventListener('click', () => void deleteNamedFilter());
-  saveRow.append(saveNameWrap, saveBtn, deleteBtn);
 
-  savedListBox = div('st-f-savedlist');
+  buildFilterForm({ sections, footer: [btnRow, savedBar.root], mount: host });
 
-  buildFilterForm({ sections, footer: [btnRow, saveRow, savedListBox], mount: host });
-
-  renderSavedList();
   for (const section of sections) section.refresh();
   resolveParentClouds();
 }
 
 // ---------------------------------------------------------------------------
-// Saved filters (§15.3)
+// Saved filters (§15.3) — общий каркас `lib/saved-filter-bar.ts`
 // ---------------------------------------------------------------------------
 
-/** Filters the saved list by the current name-field text (search-as-type). */
-function renderSaveDropdown(): void {
-  if (saveNameInput === null) return;
-  const needle = saveNameInput.value.trim().toLowerCase();
-  const matches =
-    needle === '' ? savedFilters : savedFilters.filter((f) => f.name.toLowerCase().includes(needle));
-  openFieldDropdown(
-    saveNameInput.parentElement ?? saveNameInput,
-    matches.map((filter) => ({
-      label: filter.name,
-      onPick: () => {
-        if (saveNameInput !== null) saveNameInput.value = filter.name;
-        applySavedFilter(filter);
-      },
-    })),
-  );
+/** REST-хранилище отборов вида «Структуры» (`/saved-filters?view=structures`). */
+function savedFilterStore(): SavedFilterStore {
+  return {
+    list: async () =>
+      (await etn.savedFilters.list(requireNetworkId())).map((f) => ({
+        id: f.id,
+        name: f.name,
+        definition: f.definition,
+      })),
+    create: async (name, definition) =>
+      toEntry(
+        await etn.savedFilters.create(requireNetworkId(), {
+          name,
+          definition: definition as SavedFilterDefinition,
+        }),
+      ),
+    update: async (id, patch) =>
+      toEntry(
+        await etn.savedFilters.update(requireNetworkId(), id, {
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.definition !== undefined
+            ? { definition: patch.definition as SavedFilterDefinition }
+            : {}),
+        }),
+      ),
+    remove: (id) => etn.savedFilters.remove(requireNetworkId(), id),
+  };
 }
 
-/** Deletes the saved filter whose name matches the name field, after confirming. */
-async function deleteNamedFilter(): Promise<void> {
-  const name = (saveNameInput?.value ?? '').trim();
-  const filter = savedFilters.find((f) => f.name.toLowerCase() === name.toLowerCase());
-  if (filter === undefined) {
-    notice('Отбор с таким именем не найден');
-    return;
-  }
-  await removeSavedFilter(filter);
+/** Запись хранилища → запись строки сохранённых отборов. */
+function toEntry(filter: { id: string; name: string; definition: SavedFilterDefinition }): SavedFilterEntry {
+  return { id: filter.id, name: filter.name, definition: filter.definition };
 }
 
-/** Renders the saved-filter list (click — apply; right-click — manage). */
-function renderSavedList(): void {
-  if (savedListBox === null) return;
-  clear(savedListBox);
-  if (savedFilters.length === 0) {
-    savedListBox.append(el('div', 'st-f-empty', 'Нет сохранённых отборов'));
-    return;
-  }
-  for (const filter of savedFilters) {
-    const item = el('button', 'st-f-saved');
-    item.type = 'button';
-    if (filter.id === state.savedFilterId) item.classList.add('active');
-    item.textContent = filter.name;
-    item.addEventListener('click', () => applySavedFilter(filter));
-    item.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      const items: MenuItem[] = [
-        { label: 'Применить', onClick: () => applySavedFilter(filter) },
-        { label: 'Переименовать…', onClick: () => void renameSavedFilter(filter) },
-        { label: 'Удалить', danger: true, onClick: () => void removeSavedFilter(filter) },
-      ];
-      showMenuAt(event.clientX, event.clientY, items);
-    });
-    savedListBox.append(item);
-  }
-}
-
-/** Applies a saved filter to the panel and reruns the query. Общая часть
- *  восстанавливается единым парсером конструктора (`parseFilterDefinition`),
- *  панельные дополнения (обход по связям, id отбора, ширина) — здесь. */
-function applySavedFilter(filter: SavedFilter): void {
-  const def = filter.definition;
-  const criteria = parseFilterDefinition(def);
-  setFilterState({
-    ...criteria,
-    linkFilterTypeIds: def.link_filter?.type_ids ?? [],
-    linkFilterStructural: def.link_filter?.include_structural ?? false,
-    savedFilterId: filter.id,
-    panelWidth: state.panelWidth,
-  });
-  if (saveNameInput !== null) saveNameInput.value = filter.name;
-  callbacks?.onApply();
-}
-
-/** Saves (or updates by name) the current filter under the entered name. */
-async function saveCurrentFilter(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const name = (saveNameInput?.value ?? '').trim();
-  if (name === '') {
-    notice('Введите имя отбора');
-    return;
-  }
+/** Определение отбора для записи: общая часть — единый конвертер конструктора,
+ *  панельный `link_filter` обхода ложится рядом. */
+function buildSavedDefinition(): SavedFilterDefinition {
   const traversalFilter = buildTraversalFilter();
-  // Общая часть определения — единый конвертер конструктора; панельный
-  // `link_filter` обхода ложится рядом.
-  const definition = {
+  return {
     ...buildWireFilter(state, propertyDefs, {
       activeMode: 'structures',
       showInactive: store.state.showInactive,
     }),
     ...(traversalFilter !== undefined ? { link_filter: traversalFilter } : {}),
   };
-  try {
-    const created = await etn.savedFilters.create(networkId, { name, definition });
-    state.savedFilterId = created.id;
-  } catch (err) {
-    if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'DUPLICATE') {
-      const existing = savedFilters.find((f) => f.name.toLowerCase() === name.toLowerCase());
-      if (existing !== undefined) {
-        const updated = await etn.savedFilters.update(networkId, existing.id, { definition });
-        state.savedFilterId = updated.id;
-      }
-    } else {
-      errorDialog('Сохранить отбор', err);
-      return;
-    }
-  }
-  callbacks?.onStatePersist();
-  await loadSavedFilters();
-  renderSavedList();
-  notice(`Отбор «${name}» сохранён`);
 }
 
-/** Renames a saved filter via the prompt dialog. */
-async function renameSavedFilter(filter: SavedFilter): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const name = await promptDialog('Переименовать отбор', 'Имя', filter.name);
-  if (name === null || name.trim() === '' || name.trim() === filter.name) return;
-  try {
-    await etn.savedFilters.update(networkId, filter.id, { name: name.trim() });
-  } catch (err) {
-    errorDialog('Переименовать отбор', err);
-    return;
-  }
-  await loadSavedFilters();
-}
-
-/** Deletes a saved filter after a confirmation. */
-async function removeSavedFilter(filter: SavedFilter): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const confirmed = await confirmDialog('Удалить отбор', `Удалить сохранённый отбор «${filter.name}»?`, true);
-  if (!confirmed) return;
-  try {
-    await etn.savedFilters.remove(networkId, filter.id);
-  } catch (err) {
-    errorDialog('Удалить отбор', err);
-    return;
-  }
-  if (state.savedFilterId === filter.id) {
-    state.savedFilterId = null;
-    callbacks?.onStatePersist();
-  }
-  await loadSavedFilters();
+/** Applies a saved filter to the panel and reruns the query. Общая часть
+ *  восстанавливается единым парсером конструктора (`parseFilterDefinition`),
+ *  панельные дополнения (обход по связям, id отбора) — здесь. */
+function applySavedFilterEntry(entry: SavedFilterEntry): void {
+  const def = entry.definition as SavedFilterDefinition;
+  const criteria = parseFilterDefinition(def);
+  filterName = entry.name;
+  setFilterState({
+    ...criteria,
+    linkFilterTypeIds: def.link_filter?.type_ids ?? [],
+    linkFilterStructural: def.link_filter?.include_structural ?? false,
+    savedFilterId: entry.id,
+    panelWidth: state.panelWidth,
+  });
+  callbacks?.onApply();
 }

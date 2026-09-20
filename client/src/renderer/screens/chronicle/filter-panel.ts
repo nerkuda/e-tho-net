@@ -13,12 +13,12 @@
  * период, направление сортировки, сохранённые отборы.
  */
 
-import { type ChronicleSavedFilter } from '@etn/shared';
+import { type ChronicleFilterDefinition } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
-import { button, div, el, errText, span } from '../../lib/dom.js';
+import { div, el, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   linkTypeEntityOptions,
@@ -41,8 +41,12 @@ import {
   type FilterSection,
 } from '../../lib/filter-form.js';
 import { buildChronicleWire, parseChronicleCriteria, defaultChronicleCriteriaState, type ChronicleCriteriaState } from '../../lib/filter-builder.js';
-import { showMenuAt, type MenuItem } from '../../lib/menu.js';
-import { notice } from '../../lib/notice.js';
+import {
+  buildSavedFilterBar,
+  type SavedFilterBarHandle,
+  type SavedFilterEntry,
+  type SavedFilterStore,
+} from '../../lib/saved-filter-bar.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
 
@@ -66,15 +70,14 @@ let filter: FilterState = defaultChronicleCriteriaState();
 let savedFilterId: string | null = null;
 /** Chip meta of the «мысли» field, resolved by id (not persisted). */
 const thoughtClouds = new Map<string, ThoughtCloudInput>();
-let savedFilters: ChronicleSavedFilter[] = [];
+/** Строка сохранённых отборов (общий модуль `lib/saved-filter-bar.ts`). */
+let savedBar: SavedFilterBarHandle | null = null;
+/** Имя отбора в поле строки — переживает перерисовку панели. */
+let filterName = '';
 
 let panel: HTMLElement | null = null;
 /** Чип-поле «Мысли» текущей отрисовки (для внешнего добавления/drop). */
 let thoughtsField: EntityChipSection | null = null;
-/** Поле имени отбора в футере. */
-let filterNameInput: HTMLInputElement | null = null;
-/** Список сохранённых отборов в футере. */
-let savedListBox: HTMLElement | null = null;
 /** Сворачивание группы «Автор / Редактор» (по умолчанию раскрыта). */
 let authorCollapsed = false;
 
@@ -100,7 +103,6 @@ export function setFilterState(next: FilterState): void {
 /** Marks which saved filter is selected (null = custom, not saved). */
 export function setSavedFilterId(id: string | null): void {
   savedFilterId = id;
-  renderSavedList();
 }
 
 /** The id of the currently selected saved filter. */
@@ -129,74 +131,63 @@ async function syncChipsFromIds(): Promise<void> {
   }
 }
 
-let savedFiltersLoaded = false;
-
-/** Reloads the saved-filter list and repaints it. */
+/** Reloads the saved-filter list and repaints it (real-time `saved-filter.*`). */
 export async function reloadSavedFilters(): Promise<void> {
-  try {
-    savedFilters = await etn.chronicleFilters.list(requireNetworkId());
-    savedFiltersLoaded = true;
-  } catch (err) {
-    notice(`Не удалось загрузить отборы: ${errText(err)}`, 'error');
-    savedFilters = [];
-  }
-  renderSavedList();
+  await savedBar?.reload();
+}
+
+/** REST-хранилище отборов вида «Хроника» (`/saved-filters?view=chronicle`). */
+function savedFilterStore(): SavedFilterStore {
+  return {
+    list: async () =>
+      (await etn.chronicleFilters.list(requireNetworkId())).map((f) => ({
+        id: f.id,
+        name: f.name,
+        definition: f.definition,
+      })),
+    create: async (name, definition) =>
+      toEntry(
+        await etn.chronicleFilters.create(requireNetworkId(), {
+          name,
+          definition: definition as ChronicleFilterDefinition,
+        }),
+      ),
+    update: async (id, patch) =>
+      toEntry(
+        await etn.chronicleFilters.update(requireNetworkId(), id, {
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.definition !== undefined
+            ? { definition: patch.definition as ChronicleFilterDefinition }
+            : {}),
+        }),
+      ),
+    remove: (id) => etn.chronicleFilters.remove(requireNetworkId(), id),
+  };
+}
+
+/** Запись хранилища → запись строки сохранённых отборов. */
+function toEntry(filter2: {
+  id: string;
+  name: string;
+  definition: ChronicleFilterDefinition;
+}): SavedFilterEntry {
+  return { id: filter2.id, name: filter2.name, definition: filter2.definition };
 }
 
 /** Applies a saved filter: fills the controls and delegates the query. */
-function applySavedFilter(id: string): void {
-  const saved = savedFilters.find((f) => f.id === id);
-  if (saved === undefined) return;
-  filter = parseChronicleCriteria(saved.definition);
-  savedFilterId = id;
+function applySavedFilterEntry(entry: SavedFilterEntry): void {
+  filter = parseChronicleCriteria(entry.definition as ChronicleFilterDefinition);
+  savedFilterId = entry.id;
+  filterName = entry.name;
   renderPanel();
   actions.apply();
-}
-
-/** Saves the current criteria under the typed name (overwrites by name). */
-async function saveFilter(): Promise<void> {
-  if (filterNameInput === null) return;
-  const name = filterNameInput.value.trim();
-  if (name === '') {
-    notice('Введите имя отбора.', 'info');
-    return;
-  }
-  const networkId = requireNetworkId();
-  const definition = buildChronicleWire(filter);
-  try {
-    const existing = savedFilters.find((f) => f.name.toLowerCase() === name.toLowerCase());
-    if (existing !== undefined) {
-      await etn.chronicleFilters.update(networkId, existing.id, { definition });
-      savedFilterId = existing.id;
-    } else {
-      const created = await etn.chronicleFilters.create(networkId, { name, definition });
-      savedFilterId = created.id;
-    }
-    filterNameInput.value = '';
-    await reloadSavedFilters();
-    notice('Отбор сохранён.');
-  } catch (err) {
-    notice(`Не удалось сохранить отбор: ${errText(err)}`, 'error');
-  }
-}
-
-/** Deletes the selected saved filter. */
-async function removeSavedFilter(id: string): Promise<void> {
-  const networkId = requireNetworkId();
-  try {
-    await etn.chronicleFilters.remove(networkId, id);
-    if (savedFilterId === id) savedFilterId = null;
-    await reloadSavedFilters();
-    notice('Отбор удалён.');
-  } catch (err) {
-    notice(`Не удалось удалить отбор: ${errText(err)}`, 'error');
-  }
 }
 
 /** Clears every filter field (keeps the panel, does not apply). */
 export function clearFilter(): void {
   filter = defaultChronicleCriteriaState();
   savedFilterId = null;
+  filterName = '';
   renderPanel();
 }
 
@@ -302,33 +293,6 @@ function periodSection(ctx: FilterFormContext): FilterSection {
   );
 }
 
-/** Список сохранённых отборов (клик — применить, правый клик — сменить). */
-function renderSavedList(): void {
-  if (savedListBox === null) return;
-  savedListBox.replaceChildren();
-  if (!savedFiltersLoaded) return;
-  if (savedFilters.length === 0) {
-    savedListBox.append(el('div', 'st-f-empty', 'Нет сохранённых отборов'));
-    return;
-  }
-  for (const saved of savedFilters) {
-    const item = el('button', 'st-f-saved');
-    item.type = 'button';
-    if (saved.id === savedFilterId) item.classList.add('active');
-    item.textContent = saved.name;
-    item.addEventListener('click', () => applySavedFilter(saved.id));
-    item.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      const items: MenuItem[] = [
-        { label: 'Применить', onClick: () => applySavedFilter(saved.id) },
-        { label: 'Удалить', danger: true, onClick: () => void removeSavedFilter(saved.id) },
-      ];
-      showMenuAt(event.clientX, event.clientY, items);
-    });
-    savedListBox.append(item);
-  }
-}
-
 /** Builds and mounts the filter panel into `host`; returns the root element. */
 export function mountChronicleFilterPanel(host: HTMLElement, panelActions: PanelActions): HTMLElement {
   actions = panelActions;
@@ -427,28 +391,27 @@ function renderPanel(): void {
     buildSortSection(ctx, { showSort: false }),
   );
 
-  // Футер: применить/очистить + сохранённые отборы.
+  // Футер: применить/очистить + строка сохранённых отборов (общий модуль).
   const btnRow = buildFilterFooterButtons({
     onApply: () => actions.apply(),
     onClear: () => clearFilter(),
     clearLabel: 'Очистить отбор',
   });
-  const saveRow = div('st-f-saverow');
-  filterNameInput = el('input', 'st-f-input') as HTMLInputElement;
-  filterNameInput.type = 'text';
-  filterNameInput.placeholder = 'Имя отбора';
-  filterNameInput.maxLength = 200;
-  const saveButton = button('Сохранить отбор', () => void saveFilter(), 'st-f-save');
-  saveButton.type = 'button';
-  const removeButton = button('Удалить отбор', () => {
-    if (savedFilterId !== null) void removeSavedFilter(savedFilterId);
-  }, 'st-f-save');
-  removeButton.type = 'button';
-  saveRow.append(filterNameInput, saveButton, removeButton);
-  savedListBox = div('st-f-savedlist');
+  savedBar = buildSavedFilterBar({
+    store: savedFilterStore(),
+    getName: () => filterName,
+    setName: (name) => {
+      filterName = name;
+    },
+    buildDefinition: () => buildChronicleWire(filter),
+    applyEntry: (entry) => applySavedFilterEntry(entry),
+    selectedId: () => savedFilterId,
+    setSelectedId: (id) => {
+      savedFilterId = id;
+    },
+  });
 
-  buildFilterForm({ sections, footer: [btnRow, saveRow, savedListBox], mount: panel });
-  renderSavedList();
+  buildFilterForm({ sections, footer: [btnRow, savedBar.root], mount: panel });
 }
 
 /** Global Ctrl+Enter shortcut for the chronicle view (hosted by the table). */
