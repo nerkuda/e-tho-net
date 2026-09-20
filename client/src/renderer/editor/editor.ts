@@ -408,6 +408,12 @@ let tabBarEl: HTMLElement | null = null;
 let paneHostEl: HTMLElement | null = null;
 let tabButtons = new Map<EditorTabId, HTMLButtonElement>();
 let builtPanes = new Map<EditorTabId, HTMLElement>();
+/**
+ * Сколько раз строилась вкладка за время жизни модуля. Нужен только
+ * регрессионному тесту ошибки 786bcd69 («редактор обязан перечитать набор
+ * свойств при смене типа»): кэш вкладок снаружи не наблюдаем.
+ */
+const paneBuildCounts = new Map<EditorTabId, number>();
 
 /**
  * Guards the one-time module registrations (sections, tabs, the document
@@ -586,6 +592,7 @@ export function mountEditor(editorHost: HTMLElement): void {
 function buildTabPane(id: EditorTabId): HTMLElement {
   const ctx = renderCtx;
   const pane = div('tab-pane fixed');
+  paneBuildCounts.set(id, (paneBuildCounts.get(id) ?? 0) + 1);
   if (ctx === null) return pane;
   if (id === 'main') {
     // Структура вкладки (задача 8ab775d9): вкладка целиком занята постоянным
@@ -683,16 +690,30 @@ function activateEditorTab(id: EditorTabId): void {
 }
 
 /**
- * Drops the cached «Комментарий» pane so it rebuilds from the current `ctx` on
- * next activation (bug 6b757336): a thought's type change can add/remove
- * properties, so the cached properties+comment pane can no longer be trusted
- * as-is. If «Комментарий» is the active tab this rebuilds it right away — the
- * comment's CodeMirror instance is destroyed in that case, same as before
- * this fix, but only for an actual type change, not for every header save.
+ * Drops the panes whose content depends on the owner's TYPE so they rebuild
+ * from the current `ctx` on next activation (bug 6b757336; ошибка 786bcd69).
+ *
+ * A type change swaps the owner's property set and can add/remove the
+ * type-template comment, so two cached tabs can no longer be trusted:
+ *   * «Комментарий» (`main`) — sections are rebuilt against the new type
+ *     (the template-comment create/read ordering of e477173f relies on it);
+ *   * «Свойства» (`properties`) — the in-type table is resolved from the new
+ *     type's effective property definitions (задача 8ab775d9 moved properties
+ *     out of the «Комментарий» pane; before that they shared `main`, and the
+ *     `main`-only invalidation silently left the old type's property set on
+ *     screen — ошибка 786bcd69).
+ *
+ * The remaining tabs (attachments/chrono/links/graph/metadata) do not depend
+ * on the type and keep their cache — and their CodeMirror instances. If the
+ * shown tab was dropped it is re-displayed right away, so the user sees the
+ * new set without switching tabs. Runs only on an actual type change, not on
+ * every header save.
  */
-function invalidateMainPane(): void {
+function invalidateTypeDependentPanes(): void {
+  const shownWasDropped = builtPanes.delete(shownTab);
   builtPanes.delete('main');
-  if (shownTab === 'main') displayTab('main');
+  builtPanes.delete('properties');
+  if (shownWasDropped) displayTab(shownTab);
 }
 
 /** Updates the panel title text + trash marker for the current context. */
@@ -746,14 +767,15 @@ function patchHeader(ctx: EditorContext): void {
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 
   // A thought's type change can add/remove properties (and NULL visual
-  // fields inherit new defaults) — the cached «Комментарий» pane must rebuild.
+  // fields inherit new defaults) — every type-dependent pane must rebuild
+  // («Комментарий» sections and the «Свойства» table, ошибка 786bcd69).
   // Every other header field (title/synonyms/icon/active/style) leaves the
   // property set and the comment untouched, so no pane invalidation.
   const typeChanged =
     ctx.ownerType === 'thought' &&
     prevCtx?.ownerType === 'thought' &&
     prevCtx.thought?.type_id !== ctx.thought?.type_id;
-  if (typeChanged) invalidateMainPane();
+  if (typeChanged) invalidateTypeDependentPanes();
 }
 
 /** Renders the editor for the current target (signature-guarded). */
@@ -1791,4 +1813,11 @@ export const editorInternals = {
    * что шаблонный комментарий создаётся ДО отражения апдейта в store.
    */
   saveThought,
+  /**
+   * Сколько раз строилась вкладка за время жизни модуля (ошибка 786bcd69:
+   * смена типа обязана перечитать набор свойств — вкладка «Свойства» должна
+   * быть построена заново). Кэш вкладок снаружи не наблюдаем, поэтому тест
+   * читает счётчик.
+   */
+  paneBuildCount: (id: EditorTabId): number => paneBuildCounts.get(id) ?? 0,
 };

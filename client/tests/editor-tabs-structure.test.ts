@@ -406,9 +406,13 @@ describe('набор вкладок зависит от сущности (0.8.1,
     const src = readText(SRC.editor);
     assert.ok(/function displayTab\(/.test(src), 'displayTab is declared');
     assert.ok(/let shownTab: EditorTabId/.test(src), 'shownTab tracks the actually displayed tab');
+    // Инвалидация кэша вкладок при смене типа (ошибка 786bcd69) перерисовывает
+    // именно ПОКАЗАННУЮ вкладку (shownTab), а не сохранённое предпочтение
+    // (activeTab): сброшенную вкладку, на которую пользователь смотрит, надо
+    // собрать заново, а предпочтение — не трогать.
     assert.ok(
-      /if \(shownTab === 'main'\) displayTab\('main'\)/.test(src),
-      'invalidateMainPane reads shownTab (not activeTab)',
+      /builtPanes\.delete\(shownTab\)[\s\S]{0,400}?displayTab\(shownTab\)/.test(src),
+      'invalidateTypeDependentPanes reads shownTab (not activeTab)',
     );
     assert.ok(/if \(shownTab !== 'main'\)/.test(src), 'focusEditorComment reads shownTab');
   });
