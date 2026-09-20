@@ -385,6 +385,12 @@ export function buildThoughtMenuItems(
   // вне холста — родитель самой мысли, который резолвит вызывающий.
   const siblingParentId =
     target.siblingParentId !== undefined ? target.siblingParentId : (focus?.parents[0]?.id ?? null);
+  // Якорь диалога «Добавить» — владелец вызова (08-ui-spec.md §4.1–4.2), а не
+  // мысль в фокусе: диалог обязан назвать именно его (ошибка c8bd4676). Имя
+  // родителя-родственника известно только в холстовом случае — вне холста
+  // `siblingParentId` приходит от вызывающего без имени.
+  const siblingParentTitle =
+    target.siblingParentId === undefined ? focus?.parents[0]?.title : undefined;
   const canAddSibling = siblingParentId !== null;
   const inSelection = store.state.selection.includes(target.id);
   // Manual order is only available in the parents/children zones while the
@@ -436,18 +442,24 @@ export function buildThoughtMenuItems(
       submenu: [
         {
           label: 'вверх (родитель)',
-          onClick: () => openAddDialog({ anchorId: target.id, direction: 'parent' }),
+          onClick: () =>
+            openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
         },
         {
           label: 'вниз (ребёнок)',
-          onClick: () => openAddDialog({ anchorId: target.id, direction: 'child' }),
+          onClick: () =>
+            openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
         },
         {
           label: 'налево (родственник)',
           disabled: !canAddSibling,
           onClick: () => {
             if (siblingParentId !== null) {
-              openAddDialog({ anchorId: siblingParentId, direction: 'child' });
+              openAddDialog({
+                anchorId: siblingParentId,
+                anchorTitle: siblingParentTitle,
+                direction: 'child',
+              });
             }
           },
         },
@@ -914,6 +926,7 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
             onClick: () =>
               openAddDialog({
                 anchorId: focus.focused.id,
+                anchorTitle: focus.focused.title,
                 direction: dir === 'parents' ? 'parent' : 'child',
               }),
           },

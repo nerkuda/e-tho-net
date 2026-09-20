@@ -165,15 +165,24 @@ export function mountAddDialog(): void {
  * Opens the universal picker and inserts the picked list into the canvas:
  * existing thoughts get linked to the anchor, new ones are created (with the
  * chosen thought type) and linked; the link type applies to every link.
+ *
+ * `anchorTitle` is the anchor's OWN name: the dialog's «вверх/вниз к …» suffix
+ * names the call owner (08-ui-spec.md §4.1–4.2), which for an ellipse drag is
+ * the thought whose ellipse was dragged — passing nothing used to make the
+ * suffix name the FOCUSED thought instead (ошибка c8bd4676). Callers that do
+ * not know the anchor's name still get the focus fallback of
+ * {@link pickThoughtsDialog}.
  */
 export async function openAddDialog(ctx: {
   anchorId: string | null;
+  anchorTitle?: string;
   direction: 'parent' | 'child';
 }): Promise<void> {
   const networkId = requireNetworkId();
   const result = await pickThoughtsDialog({
     networkId,
     anchor: ctx.anchorId !== null ? { id: ctx.anchorId, direction: ctx.direction } : null,
+    anchorTitle: ctx.anchorTitle,
     allowCreate: true,
     allowLinkType: true,
     applyLabel: 'Добавить',

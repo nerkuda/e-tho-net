@@ -24,6 +24,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { store } from '../src/renderer/state.js';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
@@ -258,6 +260,8 @@ interface DialogHandle {
   lineList: ShimElement;
   primaryBtn: ShimElement;
   cancelBtn: ShimElement;
+  /** Dialog header text — «Добавить мысль (вниз к «…»)». */
+  titleText: () => string;
   /** Queued list row titles (empty when the list holds only its header). */
   lineTitles: () => string[];
 }
@@ -287,7 +291,8 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
     lineList.children
       .filter((row) => row.className === 'add-list-item')
       .map((row) => row.children.find((c) => c.className === 'al-title')?.textContent ?? '');
-  return { promise, singleRadio, multiRadio, input, lineList, primaryBtn, cancelBtn, lineTitles };
+  const titleText = (): string => box.querySelector('.dialog-title')?.textContent ?? '';
+  return { promise, singleRadio, multiRadio, input, lineList, primaryBtn, cancelBtn, titleText, lineTitles };
 }
 
 /** Ticks the microtask queue so the async duplicate search settles. */
@@ -371,6 +376,83 @@ describe('pickThoughtsDialog mode switch (карточка ETN 24ad9b0e)', () =>
       result?.items.map((item: any) => item.title),
       ['Раз', 'Два'],
     );
+  });
+});
+
+describe('заголовок диалога называет якорь, а не мысль в фокусе (ошибка c8bd4676)', () => {
+  /** Минимальный ответ фокуса: диалогу нужно только имя мысли в фокусе. */
+  const focusWith = (title: string): any => ({
+    focused: { id: 'F', title },
+    parents: [],
+    siblings: [],
+    children: [],
+    edges: [],
+    sorts: {
+      parents: { sort: 'created', order: 'asc' },
+      children: { sort: 'created', order: 'asc' },
+      siblings: { sort: 'created', order: 'asc' },
+    },
+  });
+
+  it('имя источника драга перебивает имя мысли в фокусе', async () => {
+    store.update({ focus: focusWith('Мысль в фокусе') });
+    const ui = await openDialog({
+      anchor: { id: 'X', direction: 'child' },
+      anchorTitle: 'Источник драга',
+    });
+    assert.equal(ui.titleText(), 'Добавить мысль (вниз к «Источник драга»)');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+
+  it('openAddDialog доносит имя якоря до заголовка (путь эллипса)', async () => {
+    const mod = await loadDialog();
+    store.update({ networkId: 'n1', focus: focusWith('Мысль в фокусе') });
+    const done = mod.openAddDialog({
+      anchorId: 'X',
+      anchorTitle: 'Источник драга',
+      direction: 'child',
+    });
+    const body = (globalThis as any).document.body as ShimElement;
+    const backdrop = body.children.find((c) => c.className === 'dialog-backdrop');
+    const box = backdrop?.children[0];
+    assert.equal(
+      box?.querySelector('.dialog-title')?.textContent ?? '',
+      'Добавить мысль (вниз к «Источник драга»)',
+    );
+    // Отмена: диалог закрывается, ничего не создаётся.
+    const footer = box?.children.find((c) => c.className === 'dialog-footer');
+    footer?.children.find((c) => !c.className.split(/\s+/).includes('primary'))?.click();
+    assert.equal(await done, undefined);
+    store.update({ networkId: null, focus: null });
+  });
+
+  it('направление берётся из эллипса: верхний даёт «вверх к якорю»', async () => {
+    store.update({ focus: focusWith('Мысль в фокусе') });
+    const ui = await openDialog({
+      anchor: { id: 'X', direction: 'parent' },
+      anchorTitle: 'Источник драга',
+    });
+    assert.equal(ui.titleText(), 'Добавить мысль (вверх к «Источник драга»)');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+
+  it('без имени якоря остаётся прежний откат на мысль в фокусе', async () => {
+    store.update({ focus: focusWith('Мысль в фокусе') });
+    const ui = await openDialog({ anchor: { id: 'X', direction: 'child' } });
+    assert.equal(ui.titleText(), 'Добавить мысль (вниз к «Мысль в фокусе»)');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+    store.update({ focus: null });
+  });
+
+  it('без якоря суффикса направления нет', async () => {
+    store.update({ focus: null });
+    const ui = await openDialog();
+    assert.equal(ui.titleText(), 'Добавить мысли');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
   });
 });
 

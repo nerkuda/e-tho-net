@@ -126,6 +126,14 @@ const NEIGHBORS_PREVIEW_LIMIT = 200;
 export interface AddDialogContext {
   /** The thought the dragged ellipse belongs to (link anchor). */
   anchorId: string;
+  /**
+   * Title of the anchor itself. The «вверх/вниз к …» suffix of the dialog names
+   * the CALL OWNER (08-ui-spec.md §4.1–4.2) — for an ellipse drag that is the
+   * thought whose ellipse was dragged, never the focused thought (ошибка
+   * c8bd4676). Supplied by the drag source; the dialog falls back to the
+   * focused thought for legacy callers that do not know the anchor's name.
+   */
+  anchorTitle?: string;
   /** Top ellipse → new parent; bottom ellipse → new child. */
   direction: 'parent' | 'child';
 }
@@ -133,6 +141,8 @@ export interface AddDialogContext {
 /** Pending ellipse drag state. */
 interface DragState {
   anchorId: string;
+  /** Anchor's own title — carried into the add dialog (see {@link AddDialogContext}). */
+  anchorTitle: string;
   direction: 'parent' | 'child';
   startX: number;
   startY: number;
@@ -888,8 +898,8 @@ function renderFocusRow(focus: FocusResponse): void {
   if (children > 0) bottomEllipse.classList.add('filled');
   setTooltip(topEllipse, `Входящие связи: ${parents}`);
   setTooltip(bottomEllipse, `Исходящие связи: ${children}`);
-  wireEllipseDrag(topEllipse, thought.id, 'parent');
-  wireEllipseDrag(bottomEllipse, thought.id, 'child');
+  wireEllipseDrag(topEllipse, thought.id, thought.title, 'parent');
+  wireEllipseDrag(bottomEllipse, thought.id, thought.title, 'child');
   markNeighborsPreview(topEllipse, thought.id, neighborsDirForEllipse('top'), thought.title);
   markNeighborsPreview(bottomEllipse, thought.id, neighborsDirForEllipse('bottom'), thought.title);
 
@@ -1065,9 +1075,14 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     const target = event.target as HTMLElement | null;
     if (target !== null && target.closest('.cloud') !== null) return;
     const focusId = store.state.focus?.focused.id;
+    const focusTitle = store.state.focus?.focused.title;
     if (focusId === undefined) return;
     if (addDialogOpener !== null) {
-      addDialogOpener({ anchorId: focusId, direction: dir === 'parents' ? 'parent' : 'child' });
+      addDialogOpener({
+        anchorId: focusId,
+        anchorTitle: focusTitle,
+        direction: dir === 'parents' ? 'parent' : 'child',
+      });
     }
   });
 
@@ -1353,8 +1368,8 @@ function buildCloud(
   if (hasOut) bottomEllipse.classList.add('filled');
   setTooltip(topEllipse, hasIn ? 'Есть входящие связи' : 'Входящих связей нет');
   setTooltip(bottomEllipse, hasOut ? 'Есть исходящие связи' : 'Исходящих связей нет');
-  wireEllipseDrag(topEllipse, entry.id, 'parent');
-  wireEllipseDrag(bottomEllipse, entry.id, 'child');
+  wireEllipseDrag(topEllipse, entry.id, cloudTitleFull, 'parent');
+  wireEllipseDrag(bottomEllipse, entry.id, cloudTitleFull, 'child');
   markNeighborsPreview(topEllipse, entry.id, neighborsDirForEllipse('top'), cloudTitleFull);
   markNeighborsPreview(bottomEllipse, entry.id, neighborsDirForEllipse('bottom'), cloudTitleFull);
 
@@ -1598,12 +1613,18 @@ export const canvasInternals = {
  *  - over another thought cloud → direct link creation;
  *  - anywhere else → the registered add-thought dialog opener.
  *
+ * The gesture belongs to the ellipse's OWN thought: `anchorId`/`anchorTitle`
+ * come from the cloud that renders the ellipse, so a drag started on a
+ * non-focus cloud links (or opens the dialog) for THAT thought — the focused
+ * thought plays no part here (ошибка c8bd4676).
+ *
  * Hovering an ellipse highlights it and every visible link of its direction
  * (the link overlay's {@link setEllipseHover}).
  */
 function wireEllipseDrag(
   ellipse: HTMLElement,
   anchorId: string,
+  anchorTitle: string,
   direction: 'parent' | 'child',
 ): void {
   ellipse.addEventListener('mouseenter', (event) => {
@@ -1631,6 +1652,7 @@ function wireEllipseDrag(
     event.stopPropagation();
     drag = {
       anchorId,
+      anchorTitle,
       direction,
       startX: event.clientX,
       startY: event.clientY,
@@ -1696,15 +1718,53 @@ function onDragMove(event: MouseEvent): void {
   }
 }
 
+/**
+ * What an ellipse drag resolves to on release — a link to the thought under
+ * the cursor, or the add-thought dialog for the drag's own anchor. Pure: the
+ * DOM hit-testing lives in {@link onDragMove}; this only decides the outcome.
+ *
+ * The anchor and the direction come from the DRAGGED ellipse (`top` → the new
+ * thought becomes the anchor's parent, `bottom` → its child); the focused
+ * thought is not consulted at all (ошибка c8bd4676).
+ */
+export function resolveEllipseDrop(
+  drag: { anchorId: string; anchorTitle: string; direction: 'parent' | 'child' },
+  hoveredId: string | null,
+): EllipseDropOutcome {
+  if (hoveredId !== null && hoveredId !== drag.anchorId) {
+    return {
+      kind: 'link',
+      anchorId: drag.anchorId,
+      direction: drag.direction,
+      droppedId: hoveredId,
+    };
+  }
+  return {
+    kind: 'add',
+    anchorId: drag.anchorId,
+    anchorTitle: drag.anchorTitle,
+    direction: drag.direction,
+  };
+}
+
+/** Outcome of an ellipse drag release (see {@link resolveEllipseDrop}). */
+export type EllipseDropOutcome =
+  /** Dropped on another thought — a direct link from/to the drag's anchor. */
+  | { kind: 'link'; anchorId: string; direction: 'parent' | 'child'; droppedId: string }
+  /** Dropped on empty space — the add-thought dialog for the drag's anchor. */
+  | { kind: 'add'; anchorId: string; anchorTitle: string; direction: 'parent' | 'child' };
+
 /** Ends the drag: creates a link or opens the add dialog. */
 function onDragEnd(_event: MouseEvent): void {
   window.removeEventListener('mousemove', onDragMove);
   window.removeEventListener('mouseup', onDragEnd);
   if (drag === null) return;
   const wasActive = drag.active;
-  const anchorId = drag.anchorId;
-  const direction = drag.direction;
   const hoveredId = drag.hovered !== null ? ellipseDropId(drag.hovered) : null;
+  const outcome = resolveEllipseDrop(
+    { anchorId: drag.anchorId, anchorTitle: drag.anchorTitle, direction: drag.direction },
+    hoveredId,
+  );
   if (drag.hovered !== null) drag.hovered.classList.remove('drop-target');
   drag.sourceEl.classList.remove('drag-source');
   setDragLinkLine(null);
@@ -1713,12 +1773,16 @@ function onDragEnd(_event: MouseEvent): void {
 
   if (!wasActive) return;
 
-  if (hoveredId !== null && hoveredId !== anchorId) {
-    void createLinkFromDrop(direction, anchorId, hoveredId);
+  if (outcome.kind === 'link') {
+    void createLinkFromDrop(outcome.direction, outcome.anchorId, outcome.droppedId);
     return;
   }
   if (addDialogOpener !== null) {
-    addDialogOpener({ anchorId, direction });
+    addDialogOpener({
+      anchorId: outcome.anchorId,
+      anchorTitle: outcome.anchorTitle,
+      direction: outcome.direction,
+    });
   } else {
     notice('Диалог добавления мыслей ещё не готов.', 'error');
   }
