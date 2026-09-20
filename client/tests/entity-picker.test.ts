@@ -252,7 +252,13 @@ class ShimElement {
     node.parent = null;
   }
   remove(): void {
-    this.parent?.removeChild(this);
+    // Снятие узла из DOM — путь закрытия диалога (`showDialog` вешает на него
+    // своё событие `remove`, по которому снимает слушатели клавиш и зовёт
+    // `onClose`). Шим повторяет контракт: узел без родителя не снимается и
+    // события не даёт, поэтому повторный `remove()` не переигрывает `onClose`.
+    if (this.parent === null) return;
+    this.parent.removeChild(this);
+    this.emit('remove');
   }
   replaceChildren(...nodes: ShimElement[]): void {
     this.children = [];
@@ -305,21 +311,46 @@ interface ShimWindow {
   removeEventListener(type: string, listener: (event: any) => void, capture?: boolean): void;
 }
 
-function installShim(): { body: ShimElement } {
+function installShim(): { body: ShimElement; pressEscape: () => void } {
   const body = new ShimElement('body');
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     body,
   };
+  /** Слушатели `window` — каркас диалога вешает сюда Esc и Ctrl+Enter. */
+  const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
   const win: ShimWindow = {
     innerWidth: 1200,
     innerHeight: 800,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
+    addEventListener: (type, listener) => {
+      windowListeners.push({ type, listener });
+    },
+    removeEventListener: (type, listener) => {
+      const index = windowListeners.findIndex((l) => l.type === type && l.listener === listener);
+      if (index >= 0) windowListeners.splice(index, 1);
+    },
   };
   (globalThis as any).window = win;
-  return { body };
+  /** Нажатие Esc — реальный путь каркаса: его `keydown`-слушатель закрывает диалог. */
+  const pressEscape = (): void => {
+    const event = {
+      key: 'Escape',
+      repeat: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      preventDefault: () => {
+        event.defaultPrevented = true;
+      },
+    };
+    for (const { type, listener } of [...windowListeners]) {
+      if (type === 'keydown') listener(event);
+    }
+  };
+  return { body, pressEscape };
 }
 
 async function flush(): Promise<void> {
@@ -805,5 +836,174 @@ describe('entity-picker: завершение модального чек-лис
     await done;
     assert.deepEqual(result, ['tb'], 'применение отдало текущий набор');
     assert.equal(body.children.length, 0, 'применение закрыло диалог');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Отмена модального чек-листа резолвит промис (ошибка 12dfb87e)
+// ---------------------------------------------------------------------------
+
+describe('entity-picker: отмена модального чек-листа (12dfb87e)', () => {
+  /** Плоский каталог типов мыслей для диалога без обращения к store. */
+  const CATALOGUE: EntityOption[] = [
+    { id: 'ta', title: 'Проект', selectable: true, cloud: { id: 'ta', title: 'Проект' } },
+    { id: 'tb', title: 'Задача', selectable: true, cloud: { id: 'tb', title: 'Задача' } },
+  ];
+
+  /** Кнопка «Отмена» футера открытого диалога. */
+  function cancelButton(backdrop: ShimElement): ShimElement {
+    const btn = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Отмена');
+    assert.ok(btn !== undefined, 'в футере есть «Отмена»');
+    return btn!;
+  }
+
+  it('кнопка «Отмена» (одиночный режим) резолвит промис в null и закрывает диалог', async () => {
+    // Регрессия 12dfb87e: у «Отмены» не было onClick, а `closeSelf` из правки
+    // c9bd04ed только снимал диалог — промис висел вечно.
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Выбрать тип мысли',
+      catalogue: CATALOGUE,
+      single: true,
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop !== undefined, 'диалог смонтирован');
+    cancelButton(backdrop).click();
+    await done;
+    assert.equal(result, null, 'отмена отдана как null, а не зависшим промисом');
+    assert.equal(body.children.length, 0, 'диалог закрыт');
+  });
+
+  it('Esc резолвит промис в null (путь закрытия каркаса)', async () => {
+    const { body, pressEscape } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Типы мыслей',
+      catalogue: CATALOGUE,
+      currentIds: ['ta'],
+    }).then((ids) => {
+      result = ids;
+    });
+    assert.equal(body.children.length, 1, 'диалог открыт');
+    pressEscape();
+    await done;
+    assert.equal(result, null, 'Esc — отмена, промис резолвлен');
+    assert.equal(body.children.length, 0, 'Esc снял диалог');
+  });
+
+  it('× в заголовке резолвит промис в null', async () => {
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Выбрать тип мысли',
+      catalogue: CATALOGUE,
+      single: true,
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop !== undefined, 'диалог смонтирован');
+    const closeBtn = findAllByClass(backdrop, 'dialog-close')[0];
+    assert.ok(closeBtn !== undefined, 'в заголовке есть ×');
+    closeBtn!.click();
+    await done;
+    assert.equal(result, null, '× — отмена');
+    assert.equal(body.children.length, 0, 'диалог закрыт');
+  });
+
+  it('множественный чек-лист: «Отмена» отдаёт null, а не текущий набор', async () => {
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Типы мыслей',
+      catalogue: CATALOGUE,
+      currentIds: ['ta'],
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop !== undefined, 'диалог смонтирован');
+    // «Очистить» меняет набор, но промис до завершения молчит.
+    findAllByClass(backdrop, 'icon-btn')[0]!.click();
+    assert.equal(result, undefined, 'до завершения результат не отдан');
+    cancelButton(backdrop).click();
+    await done;
+    assert.equal(result, null, 'отмена отдана как null даже при пустом наборе');
+  });
+
+  it('применение пустого набора отдаёт [], а не null (отмена отличима)', async () => {
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Типы мыслей',
+      catalogue: CATALOGUE,
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop !== undefined, 'диалог смонтирован');
+    const apply = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Применить');
+    assert.ok(apply !== undefined, 'в футере есть «Применить»');
+    apply!.click();
+    await done;
+    assert.deepEqual(result, [], 'осознанное применение пустого набора — []');
+  });
+
+  it('встроенное комбо: отмена в диалоге «…» не меняет значение', async () => {
+    // Ветка `if (ids === null) return;` в `openPicker` была недостижима
+    // (ошибка 12dfb87e) — теперь отмена доходит до вызывающего.
+    const { body } = installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const calls: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: null,
+      onChange: (id) => calls.push(id),
+    });
+    parts(combo).pick.click();
+    await flush();
+    const backdrop = body.children[0];
+    assert.ok(backdrop !== undefined, 'диалог «…» открыт');
+    cancelButton(backdrop).click();
+    await flush();
+    assert.deepEqual(calls, [], 'отмена не позвала onChange');
+    assert.equal(combo.value(), null, 'значение осталось пустым');
+  });
+
+  it('встроенное комбо: выбор в диалоге «…» по-прежнему задаёт значение', async () => {
+    const { body } = installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const calls: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: null,
+      onChange: (id) => calls.push(id),
+    });
+    parts(combo).pick.click();
+    await flush();
+    const backdrop = body.children[0];
+    assert.ok(backdrop !== undefined, 'диалог «…» открыт');
+    const row = findAllByClass(backdrop, 'entity-pick-row')[0];
+    assert.ok(row !== undefined, 'каталог показан');
+    row!.click();
+    await flush();
+    assert.deepEqual(calls, ['c'], 'выбор строки задал значение');
+    assert.equal(combo.value(), 'c', 'значение в поле обновилось');
+    assert.equal(body.children.length, 0, 'диалог закрыт выбором');
   });
 });

@@ -314,9 +314,12 @@ function commandButton(icon: IconName, title: string, onClick: () => void): HTML
 
 /**
  * Открывает модальный чек-лист пикера. Возвращает новый набор id или `null`
- * при отмене. Для типов список — дерево с тогглами раскрытия, поиск сужает
- * его (совпадения показываются вместе с цепочкой предков); для мыслей —
- * чипы выбранного и выпадашка живого поиска.
+ * при отмене. Отмена — ЛЮБОЙ путь закрытия каркаса `showDialog` («Отмена»,
+ * Esc, ×, программный `closeDialog()`): завершение пикера повешено на его
+ * `onClose`, срабатывающий на снятии подложки из DOM, а не на кнопку футера
+ * (ошибка 12dfb87e — промис резолвится ВСЕГДА). Для типов список — дерево с
+ * тогглами раскрытия, поиск сужает его (совпадения показываются вместе с
+ * цепочкой предков); для мыслей — чипы выбранного и выпадашка живого поиска.
  */
 export async function pickEntitiesModal(
   opts: EntityPickerModalOptions,
@@ -472,6 +475,8 @@ export async function pickEntitiesModal(
         });
       }
       buttons.push(
+        // «Отмена» без `onClick`: каркас снимает диалог сам, а отмену
+        // фиксирует `onClose` ниже (ошибка 12dfb87e).
         { label: 'Отмена' },
         ...(single
           ? []
@@ -493,7 +498,15 @@ export async function pickEntitiesModal(
         width: opts.width ?? 480,
         buttons,
         onMount: () => searchInput.focus(),
-        onClose: () => handle.dispose(),
+        // Любое закрытие каркаса — «Отмена», Esc, ×, программный
+        // `closeDialog()` — это отмена: промис резолвится `null`, иначе
+        // `await`/`.then` вызывающего висит вечно (ошибка 12dfb87e). При
+        // завершении выбором/применением `finish` уже выставил `settled`,
+        // поэтому позднее событие `remove` ничего не переигрывает.
+        onClose: () => {
+          handle.dispose();
+          finish(null);
+        },
       });
       updateButtons();
       return;
@@ -602,6 +615,8 @@ export async function pickEntitiesModal(
     }
     body.append(searchBar, list);
     const buttons: DialogButton[] = [
+      // «Отмена» без `onClick`: отмену фиксирует `onClose` диалога ниже
+      // (ошибка 12dfb87e), поэтому она работает и для Esc, и для ×.
       { label: 'Отмена' },
       ...(single
         ? []
@@ -628,6 +643,11 @@ export async function pickEntitiesModal(
         updateButtons();
         searchInput.focus();
       },
+      // Закрытие каркаса (Esc, ×, «Отмена», программный `closeDialog()`) —
+      // отмена: промис обязан резолвиться `null` (ошибка 12dfb87e).
+      // Завершение выбором/применением выставляет `settled` раньше, чем
+      // придёт событие `remove`, поэтому переигрывания не происходит.
+      onClose: () => finish(null),
     });
   });
 }
