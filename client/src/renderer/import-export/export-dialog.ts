@@ -35,13 +35,31 @@ interface DialogResult {
   targetPath: string | undefined;
 }
 
-/** Open the dialog and resolve with the chosen options or `undefined`. */
+/**
+ * Open the dialog and resolve with the chosen options or `undefined`.
+ * Dismissal by any close path («Отмена», Esc, ×, backdrop click) resolves
+ * `{ options: undefined, targetPath: undefined }`.
+ */
 export function showExportEtnxDialog(
   thoughtCount: number,
   initial: Partial<ExportEtnxOptions> = {},
   defaultFilename: string = defaultExportName(),
 ): Promise<DialogResult> {
   return new Promise<DialogResult>((resolve) => {
+    /**
+     * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
+     * каркаса (ошибка e5ec74de): кнопки завершают его явно, а Esc, × и клик
+     * по подложке — через `onClose`. Флаг `settled` не даёт позднему событию
+     * `remove` переиграть уже принятое решение.
+     */
+    let settled = false;
+    const finish = (result: DialogResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const cancelled: DialogResult = { options: undefined, targetPath: undefined };
+
     const filenameInput = el('input', 'text-input') as HTMLInputElement;
     filenameInput.type = 'text';
     filenameInput.id = 'etnx-export-filename';
@@ -130,7 +148,7 @@ export function showExportEtnxDialog(
       buttons: [
         {
           label: 'Отмена',
-          onClick: () => resolve({ options: undefined, targetPath: undefined }),
+          onClick: () => finish(cancelled),
         },
         {
           label: 'Экспортировать',
@@ -139,7 +157,7 @@ export function showExportEtnxDialog(
             const targetPath = filenameInput.value.trim();
             if (targetPath === '') return; // validation: a path is required
             const depth = clampDepth(depthInput.valueAsNumber);
-            resolve({
+            finish({
               options: {
                 include_types: includeTypes.input.checked,
                 include_attachments: includeAttachments.input.checked,
@@ -152,6 +170,10 @@ export function showExportEtnxDialog(
           },
         },
       ],
+      // Esc, × и клик по подложке — отмена: контракт «`{ options: undefined,
+      // targetPath: undefined }` on cancel», ровно как по кнопке «Отмена»
+      // (ошибка e5ec74de).
+      onClose: () => finish(cancelled),
     });
   });
 }
