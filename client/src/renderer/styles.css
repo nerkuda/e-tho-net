@@ -4685,6 +4685,16 @@ body.cloud-dragging * {
   gap: 6px;
 }
 
+/* Группа, недоступная при текущем состоянии панели: «Выбирать потомков по
+ * связям» погашена, пока пусты «Родительские мысли» (ошибка 6158d2ea). */
+.st-f-block.st-f-block-disabled {
+  opacity: 0.55;
+}
+
+.st-f-block.st-f-block-disabled .st-f-title {
+  cursor: default;
+}
+
 .st-f-title {
   font-size: 12px;
   font-weight: 600;

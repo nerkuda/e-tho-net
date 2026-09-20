@@ -71,6 +71,15 @@ import {
 export const FILTER_W_MIN = 230;
 export const FILTER_W_MAX = 420;
 
+/**
+ * Подписи группы обхода (ошибка 6158d2ea): прежние «Обход по связям» и
+ * «структурные связи» не объясняли, что ограничивают, и повторяли слово
+ * «связи» из соседней группы «Типы связей».
+ */
+const TRAVERSAL_TITLE = 'Выбирать потомков по связям';
+const TRAVERSAL_UNTYPED_LABEL = 'учитывать связи без типа';
+const TRAVERSAL_DISABLED_HINT = 'Доступно при заполненных «Родительских мыслях»';
+
 /** Full filter-panel state (persisted as the L4 `structures_state` JSON).
  *  Общая часть критериев — модель `FilterCriteriaState` единого конструктора
  *  (`lib/filter-builder.ts`); здесь только панельные дополнения. */
@@ -232,10 +241,27 @@ export function buildExtraFilter(): Pick<
 }
 
 /**
+ * Ошибка 6158d2ea: группа «Выбирать потомков по связям» применима только когда
+ * заполнены «Родительские мысли» — без них обходить нечего. Погашенная группа
+ * не попадает в запрос и не делает отбор непустым (иначе вид перестаёт
+ * показывать HOME с сиротами).
+ */
+function traversalEnabled(): boolean {
+  return state.parentIds.length > 0;
+}
+
+/** Заполнена ли группа обхода с учётом доступности (маркер и подсветка). */
+function traversalActive(): boolean {
+  return traversalEnabled() && (state.linkFilterTypeIds.length > 0 || state.linkFilterStructural);
+}
+
+/**
  * Wire `link_filter` обхода (задача c965ad03): ограничивает рёбра, по которым
- * `parent_ids` раскрывается в поддерево. `undefined` — без ограничения.
+ * `parent_ids` раскрывается в поддерево. `undefined` — без ограничения (в том
+ * числе когда «Родительские мысли» пусты: обходить нечего — ошибка 6158d2ea).
  */
 export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
+  if (!traversalEnabled()) return undefined;
   if (state.linkFilterTypeIds.length === 0 && !state.linkFilterStructural) return undefined;
   const out: LinkTypeFilterInput = {};
   if (state.linkFilterTypeIds.length > 0) out.type_ids = state.linkFilterTypeIds;
@@ -431,10 +457,12 @@ async function parentThoughtOptions(query: string): Promise<EntityOption[]> {
   }
 }
 
-/** Ограничение обхода по связям (задача c965ad03) — панельное дополнение. */
+/** Ограничение обхода по связям (задача c965ad03) — панельное дополнение.
+ *  Ошибка 6158d2ea: группа доступна только при заполненных «Родительских
+ *  мыслях»; пустая — погашена, в запрос не попадает. */
 function buildTraversalSection(ctx: FilterFormContext): FilterSection {
-  const section = buildFilterBlock('Обход по связям', {
-    isNonEmpty: () => state.linkFilterTypeIds.length > 0 || state.linkFilterStructural,
+  const section = buildFilterBlock(TRAVERSAL_TITLE, {
+    isNonEmpty: traversalActive,
   });
   const field = buildEntityChipField({
     getValues: () => [...state.linkFilterTypeIds],
@@ -451,7 +479,7 @@ function buildTraversalSection(ctx: FilterFormContext): FilterSection {
         pickEntitiesModal({
           networkId: requireNetworkId(),
           kind: 'link-types',
-          title: 'Обход по связям',
+          title: TRAVERSAL_TITLE,
           currentIds: state.linkFilterTypeIds,
         }),
     },
@@ -460,20 +488,34 @@ function buildTraversalSection(ctx: FilterFormContext): FilterSection {
       return type === undefined ? null : { id: type.id, title: type.name_forward };
     },
   });
-  setTooltip(field.root, 'Ограничить рёбра, по которым раскрывается отбор');
+  setTooltip(field.root, 'Ограничить рёбра, по которым раскрывается отбор от «Родительских мыслей»');
   const structural = div('st-f-tri-row');
   const structuralLabel = el('label', 'checkbox-row') as HTMLLabelElement;
   const structuralCheck = el('input') as HTMLInputElement;
   structuralCheck.type = 'checkbox';
   structuralCheck.checked = state.linkFilterStructural;
-  setTooltip(structuralLabel, 'Включить нетипизированные (структурные) связи в обход');
+  setTooltip(structuralLabel, 'Учитывать связи без типа (нетипизированные рёбра «родитель/потомок») при обходе');
   structuralCheck.addEventListener('change', () => {
     state.linkFilterStructural = structuralCheck.checked;
     ctx.touch();
   });
-  structuralLabel.append(structuralCheck, span('структурные связи'));
-  structural.append(el('span', 'st-f-tri-label', 'Структура'), structuralLabel);
+  structuralLabel.append(structuralCheck, span(TRAVERSAL_UNTYPED_LABEL));
+  structural.append(structuralLabel);
   section.body.append(field.root, structural);
+
+  // Доступность пересчитывается при каждом `refresh()` (её меняют «Родительские
+  // мысли»): погашенная группа запрещена к вводу и визуально приглушена.
+  const baseRefresh = section.refresh;
+  const applyAvailability = (): void => {
+    const enabled = traversalEnabled();
+    field.setDisabled(!enabled);
+    structuralCheck.disabled = !enabled;
+    section.box.classList.toggle('st-f-block-disabled', !enabled);
+    section.head.title = enabled ? '' : TRAVERSAL_DISABLED_HINT;
+    baseRefresh();
+  };
+  section.refresh = applyAvailability;
+  applyAvailability();
   return section;
 }
 
@@ -496,38 +538,15 @@ function renderPanel(): void {
     touch,
   };
 
+  // Порядок групп (ошибка 6158d2ea): Ключевые слова, Типы мыслей, Типы связей,
+  // Родительские мысли, Выбирать потомков по связям — «Родительские мысли»
+  // стоят перед ограничением обхода, которое без них ни на что не влияет.
   sections.push(
     buildKeywordsSection(ctx, {
       tooltip: 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
       showScope: true,
       suggestSource: keywordsHistorySource(),
       onEnter: triggerApply,
-    }),
-    buildEntityChipSection(ctx, {
-      title: 'Родительские мысли',
-      getValues: () => state.parentIds,
-      setValues: (values) => {
-        state.parentIds = values;
-      },
-      loadOptions: (query) => parentThoughtOptions(query),
-      optionsHeader: 'Мысли',
-      cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
-      placeholder: 'Название мысли…',
-      tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
-      picker: {
-        label: 'выбрать…',
-        open: async () => {
-          const result = await pickThoughtsDialog({
-            networkId: requireNetworkId(),
-            allowCreate: false,
-            allowLinkType: false,
-            selectedIds: state.parentIds,
-            title: 'Родительские мысли',
-            applyLabel: 'Применить',
-          });
-          return result === null ? null : pickedThoughtIds(result);
-        },
-      },
     }),
     buildEntityChipSection(ctx, {
       title: 'Типы мыслей',
@@ -567,6 +586,32 @@ function renderPanel(): void {
             title: 'Типы связей',
             currentIds: state.linkTypeIds,
           }),
+      },
+    }),
+    buildEntityChipSection(ctx, {
+      title: 'Родительские мысли',
+      getValues: () => state.parentIds,
+      setValues: (values) => {
+        state.parentIds = values;
+      },
+      loadOptions: (query) => parentThoughtOptions(query),
+      optionsHeader: 'Мысли',
+      cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
+      placeholder: 'Название мысли…',
+      tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
+      picker: {
+        label: 'выбрать…',
+        open: async () => {
+          const result = await pickThoughtsDialog({
+            networkId: requireNetworkId(),
+            allowCreate: false,
+            allowLinkType: false,
+            selectedIds: state.parentIds,
+            title: 'Родительские мысли',
+            applyLabel: 'Применить',
+          });
+          return result === null ? null : pickedThoughtIds(result);
+        },
       },
     }),
     buildTraversalSection(ctx),
