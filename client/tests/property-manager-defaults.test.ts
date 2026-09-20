@@ -4,8 +4,9 @@
  *
  * 1. Мультивыбор типов в таблицах «Типы мыслей»/«Типы источников»/
  *    «Типы назначений»: общий пикер работает в режиме чек-листа, применение
- *    — кнопкой «Применить и закрыть»; чистый хелпер {@link mergePickedTypeRows}
- *    превращает выбранный набор id в новые строки таблицы без дублей.
+ *    — кнопкой «Применить и закрыть»; чистый хелпер {@link applyPickedTypeRows}
+ *    ПЕРЕЗАПИСЫВАЕТ набор строк стороны выбранными id (ошибка a3828b28:
+ *    снятый флажок убирает строку, нетронутые строки сохраняют настройки).
  *    Пикер открывается с предзаполнением — чистый хелпер
  *    {@link currentTypeRowIds} отдаёт уже выбранные типы своей стороны
  *    (ошибка 4e9ad1a0: галочки уже выбранных типов при открытии диалога).
@@ -23,9 +24,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  applyPickedTypeRows,
   currentTypeRowIds,
   linkDefaultPayload,
-  mergePickedTypeRows,
   type TypeRowDraft,
 } from '../src/renderer/screens/property-manager.js';
 
@@ -43,38 +44,78 @@ function makeRow(overrides: Partial<TypeRowDraft> = {}): TypeRowDraft {
   };
 }
 
-describe('mergePickedTypeRows — мультивыбор «Добавить тип»', () => {
+describe('applyPickedTypeRows — перезапись набора строк пикером «Добавить тип»', () => {
   it('добавляет несколько типов одной стороной', () => {
-    const fresh = mergePickedTypeRows([], ['tt-a', 'tt-b', 'tt-c'], 'source');
-    assert.equal(fresh.length, 3);
+    const next = applyPickedTypeRows([], ['tt-a', 'tt-b', 'tt-c'], 'source');
+    assert.equal(next.length, 3);
     assert.deepEqual(
-      fresh.map((r) => r.thoughtTypeId),
+      next.map((r) => r.thoughtTypeId),
       ['tt-a', 'tt-b', 'tt-c'],
     );
-    assert.ok(fresh.every((r) => r.side === 'source' && r.id === null && r.dirty === true));
-    assert.ok(fresh.every((r) => r.defaultValue === null));
+    assert.ok(next.every((r) => r.side === 'source' && r.id === null && r.dirty === true));
+    assert.ok(next.every((r) => r.defaultValue === null));
   });
 
-  it('пропускает дубли: уже добавленные и повторы внутри выбора', () => {
-    const existing = [makeRow({ thoughtTypeId: 'tt-a', side: 'source' })];
-    const fresh = mergePickedTypeRows(existing, ['tt-a', 'tt-b', 'tt-b'], 'source');
+  it('регресс a3828b28: снятый флажок убирает строку, поставленный — добавляет', () => {
+    const existing = [
+      makeRow({ thoughtTypeId: 'tt-a', side: 'source' }),
+      makeRow({ thoughtTypeId: 'tt-b', side: 'source' }),
+    ];
+    const next = applyPickedTypeRows(existing, ['tt-b', 'tt-c'], 'source');
     assert.deepEqual(
-      fresh.map((r) => r.thoughtTypeId),
-      ['tt-b'],
+      next.map((r) => r.thoughtTypeId),
+      ['tt-b', 'tt-c'],
     );
+    // Снятый tt-a исчез из черновика — на записи его снимет removeTypeProperty
+    // (applyTypeRows диффит по снимку загрузки).
+    assert.equal(next.some((r) => r.thoughtTypeId === 'tt-a'), false);
+  });
+
+  it('нетронутый тип сохраняет id привязки, «обязательное» и дефолт', () => {
+    const kept = makeRow({
+      id: 'bind-b',
+      thoughtTypeId: 'tt-b',
+      side: 'source',
+      required: true,
+      defaultValue: ['t-1'],
+      dirty: false,
+      initialDefaultValue: ['t-1'],
+    });
+    const next = applyPickedTypeRows([makeRow({ thoughtTypeId: 'tt-a' }), kept], ['tt-b', 'tt-c'], 'source');
+    const b = next.find((r) => r.thoughtTypeId === 'tt-b');
+    assert.equal(b, kept);
+    assert.equal(b?.id, 'bind-b');
+    assert.equal(b?.required, true);
+    assert.deepEqual(b?.defaultValue, ['t-1']);
+    assert.equal(b?.dirty, false);
+    // Добавленный tt-c — новая строка с дефолтами по умолчанию.
+    const c = next.find((r) => r.thoughtTypeId === 'tt-c');
+    assert.equal(c?.id, null);
+    assert.equal(c?.required, false);
+    assert.equal(c?.defaultValue, null);
+    assert.equal(c?.dirty, true);
+  });
+
+  it('пустой выбор снимает со стороны все строки', () => {
+    const existing = [makeRow({ thoughtTypeId: 'tt-a', side: 'source' })];
+    assert.deepEqual(applyPickedTypeRows(existing, [], 'source'), []);
   });
 
   it('дубль другой стороны не считается (свойство-связь двусторонняя)', () => {
     const existing = [makeRow({ thoughtTypeId: 'tt-a', side: 'target' })];
-    const fresh = mergePickedTypeRows(existing, ['tt-a'], 'source');
+    const next = applyPickedTypeRows(existing, ['tt-a'], 'source');
     assert.deepEqual(
-      fresh.map((r) => r.thoughtTypeId),
+      next.filter((r) => r.side === 'source').map((r) => r.thoughtTypeId),
       ['tt-a'],
     );
+    // Строка чужой стороны осталась нетронутой.
+    assert.equal(next.some((r) => r.side === 'target' && r.thoughtTypeId === 'tt-a'), true);
   });
 
-  it('пустые id отбрасываются', () => {
-    assert.equal(mergePickedTypeRows([], ['', 'tt-a'], 'source').length, 1);
+  it('повторы внутри выбора и пустые id отбрасываются', () => {
+    assert.equal(applyPickedTypeRows([], ['', 'tt-a'], 'source').length, 1);
+    const existing = [makeRow({ thoughtTypeId: 'tt-a', side: 'source' })];
+    assert.equal(applyPickedTypeRows(existing, ['tt-a', 'tt-a', ''], 'source').length, 1);
   });
 });
 
@@ -108,11 +149,11 @@ describe('currentTypeRowIds — предзаполнение пикера «До
     assert.deepEqual(currentTypeRowIds([], 'source'), []);
   });
 
-  it('повторное применение с предзаполнением не добавляет дублей (ошибка 4e9ad1a0)', () => {
+  it('повторное применение предзаполненного набора не меняет строки (ошибка 4e9ad1a0)', () => {
     const existing = [makeRow({ thoughtTypeId: 'tt-a', side: 'source' })];
     const prefill = currentTypeRowIds(existing, 'source');
-    const fresh = mergePickedTypeRows(existing, prefill, 'source');
-    assert.deepEqual(fresh, []);
+    const next = applyPickedTypeRows(existing, prefill, 'source');
+    assert.deepEqual(next, existing);
   });
 });
 

@@ -511,21 +511,38 @@ export function currentTypeRowIds(
 }
 
 /**
- * Добавляет к строкам таблицы привязок новые строки для `picked` типов
- * (мультивыбор в пикере «Добавить тип»): дубли той же стороны пропускаются.
+ * Приводит строки таблицы привязок к выбору пикера «Добавить тип»:
+ * ПЕРЕЗАПИСЫВАЕТ набор строк своей стороны `picked`-типами (ошибка a3828b28) —
+ * типы, с которых сняли флажок, из черновика уходят (на записи их снимет
+ * `removeTypeProperty`), отмеченные добавляются строками с дефолтами, а
+ * нетронутые сохраняют свои настройки (id привязки, «обязательное», дефолт,
+ * снимок `initialDefaultValue`) как есть. Строки ЧУЖОЙ стороны не трогаются:
+ * таблицы «Типы источников»/«Типы назначений» независимы. Порядок: сперва
+ * сохраняемые строки в исходном порядке, затем новые (в порядке выбора).
  * Чистая — юнит-тест.
  */
-export function mergePickedTypeRows(
+export function applyPickedTypeRows(
   existing: readonly TypeRowDraft[],
   picked: readonly string[],
   side: 'source' | 'target' | null,
 ): TypeRowDraft[] {
-  const taken = new Set(existing.filter((r) => r.side === side).map((r) => r.thoughtTypeId));
-  const fresh: TypeRowDraft[] = [];
+  const wanted = new Set(picked.filter((id) => id !== ''));
+  const settled = new Set<string>();
+  const next: TypeRowDraft[] = [];
+  for (const row of existing) {
+    if (row.side !== side) {
+      next.push(row);
+      continue;
+    }
+    // Снятый флажок или дубль той же стороны — строку не переносим.
+    if (!wanted.has(row.thoughtTypeId) || settled.has(row.thoughtTypeId)) continue;
+    settled.add(row.thoughtTypeId);
+    next.push(row);
+  }
   for (const thoughtTypeId of picked) {
-    if (thoughtTypeId === '' || taken.has(thoughtTypeId)) continue;
-    taken.add(thoughtTypeId);
-    fresh.push({
+    if (thoughtTypeId === '' || settled.has(thoughtTypeId)) continue;
+    settled.add(thoughtTypeId);
+    next.push({
       id: null,
       thoughtTypeId,
       required: false,
@@ -534,7 +551,7 @@ export function mergePickedTypeRows(
       dirty: true,
     });
   }
-  return fresh;
+  return next;
 }
 
 /**
@@ -1313,8 +1330,9 @@ export function openPropertyManagerEditor(
         kind: 'thought-types',
         title,
         // Уже выбранные типы этой таблицы отмечены чек-боксами при открытии
-        // диалога (ошибка 4e9ad1a0); повторный выбор дублей не создаёт
-        // (mergePickedTypeRows их пропускает).
+        // диалога (ошибка 4e9ad1a0); применение ПЕРЕЗАПИСЫВАЕТ набор строк
+        // стороны: снятые флажки убирают строки, отмеченные — добавляют,
+        // нетронутые сохраняют настройки (ошибка a3828b28).
         currentIds: currentTypeRowIds(draft.typeRows, side),
         allowEmpty: false,
         applyLabel: 'Применить и закрыть',
@@ -1340,9 +1358,8 @@ export function openPropertyManagerEditor(
         ],
       });
       if (picked === null) return;
-      const fresh = mergePickedTypeRows(draft.typeRows, picked, side);
-      if (fresh.length === 0) return;
-      draft.typeRows = [...draft.typeRows, ...fresh];
+      const next = applyPickedTypeRows(draft.typeRows, picked, side);
+      draft.typeRows = next;
       renderTable();
       // Обе стороны общего дефолта зависят от строк обеих таблиц — отбор
       // пересобирается по живому черновику (задача 99312ffa).
