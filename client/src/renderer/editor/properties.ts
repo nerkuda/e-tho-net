@@ -142,22 +142,6 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
   return box;
 }
 
-/** Counts the type's effective property definitions for the group badge. */
-async function countProperties(ctx: EditorContext): Promise<string | undefined> {
-  const networkId = requireNetworkId();
-  // L21: an owner without an own type falls back to the root type of its
-  // type catalogue. The badge shows only the in-type definition count — the
-  // «Свойства вне типа» group carries its own badge separately.
-  const typeId = resolveEditorTypeId(ctx);
-  if (typeId === null) return undefined;
-  try {
-    const defs = await etn.types.listTypeProperties(networkId, ownerTypeOf(ctx), typeId);
-    return `(${defs.length})`;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * The type whose properties the editor shows (L21): the thought/link's own
  * type, or the root type «основной тип» for an owner without one (its
