@@ -296,8 +296,9 @@ function buildOutsideTypeTable(
     // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
     // дублировал её и читался как «заголовок колонок таблицы». Таблица
     // без `<thead>` — только строки значений; первая колонка содержит имя
-    // свойства, вторая — редактор/чип/крестик.
-    const table = el('table', 'table-list prop-outside-table');
+    // свойства, вторая — редактор/чип/крестик. `prop-grid` — фиксированная
+    // раскладка двух колонок (ошибка 2012f46b): чип не раздувает таблицу.
+    const table = el('table', 'table-list prop-outside-table prop-grid');
     const tbody = el('tbody');
     for (const value of values) {
       const row = el('tr');
@@ -553,7 +554,9 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
       // The main table still renders even if the values fetch fails.
     }
     const valueByProp = new Map(values.map((v) => [v.property_id, v]));
-    const table = el('table', 'table-list prop-table');
+    // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
+    // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
+    const table = el('table', 'table-list prop-table prop-grid');
     const tbody = el('tbody');
     for (const definition of definitions) {
       const value = valueByProp.get(definition.property_id);
