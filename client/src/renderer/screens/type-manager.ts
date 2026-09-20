@@ -619,6 +619,22 @@ export interface TypeEditorExtras {
 }
 
 /**
+ * Ширина диалога редактора типа мысли (ошибка 3c7213ec).
+ *
+ * Самое широкое содержимое диалога — таблица «Свойства типа» на вкладке
+ * «Свойства»: шесть колонок, где «По умолчанию» держит редактор значения
+ * (у свойства-связи — `.link-value-wrap` с полом 220px), а последняя —
+ * кнопки ▲/▼/✎/✕ с `nowrap`. Таблица остаётся на auto-раскладке, поэтому её
+ * ширина упирается в min-content строки: замер зондом на Chromium (реальный
+ * `styles.css`, самый длинный набор свойств сети ETN) даёт 688px. Прежние
+ * 600px отдавали таблице ≈560px — и `.admin-table-wrap` получал
+ * горизонтальную прокрутку. 760px — наименьшая из стандартных «широких»
+ * ширин проекта (столько же у «Настроек», «Администрирования» и диалога
+ * отборов) и даёт таблице ≈720px, то есть запас над замеренным min-content.
+ */
+const TYPE_EDITOR_DIALOG_WIDTH = 760;
+
+/**
  * Opens the thought-type editor; `type === null` edits a NEW type (L6/L21).
  *
  * One and the same form for a new and an existing type (task «Улучшить диалог
@@ -1044,7 +1060,7 @@ export function showThoughtTypeEditor(
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
       body,
-      width: 600,
+      width: TYPE_EDITOR_DIALOG_WIDTH,
       buttons: [
         { label: 'Отмена' },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
@@ -1155,9 +1171,11 @@ function buildStagedPropertySection(opts: {
   // placeholder up front instead of a blank gap.
   tableWrap.append(el('span', 'muted', 'Загрузка…'));
   const errorLine = span('', 'error-text');
-  const label = el('p', 'muted', 'Свойства');
-  label.style.margin = '8px 0 2px';
-  box.append(label, tableWrap, errorLine);
+  // Заголовка «Свойства» над таблицей нет (ошибка 3c7213ec): вкладка уже
+  // называется «Свойства», подпись только дублировала её. Подзаголовок
+  // «Свойства типа» остаётся — он отличает собственную таблицу от
+  // унаследованной.
+  box.append(tableWrap, errorLine);
   // Кнопка добавления свойства (ошибка 4251fbe5): сторона привязки
   // спрашивается ПОСЛЕ выбора свойства-связи внутри диалога «Добавить
   // свойство», а не заранее; «Создать свойство» — кнопка самого диалога
