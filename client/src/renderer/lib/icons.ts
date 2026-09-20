@@ -33,6 +33,12 @@ export type IconName =
   | 'layers'
   | 'loader'
   | 'filter'
+  // Команды модального чек-листа пикера (ошибка bd8b78a0, 0.8.2): «Очистить»
+  // (ластик), «Пометить все» (двойная галочка), «Вернуть умолчания» (сброс
+  // против часовой) — иконки-кнопки верхней строки вместо текстовых надписей.
+  | 'eraser'
+  | 'check-check'
+  | 'rotate-ccw'
   // Виды значения свойства (задача 6ebde54e, 0.8.2): иконка перед именем
   // скалярного свойства в общем списке свойств (`lib/property-list.ts`).
   | 'value-text'
@@ -111,6 +117,15 @@ const PATHS: Record<IconName, string> = {
   // Canvas link-type filter button (задача «Фильтр типов связей на карте
   // мыслей», 0.8.1): lucide «filter» — a literal funnel, per user request.
   filter: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  // Команды модального чек-листа пикера (ошибка bd8b78a0, 0.8.2), lucide:
+  // «eraser» — «Очистить»; «check-check» — «Пометить все»; «rotate-ccw» —
+  // «Вернуть умолчания».
+  eraser:
+    '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/>' +
+    '<path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  'check-check': '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
+  'rotate-ccw':
+    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
   // Виды значения свойства (задача 6ebde54e, 0.8.2), lucide: type (строка),
   // hash (число), calendar (дата), toggle-left (да/нет), link (URL),
   // at-sign (ссылка на мысль — legacy thought_ref).

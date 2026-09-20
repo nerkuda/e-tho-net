@@ -22,8 +22,8 @@
  *
  * Два режима показа одного пикера:
  *   - {@link pickEntitiesModal} — модальный чек-лист: одиночный или
- *     множественный выбор, раскрытие иерархии типов, поиск, «Очистить» и
- *     дополнительные кнопки вызывающего;
+ *     множественный выбор, раскрытие иерархии типов, поиск и команды-иконки
+ *     («Очистить» + команды вызывающего) в ОДНОЙ строке с поиском;
  *   - {@link buildEntityCombo} — встроенное поле ОДИНОЧНОГО выбора: пусто —
  *     строка живого поиска с кареткой; заполнено — облачко значения прямо в
  *     поле, ввод недоступен, крестик очищает, кнопка «…» открывает диалог
@@ -45,7 +45,7 @@ import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { button, div, el, span } from './dom.js';
 import { etn } from './etn.js';
-import { svgIcon } from './icons.js';
+import { svgIcon, type IconName } from './icons.js';
 import {
   wireSuggest,
   type SuggestEntry,
@@ -232,12 +232,26 @@ async function linkTypesOf(networkId: string): Promise<LinkType[]> {
 // Модальный чек-лист
 // ---------------------------------------------------------------------------
 
-/** Контекст, передаваемый дополнительным кнопкам модального чек-листа. */
+/** Контекст, передаваемый командам модального чек-листа. */
 export interface EntityPickerDialogCtx {
-  /** Текущий набор выбранных id (мутабельный — кнопки меняют его). */
+  /** Текущий набор выбранных id (мутабельный — команды меняют его). */
   checked: Set<string>;
-  /** Перерисовывает список (для «Пометить все» и подобных кнопок). */
+  /** Перерисовывает список (для «Пометить все» и подобных команд). */
   rerender: () => void;
+}
+
+/**
+ * Команда-иконка верхней строки модального чек-листа (ошибка bd8b78a0):
+ * текстовых надписей нет — единая иконка проекта плюс полное название
+ * команды в тултипе (`title`) и в `aria-label` (доступность с клавиатуры).
+ */
+export interface EntityPickerCommand {
+  /** Имя иконки из единого набора проекта (`lib/icons.ts`). */
+  icon: IconName;
+  /** Полное название команды — тултип и доступная подпись кнопки. */
+  title: string;
+  /** Действие; набор `ctx.checked` обычно мутирует, затем `ctx.rerender()`. */
+  onClick: () => void;
 }
 
 /** Параметры модального чек-листа {@link pickEntitiesModal}. */
@@ -269,22 +283,33 @@ export interface EntityPickerModalOptions {
   searchTypeIds?: readonly string[];
   /** Разрешить пустой набор; иначе «Применить» неактивен при пустом. */
   allowEmpty?: boolean;
-  /** Дополнительные кнопки футера (keep-open, например «Пометить все»). */
-  extraButtons?: (ctx: EntityPickerDialogCtx) => DialogButton[];
   /**
-   * Дополнительные маленькие кнопки, рисуемые строкой ПОД полем поиска
-   * (режим типов; например, «Отметить все» / «Снять все»). Не закрывают
-   * диалог — это обычные кнопки тела.
+   * Команды-иконки верхней строки (режим типов), справа от строки поиска.
+   * Общую «Очистить» (ластик) пикер добавляет сам — вызывающему остаются
+   * «Пометить все» / «Вернуть умолчания» и подобные. Диалог не закрывают.
+   * Длинный ряд текстовых команд в футере вылезал за границы диалога
+   * (ошибка bd8b78a0), поэтому все команды живут в верхней строке.
    */
-  searchButtons?: (ctx: EntityPickerDialogCtx) => {
-    label: string;
-    title?: string;
-    onClick: () => void;
-  }[];
+  commands?: (ctx: EntityPickerDialogCtx) => EntityPickerCommand[];
   /** Ширина диалога, px (по умолчанию 480). */
   width?: number;
   /** Подпись кнопки применения (по умолчанию «Применить»). */
   applyLabel?: string;
+}
+
+/**
+ * Кнопка-иконка команды верхней строки пикера: единый набор иконок проекта,
+ * тултип и `aria-label` (клавиатурная доступность — нативный `<button>`).
+ * Класс `.icon-btn` сужен до строки поиска правилом `.st-f-searchbar .icon-btn`.
+ */
+function commandButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
+  const btn = el('button', 'icon-btn') as HTMLButtonElement;
+  btn.type = 'button';
+  btn.title = title;
+  btn.setAttribute('aria-label', title);
+  btn.append(svgIcon(icon, 14));
+  btn.addEventListener('click', onClick);
+  return btn;
 }
 
 /**
@@ -549,35 +574,26 @@ export async function pickEntitiesModal(
         updateButtons();
       },
     };
-    // Строка поиска + необязательные маленькие кнопки под ней (режим типов).
+    // Верхняя строка: поиск + команды-иконки — общая «Очистить» (ластик) и
+    // команды вызывающего. В футере команд нет: их длинный ряд текстовых
+    // кнопок вылезал за границы диалога (ошибка bd8b78a0).
     const searchBar = div('st-f-searchbar');
     searchBar.append(searchInput);
-    if (opts.searchButtons !== undefined && !single) {
-      for (const item of opts.searchButtons(ctx)) {
-        searchBar.append(button(item.label, item.onClick, 'btn small', item.title));
+    if (!single) {
+      clearBtn = commandButton('eraser', 'Очистить', () => {
+        checked.clear();
+        renderList();
+        updateButtons();
+      });
+      searchBar.append(clearBtn);
+      if (opts.commands !== undefined) {
+        for (const cmd of opts.commands(ctx)) {
+          searchBar.append(commandButton(cmd.icon, cmd.title, cmd.onClick));
+        }
       }
     }
     body.append(searchBar, list);
-    const buttons: DialogButton[] = [];
-    if (!single) {
-      buttons.push({
-        label: 'Очистить',
-        keepOpen: true,
-        ref: (btn) => {
-          clearBtn = btn;
-          updateButtons();
-        },
-        onClick: () => {
-          checked.clear();
-          renderList();
-          updateButtons();
-        },
-      });
-    }
-    if (opts.extraButtons !== undefined && !single) {
-      for (const extra of opts.extraButtons(ctx)) buttons.push(extra);
-    }
-    buttons.push(
+    const buttons: DialogButton[] = [
       { label: 'Отмена' },
       ...(single
         ? []
@@ -592,7 +608,7 @@ export async function pickEntitiesModal(
               onClick: () => finish([...checked]),
             },
           ]),
-    );
+    ];
 
     showDialog({
       title: opts.title,

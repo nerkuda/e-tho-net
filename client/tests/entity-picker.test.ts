@@ -25,6 +25,7 @@ import {
   buildEntityCombo,
   linkTypeEntityOptions,
   normalizeParentTypeId,
+  pickEntitiesModal,
   thoughtTypeEntityOptions,
   typeRowIndentSteps,
   visibleEntityIds,
@@ -643,5 +644,86 @@ describe('normalizeParentTypeId — служебный корень это «б�
     // корня нет в каталоге (пустой store) — значение не трогаем
     assert.equal(normalizeParentTypeId(ROOT, undefined), ROOT);
     assert.equal(normalizeParentTypeId(ROOT, null), ROOT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Команды-иконки верхней строки чек-листа (ошибка bd8b78a0)
+// ---------------------------------------------------------------------------
+
+describe('entity-picker: команды-иконки верхней строки чек-листа (bd8b78a0)', () => {
+  /** Варианты каталога для диалога без обращения к store. */
+  const CATALOGUE: EntityOption[] = [
+    { id: 'la', title: 'f / r', selectable: true, cloud: { id: 'la', title: 'f / r' } },
+    { id: 'lb', title: 'g / s', selectable: true, cloud: { id: 'lb', title: 'g / s' } },
+  ];
+
+  it('верхняя строка = поиск + команды-иконки, футер = «Отмена»/применение', () => {
+    const { body } = installShim();
+    void pickEntitiesModal({
+      networkId: 'n',
+      kind: 'link-types',
+      title: 'Фильтр типов связей на карте',
+      catalogue: CATALOGUE,
+      currentIds: ['la'],
+      allowEmpty: false,
+      applyLabel: 'Применить и закрыть',
+      commands: () => [
+        { icon: 'check-check', title: 'Пометить все', onClick: () => undefined },
+        { icon: 'rotate-ccw', title: 'Вернуть умолчания', onClick: () => undefined },
+      ],
+    });
+
+    const backdrop = body.children[0];
+    assert.ok(backdrop, 'диалог смонтирован');
+
+    // Верхняя строка: строка поиска и три команды-иконки (общая «Очистить» +
+    // две команды вызывающего) — справа от поиска, текстовых надписей нет.
+    const searchbar = findByClass(backdrop, 'st-f-searchbar');
+    assert.ok(searchbar, 'есть верхняя строка');
+    assert.ok(findByClass(searchbar, 'st-f-search'), 'в верхней строке есть поиск');
+    const commands = findAllByClass(searchbar, 'icon-btn');
+    assert.equal(commands.length, 3, 'три команды-иконки в верхней строке');
+    assert.deepEqual(
+      commands.map((b) => b.title),
+      ['Очистить', 'Пометить все', 'Вернуть умолчания'],
+      'тултипы несут полные названия команд',
+    );
+    for (const btn of commands) {
+      assert.equal(btn.getAttribute('aria-label'), btn.title, 'кнопка доступна по aria-label');
+    }
+
+    // Футер: ровно «Отмена» и «Применить и закрыть», без команд.
+    const footerButtons = findAllByClass(backdrop, 'dialog-btn');
+    assert.deepEqual(
+      footerButtons.map((b) => b.textContent),
+      ['Отмена', 'Применить и закрыть'],
+      'в футере только отмена и применение',
+    );
+    assert.equal(
+      findAllByClass(backdrop, 'st-f-searchbar').length,
+      1,
+      'команды не продублированы в футере',
+    );
+  });
+
+  it('«Очистить» в верхней строке снимает отметки', () => {
+    const { body } = installShim();
+    void pickEntitiesModal({
+      networkId: 'n',
+      kind: 'link-types',
+      title: 'Фильтр',
+      catalogue: CATALOGUE,
+      currentIds: ['la', 'lb'],
+      allowEmpty: true,
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop, 'диалог смонтирован');
+    const clear = findAllByClass(backdrop, 'icon-btn')[0];
+    assert.ok(clear, 'есть кнопка «Очистить»');
+    assert.equal(clear.disabled, false, 'при непустом наборе активна');
+    clear.click();
+    // После очистки кнопка выключается (updateButtons).
+    assert.equal(clear.disabled, true, 'пустой набор выключает «Очистить»');
   });
 });

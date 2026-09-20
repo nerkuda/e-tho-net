@@ -12,8 +12,10 @@
  *
  * Чек-лист рисует общий пикер сущностей (`lib/entity-picker.ts`, ADR «выбор
  * сущности — один пикер», задача a1f5141b): строки типов связей — облачками
- * фабрики, «Пометить все»/«Снять все пометки»/«Вернуть умолчания» —
- * дополнительными кнопками пикера.
+ * фабрики, команды «Пометить все» / «Вернуть умолчания» — иконками в ОДНОЙ
+ * строке с поиском (тултип = полное название); «Очистить» (ластик) пикер
+ * добавляет сам. В футере — только «Отмена» и «Применить и закрыть»: ряд
+ * текстовых кнопок-команд вылезал за границы диалога (ошибка bd8b78a0).
  *
  * Строка «Структура (Родители/Потомки)» — синтетическая: у структурных
  * связей нет типа в реестре, их присутствие в фильтре кодируется отдельным
@@ -24,7 +26,12 @@ import type { LinkTypeFilterInput, NetworkProperty } from '@etn/shared';
 import { PREF_KEY, computeDefaultCanvasLinkFilter, parseStoredCanvasLinkFilter } from '@etn/shared';
 
 import { refreshFocus } from '../app.js';
-import { pickEntitiesModal, type EntityOption } from '../lib/entity-picker.js';
+import {
+  pickEntitiesModal,
+  type EntityOption,
+  type EntityPickerCommand,
+  type EntityPickerDialogCtx,
+} from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -78,41 +85,46 @@ async function loadAndOpen(networkId: string): Promise<void> {
     allowEmpty: false,
     applyLabel: 'Применить и закрыть',
     extraOptions: [STRUCTURAL_OPTION],
-    extraButtons: (ctx) => [
-      {
-        label: 'Пометить все',
-        keepOpen: true,
-        onClick: () => {
-          const all = [
-            ...store.state.linkTypes.filter((t) => !t.is_root).map((t) => t.id),
-            STRUCTURAL_ROW_ID,
-          ];
-          for (const id of all) ctx.checked.add(id);
-          ctx.rerender();
-        },
-      },
-      {
-        label: 'Снять все пометки',
-        keepOpen: true,
-        onClick: () => {
-          ctx.checked.clear();
-          ctx.rerender();
-        },
-      },
-      {
-        label: 'Вернуть умолчания',
-        keepOpen: true,
-        onClick: () => {
-          ctx.checked.clear();
-          for (const id of defaultFilter.type_ids ?? []) ctx.checked.add(id);
-          if (defaultFilter.include_structural === true) ctx.checked.add(STRUCTURAL_ROW_ID);
-          ctx.rerender();
-        },
-      },
-    ],
+    commands: linkFilterCommands(defaultFilter),
   });
   if (picked === null) return;
   await applyFilter(networkId, new Set(picked));
+}
+
+/**
+ * Команды верхней строки диалога — иконками с тултипами (ошибка bd8b78a0):
+ * «Пометить все» и «Вернуть умолчания». «Очистить» (ластик) пикер добавляет
+ * сам и делает ровно то, что делала прежняя текстовая «Снять все пометки», —
+ * держать две одинаковые кнопки незачем. Экспортируется для юнит-теста
+ * состава иконок.
+ */
+export function linkFilterCommands(
+  defaultFilter: LinkTypeFilterInput,
+): (ctx: EntityPickerDialogCtx) => EntityPickerCommand[] {
+  return (ctx) => [
+    {
+      icon: 'check-check',
+      title: 'Пометить все',
+      onClick: () => {
+        const all = [
+          ...store.state.linkTypes.filter((t) => !t.is_root).map((t) => t.id),
+          STRUCTURAL_ROW_ID,
+        ];
+        for (const id of all) ctx.checked.add(id);
+        ctx.rerender();
+      },
+    },
+    {
+      icon: 'rotate-ccw',
+      title: 'Вернуть умолчания',
+      onClick: () => {
+        ctx.checked.clear();
+        for (const id of defaultFilter.type_ids ?? []) ctx.checked.add(id);
+        if (defaultFilter.include_structural === true) ctx.checked.add(STRUCTURAL_ROW_ID);
+        ctx.rerender();
+      },
+    },
+  ];
 }
 
 async function applyFilter(networkId: string, checked: ReadonlySet<string>): Promise<void> {

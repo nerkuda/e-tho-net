@@ -1345,8 +1345,9 @@ export function openPropertyManagerEditor(
     async function addRow(): Promise<void> {
       // Мультивыбор (ошибка e6d92dbf): общий пикер в режиме чек-листа —
       // отметки чек-боксами, применение кнопкой «Применить и закрыть»,
-      // рядом «Отмена»; под строкой поиска — «Отметить все»/«Снять все».
-      // Пустой поиск показывает полный список каталога.
+      // рядом «Отмена». Команды — иконками в одной строке с поиском
+      // (ошибка bd8b78a0): «Отметить все»; «Очистить» (ластик) пикер
+      // добавляет сам. Пустой поиск показывает полный список каталога.
       const title = isLink
         ? side === 'source'
           ? 'Типы источников'
@@ -1363,22 +1364,14 @@ export function openPropertyManagerEditor(
         currentIds: currentTypeRowIds(draft.typeRows, side),
         allowEmpty: false,
         applyLabel: 'Применить и закрыть',
-        searchButtons: (ctx) => [
+        commands: (ctx) => [
           {
-            label: 'Отметить все',
-            title: 'Отметить все типы каталога',
+            icon: 'check-check',
+            title: 'Отметить все',
             onClick: () => {
               for (const t of store.state.thoughtTypes) {
                 if (!t.is_root) ctx.checked.add(t.id);
               }
-              ctx.rerender();
-            },
-          },
-          {
-            label: 'Снять все',
-            title: 'Снять все отметки',
-            onClick: () => {
-              ctx.checked.clear();
               ctx.rerender();
             },
           },
