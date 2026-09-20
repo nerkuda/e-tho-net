@@ -97,6 +97,7 @@ describe('draftPropertiesFrom', () => {
         value_type: 'text',
         config: null,
         description: null,
+        allowedOppositeTypeIds: [],
         defaultValue: null,
       },
       {
@@ -109,9 +110,18 @@ describe('draftPropertiesFrom', () => {
         value_type: 'number',
         config: { default_value: 3 },
         description: null,
+        allowedOppositeTypeIds: [],
         defaultValue: null,
       },
     ]);
+  });
+
+  it('несёт допустимые типы противоположной стороны привязок (a6513df0)', () => {
+    const own = [
+      { ...def('p1', 'Связь', { value_type: 'link' }), allowed_opposite_type_ids: ['tt-ver'] },
+    ];
+    const draft = draftPropertiesFrom(own);
+    assert.deepEqual(draft[0]!.allowedOppositeTypeIds, ['tt-ver']);
   });
 
   it('mirrors the stored description into the draft row', () => {

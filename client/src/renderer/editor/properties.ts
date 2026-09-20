@@ -349,6 +349,10 @@ function buildOutsideLinkCell(
     const cell = el('td', 'prop-outside-cell');
 
     if (value.property_id !== '') {
+      // Внетиповое свойство-связь: определение собирается на лету по ребру,
+      // ограничения типов у него нет (`allowed_opposite_type_ids` не задан) —
+      // внетиповое значение возникает как раз тогда, когда привязок к типу
+      // владельца нет, значит фильтровать кандидатов нечем (модель dde92461).
       const definition: EffectiveTypeProperty = {
         id: value.property_id,
         property_id: value.property_id,

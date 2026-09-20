@@ -99,7 +99,7 @@ import {
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
-import { buildLinkValueEditor, buildValueEditor } from '../editor/value-editor.js';
+import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -1380,8 +1380,14 @@ export function openPropertyManagerEditor(
           buildLinkValueEditor({
             networkId,
             definition: {
-              config: oppositeIds.length > 0 ? { allowed_target_type_ids: oppositeIds } : {},
+              config: {},
               required: false,
+              // Источник ограничения — привязки противоположной стороны
+              // (тот же контракт, что у `listTypeProperties` в редакторе
+              // мысли): у ещё не сохранённого черновика таблицы —
+              // единственный доступный снимок; после apply сервер отдаёт то
+              // же через `allowed_opposite_type_ids`.
+              allowed_opposite_type_ids: linkAllowedTypeIds(oppositeIds),
             },
             values: defaultLinkValues(row.defaultValue),
             save: async (next) => {
@@ -1952,7 +1958,6 @@ export interface LinkConfigDraft {
   structural: boolean;
   linkTypeId: string | null;
   direction: 'out' | 'in';
-  allowedTargetTypeIds: string[];
   showOnMap: boolean;
   blocksTargetDeletion: boolean;
   legacyMultiple: boolean;
@@ -1979,9 +1984,6 @@ export function buildConfig(
       config.structural = true;
     } else if (link.linkTypeId !== null) {
       config.link_type_id = link.linkTypeId;
-    }
-    if (link.allowedTargetTypeIds.length > 0) {
-      config.allowed_target_type_ids = [...link.allowedTargetTypeIds];
     }
     if (link.showOnMap) config.show_on_map = true;
     if (link.blocksTargetDeletion) config.blocks_target_deletion = true;

@@ -7,22 +7,29 @@
  * «(общее)»/«частное»: заполнено = дефолт этой привязки, пусто = общее
  * значение стороны (очистка поля снимает override). Чистые хелперы:
  *  - {@link bindingDefaultPayload} — тело `setPropertyDefaultOverride` по виду
- *    значения привязки (связь — набор целей, скаляр — значение);
- *  - {@link defaultPickerTypeIds} — отбор типов для чип-пикера: у привязки
- *    источника цели ограничены `allowed_target_type_ids`, у привязки
- *    назначения источники — `allowed_source_type_ids`.
+ *    значения привязки (связь — набор целей, скаляр — значение).
+ *
+ * Отбор типов для дефолт-пикера свойства-связи больше не отдельный хелпер: у
+ * привязки-источника допустимые цели и у привязки-назначения допустимые
+ * источники приходят из реестра привязок противоположной стороны
+ * (`EffectiveTypeProperty.allowed_opposite_type_ids`, ошибка a6513df0) и
+ * нормализуются общим `linkAllowedTypeIds` — тем же, что у поля значения в
+ * редакторе мысли. Правило «сторона → допустимые типы» проверяется юнит-тестом
+ * `editor-link-value-filter.test.ts`; здесь — что вкладка «Свойства» редактора
+ * типа не вернулась к config-ключам.
  *
  * Pure logic — no DOM (client tests run without jsdom, per the existing
  * convention).
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
   bindingDefaultPayload,
   collectBindingDefaultWrites,
-  defaultPickerTypeIds,
   type BindingDefaultDraft,
 } from '../src/renderer/screens/type-manager.js';
 
@@ -91,37 +98,28 @@ describe('collectBindingDefaultWrites — дефолты на «Применит
   });
 });
 
-describe('defaultPickerTypeIds — отбор типов чип-пикера дефолта (0.8.2)', () => {
-  it('привязка источника: цели ограничены allowed_target_type_ids', () => {
-    assert.deepEqual(
-      defaultPickerTypeIds('source', {
-        allowed_target_type_ids: ['tt-a', 'tt-b'],
-        allowed_source_type_ids: ['tt-x'],
-      }),
-      ['tt-a', 'tt-b'],
+describe('дефолт-пикер редактора типа — общий источник ограничения (a6513df0)', () => {
+  it('берёт допустимые типы из allowed_opposite_type_ids через общий linkAllowedTypeIds', () => {
+    const src = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'type-manager.ts'),
+      'utf8',
     );
-  });
-
-  it('привязка назначения: источники ограничены allowed_source_type_ids', () => {
-    assert.deepEqual(
-      defaultPickerTypeIds('target', {
-        allowed_target_type_ids: ['tt-a'],
-        allowed_source_type_ids: ['tt-x', 'tt-y'],
-      }),
-      ['tt-x', 'tt-y'],
+    assert.ok(
+      /linkAllowedTypeIds\(opts\.allowedOppositeTypeIds\)/.test(src),
+      'ядро дефолта привязки зовёт общий хелпер отбора',
     );
-  });
-
-  it('нет ограничения или пустой список — фильтра нет', () => {
-    assert.deepEqual(defaultPickerTypeIds('source', null), []);
-    assert.deepEqual(defaultPickerTypeIds(null, { allowed_target_type_ids: ['tt-a'] }), ['tt-a']);
-    assert.deepEqual(defaultPickerTypeIds('source', {}), []);
-    assert.deepEqual(defaultPickerTypeIds('source', { allowed_target_type_ids: [] }), []);
-  });
-
-  it('пустые id отбрасываются', () => {
-    assert.deepEqual(defaultPickerTypeIds('source', { allowed_target_type_ids: ['', 'tt-a'] }), [
-      'tt-a',
-    ]);
+    assert.ok(
+      /allowedOppositeTypeIds: def\.allowed_opposite_type_ids/.test(src),
+      'унаследованная таблица берёт набор из определения (реестр привязок)',
+    );
+    assert.ok(
+      /allowedOppositeTypeIds: row\.allowedOppositeTypeIds/.test(src),
+      'собственная таблица берёт набор из строки черновика',
+    );
+    assert.equal(
+      /allowed_(target|source)_type_ids/.test(src),
+      false,
+      'вкладка «Свойства» редактора типа не читает config-ключи ограничения типов',
+    );
   });
 });

@@ -1,12 +1,13 @@
 /**
- * Юнит-тесты отбора кандидатов свойства-связи по ограничению типов
- * (ошибка cfbf3855, 0.8.2): редактор мысли обязан применять к живому поиску
- * поля И к диалогу «выбрать» только допустимые типы из конфига свойства —
- * ключ конфига зависит от стороны привязки (0.8.1, требование b9562306):
- * у привязки со стороны источника ограничены ЦЕЛИ
- * (`config.allowed_target_type_ids`), у привязки со стороны назначения —
- * ИСТОЧНИКИ (`config.allowed_source_type_ids`). Нет ограничения — фильтра нет
- * (любые мысли, как раньше).
+ * Юнит-тесты отбора кандидатов свойства-связи по допустимым типам значения
+ * (ошибка a6513df0 — переделка фикса cfbf3855, 0.8.2).
+ *
+ * Источник ограничения — привязки ПРОТИВОПОЛОЖНОЙ стороны свойства в реестре
+ * `type_properties`, а не ключи `config` (их модель 0.8.1 не предусматривает:
+ * у реального свойства они всегда пусты). Сервер считает набор по реестру и
+ * отдаёт его в `EffectiveTypeProperty.allowed_opposite_type_ids`; редактор
+ * значения расширяет список до поддеревьев типов (L21) и применяет его и к
+ * живому поиску поля, и к диалогу «выбрать». Пусто — фильтра нет (любые мысли).
  *
  * Харнесс повторяет editor-link-value-chip.test.ts: DOM-shim без dispatch
  * асинхронной отрисовки выпадашки. Мы НЕ фокусируем поле — тогда `render`
@@ -172,60 +173,64 @@ async function typeAndSettle(input: ShimElement, text: string): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-const linkDefinition = (config: Record<string, unknown>, side?: 'source' | 'target') => ({
+/**
+ * Определение свойства-связи для редактора значения. `allowedOppositeTypeIds` —
+ * то, что сервер посчитал по реестру привязок противоположной стороны;
+ * `side` нужен только определениям-фикстурам (редактор по нему больше не
+ * фильтрует).
+ */
+const linkDefinition = (
+  allowedOppositeTypeIds: string[] | undefined,
+  side?: 'source' | 'target',
+) => ({
   property_id: 'lk-prop',
   key: 'Связь',
-  value_type: 'link',
-  config,
+  value_type: 'link' as const,
+  config: { link_type_id: 'lt-1' },
   required: false,
   side: side ?? null,
+  allowed_opposite_type_ids: allowedOppositeTypeIds,
   inherited: false,
   defined_on: 'thought_type',
   defined_on_name: 'Тест',
 });
 
-describe('linkAllowedTypeIds — ключ конфига по стороне привязки (cfbf3855)', () => {
-  it('сторона источника: ограничение целей из allowed_target_type_ids', async () => {
+describe('linkAllowedTypeIds — нормализация допустимых типов значения (a6513df0)', () => {
+  it('отдаёт список как есть и отбрасывает пустые id', async () => {
     installShim();
     const { linkAllowedTypeIds } = await import('../src/renderer/editor/value-editor.js');
-    assert.deepEqual(
-      linkAllowedTypeIds('source', {
-        allowed_target_type_ids: ['tt-ver'],
-        allowed_source_type_ids: ['tt-work'],
-      }),
-      ['tt-ver'],
-    );
+    assert.deepEqual(linkAllowedTypeIds(['tt-ver', '']), ['tt-ver']);
+    assert.deepEqual(linkAllowedTypeIds(['tt-a', 'tt-b']), ['tt-a', 'tt-b']);
   });
 
-  it('сторона назначения: ограничение источников из allowed_source_type_ids', async () => {
+  it('нет ограничения (пусто/undefined) — фильтра нет', async () => {
     installShim();
     const { linkAllowedTypeIds } = await import('../src/renderer/editor/value-editor.js');
-    assert.deepEqual(
-      linkAllowedTypeIds('target', {
-        allowed_target_type_ids: ['tt-ver'],
-        allowed_source_type_ids: ['tt-work'],
-      }),
-      ['tt-work'],
-    );
+    assert.deepEqual(linkAllowedTypeIds([]), []);
+    assert.deepEqual(linkAllowedTypeIds(undefined), []);
+    assert.deepEqual(linkAllowedTypeIds(null), []);
   });
 
-  it('нет ограничения или пустой конфиг — фильтра нет', async () => {
-    installShim();
-    const { linkAllowedTypeIds } = await import('../src/renderer/editor/value-editor.js');
-    assert.deepEqual(linkAllowedTypeIds('source', {}), []);
-    assert.deepEqual(linkAllowedTypeIds('target', {}), []);
-    assert.deepEqual(linkAllowedTypeIds(null, null), []);
-    assert.deepEqual(linkAllowedTypeIds('source', { allowed_target_type_ids: [] }), []);
+  it('config-ключи allowed_*_type_ids в UI-логике не участвуют', () => {
+    const src = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
+      'utf8',
+    );
+    assert.equal(
+      /allowed_(target|source)_type_ids/.test(src),
+      false,
+      'редактор значения больше не читает config-ключи ограничения типов',
+    );
   });
 });
 
-describe('buildLinkValueEditor — живой поиск фильтруется по допустимым типам (cfbf3855)', () => {
-  it('allowed_target_type_ids сужает живой поиск поля', async () => {
+describe('buildLinkValueEditor — живой поиск фильтруется по допустимым типам (a6513df0)', () => {
+  it('прямое имя (мысль-источник): допустимые цели из привязок назначения', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
-      definition: linkDefinition({ allowed_target_type_ids: ['tt-ver'] }, 'source') as any,
+      definition: linkDefinition(['tt-ver'], 'source') as any,
       values: [],
       save: async () => true,
     }) as unknown as ShimElement;
@@ -235,22 +240,16 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
     assert.deepEqual(
       searchCalls[0]!.typeIds,
       ['tt-ver'],
-      'поиск ограничен допустимыми типами цели свойства',
+      'поиск ограничен типами назначений свойства',
     );
   });
 
-  it('сторона назначения: поиск фильтруется по allowed_source_type_ids, не по целям', async () => {
+  it('обратное имя (мысль-назначение): допустимые источники из привязок источника', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
-      definition: linkDefinition(
-        {
-          allowed_target_type_ids: ['tt-ver'],
-          allowed_source_type_ids: ['tt-work'],
-        },
-        'target',
-      ) as any,
+      definition: linkDefinition(['tt-work', 'tt-task'], 'target') as any,
       values: [],
       save: async () => true,
     }) as unknown as ShimElement;
@@ -258,17 +257,17 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
     await typeAndSettle(addInputOf(editor), 'работа');
     assert.deepEqual(
       searchCalls[0]!.typeIds,
-      ['tt-work'],
+      ['tt-work', 'tt-task'],
       'у привязки со стороны назначения ограничены источники',
     );
   });
 
-  it('без ограничений поиск не сужается (любые мысли)', async () => {
+  it('противоположная таблица пуста — поиск не сужается (любые мысли)', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
-      definition: linkDefinition({ link_type_id: 'lt-1' }, 'source') as any,
+      definition: linkDefinition([], 'source') as any,
       values: [],
       save: async () => true,
     }) as unknown as ShimElement;
@@ -277,25 +276,25 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
     assert.deepEqual(searchCalls[0]!.typeIds, [], 'пустой фильтр — сервер вернёт любые мысли');
   });
 
-  it('фильтр берётся из конфига КОНКРЕТНОГО свойства, а не глобально', async () => {
+  it('фильтр берётся из привязок КОНКРЕТНОГО свойства, а не глобально', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const restricted = buildLinkValueEditor({
       networkId: 'n1',
-      definition: linkDefinition({ allowed_target_type_ids: ['tt-a'] }, 'source') as any,
+      definition: linkDefinition(['tt-a'], 'source') as any,
       values: [],
       save: async () => true,
     }) as unknown as ShimElement;
     const free = buildLinkValueEditor({
       networkId: 'n1',
-      definition: linkDefinition({}, 'source') as any,
+      definition: linkDefinition([], 'source') as any,
       values: [],
       save: async () => true,
     }) as unknown as ShimElement;
 
     await typeAndSettle(addInputOf(restricted), 'a');
     await typeAndSettle(addInputOf(free), 'b');
-    assert.deepEqual(searchCalls[0]!.typeIds, ['tt-a'], 'свойство с ограничением фильтрует');
+    assert.deepEqual(searchCalls[0]!.typeIds, ['tt-a'], 'свойство с привязками фильтрует');
     assert.deepEqual(searchCalls[1]!.typeIds, [], 'свойство без ограничения не фильтрует');
   });
 
@@ -312,7 +311,7 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
     });
     const editor = buildLinkValueEditor({
       networkId: 'n1',
-      definition: linkDefinition({ allowed_target_type_ids: ['tt-par'] }, 'source') as any,
+      definition: linkDefinition(['tt-par'], 'source') as any,
       values: [],
       save: async () => true,
     }) as unknown as ShimElement;
@@ -324,7 +323,7 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
   });
 });
 
-describe('buildLinkValueEditor — диалог «выбрать» получает тот же отбор (cfbf3855)', () => {
+describe('buildLinkValueEditor — диалог «выбрать» получает тот же отбор (a6513df0)', () => {
   it('openPicker передаёт computed filterIds в searchTypeIds диалога', () => {
     // Диалог (`pickThoughtsDialog`) — статический импорт; в shim-среде его
     // открытие требует document.body. Проверяем связку по исходнику: тот же
@@ -341,10 +340,8 @@ describe('buildLinkValueEditor — диалог «выбрать» получа�
       'диалог выбора получает отбор по тем же допустимым типам',
     );
     assert.ok(
-      /linkAllowedTypeIds\(definition\.side\s*\?\?\s*null,\s*definition\.config\s*\?\?\s*null\)/.test(
-        src,
-      ),
-      'filterIds вычисляются из стороны и конфига определения (одно правило на поле и диалог)',
+      /linkAllowedTypeIds\(definition\.allowed_opposite_type_ids\)/.test(src),
+      'filterIds вычисляются из серверного набора допустимых типов (одно правило на поле и диалог)',
     );
     assert.ok(
       /linkSearchSource\(networkId,\s*filterIds\)/.test(src),

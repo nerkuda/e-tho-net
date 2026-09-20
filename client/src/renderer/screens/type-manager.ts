@@ -1312,7 +1312,10 @@ function buildStagedPropertySection(opts: {
     propertyId: string;
     valueType: PropertyValueType;
     config: PropertyConfig | null;
-    side: LinkPropertySide | null;
+    /** Типы противоположной стороны привязок свойства-связи
+     *  (`allowed_opposite_type_ids` определения): допустимые цели
+     *  дефолт-пикера. Пусто — целей не ограничиваем. */
+    allowedOppositeTypeIds: readonly string[];
     /** Дефолт привязки на сервере; `null` — его нет (общее стороны). */
     initial: unknown;
   }): HTMLElement {
@@ -1324,15 +1327,17 @@ function buildStagedPropertySection(opts: {
       return true;
     };
     if (opts.valueType === 'link') {
-      const filterIds = defaultPickerTypeIds(opts.side, opts.config);
+      const filterIds = linkAllowedTypeIds(opts.allowedOppositeTypeIds);
       cell.append(
         buildLinkValueEditor({
           networkId,
-          // Отбор целей — по типам противоположной стороны привязки
-          // (иерархию раскрывает сам редактор); пусто — цели любые.
+          // Отбор целей — по типам противоположной стороны привязки, тот же
+          // хелпер, что у поля значения в редакторе мысли (иерархию
+          // раскрывает сам редактор); пусто — цели любые.
           definition: {
-            config: filterIds.length > 0 ? { allowed_target_type_ids: filterIds } : {},
+            config: {},
             required: false,
+            allowed_opposite_type_ids: filterIds,
           },
           values: defaultLinkValues(draftEntry.value),
           save: (next) => write(next),
@@ -1505,7 +1510,7 @@ function buildStagedPropertySection(opts: {
               propertyId: def.property_id,
               valueType: def.value_type,
               config: def.config,
-              side: def.side ?? null,
+              allowedOppositeTypeIds: def.allowed_opposite_type_ids ?? [],
               initial: def.overridden_here === true ? def.default_value ?? null : null,
             }),
           );
@@ -1587,7 +1592,7 @@ function buildStagedPropertySection(opts: {
           propertyId: row.property_id,
           valueType: row.value_type,
           config: row.config,
-          side: row.side,
+          allowedOppositeTypeIds: row.allowedOppositeTypeIds ?? [],
           initial: row.defaultValue ?? null,
         }),
       );
@@ -2359,22 +2364,6 @@ export function bindingDefaultPayload(
   value: unknown,
 ): string | number | boolean | string[] | null {
   return valueType === 'link' ? linkDefaultPayload(value) : scalarDefaultPayload(value);
-}
-
-/**
- * Отбор типов для чип-пикера дефолта привязки типа мысли (0.8.2): у привязки
- * со стороны источника цели ограничены `allowed_target_type_ids`, у привязки
- * со стороны назначения источники — `allowed_source_type_ids`; пусто —
- * фильтра нет. Иерархию раскрывает сам редактор значения
- * (`buildLinkValueEditor`). Правило «сторона → ключ конфига» — общее с
- * редактором значения ({@link linkAllowedTypeIds}); здесь только адаптер к
- * чистой сигнатуре колонки «По умолчанию». Чистая — юнит-тест.
- */
-export function defaultPickerTypeIds(
-  side: LinkPropertySide | null,
-  config: PropertyConfig | null,
-): string[] {
-  return linkAllowedTypeIds(side, config);
 }
 
 /**

@@ -66,6 +66,13 @@ export interface DraftProperty {
   config: PropertyConfig | null;
   description: string | null;
   /**
+   * Типы противоположной стороны привязок свойства-связи
+   * (`EffectiveTypeProperty.allowed_opposite_type_ids`, сервер считает по
+   * реестру `type_properties`): допустимые цели дефолт-пикера колонки
+   * «По умолчанию». Снимок для рендера — тип-редактор его не пишет.
+   */
+  allowedOppositeTypeIds?: string[];
+  /**
    * Дефолт ЭТОЙ привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
    * `type_property_overrides.default_value` — набор id целей у свойства-связи,
    * значение по виду у скаляра; `null` — собственного дефолта нет, при создании
@@ -129,7 +136,11 @@ export function moveDraftRow<T extends { id: string }>(
  *  override есть у самой привязки (`overridden_here`), иначе `null`
  *  («действует общее значение стороны»). */
 export function draftPropertiesFrom(
-  own: readonly (PropertyDefinition & { default_value?: unknown; overridden_here?: boolean })[],
+  own: readonly (PropertyDefinition & {
+    default_value?: unknown;
+    overridden_here?: boolean;
+    allowed_opposite_type_ids?: string[];
+  })[],
 ): DraftProperty[] {
   return own.map((d) => ({
     id: d.id,
@@ -141,6 +152,7 @@ export function draftPropertiesFrom(
     value_type: d.value_type,
     config: d.config,
     description: d.description,
+    allowedOppositeTypeIds: d.allowed_opposite_type_ids ?? [],
     defaultValue: d.overridden_here === true ? d.default_value ?? null : null,
   }));
 }

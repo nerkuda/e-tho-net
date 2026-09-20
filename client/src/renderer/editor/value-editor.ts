@@ -10,10 +10,10 @@
  * значения строится свитчем по `value_type`. Строится по определению
  * свойства (`EffectiveTypeProperty`): вид значения, `config.multiple`,
  * `config.options`; для вида «связь» — допустимые типы противоположной стороны
- * привязки (по `side`: цели — `config.allowed_target_type_ids`, источники —
- * `config.allowed_source_type_ids`; иерархию раскрывает L21), обязательность и
- * значение по умолчанию (`default_value` используется как начальное значение,
- * только когда вызывающий передал `value: undefined`, а не `null`).
+ * привязки (`allowed_opposite_type_ids`, посчитанные сервером по реестру
+ * привязок; иерархию раскрывает L21), обязательность и значение по умолчанию
+ * (`default_value` используется как начальное значение, только когда
+ * вызывающий передал `value: undefined`, а не `null`).
  *
  * Собирается из общих модулей, а не из примитивов (ADR):
  *  - чипы — фабрика облачка `lib/thought-cloud.ts`, профиль `chip`;
@@ -44,9 +44,7 @@
 
 import type {
   EffectiveTypeProperty,
-  LinkPropertySide,
   LinkPropertyValueItem,
-  PropertyConfig,
   ThoughtRef,
 } from '@etn/shared';
 
@@ -83,14 +81,15 @@ export interface ValueEditorOptions {
   ownerType?: 'thought' | 'link';
   ownerId?: string;
   /**
-   * Определение свойства: вид значения, `config`, `required`, `default_value`.
-   * Намеренно сужено до используемых полей — конструктор условий отборов
-   * («Структуры», отбор типа) собирает определение на лету по реестру,
+   * Определение свойства: вид значения, `config`, `required`, `default_value`,
+   * `allowed_opposite_type_ids`. Намеренно сужено до используемых полей —
+   * конструктор условий отборов («Структуры», отбор типа) собирает
+   * определение на лету по реестру,
    * без фейковых `id`/`owner_*` привязки.
    */
   definition: Pick<
     EffectiveTypeProperty,
-    'value_type' | 'config' | 'required' | 'default_value' | 'side'
+    'value_type' | 'config' | 'required' | 'default_value' | 'side' | 'allowed_opposite_type_ids'
   >;
   /**
    * Текущее значение: скаляр (`string`/`number`/`boolean`, `string[]` для
@@ -978,24 +977,26 @@ export function buildOutsideReadonlyEdgeChip(
 }
 
 /**
- * Допустимые типы противоположной стороны привязки свойства-связи — ключ
- * `config` зависит от стороны привязки (0.8.1, требование b9562306, задача
- * d7177d1d): у привязки со стороны источника ограничены ЦЕЛИ
- * (`config.allowed_target_type_ids`), у привязки со стороны назначения —
- * ИСТОЧНИКИ (`config.allowed_source_type_ids`). Пусто — ограничений нет
+ * Допустимые типы значения свойства-связи (0.8.2, ошибка a6513df0). Источник —
+ * типы привязок ПРОТИВОПОЛОЖНОЙ стороны этого свойства в реестре
+ * `type_properties`: заполняешь прямое имя (мысль — источник) → допустимые цели
+ * = типы привязок со стороны назначения; обратное имя → допустимые источники =
+ * типы привязок со стороны источника. Сервер уже выбрал нужную сторону и
+ * отдал её в `EffectiveTypeProperty.allowed_opposite_type_ids`; здесь только
+ * нормализация (пустой список/`''`-id отбрасываются). Пусто — ограничений нет
  * (кандидаты — любые мысли). Иерархию типов раскрывает вызывающий
  * (`expandTypeIdsToSubtree`, L21). Чистая — юнит-тест.
  *
- * ЕДИНСТВЕННЫЙ источник правила «сторона → ключ конфига» для пикеров клиента:
- * `screens/type-manager.ts` делегирует сюда свой `defaultPickerTypeIds`.
+ * ЕДИНСТВЕННОЕ правило отбора для всех пикеров клиента: поле значения в
+ * редакторе мысли, диалог «выбрать» и дефолт-пикеры редакторов типа и свойства
+ * (`screens/type-manager.ts`, `screens/property-manager.ts`) зовут этот хелпер.
  */
 export function linkAllowedTypeIds(
-  side: LinkPropertySide | null | undefined,
-  config: PropertyConfig | null | undefined,
+  allowedOppositeTypeIds: readonly string[] | null | undefined,
 ): string[] {
-  const raw =
-    side === 'target' ? config?.allowed_source_type_ids : config?.allowed_target_type_ids;
-  return Array.isArray(raw) ? raw.filter((id) => id !== '') : [];
+  return Array.isArray(allowedOppositeTypeIds)
+    ? allowedOppositeTypeIds.filter((id) => id !== '')
+    : [];
 }
 
 /**
@@ -1020,7 +1021,10 @@ export function buildLinkValueEditor(opts: {
   networkId: string;
   ownerType?: 'thought' | 'link';
   ownerId?: string;
-  definition: Pick<EffectiveTypeProperty, 'config' | 'required' | 'side'>;
+  definition: Pick<
+    EffectiveTypeProperty,
+    'config' | 'required' | 'side' | 'allowed_opposite_type_ids'
+  >;
   values: LinkPropertyValueItem[];
   save: (next: unknown) => Promise<boolean>;
   /** Подключает историю последних целей (требование f6399882). */
@@ -1032,13 +1036,13 @@ export function buildLinkValueEditor(opts: {
   const { networkId, ownerType, ownerId, definition } = opts;
   let current: string[] = opts.values.map((edge) => edge.target_id);
 
-  // Отбор по типам — input aid из конфига свойства-связи: ключ конфига зависит
-  // от стороны привязки (цели — allowed_target_type_ids, источники —
-  // allowed_source_type_ids), список расширяется до поддеревьев типов (L21) —
-  // зеркало серверной валидации; сохранённые значения фильтром не трогаются.
+  // Отбор по типам — input aid из реестра привязок свойства-связи:
+  // допустимые типы противоположной стороны посчитал сервер
+  // (`allowed_opposite_type_ids`), здесь список расширяется до поддеревьев
+  // типов (L21); сохранённые значения фильтром не трогаются.
   const filterIds = expandTypeIdsToSubtree(
     store.state.thoughtTypes,
-    linkAllowedTypeIds(definition.side ?? null, definition.config ?? null),
+    linkAllowedTypeIds(definition.allowed_opposite_type_ids),
   );
 
   // Кеш метаданных целей: подписи есть в рёбрах, значок/цвета/флаги —
