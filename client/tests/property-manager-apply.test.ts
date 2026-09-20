@@ -227,6 +227,126 @@ describe('buildUpdateChanges — тело PATCH из черновика (9f579e6
 });
 
 // ---------------------------------------------------------------------------
+// Round-trip config: диалог не теряет ключи, которых не редактирует
+// (ошибка a13b3845 — allowed_target_type_ids/allowed_source_type_ids)
+// ---------------------------------------------------------------------------
+
+describe('buildUpdateChanges — сохранение не теряет нередактируемые ключи config', () => {
+  /** Свойство-связь с ограничениями типов, заданными через онтологию/MCP. */
+  const currentWithRestrictions = (): RegistryRow =>
+    makeCurrent({
+      name: 'версия',
+      value_type: 'link',
+      config: {
+        direction: 'out',
+        link_type_id: 'lt-1',
+        allowed_target_type_ids: ['tt-ver'],
+        allowed_source_type_ids: ['tt-work', 'tt-task'],
+        multiple: true,
+      },
+    });
+
+  it('правка только описания: config не пересылается, ограничения остаются на сервере', () => {
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'версия',
+      nameForward: 'версия',
+      nameReverse: 'работы версии',
+      description: 'новое описание',
+    });
+    const changes = buildUpdateChanges(draft, currentWithRestrictions());
+    assert.equal(changes.description, 'новое описание');
+    // Собранный config побайтово совпал с текущим — PATCH его не несёт,
+    // а сервер без `config` оставляет текущее значение нетронутым.
+    assert.equal('config' in changes, false);
+  });
+
+  it('правка управляемого ключа: ограничения типов переносятся в новое значение config', () => {
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'версия',
+      nameForward: 'версия',
+      nameReverse: 'работы версии',
+      showOnMap: true,
+    });
+    const changes = buildUpdateChanges(draft, currentWithRestrictions());
+    assert.deepEqual(changes.config?.allowed_target_type_ids, ['tt-ver']);
+    assert.deepEqual(changes.config?.allowed_source_type_ids, ['tt-work', 'tt-task']);
+    assert.equal(changes.config?.multiple, true);
+    assert.equal(changes.config?.show_on_map, true);
+    assert.equal(changes.config?.link_type_id, 'lt-1');
+    assert.equal(changes.config?.direction, 'out');
+  });
+
+  it('снятие управляемого флага удаляет ключ, но не ограничения', () => {
+    const current = makeCurrent({
+      value_type: 'link',
+      config: {
+        direction: 'out',
+        link_type_id: 'lt-1',
+        show_on_map: true,
+        allowed_target_type_ids: ['tt-ver'],
+      },
+    });
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'приоритет',
+      nameForward: 'приоритет',
+      nameReverse: 'работы',
+      showOnMap: false,
+    });
+    const changes = buildUpdateChanges(draft, current);
+    assert.equal('show_on_map' in (changes.config ?? {}), false);
+    assert.deepEqual(changes.config?.allowed_target_type_ids, ['tt-ver']);
+  });
+
+  it('без ограничений в текущем конфиге фантомные ключи не появляются', () => {
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'приоритет',
+      nameForward: 'приоритет',
+      nameReverse: 'работы',
+      showOnMap: true,
+    });
+    const changes = buildUpdateChanges(
+      draft,
+      makeCurrent({ value_type: 'link', config: { direction: 'out', link_type_id: 'lt-1' } }),
+    );
+    assert.equal('allowed_target_type_ids' in (changes.config ?? {}), false);
+    assert.equal('allowed_source_type_ids' in (changes.config ?? {}), false);
+  });
+
+  it('структурное свойство-связь: ограничения переносятся вместе с structural', () => {
+    const draft = makeDraft({
+      valueType: 'link',
+      scalarKind: null,
+      name: 'родители',
+      nameForward: 'родители',
+      nameReverse: 'потомки',
+      showOnMap: true,
+    });
+    const changes = buildUpdateChanges(
+      draft,
+      makeCurrent({
+        value_type: 'link',
+        config: {
+          structural: true,
+          direction: 'in',
+          allowed_source_type_ids: ['tt-a'],
+        },
+      }),
+    );
+    assert.equal(changes.config?.structural, true);
+    assert.deepEqual(changes.config?.allowed_source_type_ids, ['tt-a']);
+    assert.equal('link_type_id' in (changes.config ?? {}), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Дефолты привязок: черновик → операции (0.8.2, тех.проект 43870285)
 // ---------------------------------------------------------------------------
 

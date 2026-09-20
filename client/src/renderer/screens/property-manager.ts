@@ -1858,17 +1858,46 @@ export function buildUpdateChanges(
   return changes;
 }
 
+/**
+ * Ключи `config` свойства-связи, которые собираются из полей единого диалога
+ * «Свойство / связь». Всё остальное (`allowed_target_type_ids`,
+ * `allowed_source_type_ids`, legacy-маркер `multiple` и любые произвольные
+ * ключи, заданные через MCP/онтологию) диалог не редактирует и обязан
+ * переносить без изменений: серверный `PATCH /properties/{id}` заменяет
+ * `config` целиком (`updateNetworkProperty`: `finalConfig = changes.config`),
+ * поэтому иначе любое сохранение стирало бы их (ошибка a13b3845).
+ */
+const LINK_CONFIG_MANAGED_KEYS: ReadonlySet<string> = new Set([
+  'link_type_id',
+  'structural',
+  'direction',
+  'show_on_map',
+  'blocks_target_deletion',
+  'default_value',
+  'default_value_target',
+]);
+
 /** Конфиг свойства-связи из черновика. Никогда не `null` — сервер требует
  *  `direction` для ссылки. */
 function linkConfigFromDraft(draft: PropertyDraft, current?: PropertyConfig | null): PropertyConfig | null {
   if (draft.valueType !== 'link') return null;
+  // Сначала переносим из текущего конфига всё, чем диалог не управляет
+  // (round-trip: ограничения типов, legacy-флаги, произвольные доп. ключи).
+  // Порядок важен: управляемые ключи перезаписывают одноимённые ниже —
+  // иначе, например, снятый флаг `show_on_map` не удалился бы.
+  const cfg: PropertyConfig = {};
+  if (current != null) {
+    for (const [key, value] of Object.entries(current)) {
+      if (value === undefined || LINK_CONFIG_MANAGED_KEYS.has(key)) continue;
+      cfg[key] = value;
+    }
+  }
   // Для уже существующего свойства — сохраняем `link_type_id`/`structural`
   // из текущего конфига (они задаются на create и не вычисляются из draft).
   // Без этого PATCH отклоняется сервером: VALIDATION_ERROR «свойство-связь
   // требует config.link_type_id» (баг cab38479-фикс2). Для нового — сервер
   // создаст link_type автоматически (задача dd37a66) по паре имён сторон,
   // и `config.link_type_id` придёт в ответе на create.
-  const cfg: PropertyConfig = {};
   if (current?.link_type_id !== undefined && current.link_type_id !== '') {
     cfg.link_type_id = current.link_type_id;
   }
