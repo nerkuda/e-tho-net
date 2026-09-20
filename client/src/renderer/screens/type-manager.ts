@@ -830,9 +830,11 @@ export function showThoughtTypeEditor(
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
   descriptionPane.append(descArea);
 
-  // errorLine живёт в «Описание»: имя и пометка «дубликат имени» относятся
-  // именно к этой вкладке.
-  descriptionPane.append(errorLine);
+  // Строка ошибки диалога живёт в панели кнопок (футер), а не в теле вкладки:
+  // сообщение о неудачной записи обязано быть видно на ЛЮБОЙ вкладке
+  // (ошибка add8d09d). В футер её кладёт `footerError` в `showDialog` ниже.
+  // Сюда же пишут ошибки записи стадийных свойств (`buildStagedPropertySection`)
+  // и подсветка дубликата имени.
 
   // Шаблон постоянного комментария мысли (08-ui-spec.md §8.4, 02-data-model.md
   // §3.3). Поле — как у всех markdown-полей приложения: HTML-просмотр по
@@ -878,6 +880,9 @@ export function showThoughtTypeEditor(
     previewParentId: () =>
       draft.parent_id ?? findRootType(store.state.thoughtTypes)?.id ?? null,
     onOverrideApplied: onChanged,
+    // Ошибки записи привязок идут в общую строку панели кнопок: пользователь
+    // может находиться на любой вкладке (ошибка add8d09d).
+    errorLine,
   });
   propertiesPane.append(props.root);
 
@@ -969,6 +974,9 @@ export function showThoughtTypeEditor(
    * on both paths, showing the error.
    */
   async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
+    // Строка ошибки в панели кнопок общая для диалога: перед новой попыткой
+    // гасим прошлое сообщение (иначе оно «залипает» и видно на всех вкладках).
+    errorLine.textContent = '';
     const name = nameInput.value.trim();
     if (name === '') {
       errorLine.textContent = 'Название типа обязательно.';
@@ -1063,6 +1071,9 @@ export function showThoughtTypeEditor(
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
       body,
       width: TYPE_EDITOR_DIALOG_WIDTH,
+      // Ошибка записи живёт в панели кнопок, а не в теле вкладки: она должна
+      // быть видна на любой вкладке диалога (ошибка add8d09d).
+      footerError: errorLine,
       buttons: [
         { label: 'Отмена' },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
@@ -1164,20 +1175,25 @@ function buildStagedPropertySection(opts: {
   previewParentId: () => string | null;
   /** Fired after an inherited default override was applied on the server. */
   onOverrideApplied?: () => void;
+  /**
+   * Общая строка ошибки диалога (в панели кнопок): ошибки записи привязок
+   * выводятся сюда, чтобы быть видимыми на любой вкладке (ошибка add8d09d).
+   */
+  errorLine: HTMLElement;
 }): StagedPropertySection {
-  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied } = opts;
+  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine } = opts;
   const box = div('form-stack');
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '220px';
   // The first load often starts before the dialog mounts this box — show the
   // placeholder up front instead of a blank gap.
   tableWrap.append(el('span', 'muted', 'Загрузка…'));
-  const errorLine = span('', 'error-text');
   // Заголовка «Свойства» над таблицей нет (ошибка 3c7213ec): вкладка уже
   // называется «Свойства», подпись только дублировала её. Подзаголовок
   // «Свойства типа» остаётся — он отличает собственную таблицу от
-  // унаследованной.
-  box.append(tableWrap, errorLine);
+  // унаследованной. Строки ошибки здесь нет: ошибки записи уходят в футер
+  // диалога (ошибка add8d09d).
+  box.append(tableWrap);
   // Кнопка добавления свойства (задача 298fe6f3): в списке диалога «Добавить
   // свойство» свойство-связь показано парой КОНКРЕТНЫХ имён — прямое
   // (`name_forward`, сторона `source`) и обратное (`name_reverse`, сторона

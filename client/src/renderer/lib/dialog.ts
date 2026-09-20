@@ -52,6 +52,20 @@ export interface DialogOptions {
    */
   customFooter?: HTMLElement;
   /**
+   * Строка ошибки в панели кнопок (футере) — видна при активной ЛЮБОЙ вкладке
+   * диалога (ошибка add8d09d «Сообщения об ошибках диалогов с вкладками видны
+   * на любой вкладке»).
+   *
+   * Футер лежит вне тела диалога и не переключается вместе с вкладками,
+   * поэтому у диалога с вкладками глобальное сообщение о неудачной записи
+   * выводится сюда, а не в тело вкладки. Вызывающий создаёт элемент сам
+   * (`span('', 'error-text')`) и пишет в него текст (`footerError.textContent = …`).
+   * Ошибки, относящиеся к конкретному полю вкладки, допустимо дублировать на
+   * месте; относится только к дефолтному футеру ({@link buttons}), при
+   * {@link customFooter} вызывающий кладёт строку в свой футер.
+   */
+  footerError?: HTMLElement;
+  /**
    * Extra keyboard shortcuts handled while this dialog is on top. Esc closes
    * the dialog (built-in); Ctrl/Cmd+Enter clicks the primary button
    * (built-in via {@link DialogButton.confirm}).
@@ -172,6 +186,12 @@ export function showDialog(opts: DialogOptions): () => void {
     box.append(opts.customFooter);
   } else if (opts.buttons !== undefined && opts.buttons.length > 0) {
     const footer = div('dialog-footer');
+    // Строка ошибки в панели кнопок — видна на любой вкладке (ошибка add8d09d).
+    // Кнопки прижимаются вправо, ошибка занимает свободное место слева.
+    if (opts.footerError !== undefined) {
+      footer.classList.add('dialog-footer-with-error');
+      footer.append(opts.footerError);
+    }
     for (const item of opts.buttons) {
       const btn = button(
         item.label,

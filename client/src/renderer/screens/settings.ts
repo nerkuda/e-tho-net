@@ -194,14 +194,18 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   }
 
   const content = div('settings-content');
+  // Строка ошибки живёт в sticky-футере (ниже), а не в теле: она обязана быть
+  // видна на любой вкладке/разделе диалога, в т.ч. при прокрученном
+  // содержимом (ошибка add8d09d).
   const errorLine = span('', 'error-text settings-error');
 
-  body.append(nav, content, errorLine);
+  body.append(nav, content);
 
   // -- footer ------------------------------------------------------------
   const footer = div('settings-footer');
   footer.append(
     el('span', 'settings-footer-hint', 'Shift+Enter — применить, Ctrl+Enter — применить и закрыть'),
+    errorLine,
   );
   const btnGroup = div('settings-footer-buttons');
   const btnApply = button('Применить', () => void applyDraft(false), 'dialog-btn');

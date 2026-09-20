@@ -731,8 +731,10 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       field('Адрес / путь', locationRow),
       field('Заголовок (необязательно)', titleInput),
       field('Комментарий (необязательно)', descInput),
-      errorLine,
     );
+    // errorLine уходит в панель кнопок диалога (`footerError`, ошибка
+    // add8d09d): сообщение о неудачном добавлении должно быть видно и на
+    // вкладке «Найти существующее», а не только в теле «Создать новое».
 
     // --- search panel --------------------------------------------------------
     const searchInput = el('input', 'text-input');
@@ -849,6 +851,10 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       title: 'Добавить вложение',
       body,
       width: 520,
+      // Ошибка добавления — в панели кнопок, видимой на обеих вкладках
+      // (ошибка add8d09d); на вкладке «Найти существующее» своя строка
+      // `searchError` для ошибок поиска (локальная операция вкладки).
+      footerError: errorLine,
       buttons: [
         { label: 'Отмена' },
         {

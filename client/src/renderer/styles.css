@@ -5285,6 +5285,21 @@ body.cloud-dragging * {
   border-top: 1px solid var(--border);
 }
 
+/* Строка ошибки в панели кнопок диалога с вкладками (ошибка add8d09d):
+ * футер виден на любой вкладке, поэтому глобальное сообщение о неудачной
+ * записи живёт здесь, а не в теле вкладки. Ошибка — слева, кнопки — справа. */
+.dialog-footer-with-error {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog-footer-with-error > .error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 12px;
+  text-align: left;
+}
+
 .dialog-btn {
   padding: 6px 14px;
   border: 1px solid var(--border-strong);
@@ -5702,7 +5717,12 @@ body.cloud-dragging * {
 }
 
 .settings-error {
-  margin-top: 8px;
+  /* Строка ошибки в sticky-футере диалога (ошибка add8d09d): видна на любом
+   * разделе/вкладке настроек, даже когда содержимое прокручено. */
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  text-align: right;
 }
 
 .settings-footer {
