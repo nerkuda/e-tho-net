@@ -103,7 +103,9 @@ import {
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 import {
   cacheAttachedRegistryRow,
+  canReorderBinding,
   draftPropertiesFrom,
+  moveDraftRow,
   nextDraftPropertyId,
   opToAttachInput,
   planPropertyDiff,
@@ -1378,12 +1380,13 @@ function buildStagedPropertySection(opts: {
     }
   }
 
-  /** Moves a draft row one slot up/down (the order is applied on save). */
+  /** Moves a draft row one slot up/down (the order is applied on save).
+   *  Порядок общий для всего типа — двигаются строки обеих сторон привязки
+   *  (задача b044237d). */
   function move(rowId: string, delta: -1 | 1): void {
-    const from = ownDraft.findIndex((d) => d.id === rowId);
-    const to = from + delta;
-    if (from < 0 || to < 0 || to >= ownDraft.length) return;
-    ownDraft.splice(to, 0, ...ownDraft.splice(from, 1));
+    const next = moveDraftRow(ownDraft, rowId, delta);
+    if (next === ownDraft) return;
+    ownDraft = [...next];
     draftTouched = true;
     render();
   }
@@ -1589,9 +1592,10 @@ function buildStagedPropertySection(opts: {
       tr.append(dvCell);
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
-      // Порядок (▲/▼) — в пределах стороны источника, как сейчас
-      // (требование 15b88319: «порядок — в пределах стороны источника»).
-      if (row.side !== 'target') {
+      // Порядок (▲/▼) — у всех строк таблицы, включая привязки стороны
+      // «назначение» (задача b044237d): порядок принадлежит типу, а не
+      // стороне свойства-связи.
+      if (canReorderBinding(row)) {
         actions.append(
           button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
           button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),

@@ -31,6 +31,7 @@ import {
   deleteTypeProperty,
   getPropertyValues,
   getTypeProperty,
+  listEffectiveTypeProperties,
   listTypeProperties,
   reorderTypeProperties,
   setPropertyValue,
@@ -371,6 +372,56 @@ describe(
           deleteTypeProperty(ndb, p1.id, USER);
           assert.equal(getTypeProperty(ndb, p1.id), null);
           assert.equal(listTypeProperties(ndb, 'thought_type', tt.id).length, 1);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      // Задача b044237d: `position` — общий столбец привязок, без разделения по
+      // стороне. Порядок задаётся для каждой привязки типа (и источника, и
+      // назначения) и виден в эффективном списке. Регресс-тест: серверного
+      // запрета порядка target-привязок нет и быть не должно.
+      it('порядок target-привязок сохраняется и виден в эффективном списке (b044237d)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Doc' }, USER);
+          const lt1 = createLinkType(ndb, { name_forward: 'ссылается', name_reverse: 'упомянут' }, USER);
+          const lt2 = createLinkType(ndb, { name_forward: 'зависит', name_reverse: 'нужен' }, USER);
+          // Две привязки со стороны «назначение» (0.8.1: сторона назначения
+          // равноправна источнику — требование 115e44fa).
+          const t1 = createTypeProperty(ndb, 'thought_type', tt.id, {
+            key: 'назначение A',
+            value_type: 'link',
+            config: { link_type_id: lt1.id, direction: 'out' },
+            side: 'target',
+          }, USER);
+          const t2 = createTypeProperty(ndb, 'thought_type', tt.id, {
+            key: 'назначение B',
+            value_type: 'link',
+            config: { link_type_id: lt2.id, direction: 'out' },
+            side: 'target',
+          }, USER);
+          assert.equal(t1.side, 'target');
+          assert.equal(t2.side, 'target');
+          assert.deepEqual(
+            listTypeProperties(ndb, 'thought_type', tt.id).map((p) => p.id),
+            [t1.id, t2.id],
+            'пришли в порядке добавления',
+          );
+
+          // Перестановка target-привязок сохраняется на сервере.
+          const reordered = reorderTypeProperties(ndb, 'thought_type', tt.id, [t2.id, t1.id], USER);
+          assert.deepEqual(reordered.map((p) => p.id), [t2.id, t1.id]);
+          assert.equal(reordered[0]!.side, 'target');
+          assert.equal(reordered[0]!.position, 0);
+          assert.equal(reordered[1]!.position, 1);
+
+          // ...и отражается в эффективном списке типа.
+          const effective = listEffectiveTypeProperties(ndb, 'thought_type', tt.id);
+          assert.deepEqual(
+            effective.filter((p) => p.side === 'target').map((p) => p.id),
+            [t2.id, t1.id],
+          );
         } finally {
           ndb.close();
         }

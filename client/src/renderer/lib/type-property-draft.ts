@@ -84,6 +84,43 @@ export function nextDraftPropertyId(): string {
   return `draft:${draftCounter}`;
 }
 
+/**
+ * Показывать ли у строки кнопки порядка ▲/▼. Порядок принадлежит ТИПУ, а не
+ * стороне свойства-связи: кнопки есть у всех строк таблицы «Свойства типа» —
+ * у источника, у назначения и у скалярных/структурных (задача b044237d,
+ * решение пользователя 2026-09-20). Раньше строки стороны «назначение»
+ * перемещать было нельзя (условие `side !== 'target'`, оставшееся от
+ * требования 15b88319 «порядок — в пределах стороны источника»).
+ *
+ * Вынесено из DOM-компонента: контракт проверяется юнит-тестом без документа.
+ */
+export function canReorderBinding(row: Pick<DraftProperty, 'side'>): boolean {
+  return row.side === 'source' || row.side === 'target' || row.side === null;
+}
+
+/**
+ * Переставляет строку черновика на `delta` позиций (▲ = `-1`, ▼ = `+1`) и
+ * возвращает НОВЫЙ массив; если строка не найдена или ход выходит за границы —
+ * возвращает исходный массив тем же референсом (вызывающий отличает no-op).
+ *
+ * Порядок один на весь тип: строки обеих сторон привязки двигаются в общей
+ * последовательности (задача b044237d). Серверный `position` — тоже общий
+ * столбец привязок, независимый для каждого типа.
+ */
+export function moveDraftRow<T extends { id: string }>(
+  rows: readonly T[],
+  rowId: string,
+  delta: number,
+): readonly T[] {
+  const from = rows.findIndex((r) => r.id === rowId);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= rows.length) return rows;
+  const next = [...rows];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved as T);
+  return next;
+}
+
 /** Builds the initial staged list from a type's own (non-inherited)
  *  bindings, ordered as the server returns them (`position`, then `key`).
  *

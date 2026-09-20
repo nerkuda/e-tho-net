@@ -30,7 +30,9 @@ import type { PropertyDefinition } from '@etn/shared';
 
 import {
   cacheAttachedRegistryRow,
+  canReorderBinding,
   draftPropertiesFrom,
+  moveDraftRow,
   nextDraftPropertyId,
   opToAttachInput,
   planPropertyDiff,
@@ -387,5 +389,78 @@ describe('cacheAttachedRegistryRow (fix for da2d16c4-…)', () => {
     const draft = attach('draft:1', 'reg-brand-new', { key: 'Новое свойство' });
     // Intentionally NOT calling cacheAttachedRegistryRow here.
     assert.equal(cache.get(draft.property_id), undefined, 'bug shape: cache misses the freshly attached property');
+  });
+});
+
+/**
+ * Задача b044237d («Порядок свойств в типе мысли задаётся для обеих сторон
+ * привязки», решение пользователя 2026-09-20). До фикса кнопки порядка
+ * ▲/▼ рисовались только у строк стороны «источник» (условие
+ * `row.side !== 'target'`, оставшееся от требования 15b88319 «порядок — в
+ * пределах стороны источника»). Порядок принадлежит типу, а не стороне
+ * свойства-связи: обе стороны двигаются в общей последовательности,
+ * независимой для каждого типа.
+ */
+describe('порядок привязок — обе стороны (b044237d)', () => {
+  it('canReorderBinding: кнопки порядка есть у источника, назначения и скаляра', () => {
+    assert.equal(canReorderBinding({ side: 'source' }), true);
+    assert.equal(canReorderBinding({ side: 'target' }), true, 'сторона «назначение» тоже переставляется');
+    assert.equal(canReorderBinding({ side: null }), true);
+  });
+
+  it('canReorderBinding не зависит от прочих полей строки', () => {
+    // Контракт — только про сторону: имена и вид значения роли не играют.
+    assert.equal(canReorderBinding({ side: 'target' }), canReorderBinding({ side: 'source' }));
+  });
+
+  it('moveDraftRow двигает target-привязку в общей последовательности обеих сторон', () => {
+    const draft: DraftProperty[] = [
+      { ...attach('s1', 'reg-s1', { key: 'Источник A' }, false, 'source'), isNew: false },
+      { ...attach('t1', 'reg-t1', { key: 'Назначение', value_type: 'link' }, false, 'target'), isNew: false },
+      { ...attach('s2', 'reg-s2', { key: 'Источник B' }, false, 'source'), isNew: false },
+    ];
+    const moved = moveDraftRow(draft, 't1', -1);
+    assert.deepEqual(moved.map((r) => r.id), ['t1', 's1', 's2'], 'target-строка поднялась наверх');
+    // Исходный массив не мутируется — функция возвращает новый.
+    assert.deepEqual(draft.map((r) => r.id), ['s1', 't1', 's2']);
+  });
+
+  it('moveDraftRow опускает target-строку вниз и возвращает тот же референс на no-op', () => {
+    const draft: DraftProperty[] = [
+      { ...attach('t1', 'reg-t1', { key: 'Назначение', value_type: 'link' }, false, 'target'), isNew: false },
+      { ...attach('s1', 'reg-s1', { key: 'Источник' }, false, 'source'), isNew: false },
+    ];
+    assert.deepEqual(moveDraftRow(draft, 't1', 1).map((r) => r.id), ['s1', 't1']);
+    // За границей — исходный массив тем же референсом (вызывающий отличает no-op).
+    assert.equal(moveDraftRow(draft, 't1', -1), draft);
+    assert.equal(moveDraftRow(draft, 't1', 5), draft);
+    assert.equal(moveDraftRow(draft, 'nope', -1), draft);
+  });
+
+  it('перестановка target-привязки сохраняется планом: needsReorder + порядок в черновике', () => {
+    const original: PropertyDefinition[] = [
+      def('s1', 'Источник A', { side: 'source' }),
+      def('t1', 'Назначение', { value_type: 'link', side: 'target' }),
+      def('s2', 'Источник B', { side: 'source' }),
+    ];
+    const draft = draftPropertiesFrom(original);
+    const moved = moveDraftRow(draft, 't1', -1) as DraftProperty[];
+
+    const plan = planPropertyDiff(original, [...moved], []);
+
+    assert.equal(plan.needsReorder, true, 'порядок target-привязки изменился — нужен reorder');
+    // Никаких attach/set-role: двигали существующую строку, ничего не добавляли.
+    assert.deepEqual(plan.ops, []);
+    const survivorIds = moved.filter((d) => !d.isNew).map((d) => d.id);
+    assert.deepEqual(survivorIds, ['t1', 's1', 's2'], 'payload reorder — целевой порядок с target впереди');
+  });
+
+  it('без перестановки плана reorder не требует (target-строка на месте)', () => {
+    const original: PropertyDefinition[] = [
+      def('s1', 'Источник', { side: 'source' }),
+      def('t1', 'Назначение', { value_type: 'link', side: 'target' }),
+    ];
+    const plan = planPropertyDiff(original, draftPropertiesFrom(original), []);
+    assert.equal(plan.needsReorder, false);
   });
 });
