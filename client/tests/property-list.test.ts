@@ -3,7 +3,8 @@
  *
  * Список — один компонент в двух режимах: «менеджер» (диалог «Свойства») и
  * «пикер» («Добавить свойство…» редактора типа). Здесь закреплены:
- *  - форматирование (чистые функции): колонки, стрелки концов связи, обрезка
+ *  - форматирование (чистые функции): колонки, единый значок концов связи
+ *    (зеркалирование и эффективное оформление линии), обрезка
  *    имён по 30-й символ, подпись «связь (имя - имя)», иконки видов значения,
  *    ⓘ-подсказка, эффективное оформление линии;
  *  - привязка слоёв по якорям исходника (клиентские тесты идут без DOM):
@@ -20,7 +21,9 @@ import { describe, it } from 'node:test';
 import {
   LINK_NAME_LIMIT,
   buildPropertyListRows,
-  linkEndArrow,
+  linkEndDashArray,
+  linkEndDirection,
+  linkEndIconSpec,
   linkEndLineStyle,
   linkEndLineWidth,
   propertyDescriptionHint,
@@ -125,11 +128,21 @@ describe('обрезка имён и подпись типа значения к
   });
 });
 
-describe('стрелки концов связи (требование 4)', () => {
-  it('→ у источника, ← у назначения', () => {
-    assert.equal(linkEndArrow('source'), '→');
-    assert.equal(linkEndArrow('target'), '←');
-    assert.equal(linkEndArrow(null), '→');
+describe('единый значок конца связи (требование 4)', () => {
+  it('направление: вправо у источника, влево у назначения (зеркалится)', () => {
+    assert.equal(linkEndDirection('source'), 'right');
+    assert.equal(linkEndDirection('target'), 'left');
+    assert.equal(linkEndDirection(null), 'right');
+    assert.equal(linkEndIconSpec('source', null).mirrored, false);
+    assert.equal(linkEndIconSpec('target', null).mirrored, true);
+  });
+
+  it('значок один: и источник, и назначение дают одну спецификацию с зеркалом', () => {
+    const row = linkRow();
+    const source = linkEndIconSpec('source', row.visual);
+    const target = linkEndIconSpec('target', row.visual);
+    // Всё, кроме зеркалирования, у концов одной связи совпадает — значок общий.
+    assert.deepEqual({ ...source, mirrored: null }, { ...target, mirrored: null });
   });
 
   it('оформление линии — эффективные настройки связи с клампом толщины', () => {
@@ -140,6 +153,19 @@ describe('стрелки концов связи (требование 4)', () =
     assert.equal(linkEndLineWidth({ color: null, style: 'dashed', width: 99 }), 6);
     assert.equal(linkEndLineWidth({ color: null, style: 'dotted', width: 0 }), 1);
     assert.equal(linkEndLineStyle({ color: null, style: 'dotted', width: 0 }), 'dotted');
+  });
+
+  it('цвет/стиль/толщина переносятся в спецификацию значка', () => {
+    const spec = linkEndIconSpec('source', { color: '#e08a3c', style: 'dashed', width: 4 });
+    assert.deepEqual(spec, { mirrored: false, width: 4, style: 'dashed', color: '#e08a3c' });
+    // Без оформления — цвет по умолчанию из CSS.
+    assert.equal(linkEndIconSpec('source', null).color, null);
+  });
+
+  it('прерывистость линии: dashed — штрихи, dotted — точки, solid — сплошная', () => {
+    assert.equal(linkEndDashArray('solid'), null);
+    assert.equal(linkEndDashArray('dashed'), '5 3');
+    assert.equal(linkEndDashArray('dotted'), '1 3');
   });
 });
 
@@ -213,10 +239,17 @@ describe('якоря рендера и режимов (требования 3–
     assert.ok(src.includes('showMenuAt('), 'меню открывается общим показом меню');
   });
 
-  it('линия со стрелкой — эффективное оформление связи', () => {
-    assert.match(src, /linkEndArrow\(row\.side\)/, 'стрелка по стороне строки');
-    assert.match(src, /linkEndLineStyle\(row\.visual\)/, 'стиль из эффективного оформления');
-    assert.match(src, /linkEndLineWidth\(row\.visual\)/, 'толщина из эффективного оформления');
+  it('значок конца связи — единый SVG в эффективном оформлении связи', () => {
+    assert.match(src, /buildLinkEndIcon\(linkEndIconSpec\(row\.side, row\.visual\)\)/, 'один значок из спецификации');
+    assert.match(src, /linkEndDirection\(side\) === 'left'/, 'направление: влево — назначение');
+    // Зеркалирование вместо второго значка/глифа.
+    assert.match(src, /svg\.style\.transform = 'scaleX\(-1\)'/, 'назначение зеркалится');
+    assert.match(src, /'stroke-width': spec\.width/, 'толщина из эффективного оформления');
+    assert.match(src, /linkEndDashArray\(spec\.style\)/, 'штрих из эффективного оформления');
+    assert.match(src, /svg\.style\.color = spec\.color/, 'цвет из эффективного оформления');
+    // Старой пары «линия + глиф стрелки» больше нет.
+    assert.ok(!src.includes('property-list-arrow-line'), 'нет отдельного элемента линии');
+    assert.ok(!src.includes('property-list-arrow-head'), 'нет отдельного глифа стрелки');
   });
 
   it('ⓘ несёт описание свойства, полное имя пары — в тултипе', () => {

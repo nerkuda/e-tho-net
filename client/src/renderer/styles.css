@@ -6347,24 +6347,14 @@ body.cloud-dragging * {
   color: var(--muted, #8a93a5);
 }
 
-/* Линия со стрелкой у конца связи: цвет/стиль/толщина — эффективные
-   настройки свойства-связи (наследование от родительского типа связи). */
-.property-list-arrow {
-  display: inline-flex;
-  align-items: center;
+/* Единый значок конца связи: короткая линия с приделанной к её концу стрелкой.
+   Цвет/стиль/толщина — эффективные настройки свойства-связи (наследование от
+   родительского типа связи); направление задаётся зеркалированием (scaleX(-1))
+   в `lib/property-list.ts`, поэтому значок один на источник и назначение. */
+.property-list-link-icon {
+  display: inline-block;
   margin-right: 6px;
   vertical-align: middle;
-}
-
-.property-list-arrow-line {
-  display: inline-block;
-  width: 22px;
-  border-top: 2px solid var(--link-default, #9aa3b2);
-}
-
-.property-list-arrow-head {
-  display: inline-block;
-  margin-left: -4px;
   color: var(--link-default, #9aa3b2);
 }
 

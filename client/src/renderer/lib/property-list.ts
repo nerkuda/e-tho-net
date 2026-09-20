@@ -13,14 +13,15 @@
  *     закрывает пикер; контекстное меню — только «Изменить».
  *
  * **Строка.** Скалярное свойство — одна строка; свойство-связь — ВСЕГДА две
- * строки: имя в источнике (`side: 'source'`, стрелка `→`) и имя в назначении
- * (`side: 'target'`, стрелка `←`). Порядок — единый алфавит по отображаемому
- * имени строки, скаляры и концы связей вперемешку. Структурные «Родители» /
- * «Потомки» — системные строки: одно имя, замок, без активации и меню (как
- * было в прежнем списке).
+ * строки: имя в источнике (`side: 'source'`, стрелка вправо) и имя в
+ * назначении (`side: 'target'`, стрелка влево). Порядок — единый алфавит по
+ * отображаемому имени строки, скаляры и концы связей вперемешку. Структурные
+ * «Родители» / «Потомки» — системные строки: одно имя, замок, без активации и
+ * меню (как было в прежнем списке).
  *
  * **Колонки.** «Имя» (перед именем — иконка типа значения у скаляров либо
- * короткая линия со стрелкой в эффективном оформлении связи), «Тип значения»
+ * единый значок «короткая линия со стрелкой на конце» в эффективном
+ * оформлении связи), «Тип значения»
  * (у конца связи «связь (имя - имя)» с обрезкой имён по 30-й символ,
  * полное имя — в тултипе; ⓘ с описанием свойства), «Кол-во типов» (число
  * прямых привязок своей стороны, без подписей «ист./назн.»).
@@ -258,10 +259,91 @@ export function valueTypeCellLabel(row: PropertyListRow, full = false): string {
   return `связь (${cut(row.linkNames.forward)} - ${cut(row.linkNames.reverse)})`;
 }
 
-/** Стрелка конца связи: `→` у имени источника, `←` у имени назначения
- *  (требование 4). Чистая — юнит-тест. */
-export function linkEndArrow(side: LinkPropertySide | null): string {
-  return side === 'target' ? '←' : '→';
+/**
+ * Спецификация единого значка конца связи (требование 4): зеркалирование
+ * направления плюс эффективное оформление линии. Чистая — юнит-тест.
+ */
+export interface LinkEndIconSpec {
+  /** У имени назначения значок зеркалится — стрелка смотрит влево. */
+  mirrored: boolean;
+  /** Толщина линии в px (1..6) из эффективных настроек связи. */
+  width: number;
+  style: LinkStyle;
+  /** Цвет линии и стрелки; `null` — `--link-default` из CSS. */
+  color: string | null;
+}
+
+/** Направление стрелки значка: `right` у имени источника, `left` у имени
+ *  назначения (требование 4). Чистая — юнит-тест. */
+export function linkEndDirection(side: LinkPropertySide | null): 'left' | 'right' {
+  return side === 'target' ? 'left' : 'right';
+}
+
+/** Собирает спецификацию значка из стороны строки и эффективного оформления
+ *  связи. Чистая — юнит-тест. */
+export function linkEndIconSpec(
+  side: LinkPropertySide | null,
+  visual: ResolvedLinkVisual | null,
+): LinkEndIconSpec {
+  return {
+    mirrored: linkEndDirection(side) === 'left',
+    width: linkEndLineWidth(visual),
+    style: linkEndLineStyle(visual),
+    color: visual?.color ?? null,
+  };
+}
+
+/**
+ * Геометрия единого значка в CSS-пикселях: `viewBox` совпадает с размером
+ * элемента, поэтому толщина линии задаётся настройками связи напрямую (1..6px).
+ * Линия вдвое короче прежних 22px, стрелка-шеврон приделана вершиной к её
+ * концу — один цельный указатель направления вместо линии и глифа рядом.
+ */
+const LINK_END_ICON = { size: 18, y: 9, x1: 3, x2: 14, wingX: 9, wingDy: 5 } as const;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Штрих прерывистой линии значка (`null` — сплошная): `dashed` — штрихи,
+ *  `dotted` — точки; длины в пикселях значка. Чистая — юнит-тест. */
+export function linkEndDashArray(style: LinkStyle): string | null {
+  if (style === 'dashed') return '5 3';
+  if (style === 'dotted') return '1 3';
+  return null;
+}
+
+function svgNode(name: string, attrs: Record<string, string | number>): SVGElement {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+  return node;
+}
+
+/** Единый значок конца связи: `svg` с линией и приделанной к её концу стрелкой
+ *  (требование 4). Оформление линии — из эффективных настроек связи;
+ *  направление — зеркалированием (`mirrored`), поэтому значок один. */
+function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
+  const { size, y, x1, x2, wingX, wingDy } = LINK_END_ICON;
+  const svg = svgNode('svg', {
+    class: 'property-list-link-icon',
+    viewBox: `0 0 ${size} ${size}`,
+    width: size,
+    height: size,
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': spec.width,
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    'aria-hidden': 'true',
+  }) as SVGSVGElement;
+  const line = svgNode('line', { x1, y1: y, x2, y2: y });
+  const dash = linkEndDashArray(spec.style);
+  if (dash !== null) line.setAttribute('stroke-dasharray', dash);
+  const head = svgNode('polyline', {
+    points: `${wingX},${y - wingDy} ${x2},${y} ${wingX},${y + wingDy}`,
+  });
+  svg.append(line, head);
+  if (spec.mirrored) svg.style.transform = 'scaleX(-1)';
+  if (spec.color !== null) svg.style.color = spec.color;
+  return svg;
 }
 
 /** Иконка вида значения для скаляра (требование 4): переиспользует единый
@@ -430,21 +512,13 @@ export function buildPropertyList(opts: {
     showMenuAt(x, y, items);
   }
 
-  /** Знак перед именем: иконка вида значения у скаляра либо короткая линия со
-   *  стрелкой в эффективном оформлении связи (требование 4). */
+  /** Знак перед именем: иконка вида значения у скаляра либо единый значок
+   *  «короткая линия со стрелкой на конце» в эффективном оформлении связи
+   *  (требование 4). */
   function buildNameMark(row: PropertyListRow): Element | null {
     if (row.structural) return null;
     if (row.valueType === 'link') {
-      const mark = span('', 'property-list-arrow');
-      const line = span('', 'property-list-arrow-line');
-      const width = linkEndLineWidth(row.visual);
-      const style = linkEndLineStyle(row.visual);
-      const color = row.visual?.color ?? null;
-      line.style.borderTop = `${width}px ${style} ${color ?? 'var(--link-default, #9aa3b2)'}`;
-      const arrow = span(linkEndArrow(row.side), 'property-list-arrow-head');
-      if (color !== null) arrow.style.color = color;
-      mark.append(line, arrow);
-      return mark;
+      return buildLinkEndIcon(linkEndIconSpec(row.side, row.visual));
     }
     const iconName = valueTypeIconName(row.valueType);
     if (iconName === null) return null;
