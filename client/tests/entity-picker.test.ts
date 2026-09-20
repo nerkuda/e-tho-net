@@ -727,3 +727,83 @@ describe('entity-picker: команды-иконки верхней строки
     assert.equal(clear.disabled, true, 'пустой набор выключает «Очистить»');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Завершение модального чек-листа (ошибка c9bd04ed)
+// ---------------------------------------------------------------------------
+
+describe('entity-picker: завершение модального чек-листа (c9bd04ed)', () => {
+  /** Плоский каталог типов мыслей для диалога без обращения к store. */
+  const CATALOGUE: EntityOption[] = [
+    { id: 'ta', title: 'Проект', selectable: true, cloud: { id: 'ta', title: 'Проект' } },
+    { id: 'tb', title: 'Задача', selectable: true, cloud: { id: 'tb', title: 'Задача' } },
+  ];
+
+  it('одиночный выбор: клик по строке возвращает выбор И закрывает диалог', async () => {
+    // Регрессия c9bd04ed: клик по строке резолвил промис, но диалог оставался
+    // поверх всего — закрывали его только кнопки футера.
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Выбрать тип мысли',
+      catalogue: CATALOGUE,
+      single: true,
+    }).then((ids) => {
+      result = ids;
+    });
+    assert.equal(body.children.length, 1, 'диалог открыт');
+    const rows = findAllByClass(body.children[0]!, 'entity-pick-row');
+    assert.equal(rows.length, 2, 'каталог показан целиком');
+    rows[0]!.click();
+    await done;
+    assert.deepEqual(result, ['ta'], 'одиночный выбор вернул выбранный id');
+    assert.equal(body.children.length, 0, 'диалог закрыт сразу после выбора');
+  });
+
+  it('одиночный выбор: в футере только «Отмена» (применения нет)', () => {
+    const { body } = installShim();
+    void pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Выбрать тип мысли',
+      catalogue: CATALOGUE,
+      single: true,
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop, 'диалог смонтирован');
+    assert.deepEqual(
+      findAllByClass(backdrop, 'dialog-btn').map((b) => b.textContent),
+      ['Отмена'],
+      'одиночный режим завершается выбором строки, а не кнопкой применения',
+    );
+  });
+
+  it('множественный выбор: клик по строке не закрывает, закрывает применение', async () => {
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Типы мыслей',
+      catalogue: CATALOGUE,
+      currentIds: ['tb'],
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0];
+    assert.ok(backdrop, 'диалог смонтирован');
+    // Клик по строке в множественном режиме отмечает вариант, но диалог не
+    // закрывает и ничего не возвращает (в отличие от одиночного).
+    findAllByClass(backdrop, 'entity-pick-row')[0]!.click();
+    assert.equal(body.children.length, 1, 'клик по строке не закрыл диалог');
+    assert.equal(result, undefined, 'до применения результат не отдан');
+    const apply = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Применить');
+    assert.ok(apply, 'в футере есть кнопка применения');
+    apply!.click();
+    await done;
+    assert.deepEqual(result, ['tb'], 'применение отдало текущий набор');
+    assert.equal(body.children.length, 0, 'применение закрыло диалог');
+  });
+});

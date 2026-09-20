@@ -339,9 +339,17 @@ export async function pickEntitiesModal(
     const pickedThoughts = new Map<string, ThoughtCloudInput>();
     let needle = '';
     let settled = false;
+    /**
+     * Закрывает сам диалог. Футер закрывает его неявно (клик по кнопке), а
+     * выбор строки/варианта живого поиска — нет, поэтому завершение пикера
+     * обязано снять диалог само (ошибка c9bd04ed: одиночный пикер оставался
+     * поверх всего после выбора).
+     */
+    let closeSelf: (() => void) | null = null;
     const finish = (value: string[] | null): void => {
       if (settled) return;
       settled = true;
+      closeSelf?.();
       resolve(value);
     };
     const isSelected = (id: string): boolean => checked.has(id);
@@ -479,7 +487,7 @@ export async function pickEntitiesModal(
               },
             ]),
       );
-      showDialog({
+      closeSelf = showDialog({
         title: opts.title,
         body,
         width: opts.width ?? 480,
@@ -610,7 +618,7 @@ export async function pickEntitiesModal(
           ]),
     ];
 
-    showDialog({
+    closeSelf = showDialog({
       title: opts.title,
       body,
       width: opts.width ?? 480,
