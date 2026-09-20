@@ -5251,6 +5251,24 @@ body.cloud-dragging * {
   border-bottom: 1px solid var(--border);
 }
 
+/* Повторное открытие редактора той же сущности поднимает уже открытый диалог
+   (lib/dialog.ts, raiseOpenDialog — ошибка c2d243bb). Подсветка показывает,
+   куда «прилетел» повторный клик: диалог и так на месте, второй не нужен. */
+@keyframes dialog-raise-flash {
+  from {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 3px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
+.dialog-backdrop.dialog-raised .dialog-box {
+  animation: dialog-raise-flash 600ms ease-out;
+}
+
 .dialog-title {
   font-weight: 700;
   font-size: 15px;

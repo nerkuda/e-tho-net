@@ -8,6 +8,11 @@
  * «Применить», «Сохранить» etc. are reachable from any field without tabbing
  * to the footer. `promptDialog` and `confirmDialog` are convenience wrappers
  * for the most common inputs.
+ *
+ * Entity editors add a duplicate-open guard on top of the stack: a dialog may
+ * declare `dedupeKey` (the entity it edits), and the caller first asks
+ * {@link raiseOpenDialog} — a repeated click on the same row raises and focuses
+ * the already-open editor instead of stacking a second one (ошибка c2d243bb).
  */
 
 import { button, div, el, errText } from './dom.js';
@@ -96,10 +101,23 @@ export interface DialogOptions {
    * means triggers it exactly once.
    */
   onClose?: () => void;
+  /**
+   * Identity of the ENTITY this dialog edits (`thought-type:<id>`,
+   * `property:<id>`). Registered on the stack so {@link raiseOpenDialog} can
+   * find the already-open dialog of the same entity; the duplicate-open guard
+   * itself lives in the callers (they call `raiseOpenDialog(key)` BEFORE
+   * building the body, taking a lock or creating a promise — see
+   * `showThoughtTypeEditor` / `openPropertyManagerEditor`, ошибка c2d243bb).
+   * Dialogs without an entity identity leave it unset and always stack.
+   */
+  dedupeKey?: string;
 }
 
 /** Open dialogs, bottom first. */
 const stack: HTMLDivElement[] = [];
+
+/** Entity identity of every open dialog that declared one ({@link DialogOptions.dedupeKey}). */
+const dialogKeys = new WeakMap<HTMLDivElement, string>();
 
 /** The subset of KeyboardEvent fields the dialog shortcuts inspect. */
 export interface ShortcutEventLike {
@@ -152,6 +170,65 @@ export function isInsideDialog(node: Node | null): boolean {
     if (backdrop.contains(node)) return true;
   }
   return false;
+}
+
+/**
+ * Поднимает уже открытый диалог сущности наверх и отдаёт ему фокус. Хук
+ * повторного открытия (ошибка c2d243bb): двойной клик по строке списка даёт
+ * ДВА события `click`, и без этой проверки редактор одной и той же сущности
+ * открывался дважды — двумя независимыми черновиками друг поверх друга (один
+ * из путей к DUPLICATE-рассинхрону 0bfd7180).
+ *
+ * Ищет диалог, зарегистрированный под `key` ({@link DialogOptions.dedupeKey}):
+ * нет такого — возвращает `false`, и вызывающий открывает новый диалог обычным
+ * порядком. Есть — переносит его в конец стопки (Esc/Ctrl+Enter снова
+ * действуют на него), в конец DOM (перекрывает прочие диалоги), подсвечивает
+ * и ставит фокус в первое поле; возвращает `true`, и вызывающий НЕ создаёт
+ * второй диалог.
+ *
+ * Правило — «повторное открытие редактора той же сущности не создаёт второй
+ * диалог, уже открытый поднимается»: намерение пользователя «открой мне это»
+ * сохраняется, а не игнорируется. Редактор ДРУГОЙ сущности (другой ключ)
+ * открывается поверх свободно — стопка диалогов не ломается.
+ */
+export function raiseOpenDialog(key: string): boolean {
+  for (const backdrop of stack) {
+    if (dialogKeys.get(backdrop) !== key) continue;
+    raiseDialog(backdrop);
+    return true;
+  }
+  return false;
+}
+
+/** Moves an open dialog to the top of the stack and the DOM, focuses and flashes it. */
+function raiseDialog(backdrop: HTMLDivElement): void {
+  const index = stack.indexOf(backdrop);
+  if (index >= 0) {
+    stack.splice(index, 1);
+    stack.push(backdrop);
+  }
+  // `append` MOVES a node that is already in the document — this re-inserts the
+  // backdrop after every other one, so it paints above the rest of the stack.
+  document.body.append(backdrop);
+  // Flash so the user sees which dialog the repeated click landed on. The class
+  // is removed and re-added to restart the animation on a repeated raise.
+  backdrop.classList.remove('dialog-raised');
+  void backdrop.offsetWidth;
+  backdrop.classList.add('dialog-raised');
+  focusFirstField(backdrop);
+}
+
+/** Best-effort focus into the raised dialog's first text field (the box itself as a fallback). */
+function focusFirstField(backdrop: HTMLDivElement): void {
+  const body = backdrop.querySelector<HTMLElement>('.dialog-body');
+  if (body === null) return;
+  for (const tag of ['input', 'textarea', 'select'] as const) {
+    const control = body.querySelector<HTMLElement>(tag);
+    if (control !== null) {
+      control.focus();
+      return;
+    }
+  }
 }
 
 /**
@@ -274,7 +351,9 @@ export function showDialog(opts: DialogOptions): () => void {
   backdrop.append(box);
   document.body.append(backdrop);
   stack.push(backdrop);
+  if (opts.dedupeKey !== undefined) dialogKeys.set(backdrop, opts.dedupeKey);
   backdrop.addEventListener('remove', () => {
+    dialogKeys.delete(backdrop);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', onConfirm);
     window.removeEventListener('keydown', onShiftEnter);

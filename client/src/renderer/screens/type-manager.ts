@@ -79,7 +79,7 @@ import { requireNetworkId, scheduleRefresh } from '../app.js';
 // Иконки превью типов — каноном общей фабрики облачка (пилюля типа — не
 // мысль, но использует тот же единый канон).
 import { applyThoughtIcon } from '../lib/thought-cloud.js';
-import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../lib/dialog.js';
+import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
@@ -644,6 +644,17 @@ export interface TypeEditorExtras {
 const TYPE_EDITOR_DIALOG_WIDTH = 760;
 
 /**
+ * Ключ дедупликации диалога редактора типа мысли (ошибка c2d243bb).
+ *
+ * Идентичность сущности для {@link raiseOpenDialog}: повторное открытие
+ * редактора ЭТОГО типа поднимает уже открытый диалог, а не плодит второй
+ * черновик. Тип другого id — другой ключ, открывается поверх свободно.
+ */
+export function thoughtTypeDialogKey(id: string): string {
+  return `thought-type:${id}`;
+}
+
+/**
  * Opens the thought-type editor; `type === null` edits a NEW type (L6/L21).
  *
  * One and the same form for a new and an existing type (task «Улучшить диалог
@@ -668,6 +679,11 @@ const TYPE_EDITOR_DIALOG_WIDTH = 760;
  * «Создать новый» row). The returned promise resolves when the dialog closes:
  * with the id of the type created in this session, or `null` when the dialog
  * closed without creating one (also for an existing type).
+ *
+ * Повторное открытие редактора того же типа (двойной клик по строке списка)
+ * второй диалог не создаёт: уже открытый поднимается наверх и получает фокус
+ * ({@link raiseOpenDialog}, ошибка c2d243bb) — и тогда promise сразу резолвится
+ * в `null`. Тип другого id открывается поверх свободно.
  */
 export function showThoughtTypeEditor(
   type: ThoughtType | null,
@@ -675,6 +691,16 @@ export function showThoughtTypeEditor(
   extras?: TypeEditorExtras,
 ): Promise<string | null> {
   const networkId = requireNetworkId();
+  // Повторное открытие редактора ТОГО ЖЕ типа не создаёт второй диалог: уже
+  // открытый поднимается наверх и получает фокус (ошибка c2d243bb). Двойной
+  // клик по строке списка даёт два события click — без этой проверки
+  // открывались два редактора одного типа с независимыми черновиками (один из
+  // путей к DUPLICATE-рассинхрону 0bfd7180). Проверка стоит ДО захвата блокировки
+  // и сборки тела диалога: второй вызов не должен ни брать замок, ни строить
+  // черновик, ни создавать неразрешимый Promise. Тип другого id не дедуплицируется.
+  if (type !== null && raiseOpenDialog(thoughtTypeDialogKey(type.id))) {
+    return Promise.resolve(null);
+  }
   // Auto-acquire the type lock for the lifetime of the dialog (task
   // 4f141756): the editor commits on «Применить и закрыть», so the lock
   // must outlive the entire edit session. For a NEW type (id is null) we
@@ -1078,6 +1104,10 @@ export function showThoughtTypeEditor(
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
       body,
       width: TYPE_EDITOR_DIALOG_WIDTH,
+      // Идентичность сущности для повторного открытия (ошибка c2d243bb):
+      // второй клик по строке этого типа поднимает этот диалог, а не плодит
+      // второй. Новый тип (id ещё нет) ключа не имеет и стакается свободно.
+      dedupeKey: type !== null ? thoughtTypeDialogKey(type.id) : undefined,
       // Ошибка записи живёт в панели кнопок, а не в теле вкладки: она должна
       // быть видна на любой вкладке диалога (ошибка add8d09d).
       footerError: errorLine,

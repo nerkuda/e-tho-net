@@ -84,6 +84,7 @@ import {
   confirmDialog,
   errorDialog,
   field,
+  raiseOpenDialog,
   showDialog,
 } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -771,6 +772,19 @@ export function buildDescriptionField(draft: PropertyDraft): HTMLElement {
 // ---------------------------------------------------------------------------
 
 /**
+ * Ключ дедупликации диалога редактора свойства (ошибка c2d243bb).
+ *
+ * Идентичность сущности для {@link raiseOpenDialog}: повторное открытие
+ * редактора ЭТОГО свойства (клик по строке списка «Свойства», по строке дерева
+ * типов связей в «Типах связей», по строке журнала активности) поднимает уже
+ * открытый диалог, а не создаёт второй черновик. Свойство другого id — другой
+ * ключ, открывается поверх свободно.
+ */
+export function propertyDialogKey(id: string): string {
+  return `property:${id}`;
+}
+
+/**
  * Открывает единый диалог «Свойство / связь» (задача 09201bd4, спека
  * 465495a9). Ширина — 1240 px (≥1200). Сохранение — только по «Применить и
  * закрыть»; Esc / × / клик мимо — отмена. Авто-лок строки реестра
@@ -786,6 +800,11 @@ export function buildDescriptionField(draft: PropertyDraft): HTMLElement {
  * таблицы при открытии из вкладки «Свойства» редактора типа (задача
  * 935ec90e — следующая; текущий код резерв принимает, но фактический поток
  * подключится там).
+ *
+ * Повторное открытие редактора того же свойства (двойной клик по строке списка
+ * или дерева) второй диалог не создаёт: уже открытый поднимается наверх и
+ * получает фокус ({@link raiseOpenDialog}, ошибка c2d243bb). Свойство другого
+ * id открывается поверх свободно.
  */
 export function openPropertyManagerEditor(
   property: RegistryRow | null,
@@ -794,6 +813,12 @@ export function openPropertyManagerEditor(
   options: OpenEditorOptions = {},
 ): void {
   const networkId = requireNetworkId();
+  // Повторное открытие редактора ТОГО ЖЕ свойства не создаёт второй диалог:
+  // уже открытый поднимается наверх и получает фокус (ошибка c2d243bb). Клик по
+  // строке списка/дерева — источник повторного события (двойной клик, клик по
+  // уже открытому из журнала активности). Проверка — ДО захвата блокировки и
+  // сборки тела диалога; новое свойство (id ещё нет) не дедуплицируется.
+  if (property !== null && raiseOpenDialog(propertyDialogKey(property.id))) return;
   // Server snapshot: starts at the row passed in, refreshed after a successful
   // apply, kept on a failed apply so a retry re-diffs against the same state.
   let current: RegistryRow | null = property;
@@ -1701,6 +1726,10 @@ export function openPropertyManagerEditor(
     title: property === null ? 'Новое свойство' : `Свойство — «${property.name}»`,
     body,
     width: 1240,
+    // Идентичность сущности для повторного открытия (ошибка c2d243bb): клик по
+    // этому же свойству поднимает уже открытый диалог, а не плодит второй.
+    // Новое свойство ключа не имеет и стакается свободно.
+    dedupeKey: property !== null ? propertyDialogKey(property.id) : undefined,
     // Строка ошибки записи — в панели кнопок диалога: она обязана быть видна
     // всегда (ошибка c83f0215 — осиротевшая строка в теле молча глотала
     // ошибки записи; приём и требование — ошибка add8d09d).
