@@ -92,7 +92,7 @@ import {
   typeSearchVisibleIds,
   type FlatTypeRow,
 } from '../lib/type-tree.js';
-import { buildEntityCombo, type EntityOption } from '../lib/entity-picker.js';
+import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 import {
   cacheAttachedRegistryRow,
   draftPropertiesFrom,
@@ -496,8 +496,8 @@ function buildParentPicker(opts: {
     networkId: store.state.networkId ?? '',
     kind: kinds === 'thought' ? 'thought-types' : 'link-types',
     options: optionRows,
-    // The root id is not an option — normalize it to the «без родителя» entry.
-    value: value !== null && value === rootId ? null : value,
+    // Служебный корень иерархии — «без родителя», не вариант выбора.
+    value: normalizeParentTypeId(value, rootId),
     placeholder: 'без родителя',
     emptyLabel: 'без родителя',
     expandAll: true,

@@ -89,7 +89,7 @@ import {
   expandTypeIdsToSubtree,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
-import { buildEntityCombo, pickEntitiesModal } from '../lib/entity-picker.js';
+import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor } from '../editor/value-editor.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
@@ -1231,11 +1231,15 @@ export function openPropertyManagerEditor(
 
     // Родительский тип связи + кнопка «Оформление»
     const parentRow = div('form-row type-editor-row');
+    // Служебный корень иерархии — «Без родителя», не вариант: он не попадает
+    // в каталог комбо, и без нормализации чип показал бы его сырой id.
+    const linkTypeRootId = store.state.linkTypes.find((t) => t.is_root)?.id;
     const parentCombo = buildEntityCombo({
       networkId,
       kind: 'link-types',
-      value: draft.parentLinkTypeId,
+      value: normalizeParentTypeId(draft.parentLinkTypeId, linkTypeRootId),
       placeholder: 'Без родителя',
+      emptyLabel: 'Без родителя',
       onChange: (id) => {
         draft.parentLinkTypeId = id;
       },

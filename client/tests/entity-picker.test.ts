@@ -24,6 +24,7 @@ import type { LinkType, ThoughtType } from '@etn/shared';
 import {
   buildEntityCombo,
   linkTypeEntityOptions,
+  normalizeParentTypeId,
   thoughtTypeEntityOptions,
   typeRowIndentSteps,
   visibleEntityIds,
@@ -485,5 +486,20 @@ describe('entity-picker: встроенное комбо', () => {
       !itemRows(body).some((r) => r.classList.contains('type-combo-create')),
       'при совпадениях создание не предлагается',
     );
+  });
+});
+
+describe('normalizeParentTypeId — служебный корень это «без родителя»', () => {
+  // Регрессия e0a4345 (0.8.2): у типов верхнего уровня parent_id указывает на
+  // служебный корень иерархии (миграция 021), корень в каталог вариантов не
+  // попадает — без нормализации комбо рисовал его сырой id чипом.
+  it('id корня нормализуется в null, чужой id и null проходят как есть', () => {
+    const ROOT = '00000000-0000-4000-8000-000000000002';
+    assert.equal(normalizeParentTypeId(ROOT, ROOT), null);
+    assert.equal(normalizeParentTypeId('11111111-1111-4111-8111-111111111111', ROOT), '11111111-1111-4111-8111-111111111111');
+    assert.equal(normalizeParentTypeId(null, ROOT), null);
+    // корня нет в каталоге (пустой store) — значение не трогаем
+    assert.equal(normalizeParentTypeId(ROOT, undefined), ROOT);
+    assert.equal(normalizeParentTypeId(ROOT, null), ROOT);
   });
 });
