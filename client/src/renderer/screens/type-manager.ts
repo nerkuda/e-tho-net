@@ -1178,10 +1178,12 @@ function buildStagedPropertySection(opts: {
   // «Свойства типа» остаётся — он отличает собственную таблицу от
   // унаследованной.
   box.append(tableWrap, errorLine);
-  // Кнопка добавления свойства (ошибка 4251fbe5): сторона привязки
-  // спрашивается ПОСЛЕ выбора свойства-связи внутри диалога «Добавить
-  // свойство», а не заранее; «Создать свойство» — кнопка самого диалога
-  // выбора, отдельной кнопки вкладки больше нет.
+  // Кнопка добавления свойства (задача 298fe6f3): в списке диалога «Добавить
+  // свойство» свойство-связь показано парой КОНКРЕТНЫХ имён — прямое
+  // (`name_forward`, сторона `source`) и обратное (`name_reverse`, сторона
+  // `target`); выбор имени сразу задаёт сторону привязки, отдельного диалога
+  // «Сторона привязки» нет. «Создать свойство» — кнопка самого диалога выбора,
+  // отдельной кнопки вкладки нет.
   const actions = div('form-row');
   actions.style.gap = '8px';
   actions.style.flexWrap = 'wrap';
@@ -1217,9 +1219,9 @@ function buildStagedPropertySection(opts: {
    * «Добавить свойство» dialog: pick an existing registry property (или
    * создать новое в общем редакторе свойства и затем выбрать его). Returns
    * the staged row the caller appends to {@link ownDraft} (or `null` when
-   * the user cancelled). Сторона привязки для свойства-связи спрашивается
-   * ПОСЛЕ выбора свойства внутри диалога (ошибка 4251fbe5) — сюда диалог
-   * возвращает уже готовую строку с заполненным `side`.
+   * the user cancelled). Строка списка — конкретное имя свойства (задача
+   * 298fe6f3): у свойства-связи их две, по имени на сторону, и выбор имени
+   * сразу задаёт `side` — отдельного шага «Сторона привязки» нет.
    */
   async function openAttachPropertyDialog(): Promise<void> {
     // The warning's «descendants» check needs the edited type's id and name;
@@ -1230,13 +1232,13 @@ function buildStagedPropertySection(opts: {
         : ownerType === 'thought_type'
           ? store.state.thoughtTypes.find((t) => t.id === typeId) ?? null
           : store.state.linkTypes.find((t) => t.id === typeId) ?? null;
-    // Занятые стороны подключённых свойств-связей (проверка дубля стороны в
-    // диалоге выбора; скаляр — пустой набор сторон).
-    const existingSides = new Map<string, Set<'source' | 'target'>>();
+    // Занятые стороны подключённых свойств-связей (проверка дубля ИМЕНИ в
+    // списке — имя однозначно определяет сторону; скаляр — пустой набор).
+    const existingSides = new Map<string, Set<LinkPropertySide>>();
     for (const d of ownDraft) {
       let set = existingSides.get(d.property_id);
       if (set === undefined) {
-        set = new Set<'source' | 'target'>();
+        set = new Set<LinkPropertySide>();
         existingSides.set(d.property_id, set);
       }
       if (d.side === 'source' || d.side === 'target') set.add(d.side);
@@ -1633,14 +1635,6 @@ function buildStagedPropertySection(opts: {
     return row.side === 'source' ? lt.name_forward : lt.name_reverse;
   }
 
-  /** Подпись стороны для колонки «Сторона»: «источник» / «назначение» /
-   *  «—» (для скаляров и структурных). */
-  function sideLabel(side: DraftProperty['side']): string {
-    if (side === 'source') return 'источник';
-    if (side === 'target') return 'назначение';
-    return '—';
-  }
-
   /** Loads (or reloads) the bindings from the server, plus the registry
    *  snapshot the «✎» button uses to jump into the property manager. */
   let everMounted = false;
@@ -1797,71 +1791,161 @@ function buildStagedPropertySection(opts: {
   };
 }
 
+/** Подпись стороны привязки — колонка «Сторона» таблицы свойств типа и
+ *  списка «Добавить свойство»: «источник» / «назначение» / «—» (скаляры и
+ *  структурные строки). */
+export function sideLabel(side: LinkPropertySide | null): string {
+  if (side === 'source') return 'источник';
+  if (side === 'target') return 'назначение';
+  return '—';
+}
+
+/** Имена обеих сторон типа связи, которому принадлежит свойство-связь. */
+export interface LinkSideNames {
+  forward: string;
+  reverse: string;
+}
+
 /**
- * Маленький диалог «с какой стороны подключить свойство-связь»: «Источник» /
- * «Назначение» / «Отмена». Возвращает выбранную сторону или `'cancel'`.
- * Вызывается ПОСЛЕ выбора свойства-связи в диалоге «Добавить свойство»
- * (ошибка 4251fbe5) — скалярные свойства этого шага не видят вовсе.
+ * Одна строка списка «Добавить свойство» (задача 298fe6f3): конкретное имя
+ * свойства с уже определённой стороной привязки. У свойства-связи строк две —
+ * прямое имя (`name_forward`, сторона `source`) и обратное (`name_reverse`,
+ * сторона `target`): имя однозначно задаёт привязку, поэтому диалога «Сторона
+ * привязки» больше нет.
  */
-function pickBindingSide(): Promise<'source' | 'target' | 'cancel'> {
-  return new Promise((resolve) => {
-    const hint = el(
-      'p',
-      'muted',
-      'Для свойства-связи выберите сторону привязки к этому типу: ' +
-        '«Источник» — имя `name_forward`, «Назначение» — имя `name_reverse`.',
-    );
-    hint.style.margin = '0 0 8px';
-    const body = div('form-stack');
-    body.append(hint);
-    const choose = (side: 'source' | 'target' | null): void => {
-      close();
-      if (side === null) resolve('cancel');
-      else resolve(side);
-    };
-    const close = showDialog({
-      title: 'Сторона привязки',
-      body,
-      width: 460,
-      buttons: [
-        {
-          label: 'Отмена',
-          onClick: () => choose(null),
-        },
-        {
-          label: 'Источник',
-          keepOpen: true,
-          onClick: () => choose('source'),
-        },
-        {
-          label: 'Назначение',
-          primary: true,
-          keepOpen: true,
-          onClick: () => choose('target'),
-        },
-      ],
+export interface AttachEntry {
+  /** Ключ строки: `<property_id>` у скаляра, `<property_id>:<side>` у связи. */
+  id: string;
+  property_id: string;
+  /** Имя, которое видит пользователь (у связи — имя выбранной стороны). */
+  name: string;
+  value_type: PropertyValueType;
+  /** Сторона привязки: `source`/`target` у свойства-связи, `null` у скаляра. */
+  side: LinkPropertySide | null;
+  /** Имена обеих сторон связи — по любому из них строка находится поиском;
+   *  у скаляра `null`. */
+  link_names: LinkSideNames | null;
+  /** Исходная строка реестра — из неё строится черновик привязки. */
+  registry: RegistryRow;
+}
+
+/**
+ * Строит строки списка «Добавить свойство». Скалярное свойство — одна строка
+ * со своим реестровым именем; свойство-связь — ДВЕ строки, по одной на имя
+ * стороны ([[#b9562306-9dec-40eb-819f-e5c19f1115a7]] — сторона задаётся
+ * привязкой, а имя стороны однозначно её определяет). Имена берутся из
+ * каталога типов связей по `config.link_type_id`; если тип связи каталогу
+ * ещё неизвестен, строка остаётся одна — прямое имя реестра (`row.name` —
+ * копия `name_forward`), сторона `source`: обратное имя назвать нечем.
+ * Чистая — юнит-тест `type-manager-attach-names.test.ts`.
+ */
+export function buildAttachEntries(
+  rows: readonly RegistryRow[],
+  linkTypes: readonly LinkType[],
+): AttachEntry[] {
+  const out: AttachEntry[] = [];
+  for (const row of rows) {
+    if (row.value_type !== 'link') {
+      out.push({
+        id: row.id,
+        property_id: row.id,
+        name: row.name,
+        value_type: row.value_type,
+        side: null,
+        link_names: null,
+        registry: row,
+      });
+      continue;
+    }
+    const ltId = row.config?.link_type_id;
+    const lt =
+      typeof ltId === 'string' && ltId !== ''
+        ? linkTypes.find((t) => t.id === ltId) ?? null
+        : null;
+    if (lt === null) {
+      out.push({
+        id: `${row.id}:source`,
+        property_id: row.id,
+        name: row.name,
+        value_type: 'link',
+        side: 'source',
+        link_names: null,
+        registry: row,
+      });
+      continue;
+    }
+    const names: LinkSideNames = { forward: lt.name_forward, reverse: lt.name_reverse };
+    out.push({
+      id: `${row.id}:source`,
+      property_id: row.id,
+      name: lt.name_forward,
+      value_type: 'link',
+      side: 'source',
+      link_names: names,
+      registry: row,
     });
-  });
+    out.push({
+      id: `${row.id}:target`,
+      property_id: row.id,
+      name: lt.name_reverse,
+      value_type: 'link',
+      side: 'target',
+      link_names: names,
+      registry: row,
+    });
+  }
+  return out;
 }
 
 /**
- * Решение о стороне привязки для подключаемого свойства (ошибка 4251fbe5):
- * скалярное свойство стороны не имеет (`null`), для свойства-связи сторону
- * спрашивают у пользователя (`'ask'`). Чистая — юнит-тест
- * type-manager-attach-side.test.ts.
+ * Почему строку нельзя выбрать, или `null` — можно. Унаследованное свойство
+ * блокирует обе строки связи; подключённое — по имени-строке: свойство-связь,
+ * подключённое с ОДНОЙ стороны, остаётся доступным для другой (ошибка
+ * 4251fbe5 — дубль имени стороны сервер отвергает, клиент не даёт его
+ * выбрать повторно). Чистая — юнит-тест.
  */
-export function attachSideDecision(valueType: PropertyValueType): 'ask' | 'none' {
-  return valueType === 'link' ? 'ask' : 'none';
+export function attachEntryBlockReason(
+  entry: Pick<AttachEntry, 'property_id' | 'value_type' | 'side'>,
+  existingSides: ReadonlyMap<string, ReadonlySet<LinkPropertySide>>,
+  inheritedPropertyIds: ReadonlySet<string>,
+): string | null {
+  if (inheritedPropertyIds.has(entry.property_id)) return 'унаследовано';
+  const sides = existingSides.get(entry.property_id);
+  if (sides === undefined) return null;
+  if (entry.value_type !== 'link') return 'подключено';
+  return entry.side !== null && sides.has(entry.side) ? 'подключено' : null;
 }
 
-/** Занята ли уже стороной `side` привязка свойства-связи (дубль стороны —
- *  ошибка сервера b9562306; клиент проверяет заранее, ошибка 4251fbe5).
- *  Чистая — юнит-тест. */
-export function isSideAlreadyBound(
-  existing: ReadonlySet<'source' | 'target'> | undefined,
-  side: 'source' | 'target',
-): boolean {
-  return existing !== undefined && existing.has(side);
+/**
+ * Догружает в каталог `store.state.linkTypes` типы связей свойств-связей,
+ * которых там ещё нет (realtime-канал отстаёт, либо свойство создали только
+ * что). Список «Добавить свойство» показывает конкретные ИМЕНА сторон, а
+ * реестр их не отдаёт — только `config.link_type_id`. При неудаче строка
+ * деградирует мягко: реестровое имя вместо пары имён (см.
+ * {@link buildAttachEntries}).
+ */
+async function ensureLinkTypesForAttach(
+  networkId: string,
+  rows: readonly RegistryRow[],
+): Promise<void> {
+  const wanted = new Set<string>();
+  for (const row of rows) {
+    if (row.value_type !== 'link') continue;
+    const ltId = row.config?.link_type_id;
+    if (typeof ltId === 'string' && ltId !== '' && !store.state.linkTypes.some((t) => t.id === ltId)) {
+      wanted.add(ltId);
+    }
+  }
+  await Promise.all(
+    [...wanted].map(async (id) => {
+      try {
+        const lt = await etn.types.getLinkType(networkId, id);
+        if (!store.state.linkTypes.some((t) => t.id === lt.id)) store.state.linkTypes.push(lt);
+      } catch {
+        /* имя стороны не разрешилось — строка покажет реестровое имя */
+      }
+    }),
+  );
 }
 
 /**
@@ -1882,16 +1966,17 @@ interface AttachDialogResult {
 }
 
 /**
- * «Добавить свойство» dialog (0.6.5, переработан по итогам приёмки — ошибка
- * «Диалог "Добавить свойство" в редакторе типа: непонятный интерфейс»;
- * ошибка 4251fbe5 — сторона привязки спрашивается ПОСЛЕ выбора свойства).
+ * «Добавить свойство» dialog (0.6.5; задача 298fe6f3 — список конкретных
+ * имён вместо выбора типа связи с диалогом стороны).
  *
  * One pick list over the network property registry, one search box, three
  * bottom buttons:
- *   * **Выбрать** — attach the highlighted registry property (double-click on
- *     the row and Ctrl+Enter do the same). Для свойства-связи сразу после
- *     выбора спрашивается сторона привязки («Сторона привязки»); скалярные
- *     свойства подключаются без вопроса.
+ *   * **Выбрать** — attach the highlighted row (double-click on the row and
+ *     Ctrl+Enter do the same). Строка — конкретное ИМЯ свойства: у
+ *     свойства-связи их две, прямое (`name_forward` — привязка со стороной
+ *     `source`) и обратное (`name_reverse` — `target`); выбранное имя задаёт
+ *     сторону, отдельного шага «Сторона привязки» нет. Скалярные свойства
+ *     подключаются одной строкой.
  *   * **Создать свойство** — open the SHARED property editor (the exact
  *     dialog the property manager uses) to create a brand-new registry row;
  *     after «Применить и закрыть» the list refreshes and the fresh property
@@ -1899,11 +1984,10 @@ interface AttachDialogResult {
  *     nothing is created inline any more.
  *   * **Отмена** — закрыть без изменений.
  *
- * Properties the type already carries — own or inherited — stay VISIBLE but
- * marked «подключено» / «унаследовано» and cannot be picked (the duplicate
- * check up front; the server re-checks on attach). A link-property bound on
- * ONE side only stays pickable for the other side and shows which side is
- * taken.
+ * Names the type already carries — own or inherited — stay VISIBLE but marked
+ * «подключено» / «унаследовано» and cannot be picked (the duplicate check up
+ * front; the server re-checks on attach). A link-property bound on ONE side
+ * only keeps its OTHER name pickable and marks the taken one «подключено».
  *
  * Attaching a property some DESCENDANT of the edited type already carries
  * asks first — naming the concrete types and what exactly happens (their own
@@ -1923,9 +2007,9 @@ async function openAttachDialog(opts: {
   /** The edited type's display name for warning texts (null for a new type). */
   editedTypeName: string | null;
   /** Занятые стороны собственных привязок типа: property_id → стороны
-   *  (пустой набор — скалярное свойство). Блокирует повторный выбор той же
-   *  стороны свойства-связи. */
-  existingSides: ReadonlyMap<string, ReadonlySet<'source' | 'target'>>;
+   *  (пустой набор — скалярное свойство). Блокирует повторный выбор того же
+   *  ИМЕНИ свойства-связи (имя однозначно определяет сторону). */
+  existingSides: ReadonlyMap<string, ReadonlySet<LinkPropertySide>>;
   /** Property ids inherited from the type's ancestors (or the picked parent's
    *  whole set for a new type) — shown as «унаследовано», not pickable. */
   inheritedPropertyIds: ReadonlySet<string>;
@@ -1938,6 +2022,10 @@ async function openAttachDialog(opts: {
     errorDialog('Добавить свойство', err);
     return null;
   }
+  // Имена сторон берутся из каталога типов связей — догружаем недостающие,
+  // пока диалог ещё не открыт (задача 298fe6f3).
+  await ensureLinkTypesForAttach(networkId, registryRows);
+  let entries: AttachEntry[] = buildAttachEntries(registryRows, store.state.linkTypes);
 
   return new Promise((resolve) => {
     const searchInput = el('input', 'text-input') as HTMLInputElement;
@@ -1947,54 +2035,45 @@ async function openAttachDialog(opts: {
     const resultsWrap = div('admin-table-wrap');
     resultsWrap.style.maxHeight = '260px';
 
-    /** The highlighted registry row (a PICKABLE one), or null. */
-    let selected: RegistryRow | null = null;
+    /** The highlighted entry, or null. */
+    let selected: AttachEntry | null = null;
 
-    /** Why a row cannot be picked, or null when it can. Свойство-связь,
-     *  подключённое с ОДНОЙ стороны, остаётся выбираемым — для другой
-     *  стороны (ошибка 4251fbe5). */
-    const blockReason = (row: RegistryRow): string | null => {
-      if (inheritedPropertyIds.has(row.id)) return 'унаследовано';
-      const sides = existingSides.get(row.id);
-      if (sides === undefined) return null;
-      if (row.value_type !== 'link') return 'подключено';
-      return sides.size >= 2 ? 'подключено' : null;
-    };
+    /** Why an entry cannot be picked, or null when it can. */
+    const blockReason = (entry: AttachEntry): string | null =>
+      attachEntryBlockReason(entry, existingSides, inheritedPropertyIds);
 
-    /** Информационная пометка строки (не блокирует выбор): какая сторона
-     *  свойства-связи уже занята — вторую ещё можно выбрать. */
-    const rowNote = (row: RegistryRow): string | null => {
-      if (row.value_type !== 'link') return null;
-      const sides = existingSides.get(row.id);
-      if (sides === undefined || sides.size === 0 || sides.size >= 2) return null;
-      return sides.has('source') ? 'подключено: источник' : 'подключено: назначение';
-    };
-
-    /** The registry rows matching the current search query, alphabetical. */
-    const visibleRows = (): RegistryRow[] => {
+    /** The entries matching the current search query, alphabetical. Поиск
+     *  матчит любое из имён пары — «жители» находит и прямое имя связи,
+     *  как в списке «Свойства и связи» (аннотация обоих имён). */
+    const visibleEntries = (): AttachEntry[] => {
       const fragments = searchInput.value
         .trim()
         .toLowerCase()
         .split(/\s+/)
         .filter((s) => s.length > 0);
-      return registryRows
-        .filter((row) => {
-          const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
+      return entries
+        .filter((entry) => {
+          const sideNames =
+            entry.link_names === null
+              ? ''
+              : `${entry.link_names.forward}\n${entry.link_names.reverse}`;
+          const haystack =
+            `${entry.name}\n${sideNames}\n${entry.registry.description ?? ''}`.toLowerCase();
           return fragments.every((f) => haystack.includes(f));
         })
         .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     };
 
-    const pickableRows = (): RegistryRow[] =>
-      visibleRows().filter((row) => blockReason(row) === null);
+    const pickableEntries = (): AttachEntry[] =>
+      visibleEntries().filter((entry) => blockReason(entry) === null);
 
-    /** Moves the `.selected` row class to the current `selected` row (no list
-     *  rebuild — a click or an arrow key must not flicker the whole table)
-     *  and scrolls it into view. */
+    /** Moves the `.selected` row class to the current `selected` entry (no
+     *  list rebuild — a click or an arrow key must not flicker the whole
+     *  table) and scrolls it into view. */
     function applySelection(): void {
       const selectedId = selected?.id ?? null;
       for (const tr of resultsWrap.querySelectorAll<HTMLTableRowElement>('tbody tr')) {
-        tr.classList.toggle('selected', tr.dataset['propId'] === selectedId);
+        tr.classList.toggle('selected', tr.dataset['entryId'] === selectedId);
       }
       resultsWrap
         .querySelector<HTMLTableRowElement>('tr.selected')
@@ -2002,20 +2081,20 @@ async function openAttachDialog(opts: {
     }
 
     /** Re-renders the result list. `preferId` forces the highlight onto that
-     *  row (after the shared editor created it); otherwise the CURRENT
+     *  entry (after the shared editor created a row); otherwise the CURRENT
      *  selection survives when still visible and pickable, and falls back to
      *  the first pickable row (never null when one exists — «Выбрать» and
      *  Ctrl+Enter always have a target). */
     function rerenderResults(preferId?: string): void {
-      const filtered = visibleRows();
-      const isSelectable = (row: RegistryRow): boolean =>
-        blockReason(row) === null && filtered.some((r) => r.id === row.id);
+      const filtered = visibleEntries();
+      const isSelectable = (entry: AttachEntry): boolean =>
+        blockReason(entry) === null && filtered.some((e) => e.id === entry.id);
       if (preferId !== undefined) {
-        const preferred = filtered.find((r) => r.id === preferId);
+        const preferred = filtered.find((e) => e.id === preferId);
         selected = preferred !== undefined && blockReason(preferred) === null ? preferred : null;
       }
       if (selected === null || !isSelectable(selected)) {
-        selected = filtered.find((r) => blockReason(r) === null) ?? null;
+        selected = filtered.find((entry) => blockReason(entry) === null) ?? null;
       }
 
       if (filtered.length === 0) {
@@ -2023,38 +2102,51 @@ async function openAttachDialog(opts: {
         return;
       }
       const table = el('table', 'table-list');
+      const head = el('thead');
+      const headRow = el('tr');
+      for (const label of ['Имя', 'Тип', 'Сторона', 'Отметка', 'Типов']) {
+        headRow.append(el('th', undefined, label));
+      }
+      head.append(headRow);
+      table.append(head);
       const tbody = el('tbody');
-      for (const row of filtered) {
-        const blocked = blockReason(row);
+      for (const entry of filtered) {
+        const blocked = blockReason(entry);
         const tr = el('tr');
-        tr.dataset['propId'] = row.id;
+        tr.dataset['entryId'] = entry.id;
         if (blocked !== null) tr.classList.add('row-disabled');
-        const nameCell = el('td', undefined, row.name);
+        const nameCell = el('td', undefined, entry.name);
         nameCell.style.whiteSpace = 'nowrap';
-        if (row.description !== null) setTooltip(nameCell, row.description);
-        const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]);
-        const countCell = el('td', 'muted', `в ${row.types_count} типах`);
-        countCell.style.textAlign = 'right';
-        const note = rowNote(row);
-        const markCell = el('td', 'muted', blocked ?? note ?? '');
+        if (entry.registry.description !== null) setTooltip(nameCell, entry.registry.description);
+        const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[entry.value_type]);
+        // Колонка «Сторона» — та же подпись, что в таблице свойств типа:
+        // имя однозначно задаёт сторону, подпись её показывает явно (у связи
+        // с совпадающими именами сторон это ещё и единственное различие строк).
+        const sideCell = el('td', 'muted', sideLabel(entry.side));
+        sideCell.style.whiteSpace = 'nowrap';
+        const markCell = el('td', 'muted', blocked ?? '');
         markCell.style.whiteSpace = 'nowrap';
-        tr.append(nameCell, typeCell, markCell, countCell);
+        const countCell = el('td', 'muted', `в ${entry.registry.types_count} типах`);
+        countCell.style.textAlign = 'right';
+        tr.append(nameCell, typeCell, sideCell, markCell, countCell);
         if (blocked === null) {
-          if (note !== null) {
-            setTooltip(tr, 'Эта сторона свойства-связи уже подключена — можно подключить другую сторону.');
-          }
           tr.addEventListener('click', () => {
-            selected = row;
+            selected = entry;
             applySelection();
           });
           tr.addEventListener('dblclick', () => {
-            selected = row;
+            selected = entry;
             void choose();
           });
         } else {
-          setTooltip(tr, blocked === 'подключено'
-            ? 'Свойство уже подключено к этому типу'
-            : 'Свойство уже наследуется этим типом от предка');
+          setTooltip(
+            tr,
+            blocked === 'подключено'
+              ? entry.value_type === 'link'
+                ? 'Это имя стороны свойства-связи уже подключено — можно подключить другое имя (обратное).'
+                : 'Свойство уже подключено к этому типу'
+              : 'Свойство уже наследуется этим типом от предка',
+          );
         }
         tbody.append(tr);
       }
@@ -2067,7 +2159,7 @@ async function openAttachDialog(opts: {
     // Keyboard: ↑/↓ moves the highlight over pickable rows. Ctrl+Enter is
     // the dialog stack's built-in «click the primary button» — «Выбрать».
     searchInput.addEventListener('keydown', (event) => {
-      const rows = pickableRows();
+      const rows = pickableEntries();
       if (rows.length === 0) return;
       const at = rows.findIndex((r) => r.id === selected?.id);
       if (event.key === 'ArrowDown') {
@@ -2081,12 +2173,12 @@ async function openAttachDialog(opts: {
       }
     });
 
-    /** Resolves the dialog with the highlighted pickable row. Для свойства-
-     *  связи сначала спрашивает сторону привязки (ошибка 4251fbe5). */
+    /** Resolves the dialog with the highlighted pickable entry. Выбранное имя
+     *  задаёт сторону привязки — отдельного шага нет (задача 298fe6f3). */
     async function choose(): Promise<void> {
       if (selected === null) return;
       errorLine.textContent = '';
-      const warning = await warnDescendantBindings(networkId, selected, {
+      const warning = await warnDescendantBindings(networkId, selected.registry, {
         ownerType,
         types,
         typeId,
@@ -2096,20 +2188,12 @@ async function openAttachDialog(opts: {
         const ok = await confirmDialog('Подключить свойство', warning, true);
         if (!ok) return;
       }
-      let side: 'source' | 'target' | null = null;
-      if (attachSideDecision(selected.value_type) === 'ask') {
-        const picked = await pickBindingSide();
-        if (picked === 'cancel') return;
-        if (isSideAlreadyBound(existingSides.get(selected.id), picked)) {
-          errorLine.textContent =
-            `Свойство-связь «${selected.name}» уже подключено к этому типу с этой стороны.`;
-          rerenderResults();
-          return;
-        }
-        side = picked;
-      }
+      const entry = selected;
       close();
-      resolve({ draft: attachDraftFromExisting(selected, side), registry: selected });
+      resolve({
+        draft: attachDraftFromExisting(entry.registry, entry.side, entry.name),
+        registry: entry.registry,
+      });
     }
 
     const errorLine = span('', 'error-text');
@@ -2118,21 +2202,28 @@ async function openAttachDialog(opts: {
     rerenderResults();
 
     /** Re-fetches the registry (after the shared editor created a row) and
-     *  re-renders, highlighting `highlightId` when present. */
-    const refreshRegistry = async (highlightId: string | null): Promise<void> => {
+     *  re-renders, highlighting the entry of `highlightPropertyId` when
+     *  present. */
+    const refreshRegistry = async (highlightPropertyId: string | null): Promise<void> => {
       try {
         registryRows = await etn.propertyRegistry.list(networkId);
       } catch {
         /* keep the stale list — the editor already reported its own error */
       }
-      if (highlightId !== null) rerenderResults(highlightId);
-      else rerenderResults();
+      await ensureLinkTypesForAttach(networkId, registryRows);
+      entries = buildAttachEntries(registryRows, store.state.linkTypes);
+      if (highlightPropertyId !== null) {
+        const preferred = entries.find((e) => e.property_id === highlightPropertyId);
+        rerenderResults(preferred?.id);
+      } else {
+        rerenderResults();
+      }
     };
 
     const close = showDialog({
       title: 'Добавить свойство',
       body,
-      width: 560,
+      width: 640,
       buttons: [
         { label: 'Отмена' },
         {
@@ -2161,16 +2252,23 @@ async function openAttachDialog(opts: {
 
 /** Builds the draft row for «attach existing» — `property_id` set, nature
  *  snapshot copied from the registry row. `side` — сторона привязки
- *  (`source`/`target`), выбранная после выбора свойства-связи (ошибка
- *  4251fbe5); `null` для скаляров. Экспортирована для юнит-теста. */
-export function attachDraftFromExisting(row: RegistryRow, side: 'source' | 'target' | null): DraftProperty {
+ *  (`source`/`target`), заданная выбранным ИМЕНЕМ строки списка (задача
+ *  298fe6f3); `null` для скаляров. `name` — имя выбранной строки (у
+ *  свойства-связи — имя стороны): попадает в снимок `key`, чтобы строка
+ *  таблицы верно называлась, даже если каталог типов связей ещё не догружен.
+ *  Экспортирована для юнит-теста. */
+export function attachDraftFromExisting(
+  row: RegistryRow,
+  side: LinkPropertySide | null,
+  name?: string,
+): DraftProperty {
   return {
     id: nextDraftPropertyId(),
     isNew: true,
     property_id: row.id,
     side,
     required: false,
-    key: row.name,
+    key: name ?? row.name,
     value_type: row.value_type,
     config: row.config,
     description: row.description,
