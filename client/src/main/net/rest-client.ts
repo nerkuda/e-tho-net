@@ -2121,7 +2121,9 @@ export class RestClient {
   /**
    * `GET /networks/{nid}/thoughts/{id}/hierarchy` — one-level parents/children
    * for the structures tree. `excludeIds` implements the per-branch dedup
-   * (03-server-api.md §6.11), sent comma-separated.
+   * (03-server-api.md §6.11), sent comma-separated. `linkFilter` — фильтр
+   * обхода по типам связей (ошибка db504c1a): та же форма, что у поля
+   * `link_filter` тела `POST /thoughts/query`, но JSON-строкой в query.
    */
   public async getHierarchy(
     networkId: string,
@@ -2131,6 +2133,7 @@ export class RestClient {
       showInactive?: boolean;
       excludeIds?: string[];
       offset?: number;
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
     },
   ): Promise<import('@etn/shared').HierarchyResponse> {
     const q: QueryRecord = { dir: query.dir };
@@ -2139,6 +2142,7 @@ export class RestClient {
       q['exclude_ids'] = query.excludeIds.join(',');
     }
     if (query.offset !== undefined && query.offset > 0) q['offset'] = query.offset;
+    if (query.linkFilter !== undefined) q['link_filter'] = JSON.stringify(query.linkFilter);
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/hierarchy`,

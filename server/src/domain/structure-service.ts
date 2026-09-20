@@ -431,6 +431,11 @@ export interface HierarchyOptions {
    * `include_structural`), эллипсы и рёбра ответа — те же типы. Держит
    * раскрытие дерева «Структур» согласованным с отбором `parent_ids` +
    * `link_filter` запроса выборки.
+   *
+   * Ошибка db504c1a: до 0.8.2 фильтр до этой функции не доходил ни одним путём
+   * (маршрут `GET …/hierarchy` его не разбирал, клиент не передавал) и
+   * раскрытие ветви шло по всем рёбрам. Теперь приходит query-параметром
+   * `link_filter` (JSON той же формы, что поле тела `POST /thoughts/query`).
    */
   linkFilter?: StructureFilter['link_filter'];
 }

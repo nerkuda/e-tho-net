@@ -48,6 +48,7 @@ import type {
   LinkPropertyValues,
   LinkDeletionCheckResult,
   LinkType,
+  LinkTypeFilterInput,
   LinkTypeInput,
   LinkTypeUpdateInput,
   LinkUpdateInput,
@@ -392,7 +393,9 @@ export interface EtnApi {
     ): Promise<StructureIdsQueryResponse>;
     /**
      * `GET /thoughts/{id}/hierarchy` — one-level parents/children with
-     * per-branch dedup via `excludeIds`.
+     * per-branch dedup via `excludeIds`. `linkFilter` — фильтр обхода по
+     * связям отбора (ошибка db504c1a): раскрытие ветви идёт по тем же рёбрам,
+     * что и спуск.
      */
     hierarchy(
       networkId: string,
@@ -402,6 +405,7 @@ export interface EtnApi {
         showInactive?: boolean;
         excludeIds?: string[];
         offset?: number;
+        linkFilter?: LinkTypeFilterInput;
       },
     ): Promise<HierarchyResponse>;
     /**

@@ -1584,6 +1584,65 @@ describe(
           ndb.close();
         }
       });
+
+      // Ошибка db504c1a: раскрытие ветви обязано подчиняться фильтру обхода по
+      // связям — тому же, что ограничивает спуск отбора `parent_ids`.
+      it('ограничивает соседей типами связей фильтра (ошибка db504c1a)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const lt = seedLinkType(ndb, 'Причина');
+          const other = seedLinkType(ndb, 'См. также');
+          const root = seedThought(ndb, { title: 'Корень' });
+          const typedChild = seedThought(ndb, { title: 'Типизированный' });
+          const otherChild = seedThought(ndb, { title: 'Другой тип' });
+          const structuralChild = seedThought(ndb, { title: 'Без типа' });
+          seedLink(ndb, root, typedChild, { type_id: lt });
+          seedLink(ndb, root, otherChild, { type_id: other });
+          seedLink(ndb, root, structuralChild);
+
+          // Без фильтра — прежнее поведение: все три ребра.
+          const unfiltered = getHierarchy(ndb, root, 'children', {});
+          assert.deepEqual(
+            unfiltered.neighbors.map((t) => t.title).sort(),
+            ['Без типа', 'Другой тип', 'Типизированный'],
+          );
+
+          // Фильтр по одному типу: только его дети, только его рёбра и
+          // directions считаются по тем же рёбрам.
+          const filtered = getHierarchy(ndb, root, 'children', {
+            linkFilter: { type_ids: [lt] },
+          });
+          assert.deepEqual(
+            filtered.neighbors.map((t) => t.title),
+            ['Типизированный'],
+          );
+          assert.deepEqual(
+            filtered.edges.map((e) => e.target_id),
+            [typedChild],
+          );
+          assert.deepEqual(filtered.directions[root], {
+            has_incoming: false,
+            has_outgoing: true,
+          });
+
+          // «Только связи без типа» — пустой type_ids + include_structural.
+          const structural = getHierarchy(ndb, root, 'children', {
+            linkFilter: { include_structural: true },
+          });
+          assert.deepEqual(
+            structural.neighbors.map((t) => t.title),
+            ['Без типа'],
+          );
+
+          // Родительская сторона подчиняется тому же фильтру.
+          const parents = getHierarchy(ndb, structuralChild, 'parents', {
+            linkFilter: { type_ids: [lt] },
+          });
+          assert.deepEqual(parents.neighbors, []);
+        } finally {
+          ndb.close();
+        }
+      });
     });
 
     describe('saved filters', () => {

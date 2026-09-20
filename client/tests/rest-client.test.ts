@@ -197,6 +197,44 @@ describe('RestClient — URL & query', () => {
   });
 });
 
+describe('RestClient — раскрытие дерева «Структур» (L15, ошибка db504c1a)', () => {
+  /** Пустой ответ одного уровня иерархии — важен только собранный URL. */
+  const EMPTY_HIERARCHY = {
+    status: 200,
+    body: {
+      data: { neighbors: [], edges: [], truncated: false, has_more: false, directions: {} },
+    },
+  };
+
+  it('getHierarchy кладёт фильтр обхода по связям в query-параметр link_filter', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_HIERARCHY]);
+    const client = makeClient(fetch);
+    await client.getHierarchy('net1', 't1', {
+      dir: 'children',
+      showInactive: false,
+      excludeIds: ['a', 'b'],
+      linkFilter: { type_ids: ['lt1'], include_structural: true },
+    });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.get('dir'), 'children');
+    assert.equal(url.searchParams.get('exclude_ids'), 'a,b');
+    // Форма значения — та же, что у поля `link_filter` тела `POST /thoughts/query`.
+    assert.deepEqual(JSON.parse(url.searchParams.get('link_filter') ?? 'null'), {
+      type_ids: ['lt1'],
+      include_structural: true,
+    });
+  });
+
+  it('без фильтра обхода link_filter в запрос не попадает (прежнее поведение)', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_HIERARCHY]);
+    const client = makeClient(fetch);
+    await client.getHierarchy('net1', 't1', { dir: 'parents' });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.has('link_filter'), false);
+    assert.equal(url.searchParams.get('dir'), 'parents');
+  });
+});
+
 describe('RestClient — response parsing', () => {
   it('returns the data field of the success envelope and captures meta', async () => {
     const { fetch } = makeFetch([

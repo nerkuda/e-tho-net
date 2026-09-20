@@ -157,6 +157,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           showInactive,
           excludeIds: csvToList((req.query as Record<string, unknown>)['exclude_ids']),
           offset,
+          // Фильтр обхода по связям (ошибка db504c1a): раскрытие ветви обязано
+          // идти по тем же рёбрам, что и спуск отбора `parent_ids`.
+          linkFilter: input.link_filter,
         });
         sendSuccess(reply, data);
       },

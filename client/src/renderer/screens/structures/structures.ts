@@ -18,6 +18,7 @@ import {
   STRUCTURES_PAGE_SIZE,
   UI_STATE_KEY,
   type FocusEdge,
+  type HierarchyResponse,
   type StructureFilter,
   type StructurePropertyCondition,
   type ThoughtRef,
@@ -356,6 +357,29 @@ function neighborsOf(nodeKey: string, _thoughtId: string, dir: HierarchyDir): st
   return hierarchy.get(`${nodeKey}|${dir}`)?.neighbors.map((n) => n.id) ?? [];
 }
 
+/**
+ * Один запрос уровня дерева (раскрытие узла, «Показать ещё», перезапрос после
+ * realtime). ЕДИНСТВЕННАЯ точка, откуда уходит `etn.structures.hierarchy(...)`:
+ * здесь к запросу добавляется фильтр обхода по связям — ровно применённый к
+ * текущему отбору (`appliedQuery.filter.link_filter`, тот же, что у спуска от
+ * «Родительских мыслей»). Без этого раскрытая ветвь показывала соседей по
+ * нетипизированным связям, которых отбор не включал (ошибка db504c1a).
+ */
+function fetchHierarchy(
+  networkId: string,
+  thoughtId: string,
+  dir: HierarchyDir,
+  opts: { excludeIds?: string[]; offset?: number } = {},
+): Promise<HierarchyResponse> {
+  return etn.structures.hierarchy(networkId, thoughtId, {
+    dir,
+    showInactive: store.state.showInactive,
+    excludeIds: opts.excludeIds,
+    offset: opts.offset,
+    linkFilter: appliedQuery?.filter.link_filter,
+  });
+}
+
 /** Expands or folds one node direction (ellipse click). */
 async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
   const networkId = store.state.networkId;
@@ -388,11 +412,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
   // Expand: fetch one level with the per-branch dedup ids (§15.5).
   const excludeIds = branchThoughtIds(currentRows(), row.rootId);
   try {
-    const data = await etn.structures.hierarchy(networkId, row.thoughtId, {
-      dir,
-      showInactive: store.state.showInactive,
-      excludeIds,
-    });
+    const data = await fetchHierarchy(networkId, row.thoughtId, dir, { excludeIds });
     // Every neighbor is already shown in this branch (per-branch dedup) —
     // nothing to reveal, so nothing changes (no shift, no expansion flag).
     if (data.neighbors.length === 0) return;
@@ -418,12 +438,7 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
   const offset = cached?.neighbors.length ?? 0;
   const excludeIds = branchThoughtIds(currentRows(), rootId);
   try {
-    const data = await etn.structures.hierarchy(networkId, thoughtId, {
-      dir,
-      showInactive: store.state.showInactive,
-      excludeIds,
-      offset,
-    });
+    const data = await fetchHierarchy(networkId, thoughtId, dir, { excludeIds, offset });
     hierarchy.set(cacheKey, {
       neighbors: [...(cached?.neighbors ?? []), ...data.neighbors],
       hasMore: data.has_more,
@@ -1301,11 +1316,7 @@ async function reloadAll(): Promise<void> {
       seen.add(cacheKey);
       const excludeIds = branchThoughtIds(currentRows(), row.rootId);
       try {
-        const data = await etn.structures.hierarchy(networkId, row.thoughtId, {
-          dir,
-          showInactive: store.state.showInactive,
-          excludeIds,
-        });
+        const data = await fetchHierarchy(networkId, row.thoughtId, dir, { excludeIds });
         hierarchy.set(cacheKey, { neighbors: data.neighbors, hasMore: data.has_more });
         for (const ref of data.neighbors) refs.set(ref.id, ref);
         for (const [id, flags2] of Object.entries(data.directions)) directions.set(id, flags2);

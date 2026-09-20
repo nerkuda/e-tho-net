@@ -49,6 +49,7 @@ import {
   LINK_STYLES,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
+  parseLinkTypeFilterValue,
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
   REALTIME_DEFAULTS,
@@ -57,6 +58,7 @@ import {
   TRAVERSAL_DEFAULTS,
   TYPES_LIST_SCOPES,
   TYPE_OWNER_TYPES,
+  type LinkTypeFilterInput,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
 import { validateLayerColors } from './domain/layer-service.js';
@@ -2897,7 +2899,31 @@ export const RestViewRunBody = defineContract(
   },
 );
 
-/** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/offset. */
+/**
+ * Разбор query-параметра `link_filter` у `GET /thoughts/:id/hierarchy`
+ * (ошибка db504c1a): значение — JSON-объект `{ type_ids?, include_structural? }`,
+ * та же форма, что у одноимённого поля тела `POST /thoughts/query`, и та же
+ * валидация (`parseLinkTypeFilterValue`). Так фильтр обхода доезжает до
+ * раскрытия ветви дерева и раскрытая ветвь не расходится с отбором.
+ */
+function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInput | undefined {
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof first !== 'string' || first === '') return undefined;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(first);
+  } catch {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'link_filter должен быть JSON-объектом { type_ids?: string[], include_structural?: boolean }.',
+      { field: 'link_filter' },
+      requestId,
+    );
+  }
+  return parseLinkTypeFilterValue(decoded, requestId);
+}
+
+/** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/offset/link_filter. */
 export const RestHierarchyQuery = defineContract(
   'rest:structures.hierarchy-query',
   z.object({
@@ -2906,6 +2932,7 @@ export const RestHierarchyQuery = defineContract(
     dir: z.enum(['parents', 'children']),
     show_inactive: z.boolean().optional(),
     offset: z.number().int().min(0).optional(),
+    link_filter: LinkFilter,
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -2921,6 +2948,11 @@ export const RestHierarchyQuery = defineContract(
         }
         return undefined;
       },
+    },
+    link_filter: {
+      from: { kind: 'query' },
+      parse: parseRestLinkFilter,
+      msg: 'link_filter должен быть JSON-объектом { type_ids?: string[], include_structural?: boolean }.',
     },
   },
 );
