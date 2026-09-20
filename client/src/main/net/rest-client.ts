@@ -1296,21 +1296,19 @@ export class RestClient {
   }
 
   /**
-   * `PATCH /networks/{nid}/properties/{id}` — patch. The server returns
-   * `{ ...property, converted, dropped }` so the manager can show how many
-   * stored values were rewritten/dropped after a value-type conversion. The
-   * registry does not currently participate in optimistic locking — single
-   * client owns the row for the duration of the staged editor.
+   * `PATCH /networks/{nid}/properties/{id}` — patch. The server returns the
+   * NEW property FLATTENED with the conversion footprint —
+   * `{ ...property, converted, dropped }` (not a `{ property, … }` envelope);
+   * the counters let the manager show how many stored values were
+   * rewritten/dropped after a value-type conversion. The registry does not
+   * currently participate in optimistic locking — single client owns the row
+   * for the duration of the staged editor.
    */
   public async updateNetworkProperty(
     networkId: string,
     id: string,
     input: import('@etn/shared').NetworkPropertyUpdateInput,
-  ): Promise<{
-    property: import('@etn/shared').NetworkProperty;
-    converted: number;
-    dropped: number;
-  }> {
+  ): Promise<import('@etn/shared').NetworkProperty & { converted: number; dropped: number }> {
     return this.request(
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,

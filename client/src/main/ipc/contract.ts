@@ -736,15 +736,18 @@ export interface EtnApi {
     /** `POST /networks/{nid}/properties` — create. */
     create(networkId: string, input: NetworkPropertyInput): Promise<NetworkProperty>;
     /**
-     * `PATCH /networks/{nid}/properties/{id}` — patch. Returns the new
-     * property alongside the conversion footprint (rewritten / dropped stored
-     * values when `value_type` changed; both zero otherwise).
+     * `PATCH /networks/{nid}/properties/{id}` — patch. Returns the NEW
+     * property FLATTENED together with the conversion footprint (rewritten /
+     * dropped stored values when `value_type` changed; both zero otherwise):
+     * the server sends `{ ...property, converted, dropped }` as the response
+     * `data`, not a `{ property, … }` envelope (ошибка c83f0215 — клиент
+     * читал `result.property` и терял `id` свойства).
      */
     update(
       networkId: string,
       id: string,
       input: NetworkPropertyUpdateInput,
-    ): Promise<{ property: NetworkProperty; converted: number; dropped: number }>;
+    ): Promise<NetworkProperty & { converted: number; dropped: number }>;
     /**
      * `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound.
      * For link-properties the server returns the number of edges that lose

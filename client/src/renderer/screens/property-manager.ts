@@ -819,6 +819,13 @@ export function openPropertyManagerEditor(
   const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
+  /**
+   * Собственные привязки свойства на момент загрузки (id привязки + тип).
+   * По нему на «Применить и закрыть» вычисляются снятые строки таблиц: ✕
+   * убирает строку из черновика, а сервер узнаёт об этом `DELETE` при apply
+   * (ошибка c83f0215 — снятие привязки молча не сохранялось).
+   */
+  let typeRowsSnapshot: Array<{ id: string; thoughtTypeId: string }> = [];
 
   // Initial category — locked after the first write (требование 5a82c709).
   const lockedCategory: ValueCategory | null = lockCategoryFor(property?.value_type ?? null);
@@ -1387,6 +1394,12 @@ export function openPropertyManagerEditor(
       }),
     );
     draft.typeRows = collected;
+    // Снимок СОБСТВЕННЫХ привязок на момент загрузки — по нему на
+    // «Применить и закрыть» вычисляются снятые строки (✕), которые надо
+    // удалить на сервере (ошибка c83f0215).
+    typeRowsSnapshot = collected.flatMap((row) =>
+      row.id === null ? [] : [{ id: row.id, thoughtTypeId: row.thoughtTypeId }],
+    );
     rerenderBody();
   }
 
@@ -1545,8 +1558,14 @@ export function openPropertyManagerEditor(
           current.id,
           changes,
         );
+        // Ответ сервера — САМО свойство, дополненное счётчиками конверсии
+        // (`{ ...property, converted, dropped }`), а не обёртка
+        // `{ property, converted, dropped }`: раньше здесь читалось
+        // `result.property`, из-за чего `current` терял `id`, а следующая
+        // запись привязок уходила с `property_id: undefined` и падала 422
+        // (ошибка c83f0215). Счётчики читаются с того же плоского объекта.
         current = {
-          ...result.property,
+          ...result,
           types_count: current.types_count,
           values_count: current.values_count,
         };
@@ -1579,7 +1598,24 @@ export function openPropertyManagerEditor(
    *  создания привязки. Общие значения сторон уезжают в `PATCH /properties`
    *  (тело собирает {@link buildUpdateChanges}). */
   async function applyTypeRows(propertyId: string): Promise<void> {
-    if (draft.typeRows.length === 0 && !hasRemovedRows()) return;
+    // Снятые строки: есть в снимке загрузки, нет в черновике (✕ в таблице).
+    // Перенос типа между сторонами — это снятие привязки одной стороны плюс
+    // создание другой; без этих `DELETE` снятие терялось (ошибка c83f0215).
+    const removed = typeRowsSnapshot.filter(
+      (snap) => !draft.typeRows.some((row) => row.id === snap.id),
+    );
+    if (draft.typeRows.length === 0 && removed.length === 0) return;
+    // Снятия — первыми: освобождённая пара (тип, сторона) не должна
+    // столкнуться с созданием новой привязки в этом же проходе.
+    for (const snap of removed) {
+      await etn.types.removeTypeProperty(
+        networkId,
+        'thought_type',
+        snap.thoughtTypeId,
+        snap.id,
+      );
+      typeRowsSnapshot = typeRowsSnapshot.filter((s) => s.id !== snap.id);
+    }
     const isLink = draft.valueType === 'link';
     const overrideByRow = new Map(
       collectDefaultOverrideOps(draft.typeRows, isLink).map((op) => [op.row, op.value] as const),
@@ -1641,21 +1677,14 @@ export function openPropertyManagerEditor(
     await Promise.all(ops);
   }
 
-  /** Возвращает `true`, если среди исходных строк есть удалённые (мы их
-   *  сравниваем с draft). Используется для решения — синхронизировать ли. */
-  function hasRemovedRows(): boolean {
-    // Сложность: loadTypeRowsFor даёт начальный снимок; удалённые строки
-    // просто отсутствуют в draft.typeRows. Чтобы отличить «никогда не было»
-    // от «было и удалили», нужен снимок «было». Здесь упрощённо: если
-    // среди текущих draft-строк есть хоть одна с id !== null — был снимок,
-    // значит удаления отслеживаем. Для остальных случаев no-op.
-    return draft.typeRows.some((r) => r.id !== null);
-  }
-
   showDialog({
     title: property === null ? 'Новое свойство' : `Свойство — «${property.name}»`,
     body,
     width: 1240,
+    // Строка ошибки записи — в панели кнопок диалога: она обязана быть видна
+    // всегда (ошибка c83f0215 — осиротевшая строка в теле молча глотала
+    // ошибки записи; приём и требование — ошибка add8d09d).
+    footerError: errorLine,
     buttons: [
       { label: 'Отмена' },
       {
