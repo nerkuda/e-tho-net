@@ -967,6 +967,69 @@ export function buildDatesSection(
 }
 
 // ---------------------------------------------------------------------------
+// Словарь флажков-пилюль
+// ---------------------------------------------------------------------------
+
+/** Один пункт словаря флажков-пилюль. */
+export interface PillOption<Value extends string> {
+  value: Value;
+  label: string;
+}
+
+/** Параметры секции-словаря: закрытый список значений и его место в модели. */
+export interface PillGroupOptions<Value extends string> {
+  /** Заголовок группы. */
+  title: string;
+  /** Словарь значений — его порядок и состав задают вид панели. */
+  items: ReadonlyArray<PillOption<Value>>;
+  /** Текущий выбор в модели состояния (пустой список — «любое значение»). */
+  get: () => readonly Value[];
+  /** Запись выбора в модель состояния. */
+  set: (next: Value[]) => void;
+}
+
+/**
+ * Группа «словарь флажков-пилюль»: одно значение словаря — один флажок
+ * (`мысль`, `связь`, `создал(а)`, …). Единственная реализация такого
+ * элемента на весь клиент — экраны строят свои словари этим конструктором
+ * (`buildFilterBlock` + флажки), а не своей сборкой.
+ *
+ * Флажок строится **из модели** и показывает применённый отбор: снятые
+ * флажки при непустом выборе означали для пользователя «отбор пуст, а лента
+ * пуста» — непустая лента выглядела как «события не сохранились» (ошибка
+ * 83f6028e, регрессия задачи 3742dd59: своя сборка флажков не
+ * восстанавливала состояние). Изменение флажка живёт в модели и помечается
+ * `touch()` — запрос запускает вызывающий (кнопка «Применить»).
+ */
+export function buildPillGroupSection<Value extends string>(
+  ctx: FilterFormContext,
+  opts: PillGroupOptions<Value>,
+): FilterSection {
+  const section = buildFilterBlock(opts.title, {
+    isNonEmpty: () => opts.get().length > 0,
+  });
+  const box = div('st-f-pills');
+  for (const item of opts.items) {
+    const label = el('label', 'st-f-pill') as HTMLLabelElement;
+    const input = el('input') as HTMLInputElement;
+    input.type = 'checkbox';
+    input.checked = opts.get().includes(item.value);
+    input.addEventListener('change', () => {
+      const next = opts.get().filter((v) => v !== item.value);
+      if (input.checked) next.push(item.value);
+      opts.set(next);
+      // Маркеры групп обновляет хост — общий `touch()` (запрос запускает
+      // кнопка «Применить», а не сам флажок).
+      ctx.touch();
+    });
+    label.append(input, span(item.label));
+    box.append(label);
+  }
+  section.body.append(box);
+  return section;
+}
+
+// ---------------------------------------------------------------------------
 // Сортировка
 // ---------------------------------------------------------------------------
 

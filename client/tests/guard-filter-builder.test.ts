@@ -61,6 +61,22 @@ const OWN_MODEL_NAMES =
 const OWN_CONVERTER =
   /^(?:export\s+)?(?:function|const)\s+(?:toDefinition|fromDefinition|buildWireFilter|buildChronicleWire|parseChronicleCriteria|parseFilterDefinition|buildActivityQueryPlan|parseActivityCriteria|parseSearchCriteria|buildWireDefinition|parseViewDefinition)\b/;
 
+/** Признак своей сборки флажка-пилюли словаря или её CSS-класса в экране. */
+const OWN_PILL_ELEMENT = /(?:function\s+build\w*Pill\w*\s*\(|['"][a-z][a-z-]*-pills?['"])/;
+
+/** Правило «своя сборка флажков-пилюль в экране запрещена» (ошибка 83f6028e). */
+const NO_LOCAL_PILLS = {
+  name: 'no-local-pill-element',
+  description:
+    'Флажок-пилюля словаря панели отбора строится общим каркасом ' +
+    '`buildPillGroupSection` в lib/filter-form.ts, а не в экране: своя сборка ' +
+    'не восстанавливала применённый отбор из модели — флажки показывались ' +
+    'снятыми при непустом отборе, и непустая лента «Событий» выглядела как ' +
+    '«события не сохраняются» (ошибка 83f6028e, задача 3742dd59).',
+  filePattern: new RegExp(OWN_PILL_ELEMENT.source, 'g'),
+  include: APPLY_SITES,
+};
+
 describe('guard: условия отбора строятся только общим конструктором', () => {
   it('второй словарь операторов (OPS_BY_TYPE) вне lib/filter-builder.ts запрещён', () => {
     assertGuardClean(RENDERER_ROOT, [
@@ -148,6 +164,27 @@ describe('guard: условия отбора строятся только об�
     ]);
   });
 
+  it('своя сборка флажков-пилюль словаря в экране запрещена', () => {
+    assertGuardClean(RENDERER_ROOT, [NO_LOCAL_PILLS]);
+  });
+
+  it('флажок-пилюля словаря строится с применённым отбором (ошибка 83f6028e)', () => {
+    // Обратная сторона правила выше: сам каркас обязан строить флажок из
+    // модели. Экранов «Событий» теперь много на один каркас, а поведение у
+    // них одно — начальное состояние флажка читается из состояния отбора.
+    const src = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'filter-form.ts'), 'utf8');
+    const builder =
+      /export function buildPillGroupSection[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    assert.notEqual(builder, '', 'buildPillGroupSection обязан жить в lib/filter-form.ts');
+    assert.match(
+      builder,
+      /\.checked\s*=\s*opts\.get\(\)/,
+      'флажок обязан создаваться со значением из модели (`input.checked = opts.get()…`): ' +
+        'иначе применённый отбор скрыт от пользователя и пустая лента выглядит как ' +
+        'потеря событий (ошибка 83f6028e)',
+    );
+  });
+
   it('оба новых правила краснеют на умышленном нарушении', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
     try {
@@ -168,6 +205,7 @@ describe('guard: условия отбора строятся только об�
           include: APPLY_SITES,
           allow: (rel: string) => DELEGATING_WRAPPERS.has(rel),
         },
+        NO_LOCAL_PILLS,
       ];
       fs.writeFileSync(
         path.join(dir, 'screens', 'fake', 'panel.ts'),
@@ -178,12 +216,17 @@ describe('guard: условия отбора строятся только об�
           'export function toDefinition(state: ChronicleFilterState): unknown {',
           '  return state;',
           '}',
+          'function buildPill(value: string): HTMLElement {',
+          "  const label = el('label', 'activity-pill');",
+          '  return label;',
+          '}',
         ].join('\n'),
         'utf8',
       );
       const names = new Set(collectViolations(dir, rules).map((v) => v.rule));
       assert.ok(names.has('no-second-criteria-model'), 'своя модель обязана попадать в нарушение');
       assert.ok(names.has('no-second-wire-converter'), 'свой конвертер обязана попадать в нарушение');
+      assert.ok(names.has('no-local-pill-element'), 'своя сборка пилюль обязана попадать в нарушение');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

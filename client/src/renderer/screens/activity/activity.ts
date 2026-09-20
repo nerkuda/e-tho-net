@@ -36,10 +36,10 @@ import {
 import {
   buildAuthorConditionSection,
   buildDatesSection,
-  buildFilterBlock,
   buildFilterFooterButtons,
   buildFilterForm,
   buildKeywordsSection,
+  buildPillGroupSection,
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
@@ -346,53 +346,6 @@ export function mountActivity(hostEl: HTMLElement): void {
 /** Хост панели отбора (нужен для перерисовки из состояния). */
 let filterPanelHost: HTMLElement | null = null;
 
-/** A single checkbox-pill («тип сущности» или «действие»). */
-function buildPill(value: string, label: string, group: 'entity' | 'action'): HTMLElement {
-  const id = `act-pill-${group}-${value}`;
-  const labelEl = el('label', 'activity-pill');
-  labelEl.htmlFor = id;
-  const check = el('input') as HTMLInputElement;
-  check.type = 'checkbox';
-  check.id = id;
-  check.addEventListener('change', () => {
-    if (group === 'entity') {
-      const next = filter.entityTypes.filter((v) => v !== value);
-      if (check.checked) next.push(value as ActivityEntityType);
-      filter.entityTypes = next;
-    } else {
-      const next = filter.actions.filter((v) => v !== value);
-      if (check.checked) next.push(value as ActionFilter);
-      filter.actions = next;
-    }
-    // Не запускаем запрос сразу — только по «Применить» (замечание
-    // пользователя: «изменения отборов применяются сразу»).
-  });
-  labelEl.append(check, span(label));
-  return labelEl;
-}
-
-/** Секция «Тип сущности»: флажки-пилюли. */
-function buildEntityTypesSection(): FilterSection {
-  const section = buildFilterBlock("Тип сущности", {
-    isNonEmpty: () => filter.entityTypes.length > 0,
-  });
-  const box = div("activity-pills");
-  for (const opt of ENTITY_TYPE_OPTIONS) {
-    box.append(buildPill(opt.value, ENTITY_LABELS[opt.value] ?? opt.value, "entity"));
-  }
-  section.body.append(box);
-  return section;
-}
-
-/** Секция «Действие»: флажки-пилюли. */
-function buildActionsSection(): FilterSection {
-  const section = buildFilterBlock("Действие", { isNonEmpty: () => filter.actions.length > 0 });
-  const box = div("activity-pills");
-  for (const action of ACTIONS) box.append(buildPill(action, ACTION_LABELS[action], "action"));
-  section.body.append(box);
-  return section;
-}
-
 /** Перестраивает панель отбора из состояния — секции общего каркаса. */
 function renderFilterPanel(): void {
   const area = filterPanelHost;
@@ -442,8 +395,30 @@ function renderFilterPanel(): void {
       label: "Пользователь",
       field: "author",
     }),
-    buildEntityTypesSection(),
-    buildActionsSection(),
+    // Словари панели: значения и подписи — параметры общей секции
+    // флажков-пилюль; флажки строит каркас и сразу показывает ими
+    // применённый отбор (ошибка 83f6028e: своя сборка без восстановления
+    // состояния оставляла флажки снятыми при непустом отборе, и непустая
+    // лента выглядела как «события не сохраняются»).
+    buildPillGroupSection<ActivityEntityType>(ctx, {
+      title: "Тип сущности",
+      items: ENTITY_TYPE_OPTIONS.map((o) => ({
+        value: o.value,
+        label: ENTITY_LABELS[o.value] ?? o.value,
+      })),
+      get: () => filter.entityTypes,
+      set: (next) => {
+        filter.entityTypes = next;
+      },
+    }),
+    buildPillGroupSection<ActionFilter>(ctx, {
+      title: "Действие",
+      items: ACTIONS.map((a) => ({ value: a, label: ACTION_LABELS[a] })),
+      get: () => filter.actions,
+      set: (next) => {
+        filter.actions = next;
+      },
+    }),
   );
 
   buildFilterForm({

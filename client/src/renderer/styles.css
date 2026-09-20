@@ -4374,6 +4374,34 @@ body.cloud-dragging * {
   font-size: 12px;
 }
 
+/* Pill checkbox dictionary (`lib/filter-form.ts`, `buildPillGroupSection`):
+ * «Тип сущности», «Действие» и подобные закрытые словари панелей отбора —
+ * элемент общего каркаса, стили живут вместе с ним, а не в экране. */
+.st-f-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.st-f-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.st-f-pill input[type='checkbox'] {
+  margin: 0;
+}
+
 .st-f-dropdown {
   position: absolute;
   z-index: 20;
@@ -6959,31 +6987,6 @@ table.chron-table thead th {
 
 .activity-user {
   width: 180px;
-}
-
-.activity-pills {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  align-items: center;
-}
-
-.activity-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  user-select: none;
-}
-
-.activity-pill input[type='checkbox'] {
-  margin: 0;
 }
 
 .activity-toolbar {
