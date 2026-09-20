@@ -1,6 +1,7 @@
 /**
  * Regression test for ETN error 7dfad7d4 «Локальная правка типа в менеджере
- * свойств и удаление типа не уведомляют открытый редактор».
+ * свойств и удаление типа не уведомляют открытый редактор» (+ ошибка 270b8454 —
+ * та же локальная правка не пересчитывает холст и панели).
  *
  * Симптом: пользователь правит свойство-связь в менеджере «Свойства» того же
  * клиента — единый диалог свойства правит и связанный ТИП СВЯЗИ (пара имён,
@@ -22,6 +23,9 @@
  * через `mountEditor` под DOM-шимом (правка пары имён перерисовывает шапку,
  * чужой тип — нет, удаление помечает тип и перечитывает связь) и проводка
  * производителей (`screens/property-manager.ts`, `screens/type-manager.ts`).
+ * Там же (270b8454) — тот же локальный производитель доводит правку/удаление
+ * типа связи до холста, «Структур» и «Хроники» общим набором пересчёта
+ * `scheduleTypeRepaint` (эталон — realtime-ветка `*-type.*`).
  */
 
 import assert from 'node:assert/strict';
@@ -29,7 +33,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
-import type { Link, LinkType } from '@etn/shared';
+import type { Link, LinkType, Thought } from '@etn/shared';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -500,6 +504,159 @@ describe('проводка локального уведомления о тип
         editor,
       ),
       'удаление/смена набора/оформление типа обрабатываются локально как в realtime',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Локальная правка типа связи доводится до холста и панелей (ошибка 270b8454)
+// ---------------------------------------------------------------------------
+
+function makeThought(overrides: Record<string, unknown> = {}): Thought {
+  return {
+    id: 't1',
+    title: 'T1',
+    type_id: null,
+    icon: null,
+    icon_kind: 'emoji',
+    icon_attachment_id: null,
+    active: true,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  } as unknown as Thought;
+}
+
+/** Минимальный ответ `focus()` — форма, которую переваривает `refreshFocusOrNull`. */
+function makeFocusResponse(): unknown {
+  return {
+    focused: makeThought(),
+    parents: [],
+    children: [],
+    siblings: [],
+    edges: [],
+    sorts: {
+      parents: { sort: 'created', order: 'asc' },
+      children: { sort: 'created', order: 'asc' },
+      siblings: { sort: 'created', order: 'asc' },
+    },
+  };
+}
+
+describe('локальная правка типа связи пересчитывает холст и панели (270b8454)', () => {
+  it('общий пересчёт дёргает тот же путь, что realtime-ветка типа', async () => {
+    shimDom();
+    /** Перезапросы фокуса — так виден `scheduleRefresh` (пересчёт холста). */
+    let focusFetches = 0;
+    (globalThis as any).window.etn = {
+      ui: { setState: async () => undefined },
+      types: {
+        listThoughtTypes: async () => [],
+        listLinkTypes: async () => [],
+      },
+      thoughts: {
+        focus: async () => {
+          focusFetches++;
+          return makeFocusResponse();
+        },
+      },
+    };
+    const { store } = await import('../src/renderer/state.js');
+    const { scheduleTypeRepaint, applyRealtimeToUi } =
+      await import('../src/renderer/realtime-ui.js');
+
+    store.update({
+      networkId: 'n1',
+      activeView: 'structures',
+      activeTabId: 'tab1',
+      focus: makeFocusResponse(),
+    } as any);
+
+    // Локальный производитель (менеджер свойств) уже перечитал каталог и зовёт
+    // общий пересчёт: холст обязан перечитаться (фокус), «Структуры» и
+    // «Хроника» — перестроиться (их разбудит тот же набор, см. проводку ниже).
+    scheduleTypeRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(
+      focusFetches,
+      1,
+      'пересчёт после локальной правки типа связи перечитывает фокус (холст перерисовывается)',
+    );
+
+    // Эталон: realtime-событие того же типа идёт этим же путём — «тот же набор
+    // обновлений» значит сравнение с ним, а не самостоятельный список.
+    applyRealtimeToUi({
+      type: 'link-type.updated',
+      seq: 1,
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: { user_id: 'u2', client_id: 'c2' },
+      audience: 'network',
+      network_id: 'n1',
+      layer_id: 'base',
+      data: { id: 'la', changes: { name_forward: 'X' }, version: 2 },
+      meta: { version: 1 },
+    } as any);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(
+      focusFetches,
+      2,
+      'realtime-ветка типа перечитывает фокус (эталон, с которым сверяется локальный путь)',
+    );
+  });
+
+  it('набор пересчёта задан одним помощником и зовётся обоими путями', () => {
+    const read = (rel: string): string =>
+      readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
+    const realtimeUi = read('realtime-ui.ts');
+
+    // Помощник — единственное место, где задан набор «холст + Структуры +
+    // Хроника»; редактор типов и менеджер свойств обязаны звать именно его.
+    assert.ok(
+      /export function scheduleTypeRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
+        realtimeUi,
+      ),
+      'scheduleTypeRepaint пересчитывает холст, «Структуры» и «Хронику»',
+    );
+    // Каталог перечитывается отдельно и ДО пересчёта: повторного перезапроса
+    // каталога из пересчёта нет (прецедент in-flight дележа).
+    assert.ok(
+      !/export function scheduleTypeRepaint\(\): void \{[\s\S]{0,400}?reloadTypeCatalogues\(\)/.test(
+        realtimeUi,
+      ),
+      'пересчёт не перезапрашивает каталог типов повторно',
+    );
+    assert.ok(
+      /case 'link-type\.deleted':[\s\S]{0,500}?void reloadTypeCatalogues\(\);[\s\S]{0,80}?scheduleTypeRepaint\(\);/.test(
+        realtimeUi,
+      ),
+      'realtime-ветка типа зовёт общий пересчёт',
+    );
+  });
+
+  it('менеджер свойств доводит локальную правку и удаление типа связи до холста и панелей', () => {
+    const read = (rel: string): string =>
+      readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
+    const propertyManager = read('screens/property-manager.ts');
+
+    // Правка свойства-связи: каталог перечитан ДО уведомления редактора —
+    // затем уведомление и пересчёт холста/панелей.
+    assert.ok(
+      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,800}?scheduleTypeRepaint\(\);/.test(
+        propertyManager,
+      ),
+      'правка типа связи в редакторе свойства пересчитывает холст и панели',
+    );
+    // Удаление свойства-связи вместе с типом связи: пометка типа удалённым →
+    // пересчёт (отвязанные рёбра получают свежий фокус, панели — свежие данные).
+    assert.ok(
+      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,500}?scheduleTypeRepaint\(\);/.test(
+        propertyManager,
+      ),
+      'удаление типа связи вместе со свойством пересчитывает холст и панели',
     );
   });
 });

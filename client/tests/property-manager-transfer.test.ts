@@ -171,6 +171,11 @@ function shimDom(): void {
   (globalThis as any).document = doc;
   const win: any = ((globalThis as any).window ??= {});
   win.document = doc;
+  // Таймеры окна: путь сохранения свойства-связи доводит локальную правку типа
+  // связи до холста и панелей (`scheduleTypeRepaint` → `scheduleRefresh`/
+  // `scheduleStructuresRefresh`) — им нужны `window.setTimeout`/`clearTimeout`.
+  win.setTimeout = setTimeout;
+  win.clearTimeout = clearTimeout;
   win.addEventListener = () => undefined;
   win.removeEventListener = () => undefined;
   win.matchMedia = () => ({ matches: false, addEventListener: () => undefined });

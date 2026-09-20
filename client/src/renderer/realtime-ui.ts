@@ -73,6 +73,27 @@ export function reloadTypeCatalogues(): Promise<void> {
 /** In-flight перезапрос каталогов (см. {@link reloadTypeCatalogues}). */
 let typeCataloguesReload: Promise<void> | null = null;
 
+/**
+ * Запланировать пересчёт всего, что рисует имена и оформление типов: холст
+ * (подписи и линии рёбер резолвятся из каталога типов, `canvas/links.ts`),
+ * «Структуры» и «Хроника» (обе держат собственные снимки страницы и дерева).
+ *
+ * Это ровно тот набор, которым realtime-ветка `*-type.*` /
+ * `property-definition.*` доводит смену каталога до интерфейса; локальные
+ * производители (менеджер свойств после правки/удаления типа связи) дёргают его
+ * сами — своё realtime-эхо до рендерера не доходит (G8 applier).
+ *
+ * Каталог типов НЕ перечитывает: вызывающий, которому нужен свежий каталог ДО
+ * своей отрисовки, сначала дожидается `reloadTypeCatalogues()` (in-flight дележ
+ * работает только для одновременных вызовов), и лишь затем зовёт пересчёт —
+ * так локальный путь не порождает второго перезапроса каталога.
+ */
+export function scheduleTypeRepaint(): void {
+  scheduleRefresh();
+  scheduleStructuresRefresh();
+  scheduleChronicleRefresh();
+}
+
 /** True when the thought id participates in the current focus neighbourhood. */
 export function inNeighbourhood(id: string): boolean {
   const focus = store.state.focus;
@@ -233,9 +254,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Another client changed the type catalogues (L21): reload both lists
       // and repaint everything that renders type styles/names.
       void reloadTypeCatalogues();
-      scheduleRefresh();
-      scheduleStructuresRefresh();
-      scheduleChronicleRefresh();
+      scheduleTypeRepaint();
       break;
 
     case 'thought-type-view.created':

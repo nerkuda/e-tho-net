@@ -102,7 +102,7 @@ import {
   type FlatTypeRow,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
-import { reloadTypeCatalogues } from '../realtime-ui.js';
+import { reloadTypeCatalogues, scheduleTypeRepaint } from '../realtime-ui.js';
 // Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
 // доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
 // правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
@@ -298,6 +298,11 @@ export function showPropertyManagerDialog(): void {
       ) {
         await reloadTypeCatalogues();
         notifyTypeChanged(typeDeletedFacts({ ownerType: 'link_type', ownerId: linkTypeId }));
+        // Исчезнувший тип связи: отвязанные рёбра на холсте перерисовываются
+        // только по свежему фокусу (сервер обнулил их `type_id`, отдельного
+        // события о связи не шлёт), а «Структуры»/«Хроника» держат собственные
+        // снимки — тот же набор пересчёта, что и realtime-эхо (270b8454).
+        scheduleTypeRepaint();
       }
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
@@ -1701,6 +1706,13 @@ export function openPropertyManagerEditor(
           notifyTypeChanged(
             typeUpdateFacts({ ownerType: 'link_type', ownerId: linkTypeId }, linkTypeFields),
           );
+          // Холст и панели («Структуры», «Хроника») рисуют подпись и вид линии
+          // ребра из каталога типов, а свои страницы держат в собственных
+          // снимках — локальная правка типа связи доводится до них ТЕМ ЖЕ
+          // набором пересчёта, что и realtime-эхо (ошибка 270b8454). Каталог уже
+          // перечитан строкой выше, поэтому пересчёт не перезапрашивает его
+          // повторно.
+          scheduleTypeRepaint();
         }
         // Применим привязки к типам мыслей.
         await applyTypeRows(current.id);
