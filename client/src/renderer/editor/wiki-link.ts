@@ -129,10 +129,24 @@ export function wikiLinkAutocompletion(): Extension {
 
 /**
  * Диалог «переключиться на карту мыслей?» (M11): мысль не отображается в
- * текущих результатах структуры.
+ * текущих результатах структуры. Резолвится `true` по кнопке «Да» и `false`
+ * при отказе — включая закрытие каркаса любым штатным путём («Нет», Esc, ×,
+ * клик по подложке). Экспортирован для юнит-тестов.
  */
-function confirmSwitchToMap(): Promise<boolean> {
+export function confirmSwitchToMap(): Promise<boolean> {
   return new Promise((resolve) => {
+    /**
+     * Единственная точка завершения промиса. Отказ — ЛЮБОЙ путь закрытия
+     * каркаса (ошибка aff5a96c): кнопки завершают его явно, а Esc, × и клик
+     * по подложке — через `onClose`. Флаг `settled` не даёт позднему событию
+     * `remove` переиграть уже принятое решение.
+     */
+    let settled = false;
+    const finish = (value: boolean): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     showDialog({
       title: 'Мысль не отображается',
       body: el(
@@ -141,9 +155,12 @@ function confirmSwitchToMap(): Promise<boolean> {
         'Эта мысль не отображается в структуре мыслей. Переключиться на карту мыслей?',
       ),
       buttons: [
-        { label: 'Нет', onClick: () => resolve(false) },
-        { label: 'Да', primary: true, onClick: () => resolve(true) },
+        { label: 'Нет', onClick: () => finish(false) },
+        { label: 'Да', primary: true, onClick: () => finish(true) },
       ],
+      // Esc, × и клик по подложке — отказ: контракт «`false` on cancel»,
+      // ровно как по кнопке «Нет» (ошибка aff5a96c).
+      onClose: () => finish(false),
     });
   });
 }
