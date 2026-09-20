@@ -2086,6 +2086,10 @@ function listOverrideRows(
  *
  * Throws `NOT_FOUND` (404) when the property or the type does not exist, and
  * `VALIDATION_ERROR` (422) when the property is not attached in the chain.
+ *
+ * Возвращает `true`, если эффективный дефолт привязки изменился (запись
+ * батч-онтологии по этому признаку отличает `updated` от идемпотентного
+ * `unchanged`), `false` — если значение уже было таким.
  */
 export function setTypePropertyDefaultOverride(
   ndb: NetworkDb,
@@ -2094,8 +2098,8 @@ export function setTypePropertyDefaultOverride(
   propertyId: string,
   value: PropertyValueValue,
   actorUserId: string,
-): void {
-  ndb.transaction(() => {
+): boolean {
+  return ndb.transaction(() => {
     const { prop, side } = assertOverridableProperty(ndb, ownerType, ownerId, propertyId, {
       requireInherited: false,
     });
@@ -2111,11 +2115,15 @@ export function setTypePropertyDefaultOverride(
             : normalizeLinkDefaultValue(ndb, prop, value)
           : (validateAndCoerce(ndb, prop, value), value);
     const now = new Date().toISOString();
+    // «Дефолт изменился» — сравнение эффективного собственного значения:
+    // запись той же величины не должна выдаваться за `updated`.
+    let changed = false;
     if (normalized === null) {
       // Reset the default only: a row that still carries a description
       // override survives with default_value = 'null' (JSON null reads back
       // as "no override"); a row overriding nothing is removed.
       for (const row of listOverrideRows(ndb, ownerType, ownerId, prop.id)) {
+        if (JSON.parse(row.default_value) !== null) changed = true;
         if (row.description === null) {
           // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
           deleteRowLayered(ndb, 'type_property_overrides', row.id);
@@ -2135,7 +2143,12 @@ export function setTypePropertyDefaultOverride(
       // description override held by the same row survives.
       const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
       if (existingOverride) {
+        changed =
+          JSON.stringify(JSON.parse(existingOverride.default_value)) !==
+          JSON.stringify(normalized);
         materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
+      } else {
+        changed = true;
       }
       ndb
         .prepare(
@@ -2151,6 +2164,7 @@ export function setTypePropertyDefaultOverride(
     // Любая правка дефолта (включая сброс) — это правка настроек типа:
     // обновим авторство самого типа (требование e6d4165e, приравнивание).
     touchType(ndb, ownerType, ownerId, actorUserId);
+    return changed;
   });
 }
 

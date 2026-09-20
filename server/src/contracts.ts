@@ -1092,6 +1092,10 @@ const OntologyWriteTypePropertyFields = z
     property_ref: z.string().min(1).optional(),
     required: z.boolean().optional(),
     position: z.number().int().min(0).optional(),
+    // Дефолт привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+    // скаляр (строка/число/булево), null (сброс) либо массив id мыслей у
+    // свойства-связи — нормализация по стороне привязки в домене.
+    default_value: z.unknown().optional(),
     side: z.enum(['source', 'target']).nullable().optional(),
   })
   .strict();

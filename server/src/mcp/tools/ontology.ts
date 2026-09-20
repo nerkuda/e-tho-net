@@ -57,7 +57,10 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
         'Свойство-связь ↔ link_type — единый жизненный цикл (0.8.1, требование 09f692ff): ' +
         '`properties[]` с `value_type="link"` и парой `name_forward`/`name_reverse` создаёт ' +
         'связанный link_type автоматически. `type_properties[].side` — `source`/`target`, ' +
-        'сторона привязки свойства-связи. `type_views[]` — отборы типов мыслей: ' +
+        'сторона привязки свойства-связи. `type_properties[].default_value` — дефолт привязки ' +
+        '(0.8.2): скаляр, `null` (сброс) или массив id мыслей; пишется строкой ' +
+        '`type_property_overrides` с учётом стороны привязки. ' +
+        '`type_views[]` — отборы типов мыслей: ' +
         '`action: create|update|delete`, `thought_type` XOR `thought_type_ref`. ' +
         'Доменная валидация имени (уникальность в пределах типа), токенов и `is_default` — как у ' +
         '`POST /thought-types/{id}/views`. ' +
