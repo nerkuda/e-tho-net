@@ -32,7 +32,15 @@ export type IconName =
   | 'trash'
   | 'layers'
   | 'loader'
-  | 'filter';
+  | 'filter'
+  // Виды значения свойства (задача 6ebde54e, 0.8.2): иконка перед именем
+  // скалярного свойства в общем списке свойств (`lib/property-list.ts`).
+  | 'value-text'
+  | 'value-number'
+  | 'value-date'
+  | 'value-bool'
+  | 'value-url'
+  | 'value-ref';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -103,6 +111,26 @@ const PATHS: Record<IconName, string> = {
   // Canvas link-type filter button (задача «Фильтр типов связей на карте
   // мыслей», 0.8.1): lucide «filter» — a literal funnel, per user request.
   filter: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  // Виды значения свойства (задача 6ebde54e, 0.8.2), lucide: type (строка),
+  // hash (число), calendar (дата), toggle-left (да/нет), link (URL),
+  // at-sign (ссылка на мысль — legacy thought_ref).
+  'value-text':
+    '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/>' +
+    '<line x1="12" x2="12" y1="4" y2="20"/>',
+  'value-number':
+    '<line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/>' +
+    '<line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/>',
+  'value-date':
+    '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/>' +
+    '<path d="M3 10h18"/>',
+  'value-bool':
+    '<rect width="20" height="12" x="2" y="6" rx="6" ry="6"/><circle cx="8" cy="12" r="2"/>',
+  'value-url':
+    '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>' +
+    '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  'value-ref':
+    '<circle cx="12" cy="12" r="4"/>' +
+    '<path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>',
 };
 
 /**

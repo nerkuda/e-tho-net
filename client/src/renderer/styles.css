@@ -6296,6 +6296,78 @@ body.cloud-dragging * {
   flex: none;
 }
 
+/* --- Общий список свойств (задача 6ebde54e, 0.8.2) -------------------------
+   Компонент `lib/property-list.ts`: менеджер свойств и пикер «Добавить
+   свойство…». Раскладка колонок — ФИКСИРОВАННАЯ: однострочные имена и подписи
+   концов связи (`связь (имя - имя)`) с nowrap дают min-content, который в
+   auto-таблице распирает диалог (грабли f2a047ee / ошибка 2012f46b). Поэтому
+   ширины задаёт сама таблица, а ячейки обрезаются многоточием. */
+.property-list-wrap {
+  max-height: 340px;
+}
+
+.property-list-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.property-list-table > thead > tr > th:nth-child(1) {
+  width: 45%;
+}
+
+.property-list-table > thead > tr > th:nth-child(2) {
+  width: 40%;
+}
+
+.property-list-table > thead > tr > th:nth-child(3) {
+  width: 15%;
+  text-align: right;
+}
+
+.property-list-row {
+  cursor: pointer;
+}
+
+.property-list-name-cell,
+.property-list-type-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.property-list-count-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Иконка вида значения перед именем скаляра. */
+.property-list-icon {
+  vertical-align: middle;
+  margin-right: 6px;
+  color: var(--muted, #8a93a5);
+}
+
+/* Линия со стрелкой у конца связи: цвет/стиль/толщина — эффективные
+   настройки свойства-связи (наследование от родительского типа связи). */
+.property-list-arrow {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.property-list-arrow-line {
+  display: inline-block;
+  width: 22px;
+  border-top: 2px solid var(--link-default, #9aa3b2);
+}
+
+.property-list-arrow-head {
+  display: inline-block;
+  margin-left: -4px;
+  color: var(--link-default, #9aa3b2);
+}
+
 /* Type editors (L6): disabled settings/icon buttons and a stretching name. */
 .editor-top-row .text-input,
 .type-editor-row .text-input {

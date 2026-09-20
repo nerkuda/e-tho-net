@@ -5,14 +5,15 @@
  * Two entry points share the same underlying registry (`properties` +
  * `link_types`) and the same editor (`openPropertyManagerEditor`):
  *
- * - `showPropertyManagerDialog` («Свойства и связи», бывший «Свойства») — a
- *   FLAT list mixing scalar properties and link-properties in a single
- *   alphabetical table (registry rows are not hierarchical like the type
- *   catalogues). Scalar rows show «имя · вид значения · описание · сколько
- *   типов подключено». Link rows show «имя в источнике / имя в назначении ·
- *   описание» and the per-side type counters from the server
- *   (`types_source_count` / `types_target_count`); structural «Родители» /
- *   «Потомки» are listed with a lock glyph and no «✕».
+ * - `showPropertyManagerDialog` («Свойства», до 0.8.2 — «Свойства и связи») —
+ *   the shared property list (`lib/property-list.ts`, задача 6ebde54e) in
+ *   manager mode: a single alphabetical stream where a scalar is one row and a
+ *   link-property is always TWO rows (source name `→`, target name `←`), with
+ *   columns «Имя» (value-type icon / coloured link arrow), «Тип значения»
+ *   (`связь (имя - имя)`, names cut at 30 chars, ⓘ with the description) and
+ *   «Кол-во типов» (per-side `types_source_count` / `types_target_count`).
+ *   Structural «Родители» / «Потомки» are listed with a lock glyph; deletion
+ *   lives in the row context menu («Изменить» / «Удалить»), not a «✕» button.
  *
  * - `showLinkTypesTreeDialog` («Типы связей», 0.8.1) — the same property
  *   editor reached through a tree of `link_types`: each row renders the
@@ -102,6 +103,12 @@ import {
 import { onRealtimeEvent } from '../realtime.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
+import {
+  buildPropertyList,
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  type PropertyRegistryRow,
+} from '../lib/property-list.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -127,295 +134,77 @@ const SELECTABLE_VALUE_TYPES: PropertyValueType[] = [
 ];
 
 /**
- * A registry row as returned by `GET /networks/{nid}/properties` (with counters).
- *
- * For link-properties (0.8.1, требование d7177d1d) the server also returns
- * `types_source_count` and `types_target_count` so the flat list can render
- * the per-side usage next to the link-type names. For non-link properties
- * those fields are absent.
+ * Реестровая строка свойства (`GET /networks/{nid}/properties` со счётчиками).
+ * Определение живёт в общем модуле списка свойств
+ * (`lib/property-list.ts`, задача 6ebde54e) — здесь только привычное имя для
+ * потребителей этого файла (редактор, дерево типов связей).
  */
-export type RegistryRow = NetworkProperty & {
-  types_count: number;
-  values_count: number;
-  types_source_count?: number;
-  types_target_count?: number;
-};
-
-/** One row of the registry list after sorting + filtering. */
-interface PropertyRow {
-  property: RegistryRow;
-  lowerName: string;
-  lowerDescription: string;
-  /** For link-properties only: `name_forward\nname_reverse` of the
-   *  underlying link-type, lowercased. Empty string for scalars so the
-   *  filter's `every` short-circuits the same way as before. */
-  lowerLinkNames: string;
-}
+export type RegistryRow = PropertyRegistryRow;
 
 /**
- * Pure helpers (exported for tests). The list is always alphabetised; the
- * filter keeps the rows whose name OR description contains every whitespace-
- * separated fragment of `query`, ignoring case.
- *
- * For link-properties (0.8.1, fd4d4927) the haystack also includes the
- * type-side names (`config.link_type_id` → `name_forward` / `name_reverse`
- * from the link-type catalogue) so a user can search «родитель» and find
- * the underlying property too.
+ * Открывает диалог «Свойства» (меню «Мыслесеть»; до 0.8.2 — «Свойства и
+ * связи»). Список — общий компонент `buildPropertyList` в режиме менеджера
+ * (задача 6ebde54e): скаляры и оба конца связей отдельными строками, иконки
+ * видов значения / линии со стрелками, колонки «Имя» / «Тип значения» /
+ * «Кол-во типов», поиск по имени и описанию, ↑/↓ и единая активация Enter/клик,
+ * контекстное меню «Изменить»/«Удалить». Ширина — 900 px (≈ на 25 % шире
+ * прежних 720 px).
  */
-export function sortRegistryRows(rows: RegistryRow[]): RegistryRow[] {
-  return [...rows].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-}
-
-export function annotateRows(rows: RegistryRow[]): PropertyRow[] {
-  return rows.map((property) => {
-    // Для свойства-связи ищем имена типа связи в каталоге linkTypes
-    // (`store.state.linkTypes` — синхронный снимок realtime-канала, отдельной
-    // инжекции не нужно; тесты предзаполняют стор).
-    const ltId = property.config?.link_type_id;
-    const lt =
-      ltId !== undefined && ltId !== null && ltId !== ''
-        ? store.state.linkTypes.find((t) => t.id === ltId)
-        : null;
-    const lowerLinkNames =
-      lt !== null && lt !== undefined
-        ? `${lt.name_forward}\n${lt.name_reverse}`.toLowerCase()
-        : '';
-    return {
-      property,
-      lowerName: property.name.toLowerCase(),
-      lowerDescription: (property.description ?? '').toLowerCase(),
-      lowerLinkNames,
-    };
-  });
-}
-
-/**
- * Filter the registry list against the search box. Matches every whitespace-
- * separated fragment (case-insensitive) against the property name OR
- * description OR link-type names — same shape as `etn.thoughts.query`'s
- * keyword mini-syntax. Empty query keeps every row.
- */
-export function filterRegistryRows(
-  annotated: PropertyRow[],
-  query: string,
-): PropertyRow[] {
-  const fragments = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((s) => s.length > 0);
-  if (fragments.length === 0) return annotated;
-  return annotated.filter((row) => {
-    const haystack = `${row.lowerName}\n${row.lowerDescription}\n${row.lowerLinkNames}`;
-    return fragments.every((f) => haystack.includes(f));
-  });
-}
-
-/** Opens the property-manager dialog. Wired from the «Мыслесеть» menu. */
 export function showPropertyManagerDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = span('', 'error-text');
-  const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '340px';
-  const body = div('form-stack');
-
-  const toolbar = div('form-row type-list-toolbar');
-  const searchInput = el('input', 'text-input') as HTMLInputElement;
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск по имени или описанию…';
-  toolbar.append(
-    button('Добавить', () => openPropertyManagerEditor(null, onChanged), 'btn small', 'Создать свойство'),
-    searchInput,
-  );
-  body.append(toolbar, tableWrap, errorLine);
-
-  let searchQuery = '';
-  // Last loaded registry snapshot — search/edit/delete re-render from this
-  // cache, so a keystroke does not flicker or jump the scroll position.
   let cachedRows: RegistryRow[] | null = null;
 
-  const onChanged = (): void => void reload();
+  const list = buildPropertyList({
+    mode: 'manager',
+    searchPlaceholder: 'Поиск по имени или описанию…',
+    callbacks: {
+      onAdd: () => openPropertyManagerEditor(null, onChanged),
+      onActivate: (row) => openPropertyManagerEditor(row.registry, onChanged),
+      onEdit: (row) => openPropertyManagerEditor(row.registry, onChanged),
+      onDelete: (row) => void removeRow(row.registry),
+    },
+  });
 
-  async function reload(useCache = false): Promise<void> {
-    const scrollTop = tableWrap.scrollTop;
+  const body = div('form-stack');
+  body.append(list.root, errorLine);
+
+  function onChanged(): void {
+    cachedRows = null;
+    void reload();
+  }
+
+  async function reload(): Promise<void> {
     let rows: RegistryRow[];
-    if (useCache && cachedRows !== null) {
+    if (cachedRows !== null) {
       rows = cachedRows;
     } else {
-      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
       try {
         rows = await etn.propertyRegistry.list(networkId);
       } catch (err) {
-        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        errorLine.textContent = `Ошибка: ${errText(err)}`;
         return;
       }
       cachedRows = rows;
     }
-    // Хелпер аннотирования читает имена типа связи из `store.state.linkTypes` —
-    // синхронный доступ к стейту не конфликтует с realtime (каталог типов связей
-    // обновляется через `link-type.*` события, на которые у этого диалога
-    // подписка ниже).
-    const annotated = annotateRows(sortRegistryRows(rows));
-    const visible = filterRegistryRows(annotated, searchQuery);
-    const searching = searchQuery.trim() !== '';
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Имя'),
-      el('th', undefined, 'Тип значения'),
-      el('th', undefined, 'Описание'),
-      el('th', undefined, 'Подключено к типам'),
-      el('th'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    if (visible.length === 0) {
-      const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет свойств.');
-      emptyCell.colSpan = 5;
-      emptyRow.append(emptyCell);
-      tbody.append(emptyRow);
-    }
-    /** Имя сторон ссылки (`forward / reverse`) в строке списка — заполняется
-     *  при первом рендере из `store.state.linkTypes` или после догрузки
-     *  `etn.types.getLinkType`. Хранится отдельно, чтобы догрузка могла
-     *  обновить только эту ячейку без полного перерендера. */
-    interface PendingLinkType {
-      ltId: string;
-      nameSpan: HTMLElement;
-      tr: HTMLElement;
-    }
-    const pendingLinkTypes: PendingLinkType[] = [];
-
-    for (const row of visible) {
-      const property = row.property;
-      const tr = el('tr');
-      const isStructuralLink = property.value_type === 'link' && property.config?.structural === true;
-      const isLink = property.value_type === 'link';
-      // Строка свойства-связи: имя свойства, далее имена обеих сторон через
-      // косую черту (как в диалоге «Типы связей»). Структурные «Родители» /
-      // «Потомки» идут без `link_type_id` — показываем системную подпись.
-      const ltId = property.config?.link_type_id;
-      const lt =
-        ltId !== undefined && ltId !== null && ltId !== ''
-          ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
-          : null;
-      const nameCell = el('td');
-      nameCell.style.whiteSpace = 'nowrap';
-      if (isLink && lt !== null) {
-        // Превью линии под именем — эффективный цвет/стиль/ширина (L21).
-        const resolved = resolveLinkTypeVisual(store.state.linkTypes, lt.id);
-        const swatch = span('', 'link-type-swatch');
-        swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width ?? 2))}px ${
-          resolved.style ?? 'solid'
-        } ${resolved.color ?? '#9aa3b2'}`;
-        swatch.style.display = 'inline-block';
-        swatch.style.width = '32px';
-        swatch.style.marginRight = '8px';
-        swatch.style.verticalAlign = 'middle';
-        nameCell.append(swatch);
-        nameCell.append(
-          span(property.name, 'prop-name'),
-          span(`  (${lt.name_forward} / ${lt.name_reverse})`, 'muted'),
-        );
-        setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
-      } else if (isLink && ltId !== undefined && ltId !== '' && lt === null) {
-        // link_type ещё не пришёл из realtime — рендерим заглушку и помечаем
-        // строку как «pending»: после догрузки ниже заменим содержимое ячейки.
-        nameCell.append(span(property.name, 'prop-name'));
-        const pendingSpan = span('  (загрузка…)', 'muted');
-        nameCell.append(pendingSpan);
-        pendingLinkTypes.push({ ltId, nameSpan: pendingSpan, tr });
-        setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
-      } else if (isStructuralLink) {
-        nameCell.append(span(property.name, 'prop-name'), span('  🔒 (структурное)', 'muted'));
-        setTooltip(
-          nameCell,
-          'Системное свойство-связь для нетипизированных рёбер «Родители/Потомки». Не редактируется и не удаляется из этого диалога.',
-        );
-      } else {
-        nameCell.append(span(property.name));
-      }
-      const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[property.value_type]);
-      const descCell = el('td', 'muted', (property.description ?? '').slice(0, 160));
-      descCell.style.maxWidth = '280px';
-      descCell.style.overflow = 'hidden';
-      descCell.style.textOverflow = 'ellipsis';
-      descCell.style.whiteSpace = 'nowrap';
-      if (property.description !== null) setTooltip(descCell, property.description);
-      // Свойство-связь: показываем счётчики сторон («источник»/«назначение»).
-      // Скаляр: единое число типов (как было).
-      const countCell = el('td', 'muted');
-      countCell.style.textAlign = 'right';
-      countCell.style.whiteSpace = 'nowrap';
-      if (isLink && !isStructuralLink) {
-        const src = property.types_source_count ?? 0;
-        const tgt = property.types_target_count ?? 0;
-        countCell.append(
-          span(`ист. ${src}`, 'prop-count-side'),
-          span(' / ', 'muted'),
-          span(`назн. ${tgt}`, 'prop-count-side'),
-        );
-        setTooltip(countCell, `Источник: ${src} ${pluralType(src)}. Назначение: ${tgt} ${pluralType(tgt)}.`);
-      } else {
-        countCell.append(String(property.types_count));
-      }
-      const actions = el('td');
-      actions.style.whiteSpace = 'nowrap';
-      // Структурные свойства-связи удалять нельзя (миграция 039).
-      if (!isStructuralLink) {
-        actions.append(button('✕', () => void removeRow(property), 'btn small', 'Удалить свойство'));
-      }
-      tr.append(nameCell, typeCell, descCell, countCell, actions);
-      // Clicks on the ✕ button must not open the editor; structural rows stay
-      // visible but inert — no editor opens on click.
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        if (isStructuralLink) return;
-        openPropertyManagerEditor(property, onChanged);
-      });
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    tableWrap.scrollTop = scrollTop;
-    // Догружаем имена сторон для свойств-ссылок, чей link_type ещё не
-    // подтянулся realtime-ом. Без этого строка показывает только
-    // `property.name`, а пользователь видит «Мишени» вместо
-    // «Мишени (мишени / стрелки)».
-    for (const pending of pendingLinkTypes) {
-      void fetchLinkTypeForRow(networkId, pending);
-    }
+    // Имена сторон и эффективное оформление линий берутся из каталога типов
+    // связей — догружаем недостающие до сборки строк.
+    await ensurePropertyLinkTypes(networkId, rows);
+    list.setRows(buildPropertyListRows(rows, store.state.linkTypes));
   }
 
-  searchInput.addEventListener('input', () => {
-    searchQuery = searchInput.value;
-    void reload(true);
-  });
-
   /**
-   * Удаление свойства из плоского списка (fd4d4927). Скалярные свойства
+   * Удаление свойства из контекстного меню строки. Скалярные свойства
    * отвергаются сервером с 409 при `types_count > 0` или `values_count > 0`
    * — диалог ошибки подсказывает порядок. Свойство-связь требует
    * подтверждения с числом рёбер, которые потеряют `type_id`
    * (`links_becoming_structural`); сервер возвращает это поле вместе с 200
-   * (требование 09f692ff), но значение известно заранее — для
-   * не-удаляемого случая поможет текущий счётчик рёбер `link-type-counts`,
-   * а для разрешённого — сервер сам кинет окончательное число.
-   *
-   * Здесь `links_becoming_structural` запрашивается на лету через
-   * `link-type-counts` для контекста диалога; фактический счёт возвращает
-   * DELETE-ответ и тосты «Структурных рёбер: N» после применения.
+   * (требование 09f692ff). Структурные строки меню не получают.
    */
   async function removeRow(property: RegistryRow): Promise<void> {
     const isLink = property.value_type === 'link';
     const isStructuralLink = isLink && property.config?.structural === true;
-    if (isStructuralLink) {
-      // защита — структурных строк в таблице нет «✕», но на всякий случай:
-      return;
-    }
+    if (isStructuralLink) return;
     if (!isLink && (property.types_count > 0 || property.values_count > 0)) {
       const parts: string[] = [];
       if (property.types_count > 0) {
@@ -493,10 +282,12 @@ export function showPropertyManagerDialog(): void {
   }
 
   showDialog({
-    title: 'Свойства и связи',
+    title: 'Свойства',
     body,
-    width: 720,
+    width: 900,
     buttons: [{ label: 'Закрыть', primary: true }],
+    // Фокус в поиске: ↑/↓ и Enter сразу работают по списку (требование 9).
+    onMount: () => list.focusSearch(),
   });
 
   // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —

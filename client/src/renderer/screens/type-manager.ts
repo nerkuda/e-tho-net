@@ -120,6 +120,13 @@ import {
   scalarDefaultPayload,
   type RegistryRow,
 } from './property-manager.js';
+import {
+  buildPropertyList,
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  rowBlockReason,
+  type PropertyListRow,
+} from '../lib/property-list.js';
 import { buildViewsTab } from './thought-type/views-tab.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
@@ -1821,154 +1828,6 @@ export function sideLabel(side: LinkPropertySide | null): string {
   return '—';
 }
 
-/** Имена обеих сторон типа связи, которому принадлежит свойство-связь. */
-export interface LinkSideNames {
-  forward: string;
-  reverse: string;
-}
-
-/**
- * Одна строка списка «Добавить свойство» (задача 298fe6f3): конкретное имя
- * свойства с уже определённой стороной привязки. У свойства-связи строк две —
- * прямое имя (`name_forward`, сторона `source`) и обратное (`name_reverse`,
- * сторона `target`): имя однозначно задаёт привязку, поэтому диалога «Сторона
- * привязки» больше нет.
- */
-export interface AttachEntry {
-  /** Ключ строки: `<property_id>` у скаляра, `<property_id>:<side>` у связи. */
-  id: string;
-  property_id: string;
-  /** Имя, которое видит пользователь (у связи — имя выбранной стороны). */
-  name: string;
-  value_type: PropertyValueType;
-  /** Сторона привязки: `source`/`target` у свойства-связи, `null` у скаляра. */
-  side: LinkPropertySide | null;
-  /** Имена обеих сторон связи — по любому из них строка находится поиском;
-   *  у скаляра `null`. */
-  link_names: LinkSideNames | null;
-  /** Исходная строка реестра — из неё строится черновик привязки. */
-  registry: RegistryRow;
-}
-
-/**
- * Строит строки списка «Добавить свойство». Скалярное свойство — одна строка
- * со своим реестровым именем; свойство-связь — ДВЕ строки, по одной на имя
- * стороны ([[#b9562306-9dec-40eb-819f-e5c19f1115a7]] — сторона задаётся
- * привязкой, а имя стороны однозначно её определяет). Имена берутся из
- * каталога типов связей по `config.link_type_id`; если тип связи каталогу
- * ещё неизвестен, строка остаётся одна — прямое имя реестра (`row.name` —
- * копия `name_forward`), сторона `source`: обратное имя назвать нечем.
- * Чистая — юнит-тест `type-manager-attach-names.test.ts`.
- */
-export function buildAttachEntries(
-  rows: readonly RegistryRow[],
-  linkTypes: readonly LinkType[],
-): AttachEntry[] {
-  const out: AttachEntry[] = [];
-  for (const row of rows) {
-    if (row.value_type !== 'link') {
-      out.push({
-        id: row.id,
-        property_id: row.id,
-        name: row.name,
-        value_type: row.value_type,
-        side: null,
-        link_names: null,
-        registry: row,
-      });
-      continue;
-    }
-    const ltId = row.config?.link_type_id;
-    const lt =
-      typeof ltId === 'string' && ltId !== ''
-        ? linkTypes.find((t) => t.id === ltId) ?? null
-        : null;
-    if (lt === null) {
-      out.push({
-        id: `${row.id}:source`,
-        property_id: row.id,
-        name: row.name,
-        value_type: 'link',
-        side: 'source',
-        link_names: null,
-        registry: row,
-      });
-      continue;
-    }
-    const names: LinkSideNames = { forward: lt.name_forward, reverse: lt.name_reverse };
-    out.push({
-      id: `${row.id}:source`,
-      property_id: row.id,
-      name: lt.name_forward,
-      value_type: 'link',
-      side: 'source',
-      link_names: names,
-      registry: row,
-    });
-    out.push({
-      id: `${row.id}:target`,
-      property_id: row.id,
-      name: lt.name_reverse,
-      value_type: 'link',
-      side: 'target',
-      link_names: names,
-      registry: row,
-    });
-  }
-  return out;
-}
-
-/**
- * Почему строку нельзя выбрать, или `null` — можно. Унаследованное свойство
- * блокирует обе строки связи; подключённое — по имени-строке: свойство-связь,
- * подключённое с ОДНОЙ стороны, остаётся доступным для другой (ошибка
- * 4251fbe5 — дубль имени стороны сервер отвергает, клиент не даёт его
- * выбрать повторно). Чистая — юнит-тест.
- */
-export function attachEntryBlockReason(
-  entry: Pick<AttachEntry, 'property_id' | 'value_type' | 'side'>,
-  existingSides: ReadonlyMap<string, ReadonlySet<LinkPropertySide>>,
-  inheritedPropertyIds: ReadonlySet<string>,
-): string | null {
-  if (inheritedPropertyIds.has(entry.property_id)) return 'унаследовано';
-  const sides = existingSides.get(entry.property_id);
-  if (sides === undefined) return null;
-  if (entry.value_type !== 'link') return 'подключено';
-  return entry.side !== null && sides.has(entry.side) ? 'подключено' : null;
-}
-
-/**
- * Догружает в каталог `store.state.linkTypes` типы связей свойств-связей,
- * которых там ещё нет (realtime-канал отстаёт, либо свойство создали только
- * что). Список «Добавить свойство» показывает конкретные ИМЕНА сторон, а
- * реестр их не отдаёт — только `config.link_type_id`. При неудаче строка
- * деградирует мягко: реестровое имя вместо пары имён (см.
- * {@link buildAttachEntries}).
- */
-async function ensureLinkTypesForAttach(
-  networkId: string,
-  rows: readonly RegistryRow[],
-): Promise<void> {
-  const wanted = new Set<string>();
-  for (const row of rows) {
-    if (row.value_type !== 'link') continue;
-    const ltId = row.config?.link_type_id;
-    if (typeof ltId === 'string' && ltId !== '' && !store.state.linkTypes.some((t) => t.id === ltId)) {
-      wanted.add(ltId);
-    }
-  }
-  await Promise.all(
-    [...wanted].map(async (id) => {
-      try {
-        const lt = await etn.types.getLinkType(networkId, id);
-        if (!store.state.linkTypes.some((t) => t.id === lt.id)) store.state.linkTypes.push(lt);
-      } catch {
-        /* имя стороны не разрешилось — строка покажет реестровое имя */
-      }
-    }),
-  );
-}
-
 /**
  * Result of the «Добавить свойство» dialog: a new draft row the caller
  * appends to its own-bindings list (or `null` when the user cancelled).
@@ -1987,32 +1846,21 @@ interface AttachDialogResult {
 }
 
 /**
- * «Добавить свойство» dialog (0.6.5; задача 298fe6f3 — список конкретных
- * имён вместо выбора типа связи с диалогом стороны).
+ * «Добавить свойство» dialog (0.6.5; задача 298fe6f3; 0.8.2 — перевод на общий
+ * список `lib/property-list.ts`, задача 6ebde54e).
  *
- * One pick list over the network property registry, one search box, three
- * bottom buttons:
- *   * **Выбрать** — attach the highlighted row (double-click on the row and
- *     Ctrl+Enter do the same). Строка — конкретное ИМЯ свойства: у
- *     свойства-связи их две, прямое (`name_forward` — привязка со стороной
- *     `source`) и обратное (`name_reverse` — `target`); выбранное имя задаёт
- *     сторону, отдельного шага «Сторона привязки» нет. Скалярные свойства
- *     подключаются одной строкой.
- *   * **Создать свойство** — open the SHARED property editor (the exact
- *     dialog the property manager uses) to create a brand-new registry row;
- *     after «Применить и закрыть» the list refreshes and the fresh property
- *     is the highlighted row, ready to be picked. One editor everywhere —
- *     nothing is created inline any more.
- *   * **Отмена** — закрыть без изменений.
+ * Список — общий компонент в режиме ПИКЕРА: строки скаляров и обеих сторон
+ * свойства-связи, колонки «Имя» / «Тип значения» / «Кол-во типов», поиск по
+ * имени и описанию, ↑/↓ и единая активация Enter/клик — выбор строки (у конца
+ * связи выбор несёт сторону) и закрытие пикера. Уже подключённые имена этой
+ * стороны заблокированы и помечены, второе имя той же связи остаётся доступным
+ * (правила 0.8.2, коммиты c896aee / 6e17543). Кнопки низа: **Отмена**,
+ * **Создать свойство** (общий редактор свойства — то же диалог, что у
+ * менеджера) и **Выбрать** (активирует выделенную строку).
  *
- * Names the type already carries — own or inherited — stay VISIBLE but marked
- * «подключено» / «унаследовано» and cannot be picked (the duplicate check up
- * front; the server re-checks on attach). A link-property bound on ONE side
- * only keeps its OTHER name pickable and marks the taken one «подключено».
- *
- * Attaching a property some DESCENDANT of the edited type already carries
- * asks first — naming the concrete types and what exactly happens (their own
- * bindings are taken over by inheritance; values never change).
+ * Привязка свойства, которое кто-то из ПОТОМКОВ типа уже несёт, спрашивает
+ * подтверждение заранее — с именами конкретных типов и тем, что именно
+ * произойдёт (их привязки перенимаются наследованием, значения не меняются).
  */
 async function openAttachDialog(opts: {
   networkId: string;
@@ -2044,162 +1892,34 @@ async function openAttachDialog(opts: {
     return null;
   }
   // Имена сторон берутся из каталога типов связей — догружаем недостающие,
-  // пока диалог ещё не открыт (задача 298fe6f3).
-  await ensureLinkTypesForAttach(networkId, registryRows);
-  let entries: AttachEntry[] = buildAttachEntries(registryRows, store.state.linkTypes);
+  // пока диалог ещё не открыт (общий загрузчик списка свойств).
+  await ensurePropertyLinkTypes(networkId, registryRows);
 
   return new Promise((resolve) => {
-    const searchInput = el('input', 'text-input') as HTMLInputElement;
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Поиск по имени или описанию…';
+    const errorLine = span('', 'error-text');
 
-    const resultsWrap = div('admin-table-wrap');
-    resultsWrap.style.maxHeight = '260px';
-
-    /** The highlighted entry, or null. */
-    let selected: AttachEntry | null = null;
-
-    /** Why an entry cannot be picked, or null when it can. */
-    const blockReason = (entry: AttachEntry): string | null =>
-      attachEntryBlockReason(entry, existingSides, inheritedPropertyIds);
-
-    /** The entries matching the current search query, alphabetical. Поиск
-     *  матчит любое из имён пары — «жители» находит и прямое имя связи,
-     *  как в списке «Свойства и связи» (аннотация обоих имён). */
-    const visibleEntries = (): AttachEntry[] => {
-      const fragments = searchInput.value
-        .trim()
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((s) => s.length > 0);
-      return entries
-        .filter((entry) => {
-          const sideNames =
-            entry.link_names === null
-              ? ''
-              : `${entry.link_names.forward}\n${entry.link_names.reverse}`;
-          const haystack =
-            `${entry.name}\n${sideNames}\n${entry.registry.description ?? ''}`.toLowerCase();
-          return fragments.every((f) => haystack.includes(f));
-        })
-        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    };
-
-    const pickableEntries = (): AttachEntry[] =>
-      visibleEntries().filter((entry) => blockReason(entry) === null);
-
-    /** Moves the `.selected` row class to the current `selected` entry (no
-     *  list rebuild — a click or an arrow key must not flicker the whole
-     *  table) and scrolls it into view. */
-    function applySelection(): void {
-      const selectedId = selected?.id ?? null;
-      for (const tr of resultsWrap.querySelectorAll<HTMLTableRowElement>('tbody tr')) {
-        tr.classList.toggle('selected', tr.dataset['entryId'] === selectedId);
-      }
-      resultsWrap
-        .querySelector<HTMLTableRowElement>('tr.selected')
-        ?.scrollIntoView({ block: 'nearest' });
-    }
-
-    /** Re-renders the result list. `preferId` forces the highlight onto that
-     *  entry (after the shared editor created a row); otherwise the CURRENT
-     *  selection survives when still visible and pickable, and falls back to
-     *  the first pickable row (never null when one exists — «Выбрать» and
-     *  Ctrl+Enter always have a target). */
-    function rerenderResults(preferId?: string): void {
-      const filtered = visibleEntries();
-      const isSelectable = (entry: AttachEntry): boolean =>
-        blockReason(entry) === null && filtered.some((e) => e.id === entry.id);
-      if (preferId !== undefined) {
-        const preferred = filtered.find((e) => e.id === preferId);
-        selected = preferred !== undefined && blockReason(preferred) === null ? preferred : null;
-      }
-      if (selected === null || !isSelectable(selected)) {
-        selected = filtered.find((entry) => blockReason(entry) === null) ?? null;
-      }
-
-      if (filtered.length === 0) {
-        resultsWrap.replaceChildren(el('p', 'muted', 'Ничего не найдено.'));
-        return;
-      }
-      const table = el('table', 'table-list');
-      const head = el('thead');
-      const headRow = el('tr');
-      for (const label of ['Имя', 'Тип', 'Сторона', 'Отметка', 'Типов']) {
-        headRow.append(el('th', undefined, label));
-      }
-      head.append(headRow);
-      table.append(head);
-      const tbody = el('tbody');
-      for (const entry of filtered) {
-        const blocked = blockReason(entry);
-        const tr = el('tr');
-        tr.dataset['entryId'] = entry.id;
-        if (blocked !== null) tr.classList.add('row-disabled');
-        const nameCell = el('td', undefined, entry.name);
-        nameCell.style.whiteSpace = 'nowrap';
-        if (entry.registry.description !== null) setTooltip(nameCell, entry.registry.description);
-        const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[entry.value_type]);
-        // Колонка «Сторона» — та же подпись, что в таблице свойств типа:
-        // имя однозначно задаёт сторону, подпись её показывает явно (у связи
-        // с совпадающими именами сторон это ещё и единственное различие строк).
-        const sideCell = el('td', 'muted', sideLabel(entry.side));
-        sideCell.style.whiteSpace = 'nowrap';
-        const markCell = el('td', 'muted', blocked ?? '');
-        markCell.style.whiteSpace = 'nowrap';
-        const countCell = el('td', 'muted', `в ${entry.registry.types_count} типах`);
-        countCell.style.textAlign = 'right';
-        tr.append(nameCell, typeCell, sideCell, markCell, countCell);
-        if (blocked === null) {
-          tr.addEventListener('click', () => {
-            selected = entry;
-            applySelection();
-          });
-          tr.addEventListener('dblclick', () => {
-            selected = entry;
-            void choose();
-          });
-        } else {
-          setTooltip(
-            tr,
-            blocked === 'подключено'
-              ? entry.value_type === 'link'
-                ? 'Это имя стороны свойства-связи уже подключено — можно подключить другое имя (обратное).'
-                : 'Свойство уже подключено к этому типу'
-              : 'Свойство уже наследуется этим типом от предка',
-          );
-        }
-        tbody.append(tr);
-      }
-      table.append(tbody);
-      resultsWrap.replaceChildren(table);
-      applySelection();
-    }
-
-    searchInput.addEventListener('input', () => rerenderResults());
-    // Keyboard: ↑/↓ moves the highlight over pickable rows. Ctrl+Enter is
-    // the dialog stack's built-in «click the primary button» — «Выбрать».
-    searchInput.addEventListener('keydown', (event) => {
-      const rows = pickableEntries();
-      if (rows.length === 0) return;
-      const at = rows.findIndex((r) => r.id === selected?.id);
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        selected = rows[Math.min(rows.length - 1, at + 1)] ?? rows[0]!;
-        applySelection();
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        selected = rows[Math.max(0, at - 1)] ?? rows[0]!;
-        applySelection();
-      }
+    /** Строки каталога по текущему снимку каталога типов связей. */
+    const list = buildPropertyList({
+      mode: 'picker',
+      searchPlaceholder: 'Поиск по имени или описанию…',
+      callbacks: {
+        rowBlocked: (row) => rowBlockReason(row, existingSides, inheritedPropertyIds),
+        onActivate: (row) => void choose(row),
+        onEdit: (row) =>
+          openPropertyManagerEditor(
+            row.registry,
+            () => void refreshRegistry(null),
+            (created) => void refreshRegistry(created.id),
+          ),
+      },
     });
+    list.setRows(buildPropertyListRows(registryRows, store.state.linkTypes));
 
-    /** Resolves the dialog with the highlighted pickable entry. Выбранное имя
-     *  задаёт сторону привязки — отдельного шага нет (задача 298fe6f3). */
-    async function choose(): Promise<void> {
-      if (selected === null) return;
+    /** Активация строки: подтверждение перенимаемых привязок потомков, затем
+     *  возврат черновика привязки — выбранное имя задаёт сторону. */
+    async function choose(row: PropertyListRow): Promise<void> {
       errorLine.textContent = '';
-      const warning = await warnDescendantBindings(networkId, selected.registry, {
+      const warning = await warnDescendantBindings(networkId, row.registry, {
         ownerType,
         types,
         typeId,
@@ -2209,42 +1929,38 @@ async function openAttachDialog(opts: {
         const ok = await confirmDialog('Подключить свойство', warning, true);
         if (!ok) return;
       }
-      const entry = selected;
       close();
       resolve({
-        draft: attachDraftFromExisting(entry.registry, entry.side, entry.name),
-        registry: entry.registry,
+        draft: attachDraftFromExisting(row.registry, row.side, row.name),
+        registry: row.registry,
       });
     }
 
-    const errorLine = span('', 'error-text');
-    const body = div('form-stack');
-    body.append(searchInput, resultsWrap, errorLine);
-    rerenderResults();
-
-    /** Re-fetches the registry (after the shared editor created a row) and
-     *  re-renders, highlighting the entry of `highlightPropertyId` when
-     *  present. */
-    const refreshRegistry = async (highlightPropertyId: string | null): Promise<void> => {
+    /** Перечитывает реестр (после того как общий редактор создал свойство) и
+     *  перерисовывает список, выделяя строку созданного свойства. */
+    async function refreshRegistry(highlightPropertyId: string | null): Promise<void> {
       try {
         registryRows = await etn.propertyRegistry.list(networkId);
       } catch {
-        /* keep the stale list — the editor already reported its own error */
+        /* оставляем старый список — редактор уже отчитался об ошибке */
       }
-      await ensureLinkTypesForAttach(networkId, registryRows);
-      entries = buildAttachEntries(registryRows, store.state.linkTypes);
+      await ensurePropertyLinkTypes(networkId, registryRows);
+      list.setRows(buildPropertyListRows(registryRows, store.state.linkTypes));
       if (highlightPropertyId !== null) {
-        const preferred = entries.find((e) => e.property_id === highlightPropertyId);
-        rerenderResults(preferred?.id);
-      } else {
-        rerenderResults();
+        // Новое свойство-связь даёт строку источника (`:source`); скаляр —
+        // строку с самим id. Оба вызова безвредны: отсутствующей строки нет.
+        list.selectRow(`${highlightPropertyId}:source`);
+        list.selectRow(highlightPropertyId);
       }
-    };
+    }
+
+    const body = div('form-stack');
+    body.append(list.root, errorLine);
 
     const close = showDialog({
       title: 'Добавить свойство',
       body,
-      width: 640,
+      width: 760,
       buttons: [
         { label: 'Отмена' },
         {
@@ -2254,7 +1970,7 @@ async function openAttachDialog(opts: {
             openPropertyManagerEditor(
               null,
               () => void refreshRegistry(null),
-              // Highlight the fresh row so one more Enter/«Выбрать» attaches it.
+              // Выделяем свежую строку, чтобы ещё одно Enter/«Выбрать» её подключило.
               (created) => void refreshRegistry(created.id),
             );
           },
@@ -2263,10 +1979,13 @@ async function openAttachDialog(opts: {
           label: 'Выбрать',
           primary: true,
           keepOpen: true,
-          onClick: () => void choose(),
+          onClick: () => {
+            const row = list.selected();
+            if (row !== null) void choose(row);
+          },
         },
       ],
-      onMount: () => searchInput.focus(),
+      onMount: () => list.focusSearch(),
     });
   });
 }

@@ -1,7 +1,8 @@
 /**
  * Тесты списка «Добавить свойство» редактора типа (задача 298fe6f3 —
  * «Добавление свойства-связи в типе мысли: выбор конкретного имени без
- * диалога стороны привязки»).
+ * диалога стороны привязки»; задача 6ebde54e — список переведён на общий
+ * компонент `lib/property-list.ts` в режиме пикера).
  *
  * Было (ошибка 4251fbe5): строка списка — свойство реестра, и ПОСЛЕ выбора
  * свойства-связи открывался диалог «Сторона привязки» с техническими именами
@@ -10,17 +11,17 @@
  * Стало: строка списка — конкретное ИМЯ свойства; у свойства-связи строк две —
  * прямое имя (`name_forward`, сторона `source`) и обратное (`name_reverse`,
  * сторона `target`). Выбранное имя однозначно задаёт сторону, диалога стороны
- * нет вовсе.
+ * нет вовсе. Модель строк общая с менеджером свойств (`buildPropertyListRows`),
+ * а блокировка подключённых имён — `rowBlockReason` (правила 0.8.2 сохранены).
  *
  * Pure logic — no DOM (client tests run without jsdom, per the existing
  * convention):
- *  - {@link buildAttachEntries} — пара имён одной связи и одна строка скаляра;
- *  - {@link attachEntryBlockReason} — уже подключённое имя не предлагается
- *    повторно, второе имя той же связи остаётся доступным;
+ *  - {@link buildPropertyListRows} — пара имён одной связи и одна строка скаляра;
+ *  - {@link rowBlockReason} — уже подключённое имя не предлагается повторно,
+ *    второе имя той же связи остаётся доступным;
  *  - {@link attachDraftFromExisting} — выбранное имя определяет `side`;
- *  - сквозной случай `planPropertyDiff` → `opToAttachInput`: прямое имя даёт
- *    `side: 'source'`, обратное — `'target'`;
- *  - сторож исходника: диалога «Сторона привязки» и его хелперов в коде нет.
+ *  - сторож исходника: диалога «Сторона привязки» и параллельного построителя
+ *    строк в type-manager нет.
  */
 
 import assert from 'node:assert/strict';
@@ -29,14 +30,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import {
-  attachDraftFromExisting,
-  attachEntryBlockReason,
-  buildAttachEntries,
-  sideLabel,
-  type AttachEntry,
-} from '../src/renderer/screens/type-manager.js';
+import { attachDraftFromExisting, sideLabel } from '../src/renderer/screens/type-manager.js';
 import type { RegistryRow } from '../src/renderer/screens/property-manager.js';
+import {
+  buildPropertyListRows,
+  rowBlockReason,
+  type PropertyListRow,
+} from '../src/renderer/lib/property-list.js';
 import {
   nextDraftPropertyId,
   opToAttachInput,
@@ -100,93 +100,95 @@ function makeLinkRow(overrides: Partial<RegistryRow> = {}): RegistryRow {
   });
 }
 
-describe('buildAttachEntries — список показывает конкретные имена (298fe6f3)', () => {
+describe('buildPropertyListRows — список показывает конкретные имена (298fe6f3)', () => {
   it('свойство-связь даёт пару строк: прямое имя «источник», обратное «назначение»', () => {
-    const entries = buildAttachEntries([makeLinkRow()], [makeLinkType()]);
-    assert.equal(entries.length, 2);
+    const rows = buildPropertyListRows([makeLinkRow()], [makeLinkType()]);
+    assert.equal(rows.length, 2);
     assert.deepEqual(
-      entries.map((e) => ({ name: e.name, side: e.side, id: e.id })),
+      rows.map((e) => ({ name: e.name, side: e.side, id: e.id })),
       [
         { name: 'место жительства', side: 'source', id: 'prop-link:source' },
         { name: 'жители', side: 'target', id: 'prop-link:target' },
       ],
     );
     // Имена обеих сторон лежат в строке — поиск по любому из них её находит.
-    assert.deepEqual(entries[0]!.link_names, { forward: 'место жительства', reverse: 'жители' });
-    assert.deepEqual(entries[1]!.link_names, { forward: 'место жительства', reverse: 'жители' });
+    assert.deepEqual(rows[0]!.linkNames, { forward: 'место жительства', reverse: 'жители' });
+    assert.deepEqual(rows[1]!.linkNames, { forward: 'место жительства', reverse: 'жители' });
     // Строка остаётся ссылкой на одну запись реестра — одна привязка на имя.
-    assert.equal(entries[0]!.property_id, 'prop-link');
-    assert.equal(entries[1]!.property_id, 'prop-link');
+    assert.equal(rows[0]!.propertyId, 'prop-link');
+    assert.equal(rows[1]!.propertyId, 'prop-link');
   });
 
   it('скалярное свойство — одна строка со стороной null', () => {
-    const entries = buildAttachEntries([makeRegistryRow()], []);
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.name, 'дата создания');
-    assert.equal(entries[0]!.side, null);
-    assert.equal(entries[0]!.link_names, null);
-    assert.equal(entries[0]!.id, 'prop-1');
+    const rows = buildPropertyListRows([makeRegistryRow()], []);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.name, 'дата создания');
+    assert.equal(rows[0]!.side, null);
+    assert.equal(rows[0]!.linkNames, null);
+    assert.equal(rows[0]!.id, 'prop-1');
   });
 
   it('совпадающие имена сторон — две строки, различаемые стороной', () => {
-    const entries = buildAttachEntries(
+    const rows = buildPropertyListRows(
       [makeLinkRow()],
       [makeLinkType({ name_forward: 'см. также', name_reverse: 'см. также' })],
     );
-    assert.equal(entries.length, 2);
+    assert.equal(rows.length, 2);
     assert.deepEqual(
-      entries.map((e) => e.side),
+      rows.map((e) => e.side),
       ['source', 'target'],
     );
     // Имена одинаковы — различить строки можно только подписью стороны.
-    assert.equal(sideLabel(entries[0]!.side), 'источник');
-    assert.equal(sideLabel(entries[1]!.side), 'назначение');
+    assert.equal(sideLabel(rows[0]!.side), 'источник');
+    assert.equal(sideLabel(rows[1]!.side), 'назначение');
   });
 
   it('тип связи ещё не в каталоге — одна строка с реестровым именем и стороной source', () => {
-    const entries = buildAttachEntries([makeLinkRow()], []);
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.name, 'место жительства');
-    assert.equal(entries[0]!.side, 'source');
-    assert.equal(entries[0]!.link_names, null);
+    const rows = buildPropertyListRows([makeLinkRow()], []);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.name, 'место жительства');
+    assert.equal(rows[0]!.side, 'source');
+    assert.equal(rows[0]!.linkNames, null);
   });
 });
 
-describe('attachEntryBlockReason — уже привязанные имена не предлагаются (298fe6f3)', () => {
-  const source = buildAttachEntries([makeLinkRow()], [makeLinkType()])[0]!;
-  const target = buildAttachEntries([makeLinkRow()], [makeLinkType()])[1]!;
-  const scalar = buildAttachEntries([makeRegistryRow()], [])[0]!;
+describe('rowBlockReason — уже привязанные имена не предлагаются (298fe6f3)', () => {
+  const source = buildPropertyListRows([makeLinkRow()], [makeLinkType()])[0]!;
+  const target = buildPropertyListRows([makeLinkRow()], [makeLinkType()])[1]!;
+  const scalar = buildPropertyListRows([makeRegistryRow()], [])[0]!;
   const none = new Map<string, ReadonlySet<LinkPropertySide>>();
   const noInherited = new Set<string>();
 
   it('нет привязок — обе строки выбираемы', () => {
-    assert.equal(attachEntryBlockReason(source, none, noInherited), null);
-    assert.equal(attachEntryBlockReason(target, none, noInherited), null);
+    assert.equal(rowBlockReason(source, none, noInherited), null);
+    assert.equal(rowBlockReason(target, none, noInherited), null);
   });
 
   it('подключено прямое имя — обратное остаётся выбираемым (4251fbe5 сохранён)', () => {
-    const bound = new Map<string, ReadonlySet<LinkPropertySide>>([['prop-link', new Set(['source'])]]);
-    assert.equal(attachEntryBlockReason(source, bound, noInherited), 'подключено');
-    assert.equal(attachEntryBlockReason(target, bound, noInherited), null);
+    const bound = new Map<string, ReadonlySet<LinkPropertySide>>([
+      ['prop-link', new Set(['source'])],
+    ]);
+    assert.equal(rowBlockReason(source, bound, noInherited), 'подключено');
+    assert.equal(rowBlockReason(target, bound, noInherited), null);
   });
 
   it('подключены оба имени — обе строки недоступны', () => {
     const bound = new Map<string, ReadonlySet<LinkPropertySide>>([
       ['prop-link', new Set<LinkPropertySide>(['source', 'target'])],
     ]);
-    assert.equal(attachEntryBlockReason(source, bound, noInherited), 'подключено');
-    assert.equal(attachEntryBlockReason(target, bound, noInherited), 'подключено');
+    assert.equal(rowBlockReason(source, bound, noInherited), 'подключено');
+    assert.equal(rowBlockReason(target, bound, noInherited), 'подключено');
   });
 
   it('унаследованное свойство — «унаследовано» у обеих строк', () => {
     const inherited = new Set(['prop-link']);
-    assert.equal(attachEntryBlockReason(source, none, inherited), 'унаследовано');
-    assert.equal(attachEntryBlockReason(target, none, inherited), 'унаследовано');
+    assert.equal(rowBlockReason(source, none, inherited), 'унаследовано');
+    assert.equal(rowBlockReason(target, none, inherited), 'унаследовано');
   });
 
   it('скалярное свойство блокируется целиком', () => {
     const bound = new Map<string, ReadonlySet<LinkPropertySide>>([['prop-1', new Set()]]);
-    assert.equal(attachEntryBlockReason(scalar, bound, noInherited), 'подключено');
+    assert.equal(rowBlockReason(scalar, bound, noInherited), 'подключено');
   });
 });
 
@@ -215,17 +217,17 @@ describe('attachDraftFromExisting — выбранное имя задаёт с�
 });
 
 describe('сквозной путь: имя строки → тело POST привязки (298fe6f3)', () => {
-  function attachBodyFor(entry: AttachEntry): unknown {
+  function attachBodyFor(entry: PropertyListRow): unknown {
     const original: readonly import('@etn/shared').PropertyDefinition[] = [];
     const draft = [
       {
         id: nextDraftPropertyId(),
         isNew: true,
-        property_id: entry.property_id,
+        property_id: entry.propertyId,
         side: entry.side,
         required: false,
         key: entry.name,
-        value_type: entry.value_type,
+        value_type: entry.valueType,
         config: entry.registry.config,
         description: entry.registry.description,
       },
@@ -236,10 +238,10 @@ describe('сквозной путь: имя строки → тело POST пр�
     return opToAttachInput(attach);
   }
 
-  const entries = buildAttachEntries([makeLinkRow()], [makeLinkType()]);
+  const rows = buildPropertyListRows([makeLinkRow()], [makeLinkType()]);
 
   it('прямое имя уходит на сервер со стороной source', () => {
-    assert.deepEqual(attachBodyFor(entries[0]!), {
+    assert.deepEqual(attachBodyFor(rows[0]!), {
       mode: 'attach',
       property_id: 'prop-link',
       required: false,
@@ -248,7 +250,7 @@ describe('сквозной путь: имя строки → тело POST пр�
   });
 
   it('обратное имя уходит на сервер со стороной target', () => {
-    assert.deepEqual(attachBodyFor(entries[1]!), {
+    assert.deepEqual(attachBodyFor(rows[1]!), {
       mode: 'attach',
       property_id: 'prop-link',
       required: false,
@@ -257,7 +259,7 @@ describe('сквозной путь: имя строки → тело POST пр�
   });
 });
 
-describe('сторож: диалога стороны привязки в коде нет (298fe6f3)', () => {
+describe('сторож: диалога стороны привязки и параллельного построителя строк нет (298fe6f3)', () => {
   const source = fs.readFileSync(TYPE_MANAGER_SRC, 'utf8');
 
   it('диалог «Сторона привязки» и его хелперы удалены', () => {
@@ -273,6 +275,20 @@ describe('сторож: диалога стороны привязки в код
         source.includes(gone),
         false,
         `в type-manager.ts не должно остаться «${gone}» — сторона задаётся выбранным именем`,
+      );
+    }
+  });
+
+  it('строки строит общий модуль, а не локальный построитель', () => {
+    assert.ok(
+      source.includes('buildPropertyListRows'),
+      'список берёт строки из lib/property-list.ts',
+    );
+    for (const gone of ['buildAttachEntries', 'attachEntryBlockReason', 'AttachEntry']) {
+      assert.equal(
+        source.includes(gone),
+        false,
+        `в type-manager.ts не должно остаться «${gone}» — второй список свойств запрещён`,
       );
     }
   });

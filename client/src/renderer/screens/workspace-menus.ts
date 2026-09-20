@@ -83,7 +83,7 @@ export function buildNetMenuItems(trashCount = 0): MenuItem[] {
     MENU_SEPARATOR,
     { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
     { label: 'Типы связей', onClick: () => showLinkTypesTreeDialog() },
-    { label: 'Свойства и связи', onClick: () => showPropertyManagerDialog() },
+    { label: 'Свойства', onClick: () => showPropertyManagerDialog() },
     MENU_SEPARATOR,
     {
       label: `Корзина (${trashCount})`,
