@@ -1376,20 +1376,37 @@ export function openPropertyManagerEditor(
   /** Загрузка строк таблицы привязок для существующего свойства: список
    *  типов мыслей сети + для каждого типа запрос `listTypeProperties`
    *  фильтрует по нашему `property_id`. Для свойства-связи — две стороны
-   *  (`source`/`target`) согласно `type_properties.side`. Зеркальные записи
-   *  (`mirrored`) пропускаются: у них нет физической привязки, к которой
-   *  писался бы override. */
+   *  (`source`/`target`) согласно `type_properties.side`.
+   *
+   *  `listTypeProperties` отдаёт ЭФФЕКТИВНЫЙ (наследование-зависимый) список,
+   *  поэтому строкой «своей» привязки считается только `inherited !== true`
+   *  (ошибка c59bbd64). Без этого унаследованная привязка попадала в черновик
+   *  по разу на КАЖДЫЙ тип-потомок с ОДНИМ И ТЕМ ЖЕ id привязки-предка: снимок
+   *  получал дубли, а `applyTypeRows` слал повторный `DELETE` того же id —
+   *  сервер отвечал `property <id> not found`, и запись переноса падала.
+   *  Заодно «✕» такой фантомной строки отвязывал привязку ПРЕДКА, а не
+   *  потомка. Наследование правится в редакторе ТИПА (вкладка «Свойства»),
+   *  а не в таблицах сторон свойства.
+   *
+   *  Зеркальные записи (`mirrored`) пропускаются: у них нет физической
+   *  привязки, к которой писался бы override. */
   async function loadTypeRowsFor(propertyId: string): Promise<void> {
     const types = store.state.thoughtTypes;
     if (types.length === 0) return;
     const collected: TypeRowDraft[] = [];
+    const seenBindingIds = new Set<string>();
     await Promise.all(
       types.map(async (tt) => {
         try {
           const defs = await etn.types.listTypeProperties(networkId, 'thought_type', tt.id);
           for (const def of defs) {
             if (def.property_id !== propertyId) continue;
+            // Эффективный список: наследованная привязка принадлежит предку.
+            if (def.inherited === true) continue;
             if (def.mirrored === true) continue;
+            // Одна физическая привязка — одна строка (защита от дубля id).
+            if (seenBindingIds.has(def.id)) continue;
+            seenBindingIds.add(def.id);
             // Колонка показывает СОБСТВЕННЫЙ дефолт привязки: пусто — при
             // создании мысли действует общее значение стороны (тултип
             // пустой ячейки), поэтому эффективный дефолт без override сюда
@@ -1618,9 +1635,18 @@ export function openPropertyManagerEditor(
     // Снятые строки: есть в снимке загрузки, нет в черновике (✕ в таблице).
     // Перенос типа между сторонами — это снятие привязки одной стороны плюс
     // создание другой; без этих `DELETE` снятие терялось (ошибка c83f0215).
-    const removed = typeRowsSnapshot.filter(
-      (snap) => !draft.typeRows.some((row) => row.id === snap.id),
+    // Один id привязки удаляется РОВНО один раз: повторный `DELETE` уже
+    // снятого id сервер отвечает `property <id> not found` (ошибка c59bbd64).
+    const survivingIds = new Set(
+      draft.typeRows.flatMap((row) => (row.id === null ? [] : [row.id])),
     );
+    const removedIds = new Set<string>();
+    const removed: Array<{ id: string; thoughtTypeId: string }> = [];
+    for (const snap of typeRowsSnapshot) {
+      if (survivingIds.has(snap.id) || removedIds.has(snap.id)) continue;
+      removedIds.add(snap.id);
+      removed.push(snap);
+    }
     if (draft.typeRows.length === 0 && removed.length === 0) return;
     // Снятия — первыми: освобождённая пара (тип, сторона) не должна
     // столкнуться с созданием новой привязки в этом же проходе.

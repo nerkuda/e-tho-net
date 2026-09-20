@@ -188,6 +188,8 @@ const PROPERTY_ID = 'prop-1';
 const LINK_TYPE_ID = 'lt-1';
 const TYPE_SOURCE = 'tt-source';
 const TYPE_TARGET = 'tt-target';
+/** Тип-потомок типа-источника: НАСЛЕДУЕТ его привязку (ошибка c59bbd64). */
+const TYPE_DESCENDANT = 'tt-descendant';
 const BINDING_SOURCE = 'bind-source';
 const BINDING_TARGET = 'bind-target';
 
@@ -212,8 +214,14 @@ interface StubCalls {
   updates: Array<{ ownerType: string; typeId: string; bindingId: string }>;
 }
 
-function makeApi(opts: { removeFails?: boolean } = {}): { api: any; calls: StubCalls } {
+function makeApi(opts: { removeFails?: boolean; inheritedDuplicate?: boolean } = {}): {
+  api: any;
+  calls: StubCalls;
+} {
   const calls: StubCalls = { creates: [], removes: [], updates: [] };
+  /** Живой сервер отвечает NOT_FOUND на повторный DELETE уже снятого id
+   *  привязки (`property <id> not found`, ошибка c59bbd64). */
+  const alreadyRemoved = new Set<string>();
   const api: any = {
     propertyRegistry: {
       list: async () => [],
@@ -256,6 +264,23 @@ function makeApi(opts: { removeFails?: boolean } = {}): { api: any; calls: StubC
             },
           ];
         }
+        // Сервер отдаёт ЭФФЕКТИВНЫЙ список: потомок «получает» привязку
+        // предка с тем же id, но с флагом `inherited: true`.
+        if (opts.inheritedDuplicate === true && typeId === TYPE_DESCENDANT) {
+          return [
+            {
+              id: BINDING_SOURCE,
+              property_id: PROPERTY_ID,
+              key: 'категория софта',
+              value_type: 'link',
+              config: { direction: 'out', link_type_id: LINK_TYPE_ID },
+              required: true,
+              side: 'source',
+              description: null,
+              inherited: true,
+            },
+          ];
+        }
         return [];
       },
       createTypeProperty: async (_n: string, ownerType: string, typeId: string, input: any) => {
@@ -285,6 +310,12 @@ function makeApi(opts: { removeFails?: boolean } = {}): { api: any; calls: StubC
         bindingId: string,
       ) => {
         if (opts.removeFails === true) throw new Error('Свойство держат привязки');
+        if (opts.inheritedDuplicate === true) {
+          if (alreadyRemoved.has(bindingId)) {
+            throw new Error(`property ${bindingId} not found`);
+          }
+          alreadyRemoved.add(bindingId);
+        }
         calls.removes.push({ ownerType, typeId, bindingId });
       },
       setPropertyDefaultOverride: async () => undefined,
@@ -312,8 +343,13 @@ function makeApi(opts: { removeFails?: boolean } = {}): { api: any; calls: StubC
 
 const tick = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Монтирует редактор свойства под шимом и возвращает корень документа. */
-async function mountEditor(api: any): Promise<ShimEl> {
+/** Монтирует редактор свойства под шимом и возвращает корень документа.
+ *  `extraTypes` добавляет типы в каталог сети (например, потомка —
+ *  наследование привязки, ошибка c59bbd64). */
+async function mountEditor(
+  api: any,
+  extraTypes: Array<{ id: string; name: string }> = [],
+): Promise<ShimEl> {
   (globalThis as any).etn = api;
   (globalThis as any).window.etn = api;
 
@@ -333,6 +369,7 @@ async function mountEditor(api: any): Promise<ShimEl> {
   (store.state as any).thoughtTypes = [
     { id: TYPE_SOURCE, name: 'категория софта', is_root: false, parent_id: 'lt-root' },
     { id: TYPE_TARGET, name: 'софт', is_root: false, parent_id: 'lt-root' },
+    ...extraTypes.map((t) => ({ ...t, is_root: false, parent_id: TYPE_SOURCE })),
   ];
 
   const { openPropertyManagerEditor } = await import('../src/renderer/screens/property-manager.js');
@@ -419,6 +456,52 @@ describe('редактор свойства: перенос между стор�
       'снятая строка обязана удаляться на сервере',
     );
     assert.equal(calls.creates.length, 0);
+    assert.equal(root.children.length, 0, 'при успехе диалог закрывается');
+  });
+
+  /**
+   * Ошибка c59bbd64: `listTypeProperties` — ЭФФЕКТИВНЫЙ список, поэтому
+   * привязка предка приходит ещё раз у каждого типа-потомка (`inherited: true`)
+   * с ТЕМ ЖЕ id. Редактор считал такие записи своими строками: снимок получал
+   * дубли, и перенос стороны (пикер снимает весь набор строк стороны) слал
+   * повторный `DELETE` того же id. Сервер отвечает `property <id> not found`,
+   * и запись переноса падала.
+   */
+  it('наследованная привязка не дублирует строки: один DELETE на привязку (ошибка c59bbd64)', async () => {
+    shimDom();
+    const { api, calls } = makeApi({ inheritedDuplicate: true });
+    const root = await mountEditor(api, [{ id: TYPE_DESCENDANT, name: 'софт-подтип' }]);
+
+    // Перенос: пикер «Типы источников» снимает весь набор строк стороны
+    // (replace-семантика a3828b28) — уходит ровно один DELETE привязки-предка.
+    buttons(root, 'Добавить тип')[0]!.fire('click', {});
+    await tick(60);
+    const picker = root.children[root.children.length - 1]!;
+    for (const row of picker.findAll((r) => r.className.includes('entity-pick-row'))) {
+      const checkbox = row.findAll(
+        (n) => n.tagName === 'input' && (n as any).type === 'checkbox',
+      )[0];
+      if (checkbox !== undefined && (checkbox as any).checked === true) {
+        (checkbox as any).checked = false;
+        checkbox.fire('change', {});
+      }
+    }
+    buttons(picker, 'Применить и закрыть')[0]!.fire('click', {});
+    await tick(60);
+
+    buttons(root, 'Применить и закрыть')[0]!.fire('click', {});
+    await tick(60);
+
+    assert.deepEqual(
+      calls.removes.filter((r) => r.bindingId === BINDING_SOURCE),
+      [{ ownerType: 'thought_type', typeId: TYPE_SOURCE, bindingId: BINDING_SOURCE }],
+      'привязка-предок снимается ровно одним DELETE (дубль унаследованной строки не должен порождать второй)',
+    );
+    assert.equal(
+      buttonErrorText(root),
+      null,
+      'перенос обязан проходить без NOT_FOUND «property … not found»',
+    );
     assert.equal(root.children.length, 0, 'при успехе диалог закрывается');
   });
 
