@@ -800,6 +800,9 @@ const BulkUpdateArgs = z
     link_type: z.string().min(1).optional(),
     link_type_id: z.string().min(1).nullable().optional(),
   })
+  // `.strict()` (ошибка ea4581c5): ключ, положенный не в тот уровень
+  // (`parent_ids` в корне вызова вместо `args`), отвергается, а не молча теряется.
+  .strict()
   .refine((v) => v.type === undefined || v.type_id === undefined, { message: TYPE_ID_TYPE_CONFLICT })
   .refine((v) => v.link_type === undefined || v.link_type_id === undefined, {
     message: 'provide at most one of link_type_id or link_type',
@@ -809,12 +812,14 @@ const BulkUpdateArgs = z
 export const BULK_UPDATE_OP_VALUES = BULK_UPDATE_OPS;
 export const ThoughtsBulkUpdate = defineContract(
   'etn.thoughts.bulk_update',
-  z.object({
-    network_id: NetworkId,
-    ids: z.array(ThoughtId).min(1),
-    op: z.enum(BULK_UPDATE_OPS),
-    args: BulkUpdateArgs,
-  }),
+  z
+    .object({
+      network_id: NetworkId,
+      ids: z.array(ThoughtId).min(1),
+      op: z.enum(BULK_UPDATE_OPS),
+      args: BulkUpdateArgs,
+    })
+    .strict(),
   {},
 );
 
@@ -1118,14 +1123,18 @@ const OntologyWriteTypeViewFields = z
   .strict();
 export const OntologyWrite = defineContract(
   'etn.ontology.write',
-  z.object({
-    network_id: NetworkId,
-    thought_types: z.array(OntologyWriteThoughtTypeFields).optional(),
-    link_types: z.array(OntologyWriteLinkTypeFields).optional(),
-    properties: z.array(OntologyWritePropertyFields).optional(),
-    type_properties: z.array(OntologyWriteTypePropertyFields).optional(),
-    type_views: z.array(OntologyWriteTypeViewFields).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId,
+      thought_types: z.array(OntologyWriteThoughtTypeFields).optional(),
+      link_types: z.array(OntologyWriteLinkTypeFields).optional(),
+      properties: z.array(OntologyWritePropertyFields).optional(),
+      type_properties: z.array(OntologyWriteTypePropertyFields).optional(),
+      type_views: z.array(OntologyWriteTypeViewFields).optional(),
+    })
+    // `.strict()` (ошибка ea4581c5): лишний ключ верхнего уровня — `VALIDATION_ERROR`
+    // с полем, а не тихий успех с потерянной секцией батча.
+    .strict(),
   {},
 );
 

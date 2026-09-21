@@ -102,7 +102,9 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
       description:
         'Групповые операции (одна запись бюджета на ВЕСЬ вызов): `op` ∈ {`set_type`,`clear_type`,' +
         '`set_active`,`set_inactive`,`trash`,`link_parents`,`link_children`,`set_only_parents`,' +
-        '`unlink_parents`,`unlink_children`}. Возвращает `{ affected, failures[] }`. Без `purge`/`delete`.',
+        '`unlink_parents`,`unlink_children`}. Возвращает `{ affected, failures[] }`. Без `purge`/`delete`. ' +
+        'Неизвестные ключи (в т.ч. параметры op, положенные в корень вместо `args`) отвергаются ' +
+        '`VALIDATION_ERROR` (`details.fields`), а не игнорируются.',
       inputSchema: ThoughtsBulkUpdate.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.bulk_update'],
     },

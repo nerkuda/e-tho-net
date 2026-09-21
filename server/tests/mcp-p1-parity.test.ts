@@ -297,6 +297,34 @@ describe('etn.thoughts.bulk_update (0.7.2)', { skip: !nativeAvailable() }, () =>
       await closeMcpContext(ctx);
     }
   });
+
+  it('неизвестный ключ верхнего уровня (parent_ids вне args) → VALIDATION_ERROR (ea4581c5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.bulk_update',
+          arguments: {
+            network_id: ctx.networkId,
+            ids: [ctx.homeId],
+            op: 'link_parents',
+            // `parent_ids` должны жить внутри `args` — раньше тихо терялись.
+            parent_ids: [ctx.homeId],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('parent_ids'), `expected offending field in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
 
 // ===========================================================================

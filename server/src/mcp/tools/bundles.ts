@@ -118,11 +118,17 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       message: 'a batch item with `thought` (new thought) must also declare a local `ref`',
     });
   const LocalRefsSchema = z.record(z.string().min(1), z.string().uuid()).optional();
-  const WriteSchema = z.object({
-    network_id: NetworkId,
-    local_refs: LocalRefsSchema,
-    thoughts: z.array(WriteItemSchema).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
-  });
+  // `.strict()` (ошибка ea4581c5): ключ верхнего уровня вне контракта обязан
+  // отвергаться `VALIDATION_ERROR` с полем, а не молча отбрасываться. До этого
+  // `links: [...]` на верхнем уровне (вместо `thoughts[].links`) давал тихий
+  // успех без создания связи — агент терял запись без сигнала.
+  const WriteSchema = z
+    .object({
+      network_id: NetworkId,
+      local_refs: LocalRefsSchema,
+      thoughts: z.array(WriteItemSchema).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+    })
+    .strict();
   mcp.registerTool(
     'etn.thoughts.write',
     {
@@ -137,7 +143,8 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
         '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +
         'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
-        '`etn.how_to_write_batch`.',
+        '`etn.how_to_write_batch`. Неизвестные ключи верхнего уровня (например, `links` вне ' +
+        '`thoughts[]`) отвергаются `VALIDATION_ERROR` (`details.fields`), а не игнорируются.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },

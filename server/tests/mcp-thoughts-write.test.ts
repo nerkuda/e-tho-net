@@ -251,6 +251,61 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('rejects an unknown top-level key (misplaced links) with VALIDATION_ERROR (ea4581c5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Симптом ошибки ea4581c5: `links` на ВЕРХНЕМ уровне вызова вместо
+        // `thoughts[].links` — раньше давал тихий успех и `links: []`.
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            links: [{ direction: 'child', target_id: ctx.homeId }],
+            thoughts: [{ ref: 'a', thought: { title: 'A' } }],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('links'), `expected offending field in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('still accepts documented top-level keys (network_id/local_refs/thoughts)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            local_refs: { home_ref: ctx.homeId },
+            thoughts: [
+              { ref: 'a', thought: { title: 'Strict-ok A' }, links: [{ direction: 'parent', target_ref: 'home_ref' }] },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const json = toolJson<{ items: Array<{ id: string; links?: unknown[] }> }>(result);
+        assert.equal(json.items.length, 1);
+        assert.equal(json.items[0]!.links?.length, 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('rejects a duplicate ref within the batch', async () => {
     const ctx = await buildMcpContext();
     try {

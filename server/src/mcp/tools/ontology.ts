@@ -66,7 +66,9 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
         '`POST /thought-types/{id}/views`. ' +
         'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
         'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +
-        '`property-definition.*`).',
+        '`property-definition.*`). Неизвестные ключи верхнего уровня (например, секция вне ' +
+        '`thought_types[]`/`link_types[]`/... ) отвергаются `VALIDATION_ERROR` (`details.fields`), ' +
+        'а не игнорируются.',
       inputSchema: OntologyWrite.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],
     },

@@ -218,6 +218,34 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
     }
   });
 
+  it('rejects an unknown top-level key with VALIDATION_ERROR (ea4581c5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            // Симптом ошибки ea4581c5: секция, положенная не на тот уровень
+            // (правильное имя — `properties[]`), раньше молча игнорировалась.
+            property: [{ name: 'P' }],
+            thought_types: [{ ref: 'a', name: 'A' }],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('property'), `expected offending field in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('rejects a duplicate ref within thought_types', async () => {
     const ctx = await buildMcpContext();
     try {
