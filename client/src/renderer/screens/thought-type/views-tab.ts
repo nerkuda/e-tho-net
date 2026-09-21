@@ -37,6 +37,7 @@ import { notice } from '../../lib/notice.js';
 import { onRealtimeEvent } from '../../realtime.js';
 
 import { openViewEditorDialog } from './filter-dialog.js';
+import { renderNewTypeHint } from '../../lib/type-editor-hints.js';
 import {
   applyViewUpdates,
   ownViewsOf,
@@ -58,6 +59,12 @@ export interface BuildViewsTabOpts {
   typeName: () => string;
   /** Уведомляет диалог о внешних изменениях (например, после удаления типа). */
   onChanged?: () => void;
+  /** Команда «Сохранить» из заглушки несохранённого типа (задача e7352642):
+   *  та же логика, что у кнопки «Записать» в футере диалога — пишет накопленный
+   *  черновик на сервер без закрытия диалога, после чего вкладка оживает
+   *  (`getTypeId()` начинает возвращать id). Если не передана, кнопка в
+   *  заглушке не рисуется. */
+  onSave?: () => void;
 }
 
 export interface ViewsTab {
@@ -198,12 +205,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
 
   function renderEmptyTypeHint(): void {
     tableWrap.replaceChildren();
+    // Заглушка несохранённого типа (задача e7352642): единый паттерн с
+    // вкладкой «Свойства» — текст подсказки + зелёная кнопка «Сохранить»
+    // (та же команда, что у «Записать» в футере диалога).
     tableWrap.append(
-      el(
-        'p',
-        'muted views-tab-empty',
-        'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
-      ),
+      renderNewTypeHint({
+        message: 'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
+        onSave: opts.onSave,
+      }),
     );
     errorLine.textContent = '';
   }

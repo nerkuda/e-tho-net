@@ -225,3 +225,149 @@ describe('type-manager — кнопка «Записать» и текущая �
     assert.ok(src.includes('scrollIntoView'), 'список не прокручивается к текущей строке');
   });
 });
+
+describe('type-manager — вкладки несохранённого типа: заглушка и «Сохранить» (e7352642)', () => {
+  it('в render() несохранённого типа показана заглушка «Свойства» — таблица не рисуется', () => {
+    const src = source();
+    // Заглушка идёт через общий хелпер renderNewTypeHint.
+    assert.ok(
+      src.includes("renderNewTypeHint({"),
+      'render() не использует общий хелпер renderNewTypeHint',
+    );
+    assert.ok(
+      src.includes('Сохраните тип, чтобы добавлять свойства'),
+      'текст подсказки на «Свойствах» отсутствует или разошёлся',
+    );
+    // Ветка заглушки на «Свойствах» — ДО отрисовки таблицы «prop-table».
+    // В исходнике — `el('table', 'table-list prop-table')` (без префикса
+    // `class:` — dom.ts принимает className вторым аргументом).
+    const hintIdx = src.indexOf('Сохраните тип, чтобы добавлять свойства');
+    const ownTableIdx = src.indexOf("'table-list prop-table'");
+    assert.ok(hintIdx > 0 && ownTableIdx > 0 && hintIdx < ownTableIdx, 'заглушка должна быть ДО таблицы');
+  });
+
+  it('хелпер renderNewTypeHint экспортируется из lib/type-editor-hints.ts', () => {
+    // Заглушка «Свойств» и «Отборов» — один паттерн: файл-helper.
+    const helperPath = resolve(
+      import.meta.dirname,
+      '..',
+      'src',
+      'renderer',
+      'lib',
+      'type-editor-hints.ts',
+    );
+    const helper = readFileSync(helperPath, 'utf8');
+    assert.ok(
+      helper.includes("export function renderNewTypeHint"),
+      'renderNewTypeHint не экспортирован из type-editor-hints.ts',
+    );
+    assert.ok(
+      helper.includes("'btn success'"),
+      'кнопка «Сохранить» в хелпере должна нести класс btn success',
+    );
+    assert.ok(
+      helper.includes('Записать тип и не закрывать диалог'),
+      'хелпер должен передавать осмысленный title для кнопки',
+    );
+  });
+
+  it('в render() несохранённого типа таблица свойств не создаётся — render выходит на заглушке', () => {
+    // Ветка: liveTypeId === null → return после renderNewTypeHint.
+    const src = source();
+    // «return;» внутри render() — есть ДО собственно рендера таблицы.
+    const hintBlock = src.match(/if \(liveTypeId === null\)[\s\S]{0,400}?return;/);
+    assert.ok(hintBlock !== null, 'в render() должна быть короткая ветка liveTypeId===null → return');
+    // После этой ветки идёт отрисовка собственной таблицы (Свойства типа) —
+    // убеждаемся, что она НЕ входит в блок раннего return. В исходнике —
+    // `el('table', 'table-list prop-table')` (без префикса `class:` — dom.ts
+    // принимает className вторым аргументом).
+    const ownTableMarker = "'table-list prop-table'";
+    const hintEnd = src.indexOf('return;', hintBlock!.index ?? 0);
+    const nextTable = src.indexOf(ownTableMarker, hintEnd);
+    assert.ok(nextTable > hintEnd, 'таблица свойств рисуется только после выхода из заглушки');
+  });
+
+  it('обе вкладки получают onSave — общая команда через apply(\'stay\', …)', () => {
+    const src = source();
+    // В обе опции пробрасывается `onSave: () => { void apply('stay', () => undefined); }`.
+    assert.ok(
+      src.includes("onSave: () => {\n      void apply('stay', () => undefined);\n    }"),
+      'onSave для props/viewsTab не пробрасывается как общая apply(\'stay\', …)',
+    );
+  });
+
+  it('liveTypeId обновляется в applyChanges — после записи render() видит реальный id', () => {
+    const src = source();
+    // В начале applyChanges присваивание liveTypeId = targetId — иначе после
+    // первой записи render() остался бы в ветке liveTypeId === null и
+    // показал бы заглушку вместо живой таблицы.
+    const applyChangesIdx = src.indexOf('async function applyChanges(targetId: string)');
+    assert.ok(applyChangesIdx > 0, 'applyChanges не найдена');
+    const block = src.slice(applyChangesIdx, applyChangesIdx + 800);
+    assert.ok(
+      /liveTypeId\s*=\s*targetId/.test(block),
+      'applyChanges должен присваивать liveTypeId = targetId в самом начале',
+    );
+  });
+
+  it('CSS: у .btn.success зелёный фон var(--ok) и белый текст', () => {
+    const cssPath = resolve(
+      import.meta.dirname,
+      '..',
+      'src',
+      'renderer',
+      'styles.css',
+    );
+    const css = readFileSync(cssPath, 'utf8');
+    assert.ok(/\.btn\.success\s*\{/.test(css), '.btn.success не объявлен в styles.css');
+    assert.ok(/background:\s*var\(--ok\)/.test(css), '.btn.success должен иметь фон var(--ok)');
+    assert.ok(/color:\s*#fff/.test(css), '.btn.success должен иметь белый текст (#fff)');
+  });
+
+  it('регрессия 74d9b4ed: ключ дедупликации нового типа не сломан', () => {
+    const src = source();
+    assert.ok(
+      src.includes("const NEW_THOUGHT_TYPE_DIALOG_KEY = 'thought-type:new'"),
+      'сеансовый ключ thought-type:new не найден',
+    );
+    assert.ok(
+      src.includes("id === null ? NEW_THOUGHT_TYPE_DIALOG_KEY : `thought-type:${id}`"),
+      'thoughtTypeDialogKey: новая логика дедупликации сломана',
+    );
+  });
+});
+
+describe('thought-type/views-tab — кнопка «Сохранить» в заглушке (e7352642)', () => {
+  const SRC_PATH = resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'screens',
+    'thought-type',
+    'views-tab.ts',
+  );
+
+  it('BuildViewsTabOpts принимает onSave', () => {
+    const src = readFileSync(SRC_PATH, 'utf8');
+    // Расстояние от заголовка интерфейса до `onSave?:` большое — комментарий
+    // о задаче e7352642 на 5 строк; берём запас 1000 символов.
+    assert.ok(
+      /BuildViewsTabOpts[\s\S]{0,1000}onSave\?:\s*\(\)\s*=>\s*void/.test(src),
+      'BuildViewsTabOpts не объявляет опциональное поле onSave',
+    );
+  });
+
+  it('renderEmptyTypeHint использует общий renderNewTypeHint (не дублирует разметку)', () => {
+    const src = readFileSync(SRC_PATH, 'utf8');
+    assert.ok(
+      src.includes("renderNewTypeHint({"),
+      'renderEmptyTypeHint должен использовать общий хелпер renderNewTypeHint',
+    );
+    // Подсказка — та же, что была до правки (совместима с регрессией 51732f9b).
+    assert.ok(
+      src.includes('Сохраните тип, чтобы добавлять отборы'),
+      'текст подсказки «Отборов» отсутствует',
+    );
+  });
+});

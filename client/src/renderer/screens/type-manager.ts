@@ -138,6 +138,7 @@ import {
 } from '../lib/property-list.js';
 import { buildViewsTab } from './thought-type/views-tab.js';
 import { store } from '../state.js';
+import { renderNewTypeHint } from '../lib/type-editor-hints.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
@@ -946,6 +947,10 @@ export function showThoughtTypeEditor(
   // Property sections (own staged + inherited). For a new type the inherited
   // preview follows the picked parent; for an existing type the inherited
   // defaults keep their explicit per-dialog «Применить» (as before).
+  // `onSave` для заглушки несохранённого типа (задача e7352642) — команда
+  // кнопки «Сохранить» в подсказке «Сохраните тип, чтобы добавлять
+  // свойства…»: та же `apply('stay', …)`, что и «Записать» в футере.
+  // Колбэк ленив — `apply` объявлена ниже, но в момент клика уже готова.
   const props = buildStagedPropertySection({
     networkId,
     ownerType: 'thought_type',
@@ -956,6 +961,10 @@ export function showThoughtTypeEditor(
     // Ошибки записи привязок идут в общую строку панели кнопок: пользователь
     // может находиться на любой вкладке (ошибка add8d09d).
     errorLine,
+    onSave: () => {
+      // Эмулируем клик по «Записать» — `close` тут no-op, диалог не закрываем.
+      void apply('stay', () => undefined);
+    },
   });
   propertiesPane.append(props.root);
 
@@ -974,12 +983,16 @@ export function showThoughtTypeEditor(
 
   // Вкладка «Отборы» — собственная подписка на realtime-события
   // (thought-type-view.{created,updated,deleted}); диалог вызывает dispose()
-  // на onClose.
+  // на onClose. `onSave` (задача e7352642) — та же команда «Сохранить», что
+  // и в «Свойствах»/футере; передаём одну лямбду на обе вкладки.
   const viewsTab = buildViewsTab({
     networkId,
     getTypeId: () => current?.id ?? null,
     typeName: () => draft.name,
     onChanged,
+    onSave: () => {
+      void apply('stay', () => undefined);
+    },
   });
   viewsPane.append(viewsTab.root);
 
@@ -1232,6 +1245,13 @@ interface StagedPropertySection {
    * re-diffs only what is still missing.
    */
   applyChanges(typeId: string): Promise<boolean>;
+  /**
+   * Команда «Сохранить» из заглушки несохранённого типа (задача e7352642):
+   * та же логика, что у кнопки «Записать» в футере диалога — запись без
+   * закрытия, после которой у типа появляется id и секция свойств оживает
+   * (через общий `reload()` из `applyChanges` и перерисовку вкладки).
+   * Присутствует только когда `typeId === null`; иначе — `undefined`. */
+  onSave?: () => void;
 }
 
 /**
@@ -1278,8 +1298,17 @@ function buildStagedPropertySection(opts: {
    * выводятся сюда, чтобы быть видимыми на любой вкладке (ошибка add8d09d).
    */
   errorLine: HTMLElement;
+  /** Команда «Сохранить» для заглушки несохранённого типа (задача e7352642):
+   *  запись без закрытия диалога; после неё секция свойств оживает (id
+   *  появляется). У существующего типа — `undefined`, заглушка не нужна. */
+  onSave?: () => void;
 }): StagedPropertySection {
-  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine } = opts;
+  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine, onSave } = opts;
+  // Текущее «живое» id типа: для НОВОГО — стартует `null`, после успешного
+  // `applyChanges(targetId)` обновляется до созданного id — заглушка
+  // (задача e7352642) перестаёт показываться, секция оживает. У
+  // существующего типа совпадает с `typeId` всё время.
+  let liveTypeId: string | null = typeId;
   const box = div('form-stack');
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '220px';
@@ -1341,11 +1370,11 @@ function buildStagedPropertySection(opts: {
     // The warning's «descendants» check needs the edited type's id and name;
     // both exist only for an already-created type.
     const editedType =
-      typeId === null
+      liveTypeId === null
         ? null
         : ownerType === 'thought_type'
-          ? store.state.thoughtTypes.find((t) => t.id === typeId) ?? null
-          : store.state.linkTypes.find((t) => t.id === typeId) ?? null;
+          ? store.state.thoughtTypes.find((t) => t.id === liveTypeId) ?? null
+          : store.state.linkTypes.find((t) => t.id === liveTypeId) ?? null;
     // Занятые стороны подключённых свойств-связей (проверка дубля ИМЕНИ в
     // списке — имя однозначно определяет сторону; скаляр — пустой набор).
     const existingSides = new Map<string, Set<LinkPropertySide>>();
@@ -1361,7 +1390,7 @@ function buildStagedPropertySection(opts: {
       networkId,
       ownerType,
       types: pickTypeList(),
-      typeId,
+      typeId: liveTypeId,
       editedTypeName:
         editedType === null
           ? null
@@ -1389,7 +1418,7 @@ function buildStagedPropertySection(opts: {
    *  from the subtree. `null` while the type is being created — the editor
    *  has no id yet, so the warning would be empty anyway. */
   function pickTypeList(): ThoughtType[] | LinkType[] | null {
-    if (typeId === null) return null;
+    if (liveTypeId === null) return null;
     return ownerType === 'thought_type' ? store.state.thoughtTypes : store.state.linkTypes;
   }
 
@@ -1573,11 +1602,28 @@ function buildStagedPropertySection(opts: {
   function render(): void {
     tableWrap.replaceChildren();
 
+    // Заглушка несохранённого типа (задача e7352642): свойства и отборы
+    // недоступны, пока у типа нет id — «Типы источников»/«Типы назначений»
+    // для нового свойства не настроить, потому что создаваемого типа ещё нет
+    // в списках. Тот же подход, что на «Отборах» (уже было): единая
+    // разметка-заглушка с кнопкой «Сохранить» (зелёная, та же команда, что
+    // «Записать» в футере — пишет накопленный черновик без закрытия диалога,
+    // после чего обе вкладки оживают).
+    if (liveTypeId === null) {
+      tableWrap.append(
+        renderNewTypeHint({
+          message: 'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
+          onSave,
+        }),
+      );
+      return;
+    }
+
     if (inherited.length > 0) {
       const inhLabel = el(
         'p',
         'muted',
-        typeId === null
+        liveTypeId === null
           ? 'Унаследованные свойства (передадутся от выбранного родителя)'
           : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание; обязательность задаётся на типе, который подключил свойство)',
       );
@@ -1639,12 +1685,12 @@ function buildStagedPropertySection(opts: {
         // Override описания сохраняет свой маленький диалог (транзитивность
         // описаний не менялась). Зеркальная запись (dde92461) не имеет
         // физической привязки — переопределять нечего.
-        if (typeId !== null && def.mirrored !== true) {
+        if (liveTypeId !== null && def.mirrored !== true) {
           actions.append(
             button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
           );
         }
-        if (typeId !== null && def.description_overridden) {
+        if (liveTypeId !== null && def.description_overridden) {
           actions.append(
             button('сбросить ◆', () => void clearDescriptionOverride(def), 'btn small', 'Сбросить переопределение описания'),
           );
@@ -1762,7 +1808,7 @@ function buildStagedPropertySection(opts: {
     // while still detached and must proceed. Skip only bodies that were
     // mounted and then discarded (the dialog closed or a newer body took over).
     if (everMounted && !box.isConnected) return;
-    const sourceId = typeId ?? previewParentId();
+    const sourceId = liveTypeId ?? previewParentId();
     if (sourceId === null) {
       // No catalogue at all (mid-migration) — show the empty state rather
       // than a forever-«Загрузка…» placeholder.
@@ -1779,7 +1825,7 @@ function buildStagedPropertySection(opts: {
         etn.propertyRegistry.list(networkId),
       ]);
       registryCache = new Map(registryRows.map((row) => [row.id, row]));
-      if (typeId !== null) {
+      if (liveTypeId !== null) {
         // An existing type: own rows seed the draft (once), inherited shown.
         // Mirrored link properties (dde92461) are synthesized by the server —
         // they have no `type_properties` binding, so they must never seed the
@@ -1810,6 +1856,11 @@ function buildStagedPropertySection(opts: {
    * attaches/creates, then `set-role` patches, one trailing reorder.
    */
   async function applyChanges(targetId: string): Promise<boolean> {
+    // Задача e7352642: для только что созданного типа после первой записи
+    // `liveTypeId` ещё `null` (исходное значение), и `render()` показал бы
+    // заглушку. Присваиваем сразу — следующий `render()` увидит реальный id
+    // и нарисует живую таблицу свойств.
+    liveTypeId = targetId;
     const plan = planPropertyDiff(originalOwn, ownDraft, deletedIds);
     for (const op of plan.ops) {
       try {
@@ -1896,7 +1947,7 @@ function buildStagedPropertySection(opts: {
     render();
     // Refresh the inherited view too: reparenting on the same apply may have
     // changed what this type receives from its ancestors.
-    if (typeId !== null) void reload();
+    if (liveTypeId !== null) void reload();
     return true;
   }
 
@@ -1904,9 +1955,10 @@ function buildStagedPropertySection(opts: {
   return {
     root: box,
     refreshPreview: (): void => {
-      if (typeId === null) void reload();
+      if (liveTypeId === null) void reload();
     },
     applyChanges,
+    onSave,
   };
 }
 

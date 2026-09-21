@@ -281,6 +281,19 @@ textarea {
   background: var(--danger-soft);
 }
 
+/* «Записать»-подобная кнопка в заглушках несохранённого типа (задача
+ * e7352642): зелёный фон, белая надпись — должна привлекать внимание. */
+.btn.success {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.btn.success:hover {
+  background: color-mix(in srgb, var(--ok) 88%, #000);
+  border-color: color-mix(in srgb, var(--ok) 88%, #000);
+}
+
 .btn.small {
   padding: 2px 8px;
   font-size: 12px;
