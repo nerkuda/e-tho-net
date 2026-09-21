@@ -19,6 +19,7 @@
 import type { Attachment } from '@etn/shared';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
+import { rememberShownAttachments } from '../lib/attachment-events.js';
 import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -47,6 +48,9 @@ export function registerAttachmentsTab(): void {
         ctx.ownerType,
         ctx.ownerId,
       );
+      // Индекс показанных вложений: по нему realtime-события `updated`/`deleted`
+      // (у них в событии только id) находят показанную сущность — ошибка abd25adb.
+      rememberShownAttachments(items);
       return items.length;
     } catch {
       return undefined;
@@ -282,6 +286,9 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       list.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
+    // Показанный список — источник индекса владельцев для realtime-событий
+    // (ошибка abd25adb): `attachment.updated`/`deleted` несут только id.
+    rememberShownAttachments(attachments);
     refreshTabCount('attachments');
     list.replaceChildren();
     rowById.clear();

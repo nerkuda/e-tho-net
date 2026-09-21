@@ -191,6 +191,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'attachment.created':
+      // Вложения — подобъекты сущности и фокус-ответ не меняют (см. rationale
+      // ниже). Сам факт создания в окрестности фокуса освежает холст; вкладку
+      // «Вложения» открытого редактора обновляет его собственный realtime-хук
+      // (editor.ts, гейт по показанной сущности — ошибка abd25adb).
       invalidateIndicators(evt.data.attachment.owner_id);
       if (inNeighbourhood(evt.data.attachment.owner_id)) scheduleRefresh();
       break;
@@ -202,8 +206,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Calling `scheduleRefresh` here forced an unrelated store update on
       // every remote attachment write, which in turn fired the editor's
       // `store.subscribe` callback — bug 206e33a1. The canvas indicator
-      // cache is invalidated; the editor owns its own «Вложения» tab and
-      // updates it via its own realtime hook (attachments.ts).
+      // cache is invalidated; the open editor's «Вложения» tab updates itself
+      // through its own realtime hook in editor.ts (ошибка abd25adb), which
+      // resolves the owner of these ownerless events from the list index.
       invalidateIndicators(null);
       break;
 

@@ -63,6 +63,20 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
+// Набор ВЛОЖЕНИЙ показанной сущности (ошибка abd25adb): realtime-события
+// `attachment.created/updated/deleted` от другого клиента обязаны обновить
+// вкладку «Вложения» открытого редактора. `created` несёт владельца снимком, а
+// `updated`/`deleted` — только id, поэтому владельца находит индекс показанных
+// вложений (lib/attachment-events.ts).
+import {
+  attachmentChangeFacts,
+  forgetShownAttachment,
+  isAttachmentEventType,
+  sameAttachmentOwner,
+  shownAttachmentOwner,
+  type AttachmentEventType,
+  type AttachmentOwner,
+} from '../lib/attachment-events.js';
 // Набор свойств показанной сущности зависит от определений свойств её типа
 // (ошибка 74b94c26): realtime-события `property-definition.*` и локальные
 // уведомления редактора типа/менеджера свойств обязаны перечитать вкладку
@@ -551,15 +565,23 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerGraphTab();
     registerMetadataTab();
 
-    // Изменение НАБОРА ВЛОЖЕНИЙ владельца (вставка картинки в поле markdown,
-    // «Назначить иконкой мысли» из файла) обновляет и счётчик, и список вкладки
-    // «Вложения» (ошибка 05bd8809). Раньше обновлялся только счётчик: вкладка,
-    // построенная при первом заходе, кэшируется и при показе «Комментария»
-    // отключается от DOM, а её собственный слушатель события в этот момент
-    // самоотписывается и список не перечитывает — прежний список возвращался на
-    // экран до смены сущности. Кэш сбрасывается тем же механизмом, что и прочие
-    // инвалидации (см. invalidateAttachmentsPanes). Один документный слушатель
-    // на всё время жизни приложения.
+    // Изменение НАБОРА ВЛОЖЕНИЙ владельца обновляет и счётчик, и список вкладки
+    // «Вложения». Два источника, оба сходятся в этом канале:
+    //  * локальный (ошибка 05bd8809) — вставка картинки в поле markdown,
+    //    «Назначить иконкой мысли» из файла, правки на самой вкладке: свои
+    //    производители шлют событие сами (своё realtime-эхо отбрасывает
+    //    G8-applier главного процесса);
+    //  * realtime (ошибка abd25adb) — другой клиент или MCP: обработчик
+    //    `attachment.*` ({@link applyAttachmentRealtime}) гейтит по показанной
+    //    сущности и ПЕРЕиспускает это же событие — одна точка применения, показанная
+    //    вкладка перечитывает список на месте, скрытая — сбрасывает кэш.
+    // Раньше (05bd8809) обновлялся только счётчик: вкладка, построенная при первом
+    // заходе, кэшируется и при показе «Комментария» отключается от DOM, а её
+    // собственный слушатель события в этот момент самоотписывается и список не
+    // перечитывает — прежний список возвращался на экран до смены сущности. Кэш
+    // сбрасывается тем же механизмом, что и прочие инвалидации (см.
+    // invalidateAttachmentsPanes). Один документный слушатель на всё время жизни
+    // приложения.
     document.addEventListener('etn:attachments-changed', (event) => {
       const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
       const ctx = renderCtx;
@@ -583,6 +605,13 @@ export function mountEditor(editorHost: HTMLElement): void {
       // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
       // показанной сущности этой сети не относится.
       if (evt.network_id !== store.state.networkId) return;
+      // Изменение набора ВЛОЖЕНИЙ показанной сущности (ошибка abd25adb): другой
+      // клиент или MCP добавил/изменил/удалил вложение — вкладка «Вложения»
+      // перечитывает список и счётчик без переоткрытия мысли.
+      if (isAttachmentEventType(evt.type)) {
+        applyAttachmentRealtime(evt.type, evt.data);
+        return;
+      }
       if (isDefinitionEventType(evt.type)) {
         applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
         return;
@@ -844,6 +873,65 @@ function invalidateDefinitionDependentPanes(): void {
 function invalidateAttachmentsPanes(): void {
   if (shownTab === 'attachments') return;
   invalidatePanes(['attachments']);
+}
+
+/** Владелец, показанный в редакторе сейчас; `null` — цели нет. */
+function shownOwner(): AttachmentOwner | null {
+  const ctx = renderCtx;
+  if (ctx === null) return null;
+  return { ownerType: ctx.ownerType, ownerId: ctx.ownerId };
+}
+
+/**
+ * Применяет к открытому редактору realtime-изменение ВЛОЖЕНИЙ (ошибка abd25adb):
+ * другой клиент или MCP `etn.attachments.*` добавил, изменил или удалил
+ * вложение показанной сущности — вкладка «Вложения» (её список и счётчик)
+ * обновляется без переоткрытия мысли.
+ *
+ * Гейт — по показанной сущности. `created` несёт владельца снимком; у
+ * `updated`/`deleted` владельца в событии нет (04-realtime.md §4.4), поэтому его
+ * находит индекс вложений, прочитанных для показанной сущности
+ * ({@link rememberShownAttachments} наполняется счётчиком вкладки и её списком).
+ * Чужие сети отсечены вызывающим по `network_id`.
+ *
+ * Применение идёт тем же локальным каналом `etn:attachments-changed`, что и
+ * собственные правки: диспетчеризация не дублирует обработку, потому что
+ * realtime-путь доставляет только ЧУЖИЕ записи (своё эхо отбрасывает
+ * G8-applier главного процесса), а локальные производители о чужих правках не
+ * уведомляют. Слушатель канала обновляет счётчик и сбрасывает кэш скрытой
+ * вкладки; показанная вкладка перечитывает список на месте — встроенный
+ * просмотрщик-редактор текстового вложения (CodeMirror) не разрушается.
+ *
+ * Вложение, которое ушло из показанной сущности (удалено или перенесено в
+ * другую), снимается с индекса, чтобы его дальнейшие события её не задевали.
+ */
+function applyAttachmentRealtime(type: AttachmentEventType, data: unknown): void {
+  const shown = shownOwner();
+  if (shown === null) return;
+  const facts = attachmentChangeFacts(type, data);
+  const known = facts.attachmentId === null ? null : shownAttachmentOwner(facts.attachmentId);
+  const wasShown = known !== null && sameAttachmentOwner(known, shown);
+  // Прибывает в показанную сущность: `created` — всегда, `updated` — перенос.
+  // Тип владельца в `changes` может отсутствовать (он не менялся) — тогда
+  // вложение прибыло именно в свою цель, и показанный тип верен.
+  const arrives =
+    facts.ownerId !== null &&
+    facts.ownerId === shown.ownerId &&
+    (facts.ownerType === null || facts.ownerType === shown.ownerType);
+  if (!wasShown && !arrives) return;
+  // Ушло из показанной сущности: удалено либо перенесено (у `updated` есть
+  // владелец, и он не показанный). Чистый `updated` без владельца оставляет id
+  // в индексе — вложение никуда не делось.
+  const left =
+    facts.attachmentId !== null &&
+    wasShown &&
+    (type === 'attachment.deleted' || (facts.ownerId !== null && !arrives));
+  if (left && facts.attachmentId !== null) forgetShownAttachment(facts.attachmentId);
+  document.dispatchEvent(
+    new CustomEvent('etn:attachments-changed', {
+      detail: { ownerType: shown.ownerType, ownerId: shown.ownerId },
+    }),
+  );
 }
 
 // Правка реестрового свойства (ошибка 98aa0889) идёт тем же путём: сеть/слой
