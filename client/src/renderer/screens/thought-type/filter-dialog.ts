@@ -85,6 +85,7 @@ import {
   hasAnyCriteria,
   parseViewDefinition,
   tokensToComboOptions,
+  withReverseLinkPropertySides,
   type ChainProperties,
   type ComboOption,
   type DialogCriteriaState,
@@ -150,14 +151,21 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const chainProps = await loadTypeChainProperties(networkId, chain);
   activeChainProps = chainProps;
   // Property registry (registry-level metadata, e.g. name and multiple flag
-  // for each property binding on the chain).
-  const registryById = new Map<string, NetworkProperty>();
+  // for each property binding on the chain). Задача df992826: к реестру
+  // добавляются обратные стороны свойств-связей цепочки — в конструкторе
+  // условий обе стороны адресуемы.
+  let baseRegistry = new Map<string, NetworkProperty>();
   try {
     const list = await etn.propertyRegistry.list(networkId);
-    for (const row of list) registryById.set(row.id, row);
+    for (const row of list) baseRegistry.set(row.id, row);
   } catch {
     /* empty registry — picker just shows none of the property tokens */
   }
+  const registryById = withReverseLinkPropertySides(
+    baseRegistry,
+    chainProps,
+    store.state.linkTypes,
+  );
 
   // 2. Initialise the form state from the existing view (or defaults).
   const isEdit = opts.view !== null;
@@ -398,6 +406,7 @@ export {
   defaultDialogCriteriaState,
   hasAnyCriteria,
   parseViewDefinition,
+  withReverseLinkPropertySides,
 } from './filter-dialog-pure.js';
 
 /** Length constants re-exported for tests. */

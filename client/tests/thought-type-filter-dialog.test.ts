@@ -814,4 +814,94 @@ describe('единый редактор значения условия — ко
     // Пустой запрос — весь список без фильтрации (полное открытие меню).
     assert.equal(module.filterComboOptions(options, '   ').length, 2);
   });
+
+  // Задача df992826: в конструкторе условий отбора свойство-связь доступно
+  // обеими сторонами — прямой (registry id, как раньше) и обратной
+  // (синтетическая запись по имени, сервер резолвит направление).
+  it('adds the reverse side of a chain link property to the condition registry (задача df992826)', () => {
+    const linkTypeId = 'lt-1';
+    const linkDef = {
+      id: 'tp-link',
+      property_id: 'p-link',
+      owner_type: 'thought_type',
+      owner_id: FOCUS_TYPE_ID,
+      key: 'организации категории',
+      value_type: 'link',
+      config: { link_type_id: linkTypeId },
+      required: false,
+      position: 0,
+      description: null,
+      inherited: false,
+      defined_on: FOCUS_TYPE_ID,
+      defined_on_name: 'Работа',
+      default_value: null,
+      overridden_here: false,
+      description_overridden: false,
+    } as unknown as EffectiveTypeProperty;
+    const chainProps = [{ type: TYPES[0]!, props: [linkDef] }];
+    const registry = new Map<string, NetworkProperty>([
+      [
+        'p-link',
+        {
+          id: 'p-link',
+          name: 'организации категории',
+          value_type: 'link',
+          config: { link_type_id: linkTypeId },
+          description: null,
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        },
+      ],
+    ]);
+    const linkTypes = [
+      {
+        id: linkTypeId,
+        name_forward: 'организации категории',
+        name_reverse: 'категория организации',
+        parent_id: null,
+        is_root: false,
+        color: null,
+        style: null,
+        width: null,
+        description: null,
+      },
+    ] as unknown as import('@etn/shared').LinkType[];
+
+    const withSides = module.withReverseLinkPropertySides(registry, chainProps, linkTypes);
+
+    // Прямая сторона осталась прежней записью по registry id.
+    assert.equal(withSides.get('p-link')?.name, 'организации категории');
+    // Обратная сторона добавлена по имени и различимо помечена.
+    const reverse = withSides.get('категория организации');
+    assert.ok(reverse, 'обратная сторона свойства-связи добавлена');
+    assert.equal(reverse!.value_type, 'link');
+    assert.match(reverse!.name, /обратная сторона/);
+    // Входной реестр не мутируется.
+    assert.equal(registry.size, 1);
+  });
+
+  it('skips structural link properties when adding the reverse side (задача df992826)', () => {
+    const structural = {
+      id: 'tp-children',
+      property_id: 'p-children',
+      owner_type: 'thought_type',
+      owner_id: FOCUS_TYPE_ID,
+      key: 'Потомки',
+      value_type: 'link',
+      config: { structural: true, direction: 'out' },
+      required: false,
+      position: 0,
+      description: null,
+      inherited: true,
+      defined_on: ANCESTOR_TYPE_ID,
+      defined_on_name: 'Версия',
+      default_value: null,
+      overridden_here: false,
+      description_overridden: false,
+    } as unknown as EffectiveTypeProperty;
+    const chainProps = [{ type: TYPES[0]!, props: [structural] }];
+    const registry = new Map<string, NetworkProperty>();
+    const withSides = module.withReverseLinkPropertySides(registry, chainProps, []);
+    assert.equal(withSides.size, 0, 'структурные «Потомки» не порождают обратную сторону');
+  });
 });
