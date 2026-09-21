@@ -144,16 +144,40 @@ export interface OperationContract<S extends z.ZodObject = z.ZodObject> {
   rest: Partial<Record<string, RestFieldSpec>>;
 }
 
-/** Реестр контрактов по имени инструмента (для канонических ошибок MCP). */
-const contractsByName = new Map<string, OperationContract>();
+/** Реестр контрактов по имени инструмента (для канонических ошибок MCP и
+ *  для сторожа `guard-mcp-contracts-strict.test.ts`). */
+export const contractsByName = new Map<string, OperationContract>();
 
-/** Объявить контракт операции и зарегистрировать его по имени. */
+/** Объявить контракт операции и зарегистрировать его по имени.
+ *
+ * Схема MCP-контракта (имя с префиксом `etn.`) автоматически делается
+ * `.strict()` (задача c245e7de, после ea4581c5): неизвестный ключ
+ * верхнего уровня обязан отвергаться `VALIDATION_ERROR` с `details.fields`,
+ * а не молча отбрасываться. Раньше каждую точку регистрации MCP-инструмента
+ * приходилось оборачивать вручную (`z.object({...}).strict()`), что легко
+ * забыть — теперь гарантия идёт из контракта.
+ *
+ * REST-контракты (имя с префиксом `rest:`) НЕ делаются strict: они исторически
+ * опираются на rest-карту как на единственный источник объявленных полей и
+ * могут содержать поля вне общей схемы (например, `create_link` у мыслей или
+ * `colors` у слоёв) — strict там дал бы ложные 422 на легитимные REST-вызовы.
+ * Для REST строгость — отдельный заход, выходит за рамки этой задачи.
+ *
+ * ZodEffects (схема с `.refine()`) не имеет метода `.strict()`, поэтому для
+ * неё нужно заранее ставить `.strict()` ДО `.refine()` (см. `*Fields` ниже —
+ * все они так и устроены). Идемпотентность `.strict()` для повторных
+ * применений — поведение zod 4. */
 export function defineContract<S extends z.ZodObject>(
   name: string,
   schema: S,
   rest: OperationContract<S>['rest'],
 ): OperationContract<S> {
-  const contract: OperationContract<S> = { name, schema, rest };
+  const isMcp = name.startsWith('etn.');
+  const strictSchema =
+    isMcp && schema instanceof z.ZodObject
+      ? (schema.strict() as unknown as S)
+      : schema;
+  const contract: OperationContract<S> = { name, schema: strictSchema, rest };
   contractsByName.set(name, contract);
   return contract;
 }
@@ -446,10 +470,23 @@ export function parseRest<S extends z.ZodObject>(
   }
 
   // Кросс-полевые refine общей схемы (XOR type_id/type и т.п.) — применяются
-  // и к REST: то же сообщение, что в MCP. Строгие схемы (.strict()) проверяют
-  // лишние ключи ПО СЫРОМУ телу: сливаем его с распарсенными полями (out
-  // перезаписывает валидированные значения).
-  const merged = body === undefined ? out : { ...body, ...out };
+  // и к REST: то же сообщение, что в MCP. MCP-контракты теперь `.strict()`
+  // (задача c245e7de), но REST-карта может объявлять поля вне общей схемы
+  // (`colors` у слоёв, `create_link` у мыслей, `ordered_ids` у pins). Чтобы
+  // strict не ругался на легитимные REST-only поля и одновременно отвергал
+  // лишние ключи в body (тест 0.4.3 «REST thoughts/query rejects unknown body
+  // keys with 422»), парсим схемой объединение body+out, но исключаем из
+  // него поля, объявленные ТОЛЬКО в rest-карте: они легитимны для REST,
+  // уже провалидированы поштучно в цикле выше и попадут в `out`.
+  const restOnlyFields = new Set<string>(
+    Object.keys(contract.rest).filter((k) => !(k in contract.schema.shape)),
+  );
+  const rawMerged = body === undefined ? out : { ...body, ...out };
+  const merged: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(rawMerged)) {
+    if (restOnlyFields.has(k)) continue;
+    merged[k] = v;
+  }
   const res = contract.schema.safeParse(merged);
   if (!res.success) {
     const issue = firstIssue(res.error);
@@ -637,6 +674,9 @@ const SearchFields = z
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
   })
+  // `.strict()` (ошибка c245e7de, после ea4581c5): неизвестный ключ верхнего
+  // уровня → VALIDATION_ERROR. До `.refine()` — порядок обязателен в zod 4.
+  .strict()
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
 
@@ -684,6 +724,8 @@ const QueryFields = z
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
   })
+  // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
+  .strict()
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
 export const ThoughtsQuery = defineContract('etn.thoughts.query', QueryFields, {});
 
@@ -893,6 +935,8 @@ const GetCommentFields = z
     comment_id: z.string().min(1).optional(),
     thought_id: ThoughtId.optional(),
   })
+  // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
+  .strict()
   .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
     message: 'provide exactly one of comment_id or thought_id',
   });
@@ -931,6 +975,8 @@ const EditCommentFields = z
     expected_version: ExpectedVersion,
     ops: z.array(EditOpSchema).min(1),
   })
+  // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
+  .strict()
   .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
     message: 'provide exactly one of comment_id or thought_id',
   });
@@ -1173,6 +1219,8 @@ const MentionsScanFields = z
     link_direction: z.enum(['out', 'in']).optional(),
     source_thought_id: ThoughtId.optional(),
   })
+  // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
+  .strict()
   .refine((v) => (v.text !== undefined) !== (v.source !== undefined), {
     message: 'provide exactly one of `text` or `source`',
   });
