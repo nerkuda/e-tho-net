@@ -364,12 +364,41 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     });
   }
 
+  /**
+   * Оконные capture-слушатели снимаются и возвращаются отдельно от слушателей
+   * самого поля. Поле может ВРЕМЕННО выпасть из документа — вкладка редактора
+   * кэшируется и при показе другой вкладки отключает свою панель
+   * (`paneHostEl.replaceChildren`), возвращая тот же узел обратно (ошибка
+   * 0a49c206). Полное `dispose()` по `!input.isConnected` убивало живой поиск
+   * навсегда: первое же оконное событие после отключения (клик/клавиша в
+   * «Комментарии») снимало и слушатели поля, а у возвращённого из кэша узла их
+   * уже никто не вешал. Поэтому на отключении снимаем только оконные слушатели
+   * (защита от утечки — как для закрытого диалога), а слушатель `focus` самого
+   * поля, переживший отключение, возвращает их при повторном фокусе.
+   */
+  let windowWired = true;
+  const wireWindow = (): void => {
+    if (windowWired) return;
+    windowWired = true;
+    window.addEventListener('mousedown', onWinDown, true);
+    window.addEventListener('keydown', onWinKey, true);
+  };
+  const unwireWindow = (): void => {
+    if (!windowWired) return;
+    windowWired = false;
+    window.removeEventListener('mousedown', onWinDown, true);
+    window.removeEventListener('keydown', onWinKey, true);
+  };
+
   /** Клик мимо (вне поля и списка) закрывает список. */
   const onWinDown = (event: MouseEvent): void => {
-    // Поле выпало из документа (перерисованный редактор, закрытый диалог) —
-    // оконные capture-слушатели снимаем, чтобы они не жили дольше виджета.
+    // Поле выпало из документа (перерисованный редактор, закрытый диалог,
+    // отключённая панель кэшированной вкладки) — оконные capture-слушатели
+    // снимаем, чтобы они не жили дольше виджета. Слушатели поля остаются: при
+    // возврате в документ повторный фокус вернёт оконные (wireWindow).
     if (!input.isConnected) {
-      dispose();
+      unwireWindow();
+      close();
       return;
     }
     if (list === null) return;
@@ -381,7 +410,8 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
   /** Esc: пока список открыт, нажатие принадлежит списку, не диалогу. */
   const onWinKey = (event: KeyboardEvent): void => {
     if (!input.isConnected) {
-      dispose();
+      unwireWindow();
+      close();
       return;
     }
     if (event.key !== 'Escape') return;
@@ -396,6 +426,9 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
 
   const onFocus = (): void => {
     focused = true;
+    // Поле вернулось в документ (панель кэшированной вкладки подключена
+    // обратно) — оконные слушатели, снятые при отключении, ставятся снова.
+    wireWindow();
     refresh(false);
   };
   const onInput = (): void => {
@@ -443,8 +476,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     input.removeEventListener('input', onInput);
     input.removeEventListener('keydown', onKey);
     input.removeEventListener('blur', onBlur);
-    window.removeEventListener('mousedown', onWinDown, true);
-    window.removeEventListener('keydown', onWinKey, true);
+    unwireWindow();
   };
 
   return { open: () => refresh(true), close, dispose };
