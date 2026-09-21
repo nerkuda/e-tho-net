@@ -13,9 +13,11 @@ import { EtnError } from '@etn/shared';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
+import type { NetworkDb } from '../src/db/network-db.js';
 import {
   addLinkPropertyValue,
   computeThoughtCardWarnings,
+  createNetworkProperty,
   createTypeProperty,
   getLinkPropertyValues,
   getPropertyValuesWithLinks,
@@ -241,6 +243,201 @@ describe(
         ) as { values: Array<{ target_id: string }> } | undefined;
         assert.ok(potomki !== undefined);
         assert.deepEqual(potomki.values.map((v) => v.target_id), [child.id]);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+/**
+ * Направление ЗАПИСИ свойства-связи по стороне привязки владельца (0.8.2, ошибка
+ * c67676f3): свойство привязано источником к одному типу и назначением к
+ * другому; заполнение у цели обязано создать ребро значение → владелец, чтобы
+ * прочитаться тем же свойством (а не лечь в обратную сторону).
+ */
+describe(
+  'link-property write direction by owner binding side (0.8.2, c67676f3)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    /** Живые типизированные рёбра сети — для проверки направления. */
+    function liveTypedEdges(
+      ndb: NetworkDb,
+      linkTypeId: string,
+    ): Array<{ source_id: string; target_id: string }> {
+      return ndb
+        .prepare(
+          `SELECT source_id, target_id FROM links_v
+            WHERE type_id = ? AND active = 1 AND marked_for_deletion = 0
+            ORDER BY source_id, target_id`,
+        )
+        .all(linkTypeId) as Array<{ source_id: string; target_id: string }>;
+    }
+
+    /** Карточка: свойство-связь по имени с его значениями. */
+    function findLinkValues(
+      ndb: NetworkDb,
+      thoughtId: string,
+      propertyName: string,
+    ): Array<{ target_id: string }> | undefined {
+      const found = getPropertyValuesWithLinks(ndb, 'thought', thoughtId).find(
+        (v) => v.value_type === 'link' && 'values' in v && v.property_name === propertyName,
+      );
+      return found !== undefined && 'values' in found
+        ? (found.values as Array<{ target_id: string }>).map((v) => ({ target_id: v.target_id }))
+        : undefined;
+    }
+
+    /**
+     * Свойство «организации категории / категория организации»: тип источника
+     * «Категория» привязан стороной source, тип назначения «Организация» —
+     * стороной target. Третий тип к свойству не привязан.
+     */
+    function seedCategoryOrg(ndb: NetworkDb) {
+      const category = createThoughtType(ndb, { name: 'Категория-тип' }, USER);
+      const org = createThoughtType(ndb, { name: 'Организация-тип' }, USER);
+      const other = createThoughtType(ndb, { name: 'Прочее-тип' }, USER);
+      const prop = createNetworkProperty(
+        ndb,
+        {
+          name: 'организации категории',
+          value_type: 'link',
+          name_forward: 'организации категории',
+          name_reverse: 'категория организации',
+        },
+        USER,
+      );
+      const linkTypeId = (prop.config?.link_type_id ?? '') as string;
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        category.id,
+        { key: 'организации категории', value_type: 'link', side: 'source' },
+        USER,
+      );
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        org.id,
+        { key: 'организации категории', value_type: 'link', side: 'target' },
+        USER,
+      );
+      return { category, org, other, linkTypeId };
+    }
+
+    it('со стороны source: ребро владелец → значение, видно с обеих сторон', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, linkTypeId } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина', type_id: category.id }, USER);
+        const o = createThought(ndb, { title: 'Поликлиника', type_id: org.id }, USER);
+
+        setPropertyValue(ndb, 'thought', c.id, 'организации категории', o.id, USER);
+
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), [{ source_id: c.id, target_id: o.id }]);
+        const catVals = getLinkPropertyValues(ndb, 'thought', c.id, linkTypeId, 'out');
+        assert.equal(catVals.length, 1);
+        assert.equal(catVals[0]!.target_id, o.id);
+        // Обратная сторона тоже прочитывает то же ребро.
+        assert.deepEqual(findLinkValues(ndb, o.id, 'категория организации'), [{ target_id: c.id }]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('со стороны target: ребро значение → владелец, значение читается этим же свойством', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, linkTypeId } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина 2', type_id: category.id }, USER);
+        const o = createThought(ndb, { title: 'Поликлиника 2', type_id: org.id }, USER);
+
+        // Заполняем свойство У ОРГАНИЗАЦИИ (владелец — цель привязки).
+        setPropertyValue(ndb, 'thought', o.id, 'категория организации', c.id, USER);
+
+        // Ребро обязано лечь категория → организация (значение → владелец).
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), [{ source_id: c.id, target_id: o.id }]);
+        // И прочитаться этим же свойством у организации.
+        assert.deepEqual(findLinkValues(ndb, o.id, 'категория организации'), [{ target_id: c.id }]);
+        const inVals = getLinkPropertyValues(ndb, 'thought', o.id, linkTypeId, 'in');
+        assert.equal(inVals.length, 1);
+        assert.equal(inVals[0]!.target_id, c.id);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('повторное заполнение target-стороны идемпотентно (значение не теряется)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, linkTypeId } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина 3', type_id: category.id }, USER);
+        const o = createThought(ndb, { title: 'Поликлиника 3', type_id: org.id }, USER);
+
+        setPropertyValue(ndb, 'thought', o.id, 'категория организации', c.id, USER);
+        setPropertyValue(ndb, 'thought', o.id, 'категория организации', c.id, USER);
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), [{ source_id: c.id, target_id: o.id }]);
+        assert.deepEqual(findLinkValues(ndb, o.id, 'категория организации'), [{ target_id: c.id }]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('валидация значений — по противоположной стороне привязки', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, other } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина 4', type_id: category.id }, USER);
+        const o = createThought(ndb, { title: 'Поликлиника 4', type_id: org.id }, USER);
+        const x = createThought(ndb, { title: 'Прочее 4', type_id: other.id }, USER);
+
+        // Владелец target принимает только источники (Категория) — «Прочее» отвергается.
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', o.id, 'категория организации', x.id, USER),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        // Владелец source принимает только цели (Организация) — «Прочее» отвергается.
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', c.id, 'организации категории', x.id, USER),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        // Правильная сторона проходит.
+        setPropertyValue(ndb, 'thought', o.id, 'категория организации', c.id, USER);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('remove находит ребро с обеих сторон', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, linkTypeId } = seedCategoryOrg(ndb);
+        const c1 = createThought(ndb, { title: 'Медицина 5', type_id: category.id }, USER);
+        const o1 = createThought(ndb, { title: 'Поликлиника 5', type_id: org.id }, USER);
+        const c2 = createThought(ndb, { title: 'Медицина 6', type_id: category.id }, USER);
+        const o2 = createThought(ndb, { title: 'Поликлиника 6', type_id: org.id }, USER);
+
+        // Ребро создано со стороны source; удаляем со стороны target.
+        const first = addLinkPropertyValue(
+          ndb, 'thought', c1.id, 'организации категории', o1.id, null, USER,
+        );
+        const removed = removeLinkPropertyValue(
+          ndb, 'thought', o1.id, 'категория организации', c1.id, USER,
+        );
+        assert.equal(removed.link_id, first.link_id);
+
+        // Ребро создано со стороны target; удаляем со стороны source.
+        const second = addLinkPropertyValue(
+          ndb, 'thought', o2.id, 'категория организации', c2.id, null, USER,
+        );
+        const removed2 = removeLinkPropertyValue(
+          ndb, 'thought', c2.id, 'организации категории', o2.id, USER,
+        );
+        assert.equal(removed2.link_id, second.link_id);
+
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), []);
+        assert.equal(getLink(ndb, first.link_id)?.marked_for_deletion, true);
+        assert.equal(getLink(ndb, second.link_id)?.marked_for_deletion, true);
       } finally {
         ndb.close();
       }

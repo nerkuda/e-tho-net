@@ -330,6 +330,38 @@ export function linkPropertySideFromBinding(row: {
   return linkPropertySideFromConfig(row.value_type, row.config);
 }
 
+/**
+ * Сторона привязки свойства-связи у конкретного владельца-мысли (0.8.2, ошибка
+ * c67676f3). Направление ЗАПИСИ рёбер обязано совпадать с направлением ЧТЕНИЯ
+ * (`emitExplicit`): обе стороны определяет привязка (`type_properties.side`) в
+ * цепочке типов владельца, а не `config.direction`. Ищем первое определение
+ * свойства в эффективном наборе типа владельца (собственная привязка или
+ * унаследованная; зеркала попадают туда же). `side` привязки имеет приоритет,
+ * при NULL — fallback на `config.direction` (привязки до миграции 041).
+ *
+ * `null` — свойства нет в цепочке типов владельца (внетиповое заполнение):
+ * вызывающий откатывается на `config.direction`, сохраняя прежнее поведение.
+ * Для структурных свойств («Родители»/«Потомки») сторона не определена — тоже
+ * `null`, направление берётся из `config.direction`.
+ */
+export function resolveOwnerBindingSide(
+  ndb: NetworkDb,
+  ownerId: string,
+  propertyId: string,
+): LinkPropertySide | null {
+  const row = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(ownerId) as
+    | { type_id: string | null }
+    | undefined;
+  const typeId = row?.type_id ?? getRootTypeId(ndb, 'thought_types');
+  if (typeId === null) return null;
+  for (const def of listEffectiveTypeProperties(ndb, 'thought_type', typeId)) {
+    if (def.property_id !== propertyId || def.value_type !== 'link') continue;
+    if (isStructuralLinkProperty(def.config)) return null;
+    return def.side ?? linkPropertySideFromConfig(def.value_type, def.config);
+  }
+  return null;
+}
+
 /** `source` ↔ `target`. Для вычисления зеркала из исходной стороны. */
 export function oppositeSide(side: LinkPropertySide): LinkPropertyDirection {
   return side === 'source' ? 'in' : 'out';
@@ -838,8 +870,41 @@ function linkEndpoints(
   return direction === 'out' ? [ownerId, targetId] : [targetId, ownerId];
 }
 
-/** Проверить, что цель существует и подходит под `allowed_target_type_ids`. */
-function validateLinkTargetType(ndb: NetworkDb, prop: PropertyLike, targetId: string): void {
+/**
+ * Типы-кандидаты значения свойства-связи с ПРОТИВОПОЛОЖНОЙ стороны привязки
+ * владельца (0.8.2, ошибка c67676f3): реестр привязок — единственный источник
+ * истины ограничения (та же единая точка `loadBindingTypesBySide`, что и
+ * `allowed_opposite_type_ids` при чтении карточки, см.
+ * {@link attachAllowedOppositeTypeIds}). Привязка со стороны источника
+ * ограничивает цели (типы стороны назначения), со стороны назначения —
+ * источники. Поддеревья раскрываются (L21). Пусто — ограничения по реестру нет.
+ */
+function allowedOppositeTypeIdsForValidation(
+  ndb: NetworkDb,
+  propertyId: string,
+  side: LinkPropertySide,
+): string[] {
+  const entry = loadBindingTypesBySide(ndb, [propertyId]).get(propertyId);
+  if (entry === undefined) return [];
+  const types = side === 'source' ? entry.target : entry.source;
+  if (types.length === 0) return [];
+  return expandTypeIdsToSubtree(ndb, 'thought_types', types);
+}
+
+/**
+ * Проверить, что цель существует и подходит по типу. Тип-отбор берётся с
+ * противоположной стороны привязки владельца (`side`, 0.8.2, ошибка c67676f3) —
+ * единая точка {@link allowedOppositeTypeIdsForValidation}; при отсутствии
+ * привязки (`side === null`) или пустом реестровом ограничении — legacy
+ * `config.allowed_target_type_ids` (совместимость с привязками до миграции 041
+ * и валидацией дефолтов реестра).
+ */
+function validateLinkTargetType(
+  ndb: NetworkDb,
+  prop: PropertyLike,
+  targetId: string,
+  side: LinkPropertySide | null = null,
+): void {
   const target = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(targetId) as
     | { type_id: string | null }
     | undefined;
@@ -849,11 +914,16 @@ function validateLinkTargetType(ndb: NetworkDb, prop: PropertyLike, targetId: st
       ref: targetId,
     });
   }
-  const allowedIds = expandTypeIdsToSubtree(
-    ndb,
-    'thought_types',
-    (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
-  );
+  const registryAllowed =
+    side === null ? [] : allowedOppositeTypeIdsForValidation(ndb, prop.id, side);
+  const allowedIds =
+    registryAllowed.length > 0
+      ? registryAllowed
+      : expandTypeIdsToSubtree(
+          ndb,
+          'thought_types',
+          (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
+        );
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
     throw new EtnError('VALIDATION_ERROR', `thought ${targetId} is not of a required type`, {
       key: prop.name,
@@ -1040,9 +1110,12 @@ function setLinkPropertyTargets(
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  const direction = linkPropertyDirection(cfg);
+  // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3),
+  // fallback на config.direction вне типа владельца.
+  const side = resolveOwnerBindingSide(ndb, ownerId, prop.id);
+  const direction = linkPropertyDirection(cfg, side);
 
-  for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId);
+  for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId, side);
   for (const targetId of targetIds) {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     if (src === dst) {
@@ -1168,9 +1241,11 @@ function addLinkPropertyTarget(
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  const direction = linkPropertyDirection(cfg);
+  // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3).
+  const side = resolveOwnerBindingSide(ndb, ownerId, prop.id);
+  const direction = linkPropertyDirection(cfg, side);
 
-  validateLinkTargetType(ndb, prop, targetId);
+  validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
   if (src === dst) {
     throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
@@ -1202,7 +1277,8 @@ function removeLinkPropertyTarget(
 ): string | null {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  const direction = linkPropertyDirection(cfg);
+  // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3).
+  const direction = linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing === undefined) return null;
   markLinkForDeletion(ndb, existing.id, actorUserId);
@@ -4072,7 +4148,8 @@ export function addLinkPropertyValue(
       ndb,
       ownerId,
       linkPropertyLinkTypeId(prop.config),
-      linkPropertyDirection(prop.config),
+      // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3).
+      linkPropertyDirection(prop.config, resolveOwnerBindingSide(ndb, ownerId, prop.id)),
     ).get(targetId);
     const id = addLinkPropertyTarget(ndb, ownerId, prop, targetId, comment, actorUserId);
     touchOwner(ndb, ownerType, ownerId, actorUserId);
