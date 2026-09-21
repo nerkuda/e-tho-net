@@ -2168,11 +2168,13 @@ export class RestClient {
     return data.edges;
   }
 
-  /** `GET /networks/{nid}/saved-filters` — the user's own saved filters. */
+  /** `GET /networks/{nid}/saved-filters?view=structures` — the user's own saved filters. */
   public async listSavedFilters(
     networkId: string,
   ): Promise<import('@etn/shared').SavedFilter[]> {
-    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`);
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      query: { view: 'structures' },
+    });
   }
 
   /** `POST /networks/{nid}/saved-filters` — create (idempotent). */
@@ -2182,7 +2184,7 @@ export class RestClient {
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').SavedFilter> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
-      body: input,
+      body: { view: 'structures', ...input },
       requestOptions: opts,
     });
   }
@@ -2200,7 +2202,7 @@ export class RestClient {
     return this.request(
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
-      { body: input, requestOptions: opts },
+      { body: { view: 'structures', ...input }, requestOptions: opts },
     );
   }
 

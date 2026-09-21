@@ -398,6 +398,51 @@ describe('RestClient — retry & timeout', () => {
   });
 });
 
+describe('RestClient — сохранённые отборы «Структур» (ошибка 0a8b9da3)', () => {
+  it('lists/creates/updates/deletes structure saved filters with view=structures', async () => {
+    const filter = {
+      id: 'f1',
+      view: 'structures',
+      name: 'Все персоны',
+      definition: { sort: 'alpha', order: 'asc' },
+      created_at: '2024',
+      updated_at: '2024',
+    };
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [filter] } },
+      { status: 201, body: { data: filter } },
+      { status: 200, body: { data: { ...filter, name: 'Все женщины' } } },
+      { status: 204, body: undefined },
+    ]);
+    const client = makeClient(fetch);
+
+    const list = await client.listSavedFilters('net1');
+    assert.equal(list.length, 1);
+    assert.ok(calls[0]!.url.includes('/saved-filters?'), 'чтение идёт по тому же адресу');
+    assert.ok(calls[0]!.url.includes('view=structures'), 'вид «Структур» задан явно');
+
+    await client.createSavedFilter('net1', {
+      name: 'Все женщины',
+      definition: { sort: 'alpha', order: 'asc' },
+    });
+    const createdBody = JSON.parse((calls[1]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(
+      createdBody['view'],
+      'structures',
+      'POST обязан нести view — иначе сервер отвечает VALIDATION_ERROR «Недопустимый view»',
+    );
+    assert.equal(createdBody['name'], 'Все женщины');
+
+    await client.updateSavedFilter('net1', 'f1', { name: 'Все женщины' });
+    const updatedBody = JSON.parse((calls[2]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(updatedBody['view'], 'structures');
+    assert.equal(updatedBody['name'], 'Все женщины');
+
+    await client.deleteSavedFilter('net1', 'f1');
+    assert.equal(calls[3]!.url, 'http://localhost:3000/api/v1/networks/net1/saved-filters/f1');
+  });
+});
+
 describe('RestClient — chronicle (L20)', () => {
   it('POSTs the chronicle query and reads total from the list meta', async () => {
     const { fetch, calls } = makeFetch([

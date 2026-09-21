@@ -2972,11 +2972,14 @@ export const RestEdgesBody = defineContract(
   },
 );
 
-/** Тело POST /saved-filters — { view, name, definition }. */
+/** Тело POST /saved-filters — { view?, name, definition }. */
 export const RestSavedFilterCreateBody = defineContract(
   'rest:structures.saved-filter-create-body',
   z.object({
-    view: z.enum(SAVED_FILTER_VIEWS),
+    // `view` необязателен: по спецификации (операция API `/saved-filters`)
+    // значение по умолчанию — `structures`. Обязательность расходилась с
+    // чтением (GET `view?`) и отбивала запись клиенту без явного вида.
+    view: z.enum(SAVED_FILTER_VIEWS).optional(),
     name: z.string().min(1),
   }),
   {
