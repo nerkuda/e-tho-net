@@ -176,6 +176,42 @@ describe(
       }
     });
 
+    // Стандарт «запись каждого view одного REST-контракта покрыта тестом»
+    // (задача c85e53ec): вид `dir` есть и у focus-preferences, и у
+    // focus-order — тест записи обязан пройти каждое значение вида, а не
+    // только первое. focus-preferences принимает весь FOCUS_DIRS
+    // (parents|children|siblings|both), focus-order — только ручные зоны
+    // MANUAL_DIRS (children|parents); siblings+manual отклоняется доменом,
+    // поэтому для siblings берётся sort=alpha.
+    it('focus preferences/order: every dir value of the view is accepted', async () => {
+      const ctx = await buildRestContext();
+      try {
+        for (const dir of ['parents', 'children', 'siblings', 'both'] as const) {
+          const res = await ctx.app.inject({
+            method: 'PUT',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/focus-preferences`,
+            headers: authHeaders(ctx),
+            payload: { dir, sort: 'alpha', order: 'asc' },
+          });
+          assert.equal(res.statusCode, 200, `focus-preferences dir=${dir}: ${res.body}`);
+          assert.equal((res.json().data as { dir: string }).dir, dir);
+        }
+
+        for (const dir of ['children', 'parents'] as const) {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/focus-order`,
+            headers: authHeaders(ctx),
+            payload: { dir, ordered_ids: [ctx.homeId] },
+          });
+          assert.equal(res.statusCode, 200, `focus-order dir=${dir}: ${res.body}`);
+          assert.equal((res.json().data as { dir: string }).dir, dir);
+        }
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('focus applies the show_on_map default filter to typed links (0.8.1)', async () => {
       const ctx = await buildRestContext();
       try {

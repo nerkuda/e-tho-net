@@ -184,4 +184,48 @@ describe('GET/PATCH /networks/:networkId/saved-filters', () => {
       ['Хроника за неделю'],
     );
   });
+
+  // Стандарт «запись каждого view одного REST-контракта покрыта тестом»
+  // (задача c85e53ec): `RestSavedFilterPatchBody.view` — тоже вид с двумя
+  // значениями; PATCH обязан принимать и structures, и chronicle, разбирая
+  // definition парсером выбранного вида.
+  it('PATCH с явным view сохраняет отбор своего вида', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const structures = await postFilter(ctx, {
+      view: 'structures',
+      name: 'Все персоны',
+      definition: STRUCTURE_DEFINITION,
+    });
+    const chronicle = await postFilter(ctx, {
+      view: 'chronicle',
+      name: 'Хроника за неделю',
+      definition: CHRONICLE_DEFINITION,
+    });
+    assert.equal(structures.statusCode, 201, JSON.stringify(structures.error));
+    assert.equal(chronicle.statusCode, 201, JSON.stringify(chronicle.error));
+
+    const patchStructures = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters/${structures.data!.id}`,
+      headers: authHeaders(ctx),
+      payload: { view: 'structures', definition: { sort: 'alpha', order: 'asc' } },
+    });
+    assert.equal(patchStructures.statusCode, 200, patchStructures.body);
+    const patchedStructures = patchStructures.json().data as SavedFilter;
+    assert.equal(patchedStructures.view, 'structures');
+    assert.equal((patchedStructures.definition as { sort?: string }).sort, 'alpha');
+
+    const patchChronicle = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters/${chronicle.data!.id}`,
+      headers: authHeaders(ctx),
+      payload: { view: 'chronicle', definition: { order: 'asc' } },
+    });
+    assert.equal(patchChronicle.statusCode, 200, patchChronicle.body);
+    const patchedChronicle = patchChronicle.json().data as SavedFilter;
+    assert.equal(patchedChronicle.view, 'chronicle');
+    assert.equal((patchedChronicle.definition as { order?: string }).order, 'asc');
+  });
 });
