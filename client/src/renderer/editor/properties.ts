@@ -287,8 +287,9 @@ async function confirmOutsideRemove(name: string): Promise<boolean> {
  * itself never deletes such values). Свойства-связи вне типа (dfaacb05):
  * реестровое свойство (не подключённое к типу владельца) редактируется как в
  * основной таблице — запись значений внетипового свойства-связи разрешена;
- * рёбра типа связи без свойства в реестре показываются read-only чипами —
- * ключа для записи нет.
+ * рёбра типа связи без свойства в реестре показываются read-only чипами, но
+ * удаляются по display-имени стороны (748b80fd) — «Убрать из значения» в меню
+ * чипа и крестик очистки набора у ячейки.
  *
  * Used by the standalone «Свойства вне типа» group in the «Свойства» tab
  * (task 8ab775d9); no longer rendered below the main table in the
@@ -317,7 +318,7 @@ function buildOutsideTypeTable(
           nameCell,
           value.property_id !== ''
             ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
-            : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство, но не редактируется через свойства.',
+            : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
         );
         row.append(nameCell);
         row.append(
@@ -345,8 +346,8 @@ function buildOutsideTypeTable(
  * к типу владельца) — полноценный редактор значения через общий
  * `buildValueEditor`, тот же, что в основной таблице: запись значения
  * внетипового свойства-связи разрешена (dfaacb05). Рёбра типа связи без
- * реестрового свойства — read-only чипи: ключа записи нет, редактирование
- * ушло бы в рёбра напрямую.
+ * реестрового свойства — read-only чипи с удалением по display-имени стороны
+ * (748b80fd): «Убрать из значения» в меню чипа и «×» очистки набора у ячейки.
  */
 function buildOutsideLinkCell(
   value: LinkPropertyValues,
@@ -435,15 +436,62 @@ function buildOutsideLinkCell(
 
     // Read-only рёбра вне типа (тип связи без реестрового свойства): те же
     // оформление и обработчики, что у чипа основной таблицы — cab38479.
+    //
+    // 0.8.2, ошибка 748b80fd: ключом записи служит display-имя стороны связи
+    // (`value.property_name`), которое сервер понимает (`resolveDefinition`
+    // шаг 3). Поэтому у чипов появляется «Убрать из значения» (одно ребро), а
+    // у ячейки — крестик «×» очистки набора целиком с подтверждением (как у
+    // реестровых внетиповых, cab38479). Направление сервер берёт из имени
+    // стороны, так что удаляется именно это ребро, а не типовое входящее.
+    const propertyKey = value.property_name;
+    const currentIds = value.values.map((edge) => edge.target_id);
+    const removeTarget = (targetId: string): void => {
+      void (async () => {
+        const remaining = currentIds.filter((id) => id !== targetId);
+        try {
+          await etn.properties.set(
+            networkId,
+            ownerType,
+            ownerId,
+            propertyKey,
+            remaining.length > 0 ? remaining : null,
+          );
+          repaintAfterLinkValueWrite(ownerType, ownerId);
+          onRemove();
+        } catch (err) {
+          notice(`Не удалось удалить связь: ${errText(err)}`, 'error');
+        }
+      })();
+    };
     const wrap = div('link-value-editor');
     if (value.values.length === 0) {
       wrap.append(span('—', 'muted'));
     }
     const refs = new Map<string, ThoughtRef>();
     for (const edge of value.values) {
-      wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs));
+      wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs, { removeTarget }));
     }
     cell.append(wrap);
+    // Крестик очищает внетиповой набор целиком: `set(key, null)` отзывает все
+    // рёбра выведенной из имени стороны.
+    const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
+    clearBtn.type = 'button';
+    clearBtn.title = 'Удалить значение';
+    clearBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void (async () => {
+        const ok = await confirmOutsideRemove(value.property_name);
+        if (!ok) return;
+        try {
+          await etn.properties.set(networkId, ownerType, ownerId, propertyKey, null);
+          repaintAfterLinkValueWrite(ownerType, ownerId);
+          onRemove();
+        } catch (err) {
+          notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+        }
+      })();
+    });
+    cell.append(clearBtn);
     // Подтянем стили/иконки батчем (cb73f8d6, как в buildLinkValueEditor);
     // без этого чипы рендерятся с дефолтной иконкой и без цвета мысли.
     if (value.values.length > 0) {
@@ -456,7 +504,9 @@ function buildOutsideLinkCell(
           if (!wrap.isConnected) return;
           for (const ref of resolved) refs.set(ref.id, ref);
           wrap.replaceChildren(
-            ...value.values.map((edge) => buildOutsideReadonlyEdgeChip(networkId, edge, refs)),
+            ...value.values.map((edge) =>
+              buildOutsideReadonlyEdgeChip(networkId, edge, refs, { removeTarget }),
+            ),
           );
         })
         .catch(() => undefined);

@@ -793,13 +793,18 @@ describe('editor properties — внетиповые свойства-связи
     assert.ok(json.includes('Сотрудники (связь)'), 'outside-type link row is rendered');
     assert.ok(json.includes('Иванов'), 'edge target chip #1');
     assert.ok(json.includes('Петров'), 'edge target chip #2');
-    // Read-only для рёбер без ключа реестра: нет маркеров редактора
-    // (кнопки «выбрать»/«очистить») у этой строки.
+    // Read-only для рёбер без ключа реестра: нет маркеров редактора-поля
+    // («выбрать») у этой строки.
     assert.equal(
       json.includes('link-value-corner'),
       false,
       'registry-less link chips must not carry editor corner buttons',
     );
+    // Ошибка 748b80fd: у внетипового ребра появился крестик очистки набора
+    // (ключ записи — display-имя стороны связи), поэтому крестиков теперь два —
+    // у скаляра и у набора рёбер.
+    const clearButtons = json.split('prop-outside-remove').length - 1;
+    assert.equal(clearButtons, 2, '748b80fd: outside-type link set gained a clear button');
   });
 });
 

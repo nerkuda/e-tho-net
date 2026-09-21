@@ -1106,14 +1106,20 @@ function setLinkPropertyTargets(
   prop: PropertyLike,
   targetIds: string[],
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): string[] {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3),
+  // Направление — из display-имени стороны внетиповой записи (0.8.2, ошибка
+  // 748b80fd), иначе — по стороне привязки владельца (0.8.2, ошибка c67676f3),
   // fallback на config.direction вне типа владельца.
-  const side = resolveOwnerBindingSide(ndb, ownerId, prop.id);
-  const direction = linkPropertyDirection(cfg, side);
+  const bindingSide = resolveOwnerBindingSide(ndb, ownerId, prop.id);
+  const direction = nameDirection ?? linkPropertyDirection(cfg, bindingSide);
+  // Валидация цели: у внетипового display-ключа (`nameDirection` задан)
+  // привязки у владельца нет — ограничение сторон не применяем, остаётся
+  // legacy `config.allowed_target_type_ids`; иначе — сторона привязки.
+  const side = nameDirection !== null ? null : bindingSide;
 
   for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId, side);
   for (const targetId of targetIds) {
@@ -1237,13 +1243,17 @@ function addLinkPropertyTarget(
   targetId: string,
   comment: string | null,
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): string {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3).
-  const side = resolveOwnerBindingSide(ndb, ownerId, prop.id);
-  const direction = linkPropertyDirection(cfg, side);
+  // Направление — из display-имени (748b80fd), иначе сторона привязки
+  // владельца (c67676f3).
+  const bindingSide = resolveOwnerBindingSide(ndb, ownerId, prop.id);
+  const direction = nameDirection ?? linkPropertyDirection(cfg, bindingSide);
+  // Внетиповой display-ключ: привязки у владельца нет — без ограничения сторон.
+  const side = nameDirection !== null ? null : bindingSide;
 
   validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
@@ -1274,11 +1284,15 @@ function removeLinkPropertyTarget(
   prop: PropertyLike,
   targetId: string,
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): string | null {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3).
-  const direction = linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
+  // Направление — из display-имени (748b80fd), иначе сторона привязки
+  // владельца (c67676f3).
+  const direction =
+    nameDirection ??
+    linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing === undefined) return null;
   markLinkForDeletion(ndb, existing.id, actorUserId);
@@ -3177,6 +3191,42 @@ function attachedPropertyIds(
 }
 
 /**
+ * Результат {@link resolveDefinition}: определение свойства плюс направление рёбер,
+ * выведенное из display-имени стороны (0.8.2, ошибка 748b80fd). `direction`
+ * заполнен, когда ключ совпал с display-именем стороны внетиповой записи
+ * свойства-связи (`name_forward` → `out`, `name_reverse` → `in`): запись и
+ * удаление рёбер обязаны идти из имени стороны, а не из стороны привязки
+ * владельца. `null` — ключ адресован канонически (id, скаляр, ключ
+ * эффективного набора типа): направление определяет привязка владельца
+ * (0.8.2, ошибка c67676f3).
+ */
+export interface ResolvedDefinition extends PropertyLike {
+  direction: LinkPropertyDirection | null;
+}
+
+/**
+ * Направление рёбер, заданное display-именем стороны свойства-связи
+ * (`name_forward` ⇒ `out`, `name_reverse` ⇒ `in`) — как в
+ * {@link resolveConditionPropertyRef}. `null` — имя не совпало ни с одной
+ * текущей стороной (например, устаревший снимок имени строки реестра, когда
+ * тип связи переименовали) либо свойство скалярное/структурное.
+ */
+function linkPropertyDirectionFromDisplayName(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  key: string,
+): LinkPropertyDirection | null {
+  const cfg = config ?? {};
+  if (isStructuralLinkProperty(cfg)) return null;
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  if (linkTypeId === null) return null;
+  const k = typeNameKey(key);
+  if (k === typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'out'))) return 'out';
+  if (k === typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'in'))) return 'in';
+  return null;
+}
+
+/**
  * Resolve a property by the key the READ side shows. Names are unique per
  * network since 0.6.5, so a scalar name alone addresses the property — but a
  * link property reads under its DISPLAY name computed from the link type and
@@ -3192,9 +3242,15 @@ function attachedPropertyIds(
  *     a link hit is unambiguous; a display name clashing with a scalar's name
  *     surfaces as an explicit ambiguity error;
  *  2. the registry by stored name (unattached scalars, canonical link names);
- *  3. link properties of the registry by display name — the outside-type
+ *  3. link properties of the registry by EITHER display side — the outside-type
  *     write arm (требование dfaacb05: запись значения свойства-связи, не
  *     подключённого к типу владельца).
+ *
+ * Шаги 2–3 возвращают `direction` из display-имени (имя стороны адресует
+ * направление однозначно, 0.8.2, ошибка 748b80fd): у внетипового ключа
+ * `name_forward` пишет/удаляет ИСХОДЯЩИЕ рёбра, `name_reverse` — входящие.
+ * Шаг 1 (типовой ключ эффективного набора) направление не задаёт — его, как и
+ * раньше, определяет сторона привязки владельца (ошибка c67676f3).
  *
  * Connectivity to the owner's type is NOT checked here — callers decide
  * (writes reject unattached properties with 422, deletes of outside-type
@@ -3207,7 +3263,7 @@ export function resolveDefinition(
   ownerType: PropertyOwnerType,
   ownerId: string,
   key: string,
-): PropertyLike | null {
+): ResolvedDefinition | null {
   if (ownerType === 'thought') {
     // 1) Эффективный набор типа владельца — ключи, которые отдаёт чтение.
     const row = ndb
@@ -3220,7 +3276,14 @@ export function resolveDefinition(
       );
       if (matches.length === 1) {
         const def = matches[0]!;
-        return { id: def.property_id, name: def.key, value_type: def.value_type, config: def.config };
+        // Типовой ключ: направление — за привязкой владельца (c67676f3).
+        return {
+          id: def.property_id,
+          name: def.key,
+          value_type: def.value_type,
+          config: def.config,
+          direction: null,
+        };
       }
       if (matches.length > 1) {
         throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
@@ -3231,34 +3294,48 @@ export function resolveDefinition(
       }
     }
   }
-  // 2) Канонический путь — имя строки реестра.
+  // 2) Канонический путь — имя строки реестра. Для свойства-связи имя строки —
+  //    display-имя ОДНОЙ из сторон: если оно совпало с текущей стороной типа
+  //    связи, направление берём из имени (748b80fd).
   const prop = getNetworkPropertyByName(ndb, key);
   if (prop) {
-    return { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config };
+    return {
+      id: prop.id,
+      name: prop.name,
+      value_type: prop.value_type,
+      config: prop.config,
+      direction:
+        prop.value_type === 'link'
+          ? linkPropertyDirectionFromDisplayName(ndb, prop.config, key)
+          : null,
+    };
   }
   // 3) Внетиповая запись свойства-связи (dfaacb05): ключ может быть
-  //    display-именем link-свойства реестра, не подключённого к типу владельца.
+  //    display-именем любой стороны link-свойства реестра, не подключённого к
+  //    типу владельца; направление — из имени стороны (748b80fd).
   if (ownerType === 'thought') {
-    const byDisplay = new Map<string, NetworkProperty>();
+    const byDisplay = new Map<string, { prop: NetworkProperty; direction: LinkPropertyDirection }>();
     for (const p of listNetworkProperties(ndb)) {
       if (p.value_type !== 'link') continue;
-      const cfg = p.config ?? {};
-      if (isStructuralLinkProperty(cfg)) continue;
-      const ltId = linkPropertyLinkTypeId(cfg);
-      if (ltId === null) continue;
-      if (linkPropertyDisplayName(ndb, ltId, linkPropertyDirection(cfg)) === key) {
-        byDisplay.set(p.id, p);
-      }
+      const direction = linkPropertyDirectionFromDisplayName(ndb, p.config, key);
+      if (direction === null) continue;
+      byDisplay.set(p.id, { prop: p, direction });
     }
     if (byDisplay.size === 1) {
-      const p = [...byDisplay.values()][0]!;
-      return { id: p.id, name: p.name, value_type: p.value_type, config: p.config };
+      const hit = [...byDisplay.values()][0]!;
+      return {
+        id: hit.prop.id,
+        name: hit.prop.name,
+        value_type: hit.prop.value_type,
+        config: hit.prop.config,
+        direction: hit.direction,
+      };
     }
     if (byDisplay.size > 1) {
       throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
         field: 'property',
         name: key,
-        candidates: [...byDisplay.values()].map((p) => ({ id: p.id, name: p.name })),
+        candidates: [...byDisplay.values()].map((h) => ({ id: h.prop.id, name: h.prop.name })),
       });
     }
   }
@@ -3863,7 +3940,16 @@ export function setPropertyValue(
         key,
       });
     }
-    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, { key }, actorUserId);
+    return setPropertyValueForProperty(
+      ndb,
+      ownerType,
+      ownerId,
+      prop,
+      value,
+      { key },
+      actorUserId,
+      prop.direction,
+    );
   });
 }
 
@@ -3927,6 +4013,7 @@ function setPropertyValueForProperty(
   value: PropertyValueValue,
   errKey: { key: string },
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): PropertyValue {
   // Свойство-связь: запись — создание/правка рёбер, а не значение в
   // property_values (ADR «свойство-связь — проекция ребра»). Запись вне типа
@@ -3944,6 +4031,7 @@ function setPropertyValueForProperty(
       prop,
       normalizeLinkTargets(value, errKey.key),
       actorUserId,
+      nameDirection,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     const nowMs = Date.now();
@@ -4148,10 +4236,20 @@ export function addLinkPropertyValue(
       ndb,
       ownerId,
       linkPropertyLinkTypeId(prop.config),
-      // Направление — по стороне привязки владельца (0.8.2, ошибка c67676f3).
-      linkPropertyDirection(prop.config, resolveOwnerBindingSide(ndb, ownerId, prop.id)),
+      // Направление — из display-имени (748b80fd), иначе сторона привязки
+      // владельца (0.8.2, ошибка c67676f3).
+      prop.direction ??
+        linkPropertyDirection(prop.config, resolveOwnerBindingSide(ndb, ownerId, prop.id)),
     ).get(targetId);
-    const id = addLinkPropertyTarget(ndb, ownerId, prop, targetId, comment, actorUserId);
+    const id = addLinkPropertyTarget(
+      ndb,
+      ownerId,
+      prop,
+      targetId,
+      comment,
+      actorUserId,
+      prop.direction,
+    );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id, created: existing === undefined };
   });
@@ -4183,7 +4281,14 @@ export function removeLinkPropertyValue(
         key,
       });
     }
-    const id = removeLinkPropertyTarget(ndb, ownerId, prop, targetId, actorUserId);
+    const id = removeLinkPropertyTarget(
+      ndb,
+      ownerId,
+      prop,
+      targetId,
+      actorUserId,
+      prop.direction,
+    );
     if (id !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id };
   });

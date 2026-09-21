@@ -25,7 +25,7 @@ import {
   setPropertyValue,
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
-import { getLink } from '../src/domain/link-service.js';
+import { createLink, getLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createThought } from '../src/domain/thought-service.js';
 
@@ -438,6 +438,144 @@ describe(
         assert.deepEqual(liveTypedEdges(ndb, linkTypeId), []);
         assert.equal(getLink(ndb, first.link_id)?.marked_for_deletion, true);
         assert.equal(getLink(ndb, second.link_id)?.marked_for_deletion, true);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+/**
+ * Направление записи/удаления для ВНЕТИПОВОГО display-ключа (0.8.2, ошибка
+ * 748b80fd): ключом служит display-имя стороны свойства-связи
+ * (`name_forward`/`name_reverse`), и направление рёбер обязано выводиться из
+ * ИМЕНИ стороны, а не из стороны привязки владельца. Иначе forward-ключ у
+ * владельца-цели удалял бы типовое ВХОДЯЩЕЕ ребро вместо «неправильного»
+ * исходящего.
+ */
+describe(
+  'outside-type link key direction from display name (0.8.2, 748b80fd)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    /** Живые типизированные рёбра сети — для проверки направления. */
+    function liveTypedEdges(
+      ndb: NetworkDb,
+      linkTypeId: string,
+    ): Array<{ source_id: string; target_id: string }> {
+      return ndb
+        .prepare(
+          `SELECT source_id, target_id FROM links_v
+            WHERE type_id = ? AND active = 1 AND marked_for_deletion = 0
+            ORDER BY source_id, target_id`,
+        )
+        .all(linkTypeId) as Array<{ source_id: string; target_id: string }>;
+    }
+
+    /**
+     * Свойство «организации категории / категория организации»: «Категория»
+     * привязана стороной source, «Организация» — стороной target. Третий тип
+     * к свойству не привязан (внетиповой владелец).
+     */
+    function seedCategoryOrg(ndb: NetworkDb) {
+      const category = createThoughtType(ndb, { name: 'Категория-тип' }, USER);
+      const org = createThoughtType(ndb, { name: 'Организация-тип' }, USER);
+      const other = createThoughtType(ndb, { name: 'Прочее-тип' }, USER);
+      const prop = createNetworkProperty(
+        ndb,
+        {
+          name: 'организации категории',
+          value_type: 'link',
+          name_forward: 'организации категории',
+          name_reverse: 'категория организации',
+        },
+        USER,
+      );
+      const linkTypeId = (prop.config?.link_type_id ?? '') as string;
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        category.id,
+        { key: 'организации категории', value_type: 'link', side: 'source' },
+        USER,
+      );
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        org.id,
+        { key: 'организации категории', value_type: 'link', side: 'target' },
+        USER,
+      );
+      return { category, org, other, linkTypeId };
+    }
+
+    it('forward-ключ у владельца-цели удаляет ИСХОДЯЩЕЕ ребро, не задевая типовое входящее', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, linkTypeId } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина F', type_id: category.id }, USER);
+        const o = createThought(ndb, { title: 'Поликлиника F', type_id: org.id }, USER);
+
+        // Правильное типовое входящее ребро (категория → организация): создаётся
+        // заполнением обратного имени у организации.
+        setPropertyValue(ndb, 'thought', o.id, 'категория организации', c.id, USER);
+        // «Неправильное» внетиповое исходящее ребро организация → категория —
+        // ровно то, что показывает запись «организации категории (связь)».
+        const wrong = createLink(ndb, { source_id: o.id, target_id: c.id, type_id: linkTypeId }, USER);
+
+        const { link_id } = removeLinkPropertyValue(
+          ndb, 'thought', o.id, 'организации категории', c.id, USER,
+        );
+
+        // Удалено именно исходящее ребро, типовое входящее осталось живым.
+        assert.equal(link_id, wrong.id);
+        assert.equal(getLink(ndb, wrong.id)?.marked_for_deletion, true);
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), [{ source_id: c.id, target_id: o.id }]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('reverse-ключ снимает ВХОДЯЩЕЕ ребро у внетипового владельца', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, other, linkTypeId } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина R', type_id: category.id }, USER);
+        const x = createThought(ndb, { title: 'Прочее R', type_id: other.id }, USER);
+        const edge = createLink(ndb, { source_id: c.id, target_id: x.id, type_id: linkTypeId }, USER);
+
+        // У «Прочего» свойство не подключено: запись «категория организации» —
+        // внетиповое входящее ребро, ключ — обратное display-имя.
+        const { link_id } = removeLinkPropertyValue(
+          ndb, 'thought', x.id, 'категория организации', c.id, USER,
+        );
+        assert.equal(link_id, edge.id);
+        assert.equal(getLink(ndb, edge.id)?.marked_for_deletion, true);
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('display-ключ пишет рёбра соответствующего направления', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { category, org, other, linkTypeId } = seedCategoryOrg(ndb);
+        const c = createThought(ndb, { title: 'Медицина W', type_id: category.id }, USER);
+        const o = createThought(ndb, { title: 'Поликлиника W', type_id: org.id }, USER);
+        const x = createThought(ndb, { title: 'Прочее W', type_id: other.id }, USER);
+
+        // Прямое имя (forward) у внетипового владельца → исходящее ребро.
+        setPropertyValue(ndb, 'thought', x.id, 'организации категории', o.id, USER);
+        assert.deepEqual(liveTypedEdges(ndb, linkTypeId), [{ source_id: x.id, target_id: o.id }]);
+
+        // Обратное имя (reverse) у того же владельца → входящее ребро.
+        addLinkPropertyValue(ndb, 'thought', x.id, 'категория организации', c.id, null, USER);
+        // Порядок рёбер — по строковым id, поэтому сверяем набор пар.
+        const edges = liveTypedEdges(ndb, linkTypeId);
+        assert.equal(edges.length, 2);
+        const pairs = new Set(edges.map((e) => `${e.source_id}|${e.target_id}`));
+        assert.ok(pairs.has(`${c.id}|${x.id}`), 'обратный ключ создал входящее ребро c→x');
+        assert.ok(pairs.has(`${x.id}|${o.id}`), 'прямой ключ создал исходящее ребро x→o');
       } finally {
         ndb.close();
       }

@@ -874,6 +874,8 @@ async function openReadonlyChipMenu(opts: {
   fullTitle: string;
   ref: ThoughtRef | undefined;
   chip: Element;
+  /** Команды контекста редактора (748b80fd) — например «Убрать из значения». */
+  extraItems?: MenuItem[];
 }): Promise<void> {
   await openThoughtCloudMenu({
     networkId: opts.networkId,
@@ -881,6 +883,7 @@ async function openReadonlyChipMenu(opts: {
     title: opts.fullTitle,
     trashed: opts.ref?.marked_for_deletion === true,
     anchor: opts.chip,
+    ...(opts.extraItems !== undefined ? { extraItems: opts.extraItems } : {}),
   });
 }
 
@@ -915,13 +918,24 @@ async function showLinkChipMenu(
 /**
  * Read-only мини-облачко для ребра внетипового свойства (cab38479): те же
  * визуал и обработчики (клик, двойной клик, Ctrl+Click → панель выбранных,
- * ПКМ/Shift+F10 → контекстное меню), что у редактируемого чипа. Крестика «×»
- * здесь нет: ребро управляется через свойства типа связи.
+ * ПКМ/Shift+F10 → контекстное меню), что у редактируемого чипа.
+ *
+ * `removal` (0.8.2, ошибка 748b80fd): у ребра типа связи без реестрового
+ * свойства (property_id пуст) ключа записи в наборе не было — из GUI связь не
+ * удалялась. Теперь ключом служит display-имя стороны (`propertyName`), которое
+ * сервер понимает (`resolveDefinition` шаг 3), и контекстное меню получает
+ * команду «Убрать из значения» — как у чипов основной таблицы
+ * (`showLinkChipMenu`). Крестик «×» очистки набора целиком рисует вызывающий
+ * (ячейка «Свойства вне типа»).
  */
 export function buildOutsideReadonlyEdgeChip(
   networkId: string,
   edge: LinkPropertyValueItem,
   refs: Map<string, ThoughtRef>,
+  removal?: {
+    /** Снять это ребро из набора («Убрать из значения»). */
+    removeTarget: (targetId: string) => void;
+  },
 ): HTMLElement {
   const ref = refs.get(edge.target_id);
   // Полное имя цели: свежая подпись ребра, иначе заголовок из кеша, иначе
@@ -939,9 +953,9 @@ export function buildOutsideReadonlyEdgeChip(
         onClick: (id) => openLinkRefInEditor(networkId, id),
         onDoubleClick: (id) => focusLinkRef(networkId, id),
         onCtrlClick: (id) => toggleSelection([id]),
-        onContextMenu: (event, id) => {
+        onContextMenu: (event) => {
           event?.stopPropagation?.();
-          void openReadonlyChipMenu({ networkId, id, fullTitle, ref, chip });
+          openMenu();
         },
         onTrashBadgeClick: (id) => {
           void openTrashBadgeDialog(networkId, id, fullTitle);
@@ -949,9 +963,32 @@ export function buildOutsideReadonlyEdgeChip(
       },
     },
   );
+  // Меню чипа: обычное меню облачка + «Убрать из значения», когда известен
+  // ключ внетиповой записи (748b80fd) — им служит display-имя стороны связи.
+  const openMenu = (): void => {
+    void openReadonlyChipMenu({
+      networkId,
+      id: edge.target_id,
+      fullTitle,
+      ref,
+      chip,
+      ...(removal !== undefined
+        ? {
+            extraItems: [
+              {
+                label: 'Убрать из значения',
+                onClick: () => removal.removeTarget(edge.target_id),
+              },
+            ],
+          }
+        : {}),
+    });
+  };
   setTooltip(
     chip,
-    `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
+    removal !== undefined
+      ? `${fullTitle} — ребро внетиповой связи; свойство «убрать из значения» доступно в контекстном меню.`
+      : `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
   );
   markThoughtCommentPreview(chip, edge.target_id, fullTitle);
   chip.setAttribute('role', 'button');
@@ -961,7 +998,7 @@ export function buildOutsideReadonlyEdgeChip(
   chip.addEventListener('keydown', (event) => {
     if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
       event.preventDefault();
-      void openReadonlyChipMenu({ networkId, id: edge.target_id, fullTitle, ref, chip });
+      openMenu();
       return;
     }
     if (event.key === 'Enter') {
