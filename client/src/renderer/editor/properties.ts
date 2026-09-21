@@ -587,13 +587,13 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
       // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
       // у множественных свойств; тип значения и место определения здесь не
       // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
-      // ⓘ несёт tooltip с описанием свойства.
+      // ⓘ несёт tooltip с описанием свойства. Текст заголовка — отдельный узел:
+      // счётчик обновляется локально после своей записи значения-связи (ошибка
+      // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
       const count = valueCountOf(definition, value);
-      const nameCell = el(
-        'td',
-        'prop-name-cell',
-        `${definition.key}${definition.required ? ' *' : ''}${count === null ? '' : ` (${count})`}`,
-      );
+      const nameCell = el('td', 'prop-name-cell');
+      const nameText = span(propertyNameLabel(definition, count));
+      nameCell.append(nameText);
       const hint = propertyHint(definition);
       if (hint !== null) {
         const info = span('ⓘ', 'muted prop-hint');
@@ -608,6 +608,13 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
           ownerId,
           definition,
           current: value,
+          // Своя запись значения-связи не поднимает версию мысли (гейт полной
+          // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
+          // клиента до рендерера не доходит (G8) — счётчик строки, нарисованный
+          // при `reload()`, перерисовываем здесь же (ошибка 9ee8e608).
+          onLinkCountChange: (next) => {
+            nameText.textContent = propertyNameLabel(definition, next);
+          },
         }),
       );
       tbody.append(row);
@@ -632,6 +639,9 @@ function buildEditorCell(opts: {
     ownerId: string;
     definition: EffectiveTypeProperty,
     current: PropertyValue | LinkPropertyValues | undefined,
+    /** Обновление счётчика значений в заголовке строки после своей записи
+     *  свойства-связи (ошибка 9ee8e608). Скаляры его не зовут. */
+    onLinkCountChange?: (count: number) => void,
   }): HTMLElement {
     const { networkId, ownerType, ownerId, definition, current } = opts;
     const cell = el('td');
@@ -652,6 +662,13 @@ function buildEditorCell(opts: {
         // перечитываем сразу после успешного сохранения.
         if (definition.value_type === 'link') {
           repaintAfterLinkValueWrite(ownerType, ownerId);
+          // Число целей в заголовке строки рисуется при `reload()` и после
+          // своей записи не перечитывалось (ошибка 9ee8e608): realtime-эхо
+          // собственного клиента до рендерера не доходит (G8), версию мысли
+          // запись значения не поднимает — гейт полной пересборки редактора не
+          // срабатывает. Новое число целей известно из записанного набора
+          // (`save` получает массив target_id, `null` — очистка).
+          opts.onLinkCountChange?.(linkTargetCount(value));
         }
         return true;
       } catch (err) {
@@ -690,6 +707,26 @@ function buildEditorCell(opts: {
     );
     return cell;
   }
+
+/**
+ * Заголовок строки свойства в таблице «Свойства типа»: имя, маркер
+ * обязательности и счётчик значений у множественных/связевых свойств (приёмка
+ * 0.8.1). Один источник и для первичной отрисовки при `reload()`, и для
+ * локального обновления счётчика после своей записи (ошибка 9ee8e608).
+ */
+function propertyNameLabel(definition: EffectiveTypeProperty, count: number | null): string {
+  return `${definition.key}${definition.required ? ' *' : ''}${count === null ? '' : ` (${count})`}`;
+}
+
+/**
+ * Число целей в записанном значении свойства-связи. `save` редактора связи
+ * получает массив `target_id` (или `null` при очистке) — ровно то, что
+ * `normalizeLinkTargets` положит рёбрами свойства; счётчик строки обновляется
+ * этим числом без обращения к серверу (ошибка 9ee8e608).
+ */
+function linkTargetCount(written: unknown | null): number {
+  return Array.isArray(written) ? written.length : 0;
+}
 
 /**
  * Число текущих значений для заголовка множественного свойства (приёмка
