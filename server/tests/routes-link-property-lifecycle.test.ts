@@ -496,5 +496,87 @@ describe(
         await closeRestContext(ctx);
       }
     });
+    it('смена родителя после PATCH /properties: устаревшая версия link_type — 409, свежая — 200 (ошибка e7c077e4)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const mkLinkProp = async (
+          name: string,
+        ): Promise<{ propertyId: string; linkTypeId: string }> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/properties`,
+            headers: h,
+            payload: { name, value_type: 'link', name_forward: name, name_reverse: `${name}-rev` },
+          });
+          assert.equal(res.statusCode, 201, res.body?.toString());
+          const data = res.json().data as { id: string; config: { link_type_id: string } };
+          return { propertyId: data.id, linkTypeId: data.config.link_type_id };
+        };
+        const getLt = async (id: string): Promise<{ version: number; parent_id: string | null }> => {
+          const res = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${nid}/link-types/${id}`,
+            headers: h,
+          });
+          assert.equal(res.statusCode, 200, res.body?.toString());
+          return res.json().data as { version: number; parent_id: string | null };
+        };
+        const patchLt = async (
+          id: string,
+          expectedVersion: number,
+          parentId: string | null,
+        ): Promise<number> => {
+          const res = await ctx.app.inject({
+            method: 'PATCH',
+            url: `/api/v1/networks/${nid}/link-types/${id}`,
+            headers: { ...h, 'if-match': String(expectedVersion) },
+            payload: { parent_id: parentId },
+          });
+          return res.statusCode;
+        };
+
+        const a = await mkLinkProp('prop-a');
+        const b = await mkLinkProp('prop-b');
+        const before = await getLt(a.linkTypeId);
+
+        // Один «Применить» клиента: PATCH /properties синхронизирует связанный
+        // link_type (пара имён и оформление) и поднимает его версию.
+        const propPatch = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${a.propertyId}`,
+          headers: h,
+          payload: { name: 'prop-a', name_forward: 'prop-a', name_reverse: 'prop-a-rev', link_color: '#123456' },
+        });
+        assert.equal(propPatch.statusCode, 200, propPatch.body?.toString());
+        const bumped = await getLt(a.linkTypeId);
+        assert.equal(bumped.version, before.version + 1, 'PATCH /properties поднял версию link_type');
+
+        // Следующий вызов со устаревшей версией (как делал клиент) — конфликт.
+        assert.equal(
+          await patchLt(a.linkTypeId, before.version, b.linkTypeId),
+          409,
+          'устаревшая версия даёт VERSION_CONFLICT',
+        );
+
+        // Свежая версия из GET (логика фикса) — PATCH проходит.
+        const fresh = await getLt(a.linkTypeId);
+        assert.equal(await patchLt(a.linkTypeId, fresh.version, b.linkTypeId), 200, 'свежая версия проходит');
+        assert.equal((await getLt(a.linkTypeId)).parent_id, b.linkTypeId);
+
+        // Обратный сценарий: снять родителя (на корневой тип) свежей версией.
+        const cur = await getLt(a.linkTypeId);
+        assert.equal(await patchLt(a.linkTypeId, cur.version, null), 200, 'снятие родителя проходит');
+
+        // Реальная конкурентная правка (версия изменена извне) — по-прежнему 409.
+        const v = (await getLt(a.linkTypeId)).version;
+        assert.equal(await patchLt(a.linkTypeId, v, b.linkTypeId), 200, 'первый из конкурентов проходит');
+        assert.equal(await patchLt(a.linkTypeId, v, null), 409, 'второй конфликтует');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

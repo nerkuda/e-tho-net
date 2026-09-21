@@ -629,6 +629,16 @@ export function scalarDefaultPayload(value: unknown): string | number | boolean 
  * `PATCH /link-types/{id}` (0.8.1, задача d7177d1d). При создании свойства
  * родитель уходит в `POST /properties` (`parent_link_type_id`).
  *
+ * Родителя и его версию берём у сервера непосредственно перед PATCH
+ * (`GET /link-types/{id}`): сохранение свойства-связи идёт одним «Применить»
+ * как `PATCH /properties/{id}` → `syncLinkTypeParent`, и первый вызов уже
+ * поднял версию связанного link_type (имена сторон/оформление синхронизируются
+ * сервером). Снимок `store.state.linkTypes` к этому моменту ещё не получил
+ * realtime-эхо, поэтому PATCH со старой версией падал
+ * `VERSION_CONFLICT: link type version mismatch` — один «Применить»
+ * конфликтовал сам с собой (ошибка e7c077e4). Снимок остаётся запасным
+ * источником, если GET не удался.
+ *
  * Возвращает `true`, когда `PATCH /link-types/{id}` действительно отправлен:
  * вызывающий код строит по этому факту локальное уведомление открытого
  * редактора об изменении типа связи (ошибка 7dfad7d4).
@@ -641,14 +651,14 @@ export async function syncLinkTypeParent(
   if (draft.valueType !== 'link') return false;
   const ltId = property.config?.link_type_id;
   if (ltId === undefined || ltId === null || ltId === '') return false;
-  let lt = store.state.linkTypes.find((t) => t.id === ltId) ?? null;
-  if (lt === null) {
-    try {
-      lt = await etn.types.getLinkType(networkId, ltId);
-    } catch {
-      return false;
-    }
+  let lt: LinkType | null = null;
+  try {
+    lt = await etn.types.getLinkType(networkId, ltId);
+  } catch {
+    lt = null;
   }
+  if (lt === null) lt = store.state.linkTypes.find((t) => t.id === ltId) ?? null;
+  if (lt === null) return false;
   const nextParent = draft.parentLinkTypeId;
   if ((lt.parent_id ?? null) === (nextParent ?? null)) return false;
   await etn.types.updateLinkType(networkId, ltId, { parent_id: nextParent }, lt.version);

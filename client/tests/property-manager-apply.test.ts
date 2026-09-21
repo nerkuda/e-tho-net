@@ -582,7 +582,9 @@ describe('syncLinkTypeParent — родительский тип связи (d56
           },
           getLinkType: async () => {
             if (extra.getLinkType !== undefined) return extra.getLinkType;
-            throw new Error('getLinkType не должен вызываться');
+            // По умолчанию GET недоступен — syncLinkTypeParent уходит в
+            // запасной источник (снимок store).
+            throw new Error('getLinkType недоступен');
           },
         },
       },
@@ -624,6 +626,22 @@ describe('syncLinkTypeParent — родительский тип связи (d56
     );
     assert.deepEqual(calls, [
       { id: 'lt-1', input: { parent_id: 'lt-root' }, version: 3 },
+    ]);
+  });
+
+  it('PATCH /properties поднял версию сервера, снимок store устарел — берём свежую (ошибка e7c077e4)', async () => {
+    const calls: UpdateCall[] = [];
+    // Снимок store отстал от сервера (realtime-эхо ещё не пришло): 3 против 4.
+    installEtn(calls, { getLinkType: makeLinkType('lt-1', null, 4) });
+    store.update({ linkTypes: [makeLinkType('lt-1', null, 3)] });
+    const draft = makeDraft({ valueType: 'link', parentLinkTypeId: 'lt-root' });
+    await syncLinkTypeParent(
+      'n1',
+      makeCurrent({ value_type: 'link', config: { direction: 'out', link_type_id: 'lt-1' } }),
+      draft,
+    );
+    assert.deepEqual(calls, [
+      { id: 'lt-1', input: { parent_id: 'lt-root' }, version: 4 },
     ]);
   });
 
