@@ -577,12 +577,11 @@ async function openLinkRefInEditor(id: string): Promise<void> {
 }
 
 async function focusLinkRef(id: string): Promise<void> {
-  // Фокус + активация экрана «Карта мыслей»: с другого экрана (структуры,
-  // хроника) смена фокуса без переключения вида незаметна.
-  const { setFocus } = await import('../app.js');
-  const { setActiveView } = await import('../screens/active-view.js');
-  setActiveView('map');
-  await setFocus(id);
+  // Фокус + активация экрана «Карта мыслей» — общий помощник (ошибка 562356a9):
+  // с другого экрана (структуры, хроника, события) смена фокуса без
+  // переключения вида незаметна.
+  const { focusThoughtOnMap } = await import('../screens/active-view.js');
+  await focusThoughtOnMap(id);
 }
 
 /**

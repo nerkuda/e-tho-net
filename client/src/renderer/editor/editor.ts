@@ -1812,7 +1812,9 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
  * - команды открытия нет — мысль уже открыта в редакторе;
  * - «Добавить вложение» ведёт не в редактор (он и так открыт), а на вкладку
  *   «Вложения» этой мысли;
- * - «В фокус» ставит мысль в фокус холста.
+ * - «В фокус» ставит мысль в фокус холста И показывает экран «Карта мыслей»
+ *   (общий помощник `focusThoughtOnMap`) — иначе команда с другого экрана
+ *   («Структуры», «Хроника», «События») не даёт видимого результата.
  *
  * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
  */
@@ -1822,7 +1824,7 @@ async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElemen
   // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
   const { showThoughtMenuUnder, resolveSiblingParentId } =
     await import('../canvas/context-menu.js');
-  const { setFocus } = await import('../app.js');
+  const { focusThoughtOnMap } = await import('../screens/active-view.js');
   showThoughtMenuUnder(
     anchor,
     {
@@ -1841,7 +1843,7 @@ async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElemen
           offlineNotice();
           return;
         }
-        void setFocus(thought.id);
+        void focusThoughtOnMap(thought.id);
       },
       attachmentHandler: (id) => {
         // Мысль уже открыта в редакторе: «Добавить вложение» ведёт прямо на её

@@ -807,17 +807,16 @@ function openLinkRefInEditor(networkId: string, id: string): void {
 }
 
 /**
- * Ставит мысль в фокус и активирует экран «Карта мыслей» — фокус без
- * переключения на карту незаметен, если пользователь находится на другом
- * экране (структуры, хроника).
+ * Ставит мысль в фокус и активирует экран «Карта мыслей» — общий помощник
+ * `focusThoughtOnMap` (ошибка 562356a9): фокус без переключения на карту
+ * незаметен, если пользователь находится на другом экране (структуры,
+ * хроника, события).
  */
 function focusLinkRef(networkId: string, id: string): void {
   void Promise.resolve()
     .then(async () => {
-      const { setFocus } = await import('../app.js');
-      const { setActiveView } = await import('../screens/active-view.js');
-      setActiveView('map');
-      await setFocus(id);
+      const { focusThoughtOnMap } = await import('../screens/active-view.js');
+      await focusThoughtOnMap(id);
     })
     .catch((err: unknown) => notice(errText(err), 'error'));
 }

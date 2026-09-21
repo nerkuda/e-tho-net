@@ -24,7 +24,7 @@ import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
-import { setActiveView } from '../screens/active-view.js';
+import { focusThoughtOnMap, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
@@ -186,8 +186,9 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
       return;
     }
     if (await confirmSwitchToMap()) {
-      setActiveView('map');
-      await setFocus(thought.id);
+      // Тот же путь, что у команды «В фокус»: показать карту и сфокусировать
+      // мысль (общий помощник, ошибка 562356a9).
+      await focusThoughtOnMap(thought.id);
     }
     return;
   }
