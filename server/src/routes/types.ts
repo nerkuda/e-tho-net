@@ -124,7 +124,7 @@ function parseThoughtTypeBody(body: Record<string, unknown>, requestId: string):
 function parseThoughtTypeUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
-): ThoughtTypeUpdateInput {
+): { changes: ThoughtTypeUpdateInput; confirmed: boolean } {
   const out = parseBody(RestThoughtTypeUpdateBody, body, requestId);
   const changes: Record<string, unknown> = {};
   if (out.name !== undefined) changes.name = out.name;
@@ -142,7 +142,10 @@ function parseThoughtTypeUpdateBody(
   if (changes.icon_kind === 'image') {
     assertImageIcon(changes.icon as string | null | undefined, requestId);
   }
-  return changes as unknown as ThoughtTypeUpdateInput;
+  return {
+    changes: changes as unknown as ThoughtTypeUpdateInput,
+    confirmed: out.confirmed === true,
+  };
 }
 
 /** Parse the body of `POST /link-types` (служебный, 0.8.1). */
@@ -399,10 +402,12 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as TypeIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
-        const changes = parseThoughtTypeUpdateBody(requestBody(req), req.id);
+        const { changes, confirmed } = parseThoughtTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const updated = updateThoughtType(ndb, id, changes, expectedVersion, req.auth!.user.id);
+          const updated = updateThoughtType(ndb, id, changes, expectedVersion, req.auth!.user.id, {
+            confirmed,
+          });
           return {
             result: updated,
             events: [

@@ -1042,7 +1042,14 @@ export function writeOntology(
           updateInput.comment_template_md = item.comment_template_md;
         }
         if (Object.keys(updateInput).length > 0) {
-          updateThoughtType(ndb, id, updateInput, undefined, actorUserId);
+          // 0.8.2, задача 8ea1ab6a: MCP не имеет интерактивного подтверждения;
+          // смена parent_id у используемого типа мысли сразу применяется,
+          // если сеть не против (нет живых слоёв с теневыми строками).
+          // `confirmed: true` подавляет 422 `reparent_impact`; защита по
+          // живым слоям (`reparent_blocked_by_layer`) остаётся.
+          updateThoughtType(ndb, id, updateInput, undefined, actorUserId, {
+            confirmed: true,
+          });
           version = readVersion(ndb, 'thought_types', id);
           action = 'updated';
         } else {
@@ -1072,6 +1079,8 @@ export function writeOntology(
         { parent_id: targetId },
         undefined,
         actorUserId,
+        // См. выше: MCP-путь подавляет интерактивное подтверждение.
+        { confirmed: true },
       );
       const r = ttResults.find((x) => x.id === id);
       if (r !== undefined) {

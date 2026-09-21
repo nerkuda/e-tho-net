@@ -177,22 +177,6 @@ describe(
         });
         assert.equal(cycleRes.statusCode, 422);
 
-        // Reparenting a type in use is rejected.
-        const thoughtOkRes = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${nid}/thoughts`,
-          headers: h,
-          payload: { title: 'Иванов', type_id: colleague.id },
-        });
-        assert.equal(thoughtOkRes.statusCode, 201);
-        const inUseRes = await ctx.app.inject({
-          method: 'PATCH',
-          url: `/api/v1/networks/${nid}/thought-types/${colleague.id}`,
-          headers: { ...h, 'If-Match': String(colleague.version) },
-          payload: { parent_id: null },
-        });
-        assert.equal(inUseRes.statusCode, 422);
-
         // Deleting a type with children (Персона) or the root is rejected.
         const delParentRes = await ctx.app.inject({
           method: 'DELETE',
@@ -378,6 +362,18 @@ describe(
         });
         assert.equal(ownDescOverrideRes.statusCode, 422);
 
+        // Создаём мысль с типом Коллега заранее — она нужна и тесту поиска
+        // по предку (`type_id=person.id` находит Коллега как потомка), и
+        // тесту подтверждения смены родителя ниже.
+        const thoughtOkRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thoughts`,
+          headers: h,
+          payload: { title: 'Иванов', type_id: colleague.id },
+        });
+        assert.equal(thoughtOkRes.statusCode, 201);
+        const colleagueThoughtId = (thoughtOkRes.json().data as { id: string }).id;
+
         // An untyped thought resolves the root type's properties.
         const untypedRes = await ctx.app.inject({
           method: 'POST',
@@ -436,7 +432,7 @@ describe(
         assert.equal(searchRes.statusCode, 200);
         const hits = (searchRes.json().data as { by_names: Array<{ thought_id: string }> }).by_names;
         assert.ok(
-          hits.some((hit) => hit.thought_id === (thoughtOkRes.json().data as { id: string }).id),
+          hits.some((hit) => hit.thought_id === colleagueThoughtId),
         );
 
         // --- record counts (task «Улучшить диалог редактирования типов
@@ -462,6 +458,47 @@ describe(
         assert.equal(ltCountsRes.statusCode, 200);
         // No link was ever created with a type in this scenario.
         assert.deepEqual(ltCountsRes.json().data, {});
+
+        // Reparenting a type in use is gated by an interactive confirmation:
+        // задача 8ea1ab6a (0.8.2). Первый PATCH без `confirmed` отвечает 422 с
+        // `details.kind === 'reparent_impact'` и счётчиком мыслей; повторный
+        // с `confirmed: true` выполняет правку. Цикл и глубина по-прежнему
+        // отвергаются без флага. Идёт В САМОМ КОНЦЕ — иначе репарент уберёт
+        // `Коллега` из детей `Персона`, что сломает тесты наследования свойств
+        // (`пол`) и поиска по предку (`type_id=person`).
+        // `colleague.version` мог измениться за время теста — перечитываем
+        // свежую версию перед PATCH.
+        const colleagueFreshRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague.id}`,
+          headers: h,
+        });
+        assert.equal(colleagueFreshRes.statusCode, 200);
+        const colleagueFresh = colleagueFreshRes.json().data as { version: number };
+        const inUseRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague.id}`,
+          headers: { ...h, 'If-Match': String(colleagueFresh.version) },
+          payload: { parent_id: null },
+        });
+        assert.equal(inUseRes.statusCode, 422);
+        const inUseBody = inUseRes.json() as {
+          error: { code: string; details?: { kind?: string; thoughts_count?: number } };
+        };
+        assert.equal(inUseBody.error.code, 'VALIDATION_ERROR');
+        assert.equal(inUseBody.error.details?.kind, 'reparent_impact');
+        assert.equal(inUseBody.error.details?.thoughts_count, 1);
+        // Повторный PATCH с подтверждением применяет правку.
+        const confirmedRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague.id}`,
+          headers: { ...h, 'If-Match': String(colleagueFresh.version) },
+          payload: { parent_id: null, confirmed: true },
+        });
+        assert.equal(confirmedRes.statusCode, 200);
+        const colleagueAfter = confirmedRes.json().data as { parent_id: string | null };
+        // `null` резолвится в id корневого типа.
+        assert.equal(colleagueAfter.parent_id, root.id);
       } finally {
         await closeRestContext(ctx);
       }

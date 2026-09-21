@@ -74,7 +74,13 @@ export interface ThoughtTypeInput {
 /** Input accepted by `PATCH /thought-types/{id}` (03-server-api.md §8). */
 export interface ThoughtTypeUpdateInput {
   name?: string;
-  /** Changing the parent is rejected while the type is in use by thoughts. */
+  /**
+   * Changing the parent is rejected while the type is in use by thoughts in
+   * any live (non-base) layer. For a type used only by thoughts in the base
+   * layer, the server returns 422 with `details.kind === 'reparent_impact'`;
+   * clients show a confirmation dialog and re-issue PATCH with
+   * `confirmed: true`. See task 8ea1ab6a (0.8.2).
+   */
   parent_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
@@ -87,6 +93,14 @@ export interface ThoughtTypeUpdateInput {
   description?: string | null;
   /** Шаблон постоянного комментария мысли (см. {@link ThoughtType.comment_template_md}). */
   comment_template_md?: string | null;
+  /**
+   * Подтверждение смены `parent_id` поверх перечня затронутых мыслей.
+   * Устанавливается клиентом только в ответ на 422 `reparent_impact`. Для
+   * типов связей флаг не используется — смена parent_id у них сразу
+   * применяется (без интерактивного подтверждения) либо отвергается по
+   * живым слоям.
+   */
+  confirmed?: boolean;
 }
 
 /**

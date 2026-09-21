@@ -62,6 +62,14 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
         '`type_property_overrides` с учётом стороны привязки. ' +
         '`type_views[]` — отборы типов мыслей: ' +
         '`action: create|update|delete`, `thought_type` XOR `thought_type_ref`. ' +
+        'Смена `parent`/`parent_ref` у типа мысли или связи (задача 8ea1ab6a, 0.8.2): ' +
+        'интерактива нет, MCP применяет правила немедленно. Если в ЛЮБОМ живом ' +
+        '(не базовом) слое есть мысли (для thought-types) или связи (для link-types) ' +
+        'с типом из множества {изменяемый + потомки + старый/новый родитель} — ' +
+        'отказ `422` с `details.kind = "reparent_blocked_by_layer"` и перечнем ' +
+        'слоёв. Для типов мыслей без живых слоёв — записи применяются без ' +
+        'интерактивного подтверждения (UI-флаг `confirmed` для REST не имеет ' +
+        'MCP-аналога; ответ `details.kind = "reparent_impact"` здесь НЕ возникает). ' +
         'Доменная валидация имени (уникальность в пределах типа), токенов и `is_default` — как у ' +
         '`POST /thought-types/{id}/views`. ' +
         'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +

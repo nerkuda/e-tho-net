@@ -2743,6 +2743,12 @@ export const RestThoughtTypeUpdateBody = defineContract(
     font_strike: z.boolean().nullable().optional(),
     description: z.string().nullable().optional(),
     comment_template_md: z.string().nullable().optional(),
+    // 0.8.2, задача 8ea1ab6a: флаг подтверждения смены parent_id. Первый
+    // PATCH с реальной сменой у используемого типа возвращает 422 с details
+    // { kind: 'reparent_impact', thoughts_count, requires_confirmation: true };
+    // повторный PATCH с `confirmed: true` выполняет правку. Без `parent_id`
+    // флаг игнорируется.
+    confirmed: z.boolean().optional(),
   }),
   {
     name: { from: { kind: 'body' } },
@@ -2757,6 +2763,7 @@ export const RestThoughtTypeUpdateBody = defineContract(
     font_strike: { from: { kind: 'body' } },
     description: { from: { kind: 'body' } },
     comment_template_md: { from: { kind: 'body' } },
+    confirmed: { from: { kind: 'body' } },
   },
 );
 
