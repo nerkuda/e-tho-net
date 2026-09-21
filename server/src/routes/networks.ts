@@ -23,7 +23,12 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 
-import type { Network, NetworkMember, UpdateNetworkInput } from '@etn/shared';
+import type {
+  Network,
+  NetworkMember,
+  UpdateNetworkInput,
+  UserPreferenceEntry,
+} from '@etn/shared';
 
 import { EtnError, PREF_KEY, validateTypeRoles } from '@etn/shared';
 
@@ -378,7 +383,10 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestNetworkById, req);
-        const prefs = app.systemDb.listNetworkPreferences(req.auth!.user.id, input.network_id);
+        const prefs: UserPreferenceEntry[] = app.systemDb.listNetworkPreferences(
+          req.auth!.user.id,
+          input.network_id,
+        );
         sendSuccess(reply, prefs);
       },
     );

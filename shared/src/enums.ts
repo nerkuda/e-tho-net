@@ -97,6 +97,13 @@ export type SearchScope = (typeof SEARCH_SCOPES)[number];
 export const SEARCH_GROUPS = ['names', 'texts', 'links', 'chronology'] as const;
 export type SearchGroup = (typeof SEARCH_GROUPS)[number];
 
+/**
+ * How a duplicate candidate matched the query, in descending priority order
+ * (`GET /thoughts/duplicates`, задача 120385ba).
+ */
+export const DUPLICATE_MATCH_KINDS = ['title', 'synonym', 'partial'] as const;
+export type DuplicateMatchKind = (typeof DUPLICATE_MATCH_KINDS)[number];
+
 /** Direction of a focus zone on the canvas (02-data-model.md §3.10.3). The
  *  MCP-only `both` value (0.7.2) reads both incoming and outgoing neighbours
  *  in a single call (each entry carries its own `direction: "in"|"out"`); REST

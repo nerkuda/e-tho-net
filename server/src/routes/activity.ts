@@ -27,6 +27,8 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
+import type { ActivityRollupResult, ActivityTruncateResult } from '@etn/shared';
+
 import { sendList, sendSuccess } from '../http/responses.js';
 import {
   ACTIVITY_LIMIT_MAX,
@@ -78,7 +80,7 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestActivityRollup, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const result = rollupActivity(ndb, input.network_id, input.until_ms);
+        const result: ActivityRollupResult = rollupActivity(ndb, input.network_id, input.until_ms);
         sendSuccess(reply, result);
       },
     );
@@ -96,7 +98,7 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestActivityTruncate, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const result = truncateActivity(ndb, input.network_id, input.until_ms);
+        const result: ActivityTruncateResult = truncateActivity(ndb, input.network_id, input.until_ms);
         sendSuccess(reply, result);
       },
     );

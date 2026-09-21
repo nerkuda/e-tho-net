@@ -48,9 +48,12 @@ import {
   type PropertyDefinitionInput,
   type PropertyDefinitionUpdateInput,
   type PropertyOwnerType,
+  type PropertyUsageBinding,
+  type PropertyUsageReport,
   type PropertyValueType,
   type PropertyValue,
   type PropertyValueValue,
+  type RegistryPropertyCounters,
   type ResolvedLinkProperty,
   type ResolvedPropertyValue,
   type ThoughtCardWarning,
@@ -58,6 +61,11 @@ import {
   type ThoughtUsageGroup,
   type TypeOwnerType,
 } from '@etn/shared';
+
+// Формы usage-отчёта и счётчиков справочника переехали в общий модуль
+// `@etn/shared` (задача 120385ba): одна форма ответа на обе стороны.
+// Реэкспорт сохранён для существующих импортов из домена.
+export type { PropertyUsageBinding, PropertyUsageReport, RegistryPropertyCounters };
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
@@ -4130,24 +4138,6 @@ export function deletePropertyValue(
 // тестами. Поведение перенесено дословно.
 // ---------------------------------------------------------------------------
 
-/**
- * Counts of attached types and stored values of a registry property. For
- * link-properties the `types_count` is split into two side counters
- * (0.8.1, требование d7177d1d): a link-property is attached by both sides of
- * a typed edge, and the UI uses the per-side count to render the property
- * manager. For non-link properties both side counts are `undefined`.
- */
-export interface RegistryPropertyCounters {
-  /** Number of `type_properties` rows pointing at this property (across both type kinds). */
-  types_count: number;
-  /** Number of `property_values` rows pointing at this property. */
-  values_count: number;
-  /** For link-properties only — number of types attached on the source side. */
-  types_source_count?: number;
-  /** For link-properties only — number of types attached on the target side. */
-  types_target_count?: number;
-}
-
 /** Счётчики одного свойства справочника (перенос `readCounters` из роута). */
 export function getPropertyRegistryCounters(
   ndb: NetworkDb,
@@ -4314,25 +4304,6 @@ function canStoredValueConvert(
       // Legacy (миграция 040): таких свойств в живой БД не остаётся.
       return false;
   }
-}
-
-/** Одна привязка типа в отчёте usage. */
-export interface PropertyUsageBinding {
-  owner_type: 'thought_type' | 'link_type';
-  owner_id: string;
-  owner_name: string;
-  required: boolean;
-  values_in_type_count: number;
-}
-
-/** Полный отчёт usage свойства справочника. */
-export interface PropertyUsageReport {
-  bindings: PropertyUsageBinding[];
-  values_in_type_count: number;
-  values_outside_type_count: number;
-  /** Множества id типов-владельцев (диагностика dichotomy «in/out of type»). */
-  thought_types: string[];
-  link_types: string[];
 }
 
 /**

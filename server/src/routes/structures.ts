@@ -21,8 +21,11 @@ import {
   STRUCTURES_PAGE_SIZE,
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
+  type FocusEdge,
   type SavedFilterView,
+  type StructureIdsQueryResponse,
   type StructureQueryRequest,
+  type StructureQueryResponse,
   type StructureSort,
   type SortOrder,
 } from '@etn/shared';
@@ -127,14 +130,19 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
           });
-          sendSuccess(reply, { ids: result.ids, total: result.total });
+          sendSuccess(reply, { ids: result.ids, total: result.total } satisfies StructureIdsQueryResponse);
           return;
         }
-        const result = queryThoughts(ndb, req.auth!.user.id, structureRequestToQuery(query), {
-          maxLimit: STRUCTURES_QUERY_MAX_LIMIT,
-          emptyFilterMode: 'home_orphans',
-          includeDirections: true,
-        });
+        const result: StructureQueryResponse = queryThoughts(
+          ndb,
+          req.auth!.user.id,
+          structureRequestToQuery(query),
+          {
+            maxLimit: STRUCTURES_QUERY_MAX_LIMIT,
+            emptyFilterMode: 'home_orphans',
+            includeDirections: true,
+          },
+        );
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,
         });
@@ -176,7 +184,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ids = (input.ids as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
         const showInactive = input.show_inactive === true;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const edges = getEdgesAmong(ndb, ids, showInactive).map((l) => ({
+        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive).map((l) => ({
           id: l.id,
           source_id: l.source_id,
           target_id: l.target_id,

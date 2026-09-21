@@ -28,15 +28,18 @@ import {
   parseStoredCanvasLinkFilter,
   type FocusDir,
   type FocusOrderInput,
+  type FocusOrderResult,
   type FocusPreferencesInput,
   type LinkTypeFilterInput,
   type SortKind,
   type SortOrder,
   type ThoughtBatchFailure,
   type ThoughtBatchOp,
+  type ThoughtBatchResult,
   type ThoughtCopyInput,
   type ThoughtCreateInput,
   type ThoughtUpdateInput,
+  type UsageClearResult,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
@@ -738,7 +741,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           }
           return { result: { affected, failures }, events, activity };
         });
-        sendSuccess(reply, outcome);
+        sendSuccess(reply, outcome satisfies ThoughtBatchResult);
       },
     );
 
@@ -839,7 +842,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as ThoughtIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const cleared = clearThoughtRefUsages(ndb, id);
-        sendSuccess(reply, { cleared });
+        sendSuccess(reply, { cleared } satisfies UsageClearResult);
       },
     );
 
@@ -936,7 +939,10 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             },
           ],
         }));
-        sendSuccess(reply, { focus_thought_id: fid, dir: parsed.dir, ordered_ids: orderedIds });
+        sendSuccess(
+          reply,
+          { focus_thought_id: fid, dir: parsed.dir, ordered_ids: orderedIds } satisfies FocusOrderResult,
+        );
       },
     );
   };

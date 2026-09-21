@@ -21,7 +21,9 @@ import {
   PREF_KEY,
   type ExportEtnxOptions,
   type ExportFormat,
+  type ExportJobStartResult,
   type MentionsScanMatch,
+  type MentionsScanResponse,
   type SearchResponse,
   type SearchScope,
 } from '@etn/shared';
@@ -149,7 +151,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           showInactive,
           excludeThoughtId,
         });
-        sendSuccess(reply, { results });
+        sendSuccess(reply, { results } satisfies MentionsScanResponse);
       },
     );
 
@@ -179,7 +181,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
             user_id: req.auth!.user.id,
           },
         });
-        sendSuccess(reply, { job_id: job.job_id }, undefined, 202);
+        sendSuccess(reply, { job_id: job.job_id } satisfies ExportJobStartResult, undefined, 202);
       },
     );
 

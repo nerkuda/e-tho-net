@@ -20,8 +20,12 @@ import {
   EtnError,
   type LinkStyle,
   type NetworkProperty,
+  type NetworkPropertyDeleteResult,
   type NetworkPropertyInput,
   type NetworkPropertyUpdateInput,
+  type NetworkPropertyUpdateResult,
+  type NetworkPropertyUsage,
+  type NetworkPropertyWithCounters,
   type PropertyConfig,
   type PropertyValueType,
 } from '@etn/shared';
@@ -239,7 +243,9 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           );
         }
         const counters = getPropertyRegistryCounters(ndb, id, property.value_type);
-        sendSuccess(reply, { ...property, ...counters });
+        // `satisfies` привязывает форму ответа к общему контракту (задача
+        // 120385ba): клиент читает ровно эту форму из `@etn/shared`.
+        sendSuccess(reply, { ...property, ...counters } satisfies NetworkPropertyWithCounters);
       },
     );
 
@@ -290,7 +296,10 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           const property = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
             const updated = updateNetworkProperty(ndb, id, changes, req.auth!.user.id);
             return {
-              result: { ...updated, converted, dropped },
+              // Плоское свойство + счётчики конверсии — общий контракт
+              // `NetworkPropertyUpdateResult` (ошибка c83f0215: клиент ждал
+              // конверт `{ property, … }` и терял `id`).
+              result: { ...updated, converted, dropped } satisfies NetworkPropertyUpdateResult,
               events: [
                 { type: 'property-registry.updated', data: { id, changes, converted, dropped } },
               ],
@@ -354,7 +363,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         // поле `null` — обратная совместимость с будущими правками.
         sendSuccess(
           reply,
-          { id, links_becoming_structural: result.links_becoming_structural },
+          { id, links_becoming_structural: result.links_becoming_structural } satisfies NetworkPropertyDeleteResult,
           { request_id: req.id },
         );
       },
@@ -391,7 +400,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           values_outside_type_count: usage.values_outside_type_count,
           thought_types: usage.thought_types,
           link_types: usage.link_types,
-        });
+        } satisfies NetworkPropertyUsage);
       },
     );
   };

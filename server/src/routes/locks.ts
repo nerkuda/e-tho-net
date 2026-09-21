@@ -22,7 +22,12 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { type EditAcquiredData, type EditClearedData, type EditReleasedData } from '@etn/shared';
+import {
+  type EditAcquiredData,
+  type EditClearedData,
+  type EditReleasedData,
+  type LocksClearResult,
+} from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
 import {
@@ -124,7 +129,9 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
             events: cleared.map((lock) => editClearedEvent(lock, 'manual')),
           };
         });
-        sendSuccess(reply, { cleared: removed.length }, { request_id: req.id });
+        sendSuccess(reply, { cleared: removed.length } satisfies LocksClearResult, {
+          request_id: req.id,
+        });
       },
     );
   };

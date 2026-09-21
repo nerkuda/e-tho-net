@@ -22,7 +22,12 @@ import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import type { ApiKeyWithSecret, CreateUserInput, UpdateUserInput } from '@etn/shared';
+import type {
+  AdminUserWithKey,
+  ApiKeyWithSecret,
+  CreateUserInput,
+  UpdateUserInput,
+} from '@etn/shared';
 
 import { EtnError } from '@etn/shared';
 
@@ -187,7 +192,10 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       // `POST /admin/users` returns both the created user (without secrets) and
       // the auto-generated key with its one-time secret, so the admin can show
       // them in a single modal and hand the key off.
-      const dto = { user: userDto(created.user), key: { ...keyPublicDto(created.key), key: gen.key } };
+      const dto: AdminUserWithKey = {
+        user: userDto(created.user),
+        key: { ...keyPublicDto(created.key), key: gen.key },
+      };
       sendCreated(reply, dto);
     },
   );
