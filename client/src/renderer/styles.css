@@ -2529,6 +2529,9 @@ body.cloud-dragging * {
      in --clamp-attachments on the editor scroll box (list-heights.ts), the
      fallback is the spec default — five rows (§6.5). */
   height: var(--clamp-attachments, 260px);
+  /* Потолок снят явно: высота списка задана точно и не должна обрезаться
+     ни одним унаследованным max-height (ошибка 78562781). */
+  max-height: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px 4px;
@@ -2665,13 +2668,15 @@ body.cloud-dragging * {
 
 /* Fixed table height: five rows by default, then it scrolls (§6.6). */
 /* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
-   (same specificity, later source order) — otherwise the saved height is
-   ignored after the editor re-renders (ee745368). */
+   (same specificity, later source order); `max-height: none` is required next
+   to the `height` — otherwise the 380px cap of the base rule silently clipped
+   a height dragged past it (bug 78562781). */
 .admin-table-wrap.chrono-table {
   /* Height is always fixed (bug 6b757336: was max-height, so a shorter table
      collapsed the area before growing back — visible "jitter"). Saved manual
      height (ee745368, list-heights.ts); default — five rows. */
   height: var(--clamp-chrono, 190px);
+  max-height: none;
 }
 
 /* Pin the header row while the body scrolls — the same pattern as the
@@ -2738,14 +2743,16 @@ body.cloud-dragging * {
 /* --- Properties table: headerless, five rows by default (L7, §6.3.1) ------- */
 
 /* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
-   (same specificity, later source order) — otherwise the saved height is
-   ignored after the editor re-renders (ee745368). */
+   (same specificity, later source order); `max-height: none` is required next
+   to the `height` — otherwise the 380px cap of the base rule silently clipped
+   a height dragged past it (bug 78562781). */
 .admin-table-wrap.prop-wrap {
   /* Height is always fixed (bug 6b757336: was max-height, so editing a
      thought_ref property collapsed the area to the "Загрузка…" placeholder
      before growing back — visible "jitter"). Saved manual height (ee745368,
      list-heights.ts); default — five rows. */
   height: var(--clamp-props, 190px);
+  max-height: none;
 }
 
 .editor-field {
@@ -6731,6 +6738,10 @@ body.cloud-dragging * {
   overflow: hidden;
 }
 
+/* Default cap of the chronicle table before the first drag (five rows, §17).
+ * Once the user drags the splitter, `applyGroupClamp` writes an exact inline
+ * `height` plus `max-height: none` (list-heights.ts) — the two together, so
+ * this fallback cap cannot clip a dragged height (bug 78562781). */
 .chron-table-wrap {
   max-height: 240px;
   min-height: 0;

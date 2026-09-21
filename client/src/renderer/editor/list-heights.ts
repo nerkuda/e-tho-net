@@ -157,8 +157,15 @@ function applyClampVars(): void {
  *
  * Always-fixed policy (bug 6b757336, bug 4cc6248c): the inline `height` is
  * re-applied on every tab rebuild, so the saved size survives entity
- * changes and restarts. Any stale `max-height` (the older «cap» channel) is
- * cleared so a leftover inline cap cannot clip the new fixed `height`.
+ * changes and restarts. The `max-height` cap is neutralised with `none` (bug
+ * 78562781) — both the older inline «cap» channel and, more importantly, a
+ * persistent **CSS** cap on the target (`.chron-table-wrap` defaults to
+ * `max-height: 240px` on the chronicle screen, `.admin-table-wrap` to 380px):
+ * an exact `height` larger than that cap used to be silently clipped, so a
+ * drag upward snapped back the moment the preview `max-height` was cleared
+ * (the «Хроника» table was stuck at 240 px). The area keeps its CSS default
+ * until the user drags — `applyGroupClamp` is a no-op without a saved value,
+ * so the fallback cap still shapes the first paint.
  */
 export function applyGroupClamp(group: HTMLElement, key: string): void {
   const px = clamps[key];
@@ -166,7 +173,9 @@ export function applyGroupClamp(group: HTMLElement, key: string): void {
   group.style.height = `${px}px`;
   group.style.flexGrow = '0';
   group.style.flexBasis = 'auto';
-  group.style.maxHeight = '';
+  // `none`, not `''`: an empty declaration only drops the inline cap and lets
+  // a stylesheet `max-height` clip the saved height again (bug 78562781).
+  group.style.maxHeight = 'none';
   // Кламп на теле группы (приёмка 0.8.1): сама группа-родитель тоже не
   // должна flex-fill вкладку, иначе под зафиксированным телом останется
   // пустота. `closest` безопасен для прочих вызовов (экран хроники) — там
