@@ -1101,7 +1101,7 @@ export function openPropertyManagerEditor(
     const typesHost = div('form-stack');
     const optionsHost = div('form-stack');
     buildTypeRowsTable(typesHost, /* isLink */ false, /* side */ null);
-    const optionsBlock = buildScalarOptionsBlock();
+    const optionsBlock = buildScalarOptionsBlockImpl(draft);
     optionsHost.append(optionsBlock);
 
     const defaultsHost = div('form-stack');
@@ -1228,40 +1228,6 @@ export function openPropertyManagerEditor(
       },
     });
     return fieldWithTooltip(spec.label, spec.tooltip, picker);
-  }
-
-  function buildScalarOptionsBlock(): HTMLElement {
-    const host = div('form-stack');
-    const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const choiceCheck = el('input') as HTMLInputElement;
-    choiceCheck.type = 'checkbox';
-    choiceCheck.checked = draft.choiceOn;
-    choiceCheck.addEventListener('change', () => {
-      draft.choiceOn = choiceCheck.checked;
-      renderScalarBody();
-    });
-    choiceRow.append(choiceCheck, span('выбирать из списка'));
-    host.append(choiceRow);
-    if (draft.choiceOn) {
-      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-      area.value = draft.optionsText;
-      area.rows = 4;
-      area.placeholder = 'Варианты значения — по одному в строке';
-      area.addEventListener('input', () => {
-        draft.optionsText = area.value;
-      });
-      host.append(area);
-    }
-    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const multiCheck = el('input') as HTMLInputElement;
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = draft.multipleOn;
-    multiCheck.addEventListener('change', () => {
-      draft.multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений'));
-    host.append(multiRow);
-    return host;
   }
 
   // ---- Таблица «Типы мыслей» / «Источники» / «Назначения» --------------
@@ -2149,6 +2115,53 @@ function scalarDefaultDefinition(draft: PropertyDraft): EffectiveTypeProperty {
     overridden_here: false,
     description_overridden: false,
   };
+}
+
+/**
+ * Блок «Выбирать из списка» + «Несколько значений» для скалярной ветки
+ * редактора свойства (ошибка 322a2694: прежний обработчик флажка вызывал
+ * `renderScalarBody`, и каждый клик дописывал в `mainBodyHost` ещё одну
+ * копию секции «Скалярное свойство»).
+ *
+ * Поле вариантов живёт в DOM всё время; видимость — производная от
+ * флажка «выбирать из списка». Тоггл `display` решает задачу без перерисовки:
+ * черновик (`draft.optionsText`) не теряется, фокус в соседних полях (имя,
+ * флажок «несколько значений») не сбрасывается. Работает по `draft`
+ * (поля `choiceOn`/`optionsText`/`multipleOn`) и общим `el/div/span/button`
+ * из `dom.js` — экспортируется для юнит-теста сценария пользователя
+ * (включение/выключение флажка, многократные переключения, сохранение
+ * черновика).
+ */
+export function buildScalarOptionsBlockImpl(draft: PropertyDraft): HTMLElement {
+  const host = div('form-stack');
+  const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
+  const choiceCheck = el('input') as HTMLInputElement;
+  choiceCheck.type = 'checkbox';
+  choiceCheck.checked = draft.choiceOn;
+  const area = el('textarea', 'textarea-input prop-options-area') as HTMLTextAreaElement;
+  area.value = draft.optionsText;
+  area.rows = 4;
+  area.placeholder = 'Варианты значения — по одному в строке';
+  area.style.display = draft.choiceOn ? '' : 'none';
+  area.addEventListener('input', () => {
+    draft.optionsText = area.value;
+  });
+  choiceCheck.addEventListener('change', () => {
+    draft.choiceOn = choiceCheck.checked;
+    area.style.display = draft.choiceOn ? '' : 'none';
+  });
+  choiceRow.append(choiceCheck, span('выбирать из списка'));
+  host.append(choiceRow, area);
+  const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
+  const multiCheck = el('input') as HTMLInputElement;
+  multiCheck.type = 'checkbox';
+  multiCheck.checked = draft.multipleOn;
+  multiCheck.addEventListener('change', () => {
+    draft.multipleOn = multiCheck.checked;
+  });
+  multiRow.append(multiCheck, span('несколько значений'));
+  host.append(multiRow);
+  return host;
 }
 
 // ---------------------------------------------------------------------------
