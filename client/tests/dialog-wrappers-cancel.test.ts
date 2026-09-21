@@ -6,8 +6,9 @@
  * Контракт обёрток `lib/dialog.ts`: `promptDialog` резолвится введённым текстом
  * либо `null` при отмене; `confirmDialog` — `true` при подтверждении либо
  * `false` при отказе. Отмена — ЛЮБОЙ штатный путь закрытия каркаса («Отмена»,
- * Esc, ×, клик по подложке): завершение повешено на `onClose`, а не на кнопки
- * футера (та же правка, что 5c47601 для пикера).
+ * Esc, ×): завершение повешено на `onClose`, а не на кнопки футера (та же
+ * правка, что 5c47601 для пикера). Клик по подложке диалог НЕ закрывает и
+ * промис не резолвит (задача c9353ce1) — отдельный кейс проверяет это.
  *
  * Дом — минимальный шим (конвенция `dialog-entity-dedupe.test.ts`).
  */
@@ -269,12 +270,16 @@ describe('promptDialog: отмена любым путём закрытия (e03
     assert.equal(value, null, '× — отмена');
   });
 
-  it('клик по подложке резолвит null', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отмену', async () => {
     installShim();
     const done = promptDialog('Вопрос', 'Поле');
     clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(body().children.length, 1, 'диалог остался открыт');
+    footerButton(openBackdrop(), 'Отмена').emit('click');
     const { value } = await resolvesTo(done);
-    assert.equal(value, null, 'клик мимо — отмена');
+    assert.equal(value, null, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
 
   it('«OK» резолвит введённый текст', async () => {
@@ -315,12 +320,16 @@ describe('confirmDialog: отмена любым путём закрытия (e0
     assert.equal(value, false, '× — отказ');
   });
 
-  it('клик по подложке резолвит false', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отказ', async () => {
     installShim();
     const done = confirmDialog('Вопрос', 'Текст');
     clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(body().children.length, 1, 'диалог остался открыт');
+    footerButton(openBackdrop(), 'Отмена').emit('click');
     const { value } = await resolvesTo(done);
-    assert.equal(value, false, 'клик мимо — отказ');
+    assert.equal(value, false, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
 
   it('«Подтвердить» резолвит true', async () => {

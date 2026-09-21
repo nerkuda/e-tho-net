@@ -5,9 +5,10 @@
  *
  * Контракт функций `selection/dialogs.ts`: `pickLinkType` / `pickThoughtType`
  * резолвятся выбранным id, `null` — «без типа», `undefined` — отмена. Отмена —
- * ЛЮБОЙ штатный путь закрытия каркаса («Отмена», Esc, ×, клик по подложке):
- * завершение повешено на `onClose`, а не на кнопки футера (та же правка, что
- * 5c47601 для пикера и 4c7fc0f для обёрток).
+ * ЛЮБОЙ штатный путь закрытия каркаса («Отмена», Esc, ×): завершение повешено
+ * на `onClose`, а не на кнопки футера (та же правка, что 5c47601 для пикера и
+ * 4c7fc0f для обёрток). Клик по подложке диалог НЕ закрывает и промис не
+ * резолвит (задача c9353ce1) — отдельные кейсы проверяют это.
  *
  * Дом — минимальный шим (конвенция `entity-picker.test.ts`, чьё встроенное
  * комбо `buildEntityCombo` эти диалоги и используют).
@@ -289,13 +290,17 @@ describe('pickLinkType: отмена любым путём закрытия (a68
     assert.equal(value, undefined, '× — отмена');
   });
 
-  it('клик по подложке резолвит undefined', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отмену', async () => {
     const { body } = installShim();
     prepare();
     const done = pickLinkType('Тип связи');
     clickBackdrop(openBackdrop(body));
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(findAllByClass(body, 'dialog-backdrop').length, 1, 'диалог остался открыт');
+    footerButton(openBackdrop(body), 'Отмена').click();
     const { value } = await resolvesTo(done);
-    assert.equal(value, undefined, 'клик мимо — отмена');
+    assert.equal(value, undefined, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
 
   it('«Отмена» резолвит undefined', async () => {
@@ -340,13 +345,17 @@ describe('pickThoughtType: отмена любым путём закрытия (
     assert.equal(value, undefined, '× — отмена');
   });
 
-  it('клик по подложке резолвит undefined', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отмену', async () => {
     const { body } = installShim();
     prepare();
     const done = pickThoughtType('a');
     clickBackdrop(openBackdrop(body));
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(findAllByClass(body, 'dialog-backdrop').length, 1, 'диалог остался открыт');
+    footerButton(openBackdrop(body), 'Отмена').click();
     const { value } = await resolvesTo(done);
-    assert.equal(value, undefined, 'клик мимо — отмена');
+    assert.equal(value, undefined, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
 
   it('«Отмена» резолвит undefined', async () => {

@@ -744,7 +744,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     /**
      * Единственная точка завершения промиса. Промис обязан резолвиться на
      * ЛЮБОМ пути закрытия диалога (ошибка 5069a508): кнопки завершают его
-     * явно, а Esc, × и клик по подложке — через `onClose` каркаса. Флаг
+     * явно, а Esc и × — через `onClose` каркаса. Флаг
      * `settled` не даёт позднему событию `remove` переиграть уже принятое
      * решение.
      */
@@ -823,7 +823,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       extraShortcuts: {
         ctrlShiftEnter: () => apply(true),
       },
-      // Esc, × и клик по подложке — отмена: промис резолвится `null`, ровно
+      // Esc и × — отмена: промис резолвится `null`, ровно
       // как по кнопке «Отмена», иначе `await` вызывающего висит вечно
       // (ошибка 5069a508). При завершении кнопкой `finish` уже выставил
       // `settled`, поэтому позднее событие `remove` ничего не переигрывает.

@@ -48,8 +48,8 @@ export function showExportEtnxDialog(
   return new Promise<DialogResult>((resolve) => {
     /**
      * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
-     * каркаса (ошибка e5ec74de): кнопки завершают его явно, а Esc, × и клик
-     * по подложке — через `onClose`. Флаг `settled` не даёт позднему событию
+     * каркаса (ошибка e5ec74de): кнопки завершают его явно, а Esc и × —
+     * через `onClose`. Флаг `settled` не даёт позднему событию
      * `remove` переиграть уже принятое решение.
      */
     let settled = false;
@@ -170,7 +170,7 @@ export function showExportEtnxDialog(
           },
         },
       ],
-      // Esc, × и клик по подложке — отмена: контракт «`{ options: undefined,
+      // Esc и × — отмена: контракт «`{ options: undefined,
       // targetPath: undefined }` on cancel», ровно как по кнопке «Отмена»
       // (ошибка e5ec74de).
       onClose: () => finish(cancelled),

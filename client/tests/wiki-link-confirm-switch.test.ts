@@ -4,10 +4,11 @@
  * закрытии каркаса», 0.8.2).
  *
  * Контракт `confirmSwitchToMap` (client/src/renderer/editor/wiki-link.ts):
- * `true` по «Да», `false` по «Нет» и при закрытии каркаса любым штатным путём
- * (Esc, ×, клик по подложке) — иначе `await` вызывающего (`openThoughtByRef`)
- * висит вечно. Завершение повешено на `onClose` (та же правка, что 5c47601 /
- * 4c7fc0f).
+ * `true` по «Да», `false` по «Нет» и при закрытии каркаса штатным путём
+ * (Esc, ×) — иначе `await` вызывающего (`openThoughtByRef`) висит вечно.
+ * Завершение повешено на `onClose` (та же правка, что 5c47601 / 4c7fc0f).
+ * Клик по подложке диалог НЕ закрывает и промис не резолвит (задача c9353ce1) —
+ * отдельный кейс проверяет это.
  *
  * Модуль импортируется СТАТИЧЕСКИ (как в `wiki-link.test.ts`, без DOM), и лишь
  * затем ставится шим — так граф импортов codemirror/lezer не видит `window`.
@@ -279,12 +280,15 @@ describe('confirmSwitchToMap: отказ любым путём закрытия 
     assert.equal(value, false, '× — отказ');
   });
 
-  it('клик по подложке резолвит false', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отказ', async () => {
     installShim();
     const done = confirmSwitchToMap();
     clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    footerButton(openBackdrop(), 'Нет').click();
     const { value } = await resolvesTo(done);
-    assert.equal(value, false, 'клик мимо — отказ');
+    assert.equal(value, false, 'после клика мимо кнопка «Нет» всё ещё закрывает');
   });
 
   it('«Нет» резолвит false', async () => {

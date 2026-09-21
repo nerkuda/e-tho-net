@@ -3,9 +3,10 @@
  * импорта .etnx не резолвит промис при закрытии Esc, × и кликом мимо», 0.8.2).
  *
  * Контракт `showImportEtnxDialog`: выбранный файл + срезы при «Импортировать»,
- * иначе `{ filePath: undefined, options: undefined }`. Отмена — ЛЮБОЙ штатный
- * путь закрытия каркаса («Отмена», Esc, ×, клик по подложке): завершение
- * повешено на `onClose` (та же правка, что 5c47601 / 4c7fc0f).
+ * иначе `{ filePath: undefined, options: undefined }`. Отмена — штатные пути
+ * закрытия каркаса («Отмена», Esc, ×): завершение повешено на `onClose` (та же
+ * правка, что 5c47601 / 4c7fc0f). Клик по подложке диалог НЕ закрывает и промис
+ * не резолвит (задача c9353ce1) — отдельный кейс проверяет это.
  *
  * Дом — минимальный шим (конвенция `add-dialog.test.ts`).
  */
@@ -285,12 +286,20 @@ describe('showImportEtnxDialog: отмена любым путём закрыт�
     assert.deepEqual(value, { filePath: undefined, options: undefined }, '× — отмена');
   });
 
-  it('клик по подложке резолвит отмену', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отмену', async () => {
     installShim();
     const done = showImportEtnxDialog('/tmp/a.etnx');
     clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(body().children.length, 1, 'диалог остался открыт');
+    footerButton(openBackdrop(), 'Отмена').click();
     const { value } = await resolvesTo(done);
-    assert.deepEqual(value, { filePath: undefined, options: undefined }, 'клик мимо — отмена');
+    assert.deepEqual(
+      value,
+      { filePath: undefined, options: undefined },
+      'после клика мимо кнопка «Отмена» всё ещё закрывает',
+    );
   });
 
   it('«Отмена» резолвит отмену', async () => {

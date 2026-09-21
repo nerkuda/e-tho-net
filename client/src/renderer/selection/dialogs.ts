@@ -49,8 +49,8 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
   return new Promise((resolve) => {
     /**
      * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
-     * каркаса (ошибка a68bacff): кнопки завершают его явно, а Esc, × и клик
-     * по подложке — через `onClose`. Флаг `settled` не даёт позднему событию
+     * каркаса (ошибка a68bacff): кнопки завершают его явно, а Esc и × —
+     * через `onClose`. Флаг `settled` не даёт позднему событию
      * `remove` переиграть уже принятое решение.
      */
     let settled = false;
@@ -83,7 +83,7 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
           },
         },
       ],
-      // Esc, × и клик по подложке — отмена: контракт «`undefined` on cancel»,
+      // Esc и × — отмена: контракт «`undefined` on cancel»,
       // ровно как по кнопке «Отмена» (ошибка a68bacff).
       onClose: () => finish(undefined),
       onMount: () => focusCombo(combo.root),
@@ -129,7 +129,7 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
           onClick: () => finish(combo.value()),
         },
       ],
-      // Esc, × и клик по подложке — отмена: контракт «`undefined` on cancel»,
+      // Esc и × — отмена: контракт «`undefined` on cancel»,
       // ровно как по кнопке «Отмена» (ошибка a68bacff).
       onClose: () => finish(undefined),
       onMount: () => focusCombo(combo.root),

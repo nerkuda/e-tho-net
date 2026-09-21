@@ -582,11 +582,19 @@ describe('pickThoughtsDialog: отмена любым путём закрыти�
     assert.equal(value, null, '× — отмена');
   });
 
-  it('клик по подложке резолвит null', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отмену', async () => {
     const ui = await openDialog();
     clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(ui.promise);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(
+      ((globalThis as any).document.body as ShimElement).children.length,
+      1,
+      'диалог остался открыт',
+    );
+    pressEscape();
     const { value } = await resolvesTo(ui.promise);
-    assert.equal(value, null, 'клик мимо — отмена');
+    assert.equal(value, null, 'после клика мимо Esc всё ещё закрывает диалог');
   });
 
   it('«Отмена» резолвит null', async () => {

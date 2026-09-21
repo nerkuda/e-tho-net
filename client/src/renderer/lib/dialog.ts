@@ -3,7 +3,7 @@
  *
  * Dialogs form a stack: opening one on top of another (a type editor over the
  * type list, a confirmation over an editor) keeps the lower dialog open, and
- * Escape / backdrop click / × close only the topmost one. Ctrl/Cmd+Enter
+ * Escape / × close only the topmost one. Ctrl/Cmd+Enter
  * confirms the topmost dialog — it clicks its primary button, so «OK»,
  * «Применить», «Сохранить» etc. are reachable from any field without tabbing
  * to the footer. `promptDialog` and `confirmDialog` are convenience wrappers
@@ -96,24 +96,11 @@ export interface DialogOptions {
   onMount?: (close: () => void) => void;
   /**
    * Called once when the dialog closes by ANY path — Esc, the × button, a
-   * footer button, a backdrop click, or `closeDialog()` popping the stack: it
-   * fires from the backdrop's `remove` event, so removing the backdrop from the
-   * DOM by any means triggers it exactly once.
+   * footer button, or `closeDialog()` popping the stack: it fires from the
+   * backdrop's `remove` event, so removing the backdrop from the DOM by any
+   * means triggers it exactly once.
    */
   onClose?: () => void;
-  /**
-   * Закрывать ли диалог кликом по подложке — по затемнённой области вне тела
-   * диалога (`.dialog-box`). По умолчанию `true`: клик мимо — такой же штатный
-   * путь закрытия, как Esc и ×, и снимает только верхний диалог стека
-   * (08-ui-spec.md §8.5 — «Esc и клик по подложке закрывают, как у остальных
-   * диалогов»). `false` — диалог закрывается только Esc, × и кнопками: для
-   * модальных окон, которые нельзя смахнуть случайным кликом.
-   *
-   * Клик по телу диалога (сам бокс и его содержимое) не закрывает диалог
-   * никогда; клик по подложке не всплывает дальше — панели, закрывающиеся
-   * кликом вне себя, его не видят.
-   */
-  closeOnBackdrop?: boolean;
   /**
    * Identity of the ENTITY this dialog edits (`thought-type:<id>`,
    * `property:<id>`; for an entity not created yet — the session key
@@ -363,19 +350,21 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onCtrlShiftEnter);
 
-  // Клик по подложке мимо тела диалога — штатное закрытие, как Esc (ошибка
-  // cc28ee10): снимается только верхний диалог стека. Клик по самому боксу и
-  // его содержимому доходит как `target`, отличный от подложки, и диалог не
-  // закрывает. Событие гасится и не всплывает к холсту/панелям, закрывающимся
-  // кликом вне себя: иначе клик по подложке закрыл бы ещё и панель под
-  // диалогом (`isInsideDialog` видит узел, уже снятый со стека).
+  // Клик по подложке мимо тела диалога НЕ ЗАКРЫВАЕТ диалог (правило задачи
+  // c9353ce1, отменяющее cc28ee10): модальный диалог закрывают только кнопки,
+  // выбор из списка и Esc. Правило «клик мимо закрывает» отменено — при
+  // выделении текста мышью с отпусканием кнопки за пределами окна диалог
+  // закрывался без сохранения и терял правки пользователя. Клик по самому
+  // боксу и его содержимому приходит как `target`, отличный от подложки.
+  //
+  // Событие всё равно гасится (`preventDefault` + `stopPropagation`): клик
+  // мимо не должен проваливаться на холст и всплывающие панели, закрывающиеся
+  // кликом вне себя (панель поиска карты — `isInsideDialog`). Это поведение
+  // сохраняется с cc28ee10, снято только закрытие.
   const onBackdropClick = (event: MouseEvent): void => {
-    if (opts.closeOnBackdrop === false) return;
     if (event.target !== backdrop) return;
-    if (stack[stack.length - 1] !== backdrop) return;
     event.preventDefault();
     event.stopPropagation();
-    close();
   };
   backdrop.addEventListener('click', onBackdropClick);
 
@@ -398,7 +387,7 @@ export function showDialog(opts: DialogOptions): () => void {
 
 /**
  * Simple text prompt dialog. Resolves the entered text, or `null` when the
- * dialog is dismissed (any close path — «Отмена», Esc, ×, backdrop click).
+ * dialog is dismissed (any close path — «Отмена», Esc, ×).
  */
 export function promptDialog(title: string, label: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
@@ -417,8 +406,8 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
     /**
      * Единственная точка завершения промиса. Промис обязан резолвиться на
      * ЛЮБОМ пути закрытия диалога (ошибка e0360076): кнопки завершают его
-     * явно, а Esc, × и клик по подложке — через `onClose`. Флаг `settled` не
-     * даёт позднему событию `remove` переиграть уже принятое решение.
+     * явно, а Esc и × — через `onClose`. Флаг `settled` не даёт позднему
+     * событию `remove` переиграть уже принятое решение.
      */
     const finish = (value: string | null): void => {
       if (settled) return;
@@ -436,8 +425,8 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
           onClick: () => finish(input.value),
         },
       ],
-      // Esc, × и клик по подложке — отмена: контракт «`null` on cancel»,
-      // ровно как по кнопке «Отмена» (ошибка e0360076).
+      // Esc и × — отмена: контракт «`null` on cancel», ровно как по кнопке
+      // «Отмена» (ошибка e0360076).
       onClose: () => finish(null),
       onMount: () => {
         input.focus();
@@ -456,8 +445,7 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
 
 /**
  * Confirmation dialog with a message. Resolves `true` on confirm and `false`
- * when the dialog is dismissed (any close path — «Отмена», Esc, ×, backdrop
- * click).
+ * when the dialog is dismissed (any close path — «Отмена», Esc, ×).
  */
 export function confirmDialog(title: string, message: string, danger = false): Promise<boolean> {
   return new Promise((resolve) => {
@@ -481,8 +469,8 @@ export function confirmDialog(title: string, message: string, danger = false): P
           onClick: () => finish(true),
         },
       ],
-      // Esc, × и клик по подложке — отказ: контракт «`false` on cancel»,
-      // ровно как по кнопке «Отмена» (ошибка e0360076).
+      // Esc и × — отказ: контракт «`false` on cancel», ровно как по кнопке
+      // «Отмена» (ошибка e0360076).
       onClose: () => finish(false),
     });
   });

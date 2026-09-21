@@ -46,8 +46,8 @@ export function showImportEtnxDialog(
   return new Promise<DialogResult>((resolve) => {
     /**
      * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
-     * каркаса (ошибка fd87099b): кнопки завершают его явно, а Esc, × и клик
-     * по подложке — через `onClose`. Флаг `settled` не даёт позднему событию
+     * каркаса (ошибка fd87099b): кнопки завершают его явно, а Esc и × —
+     * через `onClose`. Флаг `settled` не даёт позднему событию
      * `remove` переиграть уже принятое решение.
      */
     let settled = false;
@@ -127,7 +127,7 @@ export function showImportEtnxDialog(
           },
         },
       ],
-      // Esc, × и клик по подложке — отмена: контракт «`{ filePath: undefined,
+      // Esc и × — отмена: контракт «`{ filePath: undefined,
       // options: undefined }` on cancel», ровно как по кнопке «Отмена»
       // (ошибка fd87099b).
       onClose: () => finish(cancelled),

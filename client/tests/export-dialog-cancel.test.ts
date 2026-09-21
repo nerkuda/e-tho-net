@@ -3,9 +3,10 @@
  * экспорта .etnx не резолвит промис при закрытии Esc, × и кликом мимо», 0.8.2).
  *
  * Контракт `showExportEtnxDialog`: выбранные опции + путь при «Экспортировать»,
- * иначе `{ options: undefined, targetPath: undefined }`. Отмена — ЛЮБОЙ штатный
- * путь закрытия каркаса («Отмена», Esc, ×, клик по подложке): завершение
- * повешено на `onClose` (та же правка, что 5c47601 / 4c7fc0f).
+ * иначе `{ options: undefined, targetPath: undefined }`. Отмена — штатные пути
+ * закрытия каркаса («Отмена», Esc, ×): завершение повешено на `onClose` (та же
+ * правка, что 5c47601 / 4c7fc0f). Клик по подложке диалог НЕ закрывает и промис
+ * не резолвит (задача c9353ce1) — отдельный кейс проверяет это.
  *
  * Дом — минимальный шим (конвенция `add-dialog.test.ts`).
  */
@@ -289,12 +290,16 @@ describe('showExportEtnxDialog: отмена любым путём закрыт�
     assert.deepEqual(value, CANCELLED, '× — отмена');
   });
 
-  it('клик по подложке резолвит отмену', async () => {
+  it('клик по подложке НЕ закрывает диалог и не резолвит отмену', async () => {
     installShim();
     const done = showExportEtnxDialog(3);
     clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    assert.equal(body().children.length, 1, 'диалог остался открыт');
+    footerButton(openBackdrop(), 'Отмена').click();
     const { value } = await resolvesTo(done);
-    assert.deepEqual(value, CANCELLED, 'клик мимо — отмена');
+    assert.deepEqual(value, CANCELLED, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
 
   it('«Отмена» резолвит отмену', async () => {
