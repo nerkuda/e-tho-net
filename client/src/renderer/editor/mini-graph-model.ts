@@ -59,6 +59,88 @@ export function edgeTypeName(type: LinkType | undefined, fromCenter: boolean): s
   return fromCenter ? type.name_forward : type.name_reverse;
 }
 
+/** Шаг между полосами встречных рёбер одной пары мыслей, px (мир графа). */
+export const EDGE_LANE_GAP = 12;
+
+/** Точка в мировых координатах графа. */
+export interface GraphPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Раскладывает рёбра по полосам, чтобы ВСТРЕЧНЫЕ связи одной пары мыслей
+ * (A -> B и B -> A) не рисовались одной линией: наложенные друг на друга
+ * линии дают ложную картину «одна связь с двумя стрелками», а подписи сторон
+ * перекрывают друг друга — видно только ту, что нарисована позже.
+ *
+ * Ключ пары — оба id без порядка, поэтому раскладка не зависит от направления
+ * связи. Полоса задаётся смещением вдоль канонической нормали пары (см.
+ * {@link shiftEdgeByLane}); одинаково направленные кратные рёбра делят одну
+ * полосу — у них одно имя стороны, и наложение подписей незаметно.
+ *
+ * Возвращает смещение (px) по ключу ребра; ребро без пары (обычный случай) —
+ * смещение 0, геометрия не меняется.
+ */
+export function assignEdgeLanes(
+  edges: readonly { key: string; sourceId: string; targetId: string }[],
+  gap: number = EDGE_LANE_GAP,
+): Map<string, number> {
+  // пара (без порядка) -> направление (source>target) -> ключи рёбер
+  const pairs = new Map<string, Map<string, string[]>>();
+  for (const edge of edges) {
+    if (edge.sourceId === edge.targetId) continue;
+    const pairKey =
+      edge.sourceId < edge.targetId
+        ? `${edge.sourceId}|${edge.targetId}`
+        : `${edge.targetId}|${edge.sourceId}`;
+    let directions = pairs.get(pairKey);
+    if (directions === undefined) {
+      directions = new Map();
+      pairs.set(pairKey, directions);
+    }
+    const directionKey = `${edge.sourceId}>${edge.targetId}`;
+    const keys = directions.get(directionKey);
+    if (keys === undefined) directions.set(directionKey, [edge.key]);
+    else keys.push(edge.key);
+  }
+  const lanes = new Map<string, number>();
+  for (const directions of pairs.values()) {
+    const directionKeys = [...directions.keys()];
+    directionKeys.forEach((directionKey, index) => {
+      // Одно направление — центральная полоса (0): вид графа не меняется.
+      // Встречные — симметрично по обе стороны прямой пары.
+      const offset = (index - (directionKeys.length - 1) / 2) * gap;
+      for (const key of directions.get(directionKey) ?? []) lanes.set(key, offset);
+    });
+  }
+  return lanes;
+}
+
+/**
+ * Сдвигает линию ребра на `offset` вдоль КАНОНИЧЕСКОЙ нормали пары: нормаль к
+ * прямой между узлами, ориентированная от узла с меньшим id к большему.
+ * Ориентация берётся из id, а не из направления связи — иначе встречные рёбра
+ * сместились бы навстречу друг другу и снова совпали.
+ */
+export function shiftEdgeByLane(
+  a: GraphPoint,
+  b: GraphPoint,
+  sourceId: string,
+  targetId: string,
+  offset: number,
+): { a: GraphPoint; b: GraphPoint } {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const sign = sourceId < targetId ? 1 : -1;
+  const nx = (-dy / len) * sign;
+  const ny = (dx / len) * sign;
+  const ox = nx * offset;
+  const oy = ny * offset;
+  return { a: { x: a.x + ox, y: a.y + oy }, b: { x: b.x + ox, y: b.y + oy } };
+}
+
 /**
  * Тултип ребра: `«<имя типа связи>: <имя источника> -> <имя назначения>»`;
  * тип не задан — вместо имени слово «связь». Направление — фактическое.

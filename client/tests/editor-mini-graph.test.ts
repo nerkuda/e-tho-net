@@ -217,6 +217,35 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
+  it('ровно одна стрелка на ребро; встречные связи разведены по полосам — ошибка 6452c840', () => {
+    const src = readText(SRC.graph);
+    // Стрелка ребра создаётся ровно один раз на ребро (у конца-цели) — «два
+    // конца» давало наложение двух РАЗНЫХ связей одной пары, а не маркер.
+    const arrowCreations = src.match(/svgEl\('polygon'\)/g) ?? [];
+    assert.equal(arrowCreations.length, 1, 'one arrow polygon factory call per edge loop');
+    assert.equal(
+      (src.match(/'mini-graph-edge-arrow'/g) ?? []).length,
+      1,
+      'the arrow is drawn once per edge',
+    );
+    // Полоса встречного ребра — из чистой модели; смещение применяется к
+    // линии, зоне наведения, стрелке и подписи одним `shiftEdgeByLane`.
+    assert.ok(src.includes('assignEdgeLanes('), 'lanes are planned by the pure model');
+    assert.ok(
+      /shiftEdgeByLane\(a0, b0, edge\.source\.id, edge\.target\.id, edge\.laneOffset\)/.test(src),
+      'the lane shift is applied from the model, for both directions of the pair',
+    );
+    assert.ok(
+      src.includes('laneOffset'),
+      'every edge carries its lane offset',
+    );
+    // Подпись — имя СТОРОНЫ центральной мысли, а не всегда forward.
+    assert.ok(
+      /edgeTypeName\(type, oriented\.fromCenter\)/.test(src),
+      'the line label is the side name of the central thought',
+    );
+  });
+
   it('graph-tab резолвит соседей до полных карточек (значки/цвета) для графа', () => {
     const src = readText(SRC.graphTab);
     assert.ok(

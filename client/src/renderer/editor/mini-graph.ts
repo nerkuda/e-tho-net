@@ -17,6 +17,9 @@
  *    наверх (важно, когда облачка перекрывают друг друга);
  *  - стрелки на линиях показывают ФАКТИЧЕСКОЕ направление связи (источник →
  *    цель), а не «от центра»: для входящей связи стрелка смотрит в центр;
+ *    ровно одна стрелка на связь, а встречные связи одной пары мыслей
+ *    разведены по параллельным полосам (иначе они накладываются и выглядят
+ *    как одна двунаправленная стрелка);
  *  - линии окрашены/штрихованы/утолщены по эффективному оформлению типа связи
  *    (наследование по цепочке предков, как на карте), для связи без типа —
  *    нейтральное оформление приложения;
@@ -60,6 +63,7 @@ import { store } from '../state.js';
 import { toggleSelection } from '../selection/selection.js';
 import {
   PERIPHERY_CAP,
+  assignEdgeLanes,
   computeGraphStats,
   edgeTooltip,
   edgeTypeName,
@@ -67,6 +71,7 @@ import {
   neutralEdgeVisual,
   orientLink,
   resolveEdgeVisual,
+  shiftEdgeByLane,
   type EdgeVisual,
 } from './mini-graph-model.js';
 
@@ -110,12 +115,20 @@ interface GNode extends SimulationNodeDatum {
 
 /** Ребро симуляции. */
 interface GEdge {
+  /** Ключ ребра: id связи, для ребра без записи связи — синтетический. */
+  key: string;
   source: GNode;
   target: GNode;
   /** Имя типа связи в направлении источника→цели ('' — связи без типа). */
   label: string;
   /** Исходная связь — для эффективного оформления линии (`null` — без записи). */
   link: Link | null;
+  /**
+   * Смещение полосы (px мира) вдоль канонической нормали пары — разводит
+   * встречные связи одной пары мыслей, чтобы они не накладывались друг на
+   * друга (см. {@link assignEdgeLanes}).
+   */
+  laneOffset: number;
 }
 
 /** SVG namespace helper. */
@@ -203,7 +216,14 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       const c = nodeById.get(center.id);
       const t = nodeById.get(nb.id);
       if (c !== undefined && t !== undefined) {
-        edges.push({ source: c, target: t, label: '', link: null });
+        edges.push({
+          key: `struct:${c.id}>${t.id}`,
+          source: c,
+          target: t,
+          label: '',
+          link: null,
+          laneOffset: 0,
+        });
       }
       continue;
     }
@@ -215,13 +235,23 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       const type =
         link.type_id === null ? undefined : linkTypes.find((lt) => lt.id === link.type_id);
       edges.push({
+        key: link.id,
         source: oriented.sourceId === center.id ? c : t,
         target: oriented.targetId === center.id ? c : t,
         label: edgeTypeName(type, oriented.fromCenter),
         link,
+        laneOffset: 0,
       });
     }
   }
+  // Встречные связи одной пары мыслей (A -> B и B -> A) разводим по
+  // параллельным полосам: наложенные линии читаются как «одна связь с двумя
+  // стрелками», а подпись стороны видна только одна (верхняя). У каждой связи
+  // остаётся ровно одна стрелка её фактического направления и своя подпись.
+  const lanes = assignEdgeLanes(
+    edges.map((e) => ({ key: e.key, sourceId: e.source.id, targetId: e.target.id })),
+  );
+  for (const edge of edges) edge.laneOffset = lanes.get(edge.key) ?? 0;
 
   // --- SVG-холст: единое пространство координат -----------------------------
   const svg = svgEl('svg');
@@ -279,8 +309,11 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     arrow.setAttribute('class', 'mini-graph-edge-arrow');
     if (visual.color !== null) arrow.style.setProperty('--edge-color', visual.color);
     edgesG.append(arrow);
-    // Постоянная подпись типа связи на середине ребра (приёмка 0.8.1:
-    // типы должны быть видны всегда, не только в hover-подсказке).
+    // Постоянная подпись на середине ребра (приёмка 0.8.1): имя СТОРОНЫ
+    // свойства-связи с точки зрения центральной мысли — источник ребра даёт
+    // имя источника (name_forward), назначение — имя назначения
+    // (name_reverse); у связи без типа подписи нет. Разведённые по полосам
+    // подписи встречных рёбер больше не перекрывают друг друга.
     let label: SVGTextElement | null = null;
     if (edge.label !== '') {
       label = svgEl('text');
@@ -421,8 +454,12 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   // --- Раскладка каждого кадра симуляции ------------------------------------
   const paintEdge = (draw: EdgeDraw): void => {
     const { edge, line, arrow, label, hit } = draw;
-    const a = edgePoint(edge.source, edge.target);
-    const b = edgePoint(edge.target, edge.source);
+    const a0 = edgePoint(edge.source, edge.target);
+    const b0 = edgePoint(edge.target, edge.source);
+    // Полоса ребра: встречные связи пары уходят в РАЗНЫЕ стороны канонической
+    // нормали, поэтому перестают накладываться (зум/перетаскивание двигают
+    // узлы — смещение считается каждым кадром).
+    const { a, b } = shiftEdgeByLane(a0, b0, edge.source.id, edge.target.id, edge.laneOffset);
     line.setAttribute('x1', String(a.x));
     line.setAttribute('y1', String(a.y));
     line.setAttribute('x2', String(b.x));
@@ -431,7 +468,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     hit.setAttribute('y1', String(a.y));
     hit.setAttribute('x2', String(b.x));
     hit.setAttribute('y2', String(b.y));
-    // Стрелка у конца (цель), ориентированная по вектору.
+    // Ровно одна стрелка на ребро — у конца (цель), по вектору ребра.
     const ang = Math.atan2(b.y - a.y, b.x - a.x);
     const bx = b.x - Math.cos(ang) * 2;
     const by = b.y - Math.sin(ang) * 2;

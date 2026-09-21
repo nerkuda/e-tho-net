@@ -14,9 +14,11 @@ import { describe, it } from 'node:test';
 import type { Link, LinkType } from '@etn/shared';
 
 import {
+  EDGE_LANE_GAP,
   MASS_LINK_THRESHOLD,
   PERIPHERY_CAP,
   UNTYPED_LINK_LABEL,
+  assignEdgeLanes,
   computeGraphStats,
   computeMassLinks,
   edgeTooltip,
@@ -25,6 +27,7 @@ import {
   neutralEdgeVisual,
   orientLink,
   resolveEdgeVisual,
+  shiftEdgeByLane,
 } from '../src/renderer/editor/mini-graph-model.js';
 
 const CENTER = 'thought-center';
@@ -96,6 +99,84 @@ describe('mini-graph-model — направление и тултип ребра
     const text = edgeTooltip('включает', 'Сосед', 'Центр');
     assert.equal(inc.sourceId, OTHER);
     assert.equal(text, 'включает: Сосед -> Центр');
+  });
+});
+
+describe('mini-graph-model — сторона подписи и полосы встречных рёбер (ошибка 6452c840)', () => {
+  // Тип связи полигона etn-dev: forward «версия» (сторона источника),
+  // reverse «работы версии» (сторона назначения).
+  const versionType = linkType({
+    id: 't-version',
+    name_forward: 'версия',
+    name_reverse: 'работы версии',
+  });
+
+  it('центральная — источник: подпись forward, стрелка ОТ центра', () => {
+    const outgoing = orientLink(link({ source_id: CENTER, target_id: OTHER }), CENTER);
+    const type = versionType;
+    assert.equal(outgoing.fromCenter, true);
+    assert.equal(edgeTypeName(type, outgoing.fromCenter), 'версия');
+    assert.equal(outgoing.sourceId, CENTER, 'стрелка начинается в центре');
+    assert.equal(outgoing.targetId, OTHER, 'и смотрит на соседа');
+  });
+
+  it('центральная — назначение: подпись reverse, стрелка В центр', () => {
+    const incoming = orientLink(link({ source_id: OTHER, target_id: CENTER }), CENTER);
+    const type = versionType;
+    assert.equal(incoming.fromCenter, false);
+    assert.equal(edgeTypeName(type, incoming.fromCenter), 'работы версии');
+    assert.equal(incoming.sourceId, OTHER);
+    assert.equal(incoming.targetId, CENTER, 'стрелка смотрит в центр');
+  });
+
+  it('одиночная связь остаётся на центральной полосе (вид графа не меняется)', () => {
+    const lanes = assignEdgeLanes([{ key: 'l1', sourceId: CENTER, targetId: OTHER }]);
+    assert.equal(lanes.get('l1'), 0);
+  });
+
+  it('встречные связи одной пары уходят на РАЗНЫЕ полосы (иначе — одна линия с двумя стрелками)', () => {
+    const lanes = assignEdgeLanes([
+      { key: 'out', sourceId: CENTER, targetId: OTHER },
+      { key: 'in', sourceId: OTHER, targetId: CENTER },
+    ]);
+    const out = lanes.get('out')!;
+    const inc = lanes.get('in')!;
+    assert.notEqual(out, inc, 'встречные связи не накладываются');
+    assert.equal(out, -inc, 'полосы симметричны относительно прямой пары');
+    assert.equal(Math.abs(out), EDGE_LANE_GAP / 2);
+  });
+
+  it('кратные рёбра одного направления делят одну полосу (у них одна подпись стороны)', () => {
+    const lanes = assignEdgeLanes([
+      { key: 'a', sourceId: CENTER, targetId: OTHER },
+      { key: 'b', sourceId: CENTER, targetId: OTHER },
+      { key: 'c', sourceId: OTHER, targetId: CENTER },
+    ]);
+    assert.equal(lanes.get('a'), lanes.get('b'), 'одинаковое направление — одна полоса');
+    assert.notEqual(lanes.get('a'), lanes.get('c'));
+  });
+
+  it('раскладка пары не зависит от направления связи: ключ пары — без порядка', () => {
+    const lanes = new Set(
+      [...assignEdgeLanes([
+        { key: 'x', sourceId: OTHER, targetId: CENTER },
+        { key: 'y', sourceId: CENTER, targetId: OTHER },
+      ]).values()],
+    );
+    assert.equal(lanes.size, 2, 'два направления — две полосы');
+  });
+
+  it('shiftEdgeByLane уводит встречные линии в противоположные стороны', () => {
+    // Горизонтальная пара: центр слева (id меньше), сосед справа.
+    const forward = shiftEdgeByLane({ x: 0, y: 0 }, { x: 100, y: 0 }, CENTER, OTHER, -6);
+    const backward = shiftEdgeByLane({ x: 100, y: 0 }, { x: 0, y: 0 }, OTHER, CENTER, 6);
+    assert.equal(forward.a.y, -6);
+    assert.equal(forward.b.y, -6);
+    assert.equal(backward.a.y, 6);
+    assert.equal(backward.b.y, 6);
+    // Оба конца смещаются одинаково — длина и направление линии сохраняются.
+    assert.equal(forward.b.x - forward.a.x, 100);
+    assert.equal(backward.a.x - backward.b.x, 100);
   });
 });
 
