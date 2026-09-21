@@ -530,5 +530,342 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('thought-type reparent with shadow child: child shadow keeps its parent_id (задача 144534c8)', async () => {
+      // Сценарий карточки 144534c8: у типа T есть дочерний тип C, у C в
+      // рабочем слое есть теневая строка (например, поправлен description),
+      // но в слое нет ни одной мысли с типом C. Смена parent T в этом слое:
+      //   - `computeReparentImpact` НЕ учитывает тени самих типов — только
+      //     мысли/связи. Поскольку записей нет, `layers_open_count = 0`,
+      //     для thought-type без `confirmed` проходит (нет мыслей в базе);
+      //   - `materializeShadow` создаёт тень T в слое и обновляет parent_id;
+      //   - тень C в слое остаётся с `parent_id = T` — и это КОРРЕКТНО:
+      //     parent_id дочернего типа указывает на предка, а не на parent
+      //     предка. Смена parent предка не должна тянуть за собой дочерние
+      //     тени, иначе они бы указали на parent предка, а не на самого
+      //     предка, — это и был бы рассинхрон.
+      //
+      // Тест проверяет: после PATCH в слое view показывает правильную
+      // цепочку C → T → newParent; физически тень C в слое хранит
+      // parent_id = T (не изменилось); тень T в слое имеет parent_id =
+      // newParent. Если в слое добавить мысль типа C — следующий PATCH
+      // блокируется `reparent_blocked_by_layer` (защита работает).
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+        // Сетевая сессия per-client-id: типы создаются без client-id
+        // (базовый слой по умолчанию), а вся работа в слое — под
+        // client-id '0'. Это соглашение выдержано во всём файле.
+        const hLayer = { ...authHeaders(ctx), 'client-id': '0' };
+
+        // Иерархия: parent под корнем, child под parent, newParent под корнем.
+        const parent = await postThoughtType(ctx, { name: 'Предок-Тип' });
+        const child = await postThoughtType(ctx, {
+          name: 'Потомок-Тип',
+          parent_id: parent.id,
+        });
+        const newParent = await postThoughtType(ctx, { name: 'Новый-Предок' });
+
+        // Создаём рабочий слой и переключаем на него сессию client-id '0'.
+        const layer = await createLayer(ctx, { title: 'Слой 144534c8' });
+        await selectLayer(ctx, layer.id);
+
+        // В слое правим только метаданные child — это создаёт тень child.
+        // Тени parent в слое пока нет.
+        const childInLayer = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${child.id}`,
+          headers: hLayer,
+        });
+        assert.equal(childInLayer.statusCode, 200, childInLayer.body?.toString());
+        const childVersion = (childInLayer.json().data as { version: number }).version;
+        const patchChildDesc = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${child.id}`,
+          headers: { ...hLayer, 'If-Match': String(childVersion) },
+          payload: { description: 'правим метаданные в слое' },
+        });
+        assert.equal(patchChildDesc.statusCode, 200, patchChildDesc.body?.toString());
+        const childShadowVersion = (patchChildDesc.json().data as { version: number }).version;
+
+        // Физический SELECT через общее соединение `ctx.ndb` — его
+        // контекст = базовый слой, но `WHERE layer_id = ?` вытаскивает
+        // ровно тень слоя: контекст нужен только для `*_v`, прямой
+        // доступ к таблице работает без него.
+        const childShadowRow = ctx.ndb
+          .prepare(
+            `SELECT parent_id FROM thought_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(child.id, layer.id) as { parent_id: string | null } | undefined;
+        assert.ok(childShadowRow, 'тень child должна существовать в слое');
+        assert.equal(childShadowRow.parent_id, parent.id);
+
+        // В этом же слое меняем parent_id у parent. Поскольку мыслей с
+        // типом parent/child/newParent в базе нет, запрета по живым слоям
+        // не возникает; для thought-type нет и `reparent_impact` —
+        // подтверждение требуется только когда у типа есть живые мысли
+        // в базе (thought-type-service.ts:366-388).
+        const parentInLayer = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${parent.id}`,
+          headers: hLayer,
+        });
+        assert.equal(parentInLayer.statusCode, 200, parentInLayer.body?.toString());
+        const parentVersion = (parentInLayer.json().data as { version: number }).version;
+        const reparent = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${parent.id}`,
+          headers: { ...hLayer, 'If-Match': String(parentVersion) },
+          payload: { parent_id: newParent.id },
+        });
+        assert.equal(reparent.statusCode, 200, reparent.body?.toString());
+
+        // View в слое: parent перешёл под newParent, child остался под parent.
+        const childAfter = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${child.id}`,
+          headers: hLayer,
+        });
+        assert.equal(childAfter.statusCode, 200, childAfter.body?.toString());
+        const childAfterBody = childAfter.json().data as { parent_id: string | null };
+        assert.equal(
+          childAfterBody.parent_id,
+          parent.id,
+          'parent_id child не должен измениться',
+        );
+
+        const parentAfter = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${parent.id}`,
+          headers: hLayer,
+        });
+        assert.equal(parentAfter.statusCode, 200, parentAfter.body?.toString());
+        const parentAfterBody = parentAfter.json().data as { parent_id: string | null };
+        assert.equal(parentAfterBody.parent_id, newParent.id);
+
+        // Физически: тень child в слое по-прежнему хранит parent_id =
+        // parent, тень parent в слое хранит parent_id = newParent.
+        // version у тени child не менялся (мы обновляли только
+        // description, не parent_id), у тени parent — инкрементирован при
+        // правке parent_id.
+        const childShadowAfter = ctx.ndb
+          .prepare(
+            `SELECT parent_id, version FROM thought_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(child.id, layer.id) as { parent_id: string | null; version: number } | undefined;
+        assert.ok(childShadowAfter);
+        assert.equal(childShadowAfter.parent_id, parent.id);
+        assert.equal(childShadowAfter.version, childShadowVersion);
+
+        const parentShadowAfter = ctx.ndb
+          .prepare(
+            `SELECT parent_id FROM thought_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(parent.id, layer.id) as { parent_id: string | null } | undefined;
+        assert.ok(parentShadowAfter);
+        assert.equal(parentShadowAfter.parent_id, newParent.id);
+
+        // Дополнительная проверка защиты: если в слое есть мысль типа child,
+        // следующий PATCH parent должен блокироваться — теми же правилами
+        // задачи 8ea1ab6a, что и для всех четырёх подмножеств затронутых
+        // типов. Это подтверждает, что тень child не делает проверку
+        // «дырявой»: пока в слое живут мысли с типом из затронутого
+        // множества, смена запрещена.
+        const childThought = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thoughts`,
+          headers: hLayer,
+          payload: { title: 'мысль-потомок', type_id: child.id },
+        });
+        assert.equal(childThought.statusCode, 201, childThought.body?.toString());
+        const parentAfter2 = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${parent.id}`,
+          headers: hLayer,
+        });
+        assert.equal(parentAfter2.statusCode, 200, parentAfter2.body?.toString());
+        const parentVersion2 = (parentAfter2.json().data as { version: number }).version;
+        const blocked = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${parent.id}`,
+          headers: { ...hLayer, 'If-Match': String(parentVersion2) },
+          payload: { parent_id: null, confirmed: true },
+        });
+        assert.equal(blocked.statusCode, 422);
+        const blockedBody = blocked.json() as {
+          error: { code: string; details?: { kind?: string } };
+        };
+        assert.equal(blockedBody.error.code, 'VALIDATION_ERROR');
+        assert.equal(blockedBody.error.details?.kind, 'reparent_blocked_by_layer');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('link-type reparent with shadow child: child shadow keeps its parent_id (задача 144534c8)', async () => {
+      // Симметричный тест для link-type. Сценарий тот же: у типа связи T
+      // есть дочерний тип C, у C в слое тень (поправлен description), а
+      // мыслей/связей в базе нет. Смена parent T в слое не должна ломать
+      // цепочку: тень C хранит parent_id = T (не изменилось), тень T —
+      // parent_id = newParent. POST /links в 0.8.1 снят, поэтому полная
+      // проверка запрета по живому слою для link-type делается в
+      // отдельном тесте выше; здесь — сценарий без связей.
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const hLayer = { ...authHeaders(ctx), 'client-id': '0' };
+        const nid = ctx.networkId;
+        await selectLayer(ctx, BASE_LAYER_ID);
+
+        // Создаём link_type T под корнем и дочерний C под T. POST
+        // /properties на REST идёт в базовый слой (без client-id).
+        const ltTRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'тип-связи-T',
+            value_type: 'link',
+            name_forward: 'связь-T',
+            name_reverse: 'связь-T-назад',
+          },
+        });
+        assert.equal(ltTRes.statusCode, 201, ltTRes.body?.toString());
+        const ltTId = (ltTRes.json().data as { config: { link_type_id: string } | null })
+          .config?.link_type_id!;
+
+        const ltCRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'тип-связи-C',
+            value_type: 'link',
+            name_forward: 'связь-C',
+            name_reverse: 'связь-C-назад',
+            parent_link_type_id: ltTId,
+          },
+        });
+        assert.equal(ltCRes.statusCode, 201, ltCRes.body?.toString());
+        const ltCId = (ltCRes.json().data as { config: { link_type_id: string } | null })
+          .config?.link_type_id!;
+
+        // Подтверждаем базовый parent_id у ltC в базовом слое — иначе
+        // утверждения «parent_id не меняется» не имеют смысла.
+        const ltCBase = ctx.ndb
+          .prepare(
+            `SELECT parent_id FROM link_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(ltCId, BASE_LAYER_ID) as { parent_id: string | null } | undefined;
+        assert.ok(ltCBase);
+        assert.equal(ltCBase.parent_id, ltTId, 'ltC.parent_id в базе должен = ltTId');
+
+        // Рабочий слой.
+        const layer = await createLayer(ctx, { title: 'Слой 144534c8 — link' });
+        await selectLayer(ctx, layer.id);
+
+        // В слое правим описание C — материализуется тень C.
+        const ltCGetRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types/${ltCId}`,
+          headers: hLayer,
+        });
+        assert.equal(ltCGetRes.statusCode, 200, ltCGetRes.body?.toString());
+        const ltCVersion = (ltCGetRes.json().data as { version: number }).version;
+        const patchCRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/link-types/${ltCId}`,
+          headers: { ...hLayer, 'If-Match': String(ltCVersion) },
+          payload: { description: 'правим в слое' },
+        });
+        assert.equal(patchCRes.statusCode, 200, patchCRes.body?.toString());
+
+        // Тень C физически в слое, parent_id = ltTId. Чтение через
+        // `ctx.ndb` (базовый слой) + фильтр по `layer_id`.
+        const cShadow = ctx.ndb
+          .prepare(
+            `SELECT parent_id FROM link_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(ltCId, layer.id) as { parent_id: string | null } | undefined;
+        assert.ok(cShadow, 'тень link_type C должна существовать в слое');
+        assert.equal(cShadow.parent_id, ltTId);
+
+        // Создаём link_type newParent для смены родителя — в базовом слое.
+        const ltNRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'тип-связи-N',
+            value_type: 'link',
+            name_forward: 'связь-N',
+            name_reverse: 'связь-N-назад',
+          },
+        });
+        assert.equal(ltNRes.statusCode, 201, ltNRes.body?.toString());
+        const ltNId = (ltNRes.json().data as { config: { link_type_id: string } | null })
+          .config?.link_type_id!;
+
+        // В слое меняем parent_id T → N. Связей с типом T/C нет → нет
+        // блокировки, link-type меняются сразу.
+        const ltTGetRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types/${ltTId}`,
+          headers: hLayer,
+        });
+        assert.equal(ltTGetRes.statusCode, 200, ltTGetRes.body?.toString());
+        const ltTVersion = (ltTGetRes.json().data as { version: number }).version;
+        const reparentRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/link-types/${ltTId}`,
+          headers: { ...hLayer, 'If-Match': String(ltTVersion) },
+          payload: { parent_id: ltNId },
+        });
+        assert.equal(reparentRes.statusCode, 200, reparentRes.body?.toString());
+        const reparentBody = reparentRes.json().data as { parent_id: string | null };
+        assert.equal(reparentBody.parent_id, ltNId);
+
+        // View в слое: C остался под T, T теперь под N.
+        const ltCAfter = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types/${ltCId}`,
+          headers: hLayer,
+        });
+        assert.equal(ltCAfter.statusCode, 200, ltCAfter.body?.toString());
+        const ltCAfterBody = ltCAfter.json().data as { parent_id: string | null };
+        assert.equal(
+          ltCAfterBody.parent_id,
+          ltTId,
+          'parent_id C не должен измениться',
+        );
+
+        // Физически: тень C в слое хранит parent_id = ltTId, тень T — ltNId.
+        const cShadowAfter = ctx.ndb
+          .prepare(
+            `SELECT parent_id FROM link_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(ltCId, layer.id) as { parent_id: string | null } | undefined;
+        assert.ok(cShadowAfter);
+        assert.equal(cShadowAfter.parent_id, ltTId);
+
+        const tShadowAfter = ctx.ndb
+          .prepare(
+            `SELECT parent_id FROM link_types
+             WHERE id = ? AND layer_id = ? AND deleted = 0`,
+          )
+          .get(ltTId, layer.id) as { parent_id: string | null } | undefined;
+        assert.ok(tShadowAfter);
+        assert.equal(tShadowAfter.parent_id, ltNId);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );
