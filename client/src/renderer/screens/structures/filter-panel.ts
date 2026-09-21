@@ -67,6 +67,7 @@ import {
   datesActive,
   defaultFilterCriteriaState,
   parseFilterDefinition,
+  withReverseLinkPropertySides,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
 
@@ -195,9 +196,11 @@ export function buildKeywordScope(): StructureKeywordScope[] | undefined {
 }
 
 /** Wire property conditions built from the panel rows (typed conversion) —
- *  единый конвертер конструктора (`lib/filter-builder.ts`). */
+ *  единый конвертер конструктора (`lib/filter-builder.ts`). Реестр — с
+ *  обратными сторонами свойств-связей (`registryWithSides`), иначе условие по
+ *  обратному имени молча выпало бы из запроса. */
 export function buildConditions(): StructurePropertyCondition[] {
-  return buildConditionsWire(state, propertyDefs);
+  return buildConditionsWire(state, registryWithSides());
 }
 
 /** The «Родительские мысли»/«Дополнительно» fields of the wire filter (§15.3)
@@ -220,7 +223,7 @@ export function buildExtraFilter(): Pick<
   | 'updated_after'
   | 'updated_before'
 > {
-  const wire = buildWireFilter(state, propertyDefs, {
+  const wire = buildWireFilter(state, registryWithSides(), {
     activeMode: 'structures',
     showInactive: store.state.showInactive,
   });
@@ -324,6 +327,17 @@ async function loadPropertyDefs(): Promise<void> {
   } catch {
     // Network read failed — the panel falls back to the empty registry.
   }
+}
+
+/**
+ * Реестр свойств для конструктора условий: к загруженному реестру добавлены
+ * обратные стороны свойств-связей (задача df992826) — в списке имён условий
+ * каждая связь реестра представлена ОБЕИМИ сторонами, а не только цепочкой
+ * редактируемого типа. Тот же хелпер, что и в диалоге отбора типа мысли: оба
+ * места — применения одного конструктора (стандарт S4).
+ */
+function registryWithSides(): Map<string, NetworkProperty> {
+  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
 }
 
 // ---------------------------------------------------------------------------
@@ -497,7 +511,7 @@ function renderPanel(): void {
   const ctx: FilterFormContext = {
     networkId: requireNetworkId(),
     getState: () => state,
-    registry: propertyDefs,
+    registry: registryWithSides(),
     touch,
   };
 
@@ -671,7 +685,7 @@ function toEntry(filter: { id: string; name: string; definition: SavedFilterDefi
 function buildSavedDefinition(): SavedFilterDefinition {
   const traversalFilter = buildTraversalFilter();
   return {
-    ...buildWireFilter(state, propertyDefs, {
+    ...buildWireFilter(state, registryWithSides(), {
       activeMode: 'structures',
       showInactive: store.state.showInactive,
     }),

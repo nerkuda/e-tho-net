@@ -15,7 +15,6 @@
 
 import type {
   EffectiveTypeProperty,
-  LinkType,
   NetworkProperty,
   PropertyValueType,
   StructurePropertyOp,
@@ -81,60 +80,6 @@ export const hasAnyCriteria = hasAnyFilterCriteria;
 export interface ChainProperties {
   type: ThoughtType;
   props: EffectiveTypeProperty[];
-}
-
-/**
- * Дополнить реестр свойств ОБРАТНОЙ стороной каждого свойства-связи цепочки
- * типа (задача df992826). В реестре у свойства-связи одно имя — то, что
- * соответствует стороне привязки (`def.key`, вычислено сервером); в отборе же
- * адресуемы обе стороны. Вторая сторона добавляется синтетической записью с
- * `id`, равным её ИМЕНИ: сервер (`resolveConditionPropertyRef`) резолвит имя
- * условия как прямое/обратное имя связи и берёт направление рёбер из имени.
- * Прямая сторона остаётся прежней записью по registry id — сохранённые отборы
- * не меняются.
- *
- * Пропускаются: скалярные и структурные свойства («Родители»/«Потомки» уже
- * двусторонние), связи без видимого типа связи, совпадающие имена сторон и
- * имена, уже занятые другим свойством реестра (не подменяем чужое).
- */
-export function withReverseLinkPropertySides(
-  registry: ReadonlyMap<string, NetworkProperty>,
-  chainProps: readonly ChainProperties[],
-  linkTypes: readonly LinkType[],
-): Map<string, NetworkProperty> {
-  const out = new Map(registry);
-  const byLinkTypeId = new Map(linkTypes.map((lt) => [lt.id, lt] as const));
-  for (const level of chainProps) {
-    for (const def of level.props) {
-      if (def.value_type !== 'link') continue;
-      const cfg = def.config ?? {};
-      if (cfg.structural === true) continue;
-      const linkTypeId = typeof cfg.link_type_id === 'string' ? cfg.link_type_id : '';
-      if (linkTypeId === '') continue;
-      const lt = byLinkTypeId.get(linkTypeId);
-      if (lt === undefined) continue;
-      // `def.key` — сторона, показанная в цепочке; добавляем противоположную.
-      const other =
-        def.key === lt.name_forward
-          ? lt.name_reverse
-          : def.key === lt.name_reverse
-            ? lt.name_forward
-            : null;
-      if (other === null || other.trim() === '' || other === def.key) continue;
-      if (out.has(other)) continue;
-      const base = out.get(def.property_id);
-      out.set(other, {
-        id: other,
-        name: `${other} · обратная сторона`,
-        value_type: 'link',
-        config: base?.config ?? def.config ?? null,
-        description: null,
-        created_at: base?.created_at ?? '',
-        updated_at: base?.updated_at ?? '',
-      });
-    }
-  }
-  return out;
 }
 
 /** A token the picker can insert into a value field. */

@@ -10,7 +10,10 @@
  *     принимает исполнитель) и один набор направлений (`FILTER_ORDERS`);
  *   - один конвертер состояния в wire-формат (`buildWireFilter`);
  *   - один словарь операторов авторства (`AUTHOR_OP_LABELS`) и одна строка
- *     условия «автор/редактор» (`buildAuthorConditionRow`).
+ *     условия «автор/редактор» (`buildAuthorConditionRow`);
+ *   - одна точка адресации сторон свойства-связи в условиях
+ *     (`withReverseLinkPropertySides`, задача df992826) — обе стороны каждой
+ *     связи реестра, а не только цепочки редактируемого типа.
  *
  * Панель отбора «Структур» (`screens/structures/filter-panel.ts`) и диалог
  * отбора типа мысли (`screens/thought-type/filter-dialog.ts`) — два
@@ -30,9 +33,11 @@ import {
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_SORTS,
+  typeNameKey,
   type ActivityEntityType,
   type ChronicleFilterDefinition,
   type ChronicleLinkScope,
+  type LinkType,
   type NetworkProperty,
   type PropertyValueType,
   type SortOrder,
@@ -504,6 +509,76 @@ export function buildConditionsWire(
     }
     if (values.length === 0) continue; // row not filled in yet
     out.push({ property_id: cond.propertyId, op: cond.op, value: list ? values : values[0]! });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Адресация обеих сторон свойства-связи в условиях отбора
+// ---------------------------------------------------------------------------
+
+/**
+ * Дополнить реестр свойств ОБРАТНОЙ стороной каждого свойства-связи (задача
+ * df992826, доработка по замечаниям приёмки). В реестре у свойства-связи одно
+ * имя — сторона, вычисленная при создании/правке свойства из `config.direction`
+ * (у `out`/по умолчанию — `name_forward`, у `in` — `name_reverse`); в отборе
+ * же адресуемы ОБЕ стороны (сервер, `resolveConditionPropertyRef`, резолвит
+ * имя как прямое/обратное имя связи). Поэтому каждая связь РЕЕСТРА (не только
+ * цепочка редактируемого типа) даёт в списке имён условий обе записи:
+ *
+ *   * прямую — прежняя запись по registry id (сохранённые отборы не меняются);
+ *   * обратную — синтетическая запись, `id` = имя обратной стороны, а `name` —
+ *     ТО ЖЕ чистое имя свойства, без служебных суффиксов.
+ *
+ * Направление рёбер условия сервер выводит из имени стороны, поэтому `id` и
+ * `name` совпадают. Входной реестр не мутируется.
+ *
+ * Пропускаются: скалярные и структурные свойства («Родители»/«Потомки» уже
+ * двусторонние — миграция 039), связи без видимого типа связи, совпадающие
+ * имена сторон (в том числе пустые) и имя, уже занятое другой записью — своим
+ * id или именем: чужое не подменяем и не предлагаем коллизию, которую сервер
+ * отвергнет как неоднозначную.
+ */
+export function withReverseLinkPropertySides(
+  registry: ReadonlyMap<string, NetworkProperty>,
+  linkTypes: readonly LinkType[],
+): Map<string, NetworkProperty> {
+  const out = new Map(registry);
+  const byLinkTypeId = new Map(linkTypes.map((lt) => [lt.id, lt] as const));
+  // Нормализованные имена, уже занятые записями реестра и добавленными сторонами.
+  const usedNameKeys = new Set<string>();
+  for (const entry of registry.values()) usedNameKeys.add(typeNameKey(entry.name));
+  for (const entry of registry.values()) {
+    if (entry.value_type !== 'link') continue;
+    const cfg = entry.config ?? {};
+    if (cfg.structural === true) continue;
+    const linkTypeId = typeof cfg.link_type_id === 'string' ? cfg.link_type_id : '';
+    if (linkTypeId === '') continue;
+    const lt = byLinkTypeId.get(linkTypeId);
+    if (lt === undefined) continue;
+    const ownKey = typeNameKey(entry.name);
+    const reverseName =
+      ownKey === typeNameKey(lt.name_forward)
+        ? lt.name_reverse
+        : ownKey === typeNameKey(lt.name_reverse)
+          ? lt.name_forward
+          : null;
+    if (reverseName === null) continue;
+    const name = reverseName.trim();
+    if (name === '') continue;
+    const nameKey = typeNameKey(name);
+    if (nameKey === ownKey) continue; // совпадающие имена сторон
+    if (usedNameKeys.has(nameKey)) continue; // имя занято другой записью
+    usedNameKeys.add(nameKey);
+    out.set(name, {
+      id: name,
+      name,
+      value_type: 'link',
+      config: entry.config ?? null,
+      description: null,
+      created_at: entry.created_at,
+      updated_at: entry.updated_at,
+    });
   }
   return out;
 }
