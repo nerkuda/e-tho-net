@@ -21,11 +21,10 @@ import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { buildMiniGraph } from './mini-graph.js';
+import { computeMassLinks } from './mini-graph-model.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
-/** Порог «массовости» пары (тип, цель): прячем избыточные рёбра за чипом «+N». */
-const MASS_LINK_THRESHOLD = 10;
 
 /** Registers the graph tab content (a single mini-graph that fills the pane). */
 export function registerGraphTab(): void {
@@ -71,8 +70,15 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
     root.append(el('p', 'muted', 'Граф недоступен — мысль ещё загружается.'));
     return root;
   }
-  // Параллельно: соседи (оба направления одним вызовом), полный список связей
-  // мысли (для подписей рёбер), сама мысль (уже есть в `ctx.thought`).
+  // Параллельно: соседи (оба направления), полный список связей мысли (для
+  // подписей/направления/оформления рёбер), сама мысль (уже есть в `ctx.thought`).
+  //
+  // НЕЗАВИСИМОСТЬ ОТ ОТБОРОВ (задача 6811d5e7, п.5): граф показывает все связи
+  // мысли ВСЕГДА. Источник — собственные запросы этой вкладки:
+  //  - `thoughts.neighbors` (родители/потомки) и `links.listByThought` (все
+  //    типизированные и нетипизированные рёбра обеих сторон) без фильтра типов
+  //    связей и без `type_id` — отбор карты мыслей (фильтр типов связей на
+  //    карте и прочие её условия) сюда не передаётся и не должен передаваться.
   let neighbours: Array<{ id: string; title: string }> = [];
   let links: Link[] = [];
   try {
@@ -89,43 +95,22 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
         neighbours.push({ id: item.id, title: item.title });
       }
     }
+    // Группы «связи по типу» и нетипизированные пары несут связь вложенной
+    // (`{ link, target_thought }`) — разворачиваем её; направление и тип берём
+    // у самой связи, а не у обёртки (задача 6811d5e7, п.1/3/4).
     links = [
-      ...(grouped.by_type.flatMap((g) => g.items) as unknown as Link[]),
-      ...(grouped.untyped_parents as unknown as Link[]),
-      ...(grouped.untyped_children as unknown as Link[]),
+      ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+      ...grouped.untyped_parents.map((u) => u.link),
+      ...grouped.untyped_children.map((u) => u.link),
     ];
   } catch (err) {
     root.append(el('p', 'muted', `Не удалось загрузить граф: ${errText(err)}`));
     return root;
   }
 
-  // Считаем массовые связи: для каждой связи с типом группируем по типу,
-  // и если у одной и той же цели несколько связей одного типа — прячем
-  // избыточные рёбра.
-  const massMap = new Map<string, { hidden: number; label: string }>();
-  const pairCounts = new Map<string, { typeName: string; count: number }>();
-  for (const link of links) {
-    const otherId = link.source_id === ctx.ownerId ? link.target_id : link.source_id;
-    if (otherId === ctx.ownerId) continue;
-    const key = `${link.type_id ?? ''}|${otherId}`;
-    const existing = pairCounts.get(key);
-    if (existing === undefined) {
-      const typeName =
-        store.state.linkTypes.find((t) => t.id === link.type_id)?.name_forward ?? 'связь';
-      pairCounts.set(key, { typeName, count: 1 });
-    } else {
-      existing.count += 1;
-    }
-  }
-  for (const [key, info] of pairCounts) {
-    if (info.count >= MASS_LINK_THRESHOLD) {
-      const [, otherId] = key.split('|') as [string, string];
-      const target = massMap.get(otherId) ?? { hidden: 0, label: info.typeName };
-      target.hidden += info.count - 1; // одно ребро рисуем, остальные прячем
-      target.label = info.typeName;
-      massMap.set(otherId, target);
-    }
-  }
+  // Массовые связи: ≥ MASS_LINK_THRESHOLD рёбер одного типа к одному соседу —
+  // лишние прячутся за чипом «+N» (единственный источник правила — модель).
+  const massMap = computeMassLinks(links, ctx.ownerId, store.state.linkTypes);
 
   if (neighbours.length === 0) {
     root.append(el('p', 'muted', 'У мысли нет прямых связей.'));

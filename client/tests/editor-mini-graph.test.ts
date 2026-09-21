@@ -19,6 +19,7 @@ import { describe, it } from 'node:test';
 const SRC = {
   graph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
   graphTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'graph-tab.ts'),
+  model: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph-model.ts'),
   css: resolve(import.meta.dirname, '..', 'src', 'renderer', 'styles.css'),
 };
 
@@ -71,13 +72,21 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
-  it('зум — колесо, пан — правая кнопка (единый фильтр d3-zoom)', () => {
+  it('зум — колесо, пан — ЛЕВАЯ кнопка (правая холст не двигает)', () => {
     const src = readText(SRC.graph);
     assert.ok(
-      /event\.type === 'wheel' \|\| \(event\.type === 'mousedown' && event\.button === 2\)/.test(
+      /event\.type === 'wheel' \|\| \(event\.type === 'mousedown' && event\.button === 0\)/.test(
         src,
       ),
-      'zoom filter: wheel or right button only',
+      'zoom filter: wheel or left button only (задача 6811d5e7, п.2)',
+    );
+    assert.ok(
+      !/event\.button === 2/.test(src),
+      'the right button no longer pans the canvas',
+    );
+    assert.ok(
+      src.includes('левая кнопка по пустому месту'),
+      'the hint documents the left-button pan',
     );
     assert.ok(
       src.includes("addEventListener('contextmenu'"),
@@ -221,6 +230,90 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     assert.ok(
       src.includes('fillHeight: true'),
       'graph-tab requests the mini-graph to fill the tab pane',
+    );
+  });
+
+  it('рёбра берут направление и тип у САМОЙ связи (обёртка grouped разворачивается) — п.1/3/4', () => {
+    const src = readText(SRC.graphTab);
+    // Регрессия 6811d5e7: `by_type.items`/`untyped_*` — не `Link`, а
+    // `{ link, target_thought }`; приведение к `Link` теряло direction и тип,
+    // из-за чего стрелки шли «от центра», а тултип и оформление пустели.
+    assert.ok(
+      src.includes('grouped.by_type.flatMap((g) => g.items.map((i) => i.link))'),
+      'typed groups are unwrapped through .item.link',
+    );
+    assert.ok(
+      src.includes('grouped.untyped_parents.map((u) => u.link)') &&
+        src.includes('grouped.untyped_children.map((u) => u.link)'),
+      'untyped groups are unwrapped through .link',
+    );
+    assert.ok(
+      !src.includes('as unknown as Link[]'),
+      'no blind cast of the grouped response to Link[] remains',
+    );
+    const graph = readText(SRC.graph);
+    assert.ok(graph.includes('orientLink('), 'edge direction comes from the model');
+    assert.ok(graph.includes('edgeTooltip('), 'the tooltip is built by the model');
+    assert.ok(graph.includes('resolveEdgeVisual('), 'line styling comes from the type');
+  });
+
+  it('граф независим от отборов карты мыслей — п.5', () => {
+    const src = readText(SRC.graphTab);
+    // Источник — собственные запросы вкладки без link_filter/фильтра типов;
+    // отбор карты (store.state.canvasLinkFilter) к графу не применяется.
+    assert.ok(
+      !src.includes('canvasLinkFilter'),
+      'the canvas link-type filter is never applied to the graph',
+    );
+    assert.ok(
+      !/link_filter\s*:/.test(src),
+      'no link_filter object is passed to the graph queries',
+    );
+    assert.ok(
+      /etn\.thoughts\.neighbors\(networkId, ctx\.ownerId, 'parents', 200\)/.test(src) &&
+        /etn\.thoughts\.neighbors\(networkId, ctx\.ownerId, 'children', 200\)/.test(src),
+      'structural neighbours come from unfiltered dedicated calls',
+    );
+    assert.ok(
+      /etn\.links\.listByThought\(networkId, ctx\.ownerId, true\)/.test(src),
+      'all links come from listByThought without a type filter',
+    );
+    assert.ok(
+      src.includes('computeMassLinks('),
+      'mass-link counting is delegated to the pure model',
+    );
+  });
+
+  it('шапка — понятные показатели с подсказками, механика скрытия объяснена — п.6', () => {
+    const graph = readText(SRC.graph);
+    assert.ok(graph.includes('computeGraphStats('), 'header counters come from the model');
+    assert.ok(graph.includes('graphStatEntries('), 'labels/tooltips come from the model');
+    assert.ok(
+      /setTooltip\(stat, entry\.tooltip\)/.test(graph),
+      'every header stat carries an explanatory tooltip',
+    );
+    const model = readText(SRC.model);
+    for (const label of ['Соседей:', 'Скрыто массовых:', 'Ещё не поместилось:']) {
+      assert.ok(model.includes(label), `the model names the stat «${label}»`);
+    }
+    assert.ok(
+      model.includes('вкладке «Связи»'),
+      'the tooltip explains how to see the hidden links',
+    );
+  });
+
+  it('линии оформляются кастомными свойствами (подсветка не перебивается) — п.4', () => {
+    const src = readText(SRC.graph);
+    assert.ok(src.includes("setProperty('--edge-color'"), 'edge colour is a CSS custom property');
+    assert.ok(src.includes("setProperty('--edge-width'"), 'edge width follows the type');
+    const css = readText(SRC.css);
+    assert.ok(
+      css.includes('stroke: var(--edge-color, var(--border-strong))'),
+      'CSS falls back to the neutral colour when the type sets none',
+    );
+    assert.ok(
+      /\.mini-graph-edge-arrow\s*\{[^}]*fill: var\(--edge-color/.test(css),
+      'the arrow shares the line colour',
     );
   });
 });

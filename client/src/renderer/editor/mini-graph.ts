@@ -9,13 +9,17 @@
  * Интерактив:
  *  - force-физика (притягивание по рёбрам, отталкивание, столкновения
  *    пилюль) — узлы можно перетаскивать, симуляция «дожимает» соседей;
- *  - колесо — зум, правая кнопка — панорамирование; ЛИНИИ И УЗЛЫ ЖИВУТ В
+ *  - колесо — зум, ПАН — левой кнопкой по пустому месту; ЛИНИИ И УЗЛЫ ЖИВУТ В
  *    ОДНОМ пространстве координат (единый трансформ world-группы), поэтому
  *    облачка всегда «приклеяны» к концам связей;
- *  - hover на связи — tooltip с названием типа связи, линия подсвечивается,
- *    связанные мысли получают оранжевую рамку и всплывают наверх (важно,
- *    когда облачка перекрывают друг друга);
- *  - стрелки на линиях показывают направление (исходящая/входящая от центра);
+ *  - hover на связи — tooltip «тип: источник -> назначение», линия
+ *    подсвечивается, связанные мысли получают оранжевую рамку и всплывают
+ *    наверх (важно, когда облачка перекрывают друг друга);
+ *  - стрелки на линиях показывают ФАКТИЧЕСКОЕ направление связи (источник →
+ *    цель), а не «от центра»: для входящей связи стрелка смотрит в центр;
+ *  - линии окрашены/штрихованы/утолщены по эффективному оформлению типа связи
+ *    (наследование по цепочке предков, как на карте), для связи без типа —
+ *    нейтральное оформление приложения;
  *  - облачка мыс­лей — как везде: значок (свой, иначе унаследованный от типа по
  *    цепочке предков, иначе 💭) и цвета/шрифт мысли, неактуальная бледная,
  *    помеченная на удаление — с меткой корзины;
@@ -24,9 +28,11 @@
  *  - клик — открыть в редакторе, двойной — в фокус (с активацией карты),
  *    правый/Shift+F10 — контекстное меню облачка.
  *
- * Массовые связи (>=10 одинакового типа к одной цели) скрываются за чипом
- * «+N». На больших графах (>40 соседей) часть соседей выводится за порог
- * через чип «+N ещё».
+ * Правила рёбер и счётчиков шапки живут в чистой модели
+ * `mini-graph-model.ts` (направление/имя типа/тултип, оформление линии,
+ * массовые связи, показатели) — здесь только отрисовка. Массовые связи
+ * (≥10 одинакового типа к одному соседу) скрываются за чипом «+N»; лишние
+ * соседи сверх порога — счётчиком «Ещё не поместилось».
  */
 
 import type { Link, Thought, ThoughtRef } from '@etn/shared';
@@ -44,7 +50,7 @@ import {
 import { select } from 'd3-selection';
 import { zoom, type D3ZoomEvent } from 'd3-zoom';
 
-import { div, span } from '../lib/dom.js';
+import { div, setTooltip, span } from '../lib/dom.js';
 // Пилюли-узлы мини-графа собирает общая фабрика облачка (профиль `graph`):
 // значок, цвета, начертание, бледность, метка корзины и обрезка названия
 // раскладкой с подсказкой — те же, что во всех списках клиента. HTML-облачко
@@ -52,12 +58,17 @@ import { div, span } from '../lib/dom.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { store } from '../state.js';
 import { toggleSelection } from '../selection/selection.js';
-
-/** Mass-link threshold: ≥10 ребер одного типа к одной цели скрываются за чипом. */
-const MASS_LINK_THRESHOLD = 10;
-
-/** Скрываем периферийных соседей, если их больше этого числа. */
-const PERIPHERY_CAP = 40;
+import {
+  PERIPHERY_CAP,
+  computeGraphStats,
+  edgeTooltip,
+  edgeTypeName,
+  graphStatEntries,
+  neutralEdgeVisual,
+  orientLink,
+  resolveEdgeVisual,
+  type EdgeVisual,
+} from './mini-graph-model.js';
 
 /** Геометрия пилюли-облачка: высота и границы ширины, px (мир графа). */
 const CLOUD_H = 24;
@@ -101,8 +112,10 @@ interface GNode extends SimulationNodeDatum {
 interface GEdge {
   source: GNode;
   target: GNode;
-  /** Имя типа связи в направлении источника→цели. */
+  /** Имя типа связи в направлении источника→цели ('' — связи без типа). */
   label: string;
+  /** Исходная связь — для эффективного оформления линии (`null` — без записи). */
+  link: Link | null;
 }
 
 /** SVG namespace helper. */
@@ -144,7 +157,6 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   const totalNeighbours = opts.neighbours.length;
   const visibleNeighbours = opts.neighbours.slice(0, PERIPHERY_CAP);
-  const hiddenNeighbours = totalNeighbours - visibleNeighbours.length;
 
   // --- Модель симуляции -----------------------------------------------------
   // Скрытый пробник для замера реальной ширины фабричных облачков (раскладка
@@ -178,28 +190,35 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   });
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Рёбра: для каждого видимого соседа возьмём все связи с ним; направление
-  // — от центра (source) к соседу (target), имя — прямое/обратное по типу.
+  // Рёбра: для каждого видимого соседа возьмём все связи с ним. Направление и
+  // имя типа берём у САМОЙ связи (фактический источник → цель), а не «от
+  // центра»: входящая связь рисуется стрелкой в центр (задача 6811d5e7, п.1).
   const edges: GEdge[] = [];
   const linkTypes = store.state.linkTypes;
   for (const nb of visibleNeighbours) {
     const between = opts.links.filter((l) => l.target_id === nb.id || l.source_id === nb.id);
     if (between.length === 0) {
+      // Сосед без записи связи (структурное ребро вне списка) — нейтральная
+      // линия от центра, без типа.
       const c = nodeById.get(center.id);
       const t = nodeById.get(nb.id);
-      if (c !== undefined && t !== undefined) edges.push({ source: c, target: t, label: '' });
+      if (c !== undefined && t !== undefined) {
+        edges.push({ source: c, target: t, label: '', link: null });
+      }
       continue;
     }
     for (const link of between) {
       const c = nodeById.get(center.id);
       const t = nodeById.get(nb.id);
       if (c === undefined || t === undefined) continue;
-      const type = linkTypes.find((lt) => lt.id === link.type_id);
-      const isCenterSource = link.source_id === center.id;
+      const oriented = orientLink(link, center.id);
+      const type =
+        link.type_id === null ? undefined : linkTypes.find((lt) => lt.id === link.type_id);
       edges.push({
-        source: isCenterSource ? c : t,
-        target: isCenterSource ? t : c,
-        label: isCenterSource ? (type?.name_forward ?? '') : (type?.name_reverse ?? ''),
+        source: oriented.sourceId === center.id ? c : t,
+        target: oriented.targetId === center.id ? c : t,
+        label: edgeTypeName(type, oriented.fromCenter),
+        link,
       });
     }
   }
@@ -218,16 +237,6 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   world.append(edgesG, nodesG);
   svg.append(world);
 
-  // pannedSinceDown: жест правой кнопкой был панорамированием (движение), а
-  // не кликом — узел в contextmenu не открывает меню после пана. Объявлено
-  // до отрисовки узлов: обработчик контекстного меню облачка замыкает wasPanned.
-  let pannedSinceDown = false;
-  const wasPanned = (): boolean => {
-    const moved = pannedSinceDown;
-    pannedSinceDown = false;
-    return moved;
-  };
-
   /** Точка на границе эллипса пилюли `n` в направлении к `other`. */
   const edgePoint = (n: GNode, other: GNode): { x: number; y: number } => {
     const dx = other.x! - n.x!;
@@ -244,6 +253,8 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   // --- Рёбра: линия + стрелка + постоянная подпись типа + зона ховера ------
   interface EdgeDraw {
     edge: GEdge;
+    /** Эффективное оформление (цвет/штрих/толщина) — из типа связи. */
+    visual: EdgeVisual;
     line: SVGLineElement;
     arrow: SVGPolygonElement;
     label: SVGTextElement | null;
@@ -251,12 +262,22 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   }
   const edgeDraws: EdgeDraw[] = [];
   for (const edge of edges) {
+    // Оформление линии: собственные переопределения связи → настройки типа по
+    // цепочке предков; связь без типа — нейтрально (задача 6811d5e7, п.4).
+    const visual = edge.link === null ? neutralEdgeVisual() : resolveEdgeVisual(linkTypes, edge.link);
     const line = svgEl('line');
     line.setAttribute('class', 'mini-graph-edge');
+    // Цвет — кастомным свойством, а не inline `stroke`: иначе inline-стиль
+    // перебил бы CSS подсветки `.mini-graph-edge.hovered` (акцент при наведении).
+    if (visual.color !== null) line.style.setProperty('--edge-color', visual.color);
+    line.style.setProperty('--edge-width', `${visual.width}px`);
+    line.style.setProperty('--edge-hover-width', `${Math.max(2, visual.width + 1)}px`);
+    if (visual.dash !== 'none') line.style.strokeDasharray = visual.dash;
     edgesG.append(line);
-    // Стрелка направления: источник → цель.
+    // Стрелка направления: источник → цель (фактическое направление связи).
     const arrow = svgEl('polygon');
     arrow.setAttribute('class', 'mini-graph-edge-arrow');
+    if (visual.color !== null) arrow.style.setProperty('--edge-color', visual.color);
     edgesG.append(arrow);
     // Постоянная подпись типа связи на середине ребра (приёмка 0.8.1:
     // типы должны быть видны всегда, не только в hover-подсказке).
@@ -271,9 +292,10 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     // Прозрачная толстая линия — зона наведения (pointer-events: stroke).
     const hit = svgEl('line');
     hit.setAttribute('class', 'mini-graph-edge-hit');
-    const tooltipText = edge.label === '' ? 'связь' : edge.label;
+    // Тултип: «<имя типа связи>: <источник> -> <назначение>»; без типа —
+    // слово «связь». Направление — фактическое (задача 6811d5e7, п.3).
     const title = svgEl('title');
-    title.textContent = `${tooltipText} · ${edge.source.title} → ${edge.target.title}`;
+    title.textContent = edgeTooltip(edge.label, edge.source.title, edge.target.title);
     hit.append(title);
     edgesG.append(hit);
 
@@ -296,7 +318,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       edge.source.g!.classList.remove('edge-hi');
       edge.target.g!.classList.remove('edge-hi');
     });
-    edgeDraws.push({ edge, line, arrow, label, hit });
+    edgeDraws.push({ edge, visual, line, arrow, label, hit });
   }
 
   // --- Узлы: пилюли-облачка --------------------------------------------------
@@ -326,8 +348,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
         onDoubleClick: (id) => void focusLinkRef(id),
         onCtrlClick: (id) => toggleSelection([id]),
         onContextMenu: (event) => {
-          // После панорамирования правой кнопкой меню не открываем (движение было).
-          if (wasPanned()) return;
+          // Правая кнопка больше не панорамирует — меню открывается всегда.
           event.stopPropagation();
           void showCloudContextMenu(node, cloud);
         },
@@ -472,15 +493,15 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     .on('tick', ticked);
   ticked();
 
-  // --- Зум (колесо) и пан (правая кнопка) единым трансформом world ----------
+  // --- Зум (колесо) и пан (ЛЕВАЯ кнопка) единым трансформом world ----------
+  // Левая кнопка по пустому месту — панорама; на узле d3-drag перехватывает
+  // mousedown и гасит распространение, поэтому узел тащится, а не панорамирует
+  // холст. Правая кнопка холст не двигает: контекстные меню работают как есть.
   const zoomBehavior = zoom<SVGSVGElement, unknown>()
     .scaleExtent([0.3, 3])
-    .filter((event) => event.type === 'wheel' || (event.type === 'mousedown' && event.button === 2))
+    .filter((event) => event.type === 'wheel' || (event.type === 'mousedown' && event.button === 0))
     .on('zoom', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
       world.setAttribute('transform', event.transform.toString());
-      if (event.sourceEvent !== null && event.sourceEvent.type === 'mousemove') {
-        pannedSinceDown = true;
-      }
     });
   svg.addEventListener('contextmenu', (event) => event.preventDefault());
   select(svg).call(zoomBehavior).on('dblclick.zoom', null);
@@ -528,23 +549,23 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   root.append(viewport);
 
-  // Шапка со счётчиками: «соседей N» / «скрыто массовых M».
+  // Шапка: понятные показатели, каждый со своей подсказкой (задача 6811d5e7,
+  // п.6). «Соседей» — все прямые соседи; «скрыто массовых» — избыточные рёбра
+  // однотипных пар, свёрнутые в чипы «+N»; «ещё не поместилось» — соседи сверх
+  // порога PERIPHERY_CAP. Механика и тексты — в mini-graph-model.
+  const hiddenMass = [...opts.mass.values()].reduce((s, m) => s + m.hidden, 0);
+  const stats = computeGraphStats(totalNeighbours, hiddenMass);
   const header = div('mini-graph-header');
-  header.append(span(`соседей: ${totalNeighbours}`, 'mini-graph-header-stat'));
-  if (opts.mass.size > 0) {
-    const hiddenMass = [...opts.mass.values()].reduce((s, m) => s + m.hidden, 0);
-    header.append(span(` · скрыто массовых: ${hiddenMass}`, 'mini-graph-header-stat'));
+  for (const entry of graphStatEntries(stats)) {
+    const stat = span(entry.text, 'mini-graph-header-stat');
+    setTooltip(stat, entry.tooltip);
+    header.append(stat);
   }
   root.append(header);
-  if (hiddenNeighbours > 0) {
-    const more = div('mini-graph-more');
-    more.textContent = `+${hiddenNeighbours} ещё (порог ${PERIPHERY_CAP}, массовых ≥${MASS_LINK_THRESHOLD})`;
-    header.append(more);
-  }
   // Подвал с подсказкой.
   const hint = div('mini-graph-hint muted');
   hint.textContent =
-    'Колесо — зум, правая кнопка — панорама, узлы можно таскать. Наведите на связь — тип и подсветка. Ctrl+hover — предпросмотр.';
+    'Колесо — зум, левая кнопка по пустому месту — панорама, узлы можно таскать. Наведите на связь — тип и подсветка. Ctrl+hover — предпросмотр.';
   root.append(hint);
 
   // Останавливаем физику, когда граф скрыт (группа свёрнута/вкладка сменилась),

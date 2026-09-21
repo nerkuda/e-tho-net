@@ -8051,16 +8051,19 @@ table.activity-table thead th {
    SVG-пространстве, зум/пан двигают их вместе. --- */
 
 .mini-graph-edge {
-  stroke: var(--border-strong);
-  stroke-width: 1.2;
+  /* Эффективное оформление линии приходит кастомными свойствами из
+     mini-graph.ts (тип связи по цепочке предков); без них — нейтральный цвет
+     и толщина. Инлайн-`stroke` не используем: он перебил бы подсветку. */
+  stroke: var(--edge-color, var(--border-strong));
+  stroke-width: var(--edge-width, 1.2);
   pointer-events: none;
 }
 .mini-graph-edge.hovered {
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: var(--edge-hover-width, 2);
 }
 .mini-graph-edge-arrow {
-  fill: var(--border-strong);
+  fill: var(--edge-color, var(--border-strong));
   pointer-events: none;
 }
 .mini-graph-edge-arrow.hovered {
