@@ -78,7 +78,7 @@ import {
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
 import { getThought } from './thought-service.js';
-import { listEffectiveTypeProperties } from './property-service.js';
+import { listEffectiveTypeProperties, oppositeLinkPropertyDisplayName } from './property-service.js';
 
 /**
  * Доменное представление отбора (`ThoughtTypeView`). Различается с репозиторным
@@ -120,13 +120,27 @@ function viewNameKey(name: string): string {
  * `listEffectiveTypeProperties` уже сворачивает её (предок перекрывает
  * потомка, см. 02-data-model.md §3.4.1), и до валидатора доходят ровно те
  * ключи, что реально доступны мысли этого типа.
+ *
+ * Свойство-связь привязывается к типу ОДНОЙ стороной, но адресуется обеими
+ * (задача df992826): к метаданным добавляется имя противоположной стороны,
+ * чтобы токен `$thought.[<обратное имя>]` не отвергался как `unknown_property`.
+ * Единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`.
  */
 function getTypePropertyMeta(ndb: NetworkDb, thoughtTypeId: string): PropertyMeta[] {
-  return listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId).map((p) => ({
-    key: p.key,
-    multiple: p.config?.multiple === true,
-    value_type: p.value_type,
-  }));
+  const out: PropertyMeta[] = [];
+  for (const p of listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId)) {
+    const meta: PropertyMeta = {
+      key: p.key,
+      multiple: p.config?.multiple === true,
+      value_type: p.value_type,
+    };
+    out.push(meta);
+    if (p.value_type !== 'link') continue;
+    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, p.side ?? null);
+    if (opposite === null || opposite === p.key) continue;
+    out.push({ key: opposite, multiple: meta.multiple, value_type: p.value_type });
+  }
+  return out;
 }
 
 /**

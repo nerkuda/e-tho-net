@@ -364,6 +364,30 @@ function linkPropertyDisplayName(
 }
 
 /**
+ * Имя ПРОТИВОПОЛОЖНОЙ стороны свойства-связи (задача df992826): привязка
+ * любой стороной делает в условии отбора доступными обе стороны — прямое имя
+ * (`name_forward`, сторона источника) и обратное (`name_reverse`, сторона
+ * цели). Единая точка интерпретации направления — {@link linkPropertyDirection},
+ * чтобы имя совпадало с тем, что показывает чтение карточки мысли.
+ *
+ * `null` — у скалярных, структурных («Родители»/«Потомки» уже двусторонние,
+ * см. миграцию 039) и свойств без типа связи противоположной стороны нет.
+ */
+export function oppositeLinkPropertyDisplayName(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  side: LinkPropertySide | null,
+): string | null {
+  const cfg = config ?? {};
+  if (isStructuralLinkProperty(cfg)) return null;
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  if (linkTypeId === null) return null;
+  const current = linkPropertyDirection(cfg, side);
+  const opposite: LinkPropertyDirection = current === 'out' ? 'in' : 'out';
+  return linkPropertyDisplayName(ndb, linkTypeId, opposite);
+}
+
+/**
  * Проверить конфигурацию свойства-связи (требование 2b9b5287): `link_type_id`
  * обязателен и существует (не корневой), `direction` из enum,
  * `allowed_target_type_ids` — существующие типы мыслей. Возвращает config
@@ -1274,6 +1298,101 @@ export function resolvePropertyIdByName(ndb: NetworkDb, name: string): string {
     });
   }
   return rows[0]!.id;
+}
+
+/**
+ * Резолвинг ссылки условия на свойство (задача df992826): условие отбора или
+ * прямого structure-запроса адресует свойство либо registry id, либо ИМЕНЕМ.
+ * Имя может быть:
+ *
+ *   * каноническим именем строки реестра (скаляры; у свойства-связи это одна
+ *     из сторон — та, что соответствует `config.direction`/привязке);
+ *   * ПРЯМЫМ (`name_forward`, сторона источника) или ОБРАТНЫМ
+ *     (`name_reverse`, сторона цели) именем свойства-связи — тогда условие
+ *     матчит рёбра с противоположным направлением (резолвинг обеих сторон).
+ *
+ * Направление берётся из имени: `name_forward` ⇒ `out`, `name_reverse` ⇒ `in`
+ * (единая точка интерпретации — {@link linkPropertyDirection}, без дублирования
+ * логики зеркал из чтения свойств мысли).
+ *
+ * Коллизия (обратное имя одного свойства-связи совпало с прямым именем другого
+ * свойства или с именем скаляра) НЕ проглатывается: бросается
+ * `VALIDATION_ERROR` со списком кандидатов — молчаливый выбор «первого»
+ * превратил бы условие в непредсказуемое.
+ *
+ * `null` — ссылка не распознана как свойство (условие отбрасывается движком,
+ * как и раньше для неизвестного `property_id`).
+ */
+export interface ResolvedConditionPropertyRef {
+  propertyId: string;
+  /**
+   * Направление рёбер, заданное именем стороны свойства-связи. `null` —
+   * ссылка адресована id или каноническим именем: направление, как и раньше,
+   * вычисляется из `config`/стороны привязки в движке отбора.
+   */
+  direction: LinkPropertyDirection | null;
+}
+
+export function resolveConditionPropertyRef(
+  ndb: NetworkDb,
+  ref: string,
+  requestId?: string,
+): ResolvedConditionPropertyRef | null {
+  // 1. Id реестра — прежний путь; направление остаётся за config/привязкой
+  //    (обратная совместимость сохранённых отборов и фильтров).
+  if (getNetworkProperty(ndb, ref) !== null) {
+    return { propertyId: ref, direction: null };
+  }
+  const key = typeNameKey(ref);
+  if (key === '') return null;
+
+  const candidates = new Map<string, ResolvedConditionPropertyRef>();
+  const add = (propertyId: string, direction: LinkPropertyDirection | null): void => {
+    candidates.set(`${propertyId}|${direction ?? ''}`, { propertyId, direction });
+  };
+
+  // 2. Каноническое имя строки реестра (скаляры, каноническое имя связи).
+  const byStored = getNetworkPropertyByName(ndb, ref);
+  if (byStored !== null) {
+    const cfg = byStored.config ?? {};
+    add(
+      byStored.id,
+      byStored.value_type === 'link' && !isStructuralLinkProperty(cfg)
+        ? linkPropertyDirection(cfg)
+        : null,
+    );
+  }
+
+  // 3. Обе стороны каждого свойства-связи: прямое имя — 'out', обратное — 'in'.
+  //    Структурные пропускаем — «Родители»/«Потомки» уже двусторонние.
+  for (const prop of listNetworkProperties(ndb)) {
+    if (prop.value_type !== 'link') continue;
+    const cfg = prop.config ?? {};
+    if (isStructuralLinkProperty(cfg)) continue;
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    if (linkTypeId === null) continue;
+    if (typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'out')) === key) {
+      add(prop.id, 'out');
+    }
+    if (typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'in')) === key) {
+      add(prop.id, 'in');
+    }
+  }
+
+  if (candidates.size === 0) return null;
+  if (candidates.size > 1) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Имя свойства «${ref}» неоднозначно: совпадает с несколькими сторонами свойств-связей.`,
+      {
+        field: 'property_id',
+        name: ref,
+        candidates: [...candidates.values()],
+      },
+      requestId,
+    );
+  }
+  return [...candidates.values()][0]!;
 }
 
 /**

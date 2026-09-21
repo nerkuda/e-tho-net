@@ -6,13 +6,13 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { checkThoughtDeletion, countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
 import { ThoughtsBacklinks, ThoughtsDeletionCheck, ThoughtsFindDuplicates, ThoughtsGet, ThoughtsMentions, ThoughtsNeighbors, ThoughtsPath, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
-import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolvePropertyIdByName } from '../../domain/property-service.js';
+import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
 import { findBacklinks } from '../../domain/backlinks-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
@@ -130,6 +130,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         }
         // Резолв имён свойств в id. Сбор эха `resolved_properties` —
         // аналогично, только при наличии условий с `property`.
+        // Задача df992826: имя может быть и обратным именем свойства-связи —
+        // тогда условие адресует противоположную сторону, и `property_id`
+        // остаётся ИМЕНЕМ: направление рёбер разрешает движок отбора
+        // (`resolveConditionPropertyRef`) по имени стороны.
         let resolvedProperties:
           | Array<{ input: string; id: string; name: string }>
           | undefined;
@@ -139,11 +143,17 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           let resolved: Array<{ input: string; id: string; name: string }> | null = null;
           for (const cond of args.properties) {
             if (cond.property !== undefined) {
-              const id = resolvePropertyIdByName(ndb, cond.property);
-              const propName = getNetworkProperty(ndb, id)?.name;
-              out.push({ ...cond, property_id: id });
+              const ref = resolveConditionPropertyRef(ndb, cond.property);
+              if (ref === null) {
+                throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                  field: 'property',
+                  name: cond.property,
+                });
+              }
+              const propName = getNetworkProperty(ndb, ref.propertyId)?.name;
+              out.push({ ...cond, property_id: cond.property });
               if (resolved === null) resolved = [];
-              resolved.push({ input: cond.property, id, name: propName ?? cond.property });
+              resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
               continue;
             }
             out.push(cond);

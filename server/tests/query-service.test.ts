@@ -592,6 +592,51 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       assert.deepEqual(anyOf.hits.map((h) => h.title), ['B']);
     });
 
+    // Задача df992826: условие адресует ОБЕ стороны свойства-связи по имени.
+    it('addresses both sides of a link property by its forward/reverse name (задача df992826)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'организации категории', 'категория организации');
+      const propId = seedPropertyDefinition(ndb, 'организации категории', 'link', {
+        link_type_id: lt,
+      });
+      const category = seedThought(ndb, 'Категория');
+      const org = seedThought(ndb, 'Организация');
+      seedLink(ndb, category, org, lt); // Категория --организации категории--> Организация
+
+      // Прямое имя адресует сторону источника (`out`) — как и раньше.
+      const forward = run(ndb, {
+        properties: [{ property_id: 'организации категории', operator: 'eq', value: org }],
+      });
+      assert.deepEqual(forward.hits.map((h) => h.title), ['Категория']);
+
+      // Обратное имя — сторону цели (`in`): организации текущей категории.
+      const reverse = run(ndb, {
+        properties: [{ property_id: 'категория организации', operator: 'eq', value: category }],
+      });
+      assert.deepEqual(reverse.hits.map((h) => h.title), ['Организация']);
+
+      // Адресация по registry id сохраняет прежнее поведение (направление из config).
+      const byId = run(ndb, {
+        properties: [{ property_id: propId, operator: 'eq', value: org }],
+      });
+      assert.deepEqual(byId.hits.map((h) => h.title), ['Категория']);
+    });
+
+    it('rejects a property name that collides between sides of different link properties (задача df992826)', () => {
+      const ndb = createInMemoryNetworkDb();
+      // «общее имя» — обратное имя первого свойства и прямое имя второго.
+      const lt1 = seedLinkType(ndb, 'прямое', 'общее имя');
+      const lt2 = seedLinkType(ndb, 'общее имя', 'другое');
+      seedPropertyDefinition(ndb, 'прямое', 'link', { link_type_id: lt1 });
+      seedPropertyDefinition(ndb, 'общее имя', 'link', { link_type_id: lt2 });
+      seedThought(ndb, 'A');
+
+      assert.throws(
+        () => run(ndb, { properties: [{ property_id: 'общее имя', operator: 'eq', value: 'x' }] }),
+        /неоднозначно/,
+      );
+    });
+
     it('any_of/all_of/none_of on a link property test the whole set of edge targets', () => {
       const ndb = createInMemoryNetworkDb();
       const lt = seedLinkType(ndb, 'зависит от', 'используется в');

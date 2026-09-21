@@ -45,6 +45,7 @@ import {
   buildLikePattern,
   isLinkTypeFilterActive,
   parseFilterKeywords,
+  type LinkPropertyDirection,
   type LinkTypeFilterInput,
   type PropertyConfig,
   type PropertyValueType,
@@ -67,6 +68,7 @@ import {
   isStructuralLinkProperty,
   linkPropertyDirection,
   linkPropertyLinkTypeId,
+  resolveConditionPropertyRef,
 } from './property-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
@@ -682,12 +684,16 @@ interface Clause {
  *   * `any_of`/`all_of`/`none_of` (MCP) — набор целей рёбер.
  *
  * Направление (`out`/`in`) и тип связи/структурность читаются из `config`
- * теми же хелперами, что использует чтение карточки мысли.
+ * теми же хелперами, что использует чтение карточки мысли. `directionRef`
+ * (задача df992826) переопределяет направление, когда условие адресовано
+ * именем стороны свойства-связи: обратное имя адресует противоположную
+ * сторону — клауза смотрит на рёбра со стороны цели.
  */
 function linkPropertyClause(
   def: RegistryPropertyRow,
   cond: ThoughtQueryPropertyCondition,
   requestId?: string,
+  directionRef: LinkPropertyDirection | null = null,
 ): Clause {
   let config: PropertyConfig | null = null;
   if (def.config !== null) {
@@ -703,7 +709,7 @@ function linkPropertyClause(
     // Некорректный config (валидируется при правке онтологии) — не матчит ничего.
     return { sql: '0', params: [] };
   }
-  const direction = linkPropertyDirection(config);
+  const direction = directionRef ?? linkPropertyDirection(config);
   const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
   const targetCol = direction === 'out' ? 'target_id' : 'source_id';
   const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
@@ -796,7 +802,14 @@ function propertyClauses(
   requestId?: string,
 ): Clause[] {
   if (conds.length === 0) return [];
-  const ids = [...new Set(conds.map((c) => c.property_id))];
+  // Резолвинг ссылки условия (задача df992826): registry id ИЛИ имя — прямое/
+  // обратное имя свойства-связи. Обратное имя даёт клаузу с противоположным
+  // направлением рёбер; коллизия имён отвергается с пояснением внутри
+  // `resolveConditionPropertyRef`. Неизвестная ссылка — условие отбрасывается
+  // («нет совпадения», как и раньше для чужого `property_id`).
+  const refs = conds.map((c) => resolveConditionPropertyRef(ndb, c.property_id, requestId));
+  const ids = [...new Set(refs.filter((r) => r !== null).map((r) => r.propertyId))];
+  if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
     .prepare(`SELECT id, value_type, config FROM properties_v WHERE id IN (${placeholders})`)
@@ -804,8 +817,11 @@ function propertyClauses(
   const byId = new Map(rows.map((r) => [r.id, r] as const));
 
   const out: Clause[] = [];
-  for (const cond of conds) {
-    const raw = byId.get(cond.property_id);
+  for (let i = 0; i < conds.length; i += 1) {
+    const cond = conds[i]!;
+    const ref = refs[i]!;
+    if (ref === null) continue;
+    const raw = byId.get(ref.propertyId);
     if (raw === undefined) continue;
     const def: RegistryPropertyRow = { id: raw.id, value_type: raw.value_type as PropertyValueType, config: raw.config };
     const allowed = OPS_BY_VALUE_TYPE[def.value_type];
@@ -819,7 +835,7 @@ function propertyClauses(
     }
 
     if (def.value_type === 'link') {
-      out.push(linkPropertyClause(def, cond, requestId));
+      out.push(linkPropertyClause(def, cond, requestId, ref.direction));
       continue;
     }
 
