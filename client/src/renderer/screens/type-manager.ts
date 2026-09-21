@@ -277,6 +277,52 @@ export function buildTypePatchInput(
 }
 
 /**
+ * Свежая серверная версия типа мысли — для PATCH /thought-types/{id} с
+ * `If-Match`. За время сессии редактора тип могли поправить извне
+ * (realtime-эхо до `current` ещё не дошло) или из самого редактора
+ * (вложенное создание свойства с привязкой к этому типу через диалог
+ * свойства поднимает версию через `touchType`, ошибка 5bcfa04b). Прецедент
+ * — `syncLinkTypeParent` в property-manager (33fdffb): GET перед PATCH;
+ * снимок остаётся запасным источником, если GET не удался (сеть/race).
+ * Конфликт остаётся только для реальной конкурентной правки полей извне.
+ *
+ * Экспортирована ради юнит-теста: регрессия 5bcfa04b должна убедиться, что
+ * устаревший снимок `current.version` не перекрывает свежую серверную
+ * версию.
+ */
+export async function readFreshTypeVersion(
+  networkId: string,
+  typeId: string,
+  fallback: number,
+): Promise<number> {
+  try {
+    const fresh = await etn.types.getThoughtType(networkId, typeId);
+    return fresh.version;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Свежий снимок типа мысли с сервера — после серии вложенных операций
+ * (`props.applyChanges` мог поднять версию через `touchType` на каждый
+ * attach/update/remove привязки или её дефолта). Если GET не удался — на
+ * снимке остаётся прежний `current`; следующий apply всё равно прочитает
+ * свежую версию через {@link readFreshTypeVersion} перед PATCH. Экспортирована
+ * ради юнит-теста.
+ */
+export async function readFreshTypeSnapshot(
+  networkId: string,
+  previous: ThoughtType,
+): Promise<ThoughtType> {
+  try {
+    return await etn.types.getThoughtType(networkId, previous.id);
+  } catch {
+    return previous;
+  }
+}
+
+/**
  * Ids of the ancestors that must be expanded for the row of `typeId` to be
  * visible in a type tree. The edited type itself is excluded (its own row is
  * shown once its ancestors are open). Used by the type list to reveal the
@@ -1095,18 +1141,31 @@ export function showThoughtTypeEditor(
         // Existing type: patch only the changed fields (If-Match version).
         const input = buildTypePatchInput(current, draft, description, nextTemplate);
         if (Object.keys(input).length > 0) {
+          // Серверная версия могла уйти вперёд за время сессии редактора:
+          // вложенное создание свойства с привязкой к этому типу
+          // (через диалог свойства, 5bcfa04b) вызывает attach у этого типа
+          // и поднимает версию на сервере (`touchType`), но `current` в
+          // черновике по-прежнему хранит снимок с прошлой записи. Прецедент
+          // — `syncLinkTypeParent` (33fdffb): перед PATCH читаем свежую
+          // версию у сервера; снимок остаётся запасным источником, если GET
+          // не удался (race/сеть). Конфликт остаётся только для реальной
+          // конкурентной правки полей извне.
+          const freshVersion = await readFreshTypeVersion(networkId, current.id, current.version);
           try {
             current = await etn.types.updateThoughtType(
               networkId,
               current.id,
               input,
-              current.version,
+              freshVersion,
             );
           } catch (err) {
             // 0.8.2, задача 8ea1ab6a: смена parent_id у используемого типа
             // мысли требует подтверждения. Сервер сначала отдаёт 422 с
             // `details.kind === 'reparent_impact'` и счётчиком мыслей;
             // диалог подтверждения → повторный PATCH с `confirmed: true`.
+            // Перед повторным PATCH снова берём свежую версию (тот же класс
+            // ошибки 5bcfa04b — пользователь тратит время на подтверждение,
+            // версия может снова уйти).
             if (
               err instanceof EtnError &&
               err.code === 'VALIDATION_ERROR' &&
@@ -1123,11 +1182,16 @@ export function showThoughtTypeEditor(
                 errorLine.textContent = 'Смена родителя отменена.';
                 return;
               }
+              const reparentVersion = await readFreshTypeVersion(
+                networkId,
+                current.id,
+                current.version,
+              );
               current = await etn.types.updateThoughtType(
                 networkId,
                 current.id,
                 { ...input, confirmed: true },
-                current.version,
+                reparentVersion,
               );
             } else {
               throw err;
@@ -1138,6 +1202,13 @@ export function showThoughtTypeEditor(
       }
       // Staged property definitions go after the type itself exists.
       if (!(await props.applyChanges(current.id))) return; // error shown, dialog stays
+      // applyChanges мог поднять версию типа на сервере (`touchType` на каждый
+      // attach/update свойства или его дефолта) — обновим снимок, чтобы
+      // следующий «Записать»/«Применить и закрыть» этого же диалога не
+      // конфликтовал с собой (5bcfa04b). Снимок остаётся запасным источником,
+      // если GET не удался: следующий apply прочитает свежую версию через
+      // readFreshTypeVersion всё равно.
+      current = await readFreshTypeSnapshot(networkId, current);
       // Набор свойств типа изменился (ошибка 74b94c26): открытый редактор
       // мысли этого типа (или его потомка) обязан перечитать таблицу
       // «Свойства». Своё realtime-эхо до рендерера не доходит, поэтому

@@ -453,7 +453,11 @@ describe('проводка уведомлений об определениях 
     // Редактор типа: после применения черновика привязок (applyChanges).
     const typeManager = read('screens/type-manager.ts');
     assert.ok(
-      /props\.applyChanges\(current\.id\)[\s\S]{0,400}?notifyTypeDefinitionsChanged\(\{[\s\S]{0,120}?ownerId: current\.id/.test(
+      // Лимит 1500 символов — между applyChanges и notifyTypeDefinitionsChanged
+      // может лежать обновление снимка `current` после серии вложенных
+      // операций (5bcfa04b, readFreshTypeSnapshot). Контракт один: уведомление
+      // идёт по `current.id` СВЕЖЕГО снимка, а не дребеденью из applyChanges.
+      /props\.applyChanges\(current\.id\)[\s\S]{0,1500}?notifyTypeDefinitionsChanged\(\{[\s\S]{0,120}?ownerId: current\.id/.test(
         typeManager,
       ),
       'редактор типа уведомляет редактор мысли после записи привязок',

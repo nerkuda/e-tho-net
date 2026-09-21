@@ -327,7 +327,11 @@ describe('проводка локального канала изменения 
     );
     // Прежний канал определений свойств остаётся: он отвечает за «Свойства».
     assert.ok(
-      /props\.applyChanges\(current\.id\)[\s\S]{0,400}?notifyTypeDefinitionsChanged\(\{[\s\S]{0,120}?ownerId: current\.id/.test(
+      // Лимит 1500 символов — между applyChanges и notifyTypeDefinitionsChanged
+      // может лежать обновление снимка `current` после серии вложенных
+      // операций (5bcfa04b, readFreshTypeSnapshot). Контракт один: уведомление
+      // идёт по `current.id` СВЕЖЕГО снимка, а не дребеденью из applyChanges.
+      /props\.applyChanges\(current\.id\)[\s\S]{0,1500}?notifyTypeDefinitionsChanged\(\{[\s\S]{0,120}?ownerId: current\.id/.test(
         typeManager,
       ),
       'канал определений свойств не потерян',
