@@ -26,12 +26,27 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  type ActivityListResult,
+  type ActivityRollupResult,
   type ActivityRow,
+  type ActivityTruncateResult,
+  type AdminUserWithKey,
   type ApiList,
   type ApiSuccess,
+  type AuditListResult,
+  type DuplicateHit,
   type EtnErrorBody,
   type EtnErrorCode,
+  type ExportJobStartResult,
+  type FocusOrderResult,
+  type LocksClearResult,
+  type NetworkPropertyDeleteResult,
+  type NetworkPropertyUpdateResult,
+  type NetworkPropertyUsage,
+  type NetworkPropertyWithCounters,
+  type RunThoughtTypeViewResult,
   type SystemLoggingStatus,
+  type ThoughtTypeViewsResult,
   type TypeOwnerType,
 } from '@etn/shared';
 
@@ -79,28 +94,6 @@ export interface RequestOptions {
 /** Query string value — primitives are stringified, arrays repeated. */
 type QueryValue = string | number | boolean | undefined | null;
 type QueryRecord = Record<string, QueryValue | QueryValue[]>;
-
-/**
- * Duplicate candidate returned by `GET /thoughts/duplicates`
- * (08-ui-spec.md §4.4). Mirrors the server-side `DuplicateHit` shape.
- */
-export interface DuplicateCandidate {
-  id: string;
-  title: string;
-  synonyms: string[];
-  matched_on: 'title' | 'synonym' | 'partial';
-  matched_synonym?: string;
-  type_id: string | null;
-  icon: string | null;
-  icon_kind: 'emoji' | 'image';
-  fg_color: string | null;
-  bg_color: string | null;
-  font_bold: boolean | null;
-  font_italic: boolean | null;
-  font_underline: boolean | null;
-  font_strike: boolean | null;
-  parent_title: string | null;
-}
 
 /**
  * Strongly-typed ETN REST client. Construct one per active server profile and reuse
@@ -451,7 +444,7 @@ export class RestClient {
   public async adminCreateUser(
     input: import('@etn/shared').CreateUserInput,
     opts?: RequestOptions,
-  ): Promise<{ user: import('@etn/shared').User; key: import('@etn/shared').ApiKeyWithSecret }> {
+  ): Promise<AdminUserWithKey> {
     return this.request('POST', '/admin/users', { body: input, requestOptions: opts });
   }
 
@@ -524,7 +517,7 @@ export class RestClient {
   /** `GET /admin/audit` — query the audit log (admin). */
   public async adminListAudit(
     query?: import('@etn/shared').AuditQuery,
-  ): Promise<{ entries: import('@etn/shared').AuditLogEntry[]; total: number }> {
+  ): Promise<AuditListResult> {
     const q: QueryRecord = {};
     if (query) {
       if (query.actor !== undefined) q['actor'] = query.actor;
@@ -793,7 +786,7 @@ export class RestClient {
     focusId: string,
     input: import('@etn/shared').FocusOrderInput,
     opts?: RequestOptions,
-  ): Promise<{ focus_thought_id: string; dir: string; ordered_ids: string[] }> {
+  ): Promise<FocusOrderResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(focusId)}/focus-order`,
@@ -1101,10 +1094,7 @@ export class RestClient {
     networkId: string,
     thoughtTypeId: string,
     opts?: { includeEffective?: boolean },
-  ): Promise<{
-    data: import('@etn/shared').ThoughtTypeView[];
-    meta: { effective: import('@etn/shared').ThoughtTypeView[] };
-  }> {
+  ): Promise<ThoughtTypeViewsResult> {
     const includeEffective = opts?.includeEffective !== false;
     // `request()`/`parseResponse()` auto-unwrap the `{ data, meta }` success
     // envelope down to `data` (see `queryStructureThoughts` for the same
@@ -1120,7 +1110,7 @@ export class RestClient {
       { query: includeEffective ? { include_effective: 'true' } : undefined },
     );
     const meta = this.lastMeta as
-      | { effective?: import('@etn/shared').ThoughtTypeView[] }
+      | { effective?: import('@etn/shared').EffectiveThoughtTypeView[] }
       | undefined;
     return { data, meta: { effective: meta?.effective ?? [] } };
   }
@@ -1189,19 +1179,7 @@ export class RestClient {
       limit?: number;
       offset?: number;
     },
-  ): Promise<{
-    data: import('@etn/shared').ThoughtRef[];
-    meta: {
-      total: number;
-      limit: number;
-      offset: number;
-      directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
-      view: { id: string; name: string; type_id: string };
-      sort?: string;
-      order?: string;
-      unresolved?: Array<{ token: string; reason: string; message: string }>;
-    };
-  }> {
+  ): Promise<RunThoughtTypeViewResult> {
     // Same auto-unwrap pitfall as `listThoughtTypeViews` above (баг 3,
     // 5467fb19): `request()` hands back `env.data` alone, so `meta` (with
     // `unresolved`/`view`/`directions` — everything `runActiveViewIfNeeded`
@@ -1251,16 +1229,7 @@ export class RestClient {
    */
   public async listNetworkProperties(
     networkId: string,
-  ): Promise<
-    Array<
-      import('@etn/shared').NetworkProperty & {
-        types_count: number;
-        values_count: number;
-        types_source_count?: number;
-        types_target_count?: number;
-      }
-    >
-  > {
+  ): Promise<NetworkPropertyWithCounters[]> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties`,
@@ -1271,14 +1240,7 @@ export class RestClient {
   public async getNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<
-    import('@etn/shared').NetworkProperty & {
-      types_count: number;
-      values_count: number;
-      types_source_count?: number;
-      types_target_count?: number;
-    }
-  > {
+  ): Promise<NetworkPropertyWithCounters> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1308,7 +1270,7 @@ export class RestClient {
     networkId: string,
     id: string,
     input: import('@etn/shared').NetworkPropertyUpdateInput,
-  ): Promise<import('@etn/shared').NetworkProperty & { converted: number; dropped: number }> {
+  ): Promise<NetworkPropertyUpdateResult> {
     return this.request(
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1326,7 +1288,7 @@ export class RestClient {
   public async deleteNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<{ id: string; links_becoming_structural: number | null }> {
+  ): Promise<NetworkPropertyDeleteResult> {
     return this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1337,20 +1299,7 @@ export class RestClient {
   public async getNetworkPropertyUsage(
     networkId: string,
     id: string,
-  ): Promise<{
-    property_id: string;
-    name: string;
-    value_type: import('@etn/shared').PropertyValueType;
-    bindings: Array<{
-      owner_type: 'thought_type' | 'link_type';
-      owner_id: string;
-      owner_name: string;
-      required: boolean;
-      values_in_type_count: number;
-    }>;
-    values_in_type_count: number;
-    values_outside_type_count: number;
-  }> {
+  ): Promise<NetworkPropertyUsage> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}/usage`,
@@ -2067,7 +2016,7 @@ export class RestClient {
     title: string,
     synonyms: string[] = [],
     typeIds: string[] = [],
-  ): Promise<DuplicateCandidate[]> {
+  ): Promise<DuplicateHit[]> {
     const q: QueryRecord = { title };
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
@@ -2323,7 +2272,7 @@ export class RestClient {
     networkId: string,
     input: import('@etn/shared').ExportRequest,
     opts?: RequestOptions,
-  ): Promise<{ job_id: string }> {
+  ): Promise<ExportJobStartResult> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/export`, {
       body: input,
       requestOptions: opts,
@@ -2515,7 +2464,7 @@ export class RestClient {
     networkId: string,
     userId: string,
     opts?: RequestOptions,
-  ): Promise<{ cleared: number }> {
+  ): Promise<LocksClearResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/locks/clear`,
@@ -2550,7 +2499,7 @@ export class RestClient {
       limit?: number;
       offset?: number;
     },
-  ): Promise<{ rows: ActivityRow[]; total: number }> {
+  ): Promise<ActivityListResult> {
     const query: QueryRecord = {};
     if (filters?.from_ms !== undefined) query['from_ms'] = filters.from_ms;
     if (filters?.to_ms !== undefined) query['to_ms'] = filters.to_ms;
@@ -2577,7 +2526,7 @@ export class RestClient {
     networkId: string,
     untilMs: number,
     opts?: RequestOptions,
-  ): Promise<{ removed: number; kept: number }> {
+  ): Promise<ActivityRollupResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/activity/rollup`,
@@ -2590,7 +2539,7 @@ export class RestClient {
     networkId: string,
     untilMs: number,
     opts?: RequestOptions,
-  ): Promise<{ removed: number }> {
+  ): Promise<ActivityTruncateResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/activity/truncate`,

@@ -34,6 +34,8 @@ import type {
   CommentInput,
   CommentTarget,
   CurrentUser,
+  DuplicateHit,
+  DuplicateMatchKind,
   ExportJob,
   ExportRequest,
   FocusDir,
@@ -109,6 +111,17 @@ import type {
   LayerDiffResult,
   LayerEcho,
   LayerMergeReport,
+  ActivityListResult,
+  ActivityRollupResult,
+  ActivityTruncateResult,
+  ExportJobStartResult,
+  LocksClearResult,
+  NetworkPropertyDeleteResult,
+  NetworkPropertyUpdateResult,
+  NetworkPropertyUsage,
+  NetworkPropertyWithCounters,
+  RunThoughtTypeViewResult,
+  ThoughtTypeViewsResult,
 } from '@etn/shared';
 
 /** Payload of the single `etn:invoke` channel used by the preload bridge. */
@@ -222,33 +235,10 @@ export interface TabStatePatch {
   layer_id?: string | null;
 }
 
-/** How a duplicate candidate matched the proposed title (add-thought dialog). */
-export type DuplicateMatchKind = 'title' | 'synonym' | 'partial';
-
-/**
- * A duplicate candidate returned by `GET /thoughts/duplicates`
- * (03-server-api.md §6.3, 08-ui-spec.md §4.4). Mirrors the server-side
- * `DuplicateHit` from the search service.
- */
-export interface DuplicateHit {
-  id: string;
-  title: string;
-  synonyms: string[];
-  matched_on: DuplicateMatchKind;
-  /** Synonym text that matched, when `matched_on === 'synonym'`. */
-  matched_synonym?: string;
-  type_id: string | null;
-  icon: string | null;
-  icon_kind: 'emoji' | 'image';
-  fg_color: string | null;
-  bg_color: string | null;
-  font_bold: boolean | null;
-  font_italic: boolean | null;
-  font_underline: boolean | null;
-  font_strike: boolean | null;
-  /** One parent's title (lexicographically first), to disambiguate equal titles. */
-  parent_title: string | null;
-}
+// `DuplicateHit`/`DuplicateMatchKind` приходят из общего модуля (задача
+// 120385ba): форма кандидата дубля объявлена один раз — и для REST-ответа, и
+// для IPC-контракта. Реэкспорт сохранён для потребителей `window.etn`.
+export type { DuplicateHit, DuplicateMatchKind };
 
 /** Input accepted by {@link EtnApi.ui.draftSave} (H19, drafts). */
 export interface DraftSaveInput {
@@ -507,11 +497,11 @@ export interface EtnApi {
         limit?: number;
         offset?: number;
       },
-    ): Promise<{ rows: ActivityRow[]; total: number }>;
+    ): Promise<ActivityListResult>;
     /** `POST /networks/{nid}/activity/rollup` — свёртка до `untilMs`. */
-    rollup(networkId: string, untilMs: number): Promise<{ removed: number; kept: number }>;
+    rollup(networkId: string, untilMs: number): Promise<ActivityRollupResult>;
     /** `POST /networks/{nid}/activity/truncate` — обрезка до `untilMs`. */
-    truncate(networkId: string, untilMs: number): Promise<{ removed: number }>;
+    truncate(networkId: string, untilMs: number): Promise<ActivityTruncateResult>;
   };
   types: {
     listThoughtTypes(networkId: string): Promise<ThoughtType[]>;
@@ -618,15 +608,7 @@ export interface EtnApi {
       networkId: string,
       thoughtTypeId: string,
       opts?: { includeEffective?: boolean },
-    ): Promise<{
-      data: ThoughtTypeView[];
-      meta: {
-        /** Effective views chain: root → type, with the type's own
-         *  overrides replacing same-named parent views. Empty when
-         *  `includeEffective` is false. */
-        effective: ThoughtTypeView[];
-      };
-    }>;
+    ): Promise<ThoughtTypeViewsResult>;
     /** `POST /thought-types/{id}/views` — create a new view. The dialog
      *  (stage 8) lives at the editor; here we only provide the IPC. */
     create(
@@ -663,20 +645,7 @@ export interface EtnApi {
       thoughtId: string,
       viewName: string,
       opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
-    ): Promise<{
-      data: ThoughtRef[];
-      meta: {
-        total: number;
-        limit: number;
-        offset: number;
-        /** Direction flags used to fill ellipses on the result clouds. */
-        directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
-        view: { id: string; name: string; type_id: string };
-        sort?: string;
-        order?: string;
-        unresolved?: Array<{ token: string; reason: string; message: string }>;
-      };
-    }>;
+    ): Promise<RunThoughtTypeViewResult>;
   };
   properties: {
     /**
@@ -712,30 +681,9 @@ export interface EtnApi {
    */
   propertyRegistry: {
     /** `GET /networks/{nid}/properties` — registry list with usage counters. */
-    list(
-      networkId: string,
-    ): Promise<
-      Array<
-        NetworkProperty & {
-          types_count: number;
-          values_count: number;
-          types_source_count?: number;
-          types_target_count?: number;
-        }
-      >
-    >;
+    list(networkId: string): Promise<NetworkPropertyWithCounters[]>;
     /** `GET /networks/{nid}/properties/{id}` — one property with counters. */
-    get(
-      networkId: string,
-      id: string,
-    ): Promise<
-      NetworkProperty & {
-        types_count: number;
-        values_count: number;
-        types_source_count?: number;
-        types_target_count?: number;
-      }
-    >;
+    get(networkId: string, id: string): Promise<NetworkPropertyWithCounters>;
     /** `POST /networks/{nid}/properties` — create. */
     create(networkId: string, input: NetworkPropertyInput): Promise<NetworkProperty>;
     /**
@@ -750,7 +698,7 @@ export interface EtnApi {
       networkId: string,
       id: string,
       input: NetworkPropertyUpdateInput,
-    ): Promise<NetworkProperty & { converted: number; dropped: number }>;
+    ): Promise<NetworkPropertyUpdateResult>;
     /**
      * `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound.
      * For link-properties the server returns the number of edges that lose
@@ -761,29 +709,13 @@ export interface EtnApi {
     remove(
       networkId: string,
       id: string,
-    ): Promise<{ id: string; links_becoming_structural: number | null }>;
+    ): Promise<NetworkPropertyDeleteResult>;
     /**
      * `GET /networks/{nid}/properties/{id}/usage` — type bindings, in-type
      * values per binding and out-of-type values count (the two numbers the
      * delete dialog surfaces).
      */
-    usage(
-      networkId: string,
-      id: string,
-    ): Promise<{
-      property_id: string;
-      name: string;
-      value_type: PropertyValueType;
-      bindings: Array<{
-        owner_type: 'thought_type' | 'link_type';
-        owner_id: string;
-        owner_name: string;
-        required: boolean;
-        values_in_type_count: number;
-      }>;
-      values_in_type_count: number;
-      values_outside_type_count: number;
-    }>;
+    usage(networkId: string, id: string): Promise<NetworkPropertyUsage>;
   };
   comments: {
     list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Comment[]>;
@@ -932,7 +864,7 @@ export interface EtnApi {
       filters?: { userId?: string; clientId?: string },
     ): Promise<LockRow[]>;
     /** `POST /networks/{nid}/locks/clear` — manual reset for a participant. */
-    clear(networkId: string, userId: string): Promise<{ cleared: number }>;
+    clear(networkId: string, userId: string): Promise<LocksClearResult>;
   };
   realtime: {
     onEvent(cb: (event: unknown) => void): () => void;
@@ -1108,7 +1040,7 @@ export interface EtnApi {
     appInfo(): Promise<AppInfo>;
     health(): Promise<HealthResponse>;
     version(): Promise<VersionResponse>;
-    export(networkId: string, request: ExportRequest): Promise<{ job_id: string }>;
+    export(networkId: string, request: ExportRequest): Promise<ExportJobStartResult>;
     getJob(jobId: string): Promise<ExportJob>;
     /**
      * Download a finished export job through the main process: it shows the
