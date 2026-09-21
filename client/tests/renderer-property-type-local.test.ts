@@ -613,13 +613,21 @@ describe('локальная правка типа связи пересчиты
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
     const realtimeUi = read('realtime-ui.ts');
 
-    // Помощник — единственное место, где задан набор «холст + Структуры +
-    // Хроника»; редактор типов и менеджер свойств обязаны звать именно его.
+    // Набор «холст + Структуры + Хроника» задан одним помощником
+    // `scheduleNeighbourhoodRepaint` (0.8.2, ошибка f0b959dd вынесла его сюда
+    // для правок рёбер); пересчёт типов делегирует ему — набор остаётся в
+    // одном месте.
     assert.ok(
-      /export function scheduleTypeRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
+      /export function scheduleNeighbourhoodRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
         realtimeUi,
       ),
-      'scheduleTypeRepaint пересчитывает холст, «Структуры» и «Хронику»',
+      'scheduleNeighbourhoodRepaint пересчитывает холст, «Структуры» и «Хронику»',
+    );
+    assert.ok(
+      /export function scheduleTypeRepaint\(\): void \{\s*scheduleNeighbourhoodRepaint\(\);\s*\}/.test(
+        realtimeUi,
+      ),
+      'scheduleTypeRepaint делегирует общий пересчёт окрестности',
     );
     // Каталог перечитывается отдельно и ДО пересчёта: повторного перезапроса
     // каталога из пересчёта нет (прецедент in-flight дележа).

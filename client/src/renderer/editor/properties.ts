@@ -28,6 +28,7 @@ import type {
 } from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
+import { inFocusNeighbourhood, scheduleNeighbourhoodRepaint } from '../realtime-ui.js';
 import {
   button,
   div,
@@ -57,6 +58,25 @@ import {
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
 let wired = false;
+
+/**
+ * Довести локальную запись значения свойства-СВЯЗИ до холста и панелей
+ * (ошибка f0b959dd). Серверная запись создаёт/удаляет РЕБРО, а собственное
+ * realtime-эхо собственного клиента до рендерера не доходит (G8 applier,
+ * 04-realtime.md §5) — без этого холст не перечитывал окрестность, и новая
+ * мысль не появлялась в секторе родителей/родственников. Realtime-путь для
+ * ЧУЖИХ правок уже работал: `realtime-ui.ts` на `property-value.set/deleted`
+ * пересчитывает тот же набор.
+ *
+ * Скаляры окрестность фокуса не меняют — для них пересчёт не нужен. Если
+ * владелец не виден в текущей окрестности (редактор открыт на мысли вне
+ * карты), пересчёт тоже пропускается: карта от такой правки не меняется.
+ * Само поле значения свой чип перерисовывает локально, так что перечитывание
+ * всей окрестности на каждый чип не делается — только по факту записи.
+ */
+function repaintAfterLinkValueWrite(ownerType: 'thought' | 'link', ownerId: string): void {
+  if (inFocusNeighbourhood(ownerType, ownerId)) scheduleNeighbourhoodRepaint();
+}
 
 /**
  * Registers the «Свойства» tab (task 8ab775d9). Replaces the previous
@@ -365,6 +385,9 @@ function buildOutsideLinkCell(
       const save = async (next: unknown): Promise<boolean> => {
         try {
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, next);
+          // Внетиповое свойство-связь меняет рёбра так же, как типовое, —
+          // окрестность фокуса перечитываем сразу (ошибка f0b959dd).
+          repaintAfterLinkValueWrite(ownerType, ownerId);
           onRemove();
           return true;
         } catch (err) {
@@ -397,6 +420,9 @@ function buildOutsideLinkCell(
           if (!ok) return;
           try {
             await etn.properties.set(networkId, ownerType, ownerId, value.property_name, null);
+            // Очистка внетипового свойства-связи отзывает рёбра — карта
+            // перечитывает окрестность сразу (ошибка f0b959dd).
+            repaintAfterLinkValueWrite(ownerType, ownerId);
             onRemove();
           } catch (err) {
             notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
@@ -620,6 +646,12 @@ function buildEditorCell(opts: {
           // рёбра свойства (normalizeLinkTargets → []), а DELETE /properties
           // для связей — no-op (в property_values ничего не хранится).
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
+        }
+        // Свойство-связь создало/убрало РЕБРО серверной записью (ошибка
+        // f0b959dd): своего realtime-эха у клиента нет — окрестность фокуса
+        // перечитываем сразу после успешного сохранения.
+        if (definition.value_type === 'link') {
+          repaintAfterLinkValueWrite(ownerType, ownerId);
         }
         return true;
       } catch (err) {

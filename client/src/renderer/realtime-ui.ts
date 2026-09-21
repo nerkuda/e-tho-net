@@ -74,12 +74,30 @@ export function reloadTypeCatalogues(): Promise<void> {
 let typeCataloguesReload: Promise<void> | null = null;
 
 /**
- * Запланировать пересчёт всего, что рисует имена и оформление типов: холст
- * (подписи и линии рёбер резолвятся из каталога типов, `canvas/links.ts`),
- * «Структуры» и «Хроника» (обе держат собственные снимки страницы и дерева).
+ * Запланировать пересчёт всего, что рисует окрестность фокуса: холст (секторы
+ * родителей/потомков/родственников и линии рёбер — перечитываются свежим
+ * ответом `focus()`), «Структуры» и «Хроника» (обе держат собственные снимки
+ * страницы/дерева и сами по смене данных не перестраиваются).
  *
- * Это ровно тот набор, которым realtime-ветка `*-type.*` /
- * `property-definition.*` доводит смену каталога до интерфейса; локальные
+ * ЕДИНСТВЕННОЕ место, где задан этот набор: realtime-ветки изменения
+ * соседей/рёбер (`thought.reordered`, `link.*`, `property-value.*`) и смены
+ * каталога типов (`scheduleTypeRepaint`) зовут его же. Локальные производители
+ * зовут его сами — своё realtime-эхо до рендерера не доходит (G8 applier),
+ * а потому без такого вызова карта не узнаёт о своей же правке.
+ */
+export function scheduleNeighbourhoodRepaint(): void {
+  scheduleRefresh();
+  scheduleStructuresRefresh();
+  scheduleChronicleRefresh();
+}
+
+/**
+ * Пересчёт всего, что рисует имена и оформление ТИПОВ, — тот же набор
+ * «окрестность фокуса + Структуры + Хроника» (см.
+ * {@link scheduleNeighbourhoodRepaint}): холст резолвит подписи и линии рёбер
+ * из каталога типов (`canvas/links.ts`), «Структуры»/«Хроника» держат снимки.
+ *
+ * Это набор realtime-ветки `*-type.*` / `property-definition.*`; локальные
  * производители (менеджер свойств после правки/удаления типа связи) дёргают его
  * сами — своё realtime-эхо до рендерера не доходит (G8 applier).
  *
@@ -89,9 +107,7 @@ let typeCataloguesReload: Promise<void> | null = null;
  * так локальный путь не порождает второго перезапроса каталога.
  */
 export function scheduleTypeRepaint(): void {
-  scheduleRefresh();
-  scheduleStructuresRefresh();
-  scheduleChronicleRefresh();
+  scheduleNeighbourhoodRepaint();
 }
 
 /** True when the thought id participates in the current focus neighbourhood. */
@@ -106,8 +122,31 @@ export function inNeighbourhood(id: string): boolean {
   );
 }
 
+/**
+ * Виден ли владелец значения в текущей окрестности фокуса: мысль — сам фокус
+ * или его сосед, связь — ребро этой окрестности (`focus.edges`). Локальные
+ * производители (сохранение значения свойства-связи) по этому признаку решают,
+ * нужен ли пересчёт холста: правка невидимой сущности карту не меняет, и
+ * перечитывать окрестность из-за неё не нужно (ошибка f0b959dd).
+ */
+export function inFocusNeighbourhood(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+): boolean {
+  const focus = store.state.focus;
+  if (focus === null) return false;
+  return ownerType === 'thought'
+    ? inNeighbourhood(ownerId)
+    : focus.edges.some((edge) => edge.id === ownerId);
+}
+
 /** Applies one accepted realtime event to the UI state. */
 export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
+  // Шину событий слушают все открытые вкладки-сети разом, а этот обработчик
+  // правит ОБЩИЙ store (активную вкладку): событие чужой сети не должно
+  // пересчитывать её окрестность/панели (ошибка f0b959dd — realtime-путь
+  // изменения значений свойств-связей обязан уважать границу сети).
+  if (evt.network_id !== store.state.networkId) return;
   switch (evt.type) {
     case 'thought.deleted':
       invalidateIndicators(evt.data.id);
@@ -151,11 +190,13 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'link.created':
     case 'link.updated':
     case 'link.deleted':
+    // Свойство-СВЯЗЬ меняет рёбра на сервере (структурные «Родители»/
+    // «Потомки», типизированные, «Свойства вне типа»), скаляр — нет; набор
+    // пересчёта для обоих событий один и тот же — окрестность фокуса
+    // (прецедент 270b8454: тот же набор, что у правок типов связи).
     case 'property-value.set':
     case 'property-value.deleted':
-      scheduleRefresh();
-      scheduleStructuresRefresh();
-      scheduleChronicleRefresh();
+      scheduleNeighbourhoodRepaint();
       break;
 
     case 'comment.created':
