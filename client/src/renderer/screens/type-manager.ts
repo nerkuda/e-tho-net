@@ -73,7 +73,7 @@ import type {
   TypeOwnerType,
 } from '@etn/shared';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
-import { typeNameKey } from '@etn/shared';
+import { typeNameKey, EtnError } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 // Иконки превью типов — каноном общей фабрики облачка (пилюля типа — не
@@ -1095,7 +1095,44 @@ export function showThoughtTypeEditor(
         // Existing type: patch only the changed fields (If-Match version).
         const input = buildTypePatchInput(current, draft, description, nextTemplate);
         if (Object.keys(input).length > 0) {
-          current = await etn.types.updateThoughtType(networkId, current.id, input, current.version);
+          try {
+            current = await etn.types.updateThoughtType(
+              networkId,
+              current.id,
+              input,
+              current.version,
+            );
+          } catch (err) {
+            // 0.8.2, задача 8ea1ab6a: смена parent_id у используемого типа
+            // мысли требует подтверждения. Сервер сначала отдаёт 422 с
+            // `details.kind === 'reparent_impact'` и счётчиком мыслей;
+            // диалог подтверждения → повторный PATCH с `confirmed: true`.
+            if (
+              err instanceof EtnError &&
+              err.code === 'VALIDATION_ERROR' &&
+              isReparentImpact(err.details)
+            ) {
+              if (
+                !(await confirmReparentImpactDialog(
+                  input.parent_id !== undefined && input.parent_id !== current.parent_id
+                    ? (current.parent_id ?? null)
+                    : null,
+                  err.details.thoughts_count,
+                ))
+              ) {
+                errorLine.textContent = 'Смена родителя отменена.';
+                return;
+              }
+              current = await etn.types.updateThoughtType(
+                networkId,
+                current.id,
+                { ...input, confirmed: true },
+                current.version,
+              );
+            } else {
+              throw err;
+            }
+          }
           savedTypeFields = input;
         }
       }
@@ -2410,3 +2447,57 @@ function buildMetadataRowsFromLinkType(type: LinkType): HTMLElement {
   };
   return buildMetadataRows(fields);
 }
+
+// ---------------------------------------------------------------------------
+// Reparent confirmation (задача 8ea1ab6a, 0.8.2)
+//
+// Смена parent_id у используемого типа мысли проходит через двухшаговый
+// сценарий: первый PATCH → 422 с details.kind = 'reparent_impact' и
+// thoughts_count; UI показывает таблицу последствий и просит подтвердить;
+// повторный PATCH с confirmed=true применяет правку. Ниже — узкие помощники:
+// type guard на структуру details и сама модалка подтверждения. Импорт
+// находится в шапке файла, чтобы не тянуть confirmDialog во все вложенные
+// области.
+// ---------------------------------------------------------------------------
+
+/** Структура details, возвращаемых сервером при 422 reparent_impact. */
+export interface ReparentImpactDetails {
+  kind: 'reparent_impact';
+  affected_type_ids: string[];
+  /** Число живых мыслей, у которых поменяется эффективный набор свойств. */
+  thoughts_count: number;
+  requires_confirmation: true;
+}
+
+/**
+ * Type guard для 422, требующего подтверждения смены родителя. Сервер
+ * присылает `details.kind === 'reparent_impact'` и `requires_confirmation:
+ * true`; см. задачу 8ea1ab6а (0.8.2).
+ */
+export function isReparentImpact(details: unknown): details is ReparentImpactDetails {
+  if (typeof details !== 'object' || details === null) return false;
+  const d = details as Record<string, unknown>;
+  return d.kind === 'reparent_impact' && d.requires_confirmation === true;
+}
+
+/**
+ * Диалог подтверждения смены родителя у типа мысли. Контракт — `confirmDialog`
+ * из `lib/dialog.ts`: `true` — пользователь подтвердил, `false` — отменил
+ * (Esc, ×, кнопка «Отмена»). Текст строится по правилам задачи: без
+ * вопросов о визуале, по существу — что именно поменяется у живых мыслей
+ * и каков риск висячих override'ов.
+ */
+export async function confirmReparentImpactDialog(
+  _currentParentId: string | null,
+  thoughtsCount: number,
+): Promise<boolean> {
+  const noun = thoughtsCount === 1 ? 'мысли' : thoughtsCount < 5 ? 'мыслей' : 'мыслей';
+  const verb = thoughtsCount === 1 ? 'изменится' : 'изменится';
+  const message =
+    `Смена родителя повлияет на ${thoughtsCount} ${noun}: у ${thoughtsCount === 1 ? 'неё' : 'них'} ` +
+    `изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения ` +
+    `дефолтов и описаний могут стать висячими — значения сохранятся как «вне типа» и будут ` +
+    `видны только на чтение. Продолжить?`;
+  return confirmDialog('Смена родителя типа мысли', message);
+}
+
