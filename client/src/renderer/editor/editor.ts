@@ -551,15 +551,21 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerGraphTab();
     registerMetadataTab();
 
-    // Pasted-image uploads from any markdown field re-count the «Вложения» tab
-    // badge right away (the tab's own list reloads itself via the same event;
-    // see attachments.ts). Without this the badge showed a stale 0 until the
-    // editor target changed. One document listener for the app lifetime.
+    // Изменение НАБОРА ВЛОЖЕНИЙ владельца (вставка картинки в поле markdown,
+    // «Назначить иконкой мысли» из файла) обновляет и счётчик, и список вкладки
+    // «Вложения» (ошибка 05bd8809). Раньше обновлялся только счётчик: вкладка,
+    // построенная при первом заходе, кэшируется и при показе «Комментария»
+    // отключается от DOM, а её собственный слушатель события в этот момент
+    // самоотписывается и список не перечитывает — прежний список возвращался на
+    // экран до смены сущности. Кэш сбрасывается тем же механизмом, что и прочие
+    // инвалидации (см. invalidateAttachmentsPanes). Один документный слушатель
+    // на всё время жизни приложения.
     document.addEventListener('etn:attachments-changed', (event) => {
       const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
       const ctx = renderCtx;
       if (ctx !== null && detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
         refreshTabCount('attachments');
+        invalidateAttachmentsPanes();
       }
     });
 
@@ -808,6 +814,36 @@ function invalidateTypeDependentPanes(): void {
  */
 function invalidateDefinitionDependentPanes(): void {
   invalidatePanes(['properties']);
+}
+
+/**
+ * Сбрасывает кэш вкладки «Вложения» после изменения набора вложений владельца
+ * (ошибка 05bd8809: вставка картинки в комментарий увеличивала счётчик вкладки,
+ * но её список оставался прежним до переоткрытия мысли).
+ *
+ * Событие `etn:attachments-changed` шлют все производители вложений редактора:
+ * вставка файла из буфера в поле markdown (markdown-field.ts — постоянный
+ * комментарий и текст вложения) и «Назначить иконкой мысли» из файла
+ * (editor.ts). Гейт по владельцу у вызывающего: событие адресуется сущности, а
+ * не вкладке, поэтому вкладки другой сущности не трогаются.
+ *
+ * Почему именно сброс кэша:
+ *  * вкладка кэшируется в `builtPanes` и переживает переход на «Комментарий»;
+ *    её собственный слушатель события при отключении от DOM самоотписывается
+ *    (защита от утечки, attachments.ts) и список не перечитывает — именно так
+ *    появлялся устаревший список;
+ *  * следующая активация собирает вкладку заново и читает список с сервера —
+ *    вложение из вставки в комментарий видно сразу, без переоткрытия мысли.
+ *
+ * ПОКАЗАННУЮ вкладку не пересобираем: свой список она перечитывает на месте
+ * тем же слушателем, а пересборка уничтожила бы встроенный просмотрщик-редактор
+ * текстового вложения (CodeMirror) вместе с несохранённой правкой. Вкладка
+ * вложений типонезависима, поэтому инвалидация точечная — «Комментарий» со
+ * своим CodeMirror не затрагивается.
+ */
+function invalidateAttachmentsPanes(): void {
+  if (shownTab === 'attachments') return;
+  invalidatePanes(['attachments']);
 }
 
 // Правка реестрового свойства (ошибка 98aa0889) идёт тем же путём: сеть/слой
@@ -2103,4 +2139,11 @@ export const editorInternals = {
    * читает счётчик.
    */
   paneBuildCount: (id: EditorTabId): number => paneBuildCounts.get(id) ?? 0,
+  /**
+   * Активирует вкладку так же, как клик по её кнопке (ошибка 05bd8809):
+   * тест строит вкладку «Вложения», уводит фокус на другую вкладку, шлёт
+   * событие и проверяет, что возврат на «Вложения» пересобирает вкладку и
+   * перечитывает список. Кнопки вкладок снаружи недоступны.
+   */
+  activateTab: (id: EditorTabId): void => activateEditorTab(id),
 };
