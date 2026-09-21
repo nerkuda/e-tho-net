@@ -319,12 +319,19 @@ export interface EtnApi {
       expectedVersion: number,
     ): Promise<Thought>;
     remove(networkId: string, id: string, expectedVersion: number): Promise<void>;
+    /**
+     * `linkFilter` (ошибка e5cee08e) ограничивает список теми же типами
+     * связей, что и фильтр карты (`{ type_ids?, include_structural? }` —
+     * сервер принимает его query-параметрами `link_type_id` +
+     * `include_structural`). Без него превью показывает все связи.
+     */
     neighbors(
       networkId: string,
       id: string,
       dir: FocusDir,
       limit?: number,
       offset?: number,
+      linkFilter?: LinkTypeFilterInput,
     ): Promise<FocusNeighbor[]>;
     batch(networkId: string, input: ThoughtBatchInput): Promise<ThoughtBatchResult>;
     /**

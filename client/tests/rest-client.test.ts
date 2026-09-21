@@ -235,6 +235,37 @@ describe('RestClient — раскрытие дерева «Структур» (L
   });
 });
 
+describe('RestClient — превью соседей на холсте (ошибка e5cee08e)', () => {
+  /** Пустой список соседей — важен только собранный URL. */
+  const EMPTY_NEIGHBORS = { status: 200, body: { data: [] } };
+
+  it('getNeighbors кладёт фильтр типов связей в query-параметры link_type_id + include_structural', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_NEIGHBORS]);
+    const client = makeClient(fetch);
+    await client.getNeighbors('net1', 't1', {
+      dir: 'children',
+      limit: 200,
+      linkFilter: { type_ids: ['lt1', 'lt2'], include_structural: true },
+    });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.get('dir'), 'children');
+    // Та же форма, что разбирает сервер (`parseLinkTypeFilterQuery`):
+    // повторяемый link_type_id + include_structural.
+    assert.deepEqual(url.searchParams.getAll('link_type_id'), ['lt1', 'lt2']);
+    assert.equal(url.searchParams.get('include_structural'), 'true');
+  });
+
+  it('без фильтра query-параметров фильтра нет (прежнее поведение)', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_NEIGHBORS]);
+    const client = makeClient(fetch);
+    await client.getNeighbors('net1', 't1', { dir: 'parents' });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.has('link_type_id'), false);
+    assert.equal(url.searchParams.has('include_structural'), false);
+    assert.equal(url.searchParams.get('dir'), 'parents');
+  });
+});
+
 describe('RestClient — response parsing', () => {
   it('returns the data field of the success envelope and captures meta', async () => {
     const { fetch } = makeFetch([

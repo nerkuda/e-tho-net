@@ -696,7 +696,14 @@ export class RestClient {
     );
   }
 
-  /** `GET /networks/{nid}/thoughts/{id}/neighbors`. */
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/neighbors`.
+   *
+   * `linkFilter` (ошибка e5cee08e) уходит теми же query-параметрами, что
+   * разбирает сервер (`parseLinkTypeFilterQuery`): повторяемый `link_type_id`
+   * + `include_structural`. Позволяет превью соседей на холсте подчиняться
+   * тому же фильтру типов связей, что и сама карта.
+   */
   public async getNeighbors(
     networkId: string,
     id: string,
@@ -707,6 +714,7 @@ export class RestClient {
       limit?: number;
       offset?: number;
       type_id?: string[];
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
     },
   ): Promise<import('@etn/shared').FocusNeighbor[]> {
     const q: QueryRecord = {};
@@ -717,6 +725,12 @@ export class RestClient {
       if (query.limit !== undefined) q['limit'] = query.limit;
       if (query.offset !== undefined) q['offset'] = query.offset;
       if (query.type_id !== undefined) q['type_id'] = query.type_id;
+      if (query.linkFilter !== undefined) {
+        if (query.linkFilter.type_ids !== undefined) q['link_type_id'] = query.linkFilter.type_ids;
+        if (query.linkFilter.include_structural !== undefined) {
+          q['include_structural'] = query.linkFilter.include_structural ? 'true' : 'false';
+        }
+      }
     }
     return this.request(
       'GET',

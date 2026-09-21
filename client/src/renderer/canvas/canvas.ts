@@ -1461,7 +1461,12 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
 /** Builds the `neighbors` popup content: incoming/outgoing links of the
  *  triggering ellipse's thought, alphabetical, scrollable, capped at 70%
  *  height / 25% width of the canvas viewport. Empty list → `null` (no popup),
- *  per spec — mirrors the built-in resolvers' "nothing to show" convention. */
+ *  per spec — mirrors the built-in resolvers' "nothing to show" convention.
+ *
+ *  Ошибка e5cee08e: список ограничивается активным фильтром типов связей
+ *  карты (`store.state.canvasLinkFilter`) — тем же набором `type_ids` +
+ *  `include_structural`, которым сервер рисует саму карту. Без этого
+ *  Ctrl-наведение показывало и отфильтрованные типы. */
 async function resolveNeighborsPreview(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
   const thoughtId = trigger.dataset['hpOwnerId'];
   const dir = trigger.dataset['hpDir'];
@@ -1474,9 +1479,17 @@ async function resolveNeighborsPreview(trigger: HTMLElement): Promise<HoverPrevi
   ) {
     return null;
   }
+  const linkFilter = store.state.canvasLinkFilter ?? undefined;
   let neighbors: FocusNeighbor[];
   try {
-    neighbors = await etn.thoughts.neighbors(networkId, thoughtId, dir, NEIGHBORS_PREVIEW_LIMIT);
+    neighbors = await etn.thoughts.neighbors(
+      networkId,
+      thoughtId,
+      dir,
+      NEIGHBORS_PREVIEW_LIMIT,
+      undefined,
+      linkFilter,
+    );
   } catch {
     return null;
   }

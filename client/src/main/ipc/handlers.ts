@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
+import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
@@ -341,8 +341,15 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughts.neighbors',
-    bind((networkId: string, id: string, dir: FocusDir, limit?: number, offset?: number) =>
-      requireRest(deps).getNeighbors(networkId, id, { dir, limit, offset }),
+    bind(
+      (
+        networkId: string,
+        id: string,
+        dir: FocusDir,
+        limit?: number,
+        offset?: number,
+        linkFilter?: LinkTypeFilterInput,
+      ) => requireRest(deps).getNeighbors(networkId, id, { dir, limit, offset, linkFilter }),
     ),
   );
   handlers.set(
