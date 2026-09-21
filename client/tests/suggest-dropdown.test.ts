@@ -28,126 +28,13 @@ import {
   type SuggestHandle,
   type SuggestSource,
 } from '../src/renderer/lib/suggest-dropdown.js';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ---------------------------------------------------------------------------
 // DOM-шим
 // ---------------------------------------------------------------------------
-
-/** Минимальный classList с настоящим состоянием (перерисовка красит строки). */
-class ShimClassList {
-  private tokens = new Set<string>();
-  add(...names: string[]): void {
-    names.forEach((n) => this.tokens.add(n));
-  }
-  remove(...names: string[]): void {
-    names.forEach((n) => this.tokens.delete(n));
-  }
-  contains(name: string): boolean {
-    return this.tokens.has(name);
-  }
-  toggle(name: string, force?: boolean): void {
-    const next = force ?? !this.tokens.has(name);
-    if (next) this.tokens.add(name);
-    else this.tokens.delete(name);
-  }
-}
-
-/** Минимальный элемент, переживающий отрисовку выпадашки и клавиатуру. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  parent: ShimElement | null = null;
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  innerHTML = '';
-  tabIndex = -1;
-  textContent = '';
-  value = '';
-  title = '';
-  isConnected = true;
-  classList = new ShimClassList();
-  private attrs = new Map<string, string>();
-  private listeners = new Map<string, Array<(event: any) => void>>();
-
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-
-  setAttribute(name: string, value: string): void {
-    this.attrs.set(name, value);
-  }
-
-  getAttribute(name: string): string | null {
-    return this.attrs.get(name) ?? null;
-  }
-
-  append(...nodes: ShimElement[]): void {
-    for (const node of nodes) {
-      node.parent = this;
-      this.children.push(node);
-    }
-  }
-
-  remove(): void {
-    if (this.parent === null) return;
-    const index = this.parent.children.indexOf(this);
-    if (index >= 0) this.parent.children.splice(index, 1);
-    this.parent = null;
-  }
-
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = [];
-    this.append(...nodes);
-  }
-
-  contains(node: ShimElement | null): boolean {
-    if (node === null) return false;
-    return node === this || this.children.some((child) => child.contains(node));
-  }
-
-  addEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(listener);
-    this.listeners.set(type, list);
-  }
-
-  removeEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    this.listeners.set(
-      type,
-      list.filter((fn) => fn !== listener),
-    );
-  }
-
-  /** Тестовый помощник: синтетическое событие зарегистрированным слушателям. */
-  emit(type: string, event: any = {}): void {
-    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
-  }
-
-  click(): void {
-    this.emit('click');
-  }
-
-  getBoundingClientRect(): {
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-    width: number;
-    height: number;
-  } {
-    return { left: 10, top: 10, right: 210, bottom: 34, width: 200, height: 24 };
-  }
-
-  scrollIntoView(): void {
-    /* без движка раскладки не нужен */
-  }
-}
 
 /** Keydown-событие нужной модулю формы, со счётчиками потребления. */
 function key(name: string, mods: Record<string, boolean> = {}): any {
@@ -248,7 +135,7 @@ async function flush(): Promise<void> {
 
 /** Открытый список (или undefined). */
 function openList(body: ShimElement): ShimElement | undefined {
-  return body.children.find((c) => c.className === 'type-combo-list');
+  return body.children.find((c) => c.classList.contains('type-combo-list'));
 }
 
 /** Подписи выбираемых строк (заголовки групп пропускаются). */
@@ -256,7 +143,7 @@ function rowLabels(body: ShimElement): string[] {
   const list = openList(body);
   if (list === undefined) return [];
   return list.children
-    .filter((c) => c.className === 'type-combo-item')
+    .filter((c) => c.classList.contains('type-combo-item'))
     .map((row) => row.children[0]?.textContent ?? '');
 }
 
@@ -264,7 +151,7 @@ function rowLabels(body: ShimElement): string[] {
 function itemRows(body: ShimElement): ShimElement[] {
   const list = openList(body);
   if (list === undefined) return [];
-  return list.children.filter((c) => c.className === 'type-combo-item');
+  return list.children.filter((c) => c.classList.contains('type-combo-item'));
 }
 
 /** Заголовки групп открытого списка. */
@@ -272,7 +159,7 @@ function groupHeaders(body: ShimElement): string[] {
   const list = openList(body);
   if (list === undefined) return [];
   return list.children
-    .filter((c) => c.className === 'muted type-combo-empty')
+    .filter((c) => c.classList.contains('type-combo-empty'))
     .map((header) => header.textContent);
 }
 

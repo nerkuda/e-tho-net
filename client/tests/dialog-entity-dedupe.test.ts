@@ -35,157 +35,29 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
-
-/** Элемент с класс-листом, привязанным к `className` (как в add-dialog.test.ts). */
-class ShimClassList {
-  private owner: ShimElement | null = null;
-
-  attach(owner: ShimElement): void {
-    this.owner = owner;
-  }
-
-  private tokens(): Set<string> {
-    return new Set((this.owner?.className ?? '').split(/\s+/).filter((t) => t !== ''));
-  }
-
-  private write(tokens: Set<string>): void {
-    if (this.owner !== null) this.owner.className = [...tokens].join(' ');
-  }
-
-  add(...names: string[]): void {
-    const tokens = this.tokens();
-    names.forEach((n) => tokens.add(n));
-    this.write(tokens);
-  }
-
-  remove(...names: string[]): void {
-    const tokens = this.tokens();
-    names.forEach((n) => tokens.delete(n));
-    this.write(tokens);
-  }
-
-  contains(name: string): boolean {
-    return this.tokens().has(name);
-  }
-
-  toggle(name: string, force?: boolean): void {
-    const tokens = this.tokens();
-    const next = force ?? !tokens.has(name);
-    if (next) tokens.add(name);
-    else tokens.delete(name);
-    this.write(tokens);
-  }
-}
+import { ShimElement } from './dom-shim.js';
 
 /** Последний элемент, получивший фокус (у шима нет слоя отрисовки). */
 let focused: ShimElement | null = null;
 
-/** Минимальный элемент, переживающий сборку и поднятие диалога. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  parent: ShimElement | null = null;
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  textContent = '';
-  innerHTML = '';
-  value = '';
-  type = '';
-  title = '';
-  placeholder = '';
-  disabled = false;
-  offsetWidth = 0;
-  classList = new ShimClassList();
-  private listeners = new Map<string, Array<(event: any) => void>>();
-
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    this.classList.attach(this);
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-
-  /** Как настоящий DOM: узел, уже лежащий в дереве, переносится, а не дублируется. */
-  append(...nodes: ShimElement[]): void {
-    for (const node of nodes) {
-      if (node.parent !== null) {
-        const index = node.parent.children.indexOf(node);
-        if (index >= 0) node.parent.children.splice(index, 1);
-      }
-      node.parent = this;
-      this.children.push(node);
-    }
-  }
-
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = [];
-    this.append(...nodes);
-  }
-
-  remove(): void {
-    if (this.parent !== null) {
-      const index = this.parent.children.indexOf(this);
-      if (index >= 0) this.parent.children.splice(index, 1);
-      this.parent = null;
-    }
-    this.emit('remove');
-  }
-
-  contains(node: ShimElement | null): boolean {
-    if (node === null) return false;
-    return node === this || this.children.some((child) => child.contains(node));
-  }
-
-  addEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(listener);
-    this.listeners.set(type, list);
-  }
-
-  removeEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    this.listeners.set(type, list.filter((fn) => fn !== listener));
-  }
-
-  emit(type: string, event: any = {}): void {
-    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
-  }
-
-  /** Один токен: тег (`input`) или класс (`.dialog-body`) — как в add-dialog.test.ts. */
-  querySelectorAll(selector: string): ShimElement[] {
-    const byTag = !selector.startsWith('.');
-    const token = byTag ? selector : selector.slice(1);
-    const hits: ShimElement[] = [];
-    const walk = (node: ShimElement): void => {
-      const match = byTag ? node.tagName === token : node.className.split(/\s+/).includes(token);
-      if (match) hits.push(node);
-      node.children.forEach(walk);
-    };
-    this.children.forEach(walk);
-    return hits;
-  }
-
-  querySelector(selector: string): ShimElement | null {
-    return this.querySelectorAll(selector)[0] ?? null;
-  }
-
-  focus(): void {
+/**
+ * Шим с датчиком фокуса: тест наблюдает, куда каркас перевёл фокус при поднятии
+ * диалога (`document.activeElement` шим не ведёт).
+ */
+class FocusTrackingElement extends ShimElement {
+  override focus(): void {
+    super.focus();
     focused = this;
-  }
-
-  setAttribute(name: string, value: string): void {
-    this.dataset[name] = value;
   }
 }
 
 /** Устанавливает шим document/window (каркас диалогов читает оба). */
 function installShim(): void {
   (globalThis as any).document = {
-    createElement: (tag: string) => new ShimElement(tag),
-    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
-    documentElement: new ShimElement('html'),
-    body: new ShimElement('body'),
+    createElement: (tag: string) => new FocusTrackingElement(tag),
+    createElementNS: (_ns: string, tag: string) => new FocusTrackingElement(tag),
+    documentElement: new FocusTrackingElement('html'),
+    body: new FocusTrackingElement('body'),
   };
   (globalThis as any).window = {
     innerWidth: 1200,
@@ -224,7 +96,7 @@ function titleOf(backdrop: ShimElement): string {
 
 /** Открывает диалог с полем ввода внутри и возвращает его backdrop. */
 function openDialog(key: string | undefined, title: string): ShimElement {
-  const input = new ShimElement('input');
+  const input = new FocusTrackingElement('input');
   const dialogBody = new ShimElement('div', 'dialog-body');
   dialogBody.append(input);
   showDialog({ title, body: dialogBody as unknown as HTMLElement, dedupeKey: key });

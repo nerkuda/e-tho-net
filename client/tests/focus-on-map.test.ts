@@ -29,59 +29,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { FocusResponse } from '@etn/shared';
-
-/** Minimal element stub — the modules under test only build notices/panels. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  style: {
-    setProperty: (name: string, value: string) => void;
-    removeProperty: (name: string) => void;
-  } = { setProperty: () => undefined, removeProperty: () => undefined };
-  dataset: Record<string, string> = {};
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  hidden = false;
-  isConnected = true;
-  innerHTML = '';
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      this.children.push(typeof node === 'string' ? new ShimElement('#text', undefined, node) : node);
-    }
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = [...nodes];
-  }
-  remove(): void {
-    /* no-op */
-  }
-  addEventListener(): void {}
-  removeEventListener(): void {}
-  closest(): ShimElement | null {
-    return null;
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-}
+import { ShimElement } from './dom-shim.js';
 
 /** Minimal `document`/`window` shims — must run BEFORE the first dynamic import. */
 function shimDom(): void {

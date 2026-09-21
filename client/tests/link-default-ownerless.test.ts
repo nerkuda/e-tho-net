@@ -10,78 +10,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-/** Element-stub с keydown / contextmenu / dataset / setAttribute. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  placeholder = '';
-  autocomplete = '';
-  isConnected = true;
-  tabIndex = -1;
-  dataset: Record<string, string> = {};
-  attributes: Record<string, string> = {};
-  listeners: Record<string, Array<(event?: any) => void>> = {};
-  style: Record<string, string> = {};
-  parent: ShimElement | null = null;
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: ShimElement[]): void {
-    this.children.push(...nodes);
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = nodes;
-  }
-  remove(): void {
-    this.parent = null;
-  }
-  addEventListener(type: string, handler: (event?: any) => void): void {
-    (this.listeners[type] ??= []).push(handler);
-  }
-  removeEventListener(): void {}
-  dispatch(type: string, event?: any): void {
-    for (const handler of this.listeners[type] ?? []) handler(event);
-  }
-  setAttribute(name: string, value: string): void {
-    this.attributes[name] = value;
-  }
-  getAttribute(name: string): string | null {
-    return this.attributes[name] ?? null;
-  }
-  contains(): boolean {
-    return false;
-  }
-  focus(): void {}
-  click(): void {
-    this.dispatch('click');
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
-  }
-}
 
 let sharedWindow: Record<string, unknown> = {};
 

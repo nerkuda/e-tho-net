@@ -31,78 +31,13 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { Thought } from '@etn/shared';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ---------------------------------------------------------------------------
 // DOM-шим и данные
 // ---------------------------------------------------------------------------
-
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  placeholder = '';
-  hidden = false;
-  readOnly = false;
-  disabled = false;
-  isConnected = true;
-  innerHTML = '';
-  tabIndex = -1;
-  role = '';
-  parent: ShimElement | null = null;
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      el.parent = this;
-      this.children.push(el);
-    }
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = [...nodes];
-  }
-  remove(): void {
-    this.parent = null;
-  }
-  addEventListener(): void {}
-  removeEventListener(): void {}
-  setAttribute(): void {}
-  getAttribute(): string | null {
-    return null;
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-  closest(): ShimElement | null {
-    return null;
-  }
-  focus(): void {}
-  blur(): void {}
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
-  }
-}
 
 function shimDom(): void {
   (globalThis as any).HTMLElement = class {};

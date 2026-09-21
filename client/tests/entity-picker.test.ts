@@ -32,6 +32,7 @@ import {
   type EntityOption,
 } from '../src/renderer/lib/entity-picker.js';
 import { store } from '../src/renderer/state.js';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -171,138 +172,6 @@ describe('entity-picker: пустой поиск показывает весь �
 // ---------------------------------------------------------------------------
 // DOM-шим
 // ---------------------------------------------------------------------------
-
-class ShimClassList {
-  private tokens = new Set<string>();
-  add(...names: string[]): void {
-    names.forEach((n) => this.tokens.add(n));
-  }
-  remove(...names: string[]): void {
-    names.forEach((n) => this.tokens.delete(n));
-  }
-  contains(name: string): boolean {
-    return this.tokens.has(name);
-  }
-  toggle(name: string, force?: boolean): void {
-    const next = force ?? !this.tokens.has(name);
-    if (next) this.tokens.add(name);
-    else this.tokens.delete(name);
-  }
-}
-
-class ShimElement {
-  tagName: string;
-  children: ShimElement[] = [];
-  parent: ShimElement | null = null;
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  innerHTML = '';
-  tabIndex = -1;
-  textContent = '';
-  value = '';
-  title = '';
-  type = '';
-  placeholder = '';
-  spellcheck = false;
-  inputMode = '';
-  disabled = false;
-  isConnected = true;
-  classList = new ShimClassList();
-  private _className = '';
-  private attrs = new Map<string, string>();
-  private listeners = new Map<string, Array<(event: any) => void>>();
-
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-
-  /** `el`/`div` set `className` as a property AFTER `createElement` — the shim
-   *  keeps `classList` in sync so `classList.contains` sees those tokens. */
-  get className(): string {
-    return this._className;
-  }
-  set className(value: string) {
-    this._className = value;
-    this.classList = new ShimClassList();
-    for (const token of value.split(/\s+/)) if (token !== '') this.classList.add(token);
-  }
-
-  get firstChild(): ShimElement | null {
-    return this.children[0] ?? null;
-  }
-
-  setAttribute(name: string, value: string): void {
-    this.attrs.set(name, value);
-  }
-  getAttribute(name: string): string | null {
-    return this.attrs.get(name) ?? null;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      el.parent = this;
-      this.children.push(el);
-    }
-  }
-  removeChild(node: ShimElement): void {
-    const index = this.children.indexOf(node);
-    if (index >= 0) this.children.splice(index, 1);
-    node.parent = null;
-  }
-  remove(): void {
-    // Снятие узла из DOM — путь закрытия диалога (`showDialog` вешает на него
-    // своё событие `remove`, по которому снимает слушатели клавиш и зовёт
-    // `onClose`). Шим повторяет контракт: узел без родителя не снимается и
-    // события не даёт, поэтому повторный `remove()` не переигрывает `onClose`.
-    if (this.parent === null) return;
-    this.parent.removeChild(this);
-    this.emit('remove');
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = [];
-    this.append(...nodes);
-  }
-  contains(node: ShimElement | null): boolean {
-    if (node === null) return false;
-    return node === this || this.children.some((child) => child.contains(node));
-  }
-  focus(): void {
-    this.emit('focus');
-  }
-  addEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(listener);
-    this.listeners.set(type, list);
-  }
-  removeEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    this.listeners.set(
-      type,
-      list.filter((fn) => fn !== listener),
-    );
-  }
-  emit(type: string, event: any = {}): void {
-    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
-  }
-  click(): void {
-    this.emit('click');
-  }
-  getBoundingClientRect(): {
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-    width: number;
-    height: number;
-  } {
-    return { left: 10, top: 10, right: 210, bottom: 34, width: 200, height: 24 };
-  }
-  scrollIntoView(): void {
-    /* без движка раскладки не нужен */
-  }
-}
 
 interface ShimWindow {
   innerWidth: number;

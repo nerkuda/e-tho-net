@@ -30,156 +30,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { Thought, ThoughtType } from '@etn/shared';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-/**
- * Element-stub с настоящей дисциплиной подключения: `isConnected` считается по
- * цепочке родителей до корня, помеченного `connectedRoot` (документ). Так
- * `paneHostEl.replaceChildren(pane)` реально отключает панель от DOM, а возврат
- * на вкладку — подключает обратно (в прежних шимах `isConnected` зашит в `true`).
- */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  placeholder = '';
-  autocomplete = '';
-  hidden = false;
-  readOnly = false;
-  disabled = false;
-  role = '';
-  ariaLabel = '';
-  tabIndex = -1;
-  /** Корень, подключённый к документу (ставит тест на host и на document.body). */
-  connectedRoot = false;
-  dataset: Record<string, string> = {};
-  attributes: Record<string, string> = {};
-  listeners: Record<string, Array<(event?: any) => void>> = {};
-  style: Record<string, any> = {
-    setProperty: () => undefined,
-    removeProperty: () => undefined,
-  };
-  parent: ShimElement | null = null;
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  get isConnected(): boolean {
-    return this.parent === null ? this.connectedRoot : this.parent.isConnected;
-  }
-  get firstChild(): ShimElement | null {
-    return this.children[0] ?? null;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      el.parent = this;
-      this.children.push(el);
-    }
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    for (const child of this.children) child.parent = null;
-    this.children = [...nodes];
-    for (const node of nodes) node.parent = this;
-  }
-  removeChild(node: ShimElement): void {
-    this.children = this.children.filter((c) => c !== node);
-    node.parent = null;
-  }
-  replaceChild(node: ShimElement, old: ShimElement): void {
-    const idx = this.children.indexOf(old);
-    if (idx === -1) return;
-    this.children[idx] = node;
-    node.parent = this;
-    old.parent = null;
-  }
-  remove(): void {
-    if (this.parent !== null) {
-      this.parent.children = this.parent.children.filter((c) => c !== this);
-      this.parent = null;
-    }
-  }
-  addEventListener(type: string, handler: (event?: any) => void): void {
-    (this.listeners[type] ??= []).push(handler);
-  }
-  removeEventListener(type: string, handler: (event?: any) => void): void {
-    const list = this.listeners[type];
-    if (list === undefined) return;
-    this.listeners[type] = list.filter((h) => h !== handler);
-  }
-  dispatch(type: string, event?: any): void {
-    for (const handler of [...(this.listeners[type] ?? [])]) handler(event);
-  }
-  focus(): void {
-    this.dispatch('focus');
-  }
-  blur(): void {
-    this.dispatch('blur');
-  }
-  click(): void {
-    this.dispatch('click');
-  }
-  setAttribute(name: string, value: string): void {
-    this.attributes[name] = value;
-    if (name === 'aria-label') this.ariaLabel = value;
-    if (name === 'role') this.role = value;
-  }
-  getAttribute(name: string): string | null {
-    return this.attributes[name] ?? null;
-  }
-  hasAttribute(name: string): boolean {
-    return name in this.attributes;
-  }
-  closest(): ShimElement | null {
-    return null;
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-  contains(node: Node | null): boolean {
-    if (node === null) return false;
-    let cur: ShimElement | null = node as unknown as ShimElement;
-    while (cur !== null) {
-      if (cur === this) return true;
-      cur = cur.parent;
-    }
-    return false;
-  }
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
-  }
-  cloneNode(_deep = true): ShimElement {
-    const clone = new ShimElement(this.tagName, this.className, this.textContent);
-    clone.hidden = this.hidden;
-    clone.title = this.title;
-    clone.type = this.type;
-    return clone;
-  }
-  replaceWith(node: ShimElement): void {
-    if (this.parent === null) return;
-    const idx = this.parent.children.indexOf(this);
-    if (idx === -1) return;
-    this.parent.children[idx] = node;
-    node.parent = this.parent;
-    this.parent = null;
-  }
-}
 
 /** Document-level listeners, keyed by event type. */
 const documentListeners = new Map<string, Set<(event: any) => void>>();
@@ -193,6 +46,18 @@ function dispatchWindow(type: string, event: any = {}): void {
 
 const body = new ShimElement('body');
 body.connectedRoot = true;
+
+/**
+ * Элемент с настоящей дисциплиной подключения: `isConnected` считается по
+ * цепочке родителей до корня с флагом `connectedRoot`. Для этого теста корни по
+ * умолчанию отключены от документа — подключённые тест помечает сам
+ * (`connectedRoot = true` на host и на `document.body`).
+ */
+function detached(tag: string, className?: string, text?: string): ShimElement {
+  const element = new ShimElement(tag, className, text);
+  element.connectedRoot = false;
+  return element;
+}
 
 function shimDom(): void {
   documentListeners.clear();
@@ -209,8 +74,8 @@ function shimDom(): void {
   };
   (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
   (globalThis as any).document = {
-    createElement: (tag: string) => new ShimElement(tag),
-    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    createElement: (tag: string) => detached(tag),
+    createElementNS: (_ns: string, tag: string) => detached(tag),
     documentElement: { style: { setProperty: () => undefined, removeProperty: () => undefined } },
     addEventListener: (type: string, handler: (event: any) => void) => {
       const set = documentListeners.get(type) ?? new Set();
@@ -479,7 +344,7 @@ describe('wireSuggest: отключение поля снимает только
     const { wireSuggest } = await import('../src/renderer/lib/suggest-dropdown.js');
     const host = new ShimElement('div');
     host.connectedRoot = true;
-    const input = new ShimElement('input');
+    const input = detached('input');
     host.append(input);
 
     const handle = wireSuggest(input as any, {

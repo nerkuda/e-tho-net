@@ -34,6 +34,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { Link, LinkType, Thought } from '@etn/shared';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -113,107 +114,6 @@ describe('факты локального изменения типа из ме�
 
 /** How many DOM nodes the editor created (the shim counts them). */
 let createdElements = 0;
-
-/** Minimal element stub that survives the mount/render/patchHeader paths. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  style: {
-    setProperty: (name: string, value: string) => void;
-    removeProperty: (name: string) => void;
-  } = {
-    setProperty: () => undefined,
-    removeProperty: () => undefined,
-  };
-  dataset: Record<string, string> = {};
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  placeholder = '';
-  hidden = false;
-  isConnected = true;
-  innerHTML = '';
-  parent: ShimElement | null = null;
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  get firstChild(): ShimElement | null {
-    return this.children[0] ?? null;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      el.parent = this;
-      this.children.push(el);
-    }
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = [...nodes];
-    for (const node of nodes) node.parent = this;
-  }
-  removeChild(node: ShimElement): void {
-    this.children = this.children.filter((c) => c !== node);
-  }
-  /** `patchHeader` replaces the header node in place on a version-only change. */
-  replaceChild(node: ShimElement, old: ShimElement): void {
-    const idx = this.children.indexOf(old);
-    if (idx === -1) return;
-    this.children[idx] = node;
-    node.parent = this;
-    old.parent = null;
-  }
-  remove(): void {
-    if (this.parent !== null) {
-      this.parent.children = this.parent.children.filter((c) => c !== this);
-      this.parent = null;
-    }
-  }
-  addEventListener(): void {}
-  removeEventListener(): void {}
-  closest(): ShimElement | null {
-    return null;
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-  setAttribute(): void {}
-  getAttribute(): string | null {
-    return null;
-  }
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
-  }
-  cloneNode(_deep = true): ShimElement {
-    const clone = new ShimElement(this.tagName, this.className, this.textContent);
-    clone.hidden = this.hidden;
-    clone.title = this.title;
-    clone.dataset = { ...this.dataset };
-    clone.type = this.type;
-    return clone;
-  }
-  replaceWith(node: ShimElement): void {
-    if (this.parent === null) return;
-    const idx = this.parent.children.indexOf(this);
-    if (idx === -1) return;
-    this.parent.children[idx] = node;
-    node.parent = this.parent;
-    this.parent = null;
-  }
-}
 
 function shimDom(): void {
   (globalThis as any).HTMLElement = class {};

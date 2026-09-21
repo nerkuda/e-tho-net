@@ -30,86 +30,14 @@ import {
   type ThoughtCloudInput,
   type ThoughtCloudOptions,
 } from '../src/renderer/lib/thought-cloud.js';
+import { ShimElement } from './dom-shim.js';
 
 // ---------------------------------------------------------------------------
 // Минимальный DOM-шим
 // ---------------------------------------------------------------------------
 
-/** Элемент-заглушка: классов, стилей, dataset, детей и слушателей достаточно
- *  для фабрики; реального рендера и раскладки не происходит. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  title = '';
-  tabIndex = -1;
-  type = '';
-  textContent = '';
-  src = '';
-  alt = '';
-  innerHTML = '';
-  hidden = false;
-  children: ShimElement[] = [];
-  private attrs = new Map<string, string>();
-  private listeners = new Map<string, Array<(event: unknown) => void>>();
-
-  constructor(tag: string) {
-    this.tagName = tag.toUpperCase();
-  }
-
-  classList = {
-    add: (...names: string[]): void => {
-      for (const name of names) this.addClass(name);
-    },
-    remove: (name: string): void => {
-      this.className = this.className
-        .split(/\s+/)
-        .filter((c) => c !== '' && c !== name)
-        .join(' ');
-    },
-    toggle: (name: string, force?: boolean): void => {
-      const has = this.className.split(/\s+/).includes(name);
-      const next = force ?? !has;
-      if (next && !has) this.addClass(name);
-      if (!next && has) this.classList.remove(name);
-    },
-    contains: (name: string): boolean => this.className.split(/\s+/).includes(name),
-  };
-
-  private addClass(name: string): void {
-    if (!this.classList.contains(name)) {
-      this.className = this.className === '' ? name : `${this.className} ${name}`;
-    }
-  }
-
-  setAttribute(name: string, value: string): void {
-    this.attrs.set(name, String(value));
-  }
-
-  getAttribute(name: string): string | null {
-    return this.attrs.get(name) ?? null;
-  }
-
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = nodes;
-  }
-
-  append(...nodes: ShimElement[]): void {
-    this.children.push(...nodes);
-  }
-
-  addEventListener(type: string, fn: (event: unknown) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(fn);
-    this.listeners.set(type, list);
-  }
-
-  /** Вызывает зарегистрированные обработчики с фейковым событием. */
-  fire(type: string, event: unknown = {}): void {
-    for (const fn of this.listeners.get(type) ?? []) fn(event);
-  }
-}
+// Прежняя копия шима хранила тег в верхнем регистре — тесты проверяли `SPAN`/`SVG`.
+ShimElement.uppercaseTagNames = true;
 
 /** Рекурсивно ищет первый элемент с указанным классом. */
 function findByClass(root: ShimElement, className: string): ShimElement | undefined {

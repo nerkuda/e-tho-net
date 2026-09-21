@@ -11,6 +11,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 /**
  * The module under test reaches the preload bridge through `lib/etn.ts`, whose
@@ -29,128 +30,9 @@ function loadModule(): Promise<SettingsLogsModule> {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ---------------------------------------------------------------------------
-// Minimal DOM shim — the subset `lib/dom.ts` helpers and the section builder
-// touch: element creation, class list, append/replaceChildren, attribute
-// fields (type/checked/disabled/title/value) and event listeners that tests
-// fire explicitly through `fire()`.
+// Окружение теста: элементы приходят из общего DOM-шима (./dom-shim.js).
+// Здесь — только установка `document`/`window` и записывающий мок window.etn.
 // ---------------------------------------------------------------------------
-
-class ShimElement {
-  tagName: string;
-  private _className = '';
-  children: ShimElement[] = [];
-  dataset: Record<string, string> = {};
-  textContent = '';
-  type = '';
-  checked = false;
-  disabled = false;
-  title = '';
-  name = '';
-  parent: ShimElement | null = null;
-  private listeners = new Map<string, Array<(event?: unknown) => void>>();
-  readonly classes = new Set<string>();
-  classList = {
-    add: (c: string): void => {
-      this.classes.add(c);
-      this._syncClassName();
-    },
-    remove: (c: string): void => {
-      this.classes.delete(c);
-      this._syncClassName();
-    },
-    toggle: (c: string, on?: boolean): void => {
-      if (on === undefined) {
-        if (this.classes.has(c)) this.classes.delete(c);
-        else this.classes.add(c);
-      } else if (on) this.classes.add(c);
-      else this.classes.delete(c);
-      this._syncClassName();
-    },
-    contains: (c: string): boolean => this.classes.has(c),
-  };
-
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined && className !== '') this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-
-  get className(): string {
-    return this._className;
-  }
-  set className(value: string) {
-    this._className = value;
-    this.classes.clear();
-    for (const c of value.split(/\s+/).filter((s) => s !== '')) this.classes.add(c);
-  }
-  private _syncClassName(): void {
-    this._className = [...this.classes].join(' ');
-  }
-  get isConnected(): boolean {
-    return this.parent !== null || this.children.length > 0;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      el.parent = this;
-      this.children.push(el);
-    }
-  }
-  replaceChildren(...nodes: Array<ShimElement | string>): void {
-    this.children = [];
-    for (const node of nodes) this.append(node);
-  }
-  addEventListener(type: string, fn: (event?: unknown) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(fn);
-    this.listeners.set(type, list);
-  }
-  removeEventListener(): void {}
-  /** Fires all listeners of `type` (test driver — not a real DOM method). */
-  fire(type: string, event?: unknown): void {
-    for (const fn of [...(this.listeners.get(type) ?? [])]) fn(event);
-  }
-  setAttribute(name: string, value: string): void {
-    (this as Record<string, unknown>)[name] = value;
-  }
-  querySelector(selector: string): ShimElement | null {
-    return findFirst(this, selector);
-  }
-  querySelectorAll(selector: string): ShimElement[] {
-    const out: ShimElement[] = [];
-    walk(this, (node) => {
-      if (node !== this && matches(node, selector)) out.push(node);
-    });
-    return out;
-  }
-  /** Flat concatenation of this node's and descendants' text (assert helper). */
-  flatText(): string {
-    let out = this.textContent;
-    for (const child of this.children) out += child.flatText();
-    return out;
-  }
-}
-
-function matches(node: ShimElement, selector: string): boolean {
-  if (selector.startsWith('.')) return node.classes.has(selector.slice(1));
-  return node.tagName === selector;
-}
-
-function findFirst(root: ShimElement, selector: string): ShimElement | null {
-  for (const child of root.children) {
-    if (matches(child, selector)) return child;
-    const inner = findFirst(child, selector);
-    if (inner !== null) return inner;
-  }
-  return null;
-}
-
-function walk(root: ShimElement, cb: (n: ShimElement) => void): void {
-  for (const child of root.children) {
-    cb(child);
-    walk(child, cb);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Recording window.etn mock

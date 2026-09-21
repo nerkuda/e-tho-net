@@ -10,75 +10,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  parent: ShimElement | null = null;
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  textContent = '';
-  type = '';
-  classList = {
-    add: (...names: string[]): void => {
-      for (const name of names) if (!this.has(name)) this.className = `${this.className} ${name}`.trim();
-    },
-    remove: (name: string): void => {
-      this.className = this.className.split(/\s+/).filter((c) => c !== '' && c !== name).join(' ');
-    },
-    toggle: (name: string, force?: boolean): void => {
-      const next = force ?? !this.has(name);
-      if (next) this.classList.add(name);
-      else this.classList.remove(name);
-    },
-    contains: (name: string): boolean => this.has(name),
-  };
-  private listeners = new Map<string, Array<(event: any) => void>>();
-
-  constructor(tag: string) {
-    this.tagName = tag.toUpperCase();
-  }
-
-  private has(name: string): boolean {
-    return this.className.split(/\s+/).includes(name);
-  }
-
-  append(...nodes: ShimElement[]): void {
-    for (const node of nodes) {
-      node.parent = this;
-      this.children.push(node);
-    }
-  }
-
-  remove(): void {
-    if (this.parent === null) return;
-    const index = this.parent.children.indexOf(this);
-    if (index >= 0) this.parent.children.splice(index, 1);
-    this.parent = null;
-  }
-
-  addEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(listener);
-    this.listeners.set(type, list);
-  }
-
-  removeEventListener(type: string, listener: (event: any) => void): void {
-    const list = this.listeners.get(type) ?? [];
-    this.listeners.set(type, list.filter((fn) => fn !== listener));
-  }
-
-  getBoundingClientRect(): { left: number; top: number; right: number; bottom: number; width: number; height: number } {
-    return { left: 10, top: 10, right: 210, bottom: 34, width: 200, height: 24 };
-  }
-
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-}
 
 function installShim(): { body: ShimElement } {
   const body = new ShimElement('body');

@@ -22,90 +22,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 // ---------------------------------------------------------------------------
 // Минимальный DOM-шим (хватает пути showDialog)
 // ---------------------------------------------------------------------------
-
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  parent: ShimElement | null = null;
-  textContent = '';
-  innerHTML = '';
-  type = '';
-  title = '';
-  readonly dataset: Record<string, string> = {};
-  readonly style: Record<string, string> = {};
-  private readonly classes = new Set<string>();
-
-  readonly classList = {
-    add: (...names: string[]): void => {
-      for (const name of names) {
-        for (const c of name.split(/\s+/)) {
-          if (c !== '') this.classes.add(c);
-        }
-      }
-    },
-    remove: (...names: string[]): void => {
-      for (const name of names) this.classes.delete(name);
-    },
-    toggle: (name: string, force?: boolean): void => {
-      if (force === true) this.classes.add(name);
-      else if (force === false) this.classes.delete(name);
-      else if (this.classes.has(name)) this.classes.delete(name);
-      else this.classes.add(name);
-    },
-    contains: (name: string): boolean => this.classes.has(name),
-  };
-
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      el.parent = this;
-      this.children.push(el);
-    }
-  }
-
-  addEventListener(): void {}
-  removeEventListener(): void {}
-  setAttribute(): void {}
-
-  remove(): void {
-    if (this.parent === null) return;
-    this.parent.children = this.parent.children.filter((c) => c !== this);
-    this.parent = null;
-  }
-
-  /** Все потомки, у которых className содержит подстроку. */
-  findAll(cls: string): ShimElement[] {
-    const out: ShimElement[] = [];
-    const walk = (node: ShimElement): void => {
-      for (const child of node.children) {
-        if (child.className.includes(cls)) out.push(child);
-        walk(child);
-      }
-    };
-    walk(this);
-    return out;
-  }
-
-  isDescendantOf(node: ShimElement): boolean {
-    let cur = this.parent;
-    while (cur !== null) {
-      if (cur === node) return true;
-      cur = cur.parent;
-    }
-    return false;
-  }
-}
 
 function shimDom(): void {
   (globalThis as any).document = {
