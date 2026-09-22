@@ -27,6 +27,7 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/s
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
+import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
 import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
@@ -1463,10 +1464,15 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
  *  height / 25% width of the canvas viewport. Empty list → `null` (no popup),
  *  per spec — mirrors the built-in resolvers' "nothing to show" convention.
  *
- *  Ошибка e5cee08e: список ограничивается активным фильтром типов связей
- *  карты (`store.state.canvasLinkFilter`) — тем же набором `type_ids` +
- *  `include_structural`, которым сервер рисует саму карту. Без этого
- *  Ctrl-наведение показывало и отфильтрованные типы. */
+ *  Ошибка e5cee08e: список ограничивается фильтром типов связей карты — тем
+ *  же набором `type_ids` + `include_structural`, которым сервер рисует саму
+ *  карту, иначе Ctrl-наведение показывало и отфильтрованные типы.
+ *
+ *  Задача 7e9ec8bf: фильтр не читается из `store.state.canvasLinkFilter`
+ *  напрямую, а резолвится целиком ({@link resolveEffectiveCanvasLinkFilter}) —
+ *  явное предпочтение, иначе живой дефолт из `show_on_map`. Иначе при
+ *  незаданном предпочтении карта (её фильтрует сервер) рисовала по
+ *  `show_on_map`, а превью показывало все связи. */
 async function resolveNeighborsPreview(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
   const thoughtId = trigger.dataset['hpOwnerId'];
   const dir = trigger.dataset['hpDir'];
@@ -1479,9 +1485,9 @@ async function resolveNeighborsPreview(trigger: HTMLElement): Promise<HoverPrevi
   ) {
     return null;
   }
-  const linkFilter = store.state.canvasLinkFilter ?? undefined;
   let neighbors: FocusNeighbor[];
   try {
+    const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId);
     neighbors = await etn.thoughts.neighbors(
       networkId,
       thoughtId,
