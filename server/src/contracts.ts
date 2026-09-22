@@ -971,6 +971,26 @@ export const PropertiesRemove = defineContract(
   {},
 );
 
+/**
+ * Явный резолв значений свойства вида `cross_network_ref` (задача 7849008a,
+ * спека 46df7a8d). Для каждого видимого значения открывает целевую сеть и
+ * обновляет снапшот имени. Возвращает массив DTO
+ * {@link CrossNetworkRefValue} со статусами. Служебная операция — без
+ * write-бюджета и audit-записи как содержательной правки (требование
+ * c104a0fc). Применим ТОЛЬКО к свойствам вида `cross_network_ref`; иначе
+ * `VALIDATION_ERROR`.
+ */
+export const PropertiesResolve = defineContract(
+  'etn.properties.resolve',
+  z.object({
+    network_id: NetworkId,
+    owner_type: z.enum(PROPERTY_OWNER_TYPES),
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+  }),
+  {},
+);
+
 export const ThoughtsUsageClear = defineContract(
   'etn.thoughts.usage_clear',
   z.object({ network_id: NetworkId, thought_id: ThoughtId }),
@@ -1657,6 +1677,24 @@ export const RestPropertyPut = defineContract(
 /** DELETE …/properties/:key — удаление значения. */
 export const RestPropertyDelete = defineContract(
   'rest:properties.delete',
+  z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    owner_id: { from: { kind: 'param', name: 'id' } },
+    key: { from: { kind: 'param' } },
+  },
+);
+
+/**
+ * POST …/properties/:key/cross-resolve — явный резолв значений вида
+ * «кросс-сетевая ссылка» (задача 7849008a, требование 95511443,
+ * спека операции 737ed900). Тело пустое; ответ — массив обновлённых
+ * снапшотов с признаком `resolved`/`unresolved`. Служебная запись,
+ * без write-бюджета и audit-записи как содержательной правки
+ * (требование c104a0fc).
+ */
+export const RestPropertyCrossResolve = defineContract(
+  'rest:properties.cross-resolve',
   z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },

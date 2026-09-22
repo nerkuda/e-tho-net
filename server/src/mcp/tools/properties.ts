@@ -12,15 +12,20 @@ import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
   PropertiesAdd,
   PropertiesRemove,
+  PropertiesResolve,
   ThoughtsUsageClear,
 } from '../../contracts.js';
 import { getLink } from '../../domain/link-service.js';
 import {
   addLinkPropertyValue,
   clearThoughtRefUsages,
+  crossResolvePropertyValue,
   removeLinkPropertyValue,
 } from '../../domain/property-service.js';
+import type { CrossNetworkAccessContext } from '../../domain/cross-network-ref-service.js';
+import { SystemDb } from '../../db/system-db.js';
 import {
+  mcpLayerClientId,
   mcpWriteFx,
   openMemberNetwork,
   requireWritable,
@@ -147,6 +152,54 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
           };
         });
         return { link_id: res.link_id, request_id: String(extra.requestId) };
+      }),
+  );
+
+  // 0.8.3 (задача 7849008a, спека 46df7a8d): etn.properties.resolve — явный
+  // резолв значений `cross_network_ref`. Служебная операция, без
+  // write-бюджета и audit-записи (требование c104a0fc).
+  mcp.registerTool(
+    'etn.properties.resolve',
+    {
+      title: 'Резолв кросс-сетевой ссылки',
+      description:
+        'Resolve a cross-network property value (задача 7849008a, ADR ae8346d0): ' +
+        'for every visible value of the property opens the target network, ' +
+        'reads the target title, updates the snapshot; target/network gone → ' +
+        'marks value as `unresolved` while keeping the old title. Service record — ' +
+        'no write budget, no audit row. Returns `values: CrossNetworkRefValue[]`.',
+      inputSchema: PropertiesResolve.schema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.properties.resolve'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        // Список сетей пользователя — для прав при открытии чужой data.db.
+        const sysDb = SystemDb.open(rt.deps.dataDir, rt.deps.logger);
+        let accessibleNetworkIds: ReadonlySet<string>;
+        try {
+          accessibleNetworkIds = new Set(
+            sysDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+          );
+        } finally {
+          sysDb.close();
+        }
+        const ctx: CrossNetworkAccessContext = {
+          dataDir: rt.deps.dataDir,
+          userId: rt.deps.auth.userId,
+          clientId: mcpLayerClientId(rt),
+          logger: rt.deps.logger,
+          accessibleNetworkIds,
+          currentNetworkId: args.network_id,
+        };
+        const values = crossResolvePropertyValue(
+          ndb,
+          args.owner_type,
+          args.owner_id,
+          args.key,
+          ctx,
+        );
+        return { values, request_id: String(extra.requestId) };
       }),
   );
 }

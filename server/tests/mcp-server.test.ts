@@ -490,11 +490,13 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // (`etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`,
         // `etn.properties.set`, `etn.comments.upsert`): −3 idempotent
         // (set_active, properties.set, upsert_bundle), −6 annotated
-        // (без изменения readOnly/destructive) → 60/33/13/11.
-        assert.equal(annotated, 60);
+        // (без изменения readOnly/destructive). 0.8.3 (задача 7849008a):
+        // +1 инструмент `etn.properties.resolve` с `idempotentHint: true`
+        // → 61/33/13/12.
+        assert.equal(annotated, 61);
         assert.equal(hintReadOnly, 33);
         assert.equal(hintDestructive, 13);
-        assert.equal(hintIdempotent, 11);
+        assert.equal(hintIdempotent, 12);
       } finally {
         await handle.close();
       }

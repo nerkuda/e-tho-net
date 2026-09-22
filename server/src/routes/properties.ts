@@ -1,15 +1,21 @@
 /**
  * Property-value routes (task D4, 03-server-api.md §9).
  *
- *   GET    /networks/:networkId/thoughts/:id/properties            — list values
- *   PUT    /networks/:networkId/thoughts/:id/properties/:key       — upsert by key
- *   DELETE /networks/:networkId/thoughts/:id/properties/:key       — remove by key
- *   … and the same three under /networks/:networkId/links/:id/properties
+ *   GET    /networks/:networkId/thoughts/:id/properties                            — list values
+ *   PUT    /networks/:networkId/thoughts/:id/properties/:key                       — upsert by key
+ *   DELETE /networks/:networkId/thoughts/:id/properties/:key                       — remove by key
+ *   POST   /networks/:networkId/thoughts/:id/properties/:key/cross-resolve        — cross-network resolve
+ *   … and the same four under /networks/:networkId/links/:id/properties
  *
  * `PUT` is an upsert; the value is validated against the property definition
  * of the owner's type by the property service (unknown property → 404,
  * wrong-typed value → 422). The property key is addressed by path segment, so
  * an empty key cannot match the route; the service double-checks anyway.
+ *
+ * `cross-resolve` (задача 7849008a, спека 737ed900) — служебная операция
+ * явного резолва значений `cross_network_ref`: открывает целевые сети и
+ * обновляет снапшоты имён. Служебная запись без write-бюджета и
+ * audit-записи (требование c104a0fc).
  *
  * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */
@@ -21,13 +27,22 @@ import { type PropertyOwnerType, type PropertyValueValue } from '@etn/shared';
 import { sendList, sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import {
+  crossResolvePropertyValue,
   deletePropertyValue,
   getPropertyValuesWithLinks,
   setPropertyValue,
 } from '../domain/property-service.js';
+import type { CrossNetworkAccessContext } from '../domain/cross-network-ref-service.js';
+import { getAccessibleNetworkIdsForUser } from './helpers.js';
 import { getThought } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
-import { parseRest, RestPropertyDelete, RestPropertyList, RestPropertyPut } from '../contracts.js';
+import {
+  parseRest,
+  RestPropertyCrossResolve,
+  RestPropertyDelete,
+  RestPropertyList,
+  RestPropertyPut,
+} from '../contracts.js';
 
 /** `/api/v1/networks*` property-value routes plugin factory. */
 export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -53,6 +68,23 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const input = parseRest(RestPropertyPut, req);
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+          // Контекст для кросс-сетевой записи (задача 7849008a): нужен только
+          // если значение окажется `cross_network_ref`. Резолвим заранее —
+          // для других value_type это лишний вызов systemDb, но он дёшев
+          // (WAL-кэш).
+          const accessibleIds = await getAccessibleNetworkIdsForUser(
+            deps.dataDir,
+            req.auth!.user.id,
+            app.appLogger,
+          );
+          const crossCtx: CrossNetworkAccessContext = {
+            dataDir: deps.dataDir,
+            userId: req.auth!.user.id,
+            clientId: req.auth!.clientId ?? '',
+            logger: app.appLogger,
+            accessibleNetworkIds: accessibleIds,
+            currentNetworkId: input.network_id,
+          };
           const value = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
             const set = setPropertyValue(
               ndb,
@@ -61,6 +93,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
               input.key,
               input.value as PropertyValueValue,
               req.auth!.user.id,
+              crossCtx,
             );
             // В журнал пишем обновление самой сущности-владельца (требование
             // b0c7a57c): смена значения свойства — это её операция.
@@ -139,6 +172,40 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
             };
           });
           reply.code(204).send();
+        },
+      );
+
+      // POST …/properties/:key/cross-resolve — явный резолв кросс-сетевых
+      // значений (задача 7849008a, спека 737ed900). Служебная операция:
+      // без write-бюджета и audit-записи как содержательной правки
+      // (требование c104a0fc).
+      app.post(
+        `${pathBase}/properties/:key/cross-resolve`,
+        { preHandler: [app.authPreHandler, requireNetworkMember()] },
+        async (req: FastifyRequest, reply) => {
+          const input = parseRest(RestPropertyCrossResolve, req);
+          const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+          const accessibleIds = await getAccessibleNetworkIdsForUser(
+            deps.dataDir,
+            req.auth!.user.id,
+            app.appLogger,
+          );
+          const ctx: CrossNetworkAccessContext = {
+            dataDir: deps.dataDir,
+            userId: req.auth!.user.id,
+            clientId: req.auth!.clientId ?? '',
+            logger: app.appLogger,
+            accessibleNetworkIds: accessibleIds,
+            currentNetworkId: input.network_id,
+          };
+          const values = crossResolvePropertyValue(
+            ndb,
+            ownerType,
+            input.owner_id,
+            input.key,
+            ctx,
+          );
+          sendSuccess(reply, { values });
         },
       );
     };

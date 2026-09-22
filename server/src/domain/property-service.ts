@@ -73,6 +73,7 @@ import { propertyValueId } from '../db/property-value-id.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import {
+  type CrossNetworkRefValue,
   parseCrossNetworkAddress,
   isCrossNetworkAddress,
 } from '@etn/shared';
@@ -82,6 +83,7 @@ import {
   readCrossNetworkRefValue,
   readSnapshotPayload,
   resolveAndBuildSnapshotsForWrite,
+  resolveCrossNetworkRef,
   type CrossRefSnapshotItem,
   upsertSnapshotPayload,
 } from './cross-network-ref-service.js';
@@ -4615,6 +4617,137 @@ export function deletePropertyValue(
   });
 }
 
+
+/**
+ * Явный резолв значений свойства вида `cross_network_ref` (задача 7849008a,
+ * требование 95511443, спека операции 737ed900): для каждого видимого
+ * вызывающему значения открывает целевую сеть и обновляет снапшот имени.
+ * Цель или сеть удалены — значение помечается `unresolved: 1`, снапшот
+ * сохраняется. Обрабатываются только значения, видимые вызывающему
+ * (права уже отфильтрованы чтением).
+ *
+ * Снапшоты живут в служебной неветбимой таблице
+ * `property_value_cross_refs` (см. миграцию 044) — обновление НЕ создаёт
+ * слойных теневых строк, НЕ расходует write-бюджет и НЕ пишется в
+ * `audit_log` как содержательная операция (требование c104a0fc).
+ *
+ * @returns Массив обновлённых снапшотов в DTO-форме `CrossNetworkRefValue`
+ *   для каждого адреса значения (для single — массив длины 1).
+ * @throws {EtnError} `VALIDATION_ERROR`, если свойство не существует или
+ *   не имеет вида `cross_network_ref`.
+ */
+export function crossResolvePropertyValue(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  key: string,
+  ctx: CrossNetworkAccessContext,
+): CrossNetworkRefValue[] {
+  return ndb.transaction(() => {
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!prop) {
+      throw new EtnError('NOT_FOUND', `property "${key}" does not exist in this network`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
+        key,
+      });
+    }
+    if (prop.value_type !== 'cross_network_ref') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `cross-resolve применим только к свойствам вида cross_network_ref`,
+        { key, value_type: prop.value_type },
+      );
+    }
+    // Резолвим ФИЗИЧЕСКИЙ id значения (для слоя может быть отдельный row).
+    const valueId = resolveVisiblePropertyValueId(ndb, ownerType, ownerId, prop.id);
+    if (valueId === undefined) {
+      return [];
+    }
+    const stored = ndb
+      .prepare('SELECT value_text FROM property_values_v WHERE id = ?')
+      .get(valueId) as { value_text: string | null };
+    if (stored?.value_text === null || stored?.value_text === undefined) {
+      return [];
+    }
+    const addresses = parseStoredCrossNetworkAddresses(stored.value_text);
+    const now = new Date().toISOString();
+    // Читаем текущий снапшот, чтобы для нерезолвленных адресов оставить
+    // прежнее имя (требование 6d4ad9ac: «имя всегда из снапшота»).
+    const existingPayload = readSnapshotPayload(ndb, valueId);
+    const previousByKey = new Map<string, { title: string; resolved_at: string; unresolved: 0 | 1 }>();
+    if (existingPayload !== null) {
+      for (const item of existingPayload.items) {
+        previousByKey.set(`${item.network_id}#${item.thought_id}`, {
+          title: item.title,
+          resolved_at: item.resolved_at,
+          unresolved: item.unresolved,
+        });
+      }
+    }
+    const items: CrossRefSnapshotItem[] = [];
+    const out: CrossNetworkRefValue[] = [];
+    for (const address of addresses) {
+      const parsed = parseCrossNetworkAddress(address);
+      if (parsed === null) {
+        // Повреждённое значение: оставляем как есть, помечаем нерезолвленным.
+        items.push({
+          network_id: '',
+          thought_id: address,
+          title: address,
+          resolved_at: now,
+          unresolved: 1,
+        });
+        out.push({
+          network_id: '',
+          thought_id: address,
+          title_snapshot: address,
+          unresolved: true,
+          resolved_at: now,
+        });
+        continue;
+      }
+      const key2 = `${parsed.networkId}#${parsed.thoughtId}`;
+      const status = resolveCrossNetworkRef(address, ctx);
+      if (status.kind === 'resolved') {
+        items.push({
+          network_id: parsed.networkId,
+          thought_id: parsed.thoughtId,
+          title: status.title,
+          resolved_at: now,
+          unresolved: 0,
+        });
+        out.push({
+          network_id: parsed.networkId,
+          thought_id: parsed.thoughtId,
+          title_snapshot: status.title,
+          unresolved: false,
+          resolved_at: now,
+        });
+      } else {
+        // Нет прав / сеть или цель удалены — снапшот сохраняется, помечаем
+        // нерезолвленным (требование 6d4ad9ac).
+        const previous = previousByKey.get(key2);
+        items.push({
+          network_id: parsed.networkId,
+          thought_id: parsed.thoughtId,
+          title: previous?.title ?? address,
+          resolved_at: now,
+          unresolved: 1,
+        });
+        out.push({
+          network_id: parsed.networkId,
+          thought_id: parsed.thoughtId,
+          title_snapshot: previous?.title ?? address,
+          unresolved: true,
+          resolved_at: now,
+        });
+      }
+    }
+    upsertSnapshotPayload(ndb, valueId, items);
+    return out;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Счётчики и usage справочника свойств (ADR 8c93f03a, веха 7 версии 0.8.2).

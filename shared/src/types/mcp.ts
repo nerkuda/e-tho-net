@@ -75,6 +75,11 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.delete',
   'etn.properties.add',
   'etn.properties.remove',
+  // Кросс-сетевая ссылка (задача 7849008a, спека 46df7a8d): явный резолв
+  // снапшота имени цели — открывает целевую сеть, обновляет снапшот; цели/
+  // сети удалены → помечает значение нерезолвленным. Служебная запись
+  // (требование c104a0fc).
+  'etn.properties.resolve',
   // `etn.thoughts.write` (task 053751b5, 0.7.2) — батч-запись: одна транзакция
   // для многих связанных единиц знания (мысли + постоянные/хронологические
   // комментарии + свойства + связи с их свойствами и комментариями + вложения).
@@ -208,6 +213,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.links.restore': { idempotentHint: true },
   'etn.properties.add': { idempotentHint: true },
   'etn.properties.remove': { idempotentHint: true },
+  // Кросс-сетевая ссылка (задача 7849008a): повторный вызов с теми же
+  // аргументами даёт тот же результат (снапшот уже отрезолвлен).
+  'etn.properties.resolve': { idempotentHint: true },
   'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
   // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
