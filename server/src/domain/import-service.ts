@@ -73,6 +73,19 @@ export interface ImportOptions {
     include_attachments?: boolean;
     include_chronology?: boolean;
   };
+  /**
+   * Политика разрешения коллизий мыслей (MCP `collision_policy`, ошибка
+   * ebe93450). Значения:
+   *   * `fail` — любая коллизия (по id или по title) отвергает импорт
+   *     `VALIDATION_ERROR` со списком конфликтов;
+   *   * `overwrite` (по умолчанию) — существующая мысль обновляется
+   *     (историческое поведение импорта);
+   *   * `rename` — для коллизии создаётся новая мысль с уникализированным
+   *     title, существующая не трогается;
+   *   * `skip` — конфликтующая мысль пропускается вместе со своими связями,
+   *     комментариями, значениями свойств и вложениями.
+   */
+  collisionPolicy?: ImportCollisionPolicy;
 }
 
 /**
@@ -89,6 +102,21 @@ export interface ImportResult extends ImportSummary {
   createdLinkIds: string[];
   /** Permanent comment ids whose body was overwritten by this import. */
   updatedCommentIds: string[];
+}
+
+/** Политика разрешения коллизий при импорте (MCP `collision_policy`). */
+export type ImportCollisionPolicy = 'fail' | 'rename' | 'skip' | 'overwrite';
+
+/** Одна коллизия манифеста с существующей мыслью целевой сети. */
+export interface ImportConflict {
+  /** Природа коллизии: совпадение id манифеста или нормализованного title. */
+  kind: 'id' | 'title';
+  /** id мысли в манифесте. */
+  id: string;
+  /** title мысли в манифесте. */
+  title: string;
+  /** id существующей мысли целевой сети — только для `kind: 'title'`. */
+  existing_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +282,82 @@ function readExistingThoughtsByTitle(
     .prepare(`SELECT id, title_norm FROM thoughts_v WHERE title_norm IN (${placeholders})`)
     .all(...titleNorms) as Array<{ id: string; title_norm: string }>;
   return new Map(rows.map((r) => [r.title_norm, r.id]));
+}
+
+/**
+ * Коллизии мыслей манифеста с существующими мыслями целевой сети (ошибка
+ * ebe93450): совпадение по id (та же мысль) или по нормализованному title.
+ * Используется политикой `fail` и превью `dry_run`.
+ */
+export function findImportConflicts(
+  ndb: NetworkDb,
+  manifest: EtnxManifest,
+): ImportConflict[] {
+  const existingById = readExistingThoughtIds(
+    ndb,
+    manifest.thoughts.map((t) => t.id),
+  );
+  const titleNorms = Array.from(new Set(manifest.thoughts.map((t) => normalizeTitle(t.title))));
+  const existingByTitle = readExistingThoughtsByTitle(ndb, titleNorms);
+
+  const conflicts: ImportConflict[] = [];
+  for (const t of manifest.thoughts) {
+    if (existingById.has(t.id)) {
+      conflicts.push({ kind: 'id', id: t.id, title: t.title });
+      continue;
+    }
+    const existingId = existingByTitle.get(normalizeTitle(t.title));
+    if (existingId !== undefined) {
+      conflicts.push({ kind: 'title', id: t.id, title: t.title, existing_id: existingId });
+    }
+  }
+  return conflicts;
+}
+
+/**
+ * Множество id мыслей манифеста, которые политика `skip` пропускает: сами
+ * конфликты (`findImportConflicts`) плюс их потомки по рёбрам манифеста
+ * (пропуск дубля и его подграфа).
+ */
+export function computeSkippedThoughtIds(
+  ndb: NetworkDb,
+  manifest: EtnxManifest,
+): Set<string> {
+  const skipped = new Set<string>();
+  for (const c of findImportConflicts(ndb, manifest)) skipped.add(c.id);
+  const adj = new Map<string, string[]>();
+  for (const l of manifest.links) {
+    const list = adj.get(l.source_id);
+    if (list === undefined) adj.set(l.source_id, [l.target_id]);
+    else list.push(l.target_id);
+  }
+  const queue = [...skipped];
+  while (queue.length > 0) {
+    const id = queue.pop() as string;
+    for (const child of adj.get(id) ?? []) {
+      if (!skipped.has(child)) {
+        skipped.add(child);
+        queue.push(child);
+      }
+    }
+  }
+  return skipped;
+}
+
+/**
+ * Уникализировать title при политике `rename`: базовое название, при
+ * совпадении `title_norm` с уже существующим (или только что созданным) —
+ * суффикс ` (N)`, N = 1, 2, ….
+ */
+function uniqueImportedTitle(ndb: NetworkDb, base: string): string {
+  const taken = (candidate: string): boolean =>
+    ndb.prepare('SELECT 1 FROM thoughts_v WHERE title_norm = ? LIMIT 1').get(normalizeTitle(candidate)) !==
+    undefined;
+  if (!taken(base)) return base;
+  for (let n = 1; ; n += 1) {
+    const candidate = `${base} (${n})`;
+    if (!taken(candidate)) return candidate;
+  }
 }
 
 function readExistingThoughtTypeIds(ndb: NetworkDb, ids: string[]): Set<string> {
@@ -919,6 +1023,61 @@ export async function importFromEtnx(
   return applyManifest(ndb, manifest, attachments, opts, logger);
 }
 
+/** Прочитать манифест из .etnx-буфера, не применяя его (для `dry_run`). */
+export async function readManifestFromBuffer(
+  zipBuffer: Buffer,
+  logger: Logger,
+): Promise<EtnxManifest> {
+  const { manifest } = await readArchive(zipBuffer, logger);
+  return manifest;
+}
+
+/** План импорта мыслей с учётом `collision_policy` — для превью `dry_run`. */
+export interface ImportThoughtPlan {
+  thoughts_to_create: number;
+  thoughts_to_reuse: number;
+  thoughts_to_skip: number;
+  conflicts: ImportConflict[];
+}
+
+/**
+ * Отражают ли план `overwrite`/`fail`-без-конфликтов обновление существующей
+ * мысли, `fail`-с-конфликтами — полный отказ, `skip` — пропуск, `rename` —
+ * создание новой. Используется `etn.import.dry_run`, чтобы превью совпадало
+ * с фактическим поведением `importFromEtnx` (ошибка ebe93450).
+ */
+export function planImportThoughts(
+  ndb: NetworkDb,
+  manifest: EtnxManifest,
+  policy: ImportCollisionPolicy,
+): ImportThoughtPlan {
+  const conflicts = findImportConflicts(ndb, manifest);
+  const total = manifest.thoughts.length;
+  if (policy === 'fail' && conflicts.length > 0) {
+    return { thoughts_to_create: 0, thoughts_to_reuse: 0, thoughts_to_skip: total, conflicts };
+  }
+  if (policy === 'skip') {
+    const skipped = computeSkippedThoughtIds(ndb, manifest);
+    return {
+      thoughts_to_create: total - skipped.size,
+      thoughts_to_reuse: 0,
+      thoughts_to_skip: skipped.size,
+      conflicts,
+    };
+  }
+  if (policy === 'rename') {
+    return { thoughts_to_create: total, thoughts_to_reuse: 0, thoughts_to_skip: 0, conflicts };
+  }
+  // `overwrite` (по умолчанию) и `fail` без конфликтов: существующая мысль
+  // обновляется/переиспользуется, новые создаются.
+  return {
+    thoughts_to_create: total - conflicts.length,
+    thoughts_to_reuse: conflicts.length,
+    thoughts_to_skip: 0,
+    conflicts,
+  };
+}
+
 /**
  * Apply a pre-parsed manifest (no zip reading). Public for tests and for the
  * preview route when it already has the manifest in hand.
@@ -945,6 +1104,7 @@ export function applyManifest(
       thoughts_created: 0,
       thoughts_updated: 0,
       thoughts_reused: 0,
+      thoughts_skipped: 0,
       links_created: 0,
       permanent_comments_updated: 0,
       chronological_comments_added: 0,
@@ -1058,16 +1218,61 @@ export function applyManifest(
     }
 
     // 4. Thoughts (with id/title dedup) -----------------------------------
+    const policy: ImportCollisionPolicy = opts.collisionPolicy ?? 'overwrite';
     const incomingIds = manifest.thoughts.map((t) => t.id);
     const existingById = readExistingThoughtIds(ndb, incomingIds);
     const titleNorms = Array.from(new Set(manifest.thoughts.map((t) => normalizeTitle(t.title))));
     const existingByTitle = readExistingThoughtsByTitle(ndb, titleNorms);
 
+    // `fail` — любая коллизия отвергает импорт целиком; проверяем до записей
+    // (транзакция откатит уже вставленные типы/свойства).
+    if (policy === 'fail') {
+      const conflicts = findImportConflicts(ndb, manifest);
+      if (conflicts.length > 0) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Импорт конфликтует с существующими мыслями целевой сети (${conflicts.length}).`,
+          { conflicts },
+        );
+      }
+    }
+
+    // `skip` — конфликтующая мысль и весь её подграф не импортируются
+    // (id не попадает в remap, потомки по рёбрам манифеста — тоже).
+    const skippedIds =
+      policy === 'skip' ? computeSkippedThoughtIds(ndb, manifest) : new Set<string>();
+
     const titleMatchIds = new Set<string>();
     for (const t of manifest.thoughts) {
       const resolvedTypeId =
         t.type_id === null ? null : typeIdRemap.get(t.type_id) ?? t.type_id;
-      if (existingById.has(t.id)) {
+      const normTitle = normalizeTitle(t.title);
+      const idConflict = existingById.has(t.id);
+      const titleConflict =
+        !idConflict && existingByTitle.has(normTitle) && !titleMatchIds.has(normTitle);
+
+      // `skip` — конфликтующая мысль и её подграф не импортируются.
+      if (policy === 'skip' && skippedIds.has(t.id)) {
+        summary.thoughts_skipped = (summary.thoughts_skipped ?? 0) + 1;
+        continue;
+      }
+      // `rename` — создаём новую мысль с уникальным title, существующую не трогаем.
+      if (policy === 'rename' && (idConflict || titleConflict)) {
+        const renamed = uniqueImportedTitle(ndb, t.title);
+        const r = createThoughtForTitleMatch(
+          ndb,
+          { ...t, title: renamed },
+          resolvedTypeId,
+          opts.actorUserId,
+          now,
+        );
+        thoughtIdRemap.set(t.id, r.id);
+        createdThoughtIds.push(r.id);
+        summary.thoughts_created += 1;
+        continue;
+      }
+
+      if (idConflict) {
         const r = insertOrUpdateThought(ndb, t, resolvedTypeId, opts.actorUserId, now);
         thoughtIdRemap.set(t.id, r.id);
         if (r.action === 'updated') summary.thoughts_updated += 1;
@@ -1075,7 +1280,6 @@ export function applyManifest(
         continue;
       }
       // (Title-match path below creates new thoughts too — both go into createdThoughtIds)
-      const normTitle = normalizeTitle(t.title);
       if (existingByTitle.has(normTitle) && !titleMatchIds.has(normTitle)) {
         const existingId = existingByTitle.get(normTitle);
         if (existingId !== undefined) {

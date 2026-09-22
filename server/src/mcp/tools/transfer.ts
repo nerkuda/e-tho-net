@@ -201,14 +201,17 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Превью импорта .etnx',
       description:
         'Читает `.etnx` (file или base64), валидирует manifest и возвращает план: сколько мыслей/связей/' +
-        'вложений создастся в целевой сети. Без побочных эффектов — read-only.',
+        'вложений создастся в целевой сети. Без побочных эффектов — read-only. `collision_policy` ' +
+        '(`fail`/`rename`/`skip`/`overwrite`) учитывается в превью: счётчики ' +
+        '`thoughts_to_create/reuse/skip` и список `conflicts` отражают выбранную политику.',
       inputSchema: ImportDryRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.import.dry_run'],
     },
     (args) =>
       runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
         const buf = readImportSource(args.source);
-        const plan = await planImportFromBuffer(buf, rt.deps.logger);
+        const plan = await planImportFromBuffer(ndb, buf, args.collision_policy, rt.deps.logger);
         return {
           ok: true as const,
           manifest_version: plan.manifest_version,
@@ -226,6 +229,9 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
         'Применяет `.etnx` (file или base64) к целевой сети одной транзакцией. Требует `confirm: true`. ' +
         '`parent_thought_id` — куда подвесить корневые мысли; по умолчанию — HOME. Возвращает ' +
         '`{ imported: {...counts...}, conflicts: [...], manifest_version, layer, request_id }`. ' +
+        '`collision_policy`: `fail` — любая коллизия мыслей отвергает импорт VALIDATION_ERROR со ' +
+        'списком конфликтов; `rename` — новая мысль с уникальным title; `skip` — дубль и его подграф ' +
+        'пропускаются; `overwrite` (по умолчанию) — существующая мысль обновляется. ' +
         'Один write-бюджет + одна строка audit_log. `destructiveHint: true`.',
       inputSchema: ImportSubgraph.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.import.subgraph'],
@@ -300,6 +306,7 @@ export function registerTransferTools(mcp: McpServer, rt: McpRuntime): void {
             thoughts_created: result.thoughts_created,
             thoughts_updated: result.thoughts_updated,
             thoughts_reused: result.thoughts_reused,
+            thoughts_skipped: result.thoughts_skipped ?? 0,
             links_created: result.links_created,
             permanent_comments_updated: result.permanent_comments_updated,
             chronological_comments_added: result.chronological_comments_added,

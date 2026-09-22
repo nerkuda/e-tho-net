@@ -23,8 +23,15 @@ import {
   type McpImportPolicy,
 } from '@etn/shared';
 
+import type { NetworkDb } from '../db/network-db.js';
 import type { Logger } from '../logger.js';
-import { importFromEtnx, type ImportOptions, type ImportResult } from './import-service.js';
+import {
+  importFromEtnx,
+  planImportThoughts,
+  readManifestFromBuffer,
+  type ImportOptions,
+  type ImportResult,
+} from './import-service.js';
 import { parseManifest } from './etnx-format.js';
 
 /** Результат `planImportFromBuffer` — что произойдёт при импорте. */
@@ -96,51 +103,67 @@ export function readImportSource(
  * Построить план импорта без побочных эффектов (dry_run). Используется и для
  * `import.subgraph` — план показывается в отчёте.
  *
- * Реализация: `previewFromEtnx` (читает архив и валидирует manifest).
- * Семантика `thoughts_to_create/reuse/skip` зависит от `collision_policy`,
- * которую план не выбирает — на уровне dry_run мы возвращаем «best case»
- * (всё новое); точный учёт коллизий остаётся за `importFromEtnx`.
+ * Семантика `thoughts_to_create/reuse/skip` отражает `collision_policy`
+ * относительно целевой сети (ошибка ebe93450): `findImportConflicts` даёт
+ * список коллизий, `planImportThoughts` превращает его в счётчики. Коллизии
+ * попадают в `conflicts` — так превью предупреждает об отказе `fail` и о
+ * пропуске `skip` до фактической записи.
  */
 export async function planImportFromBuffer(
+  ndb: NetworkDb,
   buf: Buffer,
+  policy: McpImportPolicy | undefined,
   logger: Logger,
 ): Promise<ImportPlanResult> {
-  const { previewFromEtnx } = await import('./import-service.js');
-  const preview = await previewFromEtnx(buf, logger);
+  const manifest = await readManifestFromBuffer(buf, logger);
+  const thoughtPlan = planImportThoughts(ndb, manifest, policy ?? 'overwrite');
   const plan: ImportPlanResult['plan'] = {
-    thoughts_to_create: preview.counts.thoughts,
-    thoughts_to_reuse: 0,
-    thoughts_to_skip: 0,
-    links_to_create: preview.counts.links,
-    attachments_to_import: preview.counts.attachments,
-    thought_types_to_create: preview.counts.thought_types,
+    thoughts_to_create: thoughtPlan.thoughts_to_create,
+    thoughts_to_reuse: thoughtPlan.thoughts_to_reuse,
+    thoughts_to_skip: thoughtPlan.thoughts_to_skip,
+    links_to_create: manifest.links.length,
+    attachments_to_import: manifest.attachments.length,
+    thought_types_to_create: manifest.thought_types.length,
     thought_types_to_reuse: 0,
-    link_types_to_create: preview.counts.link_types,
+    link_types_to_create: manifest.link_types.length,
     link_types_to_reuse: 0,
   };
   return {
-    manifest_version: preview.manifest_version,
-    source_network_name: preview.source_network_name ?? undefined,
+    manifest_version: manifest.version,
+    source_network_name: manifest.source.network_name ?? undefined,
     plan,
-    conflicts: [],
+    conflicts: thoughtPlan.conflicts.map((c) => ({
+      kind: c.kind === 'id' ? 'duplicate_id' : 'duplicate_title',
+      id: c.id,
+      title: c.title,
+      reason:
+        c.kind === 'id'
+          ? 'мысль с таким id уже есть в целевой сети'
+          : `совпадает title с мыслью ${c.existing_id ?? ''}`.trim(),
+    })),
   };
 }
 
 /**
- * Реальный импорт архива через `importFromEtnx`. Политика `collision_policy`
- * сейчас не пробрасывается отдельной переменной — `importFromEtnx` использует
- * встроенные правила `applyManifest` (поиск дублей по id → по title →
- * создание). Расхождение по политике на уровне MCP считается
- * best-effort-планом; точное разграничение оставлено для следующей версии.
+ * Реальный импорт архива через `importFromEtnx` с учётом `collision_policy`
+ * (ошибка ebe93450): политика пробрасывается в `ImportOptions.collisionPolicy`
+ * и применяется на шаге мыслей `applyManifest` (`fail` — VALIDATION_ERROR со
+ * списком конфликтов, `rename` — новая мысль с уникальным title, `skip` —
+ * пропуск дубля и его подграфа, `overwrite` — историческое поведение).
  */
 export async function importFromBuffer(
-  ndb: import('../db/network-db.js').NetworkDb,
+  ndb: NetworkDb,
   buf: Buffer,
   opts: ImportOptions,
   logger: Logger,
-  _policy: McpImportPolicy | undefined,
+  policy: McpImportPolicy | undefined,
 ): Promise<ImportResult> {
-  return importFromEtnx(ndb, buf, opts, logger);
+  return importFromEtnx(
+    ndb,
+    buf,
+    { ...opts, ...(policy !== undefined ? { collisionPolicy: policy } : {}) },
+    logger,
+  );
 }
 
 // Re-export `applyManifest`/`readArchive` не нужны — они приватные утилиты.

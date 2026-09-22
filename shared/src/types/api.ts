@@ -181,6 +181,8 @@ export interface ImportSummary {
   thoughts_created: number;
   thoughts_updated: number;
   thoughts_reused: number;
+  /** Мысли, пропущенные политикой `collision_policy: 'skip'` (0.8.3, ошибка ebe93450). */
+  thoughts_skipped?: number;
   links_created: number;
   permanent_comments_updated: number;
   chronological_comments_added: number;

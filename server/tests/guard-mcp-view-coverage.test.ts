@@ -10,7 +10,8 @@
  * MCP-видов (`collision_policy`, `link_direction`, `duplicate_policy`), но
  * сами MCP-контракты никто не обходил: у `etn.import.*` не было ни одного
  * теста на `collision_policy`, у `etn.thoughts.copy_subtree` — на `fail`/`skip`,
- * у `etn.attachments.add` — на `kind=file`.
+ * у `etn.attachments.add` — на `kind=file`. (В 0.8.3 ветки реализованы и
+ * покрыты тестами: ошибки ebe93450, cb741cec.)
  *
  * Правило. Каждый MCP-инструмент, принимающий параметр-вид с перечислимыми
  * значениями, обязан иметь тест исполнения (вызов инструмента) на КАЖДОЕ
@@ -131,11 +132,13 @@ const MCP_WRITE_VIEW_COVERAGE: readonly McpWriteViewEntry[] = [
   {
     tool: 'etn.import.subgraph',
     field: 'collision_policy',
-    excluded: {
-      fail: 'политика принимается, но не влияет на импорт (встроенные правила applyManifest) — ошибка ebe93450',
-      rename: 'политика принимается, но не влияет на импорт (встроенные правила applyManifest) — ошибка ebe93450',
-      skip: 'политика принимается, но не влияет на импорт (встроенные правила applyManifest) — ошибка ebe93450',
-      overwrite: 'политика принимается, но не влияет на импорт (встроенные правила applyManifest) — ошибка ebe93450',
+    tests: {
+      fail: 'mcp-view-coverage.test.ts::etn.import.subgraph: каждое значение collision_policy отрабатывает свою ветку',
+      rename:
+        'mcp-view-coverage.test.ts::etn.import.subgraph: каждое значение collision_policy отрабатывает свою ветку',
+      skip: 'mcp-view-coverage.test.ts::etn.import.subgraph: каждое значение collision_policy отрабатывает свою ветку',
+      overwrite:
+        'mcp-view-coverage.test.ts::etn.import.subgraph: каждое значение collision_policy отрабатывает свою ветку',
     },
   },
 ];
@@ -214,7 +217,7 @@ const MCP_READ_ONLY_VIEWS: readonly { tool: string; field: string; note: string 
   {
     tool: 'etn.import.dry_run',
     field: 'collision_policy',
-    note: 'превью без побочных эффектов (readOnlyHint): записывать нечего; сам параметр не влияет на план импорта — ошибка ebe93450.',
+    note: 'превью без побочных эффектов (readOnlyHint): записывать нечего; политика отражается в плане (счётчики create/reuse/skip) и в списке conflicts — тест исполнения mcp-view-coverage.test.ts.',
   },
 ];
 

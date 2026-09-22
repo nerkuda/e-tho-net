@@ -9,11 +9,12 @@
  *   * `etn.attachments.add` — `kind` (`url`/`file`); раньше `file` не
  *     проверялся вовсе (все тесты работали с `url`);
  *   * `etn.thoughts.mentions_scan` — `link_direction` (`out`/`in`): обе ветки
- *     направления создаваемых связей (ошибка cb741cec).
+ *     направления создаваемых связей (ошибка cb741cec);
+ *   * `etn.import.subgraph` — `collision_policy` целиком
+ *     (`fail`/`rename`/`skip`/`overwrite`) и `etn.import.dry_run` — отражение
+ *     политики в плане превью (ошибка ebe93450).
  *
- * «Значение вида без ветки поведения» здесь нет: `collision_policy` импорта —
- * мёртвый параметр (ошибка ebe93450), в стороже он заведён исключением, а не
- * поддельным тестом.
+ * «Значение вида без ветки поведения» здесь больше нет.
  */
 
 import assert from 'node:assert/strict';
@@ -202,6 +203,159 @@ describe('etn.thoughts.mentions_scan: значения link_direction (стан�
       } finally {
         await closeMcpContext(ctx);
       }
+    }
+  });
+});
+
+describe('etn.import.subgraph: значения collision_policy (стандарт view-покрытия)', {
+  skip: !nativeAvailable(),
+}, () => {
+  it('etn.import.subgraph: каждое значение collision_policy отрабатывает свою ветку', async () => {
+    for (const policy of ['fail', 'rename', 'skip', 'overwrite'] as const) {
+      const src = await buildMcpContext();
+      const dst = await buildMcpContext();
+      const srcHandle = await connectMcpClient(src, src.adminKey);
+      const dstHandle = await connectMcpClient(dst, dst.adminKey);
+      try {
+        const srcNdb = openNetworkDb(src.dataDir, src.networkId);
+        const dupTitle = `Конфликт-${policy}`;
+        const root = createThought(srcNdb, { title: dupTitle }, src.adminId).id;
+        const child = createThought(srcNdb, { title: `Потомок-${policy}` }, src.adminId).id;
+        createLink(srcNdb, { source_id: root, target_id: child }, src.adminId);
+
+        // В целевой сети уже есть мысль с тем же title — коллизия по title.
+        createThought(openNetworkDb(dst.dataDir, dst.networkId), { title: dupTitle }, dst.adminId);
+
+        const exportRes = await srcHandle.client.callTool({
+          name: 'etn.export.subgraph',
+          arguments: {
+            network_id: src.networkId,
+            seed_ids: [root],
+            radius: 2,
+            format: 'etnx',
+            etnx_options: { include_attachments: false },
+          },
+        });
+        assert.equal(exportRes.isError, undefined, toolText(exportRes));
+        const { content_b64 } = toolJson<{ content_b64: string }>(exportRes);
+
+        const importRes = await dstHandle.client.callTool({
+          name: 'etn.import.subgraph',
+          arguments: {
+            network_id: dst.networkId,
+            source: { kind: 'etnx_base64', content_base64: content_b64 },
+            confirm: true,
+            collision_policy: policy,
+          },
+        });
+
+        if (policy === 'fail') {
+          assert.ok(importRes.isError, 'fail: коллизия обязана отвергнуть импорт');
+          assert.ok(toolText(importRes).includes('VALIDATION_ERROR'), toolText(importRes));
+          assert.equal(countThoughts(dst), 1, 'fail: целевая сеть не изменилась');
+          continue;
+        }
+
+        assert.equal(importRes.isError, undefined, toolText(importRes));
+        const data = toolJson<{
+          imported: {
+            thoughts_created: number;
+            thoughts_updated: number;
+            thoughts_skipped: number;
+          };
+        }>(importRes);
+
+        if (policy === 'overwrite') {
+          assert.equal(data.imported.thoughts_updated, 1, 'overwrite: дубль обновлён');
+          assert.equal(data.imported.thoughts_created, 1, 'overwrite: потомок создан');
+          assert.equal(countThoughts(dst), 2, 'overwrite: дубль не размножен');
+        } else if (policy === 'rename') {
+          assert.equal(data.imported.thoughts_created, 2, 'rename: обе мысли созданы заново');
+          assert.equal(countThoughts(dst), 3, 'rename: дубль остался + две новые');
+          const renamed = openNetworkDb(dst.dataDir, dst.networkId)
+            .prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE title LIKE ?')
+            .get(`${dupTitle} (%`) as { c: number };
+          assert.equal(renamed.c, 1, 'rename: у новой мысли title уникализирован');
+        } else {
+          assert.equal(data.imported.thoughts_skipped, 2, 'skip: дубль и его подграф пропущены');
+          assert.equal(data.imported.thoughts_created, 0, 'skip: новых мыслей нет');
+          assert.equal(countThoughts(dst), 1, 'skip: целевая сеть не изменилась');
+        }
+      } finally {
+        await dstHandle.close();
+        await srcHandle.close();
+        await closeMcpContext(dst);
+        await closeMcpContext(src);
+      }
+    }
+  });
+
+  it('etn.import.dry_run: collision_policy отражается в плане превью', async () => {
+    const src = await buildMcpContext();
+    const dst = await buildMcpContext();
+    const srcHandle = await connectMcpClient(src, src.adminKey);
+    const dstHandle = await connectMcpClient(dst, dst.adminKey);
+    try {
+      const srcNdb = openNetworkDb(src.dataDir, src.networkId);
+      const dupTitle = 'Превью-конфликт';
+      const root = createThought(srcNdb, { title: dupTitle }, src.adminId).id;
+      const child = createThought(srcNdb, { title: 'Превью-потомок' }, src.adminId).id;
+      createLink(srcNdb, { source_id: root, target_id: child }, src.adminId);
+      createThought(openNetworkDb(dst.dataDir, dst.networkId), { title: dupTitle }, dst.adminId);
+
+      const exportRes = await srcHandle.client.callTool({
+        name: 'etn.export.subgraph',
+        arguments: {
+          network_id: src.networkId,
+          seed_ids: [root],
+          radius: 2,
+          format: 'etnx',
+          etnx_options: { include_attachments: false },
+        },
+      });
+      assert.equal(exportRes.isError, undefined, toolText(exportRes));
+      const { content_b64 } = toolJson<{ content_b64: string }>(exportRes);
+
+      // skip: превью предупреждает о пропуске дубля и его подграфа.
+      const skipRes = await dstHandle.client.callTool({
+        name: 'etn.import.dry_run',
+        arguments: {
+          network_id: dst.networkId,
+          source: { kind: 'etnx_base64', content_base64: content_b64 },
+          collision_policy: 'skip',
+        },
+      });
+      assert.equal(skipRes.isError, undefined, toolText(skipRes));
+      const skipData = toolJson<{
+        plan: { thoughts_to_create: number; thoughts_to_reuse: number; thoughts_to_skip: number };
+        conflicts: Array<{ kind: string; title?: string }>;
+      }>(skipRes);
+      assert.equal(skipData.plan.thoughts_to_skip, 2, 'skip-превью: дубль и подграф пропущены');
+      assert.equal(skipData.plan.thoughts_to_create, 0, 'skip-превью: новых мыслей нет');
+      assert.equal(skipData.conflicts.length, 1, 'skip-превью: конфликт показан');
+
+      // rename: превью обещает создание обеих мыслей без конфликтов-пропусков.
+      const renameRes = await dstHandle.client.callTool({
+        name: 'etn.import.dry_run',
+        arguments: {
+          network_id: dst.networkId,
+          source: { kind: 'etnx_base64', content_base64: content_b64 },
+          collision_policy: 'rename',
+        },
+      });
+      const renameData = toolJson<{ plan: { thoughts_to_create: number; thoughts_to_skip: number } }>(
+        renameRes,
+      );
+      assert.equal(renameData.plan.thoughts_to_create, 2, 'rename-превью: обе мысли создаются');
+      assert.equal(renameData.plan.thoughts_to_skip, 0, 'rename-превью: пропусков нет');
+
+      // Превью не пишет в целевую сеть.
+      assert.equal(countThoughts(dst), 1, 'dry_run: целевая сеть не изменилась');
+    } finally {
+      await dstHandle.close();
+      await srcHandle.close();
+      await closeMcpContext(dst);
+      await closeMcpContext(src);
     }
   });
 });
