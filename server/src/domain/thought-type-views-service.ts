@@ -702,12 +702,15 @@ function collectThoughtPropertyValues(
     // …». Это требование b7fdab20.
     if (v.value === null) continue;
     if (Array.isArray(v.value) && v.value.length === 0) continue;
+    // `cross_network_ref` (задача 7849008a) — снапшот `CrossNetworkRefValue[]`,
+    // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
+    if (v.value_type === 'cross_network_ref') continue;
     const m = meta.get(v.property_name);
     out.push({
       key: v.property_name,
       value_type: m?.value_type ?? v.value_type,
       multiple: m?.multiple === true,
-      value: v.value,
+      value: v.value as string | number | boolean | string[],
     });
   }
   return out;

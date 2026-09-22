@@ -416,7 +416,18 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const ndb = openMemberNetwork(rt, args.network_id);
         const rawThought = getThoughtOrThrow(ndb, args.thought_id);
         const rawType = rawThought.type_id === null ? null : getThoughtType(ndb, rawThought.type_id);
-        const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
+        // Задача 7849008a, требование 6d4ad9ac: значения `cross_network_ref`
+        // фильтруются по правам доступа к целевой сети. Список сетей
+        // пользователя запрашивается в системной БД.
+        const accessibleNetworkIds = new Set(
+          rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+        );
+        const properties = getPropertyValuesResolved(
+          ndb,
+          'thought',
+          args.thought_id,
+          accessibleNetworkIds,
+        );
         // O10: count this single read for `etn.metrics.reads` analytics.
         recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
         // Задача 3ea09a54: для `etn.thoughts.get` `meta.permanent` отдаётся

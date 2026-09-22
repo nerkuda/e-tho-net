@@ -809,7 +809,15 @@ export function createThought(
         // сменили тип), молча пропускаются — создание мысли не должно падать
         // из-за протухшего дефолта.
         if (def.value_type === 'link') {
-          const values = Array.isArray(def.default_value) ? def.default_value : [];
+          // Узкая нормализация: default_value для `link` — массив id строк,
+          // расширение `PropertyValueValue` вариантом `CrossNetworkRefValue[]`
+          // (задача 7849008a) делает тип шире, но эта ветка срабатывает
+          // только для link-дефолтов — снапшот тут не появляется.
+          const values: string[] = Array.isArray(def.default_value)
+            ? (def.default_value as unknown[]).filter(
+                (v): v is string => typeof v === 'string' && v !== '',
+              )
+            : [];
           const side = def.side ?? linkPropertySideFromConfig('link', def.config ?? null);
           if (side === 'target') {
             const sources = filterApplicableLinkDefaultSources(ndb, values);

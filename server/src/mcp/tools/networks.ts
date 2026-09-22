@@ -124,10 +124,16 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         const ndb = openMemberNetwork(rt, args.network_id);
         const rows = listTocSections(ndb, sectionTypeId);
 
+        // Задача 7849008a, требование 6d4ad9ac: фильтр прав для
+        // `cross_network_ref` строится один раз для всего обхода `sections`.
+        const accessibleNetworkIds = new Set(
+          rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+        );
+
         const sections = rows.map((row) => {
           const meta = getThoughtMeta(ndb, row.id);
           const permanent = getPermanentPreview(ndb, 'thought', row.id);
-          const properties = getPropertyValuesResolved(ndb, 'thought', row.id);
+          const properties = getPropertyValuesResolved(ndb, 'thought', row.id, accessibleNetworkIds);
           const usage = findThoughtUsage(ndb, row.id);
           return {
             id: row.id,

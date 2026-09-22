@@ -61,7 +61,15 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const input = parseRest(RestPropertyList, req);
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-          const values = getPropertyValuesWithLinks(ndb, ownerType, input.owner_id);
+          // Задача 7849008a, требование 6d4ad9ac: фильтр прав для
+          // `cross_network_ref` — список сетей пользователя запрашивается из
+          // системной БД; нет прав на сеть → значение молча отфильтровывается.
+          const accessibleIds = await getAccessibleNetworkIdsForUser(
+            deps.dataDir,
+            req.auth!.user.id,
+            app.appLogger,
+          );
+          const values = getPropertyValuesWithLinks(ndb, ownerType, input.owner_id, accessibleIds);
           sendList(reply, values, values.length, 0, values.length);
         },
       );

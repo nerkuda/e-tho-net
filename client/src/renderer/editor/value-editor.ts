@@ -43,6 +43,7 @@
  */
 
 import type {
+  CrossNetworkRefValue,
   EffectiveTypeProperty,
   LinkPropertyValueItem,
   ThoughtRef,
@@ -68,7 +69,8 @@ import { loadRecentValues, recordRecentValue } from './recent-values.js';
 import { removeLinkValueEdges } from './link-value-removal.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
-import type { MenuItem } from '../lib/menu.js';
+import { openWikiIdTarget } from './wiki-link.js';
+import { showMenuAt, type MenuItem } from '../lib/menu.js';
 
 // ---------------------------------------------------------------------------
 // Публичный API
@@ -154,20 +156,37 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
         ownerType: opts.ownerType,
         ownerId: opts.ownerId,
         definition: opts.definition,
+        // Для `link` ветки значения — массив `LinkPropertyValueItem[]` или
+        // строк-id (multiple — массив строк-id). Расширение типа
+        // `PropertyValueValue` вариантом `CrossNetworkRefValue[]` (задача
+        // 7849008a) делает сигнатуру шире, но эта ветка срабатывает только
+        // для `value_type: 'link'` — снапшот тут не появляется; строки и
+        // объекты с `link_id` валидны.
         values: Array.isArray(opts.value)
-          ? (opts.value as unknown[]).map((item) =>
-              typeof item === 'string'
-                ? {
+          ? ((opts.value as unknown[]).flatMap((item): LinkPropertyValueItem[] => {
+              if (typeof item === 'string' && item !== '') {
+                return [
+                  {
                     link_id: '',
                     target_id: item,
                     target_title: null,
                     target_type_id: null,
                     comment: null,
-                  }
-                : (item as LinkPropertyValueItem),
-            )
+                  },
+                ];
+              }
+              if (
+                typeof item === 'object' &&
+                item !== null &&
+                'link_id' in item &&
+                'target_id' in item
+              ) {
+                return [item as LinkPropertyValueItem];
+              }
+              return [];
+            }) as LinkPropertyValueItem[])
           : (opts.value === undefined && Array.isArray(opts.definition.default_value)
-              ? opts.definition.default_value.map((id) => ({
+              ? (opts.definition.default_value as string[]).map((id) => ({
                   link_id: '',
                   target_id: id,
                   target_title: null,
@@ -193,22 +212,27 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
 }
 
 /**
- * Редактор кросс-сетевой ссылки (задача 7849008a, требование 95511443).
- * Значение — адрес `n:<network>#<thought>` (single или JSON-массив для
- * multiple). Сохраняется через общий save (REST PUT …/properties/{key}).
- * Кнопка «обновить» дёргает IPC `properties.crossResolve` и обновляет
- * снапшот имени (служебная запись, без write-бюджета и audit-строки —
- * требование c104a0fc).
+ * Редактор кросс-сетевой ссылки (задача 7849008a, требования 6d4ad9ac и
+ * 95511443). Сервер при чтении обогащает значение снапшотом
+ * (`CrossNetworkRefValue[]`); редактор показывает имя цели и сеть рядом с
+ * полем адреса. Сохранение идёт по адресу (`n:<network>#<thought>`) — поле
+ * ввода остаётся адресным. Кнопка «обновить» дёргает IPC
+ * `properties.crossResolve` и обновляет снапшот имени (служебная запись, без
+ * write-бюджета и audit-строки — требование c104a0fc).
+ *
+ * Резолв по действию:
+ *   * клик по чипу снапшота → переход в целевую сеть (`openWikiIdTarget`)
+ *     + отдельный `crossResolve` в сеть-источник (требование 95511443).
+ *   * контекстное меню чипа «Обновить имя» → `crossResolve` без перехода.
  */
 function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
   const isMultiple = opts.definition.config?.multiple === true;
-  // Для multiple в value лежит string[] — нормализуем к одной строке через
-  // запятую, чтобы поле ввода оставалось простым (как url multiple).
-  const stored = Array.isArray(opts.value)
-    ? (opts.value as string[]).filter((s) => typeof s === 'string').join(', ')
-    : typeof opts.value === 'string'
-      ? opts.value
-      : '';
+  // Сервер при чтении обогащает значение снапшотом (CrossNetworkRefValue[]);
+  // редактор поля значения (конструктор условий, change-режим) может
+  // передать сырую строку или массив строк. Нормализуем обе формы.
+  const snapshots = readSnapshotFromValue(opts.value);
+  const addresses = readAddressesFromValue(opts.value);
+  const stored = addresses.join(', ');
   const wrapper = div('value-editor value-editor--cross-network-ref');
   const input = el('input') as HTMLInputElement;
   input.type = 'text';
@@ -239,11 +263,189 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
           : next,
     );
   });
-  // commitOn: 'blur' — стандарт таблицы свойств; для change-режима
-  // (конструктор условий) тоже работает, потому что save возвращает Promise.
-  void isMultiple;
   wrapper.append(input, refreshBtn, hint);
+  // Чипы снапшота (требование 6d4ad9ac): показываем имя цели и сеть; клик
+  // переходит в цель и обновляет снапшот в сети-источнике; контекстное
+  // меню «Обновить имя» — точечный crossResolve.
+  if (snapshots.length > 0) {
+    const chips = div('cross-network-ref-chips');
+    for (const snap of snapshots) {
+      chips.append(buildCrossNetworkRefChip(opts, snap));
+    }
+    wrapper.append(chips);
+  }
   return wrapper;
+}
+
+/** Достать массив снапшотов из `value` (CrossNetworkRefValue[]); пусто — нет. */
+function readSnapshotFromValue(value: unknown): CrossNetworkRefValue[] {
+  if (!Array.isArray(value)) return [];
+  const out: CrossNetworkRefValue[] = [];
+  for (const item of value) {
+    if (
+      item !== null &&
+      typeof item === 'object' &&
+      'network_id' in item &&
+      'thought_id' in item &&
+      'title_snapshot' in item &&
+      'unresolved' in item
+    ) {
+      out.push(item as CrossNetworkRefValue);
+    }
+  }
+  return out;
+}
+
+/** Достать сырые адреса (строки) из `value` — для отображения в поле ввода. */
+function readAddressesFromValue(value: unknown): string[] {
+  if (typeof value === 'string') return value === '' ? [] : [value];
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === 'string' && item !== '') out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Чип снапшота кросс-сетевой ссылки: имя цели + короткое имя сети; клик
+ * открывает цель, контекстное меню даёт «Обновить имя» без перехода. Клик
+ * по нерезолвленному — переход всё равно работает (цель могла быть
+ * восстановлена).
+ */
+function buildCrossNetworkRefChip(
+  opts: ValueEditorOptions,
+  snap: CrossNetworkRefValue,
+): HTMLElement {
+  const chip = el(
+    'button',
+    `cross-network-ref-chip${snap.unresolved ? ' cross-network-ref-chip--unresolved' : ''}`,
+    '🔗',
+  ) as HTMLButtonElement;
+  chip.type = 'button';
+  const net = snap.network_id === '' ? '—' : shortCrossNetworkLabel(snap.network_id);
+  chip.append(
+    span(snap.title_snapshot, 'cross-network-ref-chip-title'),
+    span(` · ${net}`, 'muted cross-network-ref-chip-net'),
+  );
+  if (snap.unresolved) {
+    chip.append(span(' (нерезолвлено)', 'muted cross-network-ref-chip-flag'));
+    setTooltip(
+      chip,
+      'Последний живой резолв отказал — сеть или цель удалены. Кликните «Обновить имя» в контекстном меню.',
+    );
+  } else {
+    setTooltip(chip, `${snap.title_snapshot} — ${snap.network_id}#${snap.thought_id}`);
+  }
+  chip.addEventListener('click', () => {
+    if (snap.network_id === '' || snap.thought_id === '') return;
+    void navigateCrossNetworkRef(opts, snap);
+  });
+  chip.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    void openCrossNetworkRefChipMenu(chip, opts, snap);
+  });
+  return chip;
+}
+
+/**
+ * Короткое имя сети: из каталога сетей, иначе — префикс id. Локальный
+ * клон хелпера из editor/properties.ts — здесь нужен только в основной
+ * таблице, чтобы избежать циклического импорта.
+ */
+function shortCrossNetworkLabel(networkId: string): string {
+  const fromCatalog = store.state.networkList.find((n) => n.id === networkId);
+  if (fromCatalog !== undefined && fromCatalog.display_name !== '') {
+    return fromCatalog.display_name;
+  }
+  return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
+}
+
+/**
+ * Переход по чипу: открыть цель через {@link openWikiIdTarget}, после
+ * успешного открытия — отдельный `crossResolve` в сеть-источник
+ * (требование 95511443).
+ */
+async function navigateCrossNetworkRef(
+  opts: ValueEditorOptions,
+  snap: CrossNetworkRefValue,
+): Promise<void> {
+  try {
+    await openWikiIdTarget(snap.network_id, snap.thought_id);
+  } catch {
+    // openWikiIdTarget сам показывает тост при ошибке сети/мысли.
+    return;
+  }
+  // После успешного открытия — снапшот в сети-источнике мог протухнуть
+  // (цель переименовали). Точечный crossResolve обновит запись; ошибка не
+  // критична — откроется окно с устаревшим именем, пользователь увидит
+  // реальное.
+  if (opts.ownerType !== 'thought' || opts.ownerId === undefined) return;
+  const key = opts.definition.key ?? '';
+  if (key === '') return;
+  try {
+    await etn.properties.crossResolve(opts.networkId, opts.ownerId, key);
+  } catch {
+    // Тихо: пользователь всё равно попадёт в цель, обновление снапшота —
+    // дополнительное удобство.
+  }
+}
+
+/**
+ * Контекстное меню чипа снапшота (требование 95511443): «Обновить имя» —
+ * точечный `crossResolve` без перехода. Ошибка уходит в общий тост.
+ */
+async function openCrossNetworkRefChipMenu(
+  anchor: HTMLElement,
+  opts: ValueEditorOptions,
+  snap: CrossNetworkRefValue,
+): Promise<void> {
+  if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
+    notice('Обновление имени доступно только для свойств мыслей.', 'error');
+    return;
+  }
+  const key = opts.definition.key ?? '';
+  if (key === '') return;
+  const items: MenuItem[] = [
+    {
+      label: 'Обновить имя',
+      onClick: () => {
+        void (async () => {
+          try {
+            const result = await etn.properties.crossResolve(
+              opts.networkId,
+              opts.ownerId!,
+              key,
+            );
+            const unresolved = result.values.filter((v) => v.unresolved).length;
+            notice(
+              unresolved === 0
+                ? 'Снапшоты обновлены.'
+                : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
+              'info',
+            );
+            document.dispatchEvent(
+              new CustomEvent('etn:property-values-refreshed', { detail: { key } }),
+            );
+          } catch (err) {
+            notice(`Не удалось обновить имя: ${errText(err)}`, 'error');
+          }
+        })();
+      },
+    },
+    ...(snap.network_id !== '' && snap.thought_id !== ''
+      ? [
+          {
+            label: 'Открыть цель',
+            onClick: () => {
+              void navigateCrossNetworkRef(opts, snap);
+            },
+          },
+        ]
+      : []),
+  ];
+  const rect = anchor.getBoundingClientRect();
+  showMenuAt(rect.left, rect.bottom, items);
 }
 
 async function refreshSnapshot(

@@ -418,7 +418,7 @@ export interface PropertyDefaultOverrideInput {
  * (task 0.6.2). A JSON-array payload is used (not comma-join as for `text`)
  * because URLs may contain commas.
  */
-export type PropertyValueValue = string | number | boolean | string[] | null;
+export type PropertyValueValue = string | number | boolean | string[] | null | CrossNetworkRefValue[];
 
 /**
  * Резолвнутая форма legacy `thought_ref` для MCP-чтения (задача N4, миграция
@@ -430,6 +430,8 @@ export type PropertyValueValue = string | number | boolean | string[] | null;
 export type ResolvedThoughtRefValue =
   | { id: string; title: string | null }
   | Array<{ id: string; title: string | null }>;
+
+import type { CrossNetworkRefValue } from './cross-network.js';
 
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {

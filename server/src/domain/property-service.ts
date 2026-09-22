@@ -865,11 +865,16 @@ export function getLinkPropertyValues(
 /** Нормализовать входящее значение свойства-связи в список id целей. */
 function normalizeLinkTargets(value: PropertyValueValue, key: string): string[] {
   if (value === null || value === undefined) return [];
+  // Свойство-связь — строковые id (или массив id). Расширение типа
+  // `PropertyValueValue` вариантом `CrossNetworkRefValue[]` (задача 7849008a)
+  // сделало сигнатуру шире, но эта функция вызывается только для `link`
+  // значений (см. `setPropertyValue` ниже), так что нестроковый массив
+  // здесь — `VALIDATION_ERROR`.
   if (Array.isArray(value)) {
     if (value.some((v) => typeof v !== 'string' || v === '')) {
       throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мыслей`, { key });
     }
-    return [...new Set(value)];
+    return [...new Set(value as string[])];
   }
   if (typeof value === 'string' && value !== '') return [value];
   throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мысли или массив id`, {
@@ -967,7 +972,7 @@ function normalizeLinkDefaultValue(
       { key: prop.name, expected: 'link' },
     );
   }
-  const ids = [...new Set(value)];
+  const ids = [...new Set(value as string[])];
   for (const id of ids) validateLinkTargetType(ndb, prop, id);
   return ids.length > 0 ? ids : null;
 }
@@ -2892,7 +2897,14 @@ function migratePropertyValues(
     // No definition here (only the source value type) — the data-driven array
     // parse inside readValue covers stored multiple values without the flag.
     const value = readValue(row, from);
-    const converted = value === null ? null : convertStoredValue(value, to);
+    // Конверсия при смене value_type между скалярными категориями; форма
+    // `CrossNetworkRefValue[]` (задача 7849008a) здесь не появляется —
+    // `readValue` для cross_network_ref возвращает сырой адрес-строку или
+    // JSON-массив, без снапшота. `convertStoredValue` ждёт скаляр.
+    const converted =
+      value === null
+        ? null
+        : convertStoredValue(value as string | number | boolean | string[], to);
     if (converted === null) {
       // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
       deleteRowLayered(ndb, 'property_values', row.id);
@@ -3377,17 +3389,60 @@ export function resolveDefinition(
 }
 
 /**
+ * Прочитать значение `cross_network_ref` со снапшотом и применить фильтр прав
+ * (задача 7849008a, требование 6d4ad9ac). Возвращает `null`, если после
+ * фильтрации не осталось ни одного адреса — это сигнал вызывающему, что
+ * значения нет вообще (нет прав на единственную сеть). Иначе возвращает
+ * массив `CrossNetworkRefValue[]` либо пустой массив, если значение пустое.
+ *
+ * Деградация по правам:
+ *   * сеть удалена — снапшот и пометка `unresolved: true` сохраняются
+ *     (значение остаётся видимым);
+ *   * нет прав на сеть — адрес молча отфильтровывается; если после этого
+ *     не осталось ни одного адреса, возвращается `null` (значение исчезает
+ *     из карточки);
+ *   * повреждённый адрес (network_id === '') — пропускается фильтром
+ *     (`accessibleNetworkIds` сети с пустым id не содержит) и отбрасывается
+ *     заодно с фильтрацией.
+ *
+ * Если `accessibleNetworkIds === null`, фильтрация не выполняется (тесты и
+ * устаревшие пути чтения).
+ */
+function readCrossNetworkRefValueResolved(
+  ndb: NetworkDb,
+  propertyValueId: string,
+  rawValue: string | string[],
+  accessibleNetworkIds: ReadonlySet<string> | null,
+): CrossNetworkRefValue[] | null {
+  const payload = readSnapshotPayload(ndb, propertyValueId);
+  const values = readCrossNetworkRefValue(rawValue, payload);
+  if (accessibleNetworkIds === null) return values;
+  const filtered = values.filter((v) => v.network_id === '' || accessibleNetworkIds.has(v.network_id));
+  // Если всё отфильтровано и исходное значение не пустое — скрываем значение целиком.
+  const isEmpty = (Array.isArray(rawValue) ? rawValue.length === 0 : rawValue === '');
+  if (filtered.length === 0 && !isEmpty) return null;
+  return filtered;
+}
+
+/**
  * List all stored property values of an owner (docs/03-server-api.md §9),
  * including **values outside type** — values whose property is not attached to
  * the owner's type chain (a leftover from a type change or a detached
  * property). Such values carry `outside_type: true` plus the property's name
  * and value type, without which the client could not render them
  * (02-data-model.md §3.5a).
+ *
+ * `accessibleNetworkIds` (задача 7849008a, требование 6d4ad9ac) — набор сетей,
+ * к которым у текущего пользователя есть доступ; используется для фильтрации
+ * значений `cross_network_ref` (нет прав — значение молча отфильтровывается).
+ * `null`/не задано — фильтрация не выполняется (для тестов и устаревших
+ * путей чтения).
  */
 export function getPropertyValues(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
+  accessibleNetworkIds: ReadonlySet<string> | null = null,
 ): PropertyValue[] {
   const rows = ndb
     .prepare(
@@ -3410,6 +3465,36 @@ export function getPropertyValues(
       value_type: row.property_value_type as PropertyValueType,
       config: row.property_config ? (JSON.parse(row.property_config) as PropertyConfig) : null,
     };
+    if (prop.value_type === 'cross_network_ref') {
+      // Чтение со снапшотом и фильтром прав. `null` — все адреса отфильтрованы
+      // (нет прав на единственную сеть) — значение в карточке не показывается.
+      const stored = row.value_text;
+      const rawValue: string | string[] = stored === null
+        ? ''
+        : stored.startsWith('[')
+          ? parseRefIds(stored)
+          : isMultipleProperty(prop)
+            ? [stored]
+            : stored;
+      const resolved = readCrossNetworkRefValueResolved(ndb, row.id, rawValue, accessibleNetworkIds);
+      if (resolved === null) continue;
+      out.push({
+        id: row.id,
+        owner_type: ownerType,
+        owner_id: ownerId,
+        property_id: row.property_id,
+        outside_type: !attached.has(row.property_id),
+        property_name: row.property_name,
+        value_type: prop.value_type,
+        value: resolved,
+        updated_at: row.updated_at,
+        created_by: row.created_by,
+        updated_by: row.updated_by,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+      });
+      continue;
+    }
     out.push({
       id: row.id,
       owner_type: ownerType,
@@ -3433,13 +3518,21 @@ export function getPropertyValues(
  * Значения свойств для REST `GET …/properties` (0.8.1): скаляры как раньше
  * плюс свойства-связи — списком рёбер (id ребра + цель + комментарий,
  * требование d024dbd6). Карточка MCP отдаёт счётчики, этот запрос — рёбра.
+ *
+ * `accessibleNetworkIds` — см. {@link getPropertyValues}.
  */
 export function getPropertyValuesWithLinks(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
+  accessibleNetworkIds: ReadonlySet<string> | null = null,
 ): (PropertyValue | LinkPropertyValues)[] {
-  const out: (PropertyValue | LinkPropertyValues)[] = getPropertyValues(ndb, ownerType, ownerId);
+  const out: (PropertyValue | LinkPropertyValues)[] = getPropertyValues(
+    ndb,
+    ownerType,
+    ownerId,
+    accessibleNetworkIds,
+  );
   if (ownerType === 'thought') {
     for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
       out.push({
@@ -3459,11 +3552,15 @@ export function getPropertyValuesWithLinks(
  * на каждую ссылку; `title: null` — висячая ссылка на удалённую мысль.
  * Legacy-ветка восстановлена для тестов value-handling и импорта архивов
  * (миграция 040): в живой БД таких свойств быть не должно.
+ *
+ * `accessibleNetworkIds` (задача 7849008a) — фильтр для `cross_network_ref`,
+ * проброшенный в {@link getPropertyValues}.
  */
 export function getPropertyValuesResolved(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
+  accessibleNetworkIds: ReadonlySet<string> | null = null,
 ): (ResolvedPropertyValue | ResolvedLinkProperty)[] {
   const rows = ndb
     .prepare(
@@ -3501,7 +3598,7 @@ export function getPropertyValuesResolved(
   const arrayIds = new Set<string>();
   for (const { prop, value } of prepared) {
     if (prop.value_type === 'thought_ref' && Array.isArray(value)) {
-      for (const id of value) arrayIds.add(id);
+      for (const id of value) arrayIds.add(id as string);
     }
   }
   const titlesById = new Map<string, string>();
@@ -3530,6 +3627,27 @@ export function getPropertyValuesResolved(
       } else if (typeof value === 'string') {
         resolved = { id: value, title: row.ref_title };
       }
+    } else if (prop.value_type === 'cross_network_ref') {
+      // Задача 7849008a, требование 6d4ad9ac: значение читается со снапшотом
+      // имени цели. Сервер НЕ открывает чужую data.db; фильтр прав
+      // (`accessibleNetworkIds`) применяется здесь — нет прав на сеть →
+      // значение молча отфильтровывается. Сеть удалена → снапшот виден с
+      // пометкой `unresolved: true`.
+      const rawValue: string | string[] =
+        value === null
+          ? ''
+          : Array.isArray(value)
+            ? (value as string[])
+            : (value as string);
+      const enriched = readCrossNetworkRefValueResolved(
+        ndb,
+        row.id,
+        rawValue,
+        accessibleNetworkIds,
+      );
+      // null — все адреса отфильтрованы: значение в карточке не показывается.
+      if (enriched === null) continue;
+      resolved = enriched;
     }
     out.push({
       id: row.id,
@@ -3842,7 +3960,7 @@ function validateAndCoerce(
             { key: prop.name, expected: 'url', multiple: false },
           );
         }
-        const urls = [...new Set(value)];
+        const urls = [...new Set(value as string[])];
         if (urls.length === 0) return { column, raw: null };
         if (urls.some((url) => typeof url !== 'string')) {
           throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects URL strings`, {
@@ -3909,7 +4027,7 @@ function validateAndCoerce(
             { key: prop.name, expected: 'thought_ref', multiple: false },
           );
         }
-        const ids = [...new Set(value)];
+        const ids = [...new Set(value as string[])];
         if (ids.length === 0) {
           // An empty selection clears the value (same as null).
           return { column, raw: null };
@@ -3950,7 +4068,7 @@ function validateAndCoerce(
             { key: prop.name, expected: 'cross_network_ref', multiple: false },
           );
         }
-        const addresses = [...new Set(value)];
+        const addresses = [...new Set(value as string[])];
         if (addresses.length === 0) {
           // An empty selection clears the value (same as null).
           return { column, raw: null };

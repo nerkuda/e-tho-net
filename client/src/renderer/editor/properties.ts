@@ -21,6 +21,7 @@
  */
 
 import type {
+  CrossNetworkRefValue,
   EffectiveTypeProperty,
   LinkPropertyValues,
   PropertyValue,
@@ -561,13 +562,18 @@ function buildOutsideValueCell(
     // не строит ПОЛЕ ВВОДА — это подпись, строит её value-editor-ветка
     // только для редактируемых значений).
     const stored = value.value;
-    if (value.value_type === 'url' && Array.isArray(stored)) {
-      cell.append(buildMultiUrlReadonly({ urls: stored, onOpen: openOneUrl }));
+    if (value.value_type === 'url' && Array.isArray(stored) && typeof stored[0] === 'string') {
+      cell.append(buildMultiUrlReadonly({ urls: stored as string[], onOpen: openOneUrl }));
     } else if (value.value_type === 'url' && typeof stored === 'string') {
       const row = div('form-row');
       row.style.marginBottom = '0';
       row.append(span(stored, 'prop-outside-text'), buildUrlOpenBtn(stored));
       cell.append(row);
+    } else if (value.value_type === 'cross_network_ref' && Array.isArray(stored)) {
+      // cross_network_ref внетипового значения (задача 7849008a) — снапшот
+      // адреса отдельным узлом. Здесь только подпись; переход/обновление —
+      // через основную таблицу и value-editor.
+      cell.append(buildCrossNetworkRefReadonly(stored as CrossNetworkRefValue[]));
     } else if (typeof stored === 'string' || typeof stored === 'number') {
       cell.append(span(String(stored), 'prop-outside-text'));
     } else if (typeof stored === 'boolean') {
@@ -616,6 +622,17 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
 
   let everMounted = false;
   currentReload = () => void reload();
+  // Слушаем локальное уведомление value-editor после успешного
+  // `crossResolve` (задача 7849008a, требование 95511443) — снапшот имени
+  // обновлён в `property_value_cross_refs`, но карточка в памяти держит
+  // старое значение; триггерим reload по тому же каналу, что и realtime.
+  // `document.addEventListener` доступен только в DOM-окружении: в юнит-тестах
+  // DOM-шим пропускает `document` — гард через typeof.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('etn:property-values-refreshed', () => {
+      if (box.isConnected) void reload();
+    });
+  }
   void reload();
 
   async function reload(): Promise<void> {
@@ -887,4 +904,50 @@ export function isLinkPropertyValues(
 export function propertyHint(definition: EffectiveTypeProperty): string | null {
   const text = definition.description?.trim();
   return text === undefined || text === '' ? null : text;
+}
+
+// ---------------------------------------------------------------------------
+// Read-only рендер значения `cross_network_ref` (задача 7849008a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Короткая пометка сети по `network_id`: либо имя из каталога сетей (если
+ * загружен), либо сокращённый id. Каталог сетей общий (`etn.networks.list`),
+ * здесь хелпер — переиспользуется и в основной таблице, и во внетиповой.
+ */
+function shortNetworkLabel(networkId: string): string {
+  const fromCatalog = store.state.networkList.find((n) => n.id === networkId);
+  if (fromCatalog !== undefined && fromCatalog.display_name !== '') {
+    return fromCatalog.display_name;
+  }
+  return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
+}
+
+/**
+ * Read-only отображение значения `cross_network_ref` для внетипового блока:
+ * каждая запись снапшота — отдельная строка «название (сеть)» с пометкой
+ * `нерезолвлено`. Полное взаимодействие (переход/обновление) — через основную
+ * таблицу и `value-editor`; здесь — только информация для истории значения.
+ */
+export function buildCrossNetworkRefReadonly(values: CrossNetworkRefValue[]): HTMLElement {
+  const root = div('prop-outside-cross-network-ref');
+  if (values.length === 0) {
+    root.append(span('—', 'muted'));
+    return root;
+  }
+  for (const v of values) {
+    const row = div('prop-outside-cross-network-ref-row');
+    const net = v.network_id === '' ? '(нет сети)' : shortNetworkLabel(v.network_id);
+    row.append(
+      span(v.title_snapshot, 'prop-outside-text'),
+      span(` — ${net}`, 'muted prop-outside-text'),
+    );
+    if (v.unresolved) {
+      const flag = span(' (нерезолвлено)', 'muted prop-outside-text');
+      setTooltip(flag, 'Последний живой резолв отказал — сеть или цель удалены. Нажмите «Обновить имя» в основной таблице.');
+      row.append(flag);
+    }
+    root.append(row);
+  }
+  return root;
 }
