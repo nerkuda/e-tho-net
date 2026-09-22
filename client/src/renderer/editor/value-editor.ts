@@ -46,6 +46,7 @@ import type {
   CrossNetworkRefValue,
   EffectiveTypeProperty,
   LinkPropertyValueItem,
+  SearchNameHit,
   ThoughtRef,
 } from '@etn/shared';
 
@@ -59,7 +60,6 @@ import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import {
   historySuggestSource,
   optionsSuggestSource,
-  searchSuggestSource,
   wireSuggest,
   type SuggestEntry,
   type SuggestHandle,
@@ -614,20 +614,51 @@ function linkHistorySource(networkId: string, propertyId: string): SuggestSource
   });
 }
 
-/** Источник живого поиска целей свойства-связи (отбор по типам — input aid).
- *  Строка-мысль — облачком: DTO кандидата структурно совместим с `ThoughtCloudInput`. */
+/**
+ * Источник живого поиска целей свойства-связи (отбор по типам — input aid).
+ * Строка-мысль — облачком. Поиск порционный (задача c8fa74ba): при большом
+ * числе кандидатов список целей догружается по мере скролла выпадашки, а не
+ * обрезается одной серверной порцией. `scope: 'names'` — кандидаты ищутся по
+ * названию/синониму (совпадает с прежним поведением `findDuplicates`).
+ */
+const LINK_TARGETS_PAGE_SIZE = 50;
+
+/** Хит поиска по именам (`by_names`) → строка-облачко выпадашки. Поля
+ *  визуала переносятся как есть (спред DTO) — представление мысли строит
+ *  общая фабрика облачка, а не этот маппер (стандарт S1, сторож
+ *  `guard-thought-cloud`). */
+function nameHitToSuggestEntry(hit: SearchNameHit): SuggestEntry {
+  return {
+    value: hit.thought_id,
+    label: hit.title,
+    thought: { ...hit, id: hit.thought_id },
+  };
+}
+
 function linkSearchSource(networkId: string, typeIds: string[]): SuggestSource {
   const filter = typeIds.filter((id) => id !== '');
-  return searchSuggestSource({
-    load: (query) => {
-      const trimmed = query.trim();
-      if (trimmed === '') return [];
-      return etn.thoughts
-        .findDuplicates(networkId, trimmed, [], filter)
-        .catch(() => [] as Awaited<ReturnType<typeof etn.thoughts.findDuplicates>>)
-        .then((hits) => hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })));
-    },
-  });
+  const loadPage = async (query: string, offset: number): Promise<SuggestEntry[]> => {
+    const trimmed = query.trim();
+    if (trimmed === '') return [];
+    try {
+      const response = await etn.thoughts.search(networkId, {
+        q: trimmed,
+        scope: 'names',
+        ...(filter.length > 0 ? { type_id: filter } : {}),
+        limit: LINK_TARGETS_PAGE_SIZE,
+        offset,
+      });
+      return response.by_names.map(nameHitToSuggestEntry);
+    } catch {
+      return [];
+    }
+  };
+  return {
+    when: 'typed',
+    load: (query) => loadPage(query, 0),
+    loadMore: (query, offset) => loadPage(query, offset),
+    pageSize: LINK_TARGETS_PAGE_SIZE,
+  };
 }
 
 // ---------------------------------------------------------------------------

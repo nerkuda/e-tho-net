@@ -252,7 +252,23 @@ describe('живой поиск в поле-связи переживает ух
       thoughts: {
         get: async () => thought,
         focus: async () => null,
-        findDuplicates: async () => [{ ...thoughtRef('c1'), title: 'Мысль-цель' }],
+        // Живой поиск целей свойства-связи порционный и ходит в `search`
+        // (задача c8fa74ba), а не в `findDuplicates`.
+        search: async () => ({
+          by_names: [
+            {
+              ...thoughtRef('c1'),
+              thought_id: 'c1',
+              title: 'Мысль-цель',
+              snippet: '',
+              highlights: [],
+            },
+          ],
+          by_texts: [],
+          by_links: [],
+          by_chrono: [],
+          meta: { total_in_group: { names: 1, texts: 0, links: 0, chronology: 0 } },
+        }),
         resolve: async (_n: string, ids: string[]) => ids.map((id) => thoughtRef(id)),
         update: async () => thought,
       },

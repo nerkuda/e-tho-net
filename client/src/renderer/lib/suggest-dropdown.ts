@@ -107,6 +107,18 @@ export interface SuggestSource {
    * (запрос к серверу); ответы устаревших вызовов отбрасываются.
    */
   load(query: string): SuggestEntry[] | Promise<SuggestEntry[]>;
+  /**
+   * Порционная подгрузка (задача c8fa74ba): следующие варианты начиная с
+   * `offset` (число уже показанных строк этого источника). Задана — список
+   * догружается при скролле выпадашки вниз, порциями по {@link pageSize}.
+   * Источник с `loadMore` обязан возвращать первые `pageSize` строк из `load`.
+   */
+  loadMore?(query: string, offset: number): Promise<SuggestEntry[]>;
+  /**
+   * Размер порции источника с {@link SuggestSource.loadMore} (по умолчанию
+   * 50). Ответ короче порции считается последним — догрузка прекращается.
+   */
+  pageSize?: number;
 }
 
 /** Параметры {@link wireSuggest}. */
@@ -174,6 +186,9 @@ function navIndex(cursor: number | null, count: number, delta: 1 | -1): number |
   return Math.min(count - 1, Math.max(0, base + delta));
 }
 
+/** Порог близости к нижней границе списка, px: ближе — догружаем порцию. */
+const SUGGEST_SCROLL_THRESHOLD_PX = 48;
+
 /**
  * Подключает выпадашку подсказок к полю ввода.
  *
@@ -198,6 +213,49 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
   let focused = false;
   /** Порядковый номер запроса: побеждает только последний. */
   let seq = 0;
+  /** Последние сгруппированные строки списка — база для догрузки порций. */
+  let lastGroups: Array<{ source: SuggestSource; entries: SuggestEntry[] }> = [];
+  /** Состояние порций источника с `loadMore`: сколько показано и всё ли. */
+  const pageState = new Map<SuggestSource, { offset: number; done: boolean }>();
+  /** Идёт ли запрос следующей порции прямо сейчас. */
+  let loadingMore = false;
+
+  /** Размер порции источника (по умолчанию 50). */
+  const pageSizeOf = (source: SuggestSource): number => source.pageSize ?? 50;
+
+  /** Догружает следующую порцию источника при скролле выпадашки к низу. */
+  const loadMoreNext = async (): Promise<void> => {
+    if (loadingMore) return;
+    const query = input.value;
+    for (const group of lastGroups) {
+      const source = group.source;
+      const state = pageState.get(source);
+      if (source.loadMore === undefined || state === undefined || state.done) continue;
+      loadingMore = true;
+      try {
+        const more = await source.loadMore(query, state.offset);
+        // Инвалидация: поле ушло, текст изменился или список пересобран.
+        if (!input.isConnected || input.value !== query || !lastGroups.includes(group)) return;
+        group.entries.push(...more);
+        state.offset += more.length;
+        if (more.length < pageSizeOf(source)) state.done = true;
+        render(lastGroups);
+      } catch {
+        // Проброс не должен крутить бесконечную догрузку — повторит скролл.
+        state.done = true;
+      } finally {
+        loadingMore = false;
+      }
+      return;
+    }
+  };
+
+  /** Скролл списка: у нижней границы — догружаем порцию. */
+  const onListScroll = (): void => {
+    if (list === null) return;
+    const remaining = list.scrollHeight - (list.scrollTop + list.clientHeight);
+    if (remaining <= SUGGEST_SCROLL_THRESHOLD_PX) void loadMoreNext();
+  };
 
   const close = (): void => {
     if (list !== null) {
@@ -208,6 +266,9 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     rows = [];
     rowEntries = [];
     cursor = null;
+    lastGroups = [];
+    pageState.clear();
+    loadingMore = false;
   };
 
   const paint = (): void => {
@@ -245,11 +306,15 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       return;
     }
     const fresh = list === null;
+    // `replaceChildren` сбрасывает прокрутку — сохраняем позицию, чтобы
+    // догрузка порции не уводила список вверх (задача c8fa74ba).
+    const prevScroll = list?.scrollTop ?? 0;
     let box: HTMLDivElement;
     if (list === null) {
       box = div('type-combo-list');
       list = box;
       cursor = null;
+      box.addEventListener('scroll', onListScroll);
     } else {
       box = list;
       box.replaceChildren();
@@ -331,6 +396,8 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       openLists.add(box);
       document.body.append(box);
       positionBodyDropdown(box, input);
+    } else {
+      box.scrollTop = prevScroll;
     }
     if (cursor !== null) cursor = Math.min(cursor, rowEntries.length - 1);
     paint();
@@ -362,6 +429,19 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       ),
     ).then((groups) => {
       if (run !== seq || (!force && !focused) || !input.isConnected) return;
+      // Новый набор строк: сбрасываем состояние порций и запоминаем группы
+      // как базу для догрузки (задача c8fa74ba).
+      lastGroups = groups;
+      pageState.clear();
+      loadingMore = false;
+      for (const group of groups) {
+        if (group.source.loadMore === undefined) continue;
+        const size = pageSizeOf(group.source);
+        pageState.set(group.source, {
+          offset: group.entries.length,
+          done: group.entries.length === 0 || group.entries.length < size,
+        });
+      }
       render(groups);
     });
   }

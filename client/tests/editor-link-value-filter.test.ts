@@ -12,7 +12,8 @@
  * Харнесс повторяет editor-link-value-chip.test.ts: DOM-shim без dispatch
  * асинхронной отрисовки выпадашки. Мы НЕ фокусируем поле — тогда `render`
  * выпадашки не вызывается (условие `focused` в wireSuggest), а `source.load`
- * доходит до `etn.thoughts.findDuplicates`, чьи аргументы и перехватываются.
+ * доходит до `etn.thoughts.search` (порционный живой поиск целей, задача
+ * c8fa74ba), чьи аргументы и перехватываются.
  */
 
 import assert from 'node:assert/strict';
@@ -24,13 +25,15 @@ import { ShimElement } from './dom-shim.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 let sharedWindow: Record<string, unknown> = {};
-/** Аргументы каждого вызова `etn.thoughts.findDuplicates` (живой поиск). */
+/** Аргументы каждого вызова `etn.thoughts.search` (живой поиск целей). */
 let searchCalls: Array<{ query: string; typeIds: string[] }> = [];
 
 /**
- * Шим: document/window + `etn.thoughts.findDuplicates`/`resolve`. Один
- * глобальный объект на файл (`lib/etn.ts` привязывается к `window.etn` при
- * первом импорте).
+ * Шим: document/window + `etn.thoughts.search`/`resolve`. Один глобальный
+ * объект на файл (`lib/etn.ts` привязывается к `window.etn` при первом импорте).
+ * Живой поиск целей свойства-связи порционный (задача c8fa74ba) — источник
+ * ходит в `thoughts.search` (`scope: 'names'`, фильтр по `type_id`), а не в
+ * `findDuplicates`, поэтому перехватываются аргументы именно `search`.
  */
 function installShim(): void {
   searchCalls = [];
@@ -52,9 +55,15 @@ function installShim(): void {
   if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
   const etnApi = sharedWindow['etn'] as Record<string, unknown>;
   etnApi['thoughts'] = {
-    findDuplicates: async (_n: string, query: string, _s: string[], typeIds: string[] = []) => {
-      searchCalls.push({ query, typeIds: [...typeIds] });
-      return [];
+    search: async (_n: string, request: { q: string; type_id?: string[] }) => {
+      searchCalls.push({ query: request.q, typeIds: [...(request.type_id ?? [])] });
+      return {
+        by_names: [],
+        by_texts: [],
+        by_links: [],
+        by_chrono: [],
+        meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
+      };
     },
     resolve: async (_n: string, ids: string[]) =>
       ids.map((id) => ({
