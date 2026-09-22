@@ -210,6 +210,18 @@ describe(
         byDefault.neighbors.map((n) => n.id).sort(),
         [liveChild, trashedChild, trashedLinkChild].sort(),
       );
+      // Флаг корзины едет вместе с соседом (ошибка 8bbc9542): иначе помеченная
+      // мысль видна, но клиент не может отрисовать метку, как на карте.
+      assert.equal(
+        byDefault.neighbors.find((n) => n.id === trashedChild)?.marked_for_deletion,
+        true,
+        'помеченный сосед приезжает с marked_for_deletion',
+      );
+      assert.equal(
+        byDefault.neighbors.find((n) => n.id === liveChild)?.marked_for_deletion,
+        false,
+        'живой сосед не помечен',
+      );
 
       const hidden = getHierarchy(ndb, root, 'children', { showTrash: false });
       assert.deepEqual(hidden.neighbors.map((n) => n.id), [liveChild]);

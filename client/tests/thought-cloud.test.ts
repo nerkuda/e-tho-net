@@ -241,6 +241,18 @@ describe('признаки состояния', () => {
     assert.equal(findByClass(root, 'cloud-trash-badge'), undefined);
   });
 
+  it('в корзине (tree) — бледность + метка корзины, как на холсте (ошибка 8bbc9542)', () => {
+    // Дерево «Структур» собирает узел той же фабрикой: как только сервер
+    // присылает флаг соседа (REF_COLUMNS), метка появляется без отдельной
+    // отрисовки — проверяем ровно это.
+    const root = cloud(thought({ marked_for_deletion: true }), { profile: 'tree' });
+    assert.ok(root.classList.contains('dim'));
+    const badge = findByClass(root, 'cloud-trash-badge');
+    assert.ok(badge !== undefined);
+    assert.equal(badge.children[0]?.tagName, 'SVG');
+    assert.equal(badge.title, 'Мысль находится в корзине. Нажмите для удаления/восстановления');
+  });
+
   it('актуальная и не в корзине — без бледности и меток', () => {
     const root = cloud(thought(), { profile: 'canvas' });
     assert.ok(!root.classList.contains('dim'));

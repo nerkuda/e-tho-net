@@ -866,6 +866,21 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
       actions: {
         onClick: (id) => void openStructuresThought(id),
         onCtrlClick: (id) => toggleSelection([id]),
+        // Метка корзины на облачке узла (ошибка 8bbc9542): сосед-мысль в
+        // корзине виден и помечен, как на карте, и клик по метке открывает
+        // тот же диалог восстановления/удаления. Импорт ленивый — trash.ts
+        // статически тянет этот модуль (scheduleStructuresRefresh), статический
+        // импорт замкнул бы цикл.
+        onTrashBadgeClick: (id) => {
+          const networkId = store.state.networkId;
+          if (networkId === null) return;
+          void import('../../trash.js').then(({ openThoughtDeleteDialog }) =>
+            openThoughtDeleteDialog(networkId, {
+              id,
+              title: refs.get(id)?.title ?? row.thoughtId,
+            }),
+          );
+        },
         onContextMenu: (event, id) => {
           event.stopPropagation();
           showThoughtContextMenu(
