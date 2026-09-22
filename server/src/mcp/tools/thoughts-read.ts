@@ -1013,6 +1013,8 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
           return {
             hits: result.hits.map((hit) => withSanitizedIcon(hit)),
             networks: result.networks,
+            truncated: result.truncated,
+            reason: result.reason,
           };
         }
         const ndb = openMemberNetwork(rt, args.network_id as string);

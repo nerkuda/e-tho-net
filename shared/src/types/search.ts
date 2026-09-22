@@ -144,7 +144,22 @@ export interface SearchResponse {
    * Задача eb1a3f43, требование c98d5d19.
    */
   networks?: NetworksCatalog;
+  /**
+   * True, когда суммарная веерная выдача обрезана потолком
+   * {@link CrossNetworkTruncationReason} (задача 29bc5673). В одиночном режиме
+   * не выставляется.
+   */
+  truncated?: boolean;
+  /** Причина обрезки веерной выдачи; `null` — не обрезано. */
+  reason?: CrossNetworkTruncationReason | null;
 }
+
+/**
+ * Причина обрезки суммарной веерной выдачи (задача 29bc5673): число
+ * объединённых хитов по всем сетям достигло потолка `CROSS_NETWORK_MAX_HITS`.
+ * Обрезка предсказуема — сети обходятся в порядке `network_ids`.
+ */
+export type CrossNetworkTruncationReason = 'cross_network_max_hits';
 
 /** Per-group totals returned alongside {@link SearchResponse}. */
 export interface SearchResponseMeta {

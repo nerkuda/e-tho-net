@@ -927,7 +927,12 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           });
           sendSuccess(
             reply,
-            { hits: result.hits, networks: result.networks } satisfies CrossNetworkDuplicateResponse,
+            {
+              hits: result.hits,
+              networks: result.networks,
+              truncated: result.truncated,
+              reason: result.reason,
+            } satisfies CrossNetworkDuplicateResponse,
           );
           return;
         }

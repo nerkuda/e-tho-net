@@ -22,6 +22,12 @@ import { describe, it } from 'node:test';
 
 import { closeNetworkDb } from '../src/db/network-db.js';
 import {
+  fanOutFindDuplicates,
+  fanOutQuery,
+  fanOutSearch,
+  type CrossNetworkAccess,
+} from '../src/domain/cross-network-search-service.js';
+import {
   authHeaders,
   buildRestContext,
   closeRestContext,
@@ -121,6 +127,111 @@ async function addMember(
 }
 
 /** Параллельный владелец второй сети (см. {@link createSecondAdminUser}). */
+
+/** Контекст доступа к вееру для одной сети (задача 29bc5673). */
+function makeAccess(ctx: RestTestContext, networkId: string): CrossNetworkAccess {
+  const networks = [{ id: networkId, display_name: 'Test Net' }];
+  return {
+    networks,
+    accessibleIds: [networkId],
+    dataDir: ctx.dataDir,
+    userId: ctx.adminId,
+    clientId: 'test-cross-net',
+    logger: ctx.app.appLogger,
+  };
+}
+
+describe(
+  'cross-network (fan-out): потолок суммарной выдачи и диагностика обрезки',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    it('search: выдача сверх потолка обрезается, ответ несёт truncated и reason', async () => {
+      const ctx = await buildCrossNetworkContext();
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          await createThought(ctx, ctx.networkId, ctx.adminKey, `Кап${i}`);
+        }
+        const { response, networks } = fanOutSearch(makeAccess(ctx, ctx.networkId), {
+          networkIds: [ctx.networkId],
+          q: 'Кап',
+          limit: 50,
+          offset: 0,
+          showInactiveDefault: false,
+          maxHits: 3,
+        });
+        assert.equal(response.by_names.length, 3, 'ровно потолок хитов в выдаче');
+        assert.equal(response.truncated, true, 'обрезка отмечена');
+        assert.equal(response.reason, 'cross_network_max_hits');
+        // Справочник сетей сохраняется и при обрезке.
+        assert.equal(networks.length, 1);
+      } finally {
+        await closeCrossNetworkContext(ctx);
+      }
+    });
+
+    it('search: ровно в потолок не считается обрезкой', async () => {
+      const ctx = await buildCrossNetworkContext();
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          await createThought(ctx, ctx.networkId, ctx.adminKey, `Ровн${i}`);
+        }
+        const { response } = fanOutSearch(makeAccess(ctx, ctx.networkId), {
+          networkIds: [ctx.networkId],
+          q: 'Ровн',
+          limit: 50,
+          offset: 0,
+          showInactiveDefault: false,
+          maxHits: 5,
+        });
+        assert.equal(response.by_names.length, 5);
+        assert.equal(response.truncated, false, 'выдача ровно в потолок — не обрезана');
+        assert.equal(response.reason, null);
+      } finally {
+        await closeCrossNetworkContext(ctx);
+      }
+    });
+
+    it('query: выдача сверх потолка обрезается с reason cross_network_max_hits', async () => {
+      const ctx = await buildCrossNetworkContext();
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          await createThought(ctx, ctx.networkId, ctx.adminKey, `Запрос${i}`);
+        }
+        const { response } = fanOutQuery(makeAccess(ctx, ctx.networkId), {
+          networkIds: [ctx.networkId],
+          query: { sort: 'alpha', order: 'asc', limit: 50, offset: 0, keywords: 'Запрос' },
+          limit: 50,
+          offset: 0,
+          maxHits: 2,
+        });
+        assert.equal(response.hits.length, 2);
+        assert.equal(response.truncated, true);
+        assert.equal(response.reason, 'cross_network_max_hits');
+      } finally {
+        await closeCrossNetworkContext(ctx);
+      }
+    });
+
+    it('find_duplicates: выдача сверх потолка обрезается с reason', async () => {
+      const ctx = await buildCrossNetworkContext();
+      try {
+        for (let i = 0; i < 4; i += 1) {
+          await createThought(ctx, ctx.networkId, ctx.adminKey, 'Дубль-кап');
+        }
+        const result = fanOutFindDuplicates(makeAccess(ctx, ctx.networkId), {
+          networkIds: [ctx.networkId],
+          title: 'Дубль-кап',
+          maxHits: 2,
+        });
+        assert.equal(result.hits.length, 2);
+        assert.equal(result.truncated, true);
+        assert.equal(result.reason, 'cross_network_max_hits');
+      } finally {
+        await closeCrossNetworkContext(ctx);
+      }
+    });
+  },
+);
 
 describe(
   'cross-network (fan-out) search/query/duplicates',

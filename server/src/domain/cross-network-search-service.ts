@@ -14,8 +14,10 @@
  *      пользователь ключа — участник; недоступные исключаются молча»).
  *
  * Объём результата умножается на количество сетей, поэтому потолок по
- * сетям — 16 (требование: «разумный потолок»). `limit`/`offset` применяются
- * уже к объединённой выдаче, что даёт честный пейджинг по вееру.
+ * сетям — 16 (требование: «разумный потолок»), а суммарная выдача
+ * ограничена {@link CROSS_NETWORK_MAX_HITS} с диагностикой
+ * `truncated`/`reason` (задача 29bc5673). `limit`/`offset` применяются уже к
+ * объединённой (и обрезанной) выдаче, что даёт честный пейджинг по вееру.
  *
  * Общего кросс-сетевого индекса не появляется — граница MVP сохранена:
  * каждая сеть опрашивается по своему индексу (см. комментарий в карточке
@@ -34,6 +36,46 @@ import type { DuplicateHit, NetworksCatalog, NetworkRef, SearchResponse, Thought
 /** Максимум сетей в одном веерном вызове. Запросы сверх лимита — ошибка
  *  (агенту нужен явный сигнал, а не молчаливая обрезка). */
 export const CROSS_NETWORK_MAX = 16;
+
+/**
+ * Потолок суммарной веерной выдачи: максимум объединённых хитов по всем сетям
+ * (задача 29bc5673). Раньше per-сеть лимит `limit * |networks|` умножался на
+ * число сетей, и объём ответа рос неограниченно. Сети обходятся в порядке
+ * `network_ids`, вклад сверх потолка отбрасывается, и ответ несёт `truncated`
+ * + `reason: 'cross_network_max_hits'` — обрезка предсказуема.
+ *
+ * Значение — верхняя граница объединённой выдачи одного веерного вызова;
+ * `limit`/`offset` применяются к ней уже после обрезки (честный пейджинг по
+ * обрезанному множеству). Для тестов и внутренних вызовов порог можно
+ * переопределить аргументом `maxHits`.
+ */
+export const CROSS_NETWORK_MAX_HITS = 1000;
+
+/**
+ * Общий бюджет хитов на веерный вызов (задача 29bc5673): `remaining`
+ * уменьшается по мере наполнения групп в порядке сетей и групп; `truncated`
+ * становится true, если что-то не поместилось. `cap <= 0` — без потолка.
+ */
+interface HitBudget {
+  remaining: number;
+  truncated: boolean;
+}
+
+function makeBudget(cap: number): HitBudget {
+  return { remaining: cap > 0 ? cap : Number.POSITIVE_INFINITY, truncated: false };
+}
+
+/** Взять из `items` столько, сколько осталось в бюджете; остаток — обрезка. */
+function acceptWithBudget<T>(budget: HitBudget, items: readonly T[]): T[] {
+  if (items.length <= budget.remaining) {
+    budget.remaining -= items.length;
+    return [...items];
+  }
+  const taken = items.slice(0, Math.max(0, budget.remaining));
+  budget.remaining -= taken.length;
+  budget.truncated = true;
+  return taken;
+}
 
 /** Открыть `data.db` сети в её текущем сессионном слое для cross-network
  *  запроса. Слой выбирается так же, как в {@link openMemberNetwork} MCP. */
@@ -84,31 +126,46 @@ function normalizeNetworkIds(ids: string[]): string[] {
   return unique;
 }
 
-/** Слить N SearchResponse в один с проставленным `network_id` на каждом хите. */
+/** Слить N SearchResponse в один с проставленным `network_id` на каждом хите.
+ *  Суммарный бюджет `cap` расходуется в порядке сетей и групп; при обрезке
+ *  возвращается `truncated: true`. */
 function mergeSearchResponses(
   responses: Array<{ networkId: string; response: SearchResponse }>,
-): SearchResponse {
+  cap: number,
+): { response: SearchResponse; truncated: boolean } {
+  const budget = makeBudget(cap);
   const by_names: SearchResponse['by_names'] = [];
   const by_texts: SearchResponse['by_texts'] = [];
   const by_links: SearchResponse['by_links'] = [];
   const by_chrono: SearchResponse['by_chrono'] = [];
   const total = { names: 0, texts: 0, links: 0, chronology: 0 };
   for (const { networkId, response } of responses) {
-    for (const hit of response.by_names) by_names.push({ ...hit, network_id: networkId });
-    for (const hit of response.by_texts) by_texts.push({ ...hit, network_id: networkId });
-    for (const hit of response.by_links) by_links.push({ ...hit, network_id: networkId });
-    for (const hit of response.by_chrono) by_chrono.push({ ...hit, network_id: networkId });
+    for (const hit of acceptWithBudget(budget, response.by_names)) {
+      by_names.push({ ...hit, network_id: networkId });
+    }
+    for (const hit of acceptWithBudget(budget, response.by_texts)) {
+      by_texts.push({ ...hit, network_id: networkId });
+    }
+    for (const hit of acceptWithBudget(budget, response.by_links)) {
+      by_links.push({ ...hit, network_id: networkId });
+    }
+    for (const hit of acceptWithBudget(budget, response.by_chrono)) {
+      by_chrono.push({ ...hit, network_id: networkId });
+    }
     total.names += response.meta.total_in_group.names;
     total.texts += response.meta.total_in_group.texts;
     total.links += response.meta.total_in_group.links;
     total.chronology += response.meta.total_in_group.chronology;
   }
   return {
-    by_names,
-    by_texts,
-    by_links,
-    by_chrono,
-    meta: { total_in_group: total },
+    response: {
+      by_names,
+      by_texts,
+      by_links,
+      by_chrono,
+      meta: { total_in_group: total },
+    },
+    truncated: budget.truncated,
   };
 }
 
@@ -133,6 +190,8 @@ export interface CrossNetworkSearchArgs {
   offset: number;
   /** Значение `show_inactive` по умолчанию (из пользовательских настроек). */
   showInactiveDefault: boolean;
+  /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
+  maxHits?: number;
 }
 
 /** Запустить веером {@link search} по всем сетям и слить выдачу. */
@@ -142,6 +201,7 @@ export function fanOutSearch(
 ): { response: SearchResponse; networks: NetworksCatalog } {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
+  const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
   const responses: Array<{ networkId: string; response: SearchResponse }> = [];
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
@@ -158,22 +218,25 @@ export function fanOutSearch(
       author_id: args.author_id,
       editor_id: args.editor_id,
       // Берём per-сеть лимит = лимит * |networks|, чтобы после слияния
-      // верхушка веера была представлена полностью. Можно жёстче
-      // (limit на сеть), но это даёт агенту меньше контроля.
+      // верхушка веера была представлена полностью. Объём удерживает общий
+      // потолок `cap` (задача 29bc5673): per-сеть лимит НЕ занижаем до `cap`,
+      // иначе обрезка становится неотличима от «ровно в потолок».
       limit: args.limit * Math.max(accessible.length, 1),
       offset: 0,
     }, args.showInactiveDefault);
     responses.push({ networkId: net.id, response });
   }
-  // Сначала сливаем (по сетям уже урезанные по per-сеть-лимиту выборки), затем
-  // применяем limit/offset к объединённой выдаче.
-  const merged = mergeSearchResponses(responses);
+  // Сначала сливаем (по сетям уже урезанные по per-сеть-лимиту выборки) с
+  // общим бюджетом, затем применяем limit/offset к объединённой выдаче.
+  const { response: merged, truncated } = mergeSearchResponses(responses, cap);
   const paginated: SearchResponse = {
     by_names: merged.by_names.slice(args.offset, args.offset + args.limit),
     by_texts: merged.by_texts.slice(args.offset, args.offset + args.limit),
     by_links: merged.by_links.slice(args.offset, args.offset + args.limit),
     by_chrono: merged.by_chrono.slice(args.offset, args.offset + args.limit),
     meta: merged.meta,
+    truncated,
+    reason: truncated ? 'cross_network_max_hits' : null,
   };
   return {
     response: paginated,
@@ -190,6 +253,8 @@ export interface CrossNetworkQueryArgs {
   query: ThoughtQueryRequest;
   limit: number;
   offset: number;
+  /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
+  maxHits?: number;
 }
 
 /** Запустить веером {@link queryThoughts} по всем сетям. */
@@ -199,20 +264,23 @@ export function fanOutQuery(
 ): { response: ThoughtQueryResponse; networks: NetworksCatalog } {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
+  const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
+  const budget = makeBudget(cap);
   const hits: import('@etn/shared').ThoughtQueryHit[] = [];
   let total = 0;
   let truncated = false;
-  let reason: 'max_nodes' | null = null;
+  let reason: 'max_nodes' | 'cross_network_max_hits' | null = null;
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const result = queryThoughts(
       ndb,
       access.userId,
-      // per-сеть лимит — тот же приём, что в fanOutSearch.
+      // per-сеть лимит — тот же приём, что в fanOutSearch: не занижаем до
+      // `cap`, чтобы обрезку можно было отличить от «ровно в потолок».
       { ...args.query, limit: args.limit * Math.max(accessible.length, 1), offset: 0 },
       { maxLimit: 200, emptyFilterMode: 'all' },
     );
-    for (const item of result.items) {
+    for (const item of acceptWithBudget(budget, result.items)) {
       hits.push({
         id: item.id,
         network_id: net.id,
@@ -239,6 +307,11 @@ export function fanOutQuery(
   };
   hits.sort(cmp);
   const page = hits.slice(args.offset, args.offset + args.limit);
+  // Потолок веера перекрывает per-сетевой `max_nodes` как более общую причину.
+  if (budget.truncated) {
+    truncated = true;
+    reason = 'cross_network_max_hits';
+  }
   return {
     response: {
       total,
@@ -256,15 +329,24 @@ export interface CrossNetworkFindDuplicatesArgs {
   title: string;
   synonyms?: string[];
   typeIds?: string[];
+  /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
+  maxHits?: number;
 }
 
 /** Запустить веером {@link findDuplicates}. */
 export function fanOutFindDuplicates(
   access: CrossNetworkAccess,
   args: CrossNetworkFindDuplicatesArgs,
-): { hits: DuplicateHit[]; networks: NetworksCatalog } {
+): {
+  hits: DuplicateHit[];
+  networks: NetworksCatalog;
+  truncated: boolean;
+  reason: 'cross_network_max_hits' | null;
+} {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
+  const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
+  const budget = makeBudget(cap);
   const byId = new Map<string, DuplicateHit>();
   // Объединяем по `(network_id, thought_id)` — одинаковые id в разных сетях
   // (теоретически возможно при кросс-DB ссылках) трактуются как разные хиты.
@@ -272,7 +354,7 @@ export function fanOutFindDuplicates(
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const local = findDuplicates(ndb, args.title, args.synonyms ?? [], args.typeIds ?? []);
-    for (const hit of local) {
+    for (const hit of acceptWithBudget(budget, local)) {
       const key = keyOf(net.id, hit.id);
       const existing = byId.get(key);
       if (existing === undefined) {
@@ -283,6 +365,8 @@ export function fanOutFindDuplicates(
   return {
     hits: [...byId.values()],
     networks: accessible.map((n) => ({ id: n.id, display_name: n.display_name })),
+    truncated: budget.truncated,
+    reason: budget.truncated ? 'cross_network_max_hits' : null,
   };
 }
 

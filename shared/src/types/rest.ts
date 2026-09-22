@@ -17,6 +17,8 @@
 
 import type { DuplicateMatchKind, IconKind, PropertyValueType } from '../enums.js';
 
+import type { CrossNetworkTruncationReason } from './search.js';
+
 import type { ActivityRow } from './activity.js';
 import type { AuditLogEntry } from './api.js';
 import type { ApiKeyWithSecret, User } from './user.js';
@@ -189,6 +191,10 @@ export interface DuplicateHit {
 export interface CrossNetworkDuplicateResponse {
   hits: DuplicateHit[];
   networks: NetworksCatalog;
+  /** True, когда суммарная выдача обрезана потолком веера (задача 29bc5673). */
+  truncated?: boolean;
+  /** Причина обрезки веерной выдачи; `null` — не обрезано. */
+  reason?: CrossNetworkTruncationReason | null;
 }
 
 /**
