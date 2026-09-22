@@ -18,8 +18,7 @@ import {
   type Thought,
   type ThoughtDeletionBlocking,
   type ThoughtDeletionCheckResult,
-  type TrashLinkEntry,
-  type TrashThoughtEntry,
+  type TrashListResult,
 } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
@@ -40,6 +39,7 @@ import { refreshSelectionPanel } from './selection/selection.js';
 import { patchFocusEdge, store } from './state.js';
 import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
 import { button, div, el, setTooltip, span } from './lib/dom.js';
+import { svgIcon } from './lib/icons.js';
 import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
@@ -124,6 +124,48 @@ async function resolveThoughtTitles(
   } catch {
     return new Map();
   }
+}
+
+/**
+ * Число мест использования помеченного элемента — колонка «Ссылок» корзины
+ * (§5a.4, ошибка 009784ad): сколько раз на мысль ссылаются свойствами
+ * (`usage.total`, 03-server-api.md §9.1). У связи использования в свойствах нет
+ * (§5a.3: группа «Используется в свойствах» строится только для мыслей) —
+ * соответствующий аргумент равен `null`, и колонка рисует прочерк, а не ноль;
+ * прочерк же встаёт, если счёт не удалось получить.
+ */
+export function referencesText(total: number | null): string {
+  return total === null ? '—' : String(total);
+}
+
+/**
+ * Модель строки корзины (§5a.4, ошибка 009784ad) — то, что видно в первых двух
+ * колонках таблицы: «что в корзине» и «сколько ссылок». Вынесено из сборки DOM,
+ * потому что это и есть суть исправления (id вместо названий, непонятный счёт
+ * мест использования) — проверяется юнит-тестом без DOM.
+ */
+export interface TrashRowView {
+  /** Колонка 1: название мысли либо подпись связи «источник → назначение · тип». */
+  label: string;
+  /** Колонка 2: мест использования; `null` — показывается прочерком. */
+  count: number | null;
+}
+
+/** Строка помеченной мысли: колонка 1 — название, колонка 2 — `usage.total`. */
+export function thoughtTrashRow(item: { title: string }, usageTotal: number | null): TrashRowView {
+  return { label: `📝 ${item.title}`, count: usageTotal };
+}
+
+/**
+ * Строка помеченного ребра: у связи нет названия, её колонка 1 — подпись
+ * «источник → назначение · тип связи» (имена концов — из `titles`), а колонка 2
+ * пуста: использования в свойствах у связей нет (§5a.3).
+ */
+export function linkTrashRow(
+  link: { source_id: string; target_id: string; type_id: string | null },
+  titles: ReadonlyMap<string, string>,
+): TrashRowView {
+  return { label: `🔗 ${linkCaption(link, titles)}`, count: null };
 }
 
 /** Resolve the current version of a link (for If-Match). */
@@ -435,6 +477,10 @@ export const trashInternals = {
   // строки корзины, тоже под тестами.
   linkCaption,
   linkTypeForwardName,
+  // Число мест использования в колонке «Ссылок» корзины (ошибка 009784ad).
+  referencesText,
+  thoughtTrashRow,
+  linkTrashRow,
 };
 
 export async function openThoughtGroupDeleteDialog(
@@ -638,72 +684,149 @@ export async function openThoughtGroupDeleteDialog(
 }
 
 /**
- * The trash dialog (08-ui-spec.md §5a.4): every marked thought/link with its
- * precomputed blocking. Rows offer restore / delete / (purge-all at the footer).
+ * The trash dialog (08-ui-spec.md §5a.4; переделан по ошибке 009784ad, 0.8.2):
+ * every marked thought/link with its precomputed blocking, laid out as a table
+ * instead of a wrapping list — «что в корзине» (мысль — название, связь —
+ * «источник → назначение · тип связи»), «Ссылок» (мест использования) и
+ * кнопки-иконки «Восстановить»/«Удалить» с подсказками. «Удалить» активна
+ * только у строки, которую действительно можно удалить физически (`blocked`
+ * приходит из `GET /trash` вместе с `blocking`), у заблокированной её тултип
+ * объясняет причину.
+ *
+ * Имена концов связей и число мест использования мыслей диалог догружает к
+ * одному `GET /trash` — у ребра в ответе только id, а использования он не несёт.
  */
 export async function openTrashDialog(networkId: string): Promise<void> {
-  const body = div('trash-list');
-  const empty = el('p', 'dialog-text', 'Корзина пуста.');
-  body.append(empty);
+  const body = div('trash');
+  const table = div('trash-table');
+  body.append(table);
+
+  /** Кнопка-иконка действия строки — как в остальном UI: svg + тултип. */
+  const actionButton = (
+    icon: 'undo' | 'trash',
+    label: string,
+    danger: boolean,
+    onClick: () => void,
+  ): HTMLButtonElement => {
+    const btn = el('button', danger ? 'icon-btn trash-act trash-act-danger' : 'icon-btn trash-act');
+    btn.type = 'button';
+    btn.append(svgIcon(icon, 15));
+    setTooltip(btn, label);
+    btn.setAttribute('aria-label', label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  };
+
+  /** Колонка действий строки: «Восстановить» всегда, «Удалить» — по блокировке. */
+  const buildActions = (
+    blocked: boolean,
+    reason: string,
+    onRestore: () => Promise<void>,
+    onDelete: () => Promise<void>,
+  ): HTMLElement => {
+    const cell = div('trash-actions');
+    cell.append(actionButton('undo', 'Восстановить', false, () => void onRestore()));
+    const delBtn = actionButton(
+      'trash',
+      blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : 'Удалить совсем',
+      true,
+      () => void onDelete(),
+    );
+    delBtn.disabled = blocked;
+    cell.append(delBtn);
+    return cell;
+  };
+
+  /** Строка таблицы: что в корзине, число мест использования, действия. */
+  const renderRow = (
+    label: string,
+    blocked: boolean,
+    reason: string,
+    count: number | null,
+    onRestore: () => Promise<void>,
+    onDelete: () => Promise<void>,
+  ): HTMLElement => {
+    const row = div('trash-row');
+    const item = div('trash-item');
+    item.append(span(label, 'trash-item-title'));
+    if (blocked) {
+      // Замок — статичная индикация блокировки (§5a.4): видно, не наводя курсор.
+      const lock = span('🔒', 'trash-item-lock');
+      setTooltip(lock, reason || 'заблокировано для удаления');
+      item.append(lock);
+    }
+    setTooltip(item, label);
+    row.append(item);
+    row.append(span(referencesText(count), 'trash-count'));
+    row.append(buildActions(blocked, reason, onRestore, onDelete));
+    return row;
+  };
 
   const render = async (): Promise<void> => {
-    let trash: { thoughts: TrashThoughtEntry[]; links: TrashLinkEntry[] };
+    let trash: TrashListResult;
     try {
       trash = await etn.trash.list(networkId);
     } catch (err) {
       errorDialog('Корзина', err);
       return;
     }
-    while (body.firstChild !== null) body.removeChild(body.firstChild);
 
     if (trash.thoughts.length === 0 && trash.links.length === 0) {
-      body.append(empty.cloneNode(true));
+      table.replaceChildren(el('p', 'dialog-text', 'Корзина пуста.'));
       return;
     }
 
-    const renderRow = (
-      label: string,
-      locked: boolean,
-      reason: string,
-      onRestore: () => Promise<void>,
-      onDelete: () => Promise<void>,
-    ): HTMLElement => {
-      const row = div('trash-row');
-      const title = span(label, 'trash-row-title');
-      if (locked) title.append(span(' 🔒', 'trash-row-lock'));
-      row.append(title);
-      const actions = div('trash-row-actions');
-      actions.append(button('↩ Вернуть', () => void onRestore(), 'link-btn', 'Вернуть из корзины'));
-      const delBtn = button('🗑 Удалить', () => void onDelete(), 'link-btn danger', 'Удалить');
-      delBtn.disabled = locked;
-      if (locked) setTooltip(delBtn, `Удалить нельзя — ${reason || 'заблокировано'}`);
-      actions.append(delBtn);
-      row.append(actions);
-      return row;
-    };
+    // Догрузка к одному `GET /trash`: названия концов связей (в рёбрах только
+    // id) и число мест использования мыслей (`GET /thoughts/{id}/usage`).
+    const titles = await resolveThoughtTitles(
+      networkId,
+      trash.links.flatMap((l) => [l.source_id, l.target_id]),
+    );
+    const usageById = new Map<string, number | null>();
+    await Promise.all(
+      trash.thoughts.map(async (t) => {
+        try {
+          usageById.set(t.id, (await etn.thoughts.usage(networkId, t.id)).total);
+        } catch {
+          usageById.set(t.id, null);
+        }
+      }),
+    );
 
+    const head = div('trash-row trash-head');
+    head.append(
+      span('В корзине', 'trash-head-item'),
+      span('Ссылок', 'trash-head-count'),
+      span('Действия', 'trash-head-actions'),
+    );
+    const rows: HTMLElement[] = [head];
     for (const t of trash.thoughts) {
-      body.append(
+      const view = thoughtTrashRow(t, usageById.get(t.id) ?? null);
+      rows.push(
         renderRow(
-          `📝 ${t.title}`,
+          view.label,
           t.blocked,
           blockingReasons('мысль', t.blocking).join('; '),
+          view.count,
           () => restoreThought(networkId, t.id),
           () => deleteFromTrash(networkId, t.id),
         ),
       );
     }
     for (const l of trash.links) {
-      body.append(
+      const view = linkTrashRow(l, titles);
+      rows.push(
         renderRow(
-          `🔗 ${l.source_id} → ${l.target_id}`,
+          view.label,
           l.blocked,
           blockingReasons('связь', l.blocking).join('; '),
+          view.count,
           () => restoreLink(networkId, l.id),
           () => deleteLinkFromTrash(networkId, l.id),
         ),
       );
     }
+    table.replaceChildren(...rows);
   };
 
   const restoreThought = async (networkId: string, id: string): Promise<void> => {
@@ -761,6 +884,9 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   showDialog({
     title: 'Корзина',
     body,
+    // Ширина задаётся классом (§5a.4, ошибка 009784ad): таблица из трёх колонок
+    // не должна ломать строки переносом, окно растёт вместе с экраном.
+    boxClass: 'trash-box',
     buttons: [
       {
         label: 'Удалить всё, что возможно',

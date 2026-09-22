@@ -30,6 +30,9 @@ export type IconName =
   | 'activity'
   | 'plus'
   | 'trash'
+  // Возврат из корзины (ошибка 009784ad, 0.8.2): кнопка-иконка «Восстановить»
+  // в таблице корзины — lucide «undo-2» (стрелка, уходящая назад и вверх).
+  | 'undo'
   | 'layers'
   | 'loader'
   | 'filter'
@@ -101,6 +104,8 @@ const PATHS: Record<IconName, string> = {
     '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>' +
     '<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/>' +
     '<line x1="14" x2="14" y1="11" y2="17"/>',
+  // Кнопка «Восстановить» строки корзины (ошибка 009784ad), lucide «undo-2».
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/>',
   // Layer menu + overridden badge (S11, 13-layers.md §10.3): lucide «layers».
   layers:
     '<polygon points="12 2 2 7 12 12 22 7 12 2"/>' +
