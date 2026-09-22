@@ -22,6 +22,7 @@ import { describe, it } from 'node:test';
 import type { LinkType, ThoughtType } from '@etn/shared';
 
 import {
+  buildEntityChipField,
   buildEntityCombo,
   linkTypeEntityOptions,
   normalizeParentTypeId,
@@ -186,6 +187,9 @@ function installShim(): { body: ShimElement; pressEscape: () => void } {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     body,
+    // Шим не ведёт учёт фокуса браузера: `activeElement` читает модуль под
+    // тестом, а тест выставляет его сам (`setActive`) — иначе фокус «повисает».
+    activeElement: body,
   };
   /** Слушатели `window` — каркас диалога вешает сюда Esc и Ctrl+Enter. */
   const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
@@ -224,6 +228,16 @@ function installShim(): { body: ShimElement; pressEscape: () => void } {
 
 async function flush(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Активный элемент документа — как его видит браузер (шим его не считает). */
+function setActive(element: ShimElement): void {
+  (globalThis as any).document.activeElement = element;
+}
+
+/** Потеря фокуса в браузере: активный узел исчез из DOM — фокус ушёл на `<body>`. */
+function loseFocusToBody(body: ShimElement): void {
+  setActive(body);
 }
 
 function mousedownEvent(target: unknown): any {
@@ -529,6 +543,170 @@ describe('entity-picker: поле одиночного выбора — запо
       undefined,
       'у выключенного поля крестика очистки нет',
     );
+  });
+});
+
+describe('entity-picker: выбор из списка не роняет клавиатурный фокус (ошибка 797d0485)', () => {
+  // Регрессия 797d0485: узел, державший фокус, исчезает или скрывается —
+  // браузер переводит фокус на <body>, и клавиатура диалога замолкает:
+  // Tab/Shift+Tab перестают ходить по полям. Виджет обязан вернуть фокус
+  // своему живому узлу (строка ввода пустого поля / кнопка «…» заполненного).
+
+  it('комбо: выбор строки мышью переводит фокус на живой узел поля', async () => {
+    const { body } = installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: null,
+      emptyLabel: 'без типа',
+      onChange: () => undefined,
+    });
+    const { input, pick } = parts(combo);
+    input.emit('focus');
+    await flush();
+    const row = itemRows(body).find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'a');
+    assert.ok(row !== undefined, 'строка типа a есть');
+
+    // Клик по строке: mousedown гасится (фокус остаётся в поле), клик выбирает.
+    setActive(input);
+    row!.emit('mousedown', mousedownEvent(row));
+    row!.click();
+
+    assert.equal(input.classList.contains('hidden'), true, 'выбор заполнил поле — ввод скрыт');
+    assert.equal(
+      pick.focused,
+      true,
+      'фокус переведён на живой узел поля (кнопку «…»), а не потерян на <body>',
+    );
+  });
+
+  it('комбо: выбор строки с клавиатуры (Enter) тоже удерживает фокус в поле', async () => {
+    const { body } = installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: null,
+      emptyLabel: 'без типа',
+      onChange: () => undefined,
+    });
+    const { input, pick } = parts(combo);
+    input.emit('focus');
+    await flush();
+
+    setActive(input);
+    // Первая строка каталога — «без типа» (пустое значение); вниз дважды —
+    // реальный тип «Архив» (c), как выбрал бы пользователь стрелками.
+    input.emit('keydown', { key: 'ArrowDown', preventDefault: () => undefined });
+    input.emit('keydown', { key: 'ArrowDown', preventDefault: () => undefined });
+    input.emit('keydown', {
+      key: 'Enter',
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+      preventDefault: () => undefined,
+    });
+    assert.equal(combo.value(), 'c', 'Enter выбрал выделенный тип');
+    assert.equal(pick.focused, true, 'Enter выбрал строку и не уронил фокус на <body>');
+  });
+
+  it('комбо: крестик очистки возвращает фокус в строку ввода', () => {
+    installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: 'a',
+      onChange: () => undefined,
+    });
+    const { input } = parts(combo);
+    const remove = findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline');
+    assert.ok(remove !== undefined, 'у облачка значения есть крестик очистки');
+
+    // Клик по крестику сфокусировал его; после очистки узел исчезает.
+    setActive(remove!);
+    remove!.emit('click', { stopPropagation: () => undefined });
+
+    assert.equal(input.classList.contains('hidden'), false, 'поле снова принимает ввод');
+    assert.equal(input.focused, true, 'фокус вернулся в строку ввода, а не упал на <body>');
+  });
+
+  it('комбо: закрытие диалога «…» оставляет фокус в поле (он был на <body>)', async () => {
+    const { body } = installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thought-types',
+      value: 'a',
+      onChange: () => undefined,
+    });
+    const { pick } = parts(combo);
+    pick.click();
+    await flush();
+    await flush();
+    const rows = findAllByClass(body, 'entity-pick-row');
+    const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
+    assert.ok(target !== undefined, 'в диалоге есть строка типа c');
+
+    // Модальный пикер закрылся, фокус остался на <body> — поле забирает его себе.
+    loseFocusToBody(body);
+    target!.click();
+    await flush();
+    assert.equal(combo.value(), 'c', 'значение применено');
+    assert.equal(pick.focused, true, 'фокус вернулся на живой узел поля, а не остался на <body>');
+  });
+
+  it('чип-поле: выбор строки списка не роняет фокус — он остаётся в поле ввода', async () => {
+    const { body } = installShim();
+    let values: string[] = [];
+    const field = buildEntityChipField({
+      getValues: () => values,
+      onChange: (next) => {
+        values = next;
+      },
+      loadOptions: () => [{ id: 'x', title: 'Икс', cloud: { id: 'x', title: 'Икс' } }],
+    });
+    await flush();
+    const root = field.root as unknown as ShimElement;
+    const input = findByClass(root, 'entity-chip-input');
+    assert.ok(input !== undefined, 'у чип-поля есть строка ввода');
+
+    input!.emit('focus');
+    await flush();
+    const row = itemRows(body)[0];
+    assert.ok(row !== undefined, 'строка списка показана');
+
+    setActive(input!);
+    row!.emit('mousedown', mousedownEvent(row));
+    row!.click();
+    assert.deepEqual(values, ['x'], 'значение добавлено чипом');
+    assert.equal(
+      input!.focused,
+      true,
+      'фокус остался в строке ввода (перерисовка чипов не сбросила его на <body>)',
+    );
+  });
+
+  it('чип-поле: снятие чипа крестиком возвращает фокус в поле ввода', () => {
+    installShim();
+    let values = ['x'];
+    const field = buildEntityChipField({
+      getValues: () => values,
+      onChange: (next) => {
+        values = next;
+      },
+      loadOptions: () => [{ id: 'x', title: 'Икс', cloud: { id: 'x', title: 'Икс' } }],
+    });
+    const root = field.root as unknown as ShimElement;
+    const input = findByClass(root, 'entity-chip-input');
+    const remove = findByClass(root, 'st-f-clear-inline');
+    assert.ok(input !== undefined && remove !== undefined, 'чип со снятием есть');
+
+    setActive(remove!);
+    remove!.emit('click', { stopPropagation: () => undefined });
+    assert.deepEqual(values, [], 'чип снят');
+    assert.equal(input!.focused, true, 'фокус вернулся в строку ввода, а не упал на <body>');
   });
 });
 

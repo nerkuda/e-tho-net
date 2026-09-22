@@ -703,6 +703,41 @@ function entityEntry(opt: EntityOption): SuggestEntry {
   return entry;
 }
 
+/** Стоит ли клавиатурный фокус внутри узла — снимок ДО перерисовки виджета. */
+function hasKeyboardFocus(container: HTMLElement): boolean {
+  const active: Element | null | undefined = document.activeElement;
+  return active != null && container.contains(active);
+}
+
+/**
+ * Возвращает клавиатурный фокус в виджет после перерисовки, снёсшей или
+ * скрывшей сфокусированный узел (ошибка 797d0485).
+ *
+ * Браузер переводит фокус на `<body>`, когда узел с фокусом исчезает из DOM
+ * (снятие чипа сносит кнопку «✕») или становится `display:none` (выбор строки
+ * прячет строку ввода заполненного комбо, `renderMode`). Фокус на `<body>` —
+ * это «молчащий» диалог: `Tab`/`Shift+Tab` перестают ходить по его полям.
+ * Поэтому после перерисовки отдаём фокус живому узлу поля (`target`).
+ *
+ * `hadFocus` — был ли фокус внутри виджета ДО перерисовки: тогда он потерян
+ * именно нашей правкой. `adoptLostFocus` — забирать ли фокус, уже потерянный
+ * на `<body>` не нами: нужно виджету, действие которого закрыло поверх него
+ * модальный пикер (комбо «…»); не нужно при внешней перерисовке (`refresh`
+ * чип-поля), чтобы не перехватывать чужой фокус. Фокус на живом постороннем
+ * узле не перехватывается никогда.
+ */
+function restoreKeyboardFocus(
+  target: HTMLElement | null,
+  hadFocus: boolean,
+  adoptLostFocus = true,
+): void {
+  if (target === null) return;
+  const active: Element | null | undefined = document.activeElement;
+  const lost = active == null || active === document.body;
+  if (!hadFocus && !(adoptLostFocus && lost)) return;
+  target.focus();
+}
+
 /**
  * Чип-лист множественного выбора сущностей: выбранные значения — мини-облачка
  * общей фабрики (значок, цвета, бледность неактуальной, метка корзины;
@@ -766,6 +801,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   });
 
   function renderChips(): void {
+    // Перерисовка сносит чипы и переставляет узел ввода: если фокус был внутри
+    // поля, браузер уводит его на <body> — вернём его в строку ввода (797d0485).
+    const hadFocus = hasKeyboardFocus(field);
     const chips: HTMLElement[] = [];
     for (const value of opts.getValues()) {
       const cloud = opts.cloudOf?.(value) ?? byId.get(value)?.cloud ?? { id: value, title: value };
@@ -786,6 +824,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
     field.replaceChildren(...chips, input);
+    // Перерисовку может затеять и вызывающий (асинхронная догрузка каталога) —
+    // его фокус не перехватываем, возвращаем только потерянный здесь.
+    restoreKeyboardFocus(input, hadFocus, false);
   }
 
   /** Приводит поле ввода, кнопку пикера и рамку к состоянию `disabled`. */
@@ -1041,6 +1082,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
 
   const setValue = (id: string | null): void => {
     if (opts.disabled === true) return;
+    // Узел с фокусом сейчас исчезнет (крестик облачка) или скроется (строка
+    // ввода заполненного поля) — запоминаем фокус, чтобы вернуть его живому
+    // узлу поля, а не отдать браузеру на <body> (ошибка 797d0485).
+    const hadFocus = hasKeyboardFocus(root);
     current = id;
     const opt = id !== null ? byId.get(id) : undefined;
     currentCloud = opt?.cloud ?? null;
@@ -1048,6 +1093,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     renderValue();
     renderMode();
     opts.onChange(id);
+    restoreKeyboardFocus(current !== null ? pickBtn : input, hadFocus);
   };
 
   /**

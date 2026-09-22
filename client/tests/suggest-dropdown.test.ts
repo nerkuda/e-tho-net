@@ -312,6 +312,27 @@ describe('suggest-dropdown: история последних значений (
     assert.equal(dialog.closed(), 1, 'повтор Esc погашен и без открытого списка');
   });
 
+  it('Tab при открытом списке закрывает его и не гасится — фокус идёт дальше (797d0485)', async () => {
+    const w = wire(source());
+    await openBy(() => w.input.emit('focus'));
+    assert.equal(rowLabels(w.body).length, 3, 'список открыт');
+
+    // Tab — не клавиша списка: он закрывает подсказку и уходит дальше обычным
+    // порядком фокуса диалога. `preventDefault` тут недопустим: погашенный Tab
+    // перестанет перемещать фокус — симптом ошибки 797d0485.
+    const tab = key('Tab');
+    w.input.emit('keydown', tab);
+    assert.equal(tab.defaultPrevented, false, 'Tab не проглочен');
+    assert.equal(openList(w.body), undefined, 'Tab закрыл список');
+
+    const shiftTab = key('Tab', { shiftKey: true });
+    await openBy(() => w.input.emit('focus'));
+    assert.equal(rowLabels(w.body).length, 3, 'список открыт заново');
+    w.input.emit('keydown', shiftTab);
+    assert.equal(shiftTab.defaultPrevented, false, 'Shift+Tab не проглочен');
+    assert.equal(openList(w.body), undefined, 'Shift+Tab закрыл список');
+  });
+
   it('потеря фокуса: blur и клик мимо закрывают список без выбора', async () => {
     const w = wire(source());
     await openBy(() => w.input.emit('focus'));
