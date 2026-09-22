@@ -58,6 +58,18 @@ function buildApi(): EtnApi {
         invoke('thoughts.remove', networkId, id, expectedVersion),
       neighbors: (networkId, id, dir, limit, offset, linkFilter) =>
         invoke('thoughts.neighbors', networkId, id, dir, limit, offset, linkFilter),
+      neighborsPage: (networkId, id, dir, limit, offset, sort, order, linkFilter) =>
+        invoke(
+          'thoughts.neighborsPage',
+          networkId,
+          id,
+          dir,
+          limit,
+          offset,
+          sort,
+          order,
+          linkFilter,
+        ),
       batch: (networkId, input) => invoke('thoughts.batch', networkId, input),
       copyBatch: (networkId, input) => invoke('thoughts.copyBatch', networkId, input),
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),

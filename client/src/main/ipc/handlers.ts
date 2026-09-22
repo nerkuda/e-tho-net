@@ -353,6 +353,29 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'thoughts.neighborsPage',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        dir: FocusDir,
+        limit: number,
+        offset: number,
+        sort?: import('@etn/shared').SortKind,
+        order?: import('@etn/shared').SortOrder,
+        linkFilter?: LinkTypeFilterInput,
+      ) =>
+        requireRest(deps).getNeighborsPage(networkId, id, {
+          dir,
+          limit,
+          offset,
+          sort,
+          order,
+          linkFilter,
+        }),
+    ),
+  );
+  handlers.set(
     'thoughts.batch',
     bind((networkId: string, input: Parameters<RestClient['batchThoughts']>[1]) => {
       // Idempotency: a fresh Client-Request-Id per user action; the server

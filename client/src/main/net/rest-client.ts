@@ -739,6 +739,38 @@ export class RestClient {
     );
   }
 
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/neighbors` с метаданными пагинации
+   * (`meta.total`) — источник порционной подгрузки секторов карты мыслей
+   * (задача c8fa74ba). Отличие от {@link getNeighbors} только в возврате:
+   * тот отдаёт массив и теряет `meta`, здесь `total`/`limit`/`offset`
+   * читаются из `lastMeta` сразу после запроса.
+   */
+  public async getNeighborsPage(
+    networkId: string,
+    id: string,
+    query?: {
+      dir?: import('@etn/shared').FocusDir;
+      sort?: import('@etn/shared').SortKind;
+      order?: import('@etn/shared').SortOrder;
+      limit?: number;
+      offset?: number;
+      type_id?: string[];
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
+    },
+  ): Promise<import('@etn/shared').NeighborPage> {
+    const items = await this.getNeighbors(networkId, id, query);
+    // `getNeighbors` → `request()` кладёт `meta` списка в `lastMeta`; для
+    // одиночных запросов там `undefined` — безопасные фолбэки.
+    const meta = this.lastMeta as { total?: number; limit?: number; offset?: number } | undefined;
+    return {
+      items,
+      total: meta?.total ?? items.length,
+      limit: meta?.limit ?? items.length,
+      offset: meta?.offset ?? 0,
+    };
+  }
+
   /** `POST /networks/{nid}/thoughts/batch`. */
   public async batchThoughts(
     networkId: string,

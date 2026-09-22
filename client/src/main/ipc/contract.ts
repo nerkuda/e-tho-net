@@ -338,6 +338,22 @@ export interface EtnApi {
       offset?: number,
       linkFilter?: LinkTypeFilterInput,
     ): Promise<FocusNeighbor[]>;
+    /**
+     * `GET /thoughts/{id}/neighbors` с метаданными пагинации — источник
+     * порционной подгрузки секторов карты мыслей (задача c8fa74ba). В
+     * отличие от {@link neighbors} возвращает ещё и `total`, по которому
+     * строится плавающий индикатор количества мыслей сектора.
+     */
+    neighborsPage(
+      networkId: string,
+      id: string,
+      dir: FocusDir,
+      limit: number,
+      offset: number,
+      sort?: import('@etn/shared').SortKind,
+      order?: import('@etn/shared').SortOrder,
+      linkFilter?: LinkTypeFilterInput,
+    ): Promise<import('@etn/shared').NeighborPage>;
     batch(networkId: string, input: ThoughtBatchInput): Promise<ThoughtBatchResult>;
     /**
      * `POST /thoughts/copy-batch` — paste a clipboard snapshot under

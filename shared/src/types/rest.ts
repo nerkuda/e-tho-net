@@ -25,6 +25,7 @@ import type { ApiKeyWithSecret, User } from './user.js';
 import type { EffectiveThoughtTypeView, ThoughtTypeView } from './thought-type-view.js';
 import type { NetworkProperty } from './thought-type.js';
 import type { ThoughtRef } from './thought.js';
+import type { FocusNeighbor } from './thought.js';
 import type { NetworksCatalog } from './network.js';
 import type { StructureQueryResponse } from './structure.js';
 
@@ -51,6 +52,20 @@ export interface FocusOrderResult {
   focus_thought_id: string;
   dir: string;
   ordered_ids: string[];
+}
+
+/**
+ * `GET /networks/{nid}/thoughts/{id}/neighbors` — страница соседей с
+ * метаданными пагинации (задача c8fa74ba). `items` — сами строки (форма
+ * {@link FocusNeighbor}), `total`/`limit`/`offset` сервер отдаёт в `meta`
+ * списка; клиент сводит их в одну форму источником порционной подгрузки
+ * секторов карты мыслей и выпадающих списков целей.
+ */
+export interface NeighborPage {
+  items: FocusNeighbor[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 /**

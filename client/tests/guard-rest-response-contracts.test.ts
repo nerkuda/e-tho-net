@@ -60,6 +60,10 @@ const CLIENT_COMPOSED_RESULTS = new Set([
   'AuditListResult',
   'ThoughtTypeViewsResult',
   'RunThoughtTypeViewResult',
+  // Форма порции соседей (задача c8fa74ba): сервер отдаёт страницу через
+  // `sendList` (`data` + `meta{total,limit,offset}`), клиент сводит их в одну
+  // форму `NeighborPage`; единого серверного объекта с таким именем нет.
+  'NeighborPage',
 ]);
 
 /** Собрать все `.ts` под каталогом (рекурсивно). */
