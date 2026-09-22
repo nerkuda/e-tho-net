@@ -272,6 +272,76 @@ describe(
           ndb.close();
         }
       });
+
+      // Bug faf56a02-e884-488b-9b7b-39dfd5d5b275:
+      // `etn.thoughts.write` with `thought_id + active` at item level must
+      // toggle the existing thought's `active` flag, even when no nested
+      // `thought` patch is supplied (absorbs `etn.thoughts.set_active`).
+      it('with item-level `active: false` deactivates the addressed thought', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const created = upsertThoughtBundle(ndb, { thought: { title: 'Активная' } }, USER);
+          assert.equal(created.thought.active, true);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought_id: created.thought.id, active: false },
+            USER,
+          );
+
+          assert.equal(result.thought.id, created.thought.id);
+          assert.equal(result.thought_action, 'updated');
+          assert.equal(result.thought.active, false, 'item-level active must toggle off');
+          assert.equal(result.thought.title, 'Активная', 'title must be untouched');
+          assert.equal(result.thought.version, 2);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('with item-level `active: true` reactivates an inactive thought', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const created = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Неактивная', active: false } },
+            USER,
+          );
+          assert.equal(created.thought.active, false);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought_id: created.thought.id, active: true },
+            USER,
+          );
+
+          assert.equal(result.thought.active, true, 'item-level active must toggle on');
+          assert.equal(result.thought_action, 'updated');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('item-level `active` wins over `thought.active` when both are set', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const created = upsertThoughtBundle(ndb, { thought: { title: 'Конфликт' } }, USER);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            {
+              thought_id: created.thought.id,
+              thought: { title: 'Конфликт', active: true },
+              active: false,
+            },
+            USER,
+          );
+
+          assert.equal(result.thought.active, false, 'item-level active wins');
+        } finally {
+          ndb.close();
+        }
+      });
     });
   },
 );

@@ -650,6 +650,71 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Bug faf56a02-e884-488b-9b7b-39dfd5d5b275:
+  // item-level `active` (absorbed from `etn.thoughts.set_active`) must
+  // toggle the existing thought's `active` flag even without a nested
+  // `thought` patch.
+  it('item-level `active` toggles the addressed thought without a nested `thought`', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // 1. create a thought
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 't1', thought: { title: 'Активная-через-MCP' } }],
+          },
+        });
+        assert.notEqual(created.isError, true, toolText(created));
+        const createdJson = JSON.parse(toolText(created)) as { items: Array<{ id: string }> };
+        const thoughtId = createdJson.items[0]!.id;
+
+        // 2. toggle off with item-level active: false (no nested thought)
+        const off = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, active: false }],
+          },
+        });
+        assert.notEqual(off.isError, true, toolText(off));
+        const offJson = JSON.parse(toolText(off)) as {
+          items: Array<{ thought_action: string }>;
+        };
+        assert.equal(offJson.items[0]!.thought_action, 'updated');
+
+        // 3. verify via get
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        const gotJson = JSON.parse(toolText(got)) as { active: boolean };
+        assert.equal(gotJson.active, false);
+
+        // 4. toggle on with item-level active: true
+        await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, active: true }],
+          },
+        });
+        const got2 = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        const gotJson2 = JSON.parse(toolText(got2)) as { active: boolean };
+        assert.equal(gotJson2.active, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('property key not in the registry → NOT_FOUND', async () => {
     const ctx = await buildMcpContext();
     try {

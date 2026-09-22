@@ -76,6 +76,15 @@ export interface ThoughtBundleChronicleItem {
 export interface ThoughtBundleInput {
   thought_id?: string;
   thought?: ThoughtBundleThoughtInput;
+  /**
+   * Apply to an existing thought (addressed by `thought_id`) without a
+   * nested `thought` block. Absorbs `etn.thoughts.set_active` (bug
+   * faf56a02-e884-488b-9b7b-39dfd5d5b275): when `thought_id` is given,
+   * the item-level `active` field toggles the thought's `active` flag
+   * even if no `thought` patch is supplied. Wins over `thought.active`
+   * when both are set.
+   */
+  active?: boolean;
   on_duplicate?: ThoughtBundleOnDuplicate;
   comment?: ThoughtBundleCommentInput;
   /** Chronicle entries appended to the owner's comment log (task 053751b5). */

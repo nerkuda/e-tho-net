@@ -313,6 +313,7 @@ export function writeThoughts(
       const bundleInput: ThoughtBundleInput = {
         ...(item.thought_id !== undefined ? { thought_id: item.thought_id } : {}),
         ...(item.thought !== undefined ? { thought: item.thought } : {}),
+        ...(item.active !== undefined ? { active: item.active } : {}),
         ...(item.on_duplicate !== undefined ? { on_duplicate: item.on_duplicate } : {}),
         ...(item.comment === undefined ? {} : { comment: item.comment }),
         ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),

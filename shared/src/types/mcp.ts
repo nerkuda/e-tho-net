@@ -507,6 +507,14 @@ export interface McpThoughtWriteItem {
     type?: string;
     active?: boolean;
   };
+  /**
+   * Apply `active` to the existing thought addressed by `thought_id`,
+   * without supplying a nested `thought` block. Absorbs
+   * `etn.thoughts.set_active` (bug faf56a02-e884-488b-9b7b-39dfd5d5b275):
+   * before the fix the field was silently dropped by Zod (item-level
+   * `active` was unknown). Wins over `thought.active` when both are set.
+   */
+  active?: boolean;
   /** How to handle a `find_duplicates` match against `thought.title`/`synonyms`
    *  when `thought_id` is absent. Mirrors `etn.thoughts.upsert_bundle`. */
   on_duplicate?: ThoughtBundleOnDuplicate;

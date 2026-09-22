@@ -49,15 +49,26 @@ function resolveThought(
   if (input.thought_id !== undefined) {
     let thought = getThoughtOrThrow(ndb, input.thought_id);
     let action: ThoughtBundleThoughtAction = 'reused';
-    if (input.thought !== undefined) {
+    // `active` at item level (absorbed from `etn.thoughts.set_active`) is
+    // applied even when `thought` is absent: the contract claims
+    // `etn.thoughts.set_active` is absorbed by `etn.thoughts.write`, so the
+    // item-level field must take effect on existing thoughts (bug
+    // faf56a02-e884-488b-9b7b-39dfd5d5b275). When both `input.active` and
+    // `input.thought.active` are present, the item-level field wins — it's
+    // the more specific intent ("just toggle active for this existing
+    // thought").
+    const itemActive = input.active;
+    const thoughtActive = input.thought?.active;
+    const mergedActive = itemActive !== undefined ? itemActive : thoughtActive;
+    if (input.thought !== undefined || mergedActive !== undefined) {
       thought = updateThought(
         ndb,
         thought.id,
         {
-          title: input.thought.title,
-          ...(input.thought.synonyms === undefined ? {} : { synonyms: input.thought.synonyms }),
-          ...(input.thought.type_id === undefined ? {} : { type_id: input.thought.type_id }),
-          ...(input.thought.active === undefined ? {} : { active: input.thought.active }),
+          ...(input.thought?.title === undefined ? {} : { title: input.thought.title }),
+          ...(input.thought?.synonyms === undefined ? {} : { synonyms: input.thought.synonyms }),
+          ...(input.thought?.type_id === undefined ? {} : { type_id: input.thought.type_id }),
+          ...(mergedActive === undefined ? {} : { active: mergedActive }),
         },
         undefined,
         actorUserId,

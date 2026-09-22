@@ -98,6 +98,12 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       ref: z.string().min(1).optional(),
       thought_id: z.string().min(1).optional(),
       thought: BundleThoughtSchema.optional(),
+      // Item-level `active` — absorbed from `etn.thoughts.set_active`
+      // (bug faf56a02-e884-488b-9b7b-39dfd5d5b275). Applied to the
+      // existing thought addressed by `thought_id` even without a
+      // nested `thought` block. Wins over `thought.active` when both
+      // are set.
+      active: z.boolean().optional(),
       on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
       comment: BundleCommentSchema.optional(),
       chronicle: z.array(WriteChronicleItemSchema).optional(),
@@ -161,6 +167,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
             ...(item.ref === undefined ? {} : { ref: item.ref }),
             ...(item.thought_id === undefined ? {} : { thought_id: item.thought_id }),
             ...(item.thought === undefined ? {} : { thought: item.thought }),
+            ...(item.active === undefined ? {} : { active: item.active }),
             ...(item.on_duplicate === undefined ? {} : { on_duplicate: item.on_duplicate }),
             ...(item.comment === undefined ? {} : { comment: item.comment }),
             ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),
