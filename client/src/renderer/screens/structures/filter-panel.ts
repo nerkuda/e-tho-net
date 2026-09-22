@@ -226,6 +226,7 @@ export function buildExtraFilter(): Pick<
   const wire = buildWireFilter(state, registryWithSides(), {
     activeMode: 'structures',
     showInactive: store.state.showInactive,
+    showTrash: store.state.showTrash,
   });
   const out: ReturnType<typeof buildExtraFilter> = {};
   if (wire.parent_ids !== undefined) out.parent_ids = wire.parent_ids;
@@ -280,7 +281,8 @@ export function invalidateSavedFilters(): void {
   void savedBar?.reload();
 }
 
-/** Признаки «Дополнительно» заполнены («Корзина» — независимый флаг). */
+/** Признаки «Дополнительно» заполнены («Корзина» — независимый флаг, но
+ *  участвует только при включённой настройке видимости — задача 77923b49). */
 function extrasActive(s: FilterCriteriaState): boolean {
   return (
     s.hasProperties !== null ||
@@ -288,7 +290,7 @@ function extrasActive(s: FilterCriteriaState): boolean {
     s.hasAttachments !== null ||
     s.hasChronology !== null ||
     (s.active !== null && store.state.showInactive) ||
-    s.trashed
+    (s.trashed && store.state.showTrash)
   );
 }
 
@@ -304,7 +306,7 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
 
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
-    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}`;
+    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}`;
     if (signature !== catalogueSignature) {
       catalogueSignature = signature;
       void loadPropertyDefs().then(() => renderPanel());
@@ -601,7 +603,10 @@ function renderPanel(): void {
       {
         activeDisabled: !store.state.showInactive,
         activeTooltip:
-          'Доступно при включённой настройке «Показывать неактуальное» (Вид → Неактуальные)',
+          'Доступно при включённой настройке «Показывать неактуальные мысли и связи» (Настройки мыслесети → Видимость)',
+        trashedDisabled: !store.state.showTrash,
+        trashedTooltip:
+          'Доступно при включённой настройке «Показывать содержимое корзины» (Настройки мыслесети → Видимость)',
       },
     ),
     buildSortSection(ctx),
@@ -688,6 +693,7 @@ function buildSavedDefinition(): SavedFilterDefinition {
     ...buildWireFilter(state, registryWithSides(), {
       activeMode: 'structures',
       showInactive: store.state.showInactive,
+      showTrash: store.state.showTrash,
     }),
     ...(traversalFilter !== undefined ? { link_filter: traversalFilter } : {}),
   };

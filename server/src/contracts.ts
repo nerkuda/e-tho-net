@@ -2156,6 +2156,7 @@ export const RestLinksByThought = defineContract(
       check: (v: unknown) => (typeof v === 'string' && v !== 'type' ? 'Поддерживается только group=type.' : null),
     },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
+    show_trash: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
   },
 );
 
@@ -2581,11 +2582,14 @@ export const RestIfMatch = defineContract(
   },
 );
 
-/** Тело focus-переопределения (show_inactive). */
+/** Тело focus-переопределения (show_inactive / show_trash). */
 export const RestFocusBody = defineContract(
   'rest:thoughts.focus-body',
-  z.object({ show_inactive: z.boolean().optional() }),
-  { show_inactive: { from: { kind: 'body' } } },
+  z.object({ show_inactive: z.boolean().optional(), show_trash: z.boolean().optional() }),
+  {
+    show_inactive: { from: { kind: 'body' } },
+    show_trash: { from: { kind: 'body' } },
+  },
 );
 
 /** Тело { ids: string[] } для пакетных операций. */
@@ -2612,6 +2616,7 @@ export const RestNeighborsQuery = defineContract(
     order: z.string().optional(),
     type_id: z.string().optional(),
     show_inactive: z.boolean().optional(),
+    show_trash: z.boolean().optional(),
     limit: z.number().int().min(1).optional(),
     offset: z.number().int().min(0).optional(),
   }),
@@ -2635,6 +2640,7 @@ export const RestNeighborsQuery = defineContract(
     },
     type_id: { from: { kind: 'query' }, t: z.string().optional() },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
+    show_trash: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
   },
@@ -2987,7 +2993,7 @@ function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInp
   return parseLinkTypeFilterValue(decoded, requestId);
 }
 
-/** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/offset/link_filter. */
+/** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/show_trash/offset/link_filter. */
 export const RestHierarchyQuery = defineContract(
   'rest:structures.hierarchy-query',
   z.object({
@@ -2995,6 +3001,7 @@ export const RestHierarchyQuery = defineContract(
     thought_id: z.string().min(1),
     dir: z.enum(['parents', 'children']),
     show_inactive: z.boolean().optional(),
+    show_trash: z.boolean().optional(),
     offset: z.number().int().min(0).optional(),
     link_filter: LinkFilter,
   }),
@@ -3003,6 +3010,7 @@ export const RestHierarchyQuery = defineContract(
     thought_id: { from: { kind: 'param', name: 'id' } },
     dir: { from: { kind: 'query' }, msg: 'dir должен быть parents или children.' },
     show_inactive: { from: { kind: 'query', coerce: 'bool' } },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
     offset: {
       from: { kind: 'query' },
       parse: (raw: unknown) => {
@@ -3021,18 +3029,20 @@ export const RestHierarchyQuery = defineContract(
   },
 );
 
-/** Тело POST /thoughts/edges — { ids, show_inactive } (+ network_id из params). */
+/** Тело POST /thoughts/edges — { ids, show_inactive, show_trash } (+ network_id из params). */
 export const RestEdgesBody = defineContract(
   'rest:structures.edges-body',
   z.object({
     network_id: NetworkId,
     ids: z.array(z.string()).min(1),
     show_inactive: z.boolean().optional(),
+    show_trash: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     ids: { from: { kind: 'body' }, msg: 'ids должен быть массивом строк.' },
     show_inactive: { from: { kind: 'body' } },
+    show_trash: { from: { kind: 'body' } },
   },
 );
 

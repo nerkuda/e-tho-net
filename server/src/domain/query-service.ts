@@ -466,9 +466,10 @@ export function directionsOf(
   ndb: NetworkDb,
   ids: string[],
   linkFilter?: LinkTypeFilterInput,
+  showTrash = true,
 ): StructureDirectionFlags {
   const out: StructureDirectionFlags = {};
-  for (const [id, d] of getLinkDirections(ndb, ids, linkFilter)) {
+  for (const [id, d] of getLinkDirections(ndb, ids, linkFilter, showTrash)) {
     out[id] = { has_incoming: d.has_in, has_outgoing: d.has_out };
   }
   return out;

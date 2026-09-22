@@ -23,6 +23,7 @@ import {
   actionOfChanges,
   openNetworkDb,
   openRouteNetworkDb,
+  resolveShowTrash,
   restWriteFx,
   runWrite,
   type RouteDeps,
@@ -157,6 +158,14 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const grouped = listLinksByThought(ndb, input.thought_id, {
           showInactive: input.show_inactive === true,
+          // Показывать содержимое корзины (задача 77923b49): grouped-список
+          // редактора прячет помеченные связи/мысли, когда настройка выключена.
+          showTrash: resolveShowTrash(
+            app,
+            req.auth!.user.id,
+            networkId,
+            input.show_trash as boolean | undefined,
+          ),
         });
         sendSuccess(reply, grouped);
       },

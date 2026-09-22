@@ -421,6 +421,11 @@ function validateFilterName(name: string, requestId?: string): string {
 /** Options of {@link getHierarchy}. */
 export interface HierarchyOptions {
   showInactive?: boolean;
+  /**
+   * Include trashed (marked-for-deletion) thoughts/links when true
+   * (preferences.show_trash, задача 77923b49). Defaults to `true`.
+   */
+  showTrash?: boolean;
   /** Thoughts already shown in the same root branch — excluded before paging. */
   excludeIds?: string[];
   /** Page offset into the post-exclude neighbor list (§15.5 per-node pagination). */
@@ -459,6 +464,7 @@ export function getHierarchy(
 ): HierarchyResponse {
   getThoughtOrThrow(ndb, thoughtId);
   const showInactive = opts.showInactive === true ? 1 : 0;
+  const showTrash = opts.showTrash !== false ? 1 : 0;
   const exclude = new Set((opts.excludeIds ?? []).slice(0, HIERARCHY_EXCLUDE_MAX_IDS));
   const typeClause = linkTypeFilterClause(ndb, opts.linkFilter, 'l');
   const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
@@ -471,12 +477,18 @@ export function getHierarchy(
       `SELECT DISTINCT ${REF_COLUMNS}
        FROM links_v l
        JOIN thoughts_v t ON t.id = ${neighbourJoin}
-       WHERE ${focusSide} = ? AND (l.active = 1 OR ?) AND (t.active = 1 OR ?)${typeSql}
+       WHERE ${focusSide} = ? AND (l.active = 1 OR ?) AND (t.active = 1 OR ?)
+         AND (l.marked_for_deletion = 0 OR ?) AND (t.marked_for_deletion = 0 OR ?)${typeSql}
        ORDER BY t.title COLLATE NOCASE ASC`,
     )
-    .all(thoughtId, showInactive, showInactive, ...typeParams) as Array<
-    Parameters<typeof rowToThoughtRef>[0]
-  >;
+    .all(
+      thoughtId,
+      showInactive,
+      showInactive,
+      showTrash,
+      showTrash,
+      ...typeParams,
+    ) as Array<Parameters<typeof rowToThoughtRef>[0]>;
   const fresh = rows.filter((row) => !exclude.has(row.id));
   const offset = Math.max(opts.offset ?? 0, 0);
   const page = fresh.slice(offset, offset + STRUCTURES_NODE_NEIGHBORS_LIMIT);
@@ -486,9 +498,13 @@ export function getHierarchy(
   const visibleIds = [thoughtId, ...neighbors.map((n) => n.id)];
   // Same projection as the focus response (`toFocusEdge`) — including the
   // trash flag (ошибка 355319d4), so the tree marks trashed edges like the map.
-  const edges = getEdgesAmong(ndb, visibleIds, opts.showInactive === true, opts.linkFilter).map(
-    toFocusEdge,
-  );
+  const edges = getEdgesAmong(
+    ndb,
+    visibleIds,
+    opts.showInactive === true,
+    opts.linkFilter,
+    opts.showTrash !== false,
+  ).map(toFocusEdge);
   // Whether each visible thought has active incoming/outgoing links at all —
   // in the tree these mean "has parents/children to expand", so the ellipses
   // can be filled exactly like on the canvas.
@@ -497,7 +513,7 @@ export function getHierarchy(
     edges,
     truncated: hasMore,
     has_more: hasMore,
-    directions: directionsOf(ndb, visibleIds, opts.linkFilter),
+    directions: directionsOf(ndb, visibleIds, opts.linkFilter, opts.showTrash !== false),
   };
 }
 

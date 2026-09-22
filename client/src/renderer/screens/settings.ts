@@ -21,7 +21,8 @@
  * - **Мыслесеть** — network `display_name` plus four markdown self-description
  *   fields (L2, task O5: `description`, `when_to_use`, `conventions`,
  *   `examples`), the per-network `type_roles.table_of_contents` dropdown and the
- *   per-user `show_inactive` L3 preference. Markdown tabs are owner-only.
+ *   per-user `show_inactive` / `show_trash` L3 preferences (group «Видимость»). Markdown
+ *   tabs are owner-only.
  * - **Клиент** — UI theme (L5 `client_meta.theme`) and `cloud_width` /
  *   `cloud_gap` (L4 `ui_state`), all clipped to the system constants.
  * - **Логирование** — client/server diagnostic journals (task 92b89e6f,
@@ -51,6 +52,7 @@ import { notice } from '../lib/notice.js';
 import { clip } from '../lib/pure.js';
 import { store, type Theme } from '../state.js';
 import { buildLogsSection } from './settings-logs.js';
+import { scheduleStructuresRefresh } from './structures/structures.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
 type Section = 'user' | 'network' | 'client' | 'logs';
@@ -104,6 +106,7 @@ interface Draft {
   networkNodeSectionTypeId: string | null;
   networkInstructionsTypeId: string | null;
   showInactive: boolean;
+  showTrash: boolean;
   theme: Theme;
   cloudWidth: number;
   cloudGap: number;
@@ -129,6 +132,7 @@ function readInitialDraft(): Draft {
         ? net.type_roles.instructions
         : null,
     showInactive: store.state.showInactive,
+    showTrash: store.state.showTrash,
     theme: store.state.theme,
     cloudWidth: store.state.cloudWidth,
     cloudGap: store.state.cloudGap,
@@ -147,6 +151,7 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.networkNodeSectionTypeId !== b.networkNodeSectionTypeId ||
     a.networkInstructionsTypeId !== b.networkInstructionsTypeId ||
     a.showInactive !== b.showInactive ||
+    a.showTrash !== b.showTrash ||
     a.theme !== b.theme ||
     a.cloudWidth !== b.cloudWidth ||
     a.cloudGap !== b.cloudGap
@@ -469,6 +474,22 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       span('Показывать неактуальные мысли и связи в этой сети'),
     );
 
+    // «Показывать содержимое корзины» (задача 77923b49) — рядом с неактуальными,
+    // тот же механизм (L3 `show_trash`): выключено — помеченные на удаление
+    // мысли/связи скрыты на карте, в локальном графе редактора и в структурах.
+    const showTrashCheckbox = el('input');
+    showTrashCheckbox.type = 'checkbox';
+    showTrashCheckbox.checked = draft.showTrash;
+    showTrashCheckbox.addEventListener('change', () => {
+      draft.showTrash = showTrashCheckbox.checked;
+      markDirty();
+    });
+    const showTrashLabel = el('label', 'checkbox-row');
+    showTrashLabel.append(
+      showTrashCheckbox,
+      span('Показывать содержимое корзины в этой сети'),
+    );
+
     const ownerHint = isOwner
       ? 'Эти поля задаёт владелец сети; изменения сохраняются для всех участников.'
       : 'Эти поля задаёт владелец сети. Вы можете посмотреть их, но не изменить.';
@@ -498,6 +519,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       el('p', 'muted', ownerHint),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
       showInactiveLabel,
+      showTrashLabel,
       el('p', 'muted', 'Общая настройка для всех ваших клиентов в этой сети.'),
     );
     return root;
@@ -659,6 +681,22 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
+    // Network: show_trash (L3, задача 77923b49) — «Показывать содержимое
+    // корзины». Тот же путь, что у show_inactive: preference → store →
+    // перечитывание. Плюс перезапрос деревьев «Структур»: сервер прячет
+    // помеченных в иерархии/рёбрах этого экрана, переключатель обязан
+    // отработать без перезапуска.
+    if (draft.showTrash !== original.showTrash) {
+      tasks.push(
+        (async () => {
+          await etn.networks.setPreference(networkId, PREF_KEY.SHOW_TRASH, draft.showTrash);
+          store.update({ showTrash: draft.showTrash });
+          scheduleRefresh();
+          scheduleStructuresRefresh();
+        })(),
+      );
+    }
+
     // Client: theme (L5). Mirrors `lib/theme.ts` — apply to the DOM right
     // away so the user sees the change live, then persist.
     if (draft.theme !== original.theme) {
@@ -709,6 +747,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.networkNodeSectionTypeId = draft.networkNodeSectionTypeId;
       original.networkInstructionsTypeId = draft.networkInstructionsTypeId;
       original.showInactive = draft.showInactive;
+      original.showTrash = draft.showTrash;
       original.theme = draft.theme;
       original.cloudWidth = draft.cloudWidth;
       original.cloudGap = draft.cloudGap;

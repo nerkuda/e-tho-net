@@ -7,7 +7,8 @@
  * interactions:
  *
  * - chips: icon + ≤64-char title, thought/type colours, dimmed when inactive;
- *   inactive pins are hidden while `show_inactive` is off (like the history);
+ *   inactive pins are hidden while `show_inactive` is off, marked-for-deletion
+ *   pins while `show_trash` is off (задача 77923b49) — like the history;
  * - overflow: chips that don't fit on the row move into a dropdown («▾ N»)
  *   like the history dropdown; rows drag onto the canvas as well;
  * - click: the map view focuses the thought (the editor follows), the
@@ -95,7 +96,7 @@ async function render(): Promise<void> {
   if (host === null) return;
   const networkId = store.state.networkId;
   const pins = store.state.pins;
-  const signature = `${networkId ?? ''}|${pins.join(',')}|${String(store.state.showInactive)}`;
+  const signature = `${networkId ?? ''}|${pins.join(',')}|${String(store.state.showInactive)}|${String(store.state.showTrash)}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 
@@ -107,10 +108,14 @@ async function render(): Promise<void> {
   // A newer render may have started while we fetched — don't paint stale data.
   if (host === null || !host.isConnected || signature !== lastSignature) return;
 
-  // Inactive pins follow the «Показывать неактуальное» setting (§16).
+  // Inactive pins follow the «Показывать неактуальное» setting (§16), marked-
+  // for-deletion ones — «Показывать содержимое корзины» (задача 77923b49):
+  // обе настройки видимости прячут облачко целиком.
   const visible = pins.filter((id) => {
     const ref = refs.get(id);
-    return store.state.showInactive || ref === undefined || ref.active;
+    if (ref === undefined) return true;
+    return (store.state.showInactive || ref.active) &&
+      (store.state.showTrash || ref.marked_for_deletion !== true);
   });
 
   clear(host);

@@ -49,6 +49,7 @@ import {
   parseLinkTypeFilterQuery,
   queryStrings,
   requestBody,
+  resolveShowTrash,
   restWriteFx,
   runWrite,
   type AnyWriteEvent,
@@ -322,8 +323,17 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const override = parseRest(RestFocusBody, req).show_inactive as boolean | undefined;
+        const focusBody = parseRest(RestFocusBody, req);
+        const override = focusBody.show_inactive as boolean | undefined;
         const showInactive = resolveShowInactive(app, req, networkId, override);
+        // Показывать содержимое корзины (задача 77923b49): фокус/карта и
+        // локальный граф редактора — тот же путь, что show_inactive.
+        const showTrash = resolveShowTrash(
+          app,
+          req.auth!.user.id,
+          networkId,
+          focusBody.show_trash as boolean | undefined,
+        );
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Задача c965ad03: фильтр обхода по типам связей — зоны, рёбра и
         // индикаторы направлений ограничиваются выбранными типами. Задача
@@ -338,7 +348,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           parseLinkTypeFilter(requestBody(req), req.id),
         );
         const response = runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
-          result: focus(ndb, req.auth!.user.id, id, { showInactive, linkFilter }),
+          result: focus(ndb, req.auth!.user.id, id, { showInactive, showTrash, linkFilter }),
           events: [
             {
               type: 'thought-view.updated',
@@ -515,6 +525,12 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             req,
             networkId,
             input.show_inactive as boolean | undefined,
+          ),
+          showTrash: resolveShowTrash(
+            app,
+            req.auth!.user.id,
+            networkId,
+            input.show_trash as boolean | undefined,
           ),
           sort: sortRaw as SortKind | undefined,
           order: orderRaw as SortOrder | undefined,

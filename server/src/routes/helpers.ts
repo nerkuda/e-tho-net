@@ -11,11 +11,12 @@
  * запроса как объекта и обёртки фильтра типов связей (shared-домен).
  */
 
-import type { FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import {
   BASE_LAYER_ID,
   EtnError,
+  PREF_KEY,
   type LayerEcho,
   type LinkTypeFilterInput,
   type RealtimeAudience,
@@ -143,6 +144,24 @@ export function requestBody(req: FastifyRequest): Record<string, unknown> {
     return {};
   }
   return req.body as Record<string, unknown>;
+}
+
+/**
+ * Resolve the `show_trash` visibility flag (задача 77923b49, 0.8.2): an
+ * explicit request-level override wins, otherwise the user's network
+ * preference `preferences.show_trash`. Default is `true` — помеченные на
+ * удаление элементы видны с признаком корзины (поведение после 355319d4);
+ * `false` прячет их на карте, локальном графе и в структурах.
+ */
+export function resolveShowTrash(
+  app: FastifyInstance,
+  userId: string,
+  networkId: string,
+  override?: boolean,
+): boolean {
+  if (override !== undefined) return override;
+  const pref = app.systemDb.getNetworkPreference(userId, networkId, PREF_KEY.SHOW_TRASH);
+  return pref?.value !== false;
 }
 
 /**

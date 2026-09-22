@@ -50,6 +50,7 @@ import { emitDomainEvent } from '../realtime/emit.js';
 /** Keys accepted by `PUT /networks/:id/preferences/:key` (11-settings-and-state.md §2.1 L3). */
 const SUPPORTED_PREFERENCE_KEYS = new Set<string>([
   PREF_KEY.SHOW_INACTIVE,
+  PREF_KEY.SHOW_TRASH,
   PREF_KEY.CANVAS_LINK_FILTER,
 ]);
 

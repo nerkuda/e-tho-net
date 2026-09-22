@@ -34,6 +34,7 @@ import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
   openRouteNetworkDb,
   requestBody,
+  resolveShowTrash,
   restWriteFx,
   runWrite,
   type RouteDeps,
@@ -159,10 +160,19 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const networkId = input.network_id as string;
         const dir = input.dir as 'parents' | 'children';
         const showInactive = (input.show_inactive as boolean | undefined) ?? false;
+        // Показывать содержимое корзины (задача 77923b49): дерево «Структур»
+        // прячет помеченных, когда настройка выключена (default — видны).
+        const showTrash = resolveShowTrash(
+          app,
+          req.auth!.user.id,
+          networkId,
+          input.show_trash as boolean | undefined,
+        );
         const offset = input.offset ?? 0;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const data = getHierarchy(ndb, input.thought_id, dir, {
           showInactive,
+          showTrash,
           excludeIds: csvToList((req.query as Record<string, unknown>)['exclude_ids']),
           offset,
           // Фильтр обхода по связям (ошибка db504c1a): раскрытие ветви обязано
@@ -183,11 +193,19 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const networkId = input.network_id as string;
         const ids = (input.ids as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
         const showInactive = input.show_inactive === true;
+        const showTrash = resolveShowTrash(
+          app,
+          req.auth!.user.id,
+          networkId,
+          input.show_trash as boolean | undefined,
+        );
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Same projection as the focus response (`toFocusEdge`) — including
         // the trash flag from 355319d4, so the tree lines mark trashed edges
         // exactly like the map does.
-        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive).map(toFocusEdge);
+        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive, undefined, showTrash).map(
+          toFocusEdge,
+        );
         sendSuccess(reply, { edges });
       },
     );

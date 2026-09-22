@@ -93,6 +93,10 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
+  // «Показывать содержимое корзины» (задача 77923b49): по умолчанию `true` —
+  // помеченные на удаление элементы видны с признаком корзины (355319d4).
+  const showTrashPref = prefs.find((p) => p.key === PREF_KEY.SHOW_TRASH);
+  const showTrash = typeof showTrashPref?.value === 'boolean' ? showTrashPref.value : true;
   // Requirement «Дефолт и хранение фильтра типов связей на карте» (0.8.1):
   // `null` — no explicit preference, the server (and the filter dialog)
   // fall back to the live `show_on_map` default.
@@ -145,6 +149,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     network,
     networkId,
     showInactive,
+    showTrash,
     canvasLinkFilter,
     cloudWidth: parseCloudWidth(cloudWidthRaw),
     cloudGap: parseCloudGap(cloudGapRaw),

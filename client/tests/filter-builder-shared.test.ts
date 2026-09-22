@@ -267,4 +267,34 @@ describe('выравненные возможности отбора', () => {
     assert.deepEqual(wire.type_id, ['t1', 't2']);
     assert.deepEqual(wire.link_type_id, ['l1', 'l2']);
   });
+
+  // Задача 77923b49: настройка «Показывать содержимое корзины» гасит критерий
+  // «Корзина» в панели «Структур» — ровно так же, как «Показывать
+  // неактуальное» гасит «Актуальность» (иначе явный флаг отбора возвращал бы
+  // на экран то, что настройка прячет).
+  it('«Структуры»: выключенная настройка корзины выбрасывает критерий trashed', () => {
+    const state = { ...defaultFilterCriteriaState(), trashed: true };
+    const on = buildWireFilter(state, EMPTY_REGISTRY, {
+      activeMode: 'structures',
+      showTrash: true,
+    });
+    assert.equal(on.trashed, true, 'настройка включена — критерий едет в запрос');
+    const off = buildWireFilter(state, EMPTY_REGISTRY, {
+      activeMode: 'structures',
+      showTrash: false,
+    });
+    assert.equal(off.trashed, undefined, 'настройка выключена — критерий не проходит');
+    const absent = buildWireFilter(state, EMPTY_REGISTRY, { activeMode: 'structures' });
+    assert.equal(
+      absent.trashed,
+      true,
+      'без явной настройки поведение прежнее',
+    );
+    // Отбор типа мысли — другой экран: настройку видимости он не получает,
+    // критерий едет как раньше.
+    assert.equal(
+      buildWireFilter(state, EMPTY_REGISTRY, { activeMode: 'view' }).trashed,
+      true,
+    );
+  });
 });

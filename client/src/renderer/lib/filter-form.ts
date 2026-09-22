@@ -577,13 +577,24 @@ export function buildTriRow(
   return row;
 }
 
-/** Строка флажка «Включая помеченные на удаление» (корзина). */
-export function buildTrashedRow(ctx: FilterFormContext, label = 'Включая помеченные на удаление'): HTMLElement {
+/** Строка флажка «Включая помеченные на удаление» (корзина).
+ *  `disabled` гасит флажок, когда содержимое корзины не показывают (задача
+ *  77923b49) — та же дисциплина, что у «Только актуальные» при выключенном
+ *  «Показывать неактуальное». */
+export function buildTrashedRow(
+  ctx: FilterFormContext,
+  label = 'Включая помеченные на удаление',
+  opts: { disabled?: boolean; tooltip?: string } = {},
+): HTMLElement {
   const row = div('st-f-tri-row');
   const lbl = el('label', 'checkbox-row') as HTMLLabelElement;
   const cb = el('input') as HTMLInputElement;
   cb.type = 'checkbox';
   cb.checked = ctx.getState().trashed;
+  if (opts.disabled === true) {
+    cb.disabled = true;
+    if (opts.tooltip !== undefined) setTooltip(lbl, opts.tooltip);
+  }
   cb.addEventListener('change', () => {
     ctx.getState().trashed = cb.checked;
     ctx.touch();
@@ -598,6 +609,9 @@ export interface ExtrasSectionOptions {
   /** Подписи строк и вид признака «Актуальность» (в «Структурах» — отключён). */
   activeDisabled?: boolean;
   activeTooltip?: string;
+  /** Флажок «Корзина» гаснет, когда корзину не показывают (задача 77923b49). */
+  trashedDisabled?: boolean;
+  trashedTooltip?: string;
 }
 
 /** Признаки отбора заполнены. */
@@ -638,7 +652,10 @@ export function buildExtrasSection(
       ...(opts.activeDisabled === true ? { disabled: true } : {}),
       ...(opts.activeTooltip !== undefined ? { tooltip: opts.activeTooltip } : {}),
     }),
-    buildTrashedRow(ctx),
+    buildTrashedRow(ctx, 'Включая помеченные на удаление', {
+      ...(opts.trashedDisabled === true ? { disabled: true } : {}),
+      ...(opts.trashedTooltip !== undefined ? { tooltip: opts.trashedTooltip } : {}),
+    }),
   );
   return section;
 }

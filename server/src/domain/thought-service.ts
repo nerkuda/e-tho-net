@@ -1241,6 +1241,12 @@ export interface NeighborOptions {
   userId?: string;
   /** Include inactive thoughts/links when true (preferences.show_inactive). */
   showInactive?: boolean;
+  /**
+   * Include trashed (marked-for-deletion) thoughts/links when true
+   * (preferences.show_trash, задача 77923b49). Defaults to `true`: пометка
+   * видна с признаком корзины, как после фикса 355319d4.
+   */
+  showTrash?: boolean;
   /** Sort strategy (docs/11-settings-and-state.md §3.2). */
   sort?: SortKind;
   /** Sort direction. */
@@ -1347,6 +1353,9 @@ function buildNeighborsQuery(
   focusThoughtId: string,
 ): { sql: string; params: unknown[] } {
   const showInactive = opts.showInactive === true ? 1 : 0;
+  // Trash visibility (задача 77923b49): `false` прячет помеченные на удаление
+  // мысли/связи; по умолчанию `true` — пометка видна (355319d4).
+  const showTrash = opts.showTrash !== false ? 1 : 0;
   const userId = opts.userId;
   const useViewedJoin = sort === 'viewed' && !!userId;
   const useManualJoin = sort === 'manual' && dir !== 'siblings' && !!userId;
@@ -1402,12 +1411,25 @@ function buildNeighborsQuery(
     params.push(focusThoughtId, focusThoughtId);
   }
   // Active filter on the link(s) and the neighbour thought, gated by showInactive.
+  // Trash filter (задача 77923b49) — gated by showTrash (default: visible).
   if (dir === 'siblings') {
-    where.push('(lp.active = 1 OR ?)', '(l.active = 1 OR ?)', '(t.active = 1 OR ?)');
-    params.push(showInactive, showInactive, showInactive);
+    where.push(
+      '(lp.active = 1 OR ?)',
+      '(l.active = 1 OR ?)',
+      '(t.active = 1 OR ?)',
+      '(lp.marked_for_deletion = 0 OR ?)',
+      '(l.marked_for_deletion = 0 OR ?)',
+      '(t.marked_for_deletion = 0 OR ?)',
+    );
+    params.push(showInactive, showInactive, showInactive, showTrash, showTrash, showTrash);
   } else {
-    where.push('(l.active = 1 OR ?)', '(t.active = 1 OR ?)');
-    params.push(showInactive, showInactive);
+    where.push(
+      '(l.active = 1 OR ?)',
+      '(t.active = 1 OR ?)',
+      '(l.marked_for_deletion = 0 OR ?)',
+      '(t.marked_for_deletion = 0 OR ?)',
+    );
+    params.push(showInactive, showInactive, showTrash, showTrash);
   }
   // Optional thought-type filter (03-server-api.md §6.7). Pushed after the
   // clauses above so the bind order stays aligned with `where`.
@@ -1503,6 +1525,11 @@ export interface FocusOptions {
   /** Include inactive thoughts/links when true (preferences.show_inactive). */
   showInactive?: boolean;
   /**
+   * Include trashed (marked-for-deletion) thoughts/links when true
+   * (preferences.show_trash, задача 77923b49). Defaults to `true`.
+   */
+  showTrash?: boolean;
+  /**
    * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): зоны фокуса
    * наполняются только по рёбрам выбранных типов (+структурные при
    * `include_structural`), рёбра и индикаторы направлений — те же типы.
@@ -1529,6 +1556,7 @@ export function focus(
 ): FocusResponse {
   const focused = getThoughtOrThrow(ndb, thoughtId);
   const showInactive = opts.showInactive === true;
+  const showTrash = opts.showTrash !== false;
   const now = new Date().toISOString();
 
   // Record the view mark (upsert). audience=user event emitted by the realtime layer.
@@ -1566,6 +1594,7 @@ export function focus(
     grouped[dir] = getNeighbors(ndb, thoughtId, dir, {
       userId,
       showInactive,
+      showTrash,
       sort: prefs[dir]?.sort,
       order: prefs[dir]?.order,
       linkFilter: opts.linkFilter,
@@ -1598,10 +1627,12 @@ export function focus(
   // focus edges and the structures `/thoughts/edges` response, so a new edge
   // field cannot reach only one of them (ошибка 355319d4 came from exactly
   // that kind of drift).
-  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter).map(toFocusEdge);
+  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter, showTrash).map(
+    toFocusEdge,
+  );
   // Whether each visible thought has any incoming/outgoing link at all —
   // drives the top/bottom ellipse fill so chains are visible off-screen.
-  const directions = getLinkDirections(ndb, visibleIds, opts.linkFilter);
+  const directions = getLinkDirections(ndb, visibleIds, opts.linkFilter, showTrash);
   const annotate = (n: FocusNeighbor): FocusNeighbor => {
     const d = directions.get(n.id) ?? { has_in: false, has_out: false };
     return { ...n, has_incoming: d.has_in, has_outgoing: d.has_out };

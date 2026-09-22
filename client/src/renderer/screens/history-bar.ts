@@ -18,8 +18,10 @@
  *   by the row width;
  * - empty history hides the area entirely;
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
- *   thoughts were already pruned locally by the main-process applier, and
- *   inactive thoughts are hidden while `show_inactive` is off;
+ *   thoughts were already pruned locally by the main-process applier, inactive
+ *   thoughts are hidden while `show_inactive` is off, and marked-for-deletion
+ *   ones while `show_trash` is off (задача 77923b49, симметрия настроек
+ *   видимости);
  * - clicking an entry opens the thought in the editor: switches the focus
  *   (map view) or opens the thought without moving the canvas focus
  *   (structures/chronicle view) — the current-thought frame follows the pick
@@ -125,7 +127,7 @@ async function render(): Promise<void> {
   const view = store.state.activeView;
   // The width is part of the signature: the visible chip set depends on it.
   // The view is part of it too: chips route the click per the active screen.
-  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${host.clientWidth}`;
+  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${host.clientWidth}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 
@@ -150,7 +152,12 @@ async function render(): Promise<void> {
     // the user moves away from it.
     if (id === activeId) return false;
     const ref = refs.get(id);
-    return store.state.showInactive || ref === undefined || ref.active;
+    // Неактуальные — по `show_inactive`, помеченные на удаление — по
+    // `show_trash` (задача 77923b49): оба переключателя прячут облачко, но
+    // ведут себя как одна настройка видимости (симметрия механизмов).
+    if (ref === undefined) return true;
+    return (store.state.showInactive || ref.active) &&
+      (store.state.showTrash || ref.marked_for_deletion !== true);
   });
 
   clear(host);

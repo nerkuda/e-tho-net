@@ -72,6 +72,12 @@ export interface AppState {
   /** L3 `show_inactive` preference of the open network. */
   showInactive: boolean;
   /**
+   * L3 `show_trash` preference of the open network (задача 77923b49):
+   * `false` — помеченные на удаление мысли/связи скрыты на карте, локальном
+   * графе и в структурах. Default `true` (пометка видна, как после 355319d4).
+   */
+  showTrash: boolean;
+  /**
    * L3 `canvas_link_filter` preference of the open network — the user's
    * explicit canvas link-type filter, or `null` when unset (the effective
    * filter is then the live `show_on_map`-derived default). See module
@@ -201,6 +207,7 @@ const initial: AppState = {
   networkId: null,
   focus: null,
   showInactive: false,
+  showTrash: true,
   canvasLinkFilter: null,
   cloudWidth: CLOUD_WIDTH_DEFAULT,
   cloudGap: CLOUD_GAP_DEFAULT,
@@ -281,6 +288,7 @@ class Store {
       networkId: null,
       focus: null,
       showInactive: false,
+      showTrash: true,
       canvasLinkFilter: null,
       selection: [],
       selectedLinkId: null,

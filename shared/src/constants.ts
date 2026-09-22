@@ -143,6 +143,13 @@ export const WS_PONG_TIMEOUT_MS = 60_000;
 export const PREF_KEY = {
   SHOW_INACTIVE: 'show_inactive',
   /**
+   * Показывать содержимое корзины (задача 77923b49, 0.8.2): `true` —
+   * помеченные на удаление мысли/связи видны на карте, локальном графе и в
+   * структурах (как было после фикса 355319d4); `false` — скрыты. По умолчанию
+   * (`true`) поведение не меняется: пометка видна с признаком корзины.
+   */
+  SHOW_TRASH: 'show_trash',
+  /**
    * Canvas link-type filter (task «Фильтр типов связей на карте мыслей»,
    * 0.8.1): `{ type_ids: string[], include_structural: boolean } | null`.
    * `null`/absent — the client derives the live default from `show_on_map`

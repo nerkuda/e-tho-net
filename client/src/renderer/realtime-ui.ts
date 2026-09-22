@@ -258,6 +258,13 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
         store.update({ showInactive: evt.data.value === true });
         scheduleRefresh();
         scheduleStructuresRefresh();
+      } else if (evt.data.key === PREF_KEY.SHOW_TRASH) {
+        // «Показывать содержимое корзины» (77923b49) — правка другого клиента:
+        // карта, локальный граф и структуры перечитываются (сервер фильтрует
+        // помеченных по этой настройке).
+        store.update({ showTrash: evt.data.value !== false });
+        scheduleRefresh();
+        scheduleStructuresRefresh();
       } else if (evt.data.key === PREF_KEY.CANVAS_LINK_FILTER) {
         // Another client (or the filter dialog itself) changed the canvas
         // link-type filter (0.8.1) — pick up the new value and re-render the

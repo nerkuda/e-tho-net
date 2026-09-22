@@ -382,6 +382,13 @@ export interface WireFilterOptions {
   activeMode: 'structures' | 'view';
   /** Для `activeMode: 'structures'` — настройка «Показывать неактуальное». */
   showInactive?: boolean;
+  /**
+   * Для `activeMode: 'structures'` — настройка «Показывать содержимое
+   * корзины» (задача 77923b49). `false` — критерий «Корзина» не проходит в
+   * wire: помеченные на удаление скрыты, как их прячет сервер в графовых
+   * выборках. `undefined` (отбор типа мысли) — критерий едет как раньше.
+   */
+  showTrash?: boolean;
 }
 
 /**
@@ -431,8 +438,12 @@ export function buildWireFilter(
       out.show_inactive = true;
     }
   }
-  // S13: marked-for-deletion participates as an independent on/off flag.
-  if (state.trashed) out.trashed = true;
+  // S13: marked-for-deletion participates as an independent on/off flag —
+  // но в панели «Структур» только когда содержимое корзины вообще доступно
+  // (задача 77923b49): при выключенной настройке «Показывать содержимое
+  // корзины» критерий не проходит, помеченные скрыты — та же дисциплина, что
+  // у `active` с `show_inactive` выше.
+  if (state.trashed && opts.showTrash !== false) out.trashed = true;
 
   // Задача 59119797: оператор + значение (id или массив id).
   // `empty`/`not_empty` несут только оператор: значение не выставляется

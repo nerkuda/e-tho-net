@@ -242,12 +242,17 @@ export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
  * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы возвращаемых рёбер
  * (типы с потомками + опционально структурные) — фокус-ответ с фильтром не
  * должен рисовать линии, которые обход отфильтровал.
+ *
+ * `showTrash` (задача 77923b49, 0.8.2): `false` прячет рёбра, помеченные на
+ * удаление, — настройка сети «Показывать содержимое корзины». По умолчанию
+ * `true` (пометка видна, как после 355319d4).
  */
 export function getEdgesAmong(
   ndb: NetworkDb,
   ids: string[],
   showInactive: boolean,
   linkFilter?: LinkTypeFilterInput,
+  showTrash = true,
 ): Link[] {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
@@ -258,9 +263,15 @@ export function getEdgesAmong(
     .prepare(
       `SELECT l.* FROM links_v l
        WHERE l.source_id IN (${placeholders}) AND l.target_id IN (${placeholders})
-         AND (l.active = 1 OR ?)${typeSql}`,
+         AND (l.active = 1 OR ?) AND (l.marked_for_deletion = 0 OR ?)${typeSql}`,
     )
-    .all(...ids, ...ids, showInactive ? 1 : 0, ...typeParams) as LinkRow[];
+    .all(
+      ...ids,
+      ...ids,
+      showInactive ? 1 : 0,
+      showTrash ? 1 : 0,
+      ...typeParams,
+    ) as LinkRow[];
   return rows.map(rowToLink);
 }
 
@@ -300,6 +311,7 @@ export function getLinkDirections(
   ndb: NetworkDb,
   ids: string[],
   linkFilter?: LinkTypeFilterInput,
+  showTrash = true,
 ): Map<string, { has_in: boolean; has_out: boolean }> {
   const result = new Map<string, { has_in: boolean; has_out: boolean }>();
   if (ids.length === 0) return result;
@@ -311,9 +323,15 @@ export function getLinkDirections(
   const rows = ndb
     .prepare(
       `SELECT l.source_id, l.target_id FROM links_v l WHERE l.active = 1
+         AND (l.marked_for_deletion = 0 OR ?)
          AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}`,
     )
-    .all(...ids, ...ids, ...typeParams) as Array<{ source_id: string; target_id: string }>;
+    .all(
+      showTrash ? 1 : 0,
+      ...ids,
+      ...ids,
+      ...typeParams,
+    ) as Array<{ source_id: string; target_id: string }>;
   for (const row of rows) {
     const src = result.get(row.source_id);
     if (src !== undefined) src.has_out = true;
@@ -768,6 +786,8 @@ export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number |
 export interface ListLinksOptions {
   /** Include inactive links/thoughts when true (preferences.show_inactive). */
   showInactive?: boolean;
+  /** Include trashed (marked-for-deletion) links/thoughts when true (77923b49). */
+  showTrash?: boolean;
 }
 
 /**
@@ -776,7 +796,8 @@ export interface ListLinksOptions {
  * carrying the opponent thought as `target_thought`), untyped links split into
  * `untyped_parents` (opponent is the source) and `untyped_children` (opponent
  * is the target). Inactive links and thoughts are filtered out unless
- * `opts.showInactive` is set.
+ * `opts.showInactive` is set; trashed (marked-for-deletion) links and thoughts
+ * are filtered out unless `opts.showTrash` is set (77923b49).
  *
  * `type_name` is the link type's `name_forward` (source → target) label; the
  * editor can flip it for the reverse side if needed.
@@ -787,6 +808,7 @@ export function listLinksByThought(
   opts: ListLinksOptions = {},
 ): ThoughtLinksGrouped {
   const showInactive = opts.showInactive === true ? 1 : 0;
+  const showTrash = opts.showTrash !== false ? 1 : 0;
   const rows = ndb
     .prepare(
       `SELECT l.id, l.source_id, l.target_id, l.type_id, l.color, l.style, l.width,
@@ -810,7 +832,9 @@ export function listLinksByThought(
        JOIN thoughts_v t ON t.id = (CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END)
        WHERE (l.source_id = ? OR l.target_id = ?)
          AND (l.active = 1 OR ?)
-         AND (t.active = 1 OR ?)`,
+         AND (t.active = 1 OR ?)
+         AND (l.marked_for_deletion = 0 OR ?)
+         AND (t.marked_for_deletion = 0 OR ?)`,
     )
     .all(
       thoughtId,
@@ -820,6 +844,8 @@ export function listLinksByThought(
       thoughtId,
       showInactive,
       showInactive,
+      showTrash,
+      showTrash,
     ) as IncidentLinkRow[];
 
   const byType = new Map<
