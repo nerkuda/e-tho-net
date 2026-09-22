@@ -12,9 +12,10 @@
  *
  * `min_confidence` отсекает результаты ниже порога.
  *
- * При `create_links: true` создаёт направленные связи (source = мысль с
- * комментарием или заданная `source_thought_id`; target = найденная мысль)
- * через `createLink`. Дубликаты связей пропускаются.
+ * При `create_links: true` создаёт направленные связи (target = найденная
+ * мысль) через `createLink`. `link_direction` задаёт направление рёбер:
+ * `out` (по умолчанию) — `source → найденная`, `in` — `найденная → source`.
+ * Дубликаты связей пропускаются.
  */
 
 import {
@@ -49,6 +50,13 @@ export interface ScanMentionsOptions {
   create_links?: boolean;
   /** Имя или id типа создаваемой связи. По умолчанию — null (без типа). */
   link_type?: string;
+  /**
+   * Направление создаваемых связей относительно `source_thought_id`:
+   * `out` (по умолчанию) — ребро `source → найденная`; `in` — ребро
+   * `найденная → source`. Ошибка cb741cec: параметр был объявлен в
+   * контракте, но не читался.
+   */
+  link_direction?: 'out' | 'in';
   /** id пользователя-актора для аудита. */
   actor_user_id: string;
 }
@@ -162,16 +170,23 @@ export function scanMentions(
       }
     }
 
+    // Направление рёбер: `out` (по умолчанию) — от source к найденной,
+    // `in` — от найденной к source (ошибка cb741cec).
+    const direction = opts.link_direction ?? 'out';
+
     // Дедуп по thought_id (одна связь на уникальную найденную мысль).
     const seen = new Set<string>();
     for (const m of scored) {
       if (seen.has(m.thought_id)) continue;
       seen.add(m.thought_id);
 
+      const edgeSource = direction === 'in' ? m.thought_id : opts.source_thought_id;
+      const edgeTarget = direction === 'in' ? opts.source_thought_id : m.thought_id;
+
       const existing = findLinksBetween(
         ndb,
-        opts.source_thought_id,
-        m.thought_id,
+        edgeSource,
+        edgeTarget,
         resolvedLinkTypeId,
       );
       if (existing.length > 0) continue;
@@ -179,8 +194,8 @@ export function scanMentions(
       const created = createLink(
         ndb,
         {
-          source_id: opts.source_thought_id,
-          target_id: m.thought_id,
+          source_id: edgeSource,
+          target_id: edgeTarget,
           type_id: resolvedLinkTypeId,
         },
         opts.actor_user_id,

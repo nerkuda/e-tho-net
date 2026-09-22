@@ -123,9 +123,9 @@ const MCP_WRITE_VIEW_COVERAGE: readonly McpWriteViewEntry[] = [
     // ветка `create_links: true`, — это вид записи.
     writeOnReadOnlyReason:
       'link_direction управляет направлением связей, которые создаёт ветка create_links: true; аннотация readOnlyHint описывает только ветку без create_links',
-    excluded: {
-      out: 'мёртвый параметр: на поведение не влияет (связи всегда идут source→найденная) — ошибка cb741cec',
-      in: 'мёртвый параметр: на поведение не влияет (связи всегда идут source→найденная) — ошибка cb741cec',
+    tests: {
+      out: 'mcp-view-coverage.test.ts::etn.thoughts.mentions_scan: каждое значение link_direction создаёт связи в нужном направлении',
+      in: 'mcp-view-coverage.test.ts::etn.thoughts.mentions_scan: каждое значение link_direction создаёт связи в нужном направлении',
     },
   },
   {

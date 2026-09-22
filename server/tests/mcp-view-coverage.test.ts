@@ -7,11 +7,13 @@
  *     (`fail`/`reuse`/`skip`/`create_always`); раньше были покрыты только
  *     `reuse` и `create_always`;
  *   * `etn.attachments.add` — `kind` (`url`/`file`); раньше `file` не
- *     проверялся вовсе (все тесты работали с `url`).
+ *     проверялся вовсе (все тесты работали с `url`);
+ *   * `etn.thoughts.mentions_scan` — `link_direction` (`out`/`in`): обе ветки
+ *     направления создаваемых связей (ошибка cb741cec).
  *
- * «Значение вида без ветки поведения» здесь нет: `collision_policy` импорта и
- * `link_direction` mentions_scan — мёртвые параметры (ошибки ebe93450 и
- * cb741cec), в стороже они заведены исключениями, а не поддельными тестами.
+ * «Значение вида без ветки поведения» здесь нет: `collision_policy` импорта —
+ * мёртвый параметр (ошибка ebe93450), в стороже он заведён исключением, а не
+ * поддельным тестом.
  */
 
 import assert from 'node:assert/strict';
@@ -146,6 +148,59 @@ describe('etn.thoughts.copy_subtree: значения duplicate_policy (стан
         }
       } finally {
         await w.closeAll();
+      }
+    }
+  });
+});
+
+describe('etn.thoughts.mentions_scan: значения link_direction (стандарт view-покрытия)', {
+  skip: !nativeAvailable(),
+}, () => {
+  it('etn.thoughts.mentions_scan: каждое значение link_direction создаёт связи в нужном направлении', async () => {
+    for (const direction of ['out', 'in'] as const) {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          const source = createThought(ndb, { title: `Источник-${direction}` }, ctx.adminId).id;
+          const target = createThought(ndb, { title: `Цель-упоминание-${direction}` }, ctx.adminId).id;
+
+          const result = await handle.client.callTool({
+            name: 'etn.thoughts.mentions_scan',
+            arguments: {
+              network_id: ctx.networkId,
+              text: `Сегодня упомянули Цель-упоминание-${direction}.`,
+              min_confidence: 0.6,
+              create_links: true,
+              source_thought_id: source,
+              link_direction: direction,
+            },
+          });
+          assert.equal(result.isError, undefined, toolText(result));
+          const data = toolJson<{ links_created: number }>(result);
+          assert.equal(data.links_created, 1, `${direction}: создана одна связь`);
+
+          const row = openNetworkDb(ctx.dataDir, ctx.networkId)
+            .prepare(
+              'SELECT source_id, target_id FROM links_v WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)',
+            )
+            .get(source, target, target, source) as
+            | { source_id: string; target_id: string }
+            | undefined;
+          assert.ok(row !== undefined, `${direction}: связь создана`);
+          if (direction === 'out') {
+            assert.equal(row.source_id, source, 'out: источник ребра — source_thought_id');
+            assert.equal(row.target_id, target, 'out: цель ребра — найденная мысль');
+          } else {
+            assert.equal(row.source_id, target, 'in: источник ребра — найденная мысль');
+            assert.equal(row.target_id, source, 'in: цель ребра — source_thought_id');
+          }
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
       }
     }
   });

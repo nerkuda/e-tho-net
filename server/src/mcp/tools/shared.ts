@@ -104,6 +104,7 @@ export function executeMentionsScan(
     ...(sourceThoughtId !== undefined ? { source_thought_id: sourceThoughtId } : {}),
     ...(args.create_links !== undefined ? { create_links: args.create_links } : {}),
     ...(args.link_type !== undefined ? { link_type: args.link_type } : {}),
+    ...(args.link_direction !== undefined ? { link_direction: args.link_direction } : {}),
     actor_user_id: actorUserId,
   });
 }
