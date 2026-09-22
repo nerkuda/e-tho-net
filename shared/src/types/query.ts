@@ -6,6 +6,7 @@
  */
 
 import type { LinkTypeFilterInput } from './link.js';
+import type { NetworksCatalog } from './network.js';
 
 /** Актуальность мысли в выборке: `'true'` — только активные, `'false'` —
  * только неактивные, `'any'` — без фильтра. */
@@ -138,6 +139,9 @@ export interface ThoughtQueryRequest {
 /** Одна мысль в результате выборки. */
 export interface ThoughtQueryHit {
   id: string;
+  /** Id сети-владельца мысли. Присутствует только в кросс-сетевом ответе
+   *  (задача eb1a3f43); для одиночной сети сеть известна из контекста. */
+  network_id?: string;
   title: string;
   type_id: string | null;
   active: boolean;
@@ -153,4 +157,9 @@ export interface ThoughtQueryResponse {
   truncated: boolean;
   /** Причина обрезки: только превышение лимита узлов (`max_nodes`). */
   reason: 'max_nodes' | null;
+  /**
+   * Справочник сетей кросс-сетевой выдачи (см. {@link SearchResponse.networks}).
+   * Присутствует только в веерном режиме; для одиночной сети — `undefined`.
+   */
+  networks?: NetworksCatalog;
 }

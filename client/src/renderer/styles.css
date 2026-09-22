@@ -4686,6 +4686,14 @@ body.cloud-dragging * {
   height: 26px;
 }
 
+/* Задача eb1a3f43, требование 79755f76: переключатель «по всем сетям» в
+ * диалоге выбора мысли. Включённый режим — заметная подсветка, чтобы
+ * пользователь видел, что живой поиск ходит по всем сетям. */
+.cross-network-toggle[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into
  * a wide orange grip while hovering or dragging. */
 .st-splitter {

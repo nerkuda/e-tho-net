@@ -12,6 +12,10 @@
  * `thoughts` is mapped to `names,texts` (two queries merged, see C9 note).
  * Search/export require network membership; the job endpoints require any
  * valid API-key (job ids are UUIDs, treated as capability URLs on MVP).
+ *
+ * Cross-network fan-out (задача eb1a3f43, требование c98d5d19): при наличии
+ * `?network_ids=...` в строке запроса веером по сетям с последующим
+ * слиянием результата (см. `cross-network-search-service`).
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
@@ -33,6 +37,10 @@ import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findMentionsInTexts, search } from '../domain/search-service.js';
+import {
+  fanOutSearch,
+  type CrossNetworkAccess,
+} from '../domain/cross-network-search-service.js';
 
 /** Map a stored export MIME type to the recommended download filename extension. */
 function extensionFor(contentType: string): string {
@@ -79,7 +87,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestSearchQuery, req);
-        const networkId = input.network_id;
+        const networkId = input.network_id as string;
         const q = input.q as string;
 
         const scopeRaw = input.scope as string | undefined;
@@ -99,6 +107,68 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const showInactiveDefault = pref?.value === true;
         const limit = input.limit ?? 50;
         const offset = input.offset ?? 0;
+
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        // Парсер repeatable кладёт `[]` при отсутствии параметра — поэтому
+        // проверяем по длине, а не по наличию ключа.
+        if ((input.network_ids as string[] | undefined)?.length ?? 0 > 0) {
+          const requested = (input.network_ids as string[]).includes(networkId)
+            ? (input.network_ids as string[])
+            : [networkId, ...(input.network_ids as string[])];
+          const unique = [...new Set(requested)];
+          // Доступ: владелец ключа или admin — иначе сеть молча исключается.
+          const accessibleIds: string[] = [];
+          for (const id of unique) {
+            if (app.systemDb.getMemberRole(req.auth!.user.id, id) !== null) accessibleIds.push(id);
+          }
+          const networks = accessibleIds.map((id) => ({
+            id,
+            display_name: app.systemDb.getNetworkById(id)?.display_name ?? id,
+          }));
+          if (networks.length === 0) {
+            sendSuccess(reply, {
+              by_names: [],
+              by_texts: [],
+              by_links: [],
+              by_chrono: [],
+              meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
+              networks: [],
+            } satisfies SearchResponse);
+            return;
+          }
+          const access: CrossNetworkAccess = {
+            networks,
+            accessibleIds,
+            dataDir: deps.dataDir,
+            userId: req.auth!.user.id,
+            clientId:
+              req.auth?.clientId ??
+              (req.headers['x-etn-client-id'] as string | undefined) ??
+              `rest:${req.auth!.user.id}`,
+            logger: app.appLogger,
+          };
+          // Legacy `thoughts` → names+texts. Для веерного режима мы мапим в
+          // первый scope, чтобы per-сеть лимит не задваивался; merge ниже
+          // приведёт к тем же группам, что и при двух scope-ах.
+          const result = fanOutSearch(access, {
+            networkIds: accessibleIds,
+            q,
+            scope: granularScopes[0],
+            in: inParam,
+            from_thought_id: fromThoughtId,
+            type_id: (input.type_id ?? []) as string[],
+            link_type_id: (input.link_type_id ?? []) as string[],
+            show_inactive: input.show_inactive as boolean | undefined,
+            trashed: input.trashed as boolean | undefined,
+            author_id: input.author_id as string | undefined,
+            editor_id: input.editor_id as string | undefined,
+            limit,
+            offset,
+            showInactiveDefault,
+          });
+          sendSuccess(reply, { ...result.response, networks: result.networks } satisfies SearchResponse);
+          return;
+        }
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const requestBase = {

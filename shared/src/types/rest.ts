@@ -23,6 +23,8 @@ import type { ApiKeyWithSecret, User } from './user.js';
 import type { EffectiveThoughtTypeView, ThoughtTypeView } from './thought-type-view.js';
 import type { NetworkProperty } from './thought-type.js';
 import type { ThoughtRef } from './thought.js';
+import type { NetworksCatalog } from './network.js';
+import type { StructureQueryResponse } from './structure.js';
 
 /**
  * `POST /admin/users` — двойной ответ при создании пользователя с ключом:
@@ -152,6 +154,9 @@ export interface NetworkPropertyUsage extends PropertyUsageReport {
 /** Кандидат дубля из `GET /thoughts/duplicates` (08-ui-spec.md §4.4). */
 export interface DuplicateHit {
   id: string;
+  /** Id сети-владельца кандидата. Присутствует только в кросс-сетевом ответе
+   *  (задача eb1a3f43); для одиночной сети сеть известна из контекста. */
+  network_id?: string;
   title: string;
   /** Display forms of the candidate's synonyms. */
   synonyms: string[];
@@ -174,6 +179,28 @@ export interface DuplicateHit {
   /** Title of one parent (lexicographically first), for disambiguation. */
   parent_title: string | null;
 }
+
+/**
+ * Кросс-сетевой ответ `etn.thoughts.find_duplicates` (задача eb1a3f43): массив
+ * хитов с проставленным `network_id` плюс справочник сетей (`id` +
+ * `display_name`). Для одиночной сети инструмент возвращает голый массив
+ * `DuplicateHit[]` — поведение не изменилось (см. задачу 120385ba).
+ */
+export interface CrossNetworkDuplicateResponse {
+  hits: DuplicateHit[];
+  networks: NetworksCatalog;
+}
+
+/**
+ * Кросс-сетевой ответ `POST /thoughts/query` с `network_ids` в теле
+ * (задача eb1a3f43, требование c98d5d19): обычный `StructureQueryResponse`
+ * плюс справочник сетей (`id` + `display_name`). Каждый `items[i]` несёт
+ * `network_id`. Для одиночной сети инструмент возвращает голый
+ * `StructureQueryResponse` без `networks` — поведение не изменилось.
+ */
+export type CrossNetworkStructureQueryResponse = StructureQueryResponse & {
+  networks: NetworksCatalog;
+};
 
 /** `POST /networks/{nid}/thoughts/export` — поставленная задача экспорта. */
 export interface ExportJobStartResult {

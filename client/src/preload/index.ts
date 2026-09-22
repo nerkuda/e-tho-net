@@ -70,6 +70,20 @@ function buildApi(): EtnApi {
       usageClear: (networkId, id) => invoke('thoughts.usageClear', networkId, id),
       findDuplicates: (networkId, title, synonyms, typeIds) =>
         invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
+      // Задача eb1a3f43: кросс-сетевой охват диалога выбора мысли.
+      findDuplicatesAcrossNetworks: (networkId, networkIds, title, synonyms, typeIds) =>
+        invoke(
+          'thoughts.findDuplicatesAcrossNetworks',
+          networkId,
+          networkIds,
+          title,
+          synonyms,
+          typeIds,
+        ),
+      searchAcrossNetworks: (networkId, networkIds, request) =>
+        invoke('thoughts.searchAcrossNetworks', networkId, networkIds, request),
+      queryStructureAcrossNetworks: (networkId, networkIds, request) =>
+        invoke('thoughts.queryStructureAcrossNetworks', networkId, networkIds, request),
       setFocusPreferences: (networkId, focusId, input) =>
         invoke('thoughts.setFocusPreferences', networkId, focusId, input),
       setFocusOrder: (networkId, focusId, input) =>

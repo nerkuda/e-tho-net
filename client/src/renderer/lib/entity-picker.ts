@@ -42,6 +42,12 @@ import type { DuplicateHit } from '../../main/ipc/contract.js';
 import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
+import {
+  isCrossNetworkScopeEnabled,
+  loadCrossNetworkScope,
+  saveCrossNetworkScope,
+  subscribeCrossNetworkScope,
+} from './cross-network-scope.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { button, div, el, span } from './dom.js';
 import { etn } from './etn.js';
@@ -231,6 +237,68 @@ export function filterEntityOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Кросс-сетевой режим диалога выбора мысли (задача eb1a3f43, требование
+// 79755f76 «Переключатель «по всем сетям» в диалоге выбора»).
+// ---------------------------------------------------------------------------
+
+/**
+ * Кнопка-переключатель режима «по всем сетям» для строки поиска диалога
+ * (модального `pickEntitiesModal`). Иконка отражает текущее состояние; клик
+ * переключает и сохраняет в `cross-network-scope.ts`. Подписка на изменение
+ * из других мест обновляет aria-pressed. Текущее состояние читается
+ * реактивно через {@link isCrossNetworkScopeEnabled} в местах потребления.
+ */
+function makeCrossNetworkScopeToggle(): HTMLButtonElement {
+  const btn = el('button', 'icon-btn cross-network-toggle') as HTMLButtonElement;
+  btn.type = 'button';
+  const refresh = (enabled: boolean): void => {
+    btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    btn.title = enabled
+      ? 'Поиск по всем доступным сетям (нажмите, чтобы переключить на текущую)'
+      : 'Поиск только в текущей сети (нажмите, чтобы включить поиск по всем сетям)';
+    btn.setAttribute(
+      'aria-label',
+      enabled ? 'Поиск по всем сетям: включён' : 'Поиск по всем сетям: выключен',
+    );
+  };
+  refresh(loadCrossNetworkScope());
+  btn.append(svgIcon('network', 14));
+  btn.addEventListener('click', () => {
+    saveCrossNetworkScope(!loadCrossNetworkScope());
+  });
+  subscribeCrossNetworkScope(refresh);
+  return btn;
+}
+
+/**
+ * Загрузить кандидатов-дублей веером по всем доступным сетям пользователя.
+ * `networkId` — текущая открытая сеть (роут автоматически добавит её в веер,
+ * если её нет в списке). Используется как `SuggestSource.load` пикера при
+ * включённом переключателе «по всем сетям».
+ */
+async function loadCrossNetworkCandidates(
+  networkId: string,
+  query: string,
+  typeIds: readonly string[],
+): Promise<DuplicateHit[]> {
+  try {
+    const networks = await etn.networks.list();
+    const ids = networks.map((n) => n.id);
+    if (ids.length === 0) return [];
+    const response = await etn.thoughts.findDuplicatesAcrossNetworks(
+      networkId,
+      ids,
+      query,
+      [],
+      [...typeIds],
+    );
+    return response.hits;
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Каталоги типов (с догрузкой, если realtime ещё не принёс их)
 // ---------------------------------------------------------------------------
 
@@ -393,20 +461,36 @@ export async function pickEntitiesModal(
       searchInput.type = 'text';
       searchInput.autocomplete = 'off';
       searchInput.placeholder = 'Найти мысль…';
+      // Задача eb1a3f43, требование 79755f76: переключатель «по всем сетям».
+      // Состояние хранится локально (`cross-network-scope.ts`) и переживает
+      // перезапуск; умолчание — ВЫКЛ (поиск по текущей сети).
+      const crossScopeToggle = makeCrossNetworkScopeToggle();
+      const searchBar = div('st-f-searchbar');
+      searchBar.append(searchInput, crossScopeToggle);
       const chipsBox = div('entity-pick-chips');
-      body.append(searchInput, chipsBox);
+      body.append(searchBar, chipsBox);
 
       const searchSource: SuggestSource = {
         when: 'typed',
-        load: (query) =>
-          etn.thoughts
-            .findDuplicates(opts.networkId, query.trim(), [], (opts.searchTypeIds ?? []).filter((id) => id !== ''))
+        load: (query) => {
+          const trimmed = query.trim();
+          const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
+          // Реактивное чтение: пользователь может переключить режим между
+          // вызовами `load` (см. `subscribeCrossNetworkScope`).
+          if (isCrossNetworkScopeEnabled()) {
+            return loadCrossNetworkCandidates(opts.networkId, trimmed, typeIds).then((hits) =>
+              hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
+            );
+          }
+          return etn.thoughts
+            .findDuplicates(opts.networkId, trimmed, [], typeIds)
             .catch(() => [] as DuplicateHit[])
             .then((hits) =>
               // Строка-мысль — облачком: DTO кандидата структурно совместим с
               // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
               hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
-            ),
+            );
+        },
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
@@ -1228,16 +1312,22 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       when: 'typed',
       load: (query) => {
         if (opts.disabled === true) return [];
+        const trimmed = query.trim();
+        const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
+        const apply = (hits: DuplicateHit[]): SuggestEntry[] =>
+          hits.map((hit) => {
+            const opt = thoughtEntityOption(hit);
+            byId.set(hit.id, opt);
+            return { value: hit.id, label: hit.title, thought: opt.cloud };
+          });
+        // Задача eb1a3f43: при включённом переключателе — кросс-сетевой поиск.
+        if (isCrossNetworkScopeEnabled()) {
+          return loadCrossNetworkCandidates(opts.networkId, trimmed, typeIds).then(apply);
+        }
         return etn.thoughts
-          .findDuplicates(opts.networkId, query.trim(), [], (opts.searchTypeIds ?? []).filter((id) => id !== ''))
+          .findDuplicates(opts.networkId, trimmed, [], typeIds)
           .catch(() => [] as DuplicateHit[])
-          .then((hits) =>
-            hits.map((hit) => {
-              const opt = thoughtEntityOption(hit);
-              byId.set(hit.id, opt);
-              return { value: hit.id, label: hit.title, thought: opt.cloud };
-            }),
-          );
+          .then(apply);
       },
     });
   }

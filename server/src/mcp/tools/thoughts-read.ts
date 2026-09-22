@@ -2,6 +2,12 @@
  * thoughts-read.ts — MCP-инструменты области «registerThoughtsReadTools, registerFindDuplicatesTool».
  * Вынесено из `tools.ts` (ADR 8c93f03a, веха 7 версии 0.8.2) без изменения
  * поведения: фасады разбиты на модули по областям, логика — в домене.
+ *
+ * Cross-network (fan-out) режим (задача eb1a3f43, требование c98d5d19):
+ * `etn.thoughts.search`, `etn.thoughts.query` и `etn.thoughts.find_duplicates`
+ * принимают опциональный `network_ids`. При его наличии вызов делегирует
+ * `cross-network-search-service` (fan-out + merge), фильтруя сети по
+ * `hasNetworkAccess`. Сети без доступа молча исключаются.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -23,7 +29,42 @@ import { linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactT
 import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
-import { openMemberNetwork, runTool } from '../context.js';
+import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
+import {
+  fanOutFindDuplicates,
+  fanOutQuery,
+  fanOutSearch,
+  type CrossNetworkAccess,
+} from '../../domain/cross-network-search-service.js';
+
+/** Собрать кросс-сетевой «доступ»: отфильтровать сети по правам, подтянуть
+ *  `display_name` из `systemDb` для справочника. Используется только когда
+ *  в MCP-вызове передан `network_ids` (задача eb1a3f43). */
+function buildCrossNetworkAccess(
+  rt: McpRuntime,
+  requested: string[],
+): CrossNetworkAccess & { accessibleIds: string[] } {
+  const seen = new Set<string>();
+  const accessibleIds: string[] = [];
+  for (const id of requested) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (hasNetworkAccess(rt, id)) accessibleIds.push(id);
+  }
+  const networks = accessibleIds
+    .map((id) => {
+      const row = rt.deps.systemDb.getNetworkById(id);
+      return { id, display_name: row?.display_name ?? id };
+    });
+  return {
+    networks,
+    accessibleIds,
+    dataDir: rt.deps.dataDir,
+    userId: rt.deps.auth.userId,
+    clientId: mcpLayerClientId(rt),
+    logger: rt.deps.logger,
+  };
+}
 
 export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
@@ -42,7 +83,69 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     },
     (args) =>
       runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        if (args.network_ids !== undefined) {
+          const access = buildCrossNetworkAccess(rt, args.network_ids);
+          if (access.networks.length === 0) {
+            // Ни одна сеть не доступна — пустой ответ со справочником.
+            return {
+              by_names: [],
+              by_texts: [],
+              by_links: [],
+              by_chrono: [],
+              meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
+              networks: [],
+            };
+          }
+          // Резолв имени типа — только если задано. В веерном режиме одна и та
+          // же строка `type` может означать разные id в разных сетях; используем
+          // первую сеть как «контекст» для резолва и фильтруем остальные по тому
+          // же имени на уровне `expandTypeIdsToSubtree` (внутри `search`).
+          let resolvedType: { input: string; id: string; name: string } | undefined;
+          if (args.type !== undefined) {
+            const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
+            const id = resolveThoughtTypeIdByName(firstNdb, args.type);
+            const name = getThoughtType(firstNdb, id)?.name;
+            resolvedType = { input: args.type, id, name: name ?? args.type };
+          }
+          const result = fanOutSearch(access, {
+            networkIds: access.accessibleIds,
+            q: args.query,
+            scope: args.scope,
+            in: args.in_subtree_of === undefined ? undefined : 'subtree',
+            from_thought_id: args.in_subtree_of,
+            type_id: resolvedType !== undefined ? [resolvedType.id] : (args.type_id !== undefined && args.type_id !== null ? [args.type_id] : undefined),
+            type: args.type,
+            author_id: args.author_id,
+            editor_id: args.editor_id,
+            show_inactive: args.show_inactive,
+            limit: args.limit ?? 50,
+            offset: args.offset ?? 0,
+            showInactiveDefault: false,
+          });
+          // O10: count reads for the «head» network — the per-network reads
+          // counter is per-network, so we count hits from each network in its
+          // own session.
+          for (const net of access.networks) {
+            const ndb = openMemberNetwork(rt, net.id);
+            const thoughtIds = [
+              ...result.response.by_names.filter((h) => h.network_id === net.id).map((h) => h.thought_id),
+              ...result.response.by_texts.filter((h) => h.network_id === net.id).map((h) => h.thought_id),
+              ...result.response.by_chrono
+                .filter((h) => h.network_id === net.id && h.owner === 'thought')
+                .map((h) => h.owner_id),
+            ];
+            if (thoughtIds.length > 0) recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
+          }
+          return {
+            ...result.response,
+            by_names: result.response.by_names.map((h) => withSanitizedIcon(h)),
+            by_texts: result.response.by_texts.map((h) => withSanitizedIcon(h)),
+            networks: result.networks,
+            ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
+          };
+        }
+        const ndb = openMemberNetwork(rt, args.network_id as string);
         // Резолв имени типа в id (задача d5ab1630). Сбор эха для ответа —
         // `resolved_type` приходит, только если агент передал `type`.
         let resolvedType: { input: string; id: string; name: string } | undefined;
@@ -116,7 +219,94 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     },
     (args) =>
       runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        if (args.network_ids !== undefined) {
+          const access = buildCrossNetworkAccess(rt, args.network_ids);
+          if (access.networks.length === 0) {
+            return {
+              total: 0,
+              hits: [],
+              truncated: false,
+              reason: null,
+              networks: [],
+            };
+          }
+          // Резолв имён типов — берём первую сеть как контекст, как и в search.
+          let resolvedTypes: Array<{ input: string; id: string; name: string }> | undefined;
+          let resolvedTypeIds: string[] | undefined;
+          if (args.type !== undefined) {
+            const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
+            resolvedTypes = [];
+            resolvedTypeIds = [];
+            for (const name of args.type) {
+              const id = resolveThoughtTypeIdByName(firstNdb, name);
+              const rowName = getThoughtType(firstNdb, id)?.name;
+              resolvedTypes.push({ input: name, id, name: rowName ?? name });
+              resolvedTypeIds.push(id);
+            }
+          }
+          // Резолв имён свойств в первой сети (при наличии имён). Другие сети
+          // сети будут фильтроваться по тому же `property_id` — если свойства
+          // нет, фильтр вернёт пусто, что корректно.
+          let resolvedProperties: Array<{ input: string; id: string; name: string }> | undefined;
+          let domainProperties = args.properties;
+          if (args.properties !== undefined) {
+            const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
+            const out: NonNullable<typeof args.properties> = [];
+            let resolved: Array<{ input: string; id: string; name: string }> | null = null;
+            for (const cond of args.properties) {
+              if (cond.property !== undefined) {
+                const ref = resolveConditionPropertyRef(firstNdb, cond.property);
+                if (ref === null) {
+                  throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                    field: 'property',
+                    name: cond.property,
+                  });
+                }
+                const propName = getNetworkProperty(firstNdb, ref.propertyId)?.name;
+                out.push({ ...cond, property_id: cond.property });
+                if (resolved === null) resolved = [];
+                resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
+                continue;
+              }
+              out.push(cond);
+            }
+            domainProperties = out;
+            if (resolved !== null) resolvedProperties = resolved;
+          }
+          const result = fanOutQuery(access, {
+            networkIds: access.accessibleIds,
+            // Используем `mcpRequestToQuery` — единый канонический конвертер,
+            // тот же, что и в обычном (односетевом) пути ниже.
+            query: mcpRequestToQuery(
+              {
+                ...args,
+                type_id: args.type_id ?? resolvedTypeIds,
+                type: undefined,
+                properties: domainProperties,
+              },
+              { maxNodes: rt.limits.maxNodesPerSubgraph },
+            ),
+            limit: args.limit ?? 50,
+            offset: args.offset ?? 0,
+          });
+          // O10: count reads per network.
+          for (const net of access.networks) {
+            const ndb = openMemberNetwork(rt, net.id);
+            const ids = result.response.hits.filter((h) => h.network_id === net.id).map((h) => h.id);
+            if (ids.length > 0) recordReads(ndb, ids, { now: new Date().toISOString() });
+          }
+          return {
+            total: result.response.total,
+            hits: result.response.hits,
+            truncated: result.response.truncated,
+            reason: result.response.reason,
+            networks: result.networks,
+            ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
+            ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
+          };
+        }
+        const ndb = openMemberNetwork(rt, args.network_id as string);
         // Резолв имён типов в id (задача d5ab1630). Сбор эха для ответа —
         // `resolved_types` приходит, только если агент передал `type`.
         let resolvedTypes: Array<{ input: string; id: string; name: string }> | undefined;
@@ -798,7 +988,23 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
     },
     (args) =>
       runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        if (args.network_ids !== undefined) {
+          const access = buildCrossNetworkAccess(rt, args.network_ids);
+          if (access.networks.length === 0) {
+            return { hits: [], networks: [] };
+          }
+          const result = fanOutFindDuplicates(access, {
+            networkIds: access.accessibleIds,
+            title: args.title,
+            synonyms: args.synonyms,
+          });
+          return {
+            hits: result.hits.map((hit) => withSanitizedIcon(hit)),
+            networks: result.networks,
+          };
+        }
+        const ndb = openMemberNetwork(rt, args.network_id as string);
         // Bug fix (§5.1e): `findDuplicates` is shared with the REST add-thought
         // dialog (which needs the real icon to render candidates), so sanitize
         // only at this MCP-facing call site.

@@ -417,6 +417,44 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
     ),
   );
+  // Задача eb1a3f43: кросс-сетевая проверка дублей — для диалога выбора мысли
+  // при включённом переключателе «по всем сетям» (требование 79755f76).
+  handlers.set(
+    'thoughts.findDuplicatesAcrossNetworks',
+    bind(
+      (
+        networkId: string,
+        networkIds: string[],
+        title: string,
+        synonyms?: string[],
+        typeIds?: string[],
+      ) =>
+        requireRest(deps).findDuplicatesAcrossNetworks(
+          networkId,
+          networkIds,
+          title,
+          synonyms ?? [],
+          typeIds ?? [],
+        ),
+    ),
+  );
+  handlers.set(
+    'thoughts.searchAcrossNetworks',
+    bind((networkId: string, networkIds: string[], request: Parameters<RestClient['searchThoughtsAcrossNetworks']>[2]) =>
+      requireRest(deps).searchThoughtsAcrossNetworks(networkId, networkIds, request),
+    ),
+  );
+  handlers.set(
+    'thoughts.queryStructureAcrossNetworks',
+    bind(
+      (
+        networkId: string,
+        networkIds: string[],
+        request: Parameters<RestClient['queryStructureThoughtsAcrossNetworks']>[2],
+      ) =>
+        requireRest(deps).queryStructureThoughtsAcrossNetworks(networkId, networkIds, request),
+    ),
+  );
   handlers.set(
     'thoughts.setFocusPreferences',
     bind(

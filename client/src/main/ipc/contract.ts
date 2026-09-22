@@ -34,6 +34,8 @@ import type {
   CommentInput,
   CommentTarget,
   CurrentUser,
+  CrossNetworkDuplicateResponse,
+  CrossNetworkStructureQueryResponse,
   DuplicateHit,
   DuplicateMatchKind,
   ExportJob,
@@ -60,6 +62,7 @@ import type {
   MentionsScanResponse,
   Network,
   NetworkListItem,
+  NetworksCatalog,
   NetworkMember,
   NetworkProperty,
   NetworkPropertyInput,
@@ -367,6 +370,42 @@ export interface EtnApi {
       /** Optional thought-type filter (link-property pickers). */
       typeIds?: string[],
     ): Promise<DuplicateHit[]>;
+    /**
+     * Кросс-сетевой поиск дублей (задача eb1a3f43): веером по списку сетей
+     * с простановкой `network_id` на каждом кандидате + справочник сетей.
+     * Используется диалогом выбора сущностей при включённом переключателе
+     * «по всем сетям». `networkId` — текущая открытая сеть; роут добавляет
+     * её в веер, если её нет в `networkIds`.
+     */
+    findDuplicatesAcrossNetworks(
+      networkId: string,
+      networkIds: string[],
+      title: string,
+      synonyms?: string[],
+      typeIds?: string[],
+    ): Promise<CrossNetworkDuplicateResponse>;
+    /**
+     * Кросс-сетевой поиск (задача eb1a3f43, требование c98d5d19). Возвращает
+     * обычный `SearchResponse` с дополнительным `networks` (справочник сетей)
+     * и `network_id` на каждом хите. `networkId` — текущая открытая сеть;
+     * роут добавляет её в веер, если её нет в `networkIds`.
+     */
+    searchAcrossNetworks(
+      networkId: string,
+      networkIds: string[],
+      request: SearchRequest,
+    ): Promise<SearchResponse>;
+    /**
+     * Кросс-сетевая структурная выборка (задача eb1a3f43). Возвращает
+     * `StructureQueryResponse`, где каждый item несёт `network_id`, а
+     * `networks` — справочник сетей в дополнительном поле meta. `networkId`
+     * — текущая открытая сеть.
+     */
+    queryStructureAcrossNetworks(
+      networkId: string,
+      networkIds: string[],
+      request: StructureQueryRequest,
+    ): Promise<CrossNetworkStructureQueryResponse>;
     setFocusPreferences(
       networkId: string,
       focusId: string,

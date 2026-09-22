@@ -6,6 +6,7 @@
  */
 
 import type { IconKind, SearchGroup, SearchScope } from '../enums.js';
+import type { NetworksCatalog } from './network.js';
 
 /** Query parameters of `GET /search` (03-server-api.md §12). */
 export interface SearchRequest {
@@ -51,6 +52,9 @@ export interface SearchRequest {
 /** Hit in the "by_names" group — thought name/synonym matches (§12). */
 export interface SearchNameHit {
   thought_id: string;
+  /** Id сети-владельца мысли. Присутствует только в кросс-сетевом ответе
+   *  (задача eb1a3f43); для одиночной сети сеть известна из контекста. */
+  network_id?: string;
   title: string;
   /** The thought's icon (rendered in the results list). */
   icon: string | null;
@@ -76,6 +80,8 @@ export interface SearchNameHit {
 /** Hit in the "by_texts" group — thought comment matches (§12). */
 export interface SearchTextHit {
   thought_id: string;
+  /** Id сети-владельца мысли (см. {@link SearchNameHit.network_id}). */
+  network_id?: string;
   title: string;
   /** The thought's icon (rendered in the results list). */
   icon: string | null;
@@ -103,6 +109,8 @@ export interface SearchTextHit {
 /** Hit in the "by_links" group — link title/comment matches (§12). */
 export interface SearchLinkHit {
   link_id: string;
+  /** Id сети-владельца связи (см. {@link SearchNameHit.network_id}). */
+  network_id?: string;
   type_name: string;
   snippet: string;
   highlights: string[];
@@ -112,6 +120,8 @@ export interface SearchLinkHit {
 export interface SearchChronoHit {
   owner: 'thought' | 'link';
   owner_id: string;
+  /** Id сети-владельца (см. {@link SearchNameHit.network_id}). */
+  network_id?: string;
   /** First matching comment of the owner (server collapses several). */
   comment_id: string;
   valid_from: string;
@@ -127,6 +137,13 @@ export interface SearchResponse {
   by_links: SearchLinkHit[];
   by_chrono: SearchChronoHit[];
   meta: SearchResponseMeta;
+  /**
+   * Справочник сетей кросс-сетевой выдачи: одна запись на каждую сеть, в
+   * которой найдены хиты. Присутствует только в веерном режиме
+   * (параметр `network_ids` в MCP/REST); для одиночной сети — `undefined`.
+   * Задача eb1a3f43, требование c98d5d19.
+   */
+  networks?: NetworksCatalog;
 }
 
 /** Per-group totals returned alongside {@link SearchResponse}. */

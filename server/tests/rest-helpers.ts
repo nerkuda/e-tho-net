@@ -192,3 +192,14 @@ export async function apiCreateThought(
   });
   return { statusCode: res.statusCode, data: res.json().data as Record<string, unknown> };
 }
+
+/**
+ * Открыть `data.db` сети как `NetworkDb` для интеграционных тестов, которым
+ * нужен прямой доступ к БД (например, чтобы прочитать HOME-мысль свежесозданной
+ * сети). Соответствующий `closeNetworkDb` обязан вызвать владелец (см.
+ * {@link closeRestContext}, который закроет только основную сеть; для второй
+ * сети нужно звать `closeNetworkDb` явно).
+ */
+export function openNetworkDbSafe(dataDir: string, networkId: string): NetworkDb {
+  return openNetworkDb(dataDir, networkId);
+}

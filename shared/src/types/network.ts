@@ -145,3 +145,22 @@ export interface AddMemberInput {
 export interface UpdateMemberInput {
   role: NetworkRole;
 }
+
+/**
+ * Минимальная карточка сети в кросс-сетевых ответах (задача eb1a3f43,
+ * требование c98d5d19 «Веерный режим поиска и выборки: network_ids»):
+ * `id` + `display_name`. Агент резолвит расширенные поля
+ * (`description`/`when_to_use`/…) через `etn.networks.list`.
+ */
+export interface NetworkRef {
+  id: string;
+  display_name: string;
+}
+
+/**
+ * Справочник сетей в кросс-сетевом ответе: одна запись на каждую сеть, в
+ * которой вызывающему ключу доступны результаты. Сети, к которым нет
+ * доступа, не попадают ни в выдачу, ни в справочник. Агент видит
+ * `id`/`display_name` без обращения к `etn.networks.list`.
+ */
+export type NetworksCatalog = NetworkRef[];

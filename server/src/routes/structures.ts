@@ -21,6 +21,7 @@ import {
   STRUCTURES_PAGE_SIZE,
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
+  type CrossNetworkStructureQueryResponse,
   type FocusEdge,
   type SavedFilterView,
   type StructureIdsQueryResponse,
@@ -66,6 +67,10 @@ import {
 } from '../domain/query-service.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
 import { getEdgesAmong, toFocusEdge } from '../domain/link-service.js';
+import {
+  fanOutQuery,
+  type CrossNetworkAccess,
+} from '../domain/cross-network-search-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -134,7 +139,80 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const query = parseQueryBody(requestBody(req), req.id);
+        const body = requestBody(req);
+        const query = parseQueryBody(body, req.id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим. Несовместимо
+        // с `ids_only` (тот используется для bulk-команд в одной сети).
+        const networkIds = (body['network_ids'] as string[] | undefined);
+        if (networkIds !== undefined) {
+          const requested = (networkIds as string[]).includes(networkId)
+            ? (networkIds as string[])
+            : [networkId, ...(networkIds as string[])];
+          const unique = [...new Set(requested)];
+          const accessibleIds: string[] = [];
+          for (const id of unique) {
+            if (app.systemDb.getMemberRole(req.auth!.user.id, id) !== null) accessibleIds.push(id);
+          }
+          const networks = accessibleIds.map((id) => ({
+            id,
+            display_name: app.systemDb.getNetworkById(id)?.display_name ?? id,
+          }));
+          if (networks.length === 0) {
+            sendSuccess(
+              reply,
+              {
+                total: 0,
+                items: [],
+                directions: {},
+                networks: [],
+              } satisfies CrossNetworkStructureQueryResponse,
+            );
+            return;
+          }
+          const access: CrossNetworkAccess = {
+            networks,
+            accessibleIds,
+            dataDir: deps.dataDir,
+            userId: req.auth!.user.id,
+            clientId:
+              req.auth?.clientId ??
+              (req.headers['x-etn-client-id'] as string | undefined) ??
+              `rest:${req.auth!.user.id}`,
+            logger: app.appLogger,
+          };
+          // Используем общий конвертер `structureRequestToQuery` —
+          // те же правила резолва имён типов/свойств, что и в обычном пути.
+          // `queryThoughts` принимает уже канонический `ThoughtQueryRequest`.
+          const canon = structureRequestToQuery(query);
+          const result = fanOutQuery(access, {
+            networkIds: accessibleIds,
+            query: canon,
+            limit: canon.limit ?? 50,
+            offset: canon.offset ?? 0,
+          });
+          // Fan-out возвращает упрощённые хиты (id/title/type_id/active/depth).
+          // Этого хватает для веерного режима — карточка читается через
+          // `etn.thoughts.get` при необходимости. Для одиночной сети
+          // `StructureQueryResponse.items` — полные `ThoughtRef`; в веерном
+          // режиме добавляется `network_id` (нет в `ThoughtRef`).
+          // `satisfies CrossNetworkStructureQueryResponse` опущен намеренно:
+          // веерные элементы — не `ThoughtRef`, а расширение с `network_id`.
+          sendSuccess(reply, {
+            items: result.response.hits.map((h) => ({
+              id: h.id,
+              title: h.title,
+              type_id: h.type_id,
+              active: h.active,
+              depth: h.depth,
+              network_id: h.network_id,
+            })),
+            total: result.response.total,
+            truncated: result.response.truncated,
+            reason: result.response.reason,
+            networks: result.networks,
+          });
+          return;
+        }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Единый движок выборки (задача c5265deb): REST-фильтр переводится в
         // канонический запрос и исполняется общей доменной функцией.
