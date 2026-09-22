@@ -1480,6 +1480,28 @@ body.resizing-h {
   pointer-events: none;
 }
 
+/* Floating per-zone count (задача c8fa74ba): overlay on the canvas host,
+ * pinned to the zone's top-right corner by inline `top`/`left` (canvas-space)
+ * + `translateX(-100%)`. Text colour is set inline to stay contrast against
+ * the theme backdrop; the faint pill keeps it legible over clouds. */
+.zone-count {
+  position: absolute;
+  transform: translateX(-100%);
+  z-index: 4;
+  pointer-events: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+.zone-count.hidden {
+  display: none;
+}
+
 .zone-spacer {
   position: relative;
 }

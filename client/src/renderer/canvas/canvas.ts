@@ -56,12 +56,20 @@ import {
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
   cloudHeight,
+  contrastText,
   neighborsDirForEllipse,
   neighborsPreviewBounds,
   neighborsPreviewHeading,
   shortenCompoundName,
   sortRefsByTitle,
 } from '../lib/pure.js';
+import {
+  createZonePaging,
+  shouldLoadMore,
+  zoneCountLabel,
+  ZONE_PAGE_SIZE,
+  type ZonePagingCounters,
+} from '../lib/zone-paging.js';
 import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
@@ -69,6 +77,7 @@ import {
   drawLinksNow,
   setEllipseHover,
   setDragLinkLine,
+  setSupplementalEdges,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
 import { captureClouds, playFocusTransition, prefersReducedMotion } from './transition.js';
@@ -523,6 +532,10 @@ async function render(): Promise<void> {
   // The keyboard cursor does not survive a focus change: the cursor cloud may
   // have become the focus cloud, moved between zones or left the map (§2.9).
   if (focusChanged) resetCanvasCursor();
+  // A new neighbourhood invalidates the paged sectors (задача c8fa74ba):
+  // appended pages belong to the previous focus, and in-flight page requests
+  // must not land on the new one.
+  if (focusChanged) resetZonePaging(focus);
   const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
   zoneAnimationPending = false;
   const snapshot = animate ? captureClouds(host) : null;
@@ -541,15 +554,15 @@ async function render(): Promise<void> {
   // children or a view's run result.
   await renderFilterStrip(focus);
   updateFocusBand();
-  renderZone('parents', groupByThought(focus.parents));
-  renderZone('siblings', groupByThought(focus.siblings));
+  renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
+  renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
   // Lower zone: pick the strip's active mode and paint accordingly. View
   // results share the children-zone DOM (same virtualization, same cloud
   // shape) but the gestures that imply a parent/child link to the focus
   // (manual order, double-click-to-add) are gated on `viewResultActive`.
   const stripMode = getStripActiveMode();
   if (stripMode.kind === 'children') {
-    renderZone('children', groupByThought(focus.children));
+    renderZone('children', groupByThought(zoneNeighbors('children', focus)));
     setZoneAsViewResult(false, null);
   } else {
     // Run the view against the focused thought (no-op if already cached)
@@ -562,6 +575,10 @@ async function render(): Promise<void> {
     setZoneAsViewResult(true, result);
   }
   lastFocusId = focus.focused.id;
+  // Totals for the count indicators (async); a no-op unless the focus just
+  // changed — paged sectors keep their counters between same-focus renders.
+  if (focusChanged) void ensureZoneTotals(focus);
+  paintZoneIndicators();
   scheduleIndicatorLoads();
   if (snapshot !== null) {
     playFocusTransition(host, snapshot, drawLinksNow);
@@ -666,6 +683,7 @@ function updateFocusBand(): void {
   host.style.setProperty('--focus-band-top', `${Math.round(rowRect.top - hostRect.top)}px`);
   host.style.setProperty('--focus-band-bottom', `${Math.round(rowRect.bottom - hostRect.top)}px`);
   updateLayerLabel();
+  positionZoneIndicators();
 }
 
 /**
@@ -720,6 +738,7 @@ function resetFocusBand(h: HTMLElement): void {
     lastLabelKey = '';
     layerLabelEl.style.display = 'none';
   }
+  for (const dir of ZONE_DIRS) setZoneIndicator(dir, null);
 }
 
 /** Set by {@link requestZoneAnimation}; consumed by the next render. */
@@ -939,6 +958,258 @@ function groupByThought(neighbors: FocusNeighbor[]): ZoneEntry[] {
   return [...byId.values()];
 }
 
+// ---------------------------------------------------------------------------
+// Sector pagination (задача c8fa74ba)
+// ---------------------------------------------------------------------------
+
+/** Neighbours of a zone for the current focus: first page from the focus
+ *  response plus every page appended by scrolling the sector. */
+function zoneNeighbors(
+  dir: 'parents' | 'siblings' | 'children',
+  focus: FocusResponse,
+): FocusNeighbor[] {
+  const appended = zoneAppended.get(dir);
+  return appended === undefined ? focus[dir] : focus[dir].concat(appended);
+}
+
+/** Is the children zone currently showing a view run result (not real children)? */
+function isChildrenViewResult(): boolean {
+  const zone = zones?.['children'];
+  return zone !== undefined && zone.classList.contains('zone-children-view-result');
+}
+
+/**
+ * Resets the paged sectors for a freshly focused thought: appended pages and
+ * counters are dropped, the exclusivity set is seeded from the focus response
+ * (its zones are already exclusive server-side), in-flight page requests are
+ * invalidated by the bumped token, and the supplemental edge set is cleared so
+ * the overlay falls back to `focus.edges`.
+ */
+function resetZonePaging(focus: FocusResponse): void {
+  zoneAppended.clear();
+  zonePaging.clear();
+  zonePagingToken++;
+  setSupplementalEdges(null);
+  zoneVisibleIds = new Set<string>([
+    focus.focused.id,
+    ...focus.parents.map((n) => n.id),
+    ...focus.children.map((n) => n.id),
+    ...focus.siblings.map((n) => n.id),
+  ]);
+}
+
+/**
+ * Fetches the total neighbour count of every zone (in the background) so the
+ * count indicators can show it. `limit: 1` keeps the payload tiny — the focus
+ * response already delivered the first page; only `meta.total` is needed here.
+ * The first-page offset is therefore the server page size clamped to the total
+ * (the focus response was fetched with the same default page size).
+ */
+async function ensureZoneTotals(focus: FocusResponse): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const token = zonePagingToken;
+  for (const dir of ZONE_DIRS) {
+    void loadZoneTotal(networkId, focus, dir, token);
+  }
+}
+
+/** Loads one zone's total count and enables pagination for it. */
+async function loadZoneTotal(
+  networkId: string,
+  focus: FocusResponse,
+  dir: 'parents' | 'siblings' | 'children',
+  token: number,
+): Promise<void> {
+  try {
+    const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
+    const { sort, order } = focus.sorts[dir];
+    const page = await etn.thoughts.neighborsPage(
+      networkId,
+      focus.focused.id,
+      dir,
+      1,
+      0,
+      sort,
+      order,
+      linkFilter,
+    );
+    if (token !== zonePagingToken || store.state.focus?.focused.id !== focus.focused.id) return;
+    const counters = createZonePaging();
+    counters.total = page.total;
+    counters.loaded = Math.min(ZONE_PAGE_SIZE, page.total);
+    zonePaging.set(dir, counters);
+    paintZoneIndicators();
+    // A tall window / tiny zone may already sit at the bottom — try once.
+    void maybeLoadMoreZone(dir);
+  } catch {
+    // Best effort: the indicator stays hidden and scrolling retries later.
+  }
+}
+
+/**
+ * Appends the next page of a zone when the sector is scrolled near its bottom.
+ * Duplicates are filtered against {@link zoneVisibleIds} so the zone
+ * exclusivity of the focus response is preserved across pages. Accepted rows
+ * are grouped into the zone DOM incrementally — the map is not rebuilt and the
+ * focus cloud does not move.
+ */
+async function maybeLoadMoreZone(
+  dir: 'parents' | 'siblings' | 'children',
+): Promise<void> {
+  const zone = zones?.[dir];
+  const counters = zonePaging.get(dir);
+  if (zone === null || zone === undefined || counters === undefined) return;
+  if (dir === 'children' && isChildrenViewResult()) return;
+  if (
+    !shouldLoadMore(counters, {
+      scrollTop: zone.scrollTop,
+      clientHeight: zone.clientHeight,
+      scrollHeight: zone.scrollHeight,
+    })
+  ) {
+    return;
+  }
+  const focus = store.state.focus;
+  const networkId = store.state.networkId;
+  if (focus === null || networkId === null) return;
+  const token = zonePagingToken;
+  counters.loading = true;
+  try {
+    const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
+    const { sort, order } = focus.sorts[dir];
+    let appendedAny = false;
+    const acceptedIds: string[] = [];
+    // Bounded loop: a page fully consumed by the exclusivity filter (all rows
+    // already shown elsewhere) must not stall the sector — fetch the next one.
+    for (let guard = 0; guard < 20 && counters.loaded < counters.total; guard++) {
+      const page = await etn.thoughts.neighborsPage(
+        networkId,
+        focus.focused.id,
+        dir,
+        ZONE_PAGE_SIZE,
+        counters.loaded,
+        sort,
+        order,
+        linkFilter,
+      );
+      if (token !== zonePagingToken) return;
+      counters.total = page.total;
+      if (page.items.length === 0) {
+        counters.loaded = counters.total;
+        break;
+      }
+      counters.loaded += page.items.length;
+      const accepted: FocusNeighbor[] = [];
+      for (const neighbor of page.items) {
+        if (zoneVisibleIds.has(neighbor.id)) continue;
+        zoneVisibleIds.add(neighbor.id);
+        accepted.push(neighbor);
+      }
+      if (accepted.length > 0) {
+        const list = zoneAppended.get(dir) ?? [];
+        list.push(...accepted);
+        zoneAppended.set(dir, list);
+        for (const neighbor of accepted) acceptedIds.push(neighbor.id);
+        appendedAny = true;
+        break;
+      }
+    }
+    if (appendedAny) {
+      renderZone(dir, groupByThought(zoneNeighbors(dir, focus)));
+      paintZoneIndicators();
+      scheduleIndicatorLoads();
+      // Colours/icon of the appended clouds come from the ref cache, which
+      // the focus response only seeded for the first page — resolve the new
+      // ids and repaint the zone when they arrive (best effort).
+      void resolveZoneRefs(networkId, acceptedIds).then(() => {
+        if (token !== zonePagingToken) return;
+        renderZone(dir, groupByThought(zoneNeighbors(dir, focus)));
+      });
+      void refreshZoneEdges(focus);
+    }
+  } catch {
+    // Best effort: the next scroll of the sector retries.
+  } finally {
+    counters.loading = false;
+  }
+}
+
+/**
+ * Re-fetches every active link among the currently VISIBLE thoughts (focus +
+ * all appended pages) and hands them to the link overlay. Beyond the first
+ * page the focus response's `edges` no longer covers the neighbourhood, so the
+ * overlay is fed the authoritative set from `POST /thoughts/edges`.
+ */
+async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const token = zonePagingToken;
+  const ids = [...zoneVisibleIds];
+  try {
+    const edges = await etn.structures.edges(networkId, ids, store.state.showInactive);
+    if (token !== zonePagingToken) return;
+    setSupplementalEdges(edges);
+    redrawLinks?.();
+  } catch {
+    // Best effort: the overlay keeps drawing the focus response's edges.
+  }
+}
+
+/** Writes one sector's floating count overlay; `null` hides it. */
+function setZoneIndicator(
+  dir: 'parents' | 'siblings' | 'children',
+  label: string | null,
+): void {
+  const el = zoneCountEls[dir];
+  if (el === null) return;
+  if (label === null) {
+    el.textContent = '';
+    el.classList.add('hidden');
+    return;
+  }
+  if (el.textContent !== label) el.textContent = label;
+  el.classList.remove('hidden');
+}
+
+/**
+ * Refreshes every sector's count overlay from the current state: parents and
+ * siblings show their server total; the children zone shows the view-result
+ * size while a view is active, otherwise the same server total.
+ */
+function paintZoneIndicators(): void {
+  setZoneIndicator('parents', zoneCountLabel(zonePaging.get('parents')?.total ?? -1));
+  setZoneIndicator('siblings', zoneCountLabel(zonePaging.get('siblings')?.total ?? -1));
+  if (isChildrenViewResult()) {
+    setZoneIndicator('children', zoneCountLabel(zoneData.get('children')?.length ?? 0));
+  } else {
+    setZoneIndicator('children', zoneCountLabel(zonePaging.get('children')?.total ?? -1));
+  }
+}
+
+/**
+ * Pins each count overlay to the top-right corner of its zone (canvas-space),
+ * reading the theme background under it so the number stays readable on any
+ * backdrop (contrast text colour). Called from {@link updateFocusBand} on every
+ * render, host resize and splitter drag.
+ */
+function positionZoneIndicators(): void {
+  if (host === null) return;
+  const hostRect = host.getBoundingClientRect();
+  const bg =
+    getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#eef0f4';
+  const color = contrastText(bg);
+  for (const dir of ZONE_DIRS) {
+    const el = zoneCountEls[dir];
+    const zone = zones?.[dir];
+    if (el === null || zone === undefined) continue;
+    const rect = zone.getBoundingClientRect();
+    el.style.top = `${Math.round(rect.top - hostRect.top + 6)}px`;
+    el.style.left = `${Math.round(rect.right - hostRect.left - 6)}px`;
+    el.style.color = color;
+  }
+}
+
 /**
  * Titles of the visible parents/children of every displayed thought — the
  * endpoint titles of the focus response's `edges` (08-ui-spec.md §2.2.3).
@@ -1014,6 +1285,20 @@ async function enrichRefs(focus: FocusResponse): Promise<void> {
   }
 }
 
+/** Resolves the metadata of freshly appended sector clouds (colours/icon) into
+ *  the ref cache — the focus response only enriched the first page. Best
+ *  effort: failures leave those clouds with default styling. */
+async function resolveZoneRefs(networkId: string, ids: string[]): Promise<void> {
+  const missing = [...new Set(ids.filter((id) => !refCache.has(id)))];
+  if (missing.length === 0) return;
+  try {
+    const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, 100));
+    for (const ref of resolved) refCache.set(ref.id, ref);
+  } catch {
+    // Best effort.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Zones
 // ---------------------------------------------------------------------------
@@ -1034,8 +1319,16 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   const grid = div('zone-grid');
   const empty = div('zone-empty');
   empty.textContent = ZONE_EMPTY_LABELS[dir];
+  // Floating per-zone count (задача c8fa74ba) — overlay above the grid,
+  // positioned by `positionZoneIndicators()` on the canvas host.
+  const count = div('zone-count hidden');
+  count.setAttribute('aria-hidden', 'true');
+  zoneCountEls[dir] = count;
   spacer.append(grid);
   zone.append(spacer, empty);
+  // Overlay on the canvas host (not inside the scroller): the count must stay
+  // pinned to the zone's top-right corner while its content scrolls.
+  host?.append(count);
 
   let renderQueued = false;
   zone.addEventListener('scroll', () => {
@@ -1043,7 +1336,12 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     renderQueued = true;
     window.requestAnimationFrame(() => {
       renderQueued = false;
-      if (host?.isConnected === true) void renderZoneContent(dir);
+      if (host?.isConnected === true) {
+        void renderZoneContent(dir);
+        // Порционная подгрузка: порция запрашивается, когда окно сектора
+        // подходит к нижней границе (задача c8fa74ba).
+        void maybeLoadMoreZone(dir);
+      }
     });
   });
 
@@ -1101,6 +1399,34 @@ function renderZone(dir: 'parents' | 'siblings' | 'children', entries: ZoneEntry
 
 /** Per-zone entry lists, kept between scroll-triggered re-renders. */
 const zoneData = new Map<'parents' | 'siblings' | 'children', ZoneEntry[]>();
+
+/** Directions of the paged map zones (the focus row is never counted). */
+const ZONE_DIRS: readonly ('parents' | 'siblings' | 'children')[] = [
+  'parents',
+  'siblings',
+  'children',
+];
+
+/**
+ * Порционная подгрузка секторов (задача c8fa74ba). Серверный ответ фокуса
+ * отдаёт первые {@link ZONE_PAGE_SIZE} мыслей каждого сектора; при скролле
+ * сектора следующие порции догружаются в фоне через
+ * `GET /thoughts/{id}/neighbors` с `limit`/`offset`, а плавающий индикатор
+ * показывает общее количество (`meta.total`).
+ */
+const zoneAppended = new Map<'parents' | 'siblings' | 'children', FocusNeighbor[]>();
+/** Счётчики порции каждого сектора (offset, total, идёт ли запрос). */
+const zonePaging = new Map<'parents' | 'siblings' | 'children', ZonePagingCounters>();
+/** Идентификаторы мыслей, уже показанных в каком-либо секторе (исключительность). */
+let zoneVisibleIds = new Set<string>();
+/** Версия окрестности: смена фокуса инвалидирует ответы подгрузки в полёте. */
+let zonePagingToken = 0;
+/** Плавающие индикаторы-числа секторов (DOM-оверлей поверх холста). */
+const zoneCountEls: Record<'parents' | 'siblings' | 'children', HTMLElement | null> = {
+  parents: null,
+  siblings: null,
+  children: null,
+};
 
 /** Column-major grid geometry of a zone (cols × rows, 08-ui-spec.md §2.1.1). */
 function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
