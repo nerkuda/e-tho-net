@@ -37,9 +37,13 @@
 
 import {
   EtnError,
+  SORT_ORDERS,
+  STRUCTURE_SORTS,
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
   type EffectiveThoughtTypeView,
+  type SortOrder,
+  type StructureSort,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
@@ -48,7 +52,8 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
-import { parseStructureFilter, queryThoughts, type StructureQueryResult } from './structure-service.js';
+import { parseStructureFilter } from './structure-service.js';
+import { queryThoughts, structureRequestToQuery, type ThoughtQueryResult } from './query-service.js';
 import {
   buildResolveContext,
   resolveTokensInDefinition as resolveTokensDefinition,
@@ -73,7 +78,7 @@ import {
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
 import { getThought } from './thought-service.js';
-import { listEffectiveTypeProperties } from './property-service.js';
+import { listEffectiveTypeProperties, oppositeLinkPropertyDisplayName } from './property-service.js';
 
 /**
  * Доменное представление отбора (`ThoughtTypeView`). Различается с репозиторным
@@ -115,13 +120,27 @@ function viewNameKey(name: string): string {
  * `listEffectiveTypeProperties` уже сворачивает её (предок перекрывает
  * потомка, см. 02-data-model.md §3.4.1), и до валидатора доходят ровно те
  * ключи, что реально доступны мысли этого типа.
+ *
+ * Свойство-связь привязывается к типу ОДНОЙ стороной, но адресуется обеими
+ * (задача df992826): к метаданным добавляется имя противоположной стороны,
+ * чтобы токен `$thought.[<обратное имя>]` не отвергался как `unknown_property`.
+ * Единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`.
  */
 function getTypePropertyMeta(ndb: NetworkDb, thoughtTypeId: string): PropertyMeta[] {
-  return listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId).map((p) => ({
-    key: p.key,
-    multiple: p.config?.multiple === true,
-    value_type: p.value_type,
-  }));
+  const out: PropertyMeta[] = [];
+  for (const p of listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId)) {
+    const meta: PropertyMeta = {
+      key: p.key,
+      multiple: p.config?.multiple === true,
+      value_type: p.value_type,
+    };
+    out.push(meta);
+    if (p.value_type !== 'link') continue;
+    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, p.side ?? null);
+    if (opposite === null || opposite === p.key) continue;
+    out.push({ key: opposite, multiple: meta.multiple, value_type: p.value_type });
+  }
+  return out;
 }
 
 /**
@@ -622,11 +641,34 @@ export interface RunViewResult {
   items: ThoughtRef[];
   total: number;
   /** Направления связей для найденных мыслей (тот же формат, что в
-   *  `StructureQueryResult.directions` — фронт подсвечивает эллипсы). */
-  directions: StructureQueryResult['directions'];
+   *  `ThoughtQueryResult.directions` — фронт подсвечивает эллипсы). */
+  directions: ThoughtQueryResult['directions'];
   /** `[]` — все токены разрешены, иначе условие с токеном не применилось,
    *  и движок отбора возвращает пустую страницу с пояснением. */
   unresolved: TokenIssue[];
+  /** Эффективная сортировка страницы: из тела запроса или из определения
+   *  отбора (ошибка 4dd14aa3 — исполняется SQL-движком, а не JS). */
+  sort: StructureSort;
+  /** Эффективное направление сортировки (см. {@link RunViewResult.sort}). */
+  order: SortOrder;
+}
+
+/**
+ * Параметры страницы исполнения отбора (ошибка 4dd14aa3, 0.8.2). Все поля
+ * необязательны: не переданное значение берётся из определения отбора
+ * (`sort`/`order`, сохраняемые клиентом в `definition`), иначе — дефолт
+ * `alpha asc` с лимитом 100. Сортировка и пагинация исполняются SQL-движком
+ * (`queryThoughts`), а не JS-пересортировкой страницы.
+ */
+export interface RunViewQueryOptions {
+  /** Сортировка страницы — переопределяет сохранённую в определении. */
+  sort?: StructureSort;
+  /** Направление сортировки — переопределяет сохранённое в определении. */
+  order?: SortOrder;
+  /** Лимит страницы (дефолт 100, потолок — `queryThoughts`). */
+  limit?: number;
+  /** Смещение пагинации (дефолт 0). */
+  offset?: number;
 }
 
 /**
@@ -696,6 +738,7 @@ export function runViewForThought(
   thoughtId: string,
   userId: string,
   requestId?: string,
+  options?: RunViewQueryOptions,
 ): RunViewResult {
   const thought = getThought(ndb, thoughtId);
   if (thought === null) {
@@ -710,6 +753,20 @@ export function runViewForThought(
   // Повторная защита: даже если по дороге кто-то подменил definition в БД,
   // здесь отбор не выполнится с невалидными токенами — выбросим 422.
   validateDefinitionForTokens(parsed, undefined, requestId);
+
+  // Сортировка/направление: тело запроса переопределяет сохранённые в
+  // определении отбора (контракт 95273103 «sort/order в теле переопределяют
+  // сортировку, сохранённую в отборе»). Значение из определения проходит
+  // ту же валидацию по единому набору, что и тело: недопустимое (легаси или
+  // опечатка) молча не игнорируется в пользу тишины — деградируем к дефолту
+  // `alpha asc`, как и `parseStructureFilter` для прочих неизвестных полей.
+  // Ошибка 4dd14aa3: прежде сортировка зашивалась в `alpha` здесь и
+  // «исполнялась» JS-сравнением полей, которых нет в ThoughtRef, — теперь
+  // её исполняет SQL-движок.
+  const sort = options?.sort ?? readSavedSort(parsed);
+  const order = options?.order ?? readSavedOrder(parsed);
+  const limit = options?.limit ?? 100;
+  const offset = options?.offset ?? 0;
 
   const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
   const ctx: ResolveContext = buildResolveContext(
@@ -733,21 +790,31 @@ export function runViewForThought(
   const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
 
   if (resolved.unresolved.length > 0) {
-    return { items: [], total: 0, directions: {}, unresolved: resolved.unresolved };
+    return {
+      items: [],
+      total: 0,
+      directions: {},
+      unresolved: resolved.unresolved,
+      sort,
+      order,
+    };
   }
 
   // Парсер ожидает именно `Record<string, unknown>` (это `body` в REST).
   // Резолвер оставляет на выходе объект, потому что на входе был объект
   // (валидация отвергла бы не-объект), — cast для согласования типов.
   const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
-  const query: Parameters<typeof queryThoughts>[2] = {
+  const query: Parameters<typeof queryThoughts>[2] = structureRequestToQuery({
     ...filter,
-    sort: 'alpha',
-    order: 'asc',
-    limit: 100,
-    offset: 0,
-  };
-  const result = queryThoughts(ndb, userId, query, requestId);
+    sort,
+    order,
+    limit,
+    offset,
+  });
+  const result = queryThoughts(ndb, userId, query, {
+    emptyFilterMode: 'home_orphans',
+    includeDirections: true,
+  });
   // Исключаем саму контекстную мысль из результата: «отбор относительно
   // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.
   // `StructureQueryRequest` пока не несёт `exclude_ids` — фильтруем после
@@ -759,7 +826,30 @@ export function runViewForThought(
     total,
     directions: result.directions,
     unresolved: [],
+    sort,
+    order,
   };
+}
+
+/**
+ * Сохранённая в определении отбора сортировка (клиент кладёт `sort`/`order`
+ * в `definition` всегда — `buildWireFilter`). Валидация по единому набору
+ * {@link STRUCTURE_SORTS}; значение вне набора (легаси/опечатка) → дефолт
+ * `alpha` — как движок отбора трактует прочие неизвестные поля.
+ */
+function readSavedSort(definition: Record<string, unknown>): StructureSort {
+  const raw = definition['sort'];
+  return typeof raw === 'string' && (STRUCTURE_SORTS as readonly string[]).includes(raw)
+    ? (raw as StructureSort)
+    : 'alpha';
+}
+
+/** Сохранённое в определении направление сортировки (см. {@link readSavedSort}). */
+function readSavedOrder(definition: Record<string, unknown>): SortOrder {
+  const raw = definition['order'];
+  return typeof raw === 'string' && (SORT_ORDERS as readonly string[]).includes(raw)
+    ? (raw as SortOrder)
+    : 'asc';
 }
 
 /**

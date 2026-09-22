@@ -1,10 +1,10 @@
 /**
  * Regression test for the bulk «Изменить значение свойства…» dialog
  * (`selection/dialogs.ts`, selection panel → «Свойства»): a `link`-typed
- * property row must use the unified chip editor (`buildLinkValueEditor`,
- * инструкция a47947c8-fcd0-43aa-9132-cb7f17fbc240), not the muted dash
- * placeholder that made свойства-связи unrecoverable through this dialog
- * (ошибка e5cfacb9).
+ * property row must use the unified value editor (`buildValueEditor` из
+ * `editor/value-editor.ts`, ADR «значение свойства вводит один компонент»,
+ * стандарт S2, задача 77e7cafd вехи 4), not the muted dash placeholder that
+ * made свойства-связи unrecoverable through this dialog (ошибка e5cfacb9).
  *
  * `showSelectionPropertiesDialog` drives `showDialog`, which registers
  * `window.addEventListener('keydown', …)` — heavier to shim than a
@@ -31,24 +31,24 @@ function readSource(): string {
 }
 
 describe('selection properties dialog — link property row (e5cfacb9)', () => {
-  it('imports buildLinkValueEditor from editor/properties.js', () => {
+  it('imports buildValueEditor from editor/value-editor.js (S2, веха 4)', () => {
     const src = readSource();
     assert.ok(
-      /import\s*\{[^}]*buildLinkValueEditor[^}]*\}\s*from\s*['"]\.\.\/editor\/properties\.js['"]/.test(
+      /import\s*\{[^}]*buildValueEditor[^}]*\}\s*from\s*['"]\.\.\/editor\/value-editor\.js['"]/.test(
         src,
       ),
-      'buildLinkValueEditor must be imported from editor/properties.js',
+      'buildValueEditor must be imported from editor/value-editor.js',
     );
   });
 
-  it('the link branch of buildValueCell builds the unified chip editor', () => {
+  it('the value cell builds the unified editor for every value type', () => {
     const src = readSource();
     const cellStart = src.indexOf('function buildValueCell');
     assert.ok(cellStart > 0, 'buildValueCell not found');
     const cellBody = src.slice(cellStart);
     assert.ok(
-      cellBody.includes('buildLinkValueEditor({'),
-      'the link branch must build the unified chip editor',
+      cellBody.includes('buildValueEditor({'),
+      'the value cell must build the unified value editor (link included)',
     );
   });
 
@@ -64,7 +64,7 @@ describe('selection properties dialog — link property row (e5cfacb9)', () => {
     );
   });
 
-  it('PropertyRowState.def is typed as EffectiveTypeProperty (config needed by buildLinkValueEditor)', () => {
+  it('PropertyRowState.def is typed as EffectiveTypeProperty (config needed by buildValueEditor)', () => {
     const src = readSource();
     assert.ok(
       /interface PropertyRowState\s*\{\s*def:\s*EffectiveTypeProperty;/.test(src),

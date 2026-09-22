@@ -36,6 +36,7 @@ import {
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createThought } from '../src/domain/thought-service.js';
+import { listEffectiveTypeProperties } from '../src/domain/property-service.js';
 
 interface OntologyWriteResult {
   thought_types: Array<{
@@ -217,6 +218,34 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
     }
   });
 
+  it('rejects an unknown top-level key with VALIDATION_ERROR (ea4581c5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            // Симптом ошибки ea4581c5: секция, положенная не на тот уровень
+            // (правильное имя — `properties[]`), раньше молча игнорировалась.
+            property: [{ name: 'P' }],
+            thought_types: [{ ref: 'a', name: 'A' }],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('property'), `expected offending field in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('rejects a duplicate ref within thought_types', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -370,6 +399,233 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         assert.equal(secondData.thought_types[0]?.version, firstTaskVersion);
         assert.equal(secondData.properties[0]?.version, firstPropVersion);
         assert.equal(secondData.type_properties[0]?.version, firstTpVersion);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Регрессия ошибки 7b842c40: `type_properties[].default_value` объявлен в
+  // контракте, но не читался — переопределение дефолта привязки не создавалось
+  // (0.8.2, ADR «дефолт свойства живёт на привязке»).
+  it('пробрасывает type_properties[].default_value в override привязки (скаляр)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const args = {
+          network_id: ctx.networkId,
+          thought_types: [{ ref: 'task', name: 'задача-дефолт' }],
+          properties: [{ ref: 'status', name: 'Статус-дефолт', value_type: 'text' as const }],
+          type_properties: [
+            {
+              owner: 'thought_type' as const,
+              type_ref: 'task',
+              property_ref: 'status',
+              default_value: 'черновик',
+            },
+          ],
+        };
+        const first = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: args,
+        });
+        assert.equal(first.isError, undefined, toolText(first));
+        const firstData = toolJson<OntologyWriteResult>(first);
+        assert.equal(firstData.type_properties[0]?.action, 'created');
+        const typeId = firstData.thought_types[0]!.id;
+        const propId = firstData.properties[0]!.id;
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const override = ndb
+          .prepare(
+            'SELECT default_value FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+          )
+          .get('thought_type', typeId, propId) as { default_value: string } | undefined;
+        assert.ok(override, 'override дефолта привязки должен быть создан');
+        assert.equal(JSON.parse(override.default_value), 'черновик');
+        const effective = listEffectiveTypeProperties(ndb, 'thought_type', typeId).find(
+          (d) => d.property_id === propId,
+        );
+        assert.equal(effective?.default_value, 'черновик');
+        assert.equal(effective?.overridden_here, true);
+
+        // Идемпотентность: повторный вызов тем же батчем — `unchanged`.
+        const second = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: args,
+        });
+        assert.equal(second.isError, undefined, toolText(second));
+        assert.equal(toolJson<OntologyWriteResult>(second).type_properties[0]?.action, 'unchanged');
+
+        // `null` снимает дефолт привязки — эффективным становится общее значение
+        // стороны, а элемент отчитывается `updated` (дефолт изменился).
+        const reset = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_properties: [
+              {
+                owner: 'thought_type',
+                type: 'задача-дефолт',
+                property: 'Статус-дефолт',
+                default_value: null,
+              },
+            ],
+          },
+        });
+        assert.equal(reset.isError, undefined, toolText(reset));
+        assert.equal(toolJson<OntologyWriteResult>(reset).type_properties[0]?.action, 'updated');
+        const effectiveAfterReset = listEffectiveTypeProperties(ndb, 'thought_type', typeId).find(
+          (d) => d.property_id === propId,
+        );
+        assert.equal(effectiveAfterReset?.default_value, null);
+        assert.equal(effectiveAfterReset?.overridden_here, false);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('дефолт на существующей привязке переводит элемент в updated', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const base = {
+          network_id: ctx.networkId,
+          thought_types: [{ ref: 'task', name: 'задача-патч' }],
+          properties: [{ ref: 'status', name: 'Статус-патч', value_type: 'text' as const }],
+        };
+        const created = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            ...base,
+            type_properties: [
+              { owner: 'thought_type', type_ref: 'task', property_ref: 'status' },
+            ],
+          },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        assert.equal(toolJson<OntologyWriteResult>(created).type_properties[0]?.action, 'created');
+
+        const patched = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_properties: [
+              {
+                owner: 'thought_type',
+                type: 'задача-патч',
+                property: 'Статус-патч',
+                default_value: 'в работе',
+              },
+            ],
+          },
+        });
+        assert.equal(patched.isError, undefined, toolText(patched));
+        const patchedData = toolJson<OntologyWriteResult>(patched);
+        assert.equal(patchedData.type_properties[0]?.action, 'updated');
+        const typeId = patchedData.type_properties[0]!.type_id;
+        const propId = patchedData.type_properties[0]!.property_id;
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const override = ndb
+          .prepare(
+            'SELECT default_value FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+          )
+          .get('thought_type', typeId, propId) as { default_value: string } | undefined;
+        assert.equal(JSON.parse(override!.default_value), 'в работе');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('дефолт свойства-связи пишется по стороне привязки (target)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const source = createThought(ndb, { title: 'Источник дефолта' }, ctx.adminId);
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ ref: 'task', name: 'задача-связь' }],
+            properties: [
+              {
+                ref: 'dep',
+                name: 'Зависит-дефолт',
+                value_type: 'link' as const,
+                name_forward: 'зависит-дефолт-от',
+                name_reverse: 'от-дефолта',
+              },
+            ],
+            type_properties: [
+              {
+                owner: 'thought_type' as const,
+                type_ref: 'task',
+                property_ref: 'dep',
+                side: 'target' as const,
+                default_value: [source.id],
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<OntologyWriteResult>(result);
+        assert.equal(data.type_properties[0]?.action, 'created');
+        const typeId = data.thought_types[0]!.id;
+        const propId = data.properties[0]!.id;
+        const override = ndb
+          .prepare(
+            'SELECT default_value FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+          )
+          .get('thought_type', typeId, propId) as { default_value: string } | undefined;
+        assert.ok(override, 'override target-дефолта должен быть создан');
+        assert.deepEqual(JSON.parse(override.default_value), [source.id]);
+        const effective = listEffectiveTypeProperties(ndb, 'thought_type', typeId).find(
+          (d) => d.property_id === propId,
+        );
+        assert.deepEqual(effective?.default_value, [source.id]);
+        assert.equal(effective?.overridden_here, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('отвергает неверную форму type_properties[].default_value', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ ref: 'task', name: 'задача-форма' }],
+            properties: [{ ref: 'status', name: 'Статус-форма', value_type: 'text' as const }],
+            type_properties: [
+              {
+                owner: 'thought_type',
+                type_ref: 'task',
+                property_ref: 'status',
+                default_value: { nested: true },
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        assert.ok(toolText(result).includes('VALIDATION_ERROR'), toolText(result));
       } finally {
         await handle.close();
       }

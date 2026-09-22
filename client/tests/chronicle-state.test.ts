@@ -7,16 +7,20 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  DEFAULT_FILTER,
-  fromDefinition,
-  parseChronicleState,
-  toDefinition,
-  type ChronicleFilterState,
-} from '../src/renderer/screens/chronicle/state.js';
+  buildChronicleWire as toDefinition,
+  defaultChronicleCriteriaState as defaultFilter,
+  parseChronicleCriteria as fromDefinition,
+  type ChronicleCriteriaState as ChronicleFilterState,
+} from '../src/renderer/lib/filter-builder.js';
+import { parseChronicleState } from '../src/renderer/screens/chronicle/state.js';
+
+const DEFAULT_FILTER = defaultFilter();
 
 describe('toDefinition / fromDefinition', () => {
   it('round-trips a full filter', () => {
+    // Общая модель конструктора: полный набор полей даёт default + правки.
     const state: ChronicleFilterState = {
+      ...DEFAULT_FILTER,
       keywords: 'счет* -вод*',
       thoughtIds: ['a', 'b'],
       includeSubtree: true,

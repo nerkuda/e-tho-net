@@ -41,15 +41,22 @@ function seedThought(ndb: NetworkDb): string {
   return id;
 }
 
-/** Insert a directed link; `active` selects whether it is counted. */
-function seedLink(ndb: NetworkDb, sourceId: string, targetId: string, active = 1): void {
+/** Insert a directed link; `active`/`marked` select whether it is counted. */
+function seedLink(
+  ndb: NetworkDb,
+  sourceId: string,
+  targetId: string,
+  active = 1,
+  marked = 0,
+  typeId: string | null = null,
+): void {
   ndb
     .prepare(
-      `INSERT INTO links (id, source_id, target_id, active, version,
+      `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion, version,
                           created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, ?, 1, '2024', '2024', 'u', 'u')`,
+       VALUES (?, ?, ?, ?, ?, ?, 1, '2024', '2024', 'u', 'u')`,
     )
-    .run(randomUUID(), sourceId, targetId, active);
+    .run(randomUUID(), sourceId, targetId, typeId, active, marked);
 }
 
 /** Insert a comment of a given kind. */
@@ -120,6 +127,33 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
     const meta = getThoughtMeta(ndb, t);
     assert.equal(meta.parents_count, 3);
     assert.equal(meta.children_count, 3);
+  });
+
+  it('does not count edges marked for deletion (ошибка 1a7e8fde)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const t = seedThought(ndb);
+    const p1 = seedThought(ndb);
+    const p2 = seedThought(ndb);
+    const c1 = seedThought(ndb);
+    const c2 = seedThought(ndb);
+    seedLink(ndb, p1, t); // живое входящее
+    seedLink(ndb, p2, t, 1, 1); // в корзине — не считается
+    seedLink(ndb, t, c1); // живое исходящее
+    seedLink(ndb, t, c2, 1, 1); // в корзине — не считается
+
+    const meta = getThoughtMeta(ndb, t);
+    assert.equal(meta.parents_count, 1);
+    assert.equal(meta.children_count, 1);
+    // Согласованность с профилем влияния: его суммы по направлениям равны
+    // счётчикам родителей/потомков.
+    const inCount = meta.link_stats.stats
+      .filter((s) => s.direction === 'in')
+      .reduce((acc, s) => acc + s.count, 0);
+    const outCount = meta.link_stats.stats
+      .filter((s) => s.direction === 'out')
+      .reduce((acc, s) => acc + s.count, 0);
+    assert.equal(meta.parents_count, inCount);
+    assert.equal(meta.children_count, outCount);
   });
 
   it('counts attachments and chronological comments separately from permanent', () => {
@@ -198,5 +232,50 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
     assert.equal(meta.usage_count, 2);
     // The referencing thoughts themselves have no usages.
     assert.equal(getThoughtMeta(ndb, owner1).usage_count, 0);
+  });
+
+  it('usage_count блокирующего свойства-связи берёт направление из стороны привязки (083dcde5)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const linkType = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO link_types (id, name_forward, name_reverse, version, created_at, updated_at, created_by)
+         VALUES (?, 'ссылается на', 'упоминается в', 1, '2024', '2024', 'u')`,
+      )
+      .run(linkType);
+    const prop = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+         VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 'упоминается в', 'упоминается в', 'link', ?, NULL, '2024', '2024')`,
+      )
+      .run(prop, JSON.stringify({ link_type_id: linkType, blocks_target_deletion: true }));
+    const holderType = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+         VALUES (?, 'ВладелецЦель', 1, '2024', '2024', 'u')`,
+      )
+      .run(holderType);
+    // Привязка со стороны назначения: владелец — цель ребра.
+    ndb
+      .prepare(
+        `INSERT INTO type_properties (id, owner_type, owner_id, property_id, required, position, side)
+         VALUES (?, 'thought_type', ?, ?, 0, 0, 'target')`,
+      )
+      .run(randomUUID(), holderType, prop);
+    const owner = seedThought(ndb);
+    const value = seedThought(ndb);
+    seedLink(ndb, value, owner, 1, 0, linkType);
+
+    // Блокируется источник (значение), не владелец-цель.
+    assert.equal(getThoughtMeta(ndb, value).usage_count, 1);
+    assert.equal(getThoughtMeta(ndb, owner).usage_count, 0);
+
+    // Свойство без привязок — прежний fallback на config.direction (`out`):
+    // блокируется цель ребра.
+    ndb.prepare('DELETE FROM type_properties WHERE property_id = ?').run(prop);
+    assert.equal(getThoughtMeta(ndb, value).usage_count, 0);
+    assert.equal(getThoughtMeta(ndb, owner).usage_count, 1);
   });
 });

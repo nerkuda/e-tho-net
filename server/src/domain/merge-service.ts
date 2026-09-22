@@ -194,7 +194,8 @@ function resolveLiveLinkByTriple(
          )
        LIMIT 1`,
     )
-    .get(sourceId, targetId, NULL_TYPE_SENTINEL, typeId ?? NULL_TYPE_SENTINEL) as AnyRow | undefined;
+    .get(sourceId, targetId, NULL_TYPE_SENTINEL, typeId ?? NULL_TYPE_SENTINEL) as
+    AnyRow | undefined;
 }
 
 /** One merged row with its resolution against the target chain. */
@@ -224,7 +225,9 @@ function collectMergedRows(
     const rows =
       selected === undefined
         ? selection === undefined
-          ? (ndb.prepare(`SELECT t.*, t.rowid AS rowid FROM ${table} t WHERE t.layer_id = ?`).all(layerId) as AnyRow[])
+          ? (ndb
+              .prepare(`SELECT t.*, t.rowid AS rowid FROM ${table} t WHERE t.layer_id = ?`)
+              .all(layerId) as AnyRow[])
           : [] // partial merge: an unlisted table merges nothing
         : selected.length === 0
           ? []
@@ -343,10 +346,29 @@ function isPositionOnlyChange(row: AnyRow, winner: AnyRow): boolean {
 }
 
 /** Copy a physical row verbatim into another layer (reserve layer, §8.2). */
-function copyRowToLayer(ndb: NetworkDb, table: BranchableTable, rowid: number, layerId: string): void {
+function copyRowToLayer(
+  ndb: NetworkDb,
+  table: BranchableTable,
+  rowid: number,
+  layerId: string,
+): void {
   const { copyCols, hasVersion } = layoutOf(ndb, table);
-  const cols = ['id', 'layer_id', 'deleted', 'base_version', ...(hasVersion ? ['version'] : []), ...copyCols];
-  const select = ['id', '?', 'deleted', 'base_version', ...(hasVersion ? ['version'] : []), ...copyCols];
+  const cols = [
+    'id',
+    'layer_id',
+    'deleted',
+    'base_version',
+    ...(hasVersion ? ['version'] : []),
+    ...copyCols,
+  ];
+  const select = [
+    'id',
+    '?',
+    'deleted',
+    'base_version',
+    ...(hasVersion ? ['version'] : []),
+    ...copyCols,
+  ];
   ndb
     .prepare(
       `INSERT INTO ${table} (${cols.join(', ')})
@@ -492,7 +514,12 @@ function mergeLayerInner(
         const id = endpoint as string;
         if (closedOrInSet('thoughts', id)) continue;
         if (!existsAnywhere(ndb, 'thoughts', id)) {
-          skipped.push({ table: 'links', id: entry.row.id as string, reason: 'endpoint_missing', missing: role });
+          skipped.push({
+            table: 'links',
+            id: entry.row.id as string,
+            reason: 'endpoint_missing',
+            missing: role,
+          });
         } else {
           missingClosure.push({
             table: 'thoughts',
@@ -519,7 +546,9 @@ function mergeLayerInner(
   // Affected = rows that overwrite or delete something in P (a winner
   // exists). Pure inserts have nothing to back up, so an insert-only merge
   // creates no reserve (report carries null).
-  const affected = merged.filter((m) => m.winner !== undefined && !isSkipped(m.table, m.row.id as string));
+  const affected = merged.filter(
+    (m) => m.winner !== undefined && !isSkipped(m.table, m.row.id as string),
+  );
   let reserveLayerId: string | null = null;
   if (affected.length > 0) {
     reserveLayerId = randomUUID();
@@ -570,14 +599,23 @@ function mergeLayerInner(
     if (winner.layer_id === target.id) {
       const hasVersion = layoutOf(ndb, table).hasVersion;
       ndb
-        .prepare(`UPDATE ${table} SET deleted = 1${hasVersion ? ', version = ?' : ''} WHERE rowid = ?`)
+        .prepare(
+          `UPDATE ${table} SET deleted = 1${hasVersion ? ', version = ?' : ''} WHERE rowid = ?`,
+        )
         .run(...(hasVersion ? [row.version as number, winner.rowid] : [winner.rowid]));
       return;
     }
     // The winner lives above P: deleting in P materialises a tombstone row of
     // P (§5.2 semantics), copied from the winner row.
     const { copyCols, hasVersion } = layoutOf(ndb, table);
-    const cols = ['id', 'layer_id', 'deleted', 'base_version', ...(hasVersion ? ['version'] : []), ...copyCols];
+    const cols = [
+      'id',
+      'layer_id',
+      'deleted',
+      'base_version',
+      ...(hasVersion ? ['version'] : []),
+      ...copyCols,
+    ];
     const select = [
       'id',
       '?',
@@ -618,7 +656,14 @@ function mergeLayerInner(
       // state, with base_version pinned to the winner's version (§5.1
       // semantics for a row that appears in P already edited).
       const { copyCols, hasVersion } = layoutOf(ndb, table);
-      const cols = ['id', 'layer_id', 'deleted', 'base_version', ...(hasVersion ? ['version'] : []), ...copyCols];
+      const cols = [
+        'id',
+        'layer_id',
+        'deleted',
+        'base_version',
+        ...(hasVersion ? ['version'] : []),
+        ...copyCols,
+      ];
       const select = ['id', '?', 'deleted', '?', ...(hasVersion ? ['version'] : []), ...copyCols];
       ndb
         .prepare(
@@ -663,7 +708,14 @@ function mergeLayerInner(
       }
     }
     const { copyCols, hasVersion } = layoutOf(ndb, table);
-    const cols = ['id', 'layer_id', 'deleted', 'base_version', ...(hasVersion ? ['version'] : []), ...copyCols];
+    const cols = [
+      'id',
+      'layer_id',
+      'deleted',
+      'base_version',
+      ...(hasVersion ? ['version'] : []),
+      ...copyCols,
+    ];
     const select = ['id', '?', 'deleted', '0', ...(hasVersion ? ['version'] : []), ...copyCols];
     ndb
       .prepare(
@@ -697,7 +749,9 @@ function mergeLayerInner(
   // `icon_attachment_id` pointers in P (mirrors the physical purge path).
   for (const attachmentId of deletedAttachmentIds) {
     ndb
-      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ? AND layer_id = ?')
+      .prepare(
+        'UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ? AND layer_id = ?',
+      )
       .run(attachmentId, target.id);
   }
 
@@ -715,13 +769,17 @@ function mergeLayerInner(
     for (let i = 0; i < ids.length; i += 500) {
       const chunk = ids.slice(i, i + 500);
       ndb
-        .prepare(`DELETE FROM ${table} WHERE layer_id = ? AND id IN (${chunk.map(() => '?').join(', ')})`)
+        .prepare(
+          `DELETE FROM ${table} WHERE layer_id = ? AND id IN (${chunk.map(() => '?').join(', ')})`,
+        )
         .run(layerId, ...chunk);
     }
   }
   if (merged.length > 0) {
     const now = new Date().toISOString();
-    ndb.prepare('UPDATE layers SET last_activity_at = ? WHERE id IN (?, ?)').run(now, layerId, target.id);
+    ndb
+      .prepare('UPDATE layers SET last_activity_at = ? WHERE id IN (?, ?)')
+      .run(now, layerId, target.id);
   }
 
   for (const entry of merged) {
@@ -733,7 +791,9 @@ function mergeLayerInner(
   );
 
   // --- Phase F: trash auto-purge (§8.4, same call as layer deletion) ------
-  const purge = purgeTrash(ndb);
+  // Исход очистки (события/журнал) здесь не раздаётся — события раздаёт
+  // фасад по `deleted_*_ids` отчёта.
+  const purge = purgeTrash(ndb).result;
 
   // --- Phase G: авто-свёртка событий журнала для слоя (задача 6bcccd2b,
   // требование 1f7f789b «авто-свёртка при слиянии слоя»). Детальные

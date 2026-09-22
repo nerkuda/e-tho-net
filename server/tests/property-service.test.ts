@@ -19,7 +19,9 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
+  clearThoughtRefUsages,
   computeThoughtCardWarnings,
+  countThoughtRefUsages,
   createNetworkProperty,
   createTypeProperty,
   deleteNetworkProperty,
@@ -39,6 +41,7 @@ import {
   updateTypeProperty,
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
+import { getThoughtMeta } from '../src/domain/thought-meta.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
@@ -326,6 +329,63 @@ describe(
         assert.equal(otherUsage.total, 1);
         assert.equal(otherUsage.groups[0]!.key, 'editor');
         assert.equal(otherUsage.groups[0]!.thoughts[0]!.id, b2);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('учёт блокирующих ссылок берёт сторону привязки: владелец-цель (ошибка 083dcde5)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'ссылается на', name_reverse: 'упоминается в' },
+          USER,
+        );
+        const holder = createThoughtType(ndb, { name: 'ВладелецЦель' }, USER);
+        const valueType = createThoughtType(ndb, { name: 'ЗначениеЦель' }, USER);
+        // Привязка со стороны НАЗНАЧЕНИЯ: владелец — цель ребра, значение — источник.
+        // Конфиг намеренно без `direction` (миграция 042 снимает его у свойств-связей).
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          holder.id,
+          {
+            key: 'упоминается в',
+            value_type: 'link',
+            config: { link_type_id: lt.id, blocks_target_deletion: true },
+            side: 'target',
+          },
+          USER,
+        );
+        const owner = seedTypedThought(ndb, holder.id);
+        const value = seedTypedThought(ndb, valueType.id);
+        setPropertyValue(ndb, 'thought', owner, 'упоминается в', value, USER);
+
+        // Ребро канонично: значение → владелец.
+        const edge = ndb
+          .prepare('SELECT source_id, target_id FROM links WHERE type_id = ?')
+          .get(lt.id) as { source_id: string; target_id: string } | undefined;
+        assert.equal(edge?.source_id, value);
+        assert.equal(edge?.target_id, owner);
+
+        // Удаление значения (источника) блокируется ссылкой владельца-цели.
+        assert.equal(countThoughtRefUsages(ndb, value), 1);
+        const usage = findThoughtUsage(ndb, value);
+        assert.equal(usage.total, 1);
+        assert.equal(usage.groups[0]!.thoughts[0]!.id, owner);
+
+        // Владелец — не блокируемый конец: его собственное использование пусто.
+        assert.equal(countThoughtRefUsages(ndb, owner), 0);
+
+        // Зеркало в карточке мысли согласовано с проверкой удаления.
+        assert.equal(getThoughtMeta(ndb, value).usage_count, 1);
+        assert.equal(getThoughtMeta(ndb, value).usage_count, countThoughtRefUsages(ndb, value));
+        assert.equal(getThoughtMeta(ndb, owner).usage_count, countThoughtRefUsages(ndb, owner));
+
+        // «Очистить использование» снимает то же ребро (тот же резолв стороны).
+        assert.equal(clearThoughtRefUsages(ndb, value), 1);
+        assert.equal(countThoughtRefUsages(ndb, value), 0);
       } finally {
         ndb.close();
       }
@@ -1209,6 +1269,65 @@ describe(
       }
     });
 
+    it('re-attaching the same property to the same type is idempotent (ошибка 0bfd7180)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Идемпотентность' }, USER);
+        const first = createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: 'категория', value_type: 'text' },
+          USER,
+        );
+
+        // Повторный attach того же свойства: ни DUPLICATE, ни второй строки —
+        // та же привязка (её id) и тот же порядок.
+        const again = createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: 'категория', value_type: 'text' },
+          USER,
+        );
+        assert.equal(again.id, first.id, 'повтор использует существующую привязку');
+        assert.equal(again.position, first.position, 'порядок без явного position не переезжает');
+        const own = listEffectiveTypeProperties(ndb, 'thought_type', tt.id).filter(
+          (d) => d.key === 'категория' && d.inherited !== true,
+        );
+        assert.equal(own.length, 1, 'собственная привязка ровно одна');
+
+        // Явно переданная роль применяется к существующей строке.
+        const withRole = createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: 'категория', value_type: 'text', required: true, position: 5 },
+          USER,
+        );
+        assert.equal(withRole.id, first.id);
+        assert.equal(withRole.required, true);
+        assert.equal(withRole.position, 5);
+
+        // Привязка предка по-прежнему отвергается: свойство и так наследуется.
+        const child = createThoughtType(ndb, { name: 'Потомок', parent_id: tt.id }, USER);
+        assert.throws(
+          () =>
+            createTypeProperty(
+              ndb,
+              'thought_type',
+              child.id,
+              { key: 'категория', value_type: 'text' },
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          'привязка предка остаётся 409 DUPLICATE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('registry deletion is blocked by bindings and values with both counters (409)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
@@ -1322,7 +1441,7 @@ describe(
       }
     });
 
-    it('default-value overrides are transitive down the chain until re-overridden', () => {
+    it('default-value overrides do NOT traverse the chain: an empty override falls back to the side default (0.8.2)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const root = createThoughtType(ndb, { name: 'Верх' }, USER);
@@ -1334,19 +1453,23 @@ describe(
           config: { default_value: 1 },
         }, USER);
 
-        // The middle type overrides; the leaf inherits the override.
+        // Дефолт предка НЕ прыгает на потомка: у Листа своя override-строка
+        // отсутствует → действует общее значение привязки (1), не 5.
         setTypePropertyDefaultOverride(ndb, 'thought_type', mid.id, def.id, 5, USER);
+        const midEff = scalarProps(ndb, 'thought_type', mid.id);
+        assert.equal(midEff[0]!.default_value, 5);
+        assert.equal(midEff[0]!.overridden_here, true);
         let eff = scalarProps(ndb, 'thought_type', leaf.id);
-        assert.equal(eff[0]!.default_value, 5);
-        assert.equal(eff[0]!.overridden_here, false, 'stored on the ancestor, not the leaf');
+        assert.equal(eff[0]!.default_value, 1, 'без транзитивности: общее значение стороны, не дефолт предка');
+        assert.equal(eff[0]!.overridden_here, false);
 
-        // The leaf re-overrides for itself.
+        // Лист переопределяет для себя.
         setTypePropertyDefaultOverride(ndb, 'thought_type', leaf.id, def.id, 9, USER);
         eff = scalarProps(ndb, 'thought_type', leaf.id);
         assert.equal(eff[0]!.default_value, 9);
         assert.equal(eff[0]!.overridden_here, true);
 
-        // The middle keeps its own view.
+        // Середина сохраняет свой вид.
         eff = scalarProps(ndb, 'thought_type', mid.id);
         assert.equal(eff[0]!.default_value, 5);
         assert.equal(eff[0]!.overridden_here, true);

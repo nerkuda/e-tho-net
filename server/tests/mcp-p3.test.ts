@@ -29,7 +29,6 @@ import { openNetworkDb } from '../src/db/network-db.js';
 import { createThought } from '../src/domain/thought-service.js';
 import { createLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
-import { createLinkType } from '../src/domain/link-type-service.js';
 import { createAttachment } from '../src/domain/attachment-service.js';
 import { createComment } from '../src/domain/comment-service.js';
 import { createNetworkProperty } from '../src/domain/property-service.js';
@@ -73,13 +72,6 @@ function makeType(ctx: McpTestContext, name: string): string {
   // На Windows + SQLite WAL закрытие-открытие внутри одного теста приводит
   // к EBUSY при rmSync temp-каталога.
   return type.id;
-}
-
-/** Создать пользовательский тип связи в обеих сетях. */
-function makeLinkType(ctx: McpTestContext, name: string): string {
-  const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
-  const lt = createLinkType(ndb, { name_forward: name, name_reverse: name }, ctx.adminId);
-  return lt.id;
 }
 
 /** Создать дерево `родитель → ребёнок` в указанной сети. */

@@ -7,6 +7,10 @@
  * The query handler is read-only (no idempotency pre-handler); saved filters
  * of the chronicle view reuse the shared `/saved-filters` endpoints with
  * `view = 'chronicle'` (03-server-api.md §18).
+ *
+ * Веха 8 (задача c9d5f21e): валидация входа — доменный
+ * `parseChronicleQueryBody`, тот же парсер, что у MCP `etn.chronicle.query`
+ * (одна схема на операцию — в домене, оба фасада её вызывают).
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';

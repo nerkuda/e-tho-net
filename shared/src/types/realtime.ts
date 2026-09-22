@@ -32,7 +32,7 @@ import type {
 } from './thought-type.js';
 import type { SavedFilter } from './structure.js';
 import type { LayerMergeReport } from './layer.js';
-import type { EffectiveThoughtTypeView, ThoughtTypeView, ThoughtTypeViewUpdateInput } from './thought-type-view.js';
+import type { EffectiveThoughtTypeView, ThoughtTypeViewUpdateInput } from './thought-type-view.js';
 
 // ---------------------------------------------------------------------------
 // Envelope

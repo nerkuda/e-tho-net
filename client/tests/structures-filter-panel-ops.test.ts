@@ -1,5 +1,5 @@
 /**
- * Unit tests for the operator list of the structures filter panel.
+ * Unit tests for the operator list of the filter conditions builder.
  *
  * Pure structural check on the exported `OPS_BY_TYPE` map (bug fix 0.6.3):
  * every value type EXCEPT `bool` must offer `not_empty` («заполнено») and
@@ -8,14 +8,19 @@
  * cover the same intent, and a redundant toggle would clutter the small
  * list. The label strings are pinned in Russian: they are part of the
  * user-facing contract of the panel.
+ *
+ * Задача 48b59d00 (веха 5 версии 0.8.2): словарь теперь живёт в едином
+ * конструкторе `renderer/lib/filter-builder.ts` — один экземпляр на панель
+ * «Структур» и диалог отбора типа мысли; сторож дублей —
+ * `guard-filter-builder.test.ts`.
  */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { OPS_BY_TYPE } from '../src/renderer/screens/structures/filter-panel.js';
+import { OPS_BY_TYPE } from '../src/renderer/lib/filter-builder.js';
 
-describe('OPS_BY_TYPE (structures filter panel)', () => {
+describe('OPS_BY_TYPE (общий конструктор условий отбора)', () => {
   /** Every value type except `bool` must carry the presence-test ops. */
   const presentTypes = ['text', 'url', 'date', 'number', 'thought_ref'] as const;
 

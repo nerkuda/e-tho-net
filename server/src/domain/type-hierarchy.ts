@@ -11,7 +11,7 @@
  * connection's layer resolves, not over raw physical rows of every layer.
  */
 
-import { EtnError, isLinkTypeFilterActive, type LinkTypeFilterInput } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, isLinkTypeFilterActive, type LinkTypeFilterInput } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 
@@ -215,4 +215,122 @@ export function assertParentValid(
       { entity: 'type', id: typeId, parent_id: parentId },
     );
   }
+}
+
+// ===========================================================================
+// Reparent-impact helper (задача 8ea1ab6a, версия 0.8.2)
+//
+// Снят безусловный запрет «тип используется в N записях — смена родителя
+// невозможна» (link-type-service.ts:331-356, thought-type-service.ts:309-336
+// в предыдущей версии). Новая логика:
+//
+//   1. Запрет по живым слоям: если в любом не-базовом слое сети есть мысли
+//      (для типов мыслей) или связи (для типов связей) с типом из множества
+//      {изменяемый тип + все его потомки + текущий родитель + новый родитель},
+//      смена родителя отвергается 422 с перечнем затронутых слоёв.
+//   2. Иначе для типов мыслей: 422 с details { kind: 'reparent_impact', … }
+//      и интерактивным подтверждением (повторный PATCH с `confirmed=true`).
+//   3. Для типов связей: смена выполняется сразу (у свойств связей нет
+//      UI-редактора — предупреждать не о чем).
+//
+// Запрос идёт по физическим таблицам `thoughts` / `links`, а не по `*_v`:
+// «живая» строка слоя — это материализованная тень или строка, созданная в
+// этом слое. Слой без тени записи не учитывается — наследование типов он всё
+// равно прочтёт через `*_v` без собственного мнения.
+//
+// Только слои `is_base = 0`. Слитый/удалённый слой физически отсутствует
+// в `layers` (ON DELETE CASCADE на поддереве), и его строки выкошены тем же
+// каскадом (13-layers.md §2.4).
+// ===========================================================================
+
+/**
+ * Сводный перечень слоёв с теневыми строками записей, ссылающихся на тип из
+ * `affectedTypeIds`. Возвращаемые слои — не базовые (живые рабочие); для
+ * каждого — id, заголовок и число затронутых строк.
+ */
+export interface ReparentImpactLayer {
+  layer_id: string;
+  layer_title: string;
+  count: number;
+}
+
+/** Сводный итог перепланирования parent_id: счётчики + перечень слоёв. */
+export interface ReparentImpact {
+  /** Число затронутых строк по всему множеству слоёв и типов. */
+  total_count: number;
+  /** Число живых (не базовых) слоёв, где есть затронутые строки. */
+  layers_open_count: number;
+  /** Слои с числом затронутых строк в каждом. */
+  layers: ReparentImpactLayer[];
+  /** Ид типов, вошедших в проверку (включая сам тип + потомки + старый/новый родители). */
+  affected_type_ids: string[];
+}
+
+/**
+ * Подсчитать затронутые записи при планируемой смене `parent_id` для `typeId`
+ * (таблица `thought_types` или `link_types`). Множество проверяемых типов —
+ * сам тип, все его потомки, текущий родитель и новый родитель.
+ *
+ * Возвращает `null`, когда смена родителя — no-op (тип не имеет ни старого,
+ * ни нового родителя, или оба совпадают).
+ */
+export function computeReparentImpact(
+  ndb: NetworkDb,
+  table: TypeTable,
+  typeId: string,
+  currentParentId: string | null,
+  newParentId: string | null,
+): ReparentImpact | null {
+  if (currentParentId === newParentId) return null;
+
+  // Множество проверяемых id: сам тип, потомки, оба родителя (если заданы).
+  const ids = new Set<string>([typeId, ...subtreeIds(ndb, table, typeId)]);
+  if (currentParentId !== null) ids.add(currentParentId);
+  if (newParentId !== null) ids.add(newParentId);
+  const idList = [...ids];
+
+  // Физический запрос: слои `is_base = 0` (живые рабочие), запись
+  // не удалена (`deleted = 0`), `type_id` входит в проверяемое множество.
+  // Таблица записей зависит от переданной таблицы типов.
+  const recordTable: 'thoughts' | 'links' = table === 'thought_types' ? 'thoughts' : 'links';
+  const placeholders = idList.map(() => '?').join(',');
+  const sql =
+    `SELECT t.layer_id AS layer_id, l.title AS layer_title, COUNT(*) AS count ` +
+    `FROM ${recordTable} t ` +
+    `JOIN layers l ON l.id = t.layer_id AND l.is_base = 0 ` +
+    `WHERE t.type_id IN (${placeholders}) AND t.deleted = 0 ` +
+    `GROUP BY t.layer_id, l.title ` +
+    `ORDER BY count DESC, t.layer_id`;
+
+  const rows = ndb.prepare(sql).all(...idList) as Array<{
+    layer_id: string;
+    layer_title: string;
+    count: number;
+  }>;
+
+  const total = rows.reduce((s, r) => s + r.count, 0);
+  return {
+    total_count: total,
+    layers_open_count: rows.length,
+    layers: rows.map((r) => ({
+      layer_id: r.layer_id,
+      layer_title: r.layer_title,
+      count: r.count,
+    })),
+    affected_type_ids: idList,
+  };
+}
+
+/**
+ * Истина, когда в сетевой БД ровно один слой — базовый. В такой сети живой
+ * слой невозможен; перепланирование parent_id по живым слоям всегда
+ * «разрешает» (базовые записи в подсчёт не идут — они переоценятся
+ * через `*_v` независимо).
+ */
+export function hasOnlyBaseLayer(ndb: NetworkDb): boolean {
+  // BASE_LAYER_ID — фиксированный id основы (13-layers.md §2.1).
+  const row = ndb.prepare('SELECT COUNT(*) AS c FROM layers WHERE id <> ?').get(BASE_LAYER_ID) as {
+    c: number;
+  };
+  return row.c === 0;
 }

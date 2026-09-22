@@ -4,53 +4,17 @@
  *   GET /api/v1/admin/audit?actor=&network=&category=&from=&to=&limit=&offset=
  *
  * Admin-only. Returns the newest entries first with pagination metadata.
+ *
+ * Веха 8 (задача c9d5f21e): вход — единый контракт `RestAuditQuery`
+ * из `contracts.ts`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { AUDIT_CATEGORIES, type AuditCategory, type AuditQuery } from '@etn/shared';
-
-import { EtnError } from '@etn/shared';
+import { type AuditCategory, type AuditQuery } from '@etn/shared';
 
 import { sendList } from '../http/responses.js';
-
-/** Parsed + validated query for `GET /admin/audit`. */
-function parseAuditQuery(raw: NodeJS.Dict<string>): AuditQuery & { limit: number; offset: number } {
-  const q: AuditQuery = {};
-  if (typeof raw.actor === 'string' && raw.actor.length > 0) {
-    q.actor = raw.actor;
-  }
-  if (typeof raw.network === 'string' && raw.network.length > 0) {
-    q.network = raw.network;
-  }
-  if (typeof raw.category === 'string' && raw.category.length > 0) {
-    if (!(AUDIT_CATEGORIES as readonly string[]).includes(raw.category)) {
-      throw new EtnError('VALIDATION_ERROR', `Недопустимая категория: ${raw.category}`, {
-        field: 'category',
-      });
-    }
-    q.category = raw.category as AuditCategory;
-  }
-  if (typeof raw.from === 'string' && raw.from.length > 0) {
-    q.from = raw.from;
-  }
-  if (typeof raw.to === 'string' && raw.to.length > 0) {
-    q.to = raw.to;
-  }
-  const limit = raw.limit !== undefined ? Number.parseInt(raw.limit, 10) : 50;
-  const offset = raw.offset !== undefined ? Number.parseInt(raw.offset, 10) : 0;
-  if (!Number.isFinite(limit) || limit < 1) {
-    throw new EtnError('VALIDATION_ERROR', 'limit должен быть положительным целым.', {
-      field: 'limit',
-    });
-  }
-  if (!Number.isFinite(offset) || offset < 0) {
-    throw new EtnError('VALIDATION_ERROR', 'offset должен быть неотрицательным целым.', {
-      field: 'offset',
-    });
-  }
-  return { ...q, limit, offset };
-}
+import { parseRest, RestAuditQuery } from '../contracts.js';
 
 /** `/api/v1/admin/audit` route plugin (admin only). */
 export const auditRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -60,7 +24,15 @@ export const auditRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     '/admin/audit',
     { preHandler: [app.authPreHandler, requireAdmin] },
     async (req: FastifyRequest, reply) => {
-      const query = parseAuditQuery(req.query as NodeJS.Dict<string>);
+      const input = parseRest(RestAuditQuery, req);
+      const q: AuditQuery = {
+        ...(input.actor !== undefined ? { actor: input.actor } : {}),
+        ...(input.network !== undefined ? { network: input.network } : {}),
+        ...(input.category !== undefined ? { category: input.category as AuditCategory } : {}),
+        ...(input.from !== undefined ? { from: input.from } : {}),
+        ...(input.to !== undefined ? { to: input.to } : {}),
+      };
+      const query = { ...q, limit: input.limit ?? 50, offset: input.offset ?? 0 };
       const total = app.systemDb.countAudit(query);
       const entries = app.systemDb.queryAudit(query);
       sendList(reply, entries, total, query.offset, query.limit);

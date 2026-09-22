@@ -1,25 +1,23 @@
 /**
- * Shared transport-boundary helpers for the phase-D REST routes (tasks D1–D6).
+ * Транспортные хелперы REST-слоя (задача c9d5f21e, веха 8 версии 0.8.2).
  *
- * The domain services validate the business rules; these helpers cover the
- * concerns that repeat across the route plugins: opening the per-network
- * database, reading the JSON body as an object, parsing the `If-Match` header
- * and coercing individual body/query fields with canonical `VALIDATION_ERROR`
- * responses (docs/03-server-api.md §2.1). Validation messages follow the
- * Russian-wire style of the existing route layer.
+ * До вехи 8 здесь жили и полевые парсеры входа (`fieldString`, `queryInt`,
+ * `parseIfMatch` и т.п.). Они удалены: валидация входа описывается едиными
+ * контрактами в `server/src/contracts.ts` (одна схема на операцию для REST и
+ * MCP) и исполняется `parseRest`/`parseBody`.
+ *
+ * Остались только транспортные заботы, которые повторяются в роутах:
+ * открытие базы сети в контексте слоя сессии, резолв слоя, чтение тела
+ * запроса как объекта и обёртки фильтра типов связей (shared-домен).
  */
 
-import type { FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import {
   BASE_LAYER_ID,
   EtnError,
-  ICON_KINDS,
-  LINK_STYLES,
-  parseLinkTypeFilterValue,
-  type IconKind,
+  PREF_KEY,
   type LayerEcho,
-  type LinkStyle,
   type LinkTypeFilterInput,
   type RealtimeAudience,
   type RealtimeEventMap,
@@ -30,7 +28,17 @@ import type { NetworkDb } from '../db/network-db.js';
 import { openNetworkDb } from '../db/network-db.js';
 export { openNetworkDb };
 import { resolveSessionLayer } from '../domain/layer-service.js';
+import { parseLinkTypeFilterValue } from '@etn/shared';
 import type { Logger } from '../logger.js';
+import type { WriteFx } from '../domain/write-wrapper.js';
+export { actionOfChanges, runWrite } from '../domain/write-wrapper.js';
+export type {
+  AnyWriteEvent,
+  WriteActivityEntry,
+  WriteAuditEntry,
+  WriteFx,
+  WriteOutcome,
+} from '../domain/write-wrapper.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -86,7 +94,11 @@ export function resolveRequestLayer(
     const auth = req.auth;
     req.layerEcho =
       auth !== null
-        ? resolveSessionLayer(openNetworkDb(dataDir, networkId, log, BASE_LAYER_ID), auth.user.id, auth.clientId)
+        ? resolveSessionLayer(
+            openNetworkDb(dataDir, networkId, log, BASE_LAYER_ID),
+            auth.user.id,
+            auth.clientId,
+          )
         : { id: BASE_LAYER_ID, title: 'Основа' };
   }
   return req.layerEcho;
@@ -117,269 +129,55 @@ export function openRouteNetworkDb(
  * session's layer default is resolved separately via
  * {@link resolveRequestLayer}.
  */
-export function openRouteNetworkDbBase(deps: RouteDeps, networkId: string, log?: Logger): NetworkDb {
+export function openRouteNetworkDbBase(
+  deps: RouteDeps,
+  networkId: string,
+  log?: Logger,
+): NetworkDb {
   return openNetworkDb(deps.dataDir, networkId, log, BASE_LAYER_ID);
 }
 
-/** Assert that the parsed JSON body is an object and return it typed. */
-export function bodyObject(body: unknown, requestId?: string): Record<string, unknown> {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new EtnError(
-      'BAD_REQUEST',
-      'Тело запроса должно быть JSON-объектом.',
-      undefined,
-      requestId,
-    );
+/** Read a request body that may be absent (empty payload → `{}`). */
+export function requestBody(req: FastifyRequest): Record<string, unknown> {
+  if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
+    // BAD_REQUEST поднимается в parseRest; здесь — только защита типа.
+    return {};
   }
-  return body as Record<string, unknown>;
+  return req.body as Record<string, unknown>;
 }
 
 /**
- * Parse an `If-Match` header into the expected entity version. Absent header
- * yields `undefined` (no optimistic check); a non-integer value is rejected
- * with `VALIDATION_ERROR`.
+ * Resolve the `show_trash` visibility flag (задача 77923b49, 0.8.2): an
+ * explicit request-level override wins, otherwise the user's network
+ * preference `preferences.show_trash`. Default is `true` — помеченные на
+ * удаление элементы видны с признаком корзины (поведение после 355319d4);
+ * `false` прячет их на карте, локальном графе и в структурах.
  */
-export function parseIfMatch(header: string | undefined, requestId?: string): number | undefined {
-  if (header === undefined) {
-    return undefined;
-  }
-  const trimmed = header.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Заголовок If-Match должен содержать целую версию.',
-      { field: 'If-Match' },
-      requestId,
-    );
-  }
-  return Number.parseInt(trimmed, 10);
-}
-
-/** Read an optional string field; anything present but not a string → 422. */
-export function fieldString(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): string | undefined {
-  const value = obj[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} должен быть строкой.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/** Read an optional string-or-null field; wrong type → 422. */
-export function fieldNullableString(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): string | null | undefined {
-  const value = obj[key];
-  if (value === undefined || value === null) {
-    return value as undefined | null;
-  }
-  if (typeof value !== 'string') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} должен быть строкой или null.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/** Read an optional boolean field; wrong type → 422. */
-export function fieldBoolean(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): boolean | undefined {
-  const value = obj[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'boolean') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} должен быть логическим значением.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return value;
+export function resolveShowTrash(
+  app: FastifyInstance,
+  userId: string,
+  networkId: string,
+  override?: boolean,
+): boolean {
+  if (override !== undefined) return override;
+  const pref = app.systemDb.getNetworkPreference(userId, networkId, PREF_KEY.SHOW_TRASH);
+  return pref?.value !== false;
 }
 
 /**
- * Read an optional boolean-or-null field; wrong type → 422. Like
- * {@link fieldBoolean} but also accepts `null` (used for "inherit from type"
- * style fields, 02-data-model.md §3.1.1).
+ * Контекст записи REST-фасада для обёртки домена ({@link runWrite},
+ * ADR 162d8e7a): актор и слой сессии — из запроса (слой к этому моменту уже
+ * резолвлен открытием `ndb`), транспорт событий — `deps.emit`. Аудита для
+ * data-записей REST не ведёт (audit_log пишут только admin/me/networks-роуты,
+ * работающие с `_system.db`, и MCP-инструменты — 05 §6.1).
  */
-export function fieldNullableBoolean(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): boolean | null | undefined {
-  const value = obj[key];
-  if (value === undefined || value === null) {
-    return value as boolean | null | undefined;
-  }
-  if (typeof value !== 'boolean') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} должен быть логическим значением или null.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/** Validate the optional `icon_kind` field against the shared enum. */
-export function parseIconKind(
-  value: string | null | undefined,
-  requestId?: string,
-): IconKind | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (!(ICON_KINDS as readonly string[]).includes(value)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Недопустимый icon_kind.',
-      { field: 'icon_kind', allowed: ICON_KINDS },
-      requestId,
-    );
-  }
-  return value as IconKind;
-}
-
-/** Maximum inline image-icon size (decoded), 256 KiB (08-ui-spec.md §6.8). */
-export const ICON_MAX_BYTES = 256 * 1024;
-
-/** Validate the optional link line `style` against the shared enum. */
-export function parseLinkStyle(
-  value: string | null | undefined,
-  requestId?: string,
-): LinkStyle | null | undefined {
-  if (value === undefined || value === null) {
-    return value as LinkStyle | null | undefined;
-  }
-  if (!(LINK_STYLES as readonly string[]).includes(value)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Недопустимый style связи.',
-      { field: 'style', allowed: LINK_STYLES },
-      requestId,
-    );
-  }
-  return value as LinkStyle;
-}
-
-/** Read an optional integer-or-null field; wrong type → 422. */
-export function fieldNullableInt(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): number | null | undefined {
-  const value = obj[key];
-  if (value === undefined || value === null) {
-    return value as number | null | undefined;
-  }
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} должен быть целым числом или null.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/**
- * Validate an `image`-kind icon value: an `http(s)://` URL or a `data:image/…`
- * URL within {@link ICON_MAX_BYTES}. Only meaningful when `icon_kind = 'image'`.
- */
-export function assertImageIcon(icon: string | null | undefined, requestId?: string): void {
-  if (icon === undefined || icon === null || icon === '') return;
-  if (/^https?:\/\//i.test(icon)) return;
-  const match = /^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/i.exec(icon);
-  if (match === null) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'icon должен быть data:image URL или http(s) URL.',
-      { field: 'icon' },
-      requestId,
-    );
-  }
-  const b64 = match[1] ?? '';
-  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
-  const bytes = Math.floor((b64.length * 3) / 4) - padding;
-  if (bytes > ICON_MAX_BYTES) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Файл иконки слишком большой (${bytes} байт; лимит ${ICON_MAX_BYTES}).`,
-      { field: 'icon', limit: ICON_MAX_BYTES },
-      requestId,
-    );
-  }
-}
-
-/** Read an optional array of strings; wrong shape → 422. */
-export function fieldStringArray(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): string[] | undefined {
-  const value = obj[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} должен быть массивом строк.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return value as string[];
-}
-
-/**
- * Read a synonyms field in either accepted shape (03-server-api.md §6.3):
- * an array of strings or a single comma-separated string.
- */
-export function fieldStringOrArray(
-  obj: Record<string, unknown>,
-  key: string,
-  requestId?: string,
-): string[] | string | undefined {
-  const value = obj[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
-    return value as string[];
-  }
-  throw new EtnError(
-    'VALIDATION_ERROR',
-    `${key} должен быть строкой или массивом строк.`,
-    { field: key },
-    requestId,
-  );
+export function restWriteFx(deps: RouteDeps, req: FastifyRequest, networkId: string): WriteFx {
+  return {
+    networkId,
+    userId: req.auth?.user.id ?? '',
+    layerId: req.layerEcho?.id ?? null,
+    emit: (type, data, options) => deps.emit(req, networkId, type, data, options),
+  };
 }
 
 /**
@@ -397,72 +195,6 @@ export function queryStrings(value: unknown): string[] {
     return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
   }
   return [];
-}
-
-/**
- * Parse a positive-integer query parameter. Returns the `fallback` when the
- * parameter is absent; rejects non-integer values with `VALIDATION_ERROR`.
- * The `undefined` overload lets optional parameters (e.g. the layer-delete
- * `cascade` confirmation) stay absent.
- */
-export function queryInt(
-  value: unknown,
-  fallback: number,
-  opts: { field: string; min: number; requestId?: string },
-): number;
-export function queryInt(
-  value: unknown,
-  fallback: undefined,
-  opts: { field: string; min: number; requestId?: string },
-): number | undefined;
-export function queryInt(
-  value: unknown,
-  fallback: number | undefined,
-  opts: { field: string; min: number; requestId?: string },
-): number | undefined {
-  if (value === undefined) {
-    return fallback;
-  }
-  const raw = Array.isArray(value) ? value[0] : value;
-  const parsed = typeof raw === 'string' && raw !== '' ? Number.parseInt(raw, 10) : Number.NaN;
-  if (!Number.isFinite(parsed) || parsed < opts.min) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${opts.field} должен быть целым числом не меньше ${opts.min}.`,
-      { field: opts.field },
-      opts.requestId,
-    );
-  }
-  return parsed;
-}
-
-/** Parse an optional boolean query parameter (`true`/`false`/`1`/`0`). */
-export function queryBoolean(
-  value: unknown,
-  field: string,
-  requestId?: string,
-): boolean | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const raw = Array.isArray(value) ? value[0] : value;
-  if (raw === 'true' || raw === '1') {
-    return true;
-  }
-  if (raw === 'false' || raw === '0') {
-    return false;
-  }
-  throw new EtnError(
-    'VALIDATION_ERROR',
-    `Параметр ${field} должен быть логическим значением (true/false).`,
-    { field },
-    requestId,
-  );
-}
-
-/** Read a request body that may be absent (empty payload → `{}`). */
-export function requestBody(req: FastifyRequest): Record<string, unknown> {
-  return bodyObject(req.body ?? {}, req.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +225,15 @@ export function parseLinkTypeFilterQuery(
   requestId?: string,
 ): LinkTypeFilterInput | undefined {
   const typeIds = queryStrings(query['link_type_id']);
-  const includeStructural = queryBoolean(query['include_structural'], 'include_structural', requestId);
+  const includeStructuralRaw = query['include_structural'];
+  const includeStructural =
+    typeof includeStructuralRaw === 'string' &&
+    (includeStructuralRaw === 'true' || includeStructuralRaw === '1')
+      ? true
+      : typeof includeStructuralRaw === 'string' &&
+          (includeStructuralRaw === 'false' || includeStructuralRaw === '0')
+        ? false
+        : undefined;
   if (typeIds.length === 0 && includeStructural === undefined) return undefined;
   if (typeIds.length === 0 && includeStructural !== true) {
     throw new EtnError(

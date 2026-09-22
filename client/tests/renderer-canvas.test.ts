@@ -11,9 +11,10 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, Thought, ThoughtRef, Thou
 import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/canvas.js';
 import { shortenCompoundName } from '../src/renderer/lib/pure.js';
 import { store } from '../src/renderer/state.js';
+// Канон стиля и значка мысли живёт в общей фабрике облачка (веха 2).
+import { resolveCloudStyle, resolveThoughtIcon } from '../src/renderer/lib/thought-cloud.js';
 
-const { groupByThought, resolveCloudStyle, resolveThoughtIcon, canvasRenderKey, selectionKey } =
-  canvasInternals;
+const { groupByThought, canvasRenderKey, selectionKey } = canvasInternals;
 
 function thought(id: string, title = id): Thought {
   return {
@@ -67,6 +68,7 @@ function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
     link_id: linkId,
     link_type_id: null,
     link_active: true,
+    link_marked_for_deletion: false,
     has_incoming: false,
     has_outgoing: false,
     manual_position: null,
@@ -74,7 +76,16 @@ function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
 }
 
 function edge(id: string, source_id: string, target_id: string): FocusEdge {
-  return { id, source_id, target_id, type_id: null, color: null, style: null, width: null };
+  return {
+    id,
+    source_id,
+    target_id,
+    type_id: null,
+    link_marked_for_deletion: false,
+    color: null,
+    style: null,
+    width: null,
+  };
 }
 
 function ref(overrides: Partial<ThoughtRef> = {}): ThoughtRef {

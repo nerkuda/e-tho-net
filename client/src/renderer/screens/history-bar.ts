@@ -13,13 +13,15 @@
  * - each mini cloud renders the thought's icon + title (clipped to
  *   {@link CHIP_TITLE_LIMIT} chars + ellipsis), real fg/bg/font styles via
  *   `applyCloudStyle`, dimmed when inactive;
- * - dropdown items mirror the search-panel rendering (08-ui-spec.md §6.7):
- *   the same `mini-icon` DOM node, font/fg/bg/dim classes from the thought,
- *   CSS ellipsis by width;
+ * - dropdown items are the same thought mini-clouds from the shared factory
+ *   (profile `chip`): icon, colours, font, dim state and trash mark, ellipsis
+ *   by the row width;
  * - empty history hides the area entirely;
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
- *   thoughts were already pruned locally by the main-process applier, and
- *   inactive thoughts are hidden while `show_inactive` is off;
+ *   thoughts were already pruned locally by the main-process applier, inactive
+ *   thoughts are hidden while `show_inactive` is off, and marked-for-deletion
+ *   ones while `show_trash` is off (задача 77923b49, симметрия настроек
+ *   видимости);
  * - clicking an entry opens the thought in the editor: switches the focus
  *   (map view) or opens the thought without moving the canvas focus
  *   (structures/chronicle view) — the current-thought frame follows the pick
@@ -30,34 +32,24 @@
  */
 
 import { setFocus } from '../app.js';
-import { button, div, clear, el, setTooltip, span } from '../lib/dom.js';
+import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+// Мини-облачка истории и строки её дропдауна собирает общая фабрика:
+// значок, цвета, начертание, бледность и метка корзины приходят из одного
+// представления мысли (стандарт «представление мысли — только через фабрику»).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
 import { HISTORY_BAR_MORE_RESERVE, planHistoryChips, type HistoryChipPlan } from '../lib/pure.js';
 
-/**
- * Max title length inside a history mini-cloud (the chip on the bar). When the
- * title is longer we append an ellipsis so the chip stays a single line.
- */
-const CHIP_TITLE_LIMIT = 24;
 /** How many entries the dropdown source returns at once. */
 const HISTORY_LIMIT = 50;
-
-/** Suffix appended when a title is truncated to {@link CHIP_TITLE_LIMIT}. */
-const ELLIPSIS = '…';
-
-/** Truncates `text` to `limit` characters; appends an ellipsis when cut. */
-function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit)}${ELLIPSIS}` : text;
-}
 
 let host: HTMLElement | null = null;
 /** Signature of the inputs the bar depends on — avoids redundant re-renders. */
@@ -135,7 +127,7 @@ async function render(): Promise<void> {
   const view = store.state.activeView;
   // The width is part of the signature: the visible chip set depends on it.
   // The view is part of it too: chips route the click per the active screen.
-  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${host.clientWidth}`;
+  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${host.clientWidth}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 
@@ -160,7 +152,12 @@ async function render(): Promise<void> {
     // the user moves away from it.
     if (id === activeId) return false;
     const ref = refs.get(id);
-    return store.state.showInactive || ref === undefined || ref.active;
+    // Неактуальные — по `show_inactive`, помеченные на удаление — по
+    // `show_trash` (задача 77923b49): оба переключателя прячут облачко, но
+    // ведут себя как одна настройка видимости (симметрия механизмов).
+    if (ref === undefined) return true;
+    return (store.state.showInactive || ref.active) &&
+      (store.state.showTrash || ref.marked_for_deletion !== true);
   });
 
   clear(host);
@@ -235,57 +232,29 @@ function openHistoryMenu(
   anchor: HTMLElement,
 ): void {
   const items: MenuItem[] = rest.map(({ id, ref }) => ({
-    icon: buildDropdownIcon(ref),
+    // Строка-мысль — готовое облачко фабрики (профиль `chip`, ширина по
+    // строке меню): значок, цвета, начертание, бледность неактуальной и метка
+    // корзины. Прежняя ручная доклейка значка/стиля ушла вместе с ней.
+    content: createThoughtCloud(ref ?? { id, title: id }, {
+      profile: 'chip',
+      width: 'container',
+    }),
     label: ref?.title ?? id,
     dragId: id,
     onClick: () => openEntry(id),
   }));
   const rect = anchor.getBoundingClientRect();
   const root = showMenuAt(rect.left, rect.bottom + 2, items);
-  styleDropdownRows(root, rest.map((r) => r.ref));
   // Dropdown rows mirror the strip chips: they drag onto the canvas (§11.1)
   // and Ctrl+hover previews the thought's permanent comment (preview stage 3,
   // same marking as `buildChip` — rows are built by `showMenuAt`, so they are
-  // walked here in the same order as `rest`, like `styleDropdownRows` does).
+  // walked here in the same order as `rest`).
   const rows = root.querySelectorAll<HTMLElement>(':scope > .menu-item');
   rest.forEach(({ id, ref }, index) => {
     const row = rows[index];
     if (row === undefined) return;
     wireExternalDragSource(row, id, 'history', { fromMenu: true });
     markThoughtCommentPreview(row, id, ref?.title ?? id);
-  });
-}
-
-/**
- * Builds the icon node shown in a history dropdown row. Mirrors the
- * search-panel rendering (08-ui-spec.md §6.7): a real `mini-icon` node with
- * the same icon/image and font/fg/bg styles as the on-canvas cloud.
- */
-function buildDropdownIcon(ref: import('@etn/shared').ThoughtRef | undefined): HTMLElement {
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) {
-    applyThoughtIcon(icon, ref);
-  } else {
-    icon.textContent = '💭';
-  }
-  return icon;
-}
-
-/**
- * Applies cloud-style classes (`font-*`, `dim`) to the dropdown rows after
- * they are built — `showMenuAt` builds rows internally, so we walk them
- * here in the same order as the items.
- */
-function styleDropdownRows(
-  root: HTMLElement,
-  refs: Array<import('@etn/shared').ThoughtRef | undefined>,
-): void {
-  const rows = root.querySelectorAll<HTMLElement>(':scope > .menu-item');
-  refs.forEach((ref, index) => {
-    const row = rows[index];
-    if (row === undefined || ref === undefined) return;
-    applyCloudStyle(row, resolveCloudStyle(ref));
-    if (!ref.active || ref.marked_for_deletion) row.classList.add('dim');
   });
 }
 
@@ -309,41 +278,27 @@ async function resolveRefs(
   }
 }
 
-/** Builds a history mini-cloud chip. */
+/** Builds a history mini-cloud chip (icon + title, thought styles, menus). */
 function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined): HTMLElement {
-  const chip = div('history-cloud');
-  chip.dataset['id'] = id;
-  if (ref !== undefined) {
-    applyCloudStyle(chip, resolveCloudStyle(ref));
-  }
-  if (ref !== undefined && !ref.active) chip.classList.add('dim');
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) {
-    applyThoughtIcon(icon, ref);
-  } else {
-    icon.textContent = '💭';
-  }
-  const title = el('span', 'hc-title', clip(ref?.title ?? id, CHIP_TITLE_LIMIT));
-  setTooltip(chip, ref?.title ?? id);
-  chip.append(icon, title);
+  // Мини-облачко собирает общая фабрика (профиль `chip`): значок, цвета,
+  // начертание, бледность неактуальной/помеченной, метка корзины и обрезка
+  // названия раскладкой с подсказкой полного имени. Класс `history-cloud`
+  // сохраняет раскладку полосы: модификатор `.prop-ref-cloud.history-cloud`
+  // в styles.css держит чип несжимаемым (flex: 0 0 auto — чипы отчитываются
+  // о своей естественной ширине для planHistoryChips) с пределом 170px.
+  const chip = createThoughtCloud(
+    ref ?? { id, title: id },
+    {
+      profile: 'chip',
+      actions: {
+        onClick: (targetId) => openEntry(targetId),
+      },
+    },
+  );
+  chip.classList.add('history-cloud');
   // Stage 3 (same as the pinned bar's `buildChip`): no per-indicator icons on
   // a history mini-cloud — Ctrl+hover on the whole chip shows the thought's
   // permanent comment.
   markThoughtCommentPreview(chip, id, ref?.title ?? id);
-  // A thought in the trash (S13, §5a.2): the mini-cloud dims and carries the
-  // red trash glyph — the same marked reading as the canvas badge, scaled
-  // down to the strip.
-  if (ref?.marked_for_deletion === true) {
-    chip.classList.add('dim');
-    chip.append(buildTrashMark());
-  }
-  chip.addEventListener('click', () => openEntry(id));
   return chip;
-}
-
-/** Builds the small red trash glyph appended to marked history mini-clouds. */
-function buildTrashMark(): HTMLElement {
-  const mark = span('', 'list-trash-mark');
-  mark.append(svgIcon('trash', 11));
-  return mark;
 }

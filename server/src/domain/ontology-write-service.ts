@@ -54,6 +54,7 @@ import {
   type PropertyConfig,
   type PropertyDefinition,
   type PropertyValueType,
+  type PropertyValueValue,
   type ThoughtTypeInput,
   type ThoughtTypeUpdateInput,
   type LinkTypeInput,
@@ -83,6 +84,7 @@ import {
   getNetworkPropertyByName,
   getTypePropertyByKey,
   resolvePropertyIdByName,
+  setTypePropertyDefaultOverride,
   updateNetworkProperty,
   updateTypeProperty,
 } from './property-service.js';
@@ -189,6 +191,10 @@ interface ResolvedTypeProperty {
   property_ref: string | null;
   required: boolean;
   position: number | undefined;
+  /** Дефолт привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+   *  значение или `null` (сброс); `undefined` — поле не передано. Пишется
+   *  строкой `type_property_overrides` с учётом стороны привязки. */
+  default_value: PropertyValueValue | undefined;
   /** Сторона привязки свойства-связи (0.8.1, задача d7177d1d). */
   side: LinkPropertySide | null | undefined;
 }
@@ -308,6 +314,30 @@ function validateParentXor<T extends { parent?: string | null; parent_ref?: stri
       { field: `${sectionLabel}[${index}]` },
     );
   }
+}
+
+/**
+ * Сузить объявленный в контракте `default_value` (`unknown`) к значению
+ * свойства: те же формы, что у REST `PUT …/types/{id}/properties/{id}/default`
+ * — скаляр (строка/число/булево), `null` (сброс дефолта) либо непустой
+ * массив id мыслей для свойства-связи. Смысловая проверка (нормализация по
+ * стороне привязки, отбор типов цели, coerce скаляра под `value_type`) —
+ * в доменном `setTypePropertyDefaultOverride`, здесь только форма.
+ */
+function narrowDefaultValue(value: unknown, field: string): PropertyValueValue {
+  if (value === null) return null;
+  const isScalar =
+    typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+  const isLinkDefault =
+    Array.isArray(value) && value.every((id) => typeof id === 'string' && id !== '');
+  if (!isScalar && !isLinkDefault) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'default_value должен быть строкой, числом, булевым, массивом id мыслей (свойство-связь) или null',
+      { field },
+    );
+  }
+  return value as PropertyValueValue;
 }
 
 // ===========================================================================
@@ -594,6 +624,10 @@ function resolveTypeProperties(
       property_ref: hasPropertyRef ? (item.property_ref as string) : null,
       required: item.required ?? false,
       position: item.position,
+      default_value:
+        item.default_value === undefined
+          ? undefined
+          : narrowDefaultValue(item.default_value, `type_properties[${index}].default_value`),
       side: item.side,
     });
   }
@@ -641,7 +675,7 @@ function resolveTypeViews(
       }
       viewId = existing.id;
     }
-    let refForUpdate: string | null = item.ref_for_update ?? null;
+    const refForUpdate: string | null = item.ref_for_update ?? null;
     if (refForUpdate !== null && !tvRefs.has(refForUpdate)) {
       throw new EtnError(
         'VALIDATION_ERROR',
@@ -1008,7 +1042,14 @@ export function writeOntology(
           updateInput.comment_template_md = item.comment_template_md;
         }
         if (Object.keys(updateInput).length > 0) {
-          updateThoughtType(ndb, id, updateInput, undefined, actorUserId);
+          // 0.8.2, задача 8ea1ab6a: MCP не имеет интерактивного подтверждения;
+          // смена parent_id у используемого типа мысли сразу применяется,
+          // если сеть не против (нет живых слоёв с теневыми строками).
+          // `confirmed: true` подавляет 422 `reparent_impact`; защита по
+          // живым слоям (`reparent_blocked_by_layer`) остаётся.
+          updateThoughtType(ndb, id, updateInput, undefined, actorUserId, {
+            confirmed: true,
+          });
           version = readVersion(ndb, 'thought_types', id);
           action = 'updated';
         } else {
@@ -1038,6 +1079,8 @@ export function writeOntology(
         { parent_id: targetId },
         undefined,
         actorUserId,
+        // См. выше: MCP-путь подавляет интерактивное подтверждение.
+        { confirmed: true },
       );
       const r = ttResults.find((x) => x.id === id);
       if (r !== undefined) {
@@ -1287,6 +1330,23 @@ export function writeOntology(
           version = readVersion(ndb, 'type_properties', existing.id);
           action = 'unchanged';
         }
+      }
+      // Дефолт привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+      // пишется той же транзакцией строкой `type_property_overrides` через
+      // доменный путь REST `PUT …/properties/{id}/default` (нормализация с
+      // учётом стороны привязки). Изменение дефолта переводит элемент из
+      // `unchanged` в `updated` — фасад публикует событие, клиенты перечитают
+      // эффективный список типа.
+      if (item.default_value !== undefined) {
+        const defaultChanged = setTypePropertyDefaultOverride(
+          ndb,
+          item.owner,
+          typeId,
+          propertyId,
+          item.default_value,
+          actorUserId,
+        );
+        if (defaultChanged && action === 'unchanged') action = 'updated';
       }
       tpResults.push({
         owner: item.owner,

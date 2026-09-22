@@ -35,12 +35,29 @@ const DEFAULT_SLICES: Required<ImportEtnxOptions> = {
  * Open the import dialog pre-filled with `filePath` (a previously chosen
  * archive) and the default slice toggles. The user adjusts the toggles,
  * picks a different file via «Обзор…» if needed, and presses «Импортировать».
+ * Resolves the chosen file + slices, or `{ filePath: undefined, options:
+ * undefined }` when dismissed (any close path — «Отмена», Esc, ×, backdrop
+ * click).
  */
 export function showImportEtnxDialog(
   filePath: string,
   initial: Partial<ImportEtnxOptions> = {},
 ): Promise<DialogResult> {
   return new Promise<DialogResult>((resolve) => {
+    /**
+     * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
+     * каркаса (ошибка fd87099b): кнопки завершают его явно, а Esc и × —
+     * через `onClose`. Флаг `settled` не даёт позднему событию
+     * `remove` переиграть уже принятое решение.
+     */
+    let settled = false;
+    const finish = (result: DialogResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const cancelled: DialogResult = { filePath: undefined, options: undefined };
+
     const pathInput = el('input', 'text-input') as HTMLInputElement;
     pathInput.type = 'text';
     pathInput.id = 'etnx-import-filepath';
@@ -91,7 +108,7 @@ export function showImportEtnxDialog(
       buttons: [
         {
           label: 'Отмена',
-          onClick: () => resolve({ filePath: undefined, options: undefined }),
+          onClick: () => finish(cancelled),
         },
         {
           label: 'Импортировать',
@@ -99,7 +116,7 @@ export function showImportEtnxDialog(
           onClick: () => {
             const path = pathInput.value.trim();
             if (path === '') return;
-            resolve({
+            finish({
               filePath: path,
               options: {
                 include_types: includeTypes.input.checked,
@@ -110,6 +127,10 @@ export function showImportEtnxDialog(
           },
         },
       ],
+      // Esc и × — отмена: контракт «`{ filePath: undefined,
+      // options: undefined }` on cancel», ровно как по кнопке «Отмена»
+      // (ошибка fd87099b).
+      onClose: () => finish(cancelled),
     });
   });
 }

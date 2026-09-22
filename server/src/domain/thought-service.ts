@@ -33,7 +33,6 @@ import {
   type SortKind,
   type SortOrder,
   type Thought,
-  type ThoughtCardWarning,
   type ThoughtCreateInput,
   type ThoughtDeletionCheckResult,
   type ThoughtRef,
@@ -49,18 +48,20 @@ import {
   tombstoneThoughtDeletionDependants,
 } from './owner-cleanup.js';
 import {
-  computeThoughtCardWarnings,
   countThoughtRefUsages,
+  filterApplicableLinkDefaultSources,
   filterApplicableLinkDefaultTargets,
   getPropertyValuesResolved,
+  linkPropertySideFromConfig,
   listEffectiveTypeProperties,
+  setLinkPropertySourcesForTarget,
   setPropertyValueById,
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
 
 import { getAttachment } from './attachment-service.js';
-import { getEdgesAmong, getLinkDirections } from './link-service.js';
+import { getEdgesAmong, getLinkDirections, toFocusEdge } from './link-service.js';
 import { enforceLock } from './lock-service.js';
 import { getThoughtMeta } from './thought-meta.js';
 import {
@@ -119,6 +120,8 @@ interface NeighborRow {
   link_id: string;
   link_type_id: string | null;
   link_active: number;
+  /** 1 when the incident link is marked for deletion (trash, S13). */
+  link_marked_for_deletion: number;
   /**
    * Populated only when the query opted into the manual-position join
    * (`useManualJoin`, see `buildNeighborsQuery`). `number` for an entry
@@ -214,6 +217,10 @@ function rowToNeighbor(row: NeighborRow): FocusNeighbor {
     link_id: row.link_id,
     link_type_id: row.link_type_id,
     link_active: row.link_active === 1,
+    // Trash flag of the incident link (ошибка 355319d4): a marked link stays
+    // physically alive and is still listed as a neighbour — the client must
+    // show it marked, not hide it (symmetry with a marked thought).
+    link_marked_for_deletion: row.link_marked_for_deletion === 1,
     // Placeholder; `focus()` overwrites these from `getLinkDirections`.
     has_incoming: false,
     has_outgoing: false,
@@ -362,6 +369,18 @@ export function getThoughtOrThrow(ndb: NetworkDb, id: string): Thought {
     throw new EtnError('NOT_FOUND', `thought ${id} not found`, { entity: 'thought', id });
   }
   return thought;
+}
+
+/**
+ * Id защищённой HOME-мысли сети (`is_root = 1`), или `null`, когда её нет.
+ * Вынесено из MCP-фасада (ADR 8c93f03a): импорт `.etnx` подвешивает корневые
+ * мысли к HOME, когда `parent_thought_id` не задан.
+ */
+export function getHomeThoughtId(ndb: NetworkDb): string | null {
+  const row = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
+    | { id: string }
+    | undefined;
+  return row?.id ?? null;
 }
 
 /**
@@ -782,16 +801,30 @@ export function createThought(
     if (input.type_id !== undefined && input.type_id !== null) {
       for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
         if (def.default_value === null) continue;
-        // Дефолт свойства-связи — набор целей (bb67e546): применение создаёт
-        // рёбра. Цели, ставшие неприменимыми после установки дефолта
-        // (удалены, в корзине, сменили тип), молча пропускаются — создание
-        // мысли не должно падать из-за протухшего дефолта.
+        // Дефолт свойства-связи (bb67e546, 0.8.2): применение создаёт рёбра с
+        // учётом СТОРОНЫ привязки. Сторона источников — новая мысль источник,
+        // значение — набор целей; сторона назначений — новая мысль назначение,
+        // значение — набор источников (рёбра источник → новая мысль). Цели,
+        // ставшие неприменимыми после установки дефолта (удалены, в корзине,
+        // сменили тип), молча пропускаются — создание мысли не должно падать
+        // из-за протухшего дефолта.
         if (def.value_type === 'link') {
-          const ids = filterApplicableLinkDefaultTargets(
-            ndb,
-            def.config ?? null,
-            Array.isArray(def.default_value) ? def.default_value : [],
-          );
+          const values = Array.isArray(def.default_value) ? def.default_value : [];
+          const side = def.side ?? linkPropertySideFromConfig('link', def.config ?? null);
+          if (side === 'target') {
+            const sources = filterApplicableLinkDefaultSources(ndb, values);
+            if (sources.length > 0) {
+              setLinkPropertySourcesForTarget(
+                ndb,
+                id,
+                { id: def.property_id, name: def.key, value_type: 'link', config: def.config },
+                sources,
+                actorUserId,
+              );
+            }
+            continue;
+          }
+          const ids = filterApplicableLinkDefaultTargets(ndb, def.config ?? null, values);
           if (ids.length > 0) {
             setPropertyValueById(ndb, 'thought', id, def.property_id, ids, actorUserId);
           }
@@ -1208,6 +1241,12 @@ export interface NeighborOptions {
   userId?: string;
   /** Include inactive thoughts/links when true (preferences.show_inactive). */
   showInactive?: boolean;
+  /**
+   * Include trashed (marked-for-deletion) thoughts/links when true
+   * (preferences.show_trash, задача 77923b49). Defaults to `true`: пометка
+   * видна с признаком корзины, как после фикса 355319d4.
+   */
+  showTrash?: boolean;
   /** Sort strategy (docs/11-settings-and-state.md §3.2). */
   sort?: SortKind;
   /** Sort direction. */
@@ -1314,6 +1353,9 @@ function buildNeighborsQuery(
   focusThoughtId: string,
 ): { sql: string; params: unknown[] } {
   const showInactive = opts.showInactive === true ? 1 : 0;
+  // Trash visibility (задача 77923b49): `false` прячет помеченные на удаление
+  // мысли/связи; по умолчанию `true` — пометка видна (355319d4).
+  const showTrash = opts.showTrash !== false ? 1 : 0;
   const userId = opts.userId;
   const useViewedJoin = sort === 'viewed' && !!userId;
   const useManualJoin = sort === 'manual' && dir !== 'siblings' && !!userId;
@@ -1323,9 +1365,16 @@ function buildNeighborsQuery(
     (useViewedJoin ? ', tv.last_viewed_at' : '') +
     // Alias is required: rowToNeighbor reads `manual_position` by name.
     (useManualJoin ? ', ufo.position AS manual_position' : '') +
+    // `l.marked_for_deletion` (ошибка 355319d4) rides along with the other
+    // link fields so the DTO can mark trashed edges. Siblings GROUP BY the
+    // neighbour, so several parallel links collapse into one row: `MIN` is the
+    // conservative aggregate — the row counts as trashed only when EVERY
+    // parallel link is trashed (same spirit as `MIN(l.active)` above).
     (dir === 'siblings'
-      ? ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active'
-      : ', l.id AS link_id, l.type_id AS link_type_id, l.active AS link_active');
+      ? ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active,' +
+        ' MIN(l.marked_for_deletion) AS link_marked_for_deletion'
+      : ', l.id AS link_id, l.type_id AS link_type_id, l.active AS link_active,' +
+        ' l.marked_for_deletion AS link_marked_for_deletion');
 
   const joins: string[] = [];
   const params: unknown[] = [];
@@ -1362,12 +1411,25 @@ function buildNeighborsQuery(
     params.push(focusThoughtId, focusThoughtId);
   }
   // Active filter on the link(s) and the neighbour thought, gated by showInactive.
+  // Trash filter (задача 77923b49) — gated by showTrash (default: visible).
   if (dir === 'siblings') {
-    where.push('(lp.active = 1 OR ?)', '(l.active = 1 OR ?)', '(t.active = 1 OR ?)');
-    params.push(showInactive, showInactive, showInactive);
+    where.push(
+      '(lp.active = 1 OR ?)',
+      '(l.active = 1 OR ?)',
+      '(t.active = 1 OR ?)',
+      '(lp.marked_for_deletion = 0 OR ?)',
+      '(l.marked_for_deletion = 0 OR ?)',
+      '(t.marked_for_deletion = 0 OR ?)',
+    );
+    params.push(showInactive, showInactive, showInactive, showTrash, showTrash, showTrash);
   } else {
-    where.push('(l.active = 1 OR ?)', '(t.active = 1 OR ?)');
-    params.push(showInactive, showInactive);
+    where.push(
+      '(l.active = 1 OR ?)',
+      '(t.active = 1 OR ?)',
+      '(l.marked_for_deletion = 0 OR ?)',
+      '(t.marked_for_deletion = 0 OR ?)',
+    );
+    params.push(showInactive, showInactive, showTrash, showTrash);
   }
   // Optional thought-type filter (03-server-api.md §6.7). Pushed after the
   // clauses above so the bind order stays aligned with `where`.
@@ -1463,6 +1525,11 @@ export interface FocusOptions {
   /** Include inactive thoughts/links when true (preferences.show_inactive). */
   showInactive?: boolean;
   /**
+   * Include trashed (marked-for-deletion) thoughts/links when true
+   * (preferences.show_trash, задача 77923b49). Defaults to `true`.
+   */
+  showTrash?: boolean;
+  /**
    * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): зоны фокуса
    * наполняются только по рёбрам выбранных типов (+структурные при
    * `include_structural`), рёбра и индикаторы направлений — те же типы.
@@ -1489,6 +1556,7 @@ export function focus(
 ): FocusResponse {
   const focused = getThoughtOrThrow(ndb, thoughtId);
   const showInactive = opts.showInactive === true;
+  const showTrash = opts.showTrash !== false;
   const now = new Date().toISOString();
 
   // Record the view mark (upsert). audience=user event emitted by the realtime layer.
@@ -1526,6 +1594,7 @@ export function focus(
     grouped[dir] = getNeighbors(ndb, thoughtId, dir, {
       userId,
       showInactive,
+      showTrash,
       sort: prefs[dir]?.sort,
       order: prefs[dir]?.order,
       linkFilter: opts.linkFilter,
@@ -1554,19 +1623,16 @@ export function focus(
     ...grouped.children.map((n) => n.id),
     ...grouped.siblings.map((n) => n.id),
   ];
-  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter).map((l) => ({
-    id: l.id,
-    source_id: l.source_id,
-    target_id: l.target_id,
-    type_id: l.type_id,
-    // Per-link line-style override (null = inherit from the type); 08-ui-spec.md §6.9.
-    color: l.color,
-    style: l.style,
-    width: l.width,
-  }));
+  // Projection lives in `link-service` (`toFocusEdge`) — one place for the
+  // focus edges and the structures `/thoughts/edges` response, so a new edge
+  // field cannot reach only one of them (ошибка 355319d4 came from exactly
+  // that kind of drift).
+  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter, showTrash).map(
+    toFocusEdge,
+  );
   // Whether each visible thought has any incoming/outgoing link at all —
   // drives the top/bottom ellipse fill so chains are visible off-screen.
-  const directions = getLinkDirections(ndb, visibleIds, opts.linkFilter);
+  const directions = getLinkDirections(ndb, visibleIds, opts.linkFilter, showTrash);
   const annotate = (n: FocusNeighbor): FocusNeighbor => {
     const d = directions.get(n.id) ?? { has_in: false, has_out: false };
     return { ...n, has_incoming: d.has_in, has_outgoing: d.has_out };
@@ -1583,56 +1649,4 @@ export function focus(
       siblings: { sort: siblingPref?.sort ?? 'created', order: siblingPref?.order ?? 'asc' },
     },
   };
-}
-
-// ---------------------------------------------------------------------------
-// "Card completeness" warnings (task O6, docs/05-mcp-server.md §4.2)
-// ---------------------------------------------------------------------------
-
-/**
- * Result of a mutation that may surface {@link ThoughtCardWarning}s about the
- * resulting card. REST endpoints ignore `warnings`; the MCP layer surfaces
- * them to the agent so it can follow up with `etn.properties.set` /
- * `etn.thoughts.upsert_bundle`.
- */
-export interface ThoughtMutationWithWarnings {
-  thought: Thought;
-  warnings: ThoughtCardWarning[];
-}
-
-/**
- * Thin wrapper over {@link createThought} that returns the resulting thought
- * together with the list of "missing required property" warnings (task O6).
- * The warnings are computed against the freshly-written row in the same
- * transaction — empty when the type has no `required` properties or when all
- * of them are filled.
- */
-export function createThoughtWithWarnings(
-  ndb: NetworkDb,
-  input: ThoughtCreateInput,
-  actorUserId: string,
-): ThoughtMutationWithWarnings {
-  const thought = createThought(ndb, input, actorUserId);
-  const warnings = computeThoughtCardWarnings(ndb, thought.id);
-  return { thought, warnings };
-}
-
-/**
- * Thin wrapper over {@link updateThought}. Warnings are recomputed **only**
- * when the change set may have shifted the required-property surface — i.e.
- * `type_id` is present in `changes` (a type assignment is the only mutation
- * that can introduce a new obligation; renaming, restyling and toggling
- * `active` leave the property contract alone, so we skip the lookup).
- */
-export function updateThoughtWithWarnings(
-  ndb: NetworkDb,
-  id: string,
-  changes: ThoughtUpdateInput,
-  expectedVersion: number | undefined,
-  actorUserId: string,
-): ThoughtMutationWithWarnings {
-  const thought = updateThought(ndb, id, changes, expectedVersion, actorUserId);
-  const warnings =
-    changes.type_id === undefined ? [] : computeThoughtCardWarnings(ndb, thought.id);
-  return { thought, warnings };
 }

@@ -35,16 +35,15 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import {
-  applyThoughtIcon,
-  invalidateIndicators,
-  invalidateRef,
-  resolveCloudStyle,
-} from '../canvas/canvas.js';
+import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
+// Канон значка и стиля мысли живёт в общей фабрике облачка: иконка-кнопка
+// заголовка редактора рисуется им же, а сид диалога настроек читает
+// разрешённый стиль через resolveCloudStyle (редактор полей, не представление).
+import { applyThoughtIcon, resolveCloudStyle } from '../lib/thought-cloud.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';
-import { inNeighbourhood } from '../realtime-ui.js';
+import { inNeighbourhood, reloadTypeCatalogues } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
@@ -57,13 +56,47 @@ import {
   saveDraft,
 } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions, resolveLinkTypeVisual, thoughtTypeOptions } from '../lib/type-tree.js';
+import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
+// Набор ВЛОЖЕНИЙ показанной сущности (ошибка abd25adb): realtime-события
+// `attachment.created/updated/deleted` от другого клиента обязаны обновить
+// вкладку «Вложения» открытого редактора. `created` несёт владельца снимком, а
+// `updated`/`deleted` — только id, поэтому владельца находит индекс показанных
+// вложений (lib/attachment-events.ts).
+import {
+  attachmentChangeFacts,
+  forgetShownAttachment,
+  isAttachmentEventType,
+  sameAttachmentOwner,
+  shownAttachmentOwner,
+  type AttachmentEventType,
+  type AttachmentOwner,
+} from '../lib/attachment-events.js';
+// Набор свойств показанной сущности зависит от определений свойств её типа
+// (ошибка 74b94c26): realtime-события `property-definition.*` и локальные
+// уведомления редактора типа/менеджера свойств обязаны перечитать вкладку
+// «Свойства» — гейт по цепочке типов живёт в lib/type-definitions.ts.
+import {
+  definitionChangeAffectsShown,
+  definitionChangeFacts,
+  isDefinitionEventType,
+  isTypeChangeEventType,
+  markTypeDeleted,
+  onPropertyRegistryChanged,
+  onTypeChanged,
+  onTypeDefinitionsChanged,
+  typeChangeFacts,
+  type DefinitionChangeFacts,
+  type DefinitionOwner,
+  type ShownTypeChain,
+  type TypeChangeFacts,
+} from '../lib/type-definitions.js';
+import { onRealtimeEvent } from '../realtime.js';
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -409,6 +442,12 @@ let tabBarEl: HTMLElement | null = null;
 let paneHostEl: HTMLElement | null = null;
 let tabButtons = new Map<EditorTabId, HTMLButtonElement>();
 let builtPanes = new Map<EditorTabId, HTMLElement>();
+/**
+ * Сколько раз строилась вкладка за время жизни модуля. Нужен только
+ * регрессионному тесту ошибки 786bcd69 («редактор обязан перечитать набор
+ * свойств при смене типа»): кэш вкладок снаружи не наблюдаем.
+ */
+const paneBuildCounts = new Map<EditorTabId, number>();
 
 /**
  * Guards the one-time module registrations (sections, tabs, the document
@@ -431,12 +470,16 @@ let storeUnsubscribe: (() => void) | null = null;
  * both layers — its properties can differ through shadow overrides, and
  * ETN error dc4e0c07 made the editor keep the old layer's header + a
  * raw 404 in the property list. The render signature guard is still the
- * authoritative filter for an actual rebuild.
+ * authoritative filter for an actual rebuild. The `typeId` leg (ETN error
+ * 94b28014) covers a type detached server-side (its type was deleted): the
+ * thought's version does not change, but its type — and with it the header
+ * and the «Свойства» table — does.
  */
 let liveRenderedKey: {
   ownerId: string;
   layerId: string | null;
   version: string | number;
+  typeId: string | null;
 } | null = null;
 
 /** Badge spans of the current render, per counted tab (for refreshTabCount). */
@@ -522,16 +565,83 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerGraphTab();
     registerMetadataTab();
 
-    // Pasted-image uploads from any markdown field re-count the «Вложения» tab
-    // badge right away (the tab's own list reloads itself via the same event;
-    // see attachments.ts). Without this the badge showed a stale 0 until the
-    // editor target changed. One document listener for the app lifetime.
+    // Изменение НАБОРА ВЛОЖЕНИЙ владельца обновляет и счётчик, и список вкладки
+    // «Вложения». Два источника, оба сходятся в этом канале:
+    //  * локальный (ошибка 05bd8809) — вставка картинки в поле markdown,
+    //    «Назначить иконкой мысли» из файла, правки на самой вкладке: свои
+    //    производители шлют событие сами (своё realtime-эхо отбрасывает
+    //    G8-applier главного процесса);
+    //  * realtime (ошибка abd25adb) — другой клиент или MCP: обработчик
+    //    `attachment.*` ({@link applyAttachmentRealtime}) гейтит по показанной
+    //    сущности и ПЕРЕиспускает это же событие — одна точка применения, показанная
+    //    вкладка перечитывает список на месте, скрытая — сбрасывает кэш.
+    // Раньше (05bd8809) обновлялся только счётчик: вкладка, построенная при первом
+    // заходе, кэшируется и при показе «Комментария» отключается от DOM, а её
+    // собственный слушатель события в этот момент самоотписывается и список не
+    // перечитывает — прежний список возвращался на экран до смены сущности. Кэш
+    // сбрасывается тем же механизмом, что и прочие инвалидации (см.
+    // invalidateAttachmentsPanes). Один документный слушатель на всё время жизни
+    // приложения.
     document.addEventListener('etn:attachments-changed', (event) => {
       const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
       const ctx = renderCtx;
       if (ctx !== null && detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
         refreshTabCount('attachments');
+        invalidateAttachmentsPanes();
       }
+    });
+
+    // Изменение ОПРЕДЕЛЕНИЙ СВОЙСТВ типа показанной сущности перечитывает
+    // вкладку «Свойства» (ошибки 74b94c26 и 98aa0889). Два источника:
+    //  * realtime — другой клиент или MCP `etn.ontology.write`: события
+    //    `property-definition.*` (привязка свойства у типа) и
+    //    `property-registry.*` (само свойство реестра);
+    //  * локальный — правка в редакторе типа / менеджере свойств: своё
+    //    realtime-эхо до рендерера не доходит (главный процесс его
+    //    отбрасывает, G8 applier), поэтому производители уведомляют сами —
+    //    владельцем (типом) либо id реестрового свойства.
+    // Гейт по цепочке типов показанной сущности — в lib/type-definitions.ts.
+    onRealtimeEvent((evt) => {
+      // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
+      // показанной сущности этой сети не относится.
+      if (evt.network_id !== store.state.networkId) return;
+      // Изменение набора ВЛОЖЕНИЙ показанной сущности (ошибка abd25adb): другой
+      // клиент или MCP добавил/изменил/удалил вложение — вкладка «Вложения»
+      // перечитывает список и счётчик без переоткрытия мысли.
+      if (isAttachmentEventType(evt.type)) {
+        applyAttachmentRealtime(evt.type, evt.data);
+        return;
+      }
+      if (isDefinitionEventType(evt.type)) {
+        applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
+        return;
+      }
+      // Изменение самого ТИПА показанной сущности (ошибки 94b28014 — тип
+      // мысли, 34a9ef10 — тип связи): смена родителя сдвигает наследование,
+      // удаление убирает тип из цепочки, а подпись/оформление типа видны в
+      // шапке.
+      if (!isTypeChangeEventType(evt.type)) return;
+      const facts = typeChangeFacts(evt.type, evt.data);
+      if (facts === null) return;
+      if (facts.deleted) markTypeDeleted(facts.owner);
+      applyTypeChange(facts);
+    });
+    onTypeDefinitionsChanged((owner) => {
+      applyDefinitionChange({ owner, allowedTypeIds: null, coverageBoundaryUnknown: false });
+    });
+    // Реестровое свойство адресуется только своим id — владельца показанного
+    // набора находит индекс определений внутри `registryChangeFacts`.
+    onPropertyRegistryChanged((facts) => {
+      applyDefinitionChange(facts);
+    });
+    // Локальная правка САМОГО типа (ошибки 8dd5dfed, 7dfad7d4): редактор типа
+    // в этом же клиенте перечитывает каталог сам и уведомляет подписчиков —
+    // шапка открытого редактора перерисовывается сразу. Удаление типа (тип
+    // мыслей или тип связи вместе со свойством-связью) приходит тем же каналом
+    // с `deleted: true` — помечаем тип исчезнувшим, как и realtime-путь.
+    onTypeChanged((facts) => {
+      if (facts.deleted) markTypeDeleted(facts.owner);
+      applyLocalTypeChange(facts);
     });
   }
 
@@ -559,7 +669,8 @@ export function mountEditor(editorHost: HTMLElement): void {
       liveRenderedKey !== null &&
       liveRenderedKey.ownerId === ctx.ownerId &&
       liveRenderedKey.layerId === liveLayerId &&
-      liveRenderedKey.version === (liveVersion ?? '')
+      liveRenderedKey.version === (liveVersion ?? '') &&
+      liveRenderedKey.typeId === ctxTypeId(ctx)
     ) {
       return;
     }
@@ -587,6 +698,7 @@ export function mountEditor(editorHost: HTMLElement): void {
 function buildTabPane(id: EditorTabId): HTMLElement {
   const ctx = renderCtx;
   const pane = div('tab-pane fixed');
+  paneBuildCounts.set(id, (paneBuildCounts.get(id) ?? 0) + 1);
   if (ctx === null) return pane;
   if (id === 'main') {
     // Структура вкладки (задача 8ab775d9): вкладка целиком занята постоянным
@@ -684,16 +796,340 @@ function activateEditorTab(id: EditorTabId): void {
 }
 
 /**
- * Drops the cached «Комментарий» pane so it rebuilds from the current `ctx` on
- * next activation (bug 6b757336): a thought's type change can add/remove
- * properties, so the cached properties+comment pane can no longer be trusted
- * as-is. If «Комментарий» is the active tab this rebuilds it right away — the
- * comment's CodeMirror instance is destroyed in that case, same as before
- * this fix, but only for an actual type change, not for every header save.
+ * Drops the given cached panes so they rebuild from the current `ctx` on next
+ * activation. If the shown tab was dropped it is re-displayed right away, so
+ * the user sees the new content without switching tabs. Panes outside the list
+ * keep their cache — and their CodeMirror instances.
  */
-function invalidateMainPane(): void {
-  builtPanes.delete('main');
-  if (shownTab === 'main') displayTab('main');
+function invalidatePanes(ids: readonly EditorTabId[]): void {
+  const shownWasDropped = ids.includes(shownTab) ? builtPanes.delete(shownTab) : false;
+  for (const id of ids) builtPanes.delete(id);
+  if (shownWasDropped) displayTab(shownTab);
+}
+
+/**
+ * Drops the panes whose content depends on the owner's TYPE so they rebuild
+ * from the current `ctx` on next activation (bug 6b757336; ошибка 786bcd69).
+ *
+ * A type change swaps the owner's property set and can add/remove the
+ * type-template comment, so two cached tabs can no longer be trusted:
+ *   * «Комментарий» (`main`) — sections are rebuilt against the new type
+ *     (the template-comment create/read ordering of e477173f relies on it);
+ *   * «Свойства» (`properties`) — the in-type table is resolved from the new
+ *     type's effective property definitions (задача 8ab775d9 moved properties
+ *     out of the «Комментарий» pane; before that they shared `main`, and the
+ *     `main`-only invalidation silently left the old type's property set on
+ *     screen — ошибка 786bcd69).
+ *
+ * The remaining tabs (attachments/chrono/links/graph/metadata) do not depend
+ * on the type and keep their cache. Runs only on an actual type change, not on
+ * every header save.
+ */
+function invalidateTypeDependentPanes(): void {
+  invalidatePanes(['main', 'properties']);
+}
+
+/**
+ * Перечитывает набор свойств открытого редактора, когда изменились
+ * ОПРЕДЕЛЕНИЯ СВОЙСТВ типа показанной сущности (ошибка 74b94c26): таблица
+ * «Свойства» держит эффективный набор привязок типа и всех предков, а
+ * realtime-событие `property-definition.*`/локальная правка в редакторе типа
+ * версию САМОЙ мысли не меняют — гейт редактора («владелец + слой + версия»)
+ * такую правку не пропускает, и прежняя таблица живёт до смены сущности.
+ *
+ * Сбрасывается только вкладка «Свойства»: определения свойств не касаются
+ * постоянного комментария («Комментарий» держит его CodeMirror, а его
+ * разрушение — это bug 206e33a1 «Бессмысленное обновление редактора»).
+ */
+function invalidateDefinitionDependentPanes(): void {
+  invalidatePanes(['properties']);
+}
+
+/**
+ * Сбрасывает кэш вкладки «Вложения» после изменения набора вложений владельца
+ * (ошибка 05bd8809: вставка картинки в комментарий увеличивала счётчик вкладки,
+ * но её список оставался прежним до переоткрытия мысли).
+ *
+ * Событие `etn:attachments-changed` шлют все производители вложений редактора:
+ * вставка файла из буфера в поле markdown (markdown-field.ts — постоянный
+ * комментарий и текст вложения) и «Назначить иконкой мысли» из файла
+ * (editor.ts). Гейт по владельцу у вызывающего: событие адресуется сущности, а
+ * не вкладке, поэтому вкладки другой сущности не трогаются.
+ *
+ * Почему именно сброс кэша:
+ *  * вкладка кэшируется в `builtPanes` и переживает переход на «Комментарий»;
+ *    её собственный слушатель события при отключении от DOM самоотписывается
+ *    (защита от утечки, attachments.ts) и список не перечитывает — именно так
+ *    появлялся устаревший список;
+ *  * следующая активация собирает вкладку заново и читает список с сервера —
+ *    вложение из вставки в комментарий видно сразу, без переоткрытия мысли.
+ *
+ * ПОКАЗАННУЮ вкладку не пересобираем: свой список она перечитывает на месте
+ * тем же слушателем, а пересборка уничтожила бы встроенный просмотрщик-редактор
+ * текстового вложения (CodeMirror) вместе с несохранённой правкой. Вкладка
+ * вложений типонезависима, поэтому инвалидация точечная — «Комментарий» со
+ * своим CodeMirror не затрагивается.
+ */
+function invalidateAttachmentsPanes(): void {
+  if (shownTab === 'attachments') return;
+  invalidatePanes(['attachments']);
+}
+
+/** Владелец, показанный в редакторе сейчас; `null` — цели нет. */
+function shownOwner(): AttachmentOwner | null {
+  const ctx = renderCtx;
+  if (ctx === null) return null;
+  return { ownerType: ctx.ownerType, ownerId: ctx.ownerId };
+}
+
+/**
+ * Применяет к открытому редактору realtime-изменение ВЛОЖЕНИЙ (ошибка abd25adb):
+ * другой клиент или MCP `etn.attachments.*` добавил, изменил или удалил
+ * вложение показанной сущности — вкладка «Вложения» (её список и счётчик)
+ * обновляется без переоткрытия мысли.
+ *
+ * Гейт — по показанной сущности. `created` несёт владельца снимком; у
+ * `updated`/`deleted` владельца в событии нет (04-realtime.md §4.4), поэтому его
+ * находит индекс вложений, прочитанных для показанной сущности
+ * ({@link rememberShownAttachments} наполняется счётчиком вкладки и её списком).
+ * Чужие сети отсечены вызывающим по `network_id`.
+ *
+ * Применение идёт тем же локальным каналом `etn:attachments-changed`, что и
+ * собственные правки: диспетчеризация не дублирует обработку, потому что
+ * realtime-путь доставляет только ЧУЖИЕ записи (своё эхо отбрасывает
+ * G8-applier главного процесса), а локальные производители о чужих правках не
+ * уведомляют. Слушатель канала обновляет счётчик и сбрасывает кэш скрытой
+ * вкладки; показанная вкладка перечитывает список на месте — встроенный
+ * просмотрщик-редактор текстового вложения (CodeMirror) не разрушается.
+ *
+ * Вложение, которое ушло из показанной сущности (удалено или перенесено в
+ * другую), снимается с индекса, чтобы его дальнейшие события её не задевали.
+ */
+function applyAttachmentRealtime(type: AttachmentEventType, data: unknown): void {
+  const shown = shownOwner();
+  if (shown === null) return;
+  const facts = attachmentChangeFacts(type, data);
+  const known = facts.attachmentId === null ? null : shownAttachmentOwner(facts.attachmentId);
+  const wasShown = known !== null && sameAttachmentOwner(known, shown);
+  // Прибывает в показанную сущность: `created` — всегда, `updated` — перенос.
+  // Тип владельца в `changes` может отсутствовать (он не менялся) — тогда
+  // вложение прибыло именно в свою цель, и показанный тип верен.
+  const arrives =
+    facts.ownerId !== null &&
+    facts.ownerId === shown.ownerId &&
+    (facts.ownerType === null || facts.ownerType === shown.ownerType);
+  if (!wasShown && !arrives) return;
+  // Ушло из показанной сущности: удалено либо перенесено (у `updated` есть
+  // владелец, и он не показанный). Чистый `updated` без владельца оставляет id
+  // в индексе — вложение никуда не делось.
+  const left =
+    facts.attachmentId !== null &&
+    wasShown &&
+    (type === 'attachment.deleted' || (facts.ownerId !== null && !arrives));
+  if (left && facts.attachmentId !== null) forgetShownAttachment(facts.attachmentId);
+  document.dispatchEvent(
+    new CustomEvent('etn:attachments-changed', {
+      detail: { ownerType: shown.ownerType, ownerId: shown.ownerId },
+    }),
+  );
+}
+
+// Правка реестрового свойства (ошибка 98aa0889) идёт тем же путём: сеть/слой
+// фильтрует realtime-транспорт, гейт — по цепочке типов показанной сущности и
+// спискам покрытия свойства-связи, сброс кэша — только «Свойства».
+
+/**
+ * Цепочка типов показанной сущности (сам тип + предки) для вида владельца
+ * `ownerType`; `null` — сущности этого вида в редакторе нет. Мысль без типа
+ * показывает свойства корневого типа (L21) — `typeChainOf` с `null` даёт его
+ * цепочку.
+ */
+function shownTypeChainFor(ownerType: DefinitionOwner['ownerType']): ShownTypeChain | null {
+  const ctx = renderCtx;
+  if (ctx === null) return null;
+  if ((ctx.ownerType === 'thought' ? 'thought_type' : 'link_type') !== ownerType) return null;
+  // Каталоги разные по типу — цепочка каждого вида считается своим вызовом.
+  if (ownerType === 'thought_type') {
+    const chain = typeChainOf(store.state.thoughtTypes, ctx.thought?.type_id ?? null);
+    return { ownerType, ids: new Set(chain.map((t) => t.id)) };
+  }
+  const chain = typeChainOf(store.state.linkTypes, ctx.link?.type_id ?? null);
+  return { ownerType, ids: new Set(chain.map((t) => t.id)) };
+}
+
+/** Применяет изменение определений свойств к открытому редактору: касается
+ *  цепочки типов показанной сущности — вкладка «Свойства» перечитывается. */
+function applyDefinitionChange(facts: DefinitionChangeFacts): void {
+  const ctx = renderCtx;
+  if (ctx === null) return;
+  // Цепочка строится от показанной сущности; чужой вид владельца
+  // (мысль ↔ связь) гейт отсекает сам.
+  const shown = shownTypeChainFor(ctx.ownerType === 'thought' ? 'thought_type' : 'link_type');
+  if (shown === null) return;
+  if (!definitionChangeAffectsShown(facts, shown)) return;
+  invalidateDefinitionDependentPanes();
+}
+
+/**
+ * Применяет изменение ТИПА показанной сущности (ошибки 94b28014 — тип мысли,
+ * 34a9ef10 — тип связи).
+ *
+ *  - смена родителя (`setChanged`) сдвигает наследование — таблица «Свойства»
+ *    перечитывается; свой тип сущности по-прежнему валиден, и набор резолвит
+ *    сервер (вкладка запрашивает определения по нему). У связи вкладки
+ *    «Свойства» нет, поэтому там смена родителя видимого эффекта не имеет:
+ *    вид линии резолвится по цепочке (`resolveLinkTypeVisual`) на каждом
+ *    построении списка выбора типа и диалога ⚙;
+ *  - удаление типа (`deleted`) — {@link markTypeDeleted} уже отметил его как
+ *    исчезнувший, поэтому вкладка прочитает набор по корневому типу (L21), а не
+ *    по удалённому; если удалён СОБСТВЕННЫЙ тип показанной сущности, её нужно
+ *    перечитать (см. {@link refreshShownEntityAfterTypeDetach});
+ *  - правка подписи/оформления (`visualChanged`) видна в шапке редактора — она
+ *    резолвит значок, цвета и подпись типа по цепочке типов; пересобирается
+ *    только шапка, кэш вкладок (и CodeMirror «Комментария») не трогается.
+ */
+function applyTypeChange(facts: TypeChangeFacts): void {
+  const ctx = renderCtx;
+  if (ctx === null || !typeChangeAffectsShown(facts)) return;
+  const ownTypeId = ctxTypeId(ctx);
+  // Удалён собственный тип показанной сущности: сервер отвязал саму сущность
+  // (`type_id = NULL`, `version + 1`), но события о ней не прислал — снимок в
+  // store устарел, и шапка (после перезагрузки каталога) показала бы сырой id
+  // исчезнувшего типа вместо «без типа».
+  if (facts.deleted && ownTypeId !== null && ownTypeId === facts.owner.ownerId) {
+    refreshShownEntityAfterTypeDetach();
+  }
+  if (facts.setChanged) invalidateDefinitionDependentPanes();
+  // Шапка резолвит подпись и оформление типа из КАТАЛОГА типов, а он приезжает
+  // в store асинхронно (realtime-ui перечитывает его этим же событием):
+  // перерисовка сразу после применения фактов повторила бы прежний вид. Ждём
+  // тот же перезапрос (параллельные вызовы делят один запрос) — `setChanged`
+  // и пометка удалённого типа применены выше и от каталога не зависят.
+  if (facts.visualChanged) void reloadTypeCatalogues().then(() => repaintEditorHeader());
+}
+
+/**
+ * Касается ли изменение типа показанной сущности: изменённый тип обязан быть в
+ * цепочке её типов (сам тип или предок). Дополнительно сверяется СОБСТВЕННЫЙ
+ * тип сущности: при удалении типа каталог store ещё может его содержать
+ * (перезагружается асинхронно), и цепочка на момент события строится по
+ * устаревшему каталогу.
+ */
+function typeChangeAffectsShown(facts: TypeChangeFacts): boolean {
+  const ctx = renderCtx;
+  if (ctx === null) return false;
+  const shown = shownTypeChainFor(facts.owner.ownerType);
+  if (shown === null) return false;
+  return shown.ids.has(facts.owner.ownerId) || ctxTypeId(ctx) === facts.owner.ownerId;
+}
+
+/**
+ * Локальная правка/удаление типа ЭТИМ клиентом (ошибки 8dd5dfed, 7dfad7d4,
+ * канал `lib/type-definitions.ts` → `onTypeChanged`): производитель уведомляет
+ * подписчиков после того, как сам перечитал каталог типов, поэтому шапка
+ * перерисовывается сразу и по свежим данным — в отличие от realtime-пути
+ * ({@link applyTypeChange}), который обновлённого каталога дожидается. Состав
+ * реакции тот же, кроме этого ожидания: смена родителя перечитывает
+ * «Свойства», удаление собственного типа перечитывает отвязанную сущность,
+ * правка оформления перерисовывает шапку.
+ */
+function applyLocalTypeChange(facts: TypeChangeFacts): void {
+  const ctx = renderCtx;
+  if (ctx === null || !typeChangeAffectsShown(facts)) return;
+  const ownTypeId = ctxTypeId(ctx);
+  // Удалён собственный тип показанной сущности: сервер отвязал саму сущность
+  // (`type_id = NULL`, `version + 1`) без отдельного события о ней — снимок в
+  // store устарел (см. {@link refreshShownEntityAfterTypeDetach}).
+  if (facts.deleted && ownTypeId !== null && ownTypeId === facts.owner.ownerId) {
+    refreshShownEntityAfterTypeDetach();
+  }
+  if (facts.setChanged) invalidateDefinitionDependentPanes();
+  if (facts.visualChanged) repaintEditorHeader();
+}
+
+/**
+ * Перечитывает с сервера сущность, у которой удалили её СОБСТВЕННЫЙ тип
+ * (ошибки 94b28014, 34a9ef10). Удаление типа отвязывает ссылающиеся мысли и
+ * связи серверным `type_id = NULL` с бампом версии, но отдельных событий
+ * (`thought.updated` / `link.updated`) на каждую из них не шлёт: сервер
+ * сообщает только о самом типе. Сущность, показанная из `editorTarget`,
+ * держится в store снимком и фокус-рефрешем не обновляется, поэтому её
+ * перечитываем сами — свежие `type_id` и `version` (версия важна и для
+ * следующего сохранения с `If-Match`). Мысль в фокусе (без `editorTarget`)
+ * обновляет штатный `refreshFocus` по тому же событию (realtime-ui), поэтому
+ * здесь не трогается.
+ */
+function refreshShownEntityAfterTypeDetach(): void {
+  const networkId = store.state.networkId;
+  const target = store.state.editorTarget;
+  if (networkId === null || target === null) return;
+  if (target.kind === 'link') {
+    void etn.links
+      .get(networkId, target.id)
+      .then((link) => {
+        const live = store.state.editorTarget;
+        if (live !== null && live.kind === 'link' && live.id === link.id) {
+          store.update({ editorTarget: { kind: 'link', id: link.id, link } });
+        }
+      })
+      .catch(() => undefined);
+    return;
+  }
+  void etn.thoughts
+    .get(networkId, target.id)
+    .then((thought) => {
+      const live = store.state.editorTarget;
+      if (live !== null && live.kind === 'thought' && live.id === thought.id) {
+        store.update({
+          editorTarget: { kind: 'thought', id: thought.id, thought },
+          structuresActiveThought: thought,
+          structuresActiveThoughtId: thought.id,
+        });
+      }
+    })
+    .catch(() => undefined);
+}
+
+/**
+ * Перерисовывает шапку редактора тем же путём, что и сохранение поля сущности
+ * (`patchHeader`): заново резолвятся значок, цвета и подпись типа из цепочки
+ * типов каталога. Кэш вкладок при этом не сбрасывается — оформление типа их
+ * содержимого не меняет. Живую сущность берём из store, а не из `renderCtx`:
+ * событие могло прийти между обновлениями store.
+ */
+function repaintEditorHeader(): void {
+  const prev = renderCtx;
+  if (headerEl === null || prev === null) return;
+  const live = currentEditorContext();
+  if (live === null || live.ownerType !== prev.ownerType || live.ownerId !== prev.ownerId) return;
+  patchHeader(live);
+}
+
+/**
+ * Метка корзины в заголовке панели редактора (задача ff991fb2, 0.8.2).
+ *
+ * Помеченную мысль можно открыть явной навигацией (wiki-ссылка, deep-link) и
+ * при выключенной настройке «Показывать содержимое корзины»: ссылки не должны
+ * умирать молча. Поэтому у признака есть команды — клик открывает тот же
+ * диалог восстановления/удаления, что на карте (`openThoughtDeleteDialog`).
+ *
+ * Импорт ленивый: `trash.ts` статически тянет `editor.ts` (`reflectThoughtUpdate`),
+ * статический импорт замкнул бы цикл.
+ */
+function buildTrashTitleMark(thought: Thought): HTMLElement {
+  const mark = el('button', 'editor-trash-mark') as HTMLButtonElement;
+  mark.type = 'button';
+  mark.append(svgIcon('trash', 14));
+  setTooltip(mark, 'Мысль в корзине. Нажмите для восстановления или удаления');
+  mark.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    void import('../trash.js').then(({ openThoughtDeleteDialog }) =>
+      openThoughtDeleteDialog(networkId, { id: thought.id, title: thought.title }),
+    );
+  });
+  return mark;
 }
 
 /** Updates the panel title text + trash marker for the current context. */
@@ -701,10 +1137,7 @@ function updateTitleEl(ctx: EditorContext | null): void {
   if (titleEl === null) return;
   clear(titleEl);
   if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
-    const mark = span('', 'editor-trash-mark');
-    mark.append(svgIcon('trash', 14));
-    setTooltip(mark, 'Мысль находится в корзине');
-    titleEl.append(mark);
+    titleEl.append(buildTrashTitleMark(ctx.thought));
   }
   titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
 }
@@ -722,7 +1155,7 @@ function updateTitleEl(ctx: EditorContext | null): void {
  */
 function patchHeader(ctx: EditorContext): void {
   if (scrollBox === null || headerEl === null) return;
-  // Body-mounted widgets (type-combobox dropdowns) anchored to the OLD header
+  // Body-mounted widgets (entity-combo type dropdowns) anchored to the OLD header
   // nodes must close before those nodes are replaced — same reasoning as the
   // full rebuild below.
   window.dispatchEvent(new Event('etn:editor-rebuild'));
@@ -747,14 +1180,24 @@ function patchHeader(ctx: EditorContext): void {
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 
   // A thought's type change can add/remove properties (and NULL visual
-  // fields inherit new defaults) — the cached «Комментарий» pane must rebuild.
+  // fields inherit new defaults) — every type-dependent pane must rebuild
+  // («Комментарий» sections and the «Свойства» table, ошибка 786bcd69).
   // Every other header field (title/synonyms/icon/active/style) leaves the
   // property set and the comment untouched, so no pane invalidation.
   const typeChanged =
     ctx.ownerType === 'thought' &&
     prevCtx?.ownerType === 'thought' &&
     prevCtx.thought?.type_id !== ctx.thought?.type_id;
-  if (typeChanged) invalidateMainPane();
+  if (typeChanged) invalidateTypeDependentPanes();
+}
+
+/**
+ * Type id of the entity the context shows (`null` — untyped or no entity):
+ * part of the render signature and of the store-gate key (ETN error 94b28014).
+ */
+function ctxTypeId(ctx: EditorContext): string | null {
+  if (ctx.ownerType === 'thought') return ctx.thought?.type_id ?? null;
+  return ctx.link?.type_id ?? null;
 }
 
 /** Renders the editor for the current target (signature-guarded). */
@@ -769,14 +1212,20 @@ async function render(): Promise<void> {
   // purpose (ETN error dc4e0c07): a layer switch must rebuild even when the
   // focused thought is the same id+version in both layers — its properties
   // can differ through shadow overrides, and the editor must not keep the
-  // old layer's header + property cache.
+  // old layer's header + property cache. The entity's TYPE belongs to
+  // `fullSignature` only (ETN error 94b28014): a server-side detach (the type
+  // was deleted) changes `type_id` without bumping the version, and the header
+  // plus the «Свойства» set must follow it. It must NOT enter
+  // `identitySignature` — that would turn every type change into a full
+  // teardown instead of the cheap `patchHeader` (bug 206e33a1: the rebuild
+  // destroys the comment's CodeMirror).
   const layerId = store.state.currentLayer?.id ?? '';
   const identitySignature =
     ctx === null ? 'null' : `${ctx.ownerType}|${ctx.ownerId}|${store.state.editorPosition}|${layerId}`;
   const fullSignature =
     ctx === null
       ? 'null'
-      : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}`;
+      : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${ctxTypeId(ctx) ?? ''}`;
   if (fullSignature === lastSignature) return;
 
   // A version-only change of the SAME already-rendered, already-loaded
@@ -819,6 +1268,7 @@ async function render(): Promise<void> {
             ctx.ownerType === 'thought'
               ? (ctx.thought?.version ?? '')
               : (ctx.link?.version ?? ''),
+          typeId: ctxTypeId(ctx),
         };
 
   if (canPatch) {
@@ -841,7 +1291,7 @@ async function render(): Promise<void> {
   const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const refocus = activeEl !== null && scrollBox.contains(activeEl) ? activeEl : null;
 
-  // Body-mounted widgets (type-combobox dropdowns) must close before the old
+  // Body-mounted widgets (entity-combo type dropdowns) must close before the old
   // DOM is destroyed — otherwise their fixed-position lists stay behind as
   // ghosts that neither Escape nor an outside click can dismiss (e.g. Tab
   // from an edited title into the type field opens the list, then a dock
@@ -1016,7 +1466,7 @@ async function render(): Promise<void> {
 const REFOCUS_MARKERS = new Set([
   'editor-title-input',
   'synonyms-input',
-  'type-combo-input',
+  'entity-combo-input',
   'editor-icon-box',
   'md-field-area',
   'chrono-meta-input',
@@ -1456,8 +1906,9 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // when the dialog closes — the same save path as a regular pick — and the
   // caret then moves into the comment field.
   let focusCommentAfterTypeSave = false;
-  const typeCombo = createTypeCombobox({
-    options: () => thoughtTypeOptions(store.state.thoughtTypes),
+  const typeCombo = buildEntityCombo({
+    networkId,
+    kind: 'thought-types',
     value: thought.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
@@ -1509,7 +1960,9 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
  * - команды открытия нет — мысль уже открыта в редакторе;
  * - «Добавить вложение» ведёт не в редактор (он и так открыт), а на вкладку
  *   «Вложения» этой мысли;
- * - «В фокус» ставит мысль в фокус холста.
+ * - «В фокус» ставит мысль в фокус холста И показывает экран «Карта мыслей»
+ *   (общий помощник `focusThoughtOnMap`) — иначе команда с другого экрана
+ *   («Структуры», «Хроника», «События») не даёт видимого результата.
  *
  * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
  */
@@ -1519,7 +1972,7 @@ async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElemen
   // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
   const { showThoughtMenuUnder, resolveSiblingParentId } =
     await import('../canvas/context-menu.js');
-  const { setFocus } = await import('../app.js');
+  const { focusThoughtOnMap } = await import('../screens/active-view.js');
   showThoughtMenuUnder(
     anchor,
     {
@@ -1538,7 +1991,7 @@ async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElemen
           offlineNotice();
           return;
         }
-        void setFocus(thought.id);
+        void focusThoughtOnMap(thought.id);
       },
       attachmentHandler: (id) => {
         // Мысль уже открыта в редакторе: «Добавить вложение» ведёт прямо на её
@@ -1685,6 +2138,7 @@ function buildLinkHeaderLoading(linkId: string): HTMLElement {
 
 /** Builds the link header form (type + active). */
 function buildLinkHeader(link: Link): HTMLElement {
+  const networkId = requireNetworkId();
   const box = div('editor-fields');
 
   // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
@@ -1698,8 +2152,9 @@ function buildLinkHeader(link: Link): HTMLElement {
   // applied when the dialog closes and the caret moves into the comment
   // field — same flow as in the thought header.
   let focusCommentAfterTypeSave = false;
-  const typeCombo = createTypeCombobox({
-    options: () => linkTypeOptions(store.state.linkTypes),
+  const typeCombo = buildEntityCombo({
+    networkId,
+    kind: 'link-types',
     value: link.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
@@ -1784,9 +2239,29 @@ export const editorInternals = {
   /** Loader-only link header (kept for symmetry with the thought header). */
   buildLinkHeaderLoading,
   /**
+   * Метка корзины в заголовке панели (задача ff991fb2): тест проверяет, что
+   * помеченная мысль открывается с кликабельным признаком корзины, ведущим в
+   * общий диалог восстановления/удаления.
+   */
+  buildTrashTitleMark,
+  /**
    * `saveThought` (template-vs-render ordering regression, карточка
    * e477173f): тест мокает `window.etn` и подписывается на store, проверяя,
    * что шаблонный комментарий создаётся ДО отражения апдейта в store.
    */
   saveThought,
+  /**
+   * Сколько раз строилась вкладка за время жизни модуля (ошибка 786bcd69:
+   * смена типа обязана перечитать набор свойств — вкладка «Свойства» должна
+   * быть построена заново). Кэш вкладок снаружи не наблюдаем, поэтому тест
+   * читает счётчик.
+   */
+  paneBuildCount: (id: EditorTabId): number => paneBuildCounts.get(id) ?? 0,
+  /**
+   * Активирует вкладку так же, как клик по её кнопке (ошибка 05bd8809):
+   * тест строит вкладку «Вложения», уводит фокус на другую вкладку, шлёт
+   * событие и проверяет, что возврат на «Вложения» пересобирает вкладку и
+   * перечитывает список. Кнопки вкладок снаружи недоступны.
+   */
+  activateTab: (id: EditorTabId): void => activateEditorTab(id),
 };

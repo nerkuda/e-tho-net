@@ -26,12 +26,27 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  type ActivityListResult,
+  type ActivityRollupResult,
   type ActivityRow,
+  type ActivityTruncateResult,
+  type AdminUserWithKey,
   type ApiList,
   type ApiSuccess,
+  type AuditListResult,
+  type DuplicateHit,
   type EtnErrorBody,
   type EtnErrorCode,
+  type ExportJobStartResult,
+  type FocusOrderResult,
+  type LocksClearResult,
+  type NetworkPropertyDeleteResult,
+  type NetworkPropertyUpdateResult,
+  type NetworkPropertyUsage,
+  type NetworkPropertyWithCounters,
+  type RunThoughtTypeViewResult,
   type SystemLoggingStatus,
+  type ThoughtTypeViewsResult,
   type TypeOwnerType,
 } from '@etn/shared';
 
@@ -79,28 +94,6 @@ export interface RequestOptions {
 /** Query string value — primitives are stringified, arrays repeated. */
 type QueryValue = string | number | boolean | undefined | null;
 type QueryRecord = Record<string, QueryValue | QueryValue[]>;
-
-/**
- * Duplicate candidate returned by `GET /thoughts/duplicates`
- * (08-ui-spec.md §4.4). Mirrors the server-side `DuplicateHit` shape.
- */
-export interface DuplicateCandidate {
-  id: string;
-  title: string;
-  synonyms: string[];
-  matched_on: 'title' | 'synonym' | 'partial';
-  matched_synonym?: string;
-  type_id: string | null;
-  icon: string | null;
-  icon_kind: 'emoji' | 'image';
-  fg_color: string | null;
-  bg_color: string | null;
-  font_bold: boolean | null;
-  font_italic: boolean | null;
-  font_underline: boolean | null;
-  font_strike: boolean | null;
-  parent_title: string | null;
-}
 
 /**
  * Strongly-typed ETN REST client. Construct one per active server profile and reuse
@@ -451,7 +444,7 @@ export class RestClient {
   public async adminCreateUser(
     input: import('@etn/shared').CreateUserInput,
     opts?: RequestOptions,
-  ): Promise<{ user: import('@etn/shared').User; key: import('@etn/shared').ApiKeyWithSecret }> {
+  ): Promise<AdminUserWithKey> {
     return this.request('POST', '/admin/users', { body: input, requestOptions: opts });
   }
 
@@ -524,7 +517,7 @@ export class RestClient {
   /** `GET /admin/audit` — query the audit log (admin). */
   public async adminListAudit(
     query?: import('@etn/shared').AuditQuery,
-  ): Promise<{ entries: import('@etn/shared').AuditLogEntry[]; total: number }> {
+  ): Promise<AuditListResult> {
     const q: QueryRecord = {};
     if (query) {
       if (query.actor !== undefined) q['actor'] = query.actor;
@@ -703,7 +696,14 @@ export class RestClient {
     );
   }
 
-  /** `GET /networks/{nid}/thoughts/{id}/neighbors`. */
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/neighbors`.
+   *
+   * `linkFilter` (ошибка e5cee08e) уходит теми же query-параметрами, что
+   * разбирает сервер (`parseLinkTypeFilterQuery`): повторяемый `link_type_id`
+   * + `include_structural`. Позволяет превью соседей на холсте подчиняться
+   * тому же фильтру типов связей, что и сама карта.
+   */
   public async getNeighbors(
     networkId: string,
     id: string,
@@ -714,6 +714,7 @@ export class RestClient {
       limit?: number;
       offset?: number;
       type_id?: string[];
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
     },
   ): Promise<import('@etn/shared').FocusNeighbor[]> {
     const q: QueryRecord = {};
@@ -724,6 +725,12 @@ export class RestClient {
       if (query.limit !== undefined) q['limit'] = query.limit;
       if (query.offset !== undefined) q['offset'] = query.offset;
       if (query.type_id !== undefined) q['type_id'] = query.type_id;
+      if (query.linkFilter !== undefined) {
+        if (query.linkFilter.type_ids !== undefined) q['link_type_id'] = query.linkFilter.type_ids;
+        if (query.linkFilter.include_structural !== undefined) {
+          q['include_structural'] = query.linkFilter.include_structural ? 'true' : 'false';
+        }
+      }
     }
     return this.request(
       'GET',
@@ -793,7 +800,7 @@ export class RestClient {
     focusId: string,
     input: import('@etn/shared').FocusOrderInput,
     opts?: RequestOptions,
-  ): Promise<{ focus_thought_id: string; dir: string; ordered_ids: string[] }> {
+  ): Promise<FocusOrderResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(focusId)}/focus-order`,
@@ -1101,10 +1108,7 @@ export class RestClient {
     networkId: string,
     thoughtTypeId: string,
     opts?: { includeEffective?: boolean },
-  ): Promise<{
-    data: import('@etn/shared').ThoughtTypeView[];
-    meta: { effective: import('@etn/shared').ThoughtTypeView[] };
-  }> {
+  ): Promise<ThoughtTypeViewsResult> {
     const includeEffective = opts?.includeEffective !== false;
     // `request()`/`parseResponse()` auto-unwrap the `{ data, meta }` success
     // envelope down to `data` (see `queryStructureThoughts` for the same
@@ -1120,7 +1124,7 @@ export class RestClient {
       { query: includeEffective ? { include_effective: 'true' } : undefined },
     );
     const meta = this.lastMeta as
-      | { effective?: import('@etn/shared').ThoughtTypeView[] }
+      | { effective?: import('@etn/shared').EffectiveThoughtTypeView[] }
       | undefined;
     return { data, meta: { effective: meta?.effective ?? [] } };
   }
@@ -1181,24 +1185,15 @@ export class RestClient {
     thoughtId: string,
     viewName: string,
     opts?: {
-      sort?: 'alpha' | 'created' | 'updated';
-      order?: 'asc' | 'desc';
+      /** Единый набор сортировок отбора (`STRUCTURE_SORTS`, см.
+       *  `renderer/lib/filter-builder.ts`) — тип выровнен с серверным
+       *  `parseSort`, прежний `'updated'` был устаревшим значением. */
+      sort?: import('@etn/shared').StructureSort;
+      order?: import('@etn/shared').SortOrder;
       limit?: number;
       offset?: number;
     },
-  ): Promise<{
-    data: import('@etn/shared').ThoughtRef[];
-    meta: {
-      total: number;
-      limit: number;
-      offset: number;
-      directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
-      view: { id: string; name: string; type_id: string };
-      sort?: string;
-      order?: string;
-      unresolved?: Array<{ token: string; reason: string; message: string }>;
-    };
-  }> {
+  ): Promise<RunThoughtTypeViewResult> {
     // Same auto-unwrap pitfall as `listThoughtTypeViews` above (баг 3,
     // 5467fb19): `request()` hands back `env.data` alone, so `meta` (with
     // `unresolved`/`view`/`directions` — everything `runActiveViewIfNeeded`
@@ -1248,16 +1243,7 @@ export class RestClient {
    */
   public async listNetworkProperties(
     networkId: string,
-  ): Promise<
-    Array<
-      import('@etn/shared').NetworkProperty & {
-        types_count: number;
-        values_count: number;
-        types_source_count?: number;
-        types_target_count?: number;
-      }
-    >
-  > {
+  ): Promise<NetworkPropertyWithCounters[]> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties`,
@@ -1268,14 +1254,7 @@ export class RestClient {
   public async getNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<
-    import('@etn/shared').NetworkProperty & {
-      types_count: number;
-      values_count: number;
-      types_source_count?: number;
-      types_target_count?: number;
-    }
-  > {
+  ): Promise<NetworkPropertyWithCounters> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1293,21 +1272,19 @@ export class RestClient {
   }
 
   /**
-   * `PATCH /networks/{nid}/properties/{id}` — patch. The server returns
-   * `{ ...property, converted, dropped }` so the manager can show how many
-   * stored values were rewritten/dropped after a value-type conversion. The
-   * registry does not currently participate in optimistic locking — single
-   * client owns the row for the duration of the staged editor.
+   * `PATCH /networks/{nid}/properties/{id}` — patch. The server returns the
+   * NEW property FLATTENED with the conversion footprint —
+   * `{ ...property, converted, dropped }` (not a `{ property, … }` envelope);
+   * the counters let the manager show how many stored values were
+   * rewritten/dropped after a value-type conversion. The registry does not
+   * currently participate in optimistic locking — single client owns the row
+   * for the duration of the staged editor.
    */
   public async updateNetworkProperty(
     networkId: string,
     id: string,
     input: import('@etn/shared').NetworkPropertyUpdateInput,
-  ): Promise<{
-    property: import('@etn/shared').NetworkProperty;
-    converted: number;
-    dropped: number;
-  }> {
+  ): Promise<NetworkPropertyUpdateResult> {
     return this.request(
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1325,7 +1302,7 @@ export class RestClient {
   public async deleteNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<{ id: string; links_becoming_structural: number | null }> {
+  ): Promise<NetworkPropertyDeleteResult> {
     return this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1336,20 +1313,7 @@ export class RestClient {
   public async getNetworkPropertyUsage(
     networkId: string,
     id: string,
-  ): Promise<{
-    property_id: string;
-    name: string;
-    value_type: import('@etn/shared').PropertyValueType;
-    bindings: Array<{
-      owner_type: 'thought_type' | 'link_type';
-      owner_id: string;
-      owner_name: string;
-      required: boolean;
-      values_in_type_count: number;
-    }>;
-    values_in_type_count: number;
-    values_outside_type_count: number;
-  }> {
+  ): Promise<NetworkPropertyUsage> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}/usage`,
@@ -2066,7 +2030,7 @@ export class RestClient {
     title: string,
     synonyms: string[] = [],
     typeIds: string[] = [],
-  ): Promise<DuplicateCandidate[]> {
+  ): Promise<DuplicateHit[]> {
     const q: QueryRecord = { title };
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
@@ -2120,7 +2084,9 @@ export class RestClient {
   /**
    * `GET /networks/{nid}/thoughts/{id}/hierarchy` — one-level parents/children
    * for the structures tree. `excludeIds` implements the per-branch dedup
-   * (03-server-api.md §6.11), sent comma-separated.
+   * (03-server-api.md §6.11), sent comma-separated. `linkFilter` — фильтр
+   * обхода по типам связей (ошибка db504c1a): та же форма, что у поля
+   * `link_filter` тела `POST /thoughts/query`, но JSON-строкой в query.
    */
   public async getHierarchy(
     networkId: string,
@@ -2130,6 +2096,7 @@ export class RestClient {
       showInactive?: boolean;
       excludeIds?: string[];
       offset?: number;
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
     },
   ): Promise<import('@etn/shared').HierarchyResponse> {
     const q: QueryRecord = { dir: query.dir };
@@ -2138,6 +2105,7 @@ export class RestClient {
       q['exclude_ids'] = query.excludeIds.join(',');
     }
     if (query.offset !== undefined && query.offset > 0) q['offset'] = query.offset;
+    if (query.linkFilter !== undefined) q['link_filter'] = JSON.stringify(query.linkFilter);
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/hierarchy`,
@@ -2163,11 +2131,13 @@ export class RestClient {
     return data.edges;
   }
 
-  /** `GET /networks/{nid}/saved-filters` — the user's own saved filters. */
+  /** `GET /networks/{nid}/saved-filters?view=structures` — the user's own saved filters. */
   public async listSavedFilters(
     networkId: string,
   ): Promise<import('@etn/shared').SavedFilter[]> {
-    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`);
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      query: { view: 'structures' },
+    });
   }
 
   /** `POST /networks/{nid}/saved-filters` — create (idempotent). */
@@ -2177,7 +2147,7 @@ export class RestClient {
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').SavedFilter> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
-      body: input,
+      body: { view: 'structures', ...input },
       requestOptions: opts,
     });
   }
@@ -2195,7 +2165,7 @@ export class RestClient {
     return this.request(
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
-      { body: input, requestOptions: opts },
+      { body: { view: 'structures', ...input }, requestOptions: opts },
     );
   }
 
@@ -2316,7 +2286,7 @@ export class RestClient {
     networkId: string,
     input: import('@etn/shared').ExportRequest,
     opts?: RequestOptions,
-  ): Promise<{ job_id: string }> {
+  ): Promise<ExportJobStartResult> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/export`, {
       body: input,
       requestOptions: opts,
@@ -2508,7 +2478,7 @@ export class RestClient {
     networkId: string,
     userId: string,
     opts?: RequestOptions,
-  ): Promise<{ cleared: number }> {
+  ): Promise<LocksClearResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/locks/clear`,
@@ -2543,7 +2513,7 @@ export class RestClient {
       limit?: number;
       offset?: number;
     },
-  ): Promise<{ rows: ActivityRow[]; total: number }> {
+  ): Promise<ActivityListResult> {
     const query: QueryRecord = {};
     if (filters?.from_ms !== undefined) query['from_ms'] = filters.from_ms;
     if (filters?.to_ms !== undefined) query['to_ms'] = filters.to_ms;
@@ -2570,7 +2540,7 @@ export class RestClient {
     networkId: string,
     untilMs: number,
     opts?: RequestOptions,
-  ): Promise<{ removed: number; kept: number }> {
+  ): Promise<ActivityRollupResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/activity/rollup`,
@@ -2583,7 +2553,7 @@ export class RestClient {
     networkId: string,
     untilMs: number,
     opts?: RequestOptions,
-  ): Promise<{ removed: number }> {
+  ): Promise<ActivityTruncateResult> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/activity/truncate`,

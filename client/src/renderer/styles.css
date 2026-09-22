@@ -281,6 +281,19 @@ textarea {
   background: var(--danger-soft);
 }
 
+/* «Записать»-подобная кнопка в заглушках несохранённого типа (задача
+ * e7352642): зелёный фон, белая надпись — должна привлекать внимание. */
+.btn.success {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.btn.success:hover {
+  background: color-mix(in srgb, var(--ok) 88%, #000);
+  border-color: color-mix(in srgb, var(--ok) 88%, #000);
+}
+
 .btn.small {
   padding: 2px 8px;
   font-size: 12px;
@@ -603,8 +616,11 @@ textarea {
 }
 
 .tab {
-  --tab-w: 180px;
-  flex: 0 0 var(--tab-w);
+  /* Ширина — только из раскладки: `recomputeOverflow` (режим fixed) ставит
+     `style.width` от 180px до 120px. CSS ширину не фиксирует — числовой
+     `flex-basis` перебивал inline-ширину, сжатие не работало и кнопки
+     уезжали под `overflow: hidden` полосы (ошибка 1786ff94). */
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
@@ -826,8 +842,10 @@ textarea {
   justify-content: flex-end;
 }
 
-/* Search row of the map view (L18): the search input + gear live under the top
-   bar and belong to the map; the structures view hides the whole row. */
+/* Search row of the map view (L18): the search input lives under the top bar
+   and belongs to the map; the structures view hides the whole row. The old
+   options gear moved into the drop panel as the funnel toggle (задача
+   a3247f84). */
 .search-row {
   flex: 0 0 auto;
   display: flex;
@@ -857,35 +875,14 @@ textarea {
   overflow: hidden;
 }
 
-.pinned-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* Чип закреплённой мысли — фабричное мини-облачко (профиль `chip`, класс
+   `.prop-ref-cloud`) плюс модификатор раскладки панели: несжимаемый, с
+   пределом ширины 260px; таргетинг дропа ищет `.pinned-chip[data-id]`.
+   Остальное — пилюля, hover, начертание и бледность — общие правила
+   `.prop-ref-cloud` (чистка дублей, a6055d05). */
+.prop-ref-cloud.pinned-chip {
   flex: 0 0 auto;
   max-width: 260px;
-  padding: 1px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  cursor: pointer;
-  overflow: hidden;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.pinned-chip:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.pinned-chip .pc-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pinned-chip.dim {
-  opacity: 0.5;
-  font-style: italic;
 }
 
 .pinned-more {
@@ -1255,55 +1252,15 @@ textarea {
    * «Ошибки в панели истории на Карте мыслей»). */
 }
 
-.history-cloud {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 170px;
-  /* Never shrink on the strip: the bar plans the visible chip set from real
-   * measured widths (history-bar.ts::layoutChips), so a chip must report its
-   * natural width. A shrinking chip would make the strip look "full" while
-   * every chip is actually crushed into it (regressions 3ccacc1c-… and
-   * a1c7c8dc-…). */
+/* Чип истории — фабричное мини-облачко (профиль `chip`, класс
+   `.prop-ref-cloud`) плюс модификатор раскладки полосы: чип не сжимается
+   (план видимого набора считает реальные ширины, history-bar.ts::layoutChips,
+   регрессии 3ccacc1c-… и a1c7c8dc-…) и не растягивается шире 170px.
+   Остальное — пилюля, hover, начертание и бледность — общие правила
+   `.prop-ref-cloud` (чистка дублей, a6055d05). */
+.prop-ref-cloud.history-cloud {
   flex: 0 0 auto;
-  padding: 1px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  cursor: pointer;
-  overflow: hidden;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.history-cloud:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.history-cloud .hc-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Thought font/fg/bg styles — mirror the on-canvas cloud and the search
- * list (08-ui-spec.md §6.7, §11.1) so the chip respects bold/italic/etc. */
-.history-cloud.font-bold .hc-title {
-  font-weight: 700;
-}
-.history-cloud.font-italic .hc-title {
-  font-style: italic;
-}
-.history-cloud.font-underline .hc-title {
-  text-decoration: underline;
-}
-.history-cloud.font-strike .hc-title {
-  text-decoration: line-through;
-}
-
-.history-cloud.dim {
-  opacity: 0.55;
-  font-style: italic;
+  max-width: 170px;
 }
 
 .history-more {
@@ -1781,6 +1738,23 @@ body.resizing-h {
     border-color 0.12s ease;
 }
 
+/* Ширина облачка по контейнеру — опция `width: 'container'` общей фабрики
+   (`lib/thought-cloud.ts`, класс `cloud-width-container`). Снимает заданный
+   предел ширины (холстовую `--cloud-width` у `.cloud`, пилюлю у
+   `.prop-ref-cloud`) и растягивает облачко по контейнеру; имя обрезается
+   многоточием по нему (у однострочных профилей — `.cloud-title` /
+   `.prc-title` с `nowrap` + `text-overflow`). ЕДИНСТВЕННЫЙ способ задать
+   ширину «по контейнеру»: контекстные переопределения (`.link-endpoint
+   .cloud`, `.search-hit… > .cloud`, `.st-row .st-cloud.cloud`) закрыты —
+   ширину места объявляет вызов фабрики, а не селектор в стилях.
+   Снимать предел без своего `max-width` контекстом запрещено (сторож
+   `guard-thought-cloud`). */
+.cloud-width-container {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
 /* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
 .cloud-ghosts {
   position: absolute;
@@ -2220,11 +2194,18 @@ body.cloud-dragging * {
 }
 
 .cloud.font-underline .cloud-title {
-  text-decoration: underline;
+  text-decoration-line: underline;
 }
 
 .cloud.font-strike .cloud-title {
-  text-decoration: line-through;
+  text-decoration-line: line-through;
+}
+
+/* Оба начертания сразу: `text-decoration-line` принимает список значений —
+   без объединённого правила более позднее из двух одиночных перекрывало бы
+   первое, и «подчёркнутый + зачёркнутый» терял бы одно начертание (a6055d05). */
+.cloud.font-underline.font-strike .cloud-title {
+  text-decoration-line: underline line-through;
 }
 
 /* --- focus cloud (H5) ----------------------------------------------------- */
@@ -2302,12 +2283,17 @@ body.cloud-dragging * {
 
 /* Trash marker in the editor panel header (S13, 08-ui-spec.md §6.2): shown
    next to the word «Мысль» when the edited thought is in the trash — same
-   bright-red trash glyph as the canvas badge. */
+   bright-red trash glyph as the canvas badge. Кликабельная (задача ff991fb2):
+   открывает диалог восстановления/удаления, поэтому сброшены стили кнопки. */
 .editor-title .editor-trash-mark {
   display: inline-flex;
   align-items: center;
   margin-right: 4px;
   color: #e53935;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 /* The title field of a trashed thought (S13, 08-ui-spec.md §6.2.1): shown
@@ -2364,6 +2350,12 @@ body.cloud-dragging * {
   padding: 8px 10px 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  /* Высота полосы не зависит от длины содержимого панели: `.editor-scroll` —
+     column-flex, и при длинном комментарии суммарная высота детей превышает
+     контейнер; flex-shrink (по умолчанию 1) сжимал полосу до 1px — кнопки
+     вкладок пропадали (`overflow: hidden` обнуляет автоматический минимум).
+     Ошибка 79193e82. */
+  flex: 0 0 auto;
   /* `min-width: 0` — стандартный фикс flexbox для row-flex внутри column-flex
      родителя: без него flex-item растягивается по min-content (сумма
      фиксированных кнопок вкладок), его clientWidth раздувается,
@@ -2555,6 +2547,9 @@ body.cloud-dragging * {
      in --clamp-attachments on the editor scroll box (list-heights.ts), the
      fallback is the spec default — five rows (§6.5). */
   height: var(--clamp-attachments, 260px);
+  /* Потолок снят явно: высота списка задана точно и не должна обрезаться
+     ни одним унаследованным max-height (ошибка 78562781). */
+  max-height: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px 4px;
@@ -2652,12 +2647,8 @@ body.cloud-dragging * {
   color: var(--text-dim);
 }
 
-/* Облачко внутри вкладки растягивается по ширине панели: базовый `.cloud`
-   жёстко 200px (`--cloud-width`), здесь ширина — по контейнеру. */
-.link-endpoint .cloud {
-  width: auto;
-  max-width: 100%;
-}
+/* Облачко внутри вкладки растягивается по ширине панели: ширину объявляет
+   вызов фабрики (`width: 'container'`), а не селектор этого контекста. */
 
 /* Mention snippets carry server-side <mark> highlights (same look as the
    search panel). */
@@ -2695,13 +2686,15 @@ body.cloud-dragging * {
 
 /* Fixed table height: five rows by default, then it scrolls (§6.6). */
 /* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
-   (same specificity, later source order) — otherwise the saved height is
-   ignored after the editor re-renders (ee745368). */
+   (same specificity, later source order); `max-height: none` is required next
+   to the `height` — otherwise the 380px cap of the base rule silently clipped
+   a height dragged past it (bug 78562781). */
 .admin-table-wrap.chrono-table {
   /* Height is always fixed (bug 6b757336: was max-height, so a shorter table
      collapsed the area before growing back — visible "jitter"). Saved manual
      height (ee745368, list-heights.ts); default — five rows. */
   height: var(--clamp-chrono, 190px);
+  max-height: none;
 }
 
 /* Pin the header row while the body scrolls — the same pattern as the
@@ -2768,14 +2761,16 @@ body.cloud-dragging * {
 /* --- Properties table: headerless, five rows by default (L7, §6.3.1) ------- */
 
 /* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
-   (same specificity, later source order) — otherwise the saved height is
-   ignored after the editor re-renders (ee745368). */
+   (same specificity, later source order); `max-height: none` is required next
+   to the `height` — otherwise the 380px cap of the base rule silently clipped
+   a height dragged past it (bug 78562781). */
 .admin-table-wrap.prop-wrap {
   /* Height is always fixed (bug 6b757336: was max-height, so editing a
      thought_ref property collapsed the area to the "Загрузка…" placeholder
      before growing back — visible "jitter"). Saved manual height (ee745368,
      list-heights.ts); default — five rows. */
   height: var(--clamp-props, 190px);
+  max-height: none;
 }
 
 .editor-field {
@@ -3767,6 +3762,22 @@ body.cloud-dragging * {
   width: 100%;
 }
 
+/* Колонка «Значение по умолчанию» таблиц привязок (0.8.2): редактор значения
+ * без режимов — заполнено = дефолт привязки, пусто = общее значение стороны
+ * (подсказка «—» с тултипом рядом с редактором). Общая для диалога
+ * «Свойство / связь» и вкладки «Свойства» редактора типа. */
+.prop-default-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.prop-default-cell .prop-default-hint {
+  white-space: nowrap;
+  cursor: help;
+}
+
 /* --- Outside-type values group (0.6.5) -------------------------------------- */
 
 /* A second, read-only table under the main properties table — values whose
@@ -3878,7 +3889,7 @@ body.cloud-dragging * {
   text-overflow: ellipsis;
 }
 
-/* Thought font styles respect the same class set as the history chips. */
+/* Начертание мысли — тот же набор классов, что у облачка холста. */
 .prop-ref-cloud.font-bold .prc-title {
   font-weight: 700;
 }
@@ -3888,11 +3899,16 @@ body.cloud-dragging * {
 }
 
 .prop-ref-cloud.font-underline .prc-title {
-  text-decoration: underline;
+  text-decoration-line: underline;
 }
 
 .prop-ref-cloud.font-strike .prc-title {
-  text-decoration: line-through;
+  text-decoration-line: line-through;
+}
+
+/* Оба начертания сразу (см. `.cloud.font-underline.font-strike`). */
+.prop-ref-cloud.font-underline.font-strike .prc-title {
+  text-decoration-line: underline line-through;
 }
 
 .prop-ref-cloud.dim {
@@ -3930,18 +3946,6 @@ body.cloud-dragging * {
   background: var(--surface-2);
 }
 
-.link-item-title {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.link-item-label {
-  font-size: 12px;
-  min-width: 70px;
-}
-
 .mention-item {
   padding: 4px 2px;
   cursor: pointer;
@@ -3970,7 +3974,12 @@ body.cloud-dragging * {
   /* left/top are anchored to the search input from JS (positionPanel). */
   right: 10%;
   max-height: 50%;
-  overflow-y: auto;
+  /* Прокрутка живёт у зон, а не у панели: общий `overflow-y` скроллил
+     результаты и настройки одной полосой (ошибка aa5d0aff). Панель —
+     flex-колонка: тело забирает остаток высоты и раздаёт его зонам. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -3978,14 +3987,126 @@ body.cloud-dragging * {
   padding: 8px 12px;
 }
 
-.search-options-row {
+/* Верхний угол панели: кнопка-переключатель «Настройки поиска» (иконка-лейка)
+   прижата вправо. Раньше настройки открывала шестерёнка рядом со строкой
+   поиска — её больше нет (задача a3247f84). */
+.search-panel-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.search-settings-toggle.pressed,
+.search-settings-toggle[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Две зоны выпадающей панели: «результаты поиска» и «настройки поиска».
+   Тело — единственный «сжимаемый» слой панели: `min-height: 0` позволяет ему
+   ужаться под `max-height` панели, а зоны растягиваются на его высоту
+   (`align-items: stretch` по умолчанию) и прокручиваются каждая своей полосой. */
+.search-panel-body {
+  display: flex;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.search-results {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.search-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Ширина окна > 1000px: настройки справа от результатов — 30% ширины панели.
+   Положение зоны задаёт JS-класс `search-settings-side` (applySettingsPlacement
+   пересчитывает его на каждом ресайзе). */
+.search-panel.search-settings-side .search-settings {
+  flex: 0 0 30%;
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+  /* Боковая зона растянута на высоту тела — своя вертикальная прокрутка. */
+  overflow-y: auto;
+}
+
+/* Ширина окна ≤ 1000px: настройки сверху над результатами. */
+.search-panel.search-settings-top .search-panel-body {
+  flex-direction: column;
+}
+
+/* В колонке настройки не растягиваются и не сжимаются (`flex: 0 0 auto`):
+   высоту им задаёт содержимое, но не выше `max-height` — иначе три строки
+   настроек съедали бы результаты, а результаты получали нулевую высоту.
+   Сверх предела настройки прокручиваются своей полосой, остаток высоты
+   панели забирают результаты.
+   Предел задан в определённых единицах (`px`/`vh`): процент от высоты тела
+   не разрешается — тело получает высоту флексингом, и Chromium считает её
+   неопределённой, поэтому `max-height: 45%` молча превращался в `none`
+   (проверено зондом). Панель занимает не больше 50% высоты окна, поэтому
+   `25vh` — это примерно половина панели: настройки получают её лишь при
+   крайне низком окне, а остаток (не меньше 240px в обычном окне) остаётся
+   результатам. */
+.search-panel.search-settings-top .search-settings {
+  order: -1;
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: min(240px, 25vh);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+  overflow-y: auto;
+}
+
+/* Одна «строка» настроек. При нехватке ширины элементы строки укладываются
+   друг под другом (flex-wrap), а отступы между строками сохраняет `gap`
+   контейнера `.search-settings` (задача a3247f84, п. 4). */
+.search-settings-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px 12px;
   align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 8px;
+}
+
+.search-settings-row .search-settings-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.search-settings-row .checkbox-row {
+  margin-bottom: 0;
+}
+
+/* Поле мыслей-подкорней тянется по ширине строки настроек. */
+.search-settings-row .entity-chip-field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* Выключенное поле выбора мыслей-подкорней (флажок не установлен). */
+.entity-chip-field.disabled {
+  opacity: 0.55;
+}
+
+.entity-chip-field.disabled .st-f-chipfield,
+.entity-chip-field.disabled .entity-chip-pick {
+  cursor: default;
+}
+
+/* Поля «Автор»/«редактор» в строке ограничений — без нижнего отступа. */
+.search-settings-row .user-select-row {
+  margin: 0;
 }
 
 .search-group {
@@ -4023,6 +4144,9 @@ body.cloud-dragging * {
   background: var(--surface-2);
 }
 
+/* Хиты-мысли собирает общая фабрика облачка (начертание и бледность — на
+   корне `.cloud`, классы `font-*` на `.search-hit` больше не навешиваются);
+   `hit-title` остаётся только у простых строк связей/хроники (a6055d05). */
 .search-hit .hit-title {
   font-weight: 600;
 }
@@ -4032,6 +4156,23 @@ body.cloud-dragging * {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: break-word;
+}
+
+/* Хит-мысль (ошибки 265cdb5f, a42ea662): облачко занимает всю ширину
+   выпадашки, а не холстовые 200px (`--cloud-width`) — название обрезается
+   многоточием по ширине списка; snippet с подсветкой вхождений уходит на
+   следующую строку под облачко и отступает от левого края самого облачка, а
+   не от края строки. Ширину «по контейнеру» объявляет вызов фабрики
+   (`width: 'container'`, класс `cloud-width-container`) — здесь только
+   раскладка строки. Строки связи/хронологии остаются однострочными
+   (глиф + текст). */
+.search-hit.search-hit-cloud {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.search-hit.search-hit-cloud > .search-hit-info {
+  padding-left: 10px;
 }
 
 /* Keyboard/restore selection (08-ui-spec.md §3.1). */
@@ -4044,30 +4185,15 @@ body.cloud-dragging * {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.search-hit mark {
+/* Подсветка совпадений запроса: `<mark>` серверных сниппетов и такая же
+   подсветка в названии облачка результата (опция `highlightTerms` фабрики,
+   задача a1766c7d) выглядят одинаково. */
+.search-hit mark,
+.cloud-title mark {
   background: var(--mark-bg);
   color: var(--text);
   padding: 0 1px;
   border-radius: 2px;
-}
-
-/* Thought-hit cloud style (icon/colour/font) — mirrors the canvas cloud so
- * the search list matches what the user sees on the map (08-ui-spec.md §2.2,
- * §6.7). `.dim` is shared with `.cloud.dim`/`.mention-item.dim` etc. */
-.search-hit.font-bold .hit-title {
-  font-weight: 700;
-}
-.search-hit.font-italic .hit-title {
-  font-style: italic;
-}
-.search-hit.font-underline .hit-title {
-  text-decoration: underline;
-}
-.search-hit.font-strike .hit-title {
-  text-decoration: line-through;
-}
-.search-hit.dim {
-  opacity: 0.55;
 }
 
 .search-empty {
@@ -4126,21 +4252,6 @@ body.cloud-dragging * {
   background: var(--surface-2);
 }
 
-.selection-item .sel-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A thought in the trash (S13, 08-ui-spec.md §5a.2): its selection row dims
- * and carries the red trash glyph between the icon and the title — the same
- * marked reading as the canvas badge, scaled down to the list. The glyph
- * itself is the shared `.list-trash-mark` (see the group-delete dialog). */
-.selection-item.dim {
-  opacity: 0.55;
-}
-
 /* Top menu bar of the selection panel (Выделение / Действия / Свойства).
  * Wraps when the panel is dragged narrower than the buttons. */
 .selection-menu {
@@ -4184,13 +4295,10 @@ body.cloud-dragging * {
   overflow: hidden;
 }
 
-/* Left: filter panel (~33% of the view, 08-ui-spec.md §15.2). The width is
- * set by the splitter drag via --st-filter-w (persisted to L4), and falls
- * back to 33% of the view when the variable is absent. */
+/* Left: панель отбора «Структур мыслей» (§15.2). Положение (слева/вверху) и
+ * размер (ширина слева, высота вверху) задаёт общий каркас панели отбора
+ * (`.fp-host`, задача 2ebe4206) — здесь только вид самой панели. */
 .st-filter {
-  flex: 0 0 var(--st-filter-w, 33%);
-  min-width: 230px;
-  max-width: 420px;
   overflow: hidden;
   padding: 12px;
   display: flex;
@@ -4379,24 +4487,10 @@ body.cloud-dragging * {
   align-self: flex-start;
 }
 
-/* Section header inside the live-search dropdown (mirrors the old menu's
- * grouping, e.g. «Свойства «Версия»»). */
-.value-combo-section {
-  margin: 4px 8px 2px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.value-combo-section:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
-}
+/* Section headers of the shared suggestions dropdown are rendered with the
+ * common `type-combo-empty` header class (lib/suggest-dropdown.ts) — the
+ * old combobox-specific `.value-combo-section` rule is gone with its own
+ * dropdown implementation. */
 
 /* Keyword-history / saved-filter dropdowns: a small absolute list under the
  * anchor field (§15.3). */
@@ -4423,6 +4517,34 @@ body.cloud-dragging * {
 .st-f-kw-scope-item {
   margin-bottom: 0;
   font-size: 12px;
+}
+
+/* Pill checkbox dictionary (`lib/filter-form.ts`, `buildPillGroupSection`):
+ * «Тип сущности», «Действие» и подобные закрытые словари панелей отбора —
+ * элемент общего каркаса, стили живут вместе с ним, а не в экране. */
+.st-f-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.st-f-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.st-f-pill input[type='checkbox'] {
+  margin: 0;
 }
 
 .st-f-dropdown {
@@ -4542,17 +4664,26 @@ body.cloud-dragging * {
   height: 320px;
 }
 
-/* Canvas link-type filter dialog (0.8.1, «Диалог фильтра типов связей на
- * карте»): toolbar row of «Пометить все»/«Снять все пометки»/«Вернуть
- * умолчания», reusing the `.st-f-clear` button look. */
-.link-filter-toolbar {
+/* Верхняя строка пикера: поиск + команды-иконки («Очистить», «Пометить все»,
+ * «Вернуть умолчания») справа от него. Полное название команды несёт тултип
+ * кнопки — команд в футере нет, их длинный ряд текстовых кнопок вылезал за
+ * границы диалога (ошибка bd8b78a0). */
+.st-f-searchbar {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.link-filter-list {
-  height: 280px;
+.st-f-searchbar .st-f-search {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Команда-иконка в строке поиска — по высоте поля поиска, а не общей
+ * кнопки-иконки 30px. */
+.st-f-searchbar .icon-btn {
+  width: 26px;
+  height: 26px;
 }
 
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into
@@ -4574,6 +4705,16 @@ body.cloud-dragging * {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Группа, недоступная при текущем состоянии панели: «Выбирать потомков по
+ * связям» погашена, пока пусты «Родительские мысли» (ошибка 6158d2ea). */
+.st-f-block.st-f-block-disabled {
+  opacity: 0.55;
+}
+
+.st-f-block.st-f-block-disabled .st-f-title {
+  cursor: default;
 }
 
 .st-f-title {
@@ -4779,35 +4920,171 @@ body.cloud-dragging * {
   background: var(--accent-strong);
 }
 
-.st-f-saverow {
-  display: flex;
-  gap: 6px;
+.st-f-empty {
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
-.st-f-save {
-  padding: 4px 10px;
+/* ---------------------------------------------------------------------------
+ * Общий каркас панели отбора (задача 2ebe4206): плавающая кнопка
+ * «скрыть/показать», положение по ширине полотна (слева/вверху), размер
+ * перетаскиванием границы, строка сохранённых отборов и диалог их выбора.
+ * Один каркас на «Структуры мыслей», «Хронику» и «События».
+ * ------------------------------------------------------------------------- */
+
+.fp-host {
+  position: relative;
+}
+
+/* Положение панели: слева от результатов — строка, сверху — колонка. */
+.fp-host.fp-side {
+  flex-direction: row;
+}
+
+.fp-host.fp-top {
+  flex-direction: column;
+}
+
+/* Панель: размер задаёт каркас inline-`flex-basis`; прежние per-экранные
+ * ограничения ширины/высоты и внутренние границы сняты — границу рисует
+ * положение. `padding-top` освобождает место плавающей кнопке в углу. */
+.fp-host > .fp-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+  min-height: 0;
+  max-height: none;
+  padding-top: 34px;
+}
+
+.fp-host.fp-side > .fp-panel {
+  flex-basis: var(--fp-size-side, 300px);
+  border-right: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.fp-host.fp-top > .fp-panel {
+  flex-basis: var(--fp-size-top, 240px);
+  border-bottom: 1px solid var(--border);
+  border-right: none;
+}
+
+.fp-host.fp-hidden > .fp-panel,
+.fp-host.fp-hidden > .fp-splitter {
+  display: none;
+}
+
+/* Разделитель размера: направление перетаскивания — по положению панели.
+ * Селектор с `>` перебивает per-экранные `.st-splitter`/`.chron-splitter`/
+ * `.activity-splitter` (они объявлены ниже по файлу). */
+.fp-host > .fp-splitter {
+  flex: 0 0 4px;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s;
+  /* Прежний гриф «⣿» строкового сплиттера каркасу не нужен. */
+  font-size: 0;
+}
+
+.fp-host > .fp-splitter.fp-side {
+  cursor: col-resize;
+}
+
+.fp-host > .fp-splitter.fp-top {
+  cursor: row-resize;
+}
+
+.fp-host > .fp-splitter:hover,
+.fp-host > .fp-splitter.dragging {
+  background: var(--warn);
+}
+
+/* Плавающая кнопка в левом верхнем углу полотна: нажата — панель видна. */
+.fp-toggle {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 6;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.fp-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.fp-toggle.pressed {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Строка сохранённых отборов: имя + дискета + крестик + «…». */
+.sfb-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sfb-row .st-f-kw-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sfb-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  color: var(--text-dim);
   cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  white-space: nowrap;
 }
 
-.st-f-save:hover {
+.sfb-btn:hover {
   background: var(--surface-2);
+  color: var(--accent);
 }
 
-.st-f-savedlist {
+.sfb-more {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Диалог выбора сохранённого отбора: поиск сверху, список с прокруткой. */
+.sfd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 300px;
+}
+
+.sfd-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
-.st-f-saved {
+.sfd-row {
   text-align: left;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -4817,19 +5094,19 @@ body.cloud-dragging * {
   cursor: pointer;
 }
 
-.st-f-saved:hover {
+.sfd-row:hover {
   background: var(--surface-2);
 }
 
-.st-f-saved.active {
+.sfd-row.cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.sfd-row.active {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
-}
-
-.st-f-empty {
-  font-size: 12px;
-  color: var(--text-faint);
 }
 
 /* Right: results tree on the same dot-grid backdrop as the canvas. */
@@ -4889,11 +5166,12 @@ body.cloud-dragging * {
   margin-bottom: 10px;
 }
 
-/* The tree cloud matches the canvas cloud 1-to-1 (§15.4): same width, same
+/* The tree cloud matches the canvas cloud 1-to-1 (§15.4): same size and same
  * ellipses (the canvas defaults apply), only the expand/fold cursor differs
- * from the canvas drag cursor. */
+ * from the canvas drag cursor. Ширину «по колонке дерева» объявляет вызов
+ * фабрики (`width: 'container'`, класс `cloud-width-container`), а не этот
+ * селектор; здесь остаётся раскладка строки — облачко не сжимается. */
 .st-row .st-cloud.cloud {
-  max-width: 100%;
   flex: 0 0 auto;
 }
 
@@ -5075,6 +5353,15 @@ body.cloud-dragging * {
   text-align: center;
 }
 
+/* Rich menu row (MenuItem.content): caller-owned node (e.g. a thought cloud of
+ * the shared factory) fills the row and truncates inside it by its width. */
+.menu-item-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
 .menu-item-label {
   flex: 1;
   overflow: hidden;
@@ -5100,27 +5387,10 @@ body.cloud-dragging * {
   color: var(--accent);
 }
 
-/* Thought font/fg/bg styles inside the menu — applied to rows that mirror
- * the search-panel rendering (08-ui-spec.md §6.7, §11.1: history dropdown
- * «оформляются так же, как строки результатов поиска»). The classes are
- * added explicitly only by callers that want them, so other menus are
- * unaffected. */
-.menu-item.font-bold .menu-item-label {
-  font-weight: 700;
-}
-.menu-item.font-italic .menu-item-label {
-  font-style: italic;
-}
-.menu-item.font-underline .menu-item-label {
-  text-decoration: underline;
-}
-.menu-item.font-strike .menu-item-label {
-  text-decoration: line-through;
-}
-.menu-item.dim {
-  opacity: 0.55;
-  font-style: italic;
-}
+/* Rich thought rows in the history / pinned dropdowns are factory clouds
+ * (MenuItem.content) and carry their own font/dim classes — the old
+ * `.menu-item.font-* : .menu-item-label` and `.menu-item.dim` rules went with
+ * the manual row styling in those bars. */
 
 /* ---------------------------------------------------------------------------
  * Dialogs (lib/dialog.ts)
@@ -5158,6 +5428,24 @@ body.cloud-dragging * {
   border-bottom: 1px solid var(--border);
 }
 
+/* Повторное открытие редактора той же сущности поднимает уже открытый диалог
+   (lib/dialog.ts, raiseOpenDialog — ошибка c2d243bb). Подсветка показывает,
+   куда «прилетел» повторный клик: диалог и так на месте, второй не нужен. */
+@keyframes dialog-raise-flash {
+  from {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 3px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
+.dialog-backdrop.dialog-raised .dialog-box {
+  animation: dialog-raise-flash 600ms ease-out;
+}
+
 .dialog-title {
   font-weight: 700;
   font-size: 15px;
@@ -5190,6 +5478,21 @@ body.cloud-dragging * {
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
+}
+
+/* Строка ошибки в панели кнопок диалога с вкладками (ошибка add8d09d):
+ * футер виден на любой вкладке, поэтому глобальное сообщение о неудачной
+ * записи живёт здесь, а не в теле вкладки. Ошибка — слева, кнопки — справа. */
+.dialog-footer-with-error {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog-footer-with-error > .error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 12px;
+  text-align: left;
 }
 
 .dialog-btn {
@@ -5226,6 +5529,13 @@ body.cloud-dragging * {
 .dialog-text {
   margin: 0;
   line-height: 1.5;
+}
+
+/* Подпись связи «<источник> → <назначение> · <тип связи>» в диалоге её
+ * удаления (ошибка ce687b37) — первая строка тела, слегка выделена, чтобы
+ * диалог сразу называл, о какой связи спрашивает. */
+.link-caption {
+  font-weight: 600;
 }
 
 .dialog-text-error {
@@ -5316,46 +5626,18 @@ body.cloud-dragging * {
   text-align: right;
 }
 
-/* Первая колонка — мини-облачко: иконка + заголовок с настоящими цветами и
- * начертанием мысли (applyCloudStyle пишет их инлайн-стилями). Помеченная на
- * удаление мысль — бледная, с красной меткой-корзиной, как на карте (§2.2). */
-.group-delete-cloud {
-  display: flex;
-  align-items: center;
+/* Первая колонка — фабричное мини-облачко мысли (профиль `chip`, класс
+ * `.prop-ref-cloud`) с модификатором строки таблицы: отступ в ячейке, лёгкая
+ * рамка и скругление как у облачка карты. Цвета, начертание, бледность и
+ * метка корзины — общие правила `.prop-ref-cloud` (§2.2, S13; чистка
+ * дублей, a6055d05). */
+.prop-ref-cloud.group-delete-cloud {
   gap: 6px;
   min-width: 0;
   margin: 4px 6px;
   padding: 3px 10px;
-  border: 1px solid var(--border);
+  border-color: var(--border);
   border-radius: var(--radius-cloud);
-  background: var(--surface-2);
-}
-
-.group-delete-cloud.dim {
-  opacity: 0.55;
-}
-
-.group-delete-cloud-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.group-delete-cloud.font-bold .group-delete-cloud-title {
-  font-weight: 700;
-}
-
-.group-delete-cloud.font-italic .group-delete-cloud-title {
-  font-style: italic;
-}
-
-.group-delete-cloud.font-underline .group-delete-cloud-title {
-  text-decoration: underline;
-}
-
-.group-delete-cloud.font-strike .group-delete-cloud-title {
-  text-decoration: line-through;
 }
 
 /* Вторая колонка — переключатель строки, визуально отделён от облачка
@@ -5406,6 +5688,123 @@ body.cloud-dragging * {
 .group-delete-warning {
   margin: 0;
   color: var(--text-dim);
+}
+
+/* --- Корзина (S13, 08-ui-spec.md §5a.4; ошибка 009784ad) ------------------- */
+
+/* Окно шире дефолтного: таблице из трёх колонок тесно в 480px, строки
+ * переносились и теряли связь с кнопками. Как у группового удаления (§5a.2),
+ * clamp растёт с окном, а собственный max-width `.dialog-box` (100vw − 40px)
+ * удерживает диалог внутри маленького экрана. */
+.dialog-box.trash-box {
+  width: clamp(520px, 70vw, 1100px);
+}
+
+.trash {
+  --tr-row-h: 40px;
+  --tr-head-h: 30px;
+}
+
+/* Таблица «что в корзине | ссылок | действия»: высота строки фиксирована
+ * (однострочное название с многоточием и подсказкой полного текста), поэтому
+ * лимит «10 строк + шапка» стабилен; дальше — прокрутка. */
+.trash-table {
+  max-height: calc(var(--tr-row-h) * 10 + var(--tr-head-h));
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.trash-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: var(--tr-row-h);
+  border-bottom: 1px solid var(--border);
+}
+
+.trash-row:last-child {
+  border-bottom: none;
+}
+
+/* Шапка таблицы — прилипает к верху при прокрутке. */
+.trash-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: var(--tr-head-h);
+  background: var(--surface);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.trash-head-item {
+  padding: 4px 6px 4px 12px;
+}
+
+.trash-head-count {
+  padding: 4px 12px;
+  border-left: 1px solid var(--border);
+  text-align: right;
+}
+
+.trash-head-actions {
+  padding: 4px 12px 4px 16px;
+  border-left: 1px solid var(--border);
+  text-align: right;
+}
+
+/* Первая колонка: название мысли или подпись связи — одна строка с
+ * многоточием (полный текст — в подсказке), чтобы строки не переносились. */
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 12px;
+}
+
+.trash-item-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.trash-item-lock {
+  flex: 0 0 auto;
+}
+
+/* Вторая колонка: число мест использования. */
+.trash-count {
+  padding: 4px 12px;
+  border-left: 1px solid var(--border);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* Третья колонка: кнопки-иконки «Восстановить» и «Удалить». */
+.trash-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 12px 4px 16px;
+  border-left: 1px solid var(--border);
+}
+
+.trash-act {
+  width: 26px;
+  height: 26px;
+}
+
+.trash-act-danger {
+  color: var(--danger);
+}
+
+.trash-act-danger:hover:not(:disabled) {
+  border-color: var(--danger);
 }
 
 /* --- «О программе» dialog (08-ui-spec.md §8.2) ----------------------------- */
@@ -5637,7 +6036,12 @@ body.cloud-dragging * {
 }
 
 .settings-error {
-  margin-top: 8px;
+  /* Строка ошибки в sticky-футере диалога (ошибка add8d09d): видна на любом
+   * разделе/вкладке настроек, даже когда содержимое прокручено. */
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  text-align: right;
 }
 
 .settings-footer {
@@ -5770,30 +6174,6 @@ body.cloud-dragging * {
 /* Keyboard selection (↑/↓, Ctrl+↑/↓, Ctrl+Enter in the thought picker). */
 .dup-item.selected {
   background: var(--accent-soft);
-}
-
-.dup-item .dup-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  line-height: 1;
-  flex: none;
-  overflow: hidden;
-}
-
-.dup-item .dup-icon img {
-  max-width: 16px;
-  max-height: 16px;
-}
-
-.dup-item .dup-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The parent's title (first 60 chars) under/next to equal titles —
@@ -6107,6 +6487,110 @@ body.cloud-dragging * {
   font-weight: 600;
 }
 
+/* Общий пикер сущностей (0.8.2): поле ОДИНОЧНОГО выбора сущности.
+ * Пусто — строка живого поиска с кареткой; заполнено — облачко значения
+ * лежит прямо в поле, ввод и каретка скрыты, крестик на облачке очищает,
+ * «…» открывает диалог выбора единственного значения (ошибка ba2f57d3). */
+.entity-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.entity-combo-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Однострочное поле (в отличие от многострочного чип-поля значений
+   * свойства-связи): ввод и облачко значения не переносятся. */
+  flex-wrap: nowrap;
+  /* Полоса под кнопку «…» в правом углу поля. */
+  padding-right: 28px;
+}
+
+.entity-combo-value {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.entity-combo-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Поле ввода живёт ВНУТРИ рамки `.st-f-chipfield` — собственной рамки и
+   * фона не рисует. */
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.entity-combo-input:focus {
+  outline: none;
+}
+
+.entity-combo-caret {
+  color: var(--text-faint);
+  flex: none;
+}
+
+/* «…» — диалог выбора единственного значения (как угловая кнопка поля
+ * значения свойства-связи): компактная, в правом углу поля, ширину не
+ * отъедает. */
+.entity-combo-pick {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.entity-combo-pick:hover {
+  background: rgba(127, 127, 127, 0.18);
+  color: var(--text);
+}
+
+.entity-combo-pick:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Модальный чек-лист пикера: чипы выбранных мыслей. */
+.entity-pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.entity-pick-chips .muted {
+  font-size: 12px;
+}
+
+/* Строка чек-листа типов: облачко-чип занимает остаток строки. */
+.st-f-check.entity-pick-row {
+  gap: 6px;
+}
+
+.st-f-check.entity-pick-row .prop-ref-cloud {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Inline tree-checkbox type picker (0.6.5: thought_ref `allowed_type_ids`
  * filter in the property editor) — search on top, tree rows with icons and
  * inherited styles below, same visual shape as the combobox dropdown. */
@@ -6170,23 +6654,74 @@ body.cloud-dragging * {
 }
 
 /* Scrollable thought-type checklist — thought_ref property type filter (L6). */
-.type-filter-box {
-  max-height: 140px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 /* Link-type line swatch in list dialogs (L6). */
 .link-type-swatch {
   display: inline-block;
   width: 26px;
   border-top: 2px solid var(--link-default);
   flex: none;
+}
+
+/* --- Общий список свойств (задача 6ebde54e, 0.8.2) -------------------------
+   Компонент `lib/property-list.ts`: менеджер свойств и пикер «Добавить
+   свойство…». Раскладка колонок — ФИКСИРОВАННАЯ: однострочные имена и подписи
+   концов связи (`связь (имя - имя)`) с nowrap дают min-content, который в
+   auto-таблице распирает диалог (грабли f2a047ee / ошибка 2012f46b). Поэтому
+   ширины задаёт сама таблица, а ячейки обрезаются многоточием. */
+.property-list-wrap {
+  max-height: 340px;
+}
+
+.property-list-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.property-list-table > thead > tr > th:nth-child(1) {
+  width: 45%;
+}
+
+.property-list-table > thead > tr > th:nth-child(2) {
+  width: 40%;
+}
+
+.property-list-table > thead > tr > th:nth-child(3) {
+  width: 15%;
+  text-align: right;
+}
+
+.property-list-row {
+  cursor: pointer;
+}
+
+.property-list-name-cell,
+.property-list-type-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.property-list-count-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Иконка вида значения перед именем скаляра. */
+.property-list-icon {
+  vertical-align: middle;
+  margin-right: 6px;
+  color: var(--muted, #8a93a5);
+}
+
+/* Единый значок конца связи: короткая линия с приделанной к её концу стрелкой.
+   Цвет/стиль/толщина — эффективные настройки свойства-связи (наследование от
+   родительского типа связи); направление задаётся зеркалированием (scaleX(-1))
+   в `lib/property-list.ts`, поэтому значок один на источник и назначение. */
+.property-list-link-icon {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+  color: var(--link-default, #9aa3b2);
 }
 
 /* Type editors (L6): disabled settings/icon buttons and a stretching name. */
@@ -6293,70 +6828,31 @@ body.cloud-dragging * {
   background: var(--layer-bg, var(--bg));
 }
 
-/* Filter panel: four rows of criteria (saved filters/keywords, thoughts/types,
- * period/link types/scope, order/actions). */
+/* Filter area: общий каркас отбора (lib/filter-form.ts) — прокручиваемый
+ * список секций + приклеенный футер; область даёт высоту и границу. */
+/* Область панели отбора «Хроники»: размер и скрытость ведёт общий каркас
+ * панели отбора (`.fp-host`, задача 2ebe4206); здесь только вид области. */
 .chron-filter-area {
-  flex: 0 0 auto;
-  max-height: 46%;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 10px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
 .chron-filter {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.chron-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.chron-label {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.chron-keywords {
-  flex: 1;
-  min-width: 220px;
-}
-
-.chron-saved-select {
-  max-width: 240px;
-}
-
-/* «Мысли» chips stretch over the remaining row width (the picker lives in a
- * dialog now — «Выбрать…»); external drops land here too. */
-.chron-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  flex: 1;
-  min-width: 160px;
-}
-
-/* Row 3: type buttons share the whole row width. */
-.chron-type-btn {
-  flex: 1;
-  min-width: 150px;
-}
-
+/* `.chron-date` — ширина колонки даты в таблице «Хроники»; поле периода
+ * панели отбора строит общий каркас (`.st-f-date-field`). */
 .chron-date {
   width: 130px;
-}
-
-.chron-name-input {
-  flex: 1;
-  min-width: 140px;
-  max-width: 260px;
 }
 
 .chron-splitter {
@@ -6384,6 +6880,10 @@ body.cloud-dragging * {
   overflow: hidden;
 }
 
+/* Default cap of the chronicle table before the first drag (five rows, §17).
+ * Once the user drags the splitter, `applyGroupClamp` writes an exact inline
+ * `height` plus `max-height: none` (list-heights.ts) — the two together, so
+ * this fallback cap cannot clip a dragged height (bug 78562781). */
 .chron-table-wrap {
   max-height: 240px;
   min-height: 0;
@@ -6638,6 +7138,36 @@ table.chron-table thead th {
   stroke: #8c9eff;
   stroke-dasharray: 5 4;
   stroke-opacity: 0.95;
+}
+
+/* A link marked for deletion (trash, error 355319d4): the line stays visible
+   but reads as «in the trash» — the dimmed dashed stroke is set in
+   canvas/links.ts; the class is the hook for tests and further styling.
+   A marked link is never hidden: symmetry with a marked thought cloud. */
+.link-line.link-trashed {
+  stroke-linecap: round;
+}
+
+/* Trash badge on a trashed line — the same language as the marked cloud's badge
+   (black circle, bright red lucide trash icon). Clickable: opens the link
+   delete/restore dialog. Lives in the hit overlay so it stays interactive. */
+.link-trash-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.link-trash-badge svg {
+  color: #e53935;
 }
 
 /* Layer dialogs: the explaining one-liner and the safe-delete note. */
@@ -6933,11 +7463,9 @@ table.chron-table thead th {
 /* Layout: левая панель отборов + правая колонка (замечание пользователя —
  * «использовать компоновку экрана Структуры мыслей»). */
 .activity-filter {
-  flex: 0 0 var(--act-filter-w, 320px);
-  min-width: 260px;
-  max-width: 480px;
   display: flex;
   flex-direction: column;
+  padding: 12px 14px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow: hidden;
@@ -6970,92 +7498,18 @@ table.chron-table thead th {
   overflow: hidden;
 }
 
-.activity-filter-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-}
 
-.act-f-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin-top: 4px;
-}
 
-.act-f-input {
-  width: 100%;
-}
 
-.act-f-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
 
-.act-f-label {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
 
-.act-f-op {
-  width: auto;
-}
 
-.act-f-author-value {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
 
-.act-f-author .act-f-row {
-  flex-wrap: nowrap;
-}
 
-.act-f-author .act-f-op {
-  flex: 0 0 auto;
-}
 
-.act-f-footer {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-2);
-}
 
-.act-f-apply,
-.act-f-clear {
-  padding: 3px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
 
-.act-f-apply {
-  background: var(--accent);
-  color: var(--accent-text, #fff);
-  border-color: var(--accent);
-}
 
-.act-f-apply:hover,
-.act-f-clear:hover {
-  background: var(--surface);
-}
 
 /* Виджет мульти-выбора пользователей (задача 59119797, эволюция операторов). */
 .user-multi-select {
@@ -7129,49 +7583,12 @@ table.chron-table thead th {
   font-size: 12px;
 }
 
-/* Строка условия авторства в Хронике (задача 59119797). */
-.chron-author-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.chron-author-op {
-  width: auto;
-}
-
 .activity-date {
   width: 130px;
 }
 
 .activity-user {
   width: 180px;
-}
-
-.activity-pills {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  align-items: center;
-}
-
-.activity-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  user-select: none;
-}
-
-.activity-pill input[type='checkbox'] {
-  margin: 0;
 }
 
 .activity-toolbar {
@@ -7576,7 +7993,60 @@ table.activity-table thead th {
   /* Свободная полоса под угловыми кнопками, чтобы последний чип не уходил
    * под них при прокрутке. */
   padding-right: 56px;
+  /* Ширина поля не зависит от содержимого (ошибка 10ad23d1): без этого
+   * nowrap-имя длинного чипа уходит в min-content таблицы свойств, таблица
+   * ширится сверх панели и вместо обрезки имени появляется горизонтальная
+   * прокрутка. `contain: inline-size` берёт ширину поля от контейнера (у
+   * `.link-value-wrap` есть пол 220px — поле не схлопнется), и чип
+   * (`width: 'container'` фабрики облачка) обрезает имя многоточием по
+   * полю. */
+  contain: inline-size;
 }
+
+/* --- Two-column property grids: definite column widths (ошибка 2012f46b) ----
+ *
+ * Таблицы свойств «имя → значение» основной группы и группы «Свойства вне
+ * типа» (класс-модификатор `prop-grid`, ставится в `editor/properties.ts`).
+ *
+ * Корень ошибки 2012f46b: подпись чипа однострочная (`nowrap` + ellipsis),
+ * её min-content равен полной ширине имени. В auto-раскладке min-content
+ * содержимого колонки значения побеждает ширину контейнера, и таблица
+ * раздувалась сверх панели — вместо обрезки имени появлялась горизонтальная
+ * прокрутка (`min-width: 0` этого не снимает).
+ *
+ * Решение уровня таблицы, а не поля: `table-layout: fixed` вообще не смотрит
+ * на min-content содержимого ячеек, поэтому колонке значения достаётся весь
+ * остаток ширины панели, а чип «по контейнеру» (`cloud-width-container`)
+ * обрезает имя многоточием по ней. Колонка имени получает предел 130px: все
+ * ключи реестра, кроме двух самых длинных (141px), влезают в одну строку
+ * (замер зондом). Auto-раскладка остаётся у многостолбцовых таблиц свойств
+ * типа и выбора мыслей — там своя раскладка по содержимому. */
+.prop-grid {
+  table-layout: fixed;
+}
+
+.prop-grid > tbody > tr > td:first-child {
+  width: 130px;
+  /* Длинное неразрывное имя ключа не выползает в колонку значения. */
+  overflow-wrap: anywhere;
+}
+
+/* Пол 220px у `.link-value-wrap` (ошибка 10ad23d1) — страховка auto-раскладки
+ * от схлопывания поля. В фиксированной раскладке ширина колонки значения уже
+ * известна, и пол только выталкивает поле за неё: на узких панелях (240–340px)
+ * возвращается горизонтальная прокрутка. Здесь пол не нужен. */
+.prop-grid .link-value-wrap {
+  min-width: 0;
+}
+
+/* Значение внетипового свойства-связи — flex-строка «содержимое + ×»
+ * (`.prop-outside-cell`): чип-редактор обязан сжиматься по колонке значения,
+ * а не диктовать ей min-content своей колонки чипов. */
+.prop-outside-cell > .link-value-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .link-value-corner {
   position: absolute;
   top: 2px;
@@ -7608,7 +8078,8 @@ table.activity-table thead th {
   min-width: 120px;
 }
 /* Поле ввода с угловым «✕» очистки значения (приёмка 0.8.1) — обёртка
- * любого одиночного поля таблицы свойств (text/number/date/url). */
+ * любого одиночного поля (text/number/date/url таблицы свойств; поля дат
+ * панели фильтра «Структур» — ошибка a8e9eef1). */
 .clearable-field {
   position: relative;
   flex: 1 1 auto;
@@ -7617,6 +8088,9 @@ table.activity-table thead th {
 }
 .clearable-field .text-input {
   width: 100%;
+  padding-right: 22px;
+}
+.clearable-field .st-f-input {
   padding-right: 22px;
 }
 .clearable-clear {
@@ -7749,16 +8223,19 @@ table.activity-table thead th {
    SVG-пространстве, зум/пан двигают их вместе. --- */
 
 .mini-graph-edge {
-  stroke: var(--border-strong);
-  stroke-width: 1.2;
+  /* Эффективное оформление линии приходит кастомными свойствами из
+     mini-graph.ts (тип связи по цепочке предков); без них — нейтральный цвет
+     и толщина. Инлайн-`stroke` не используем: он перебил бы подсветку. */
+  stroke: var(--edge-color, var(--border-strong));
+  stroke-width: var(--edge-width, 1.2);
   pointer-events: none;
 }
 .mini-graph-edge.hovered {
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: var(--edge-hover-width, 2);
 }
 .mini-graph-edge-arrow {
-  fill: var(--border-strong);
+  fill: var(--edge-color, var(--border-strong));
   pointer-events: none;
 }
 .mini-graph-edge-arrow.hovered {
@@ -7783,48 +8260,49 @@ table.activity-table thead th {
   cursor: help;
 }
 
+/* Помеченное на удаление ребро (ошибка 355319d4): остаётся на графе, но
+   приглушается (пунктир приходит из модели, `TRASHED_EDGE_DASH`); симметрия с
+   бледной пилюлей помеченной мысли. */
+.mini-graph-edge.trashed,
+.mini-graph-edge-arrow.trashed {
+  opacity: 0.45;
+}
+.mini-graph-edge-label.trashed {
+  opacity: 0.6;
+}
+
+/* Метка корзины помеченного ребра: вид даёт общий `.link-trash-badge`, размер —
+   foreignObject (18 px), клик открывает диалог связи. */
+.mini-graph-edge-trash {
+  overflow: visible;
+}
+
 .mini-node {
   cursor: pointer;
 }
-.mini-node:focus {
+/* Рамки подсветки узла. Класс `mini-node-cloud` перенесён с <rect> на
+   HTML-облачко фабрики внутри <foreignObject> (задача 1b9dccc5): свойство
+   `stroke` на HTML-элементе не действует, а внешняя рамка срезается краем
+   foreignObject. Подсветку рисует граница самого облачка: border следует за
+   border-radius, рамка остаётся скруглённой (чистка дублей, a6055d05).
+   Фокус приходит на облачко (tabindex фабрики), а не на SVG-группу. */
+.mini-node:hover .mini-node-cloud,
+.mini-node:focus .mini-node-cloud {
+  border-color: var(--accent);
+}
+.mini-node-cloud:focus {
   outline: none;
-}
-.mini-node:focus .mini-node-cloud,
-.mini-node:hover .mini-node-cloud {
-  stroke: var(--accent);
-}
-.mini-node-cloud {
-  stroke: var(--border);
-  stroke-width: 1;
+  border-color: var(--accent);
 }
 .mini-node-center .mini-node-cloud {
-  stroke: var(--accent);
-  stroke-width: 1.6;
-}
-.mini-node.dim {
-  opacity: 0.55;
+  border-color: var(--accent);
+  border-width: 1.6px;
 }
 /* Hover на связи: связанные мысли — оранжевая рамка и поверх остальных
    (узлы подняты append'ом в mini-graph.ts). */
 .mini-node.edge-hi .mini-node-cloud {
-  stroke: #e8871e;
-  stroke-width: 2;
-}
-.mini-node-title {
-  font-size: 11px;
-  dominant-baseline: middle;
-  pointer-events: none;
-  user-select: none;
-}
-.mini-node-icon {
-  font-size: 12px;
-  dominant-baseline: middle;
-  text-anchor: middle;
-  pointer-events: none;
-}
-.mini-node-trash {
-  font-size: 10px;
-  pointer-events: none;
+  border-color: #e8871e;
+  border-width: 2px;
 }
 .mini-graph-mass-chip text {
   font-size: 10px;

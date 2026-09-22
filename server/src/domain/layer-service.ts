@@ -14,7 +14,13 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { BASE_LAYER_ID, EtnError, type Layer, type LayerColors, type LayerDeleteResult } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  EtnError,
+  type Layer,
+  type LayerColors,
+  type LayerDeleteResult,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteLayerActivity } from './activity-service.js';
@@ -101,10 +107,7 @@ function parseLayerColors(raw: string | null): LayerColors | null {
 function isLayerColors(value: unknown): value is LayerColors {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return (
-    isThemeColor(v['focus_stripe']) &&
-    isThemeColor(v['background'])
-  );
+  return isThemeColor(v['focus_stripe']) && isThemeColor(v['background']);
 }
 
 /** Runtime shape check of one `{"dark": "#rrggbb", "light": "#rrggbb"}` pair. */
@@ -230,6 +233,22 @@ export function listLayers(
   return rows;
 }
 
+/**
+ * Снимок слоя для журнала/уведомлений: `parent_id` и `title` на момент
+ * чтения, или `null`, когда слой отсутствует. Читается до физического
+ * удаления строки каскадом — фасады (REST DELETE /layers/:id и
+ * `etn.layers.delete`) используют его, чтобы перевести сессии поддерева на
+ * родителя и записать снимок в activity_log.
+ */
+export function getLayerSnapshot(
+  ndb: NetworkDb,
+  id: string,
+): { parent_id: string | null; title: string } | null {
+  const row = ndb.prepare('SELECT parent_id, title FROM layers WHERE id = ?').get(id) as
+    { parent_id: string | null; title: string } | undefined;
+  return row ?? null;
+}
+
 /** Input of {@link createLayer}. */
 export interface CreateLayerInput {
   /** Parent layer id; the route defaults it to the session's current layer (§2.3). */
@@ -288,26 +307,28 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
     const id = randomUUID();
     const nowMs = Date.now();
     const now = nowSeconds();
-    ndb.prepare(
-      `INSERT INTO layers (id, parent_id, title, comment, git_branch, colors, is_service, is_base,
+    ndb
+      .prepare(
+        `INSERT INTO layers (id, parent_id, title, comment, git_branch, colors, is_service, is_base,
                            depth, created_by, updated_by, created_at, last_activity_at,
                            created_at_ms, updated_at_ms, version)
        VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    ).run(
-      id,
-      parent.id,
-      title,
-      comment,
-      gitBranch,
-      colors === null ? null : JSON.stringify(colors),
-      parent.depth + 1,
-      input.createdBy,
-      input.createdBy,
-      now,
-      now,
-      nowMs,
-      nowMs,
-    );
+      )
+      .run(
+        id,
+        parent.id,
+        title,
+        comment,
+        gitBranch,
+        colors === null ? null : JSON.stringify(colors),
+        parent.depth + 1,
+        input.createdBy,
+        input.createdBy,
+        now,
+        now,
+        nowMs,
+        nowMs,
+      );
     return toLayer(layerRow(ndb, id) as LayerRow, 0, id);
   });
 }
@@ -362,24 +383,28 @@ export function updateLayer(
     }
     if (title !== undefined || comment !== undefined || changes.colors !== undefined) {
       const nowMs = Date.now();
-      ndb.prepare(
-        `UPDATE layers SET
+      ndb
+        .prepare(
+          `UPDATE layers SET
            title = COALESCE(?, title),
            comment = CASE WHEN ? THEN ? ELSE comment END,
            colors = CASE WHEN ? THEN ? ELSE colors END,
            version = version + 1,
            updated_by = ?, updated_at_ms = ?
          WHERE id = ?`,
-      ).run(
-        title ?? null,
-        comment !== undefined ? 1 : 0,
-        comment ?? null,
-        changes.colors !== undefined ? 1 : 0,
-        changes.colors === undefined || changes.colors === null ? null : JSON.stringify(changes.colors),
-        actorUserId,
-        nowMs,
-        id,
-      );
+        )
+        .run(
+          title ?? null,
+          comment !== undefined ? 1 : 0,
+          comment ?? null,
+          changes.colors !== undefined ? 1 : 0,
+          changes.colors === undefined || changes.colors === null
+            ? null
+            : JSON.stringify(changes.colors),
+          actorUserId,
+          nowMs,
+          id,
+        );
     }
     const counts = childrenCounts(ndb);
     return toLayer(requireLayer(ndb, id), counts.get(id) ?? 0, id);
@@ -466,10 +491,12 @@ export function deleteLayer(
     // (migration 028) is bumped too, so those sessions' next `resume`/
     // `etn.changes.list` forces a full resync instead of a stale delta.
     const placeholders = subtree.map(() => '?').join(', ');
-    ndb.prepare(
-      `UPDATE session_layers SET layer_id = ?, updated_at = ?, switched_at_seq = ?
+    ndb
+      .prepare(
+        `UPDATE session_layers SET layer_id = ?, updated_at = ?, switched_at_seq = ?
        WHERE layer_id IN (${placeholders})`,
-    ).run(row.parent_id, nowSeconds(), switchedAtSeq, ...subtree);
+      )
+      .run(row.parent_id, nowSeconds(), switchedAtSeq, ...subtree);
 
     // Журнал активности (задача 6bcccd2b, требование 1f7f789b): при удалении
     // слоя без слияния все его события должны исчезнуть без следа. Чистим
@@ -486,7 +513,9 @@ export function deleteLayer(
     ndb.prepare('DELETE FROM layers WHERE id = ?').run(id);
 
     // Auto-purge (§2.4, S13): removed shadow rows may unblock marked thoughts.
-    const { purged, skipped } = purgeTrash(ndb);
+    // Исход очистки (события/журнал) здесь не раздаётся — события раздаёт
+    // фасад через `deleteLayerWithEvents`.
+    const { purged, skipped } = purgeTrash(ndb).result;
     return { deleted: subtree.length, purged, skipped };
   });
 }
@@ -516,21 +545,29 @@ export function deleteLayerWithEvents(
   const markedBefore = {
     // layers:physical-read — дифф помеченных строк всех слоёв для событий автоочистки.
     thoughts: (
-      ndb.prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1 -- layers:physical-read').all() as { id: string }[]
+      ndb
+        .prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1 -- layers:physical-read')
+        .all() as { id: string }[]
     ).map((r) => r.id),
     links: (
-      ndb.prepare('SELECT id FROM links WHERE marked_for_deletion = 1 -- layers:physical-read').all() as { id: string }[]
+      ndb
+        .prepare('SELECT id FROM links WHERE marked_for_deletion = 1 -- layers:physical-read')
+        .all() as { id: string }[]
     ).map((r) => r.id),
   };
   const result = deleteLayer(ndb, id, cascade, switchedAtSeq);
   const survivedThoughts = new Set(
     (
-      ndb.prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1 -- layers:physical-read').all() as { id: string }[]
+      ndb
+        .prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1 -- layers:physical-read')
+        .all() as { id: string }[]
     ).map((r) => r.id),
   );
   const survivedLinks = new Set(
     (
-      ndb.prepare('SELECT id FROM links WHERE marked_for_deletion = 1 -- layers:physical-read').all() as { id: string }[]
+      ndb
+        .prepare('SELECT id FROM links WHERE marked_for_deletion = 1 -- layers:physical-read')
+        .all() as { id: string }[]
     ).map((r) => r.id),
   );
   return {
@@ -593,17 +630,21 @@ export function setSessionLayer(
   }
   const cid = clientId ?? '';
   const current = ndb
-    .prepare('SELECT layer_id, switched_at_seq FROM session_layers WHERE user_id = ? AND client_id = ? LIMIT 1')
+    .prepare(
+      'SELECT layer_id, switched_at_seq FROM session_layers WHERE user_id = ? AND client_id = ? LIMIT 1',
+    )
     .get(userId, cid) as { layer_id: string; switched_at_seq: number } | undefined;
   const isRealSwitch = current === undefined || current.layer_id !== layerId;
   const effectiveSwitchSeq = isRealSwitch ? switchedAtSeq : (current?.switched_at_seq ?? 0);
-  ndb.prepare(
-    `INSERT INTO session_layers (user_id, client_id, layer_id, updated_at, switched_at_seq)
+  ndb
+    .prepare(
+      `INSERT INTO session_layers (user_id, client_id, layer_id, updated_at, switched_at_seq)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(user_id, client_id) DO UPDATE SET layer_id = excluded.layer_id,
                                                    updated_at = excluded.updated_at,
                                                    switched_at_seq = excluded.switched_at_seq`,
-  ).run(userId, cid, layerId, nowSeconds(), effectiveSwitchSeq);
+    )
+    .run(userId, cid, layerId, nowSeconds(), effectiveSwitchSeq);
   return { id: row.id, title: row.title };
 }
 
@@ -615,9 +656,15 @@ export function setSessionLayer(
  * of {@link deleteLayer}). Callers with `since_seq`/`last_seq` older than this
  * value must force a full resync (13-layers.md §12).
  */
-export function resolveSessionSwitchSeq(ndb: NetworkDb, userId: string, clientId: string | null): number {
+export function resolveSessionSwitchSeq(
+  ndb: NetworkDb,
+  userId: string,
+  clientId: string | null,
+): number {
   const row = ndb
-    .prepare('SELECT switched_at_seq FROM session_layers WHERE user_id = ? AND client_id = ? LIMIT 1')
+    .prepare(
+      'SELECT switched_at_seq FROM session_layers WHERE user_id = ? AND client_id = ? LIMIT 1',
+    )
     .get(userId, clientId ?? '') as { switched_at_seq: number } | undefined;
   return row?.switched_at_seq ?? 0;
 }

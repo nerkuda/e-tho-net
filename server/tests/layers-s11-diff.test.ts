@@ -152,7 +152,7 @@ describe(
         const e = await postThought(ctx, 'Е');
         const linkAB = await postLink(ctx, a, b);
         await postLink(ctx, b, c);
-        const linkAE = await postLink(ctx, a, e);
+        await postLink(ctx, a, e);
         const linkType = await postLinkType(ctx, 'зависит от', 'нужен для');
 
         const layer = await createLayer(ctx, 'Правки');
@@ -168,7 +168,7 @@ describe(
         });
         assert.equal(typePatch.statusCode, 200, typePatch.body?.toString());
 
-        const bcLinks = (await getDiff(ctx, layer.id)).links;
+        void (await getDiff(ctx, layer.id)).links;
         // Find the B→C link id via the diff of the base context: simpler —
         // query it directly from the base connection.
         const baseNdb = openNetworkDb(ctx.dataDir, ctx.networkId);

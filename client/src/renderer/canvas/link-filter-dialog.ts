@@ -10,6 +10,13 @@
  * CANVAS_LINK_FILTER`) или из живого дефолта по `show_on_map`, когда
  * предпочтение не задано (см. `resolveCanvasLinkFilter` на сервере).
  *
+ * Чек-лист рисует общий пикер сущностей (`lib/entity-picker.ts`, ADR «выбор
+ * сущности — один пикер», задача a1f5141b): строки типов связей — облачками
+ * фабрики, команды «Пометить все» / «Вернуть умолчания» — иконками в ОДНОЙ
+ * строке с поиском (тултип = полное название); «Очистить» (ластик) пикер
+ * добавляет сам. В футере — только «Отмена» и «Применить и закрыть»: ряд
+ * текстовых кнопок-команд вылезал за границы диалога (ошибка bd8b78a0).
+ *
  * Строка «Структура (Родители/Потомки)» — синтетическая: у структурных
  * связей нет типа в реестре, их присутствие в фильтре кодируется отдельным
  * флагом `include_structural`. По умолчанию отмечена.
@@ -19,10 +26,13 @@ import type { LinkTypeFilterInput, NetworkProperty } from '@etn/shared';
 import { PREF_KEY, computeDefaultCanvasLinkFilter, parseStoredCanvasLinkFilter } from '@etn/shared';
 
 import { refreshFocus } from '../app.js';
-import { showDialog, type DialogButton } from '../lib/dialog.js';
-import { clear, div, el } from '../lib/dom.js';
+import {
+  pickEntitiesModal,
+  type EntityOption,
+  type EntityPickerCommand,
+  type EntityPickerDialogCtx,
+} from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
-import { orderedTypeRows } from '../lib/type-tree.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
@@ -31,11 +41,14 @@ import { store } from '../state.js';
 const STRUCTURAL_ROW_ID = '__structural__';
 const STRUCTURAL_LABEL = 'Структура (Родители/Потомки)';
 
-interface FilterRow {
-  id: string;
-  label: string;
-  depth: number;
-}
+/** Синтетический вариант пикера — строка «Структура». */
+const STRUCTURAL_OPTION: EntityOption = {
+  id: STRUCTURAL_ROW_ID,
+  title: STRUCTURAL_LABEL,
+  depth: 0,
+  selectable: true,
+  cloud: { id: STRUCTURAL_ROW_ID, title: STRUCTURAL_LABEL, icon: '🔗', icon_kind: 'emoji' },
+};
 
 /** Opens the dialog. Fetches the current preference + property registry
  *  fresh on every open — infrequent action, no need to cache. */
@@ -61,119 +74,65 @@ async function loadAndOpen(networkId: string): Promise<void> {
   const stored = parseStoredCanvasLinkFilter(storedRaw);
   const initial = stored ?? defaultFilter;
 
-  const rows: FilterRow[] = [
-    { id: STRUCTURAL_ROW_ID, label: STRUCTURAL_LABEL, depth: 0 },
-    ...orderedTypeRows(store.state.linkTypes)
-      .filter((row) => !row.type.is_root)
-      .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 })),
-  ];
-
   const checked = new Set<string>(initial.type_ids ?? []);
   if (initial.include_structural === true) checked.add(STRUCTURAL_ROW_ID);
 
-  const body = div('st-f-picker');
-  const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Найти…';
-
-  const toolbar = div('link-filter-toolbar');
-  const markAllBtn = el('button', 'st-f-clear', 'Пометить все') as HTMLButtonElement;
-  const clearAllBtn = el('button', 'st-f-clear', 'Снять все пометки') as HTMLButtonElement;
-  const restoreBtn = el('button', 'st-f-clear', 'Вернуть умолчания') as HTMLButtonElement;
-  markAllBtn.type = 'button';
-  clearAllBtn.type = 'button';
-  restoreBtn.type = 'button';
-  toolbar.append(markAllBtn, clearAllBtn, restoreBtn);
-
-  const list = div('st-f-checks st-f-picker-list link-filter-list');
-
-  let applyBtnEl: HTMLButtonElement | null = null;
-  const updateApplyState = (): void => {
-    if (applyBtnEl !== null) applyBtnEl.disabled = checked.size === 0;
-  };
-
-  const renderList = (needle: string): void => {
-    clear(list);
-    const filtered = rows.filter((row) => row.label.toLowerCase().includes(needle));
-    if (filtered.length === 0) {
-      list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-      return;
-    }
-    for (const row of filtered) {
-      const line = el('label', 'st-f-check');
-      line.style.paddingLeft = `${Math.max(0, row.depth) * 14}px`;
-      const input = el('input') as HTMLInputElement;
-      input.type = 'checkbox';
-      input.checked = checked.has(row.id);
-      input.addEventListener('change', () => {
-        if (input.checked) checked.add(row.id);
-        else checked.delete(row.id);
-        updateApplyState();
-      });
-      line.append(input, el('span', '', row.label));
-      list.append(line);
-    }
-  };
-  renderList('');
-  searchInput.addEventListener('input', () => {
-    renderList(searchInput.value.trim().toLowerCase());
+  const picked = await pickEntitiesModal({
+    networkId,
+    kind: 'link-types',
+    title: 'Фильтр типов связей на карте',
+    currentIds: [...checked],
+    allowEmpty: false,
+    applyLabel: 'Применить и закрыть',
+    extraOptions: [STRUCTURAL_OPTION],
+    commands: linkFilterCommands(defaultFilter),
   });
+  if (picked === null) return;
+  await applyFilter(networkId, new Set(picked));
+}
 
-  markAllBtn.addEventListener('click', () => {
-    for (const row of rows) checked.add(row.id);
-    renderList(searchInput.value.trim().toLowerCase());
-    updateApplyState();
-  });
-  clearAllBtn.addEventListener('click', () => {
-    checked.clear();
-    renderList(searchInput.value.trim().toLowerCase());
-    updateApplyState();
-  });
-  restoreBtn.addEventListener('click', () => {
-    checked.clear();
-    for (const id of defaultFilter.type_ids ?? []) checked.add(id);
-    if (defaultFilter.include_structural === true) checked.add(STRUCTURAL_ROW_ID);
-    renderList(searchInput.value.trim().toLowerCase());
-    updateApplyState();
-  });
-
-  body.append(searchInput, toolbar, list);
-
-  const buttons: DialogButton[] = [
-    { label: 'Отмена' },
+/**
+ * Команды верхней строки диалога — иконками с тултипами (ошибка bd8b78a0):
+ * «Пометить все» и «Вернуть умолчания». «Очистить» (ластик) пикер добавляет
+ * сам и делает ровно то, что делала прежняя текстовая «Снять все пометки», —
+ * держать две одинаковые кнопки незачем. Экспортируется для юнит-теста
+ * состава иконок.
+ */
+export function linkFilterCommands(
+  defaultFilter: LinkTypeFilterInput,
+): (ctx: EntityPickerDialogCtx) => EntityPickerCommand[] {
+  return (ctx) => [
     {
-      label: 'Применить и закрыть',
-      primary: true,
-      keepOpen: true,
-      ref: (btn) => {
-        applyBtnEl = btn;
-        updateApplyState();
+      icon: 'check-check',
+      title: 'Пометить все',
+      onClick: () => {
+        const all = [
+          ...store.state.linkTypes.filter((t) => !t.is_root).map((t) => t.id),
+          STRUCTURAL_ROW_ID,
+        ];
+        for (const id of all) ctx.checked.add(id);
+        ctx.rerender();
       },
-      onClick: (close) => {
-        void applyFilter(networkId, checked, close);
+    },
+    {
+      icon: 'rotate-ccw',
+      title: 'Вернуть умолчания',
+      onClick: () => {
+        ctx.checked.clear();
+        for (const id of defaultFilter.type_ids ?? []) ctx.checked.add(id);
+        if (defaultFilter.include_structural === true) ctx.checked.add(STRUCTURAL_ROW_ID);
+        ctx.rerender();
       },
     },
   ];
-
-  showDialog({
-    title: 'Фильтр типов связей на карте',
-    body,
-    width: 480,
-    buttons,
-    onMount: () => searchInput.focus(),
-  });
 }
 
-async function applyFilter(
-  networkId: string,
-  checked: ReadonlySet<string>,
-  close: () => void,
-): Promise<void> {
-  // Guard is also enforced by disabling the button, but a defensive check
-  // here keeps the invariant even if the dialog is driven programmatically —
-  // an empty `{ type_ids: [], include_structural: false }` is rejected by the
-  // server as an invalid `link_filter` (see requirement «Дефолт и хранение
-  // фильтра типов связей на карте»).
+async function applyFilter(networkId: string, checked: ReadonlySet<string>): Promise<void> {
+  // Guard is also enforced by the picker's disabled «Применить» button, but
+  // a defensive check here keeps the invariant even if the flow is driven
+  // programmatically — an empty `{ type_ids: [], include_structural: false }`
+  // is rejected by the server as an invalid `link_filter` (see requirement
+  // «Дефолт и хранение фильтра типов связей на карте»).
   if (checked.size === 0) {
     notice('Оставьте хотя бы один тип связи.', 'error');
     return;
@@ -185,7 +144,6 @@ async function applyFilter(
   try {
     await etn.networks.setPreference(networkId, PREF_KEY.CANVAS_LINK_FILTER, value);
     store.update({ canvasLinkFilter: value });
-    close();
     await refreshFocus();
   } catch (err) {
     notice(formatError(err, 'Не удалось сохранить фильтр типов связей.'), 'error');

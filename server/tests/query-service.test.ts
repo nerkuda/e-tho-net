@@ -14,8 +14,9 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
+  mcpRequestToQuery,
   queryThoughts,
-  type QueryBounds,
+  type ThoughtQueryResult,
 } from '../src/domain/query-service.js';
 import { EtnError, type ThoughtQueryRequest, typeNameKey } from '@etn/shared';
 
@@ -155,10 +156,36 @@ function seedPropertyValue(
     .run(randomUUID(), thoughtId, propertyId, bound);
 }
 
-const BOUNDS: QueryBounds = { maxNodes: 100 };
+/** Потолок узлов BFS-обхода поддерева (MCP `max_nodes_per_subgraph`). */
+const BOUNDS_MAX_NODES = 100;
 
-function run(ndb: NetworkDb, request: ThoughtQueryRequest) {
-  return queryThoughts(ndb, request, BOUNDS);
+/**
+ * Проекция канонного результата в MCP-форму `{ total, hits, truncated, reason }`
+ * — та же, что делает фасад `etn.thoughts.query` (задача c5265deb).
+ */
+function toMcpResponse(result: ThoughtQueryResult) {
+  return {
+    total: result.total,
+    hits: result.items.map((t) => ({
+      id: t.id,
+      title: t.title,
+      type_id: t.type_id,
+      active: t.active,
+      depth: result.depths === null ? null : (result.depths.get(t.id) ?? null),
+    })),
+    truncated: result.truncated,
+    reason: result.reason,
+  };
+}
+
+/** Прогнать MCP-запрос через единый движок и вернуть MCP-форму ответа. */
+function run(ndb: NetworkDb, request: ThoughtQueryRequest, maxNodes: number = BOUNDS_MAX_NODES) {
+  return toMcpResponse(
+    queryThoughts(ndb, 'u', mcpRequestToQuery(request, { maxNodes }), {
+      emptyFilterMode: 'all',
+      maxLimit: 200,
+    }),
+  );
 }
 
 describe('query service (N1)', { skip: !nativeAvailable() }, () => {
@@ -487,7 +514,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     for (let i = 0; i < 5; i++) {
       seedLink(ndb, root, seedThought(ndb, `Leaf ${i}`));
     }
-    const res = queryThoughts(ndb, { in_subtree_of: root }, { maxNodes: 3 });
+    const res = run(ndb, { in_subtree_of: root }, 3);
     assert.equal(res.truncated, true);
     assert.equal(res.reason, 'max_nodes');
     assert.ok(res.total <= 3);
@@ -507,7 +534,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       });
       const a = seedThought(ndb, 'A');
       const b = seedThought(ndb, 'B');
-      const c = seedThought(ndb, 'C');
+      seedThought(ndb, 'C');
       seedLink(ndb, a, b, lt); // A --зависит от--> B
 
       const eqB = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: b }] });
@@ -526,7 +553,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       });
       const a = seedThought(ndb, 'A');
       const b = seedThought(ndb, 'B');
-      const c = seedThought(ndb, 'C');
+      seedThought(ndb, 'C');
       seedLink(ndb, a, b, lt);
 
       const hasLink = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: true }] });
@@ -563,6 +590,51 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
         properties: [{ property_id: usedInProp, operator: 'any_of', value: [a] }],
       });
       assert.deepEqual(anyOf.hits.map((h) => h.title), ['B']);
+    });
+
+    // Задача df992826: условие адресует ОБЕ стороны свойства-связи по имени.
+    it('addresses both sides of a link property by its forward/reverse name (задача df992826)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'организации категории', 'категория организации');
+      const propId = seedPropertyDefinition(ndb, 'организации категории', 'link', {
+        link_type_id: lt,
+      });
+      const category = seedThought(ndb, 'Категория');
+      const org = seedThought(ndb, 'Организация');
+      seedLink(ndb, category, org, lt); // Категория --организации категории--> Организация
+
+      // Прямое имя адресует сторону источника (`out`) — как и раньше.
+      const forward = run(ndb, {
+        properties: [{ property_id: 'организации категории', operator: 'eq', value: org }],
+      });
+      assert.deepEqual(forward.hits.map((h) => h.title), ['Категория']);
+
+      // Обратное имя — сторону цели (`in`): организации текущей категории.
+      const reverse = run(ndb, {
+        properties: [{ property_id: 'категория организации', operator: 'eq', value: category }],
+      });
+      assert.deepEqual(reverse.hits.map((h) => h.title), ['Организация']);
+
+      // Адресация по registry id сохраняет прежнее поведение (направление из config).
+      const byId = run(ndb, {
+        properties: [{ property_id: propId, operator: 'eq', value: org }],
+      });
+      assert.deepEqual(byId.hits.map((h) => h.title), ['Категория']);
+    });
+
+    it('rejects a property name that collides between sides of different link properties (задача df992826)', () => {
+      const ndb = createInMemoryNetworkDb();
+      // «общее имя» — обратное имя первого свойства и прямое имя второго.
+      const lt1 = seedLinkType(ndb, 'прямое', 'общее имя');
+      const lt2 = seedLinkType(ndb, 'общее имя', 'другое');
+      seedPropertyDefinition(ndb, 'прямое', 'link', { link_type_id: lt1 });
+      seedPropertyDefinition(ndb, 'общее имя', 'link', { link_type_id: lt2 });
+      seedThought(ndb, 'A');
+
+      assert.throws(
+        () => run(ndb, { properties: [{ property_id: 'общее имя', operator: 'eq', value: 'x' }] }),
+        /неоднозначно/,
+      );
     });
 
     it('any_of/all_of/none_of on a link property test the whole set of edge targets', () => {
@@ -654,7 +726,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       const project = seedThought(ndb, 'Проект');
       const member1 = seedThought(ndb, 'Участник 1');
       const member2 = seedThought(ndb, 'Участник 2');
-      const control = seedThought(ndb, 'Без значения');
+      seedThought(ndb, 'Без значения');
       seedPropertyValue(ndb, member1, teamDef, 'thought_ref', JSON.stringify([project, member2]));
       seedPropertyValue(ndb, member2, teamDef, 'thought_ref', member2);
       // `control` has no property_values row at all for this property.

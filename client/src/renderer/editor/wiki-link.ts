@@ -24,7 +24,7 @@ import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
-import { setActiveView } from '../screens/active-view.js';
+import { focusThoughtOnMap, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
@@ -129,10 +129,24 @@ export function wikiLinkAutocompletion(): Extension {
 
 /**
  * Диалог «переключиться на карту мыслей?» (M11): мысль не отображается в
- * текущих результатах структуры.
+ * текущих результатах структуры. Резолвится `true` по кнопке «Да» и `false`
+ * при отказе — включая закрытие каркаса штатным путём («Нет», Esc, ×).
+ * Экспортирован для юнит-тестов.
  */
-function confirmSwitchToMap(): Promise<boolean> {
+export function confirmSwitchToMap(): Promise<boolean> {
   return new Promise((resolve) => {
+    /**
+     * Единственная точка завершения промиса. Отказ — ЛЮБОЙ путь закрытия
+     * каркаса (ошибка aff5a96c): кнопки завершают его явно, а Esc и × —
+     * через `onClose`. Флаг `settled` не даёт позднему событию
+     * `remove` переиграть уже принятое решение.
+     */
+    let settled = false;
+    const finish = (value: boolean): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     showDialog({
       title: 'Мысль не отображается',
       body: el(
@@ -141,9 +155,12 @@ function confirmSwitchToMap(): Promise<boolean> {
         'Эта мысль не отображается в структуре мыслей. Переключиться на карту мыслей?',
       ),
       buttons: [
-        { label: 'Нет', onClick: () => resolve(false) },
-        { label: 'Да', primary: true, onClick: () => resolve(true) },
+        { label: 'Нет', onClick: () => finish(false) },
+        { label: 'Да', primary: true, onClick: () => finish(true) },
       ],
+      // Esc и × — отказ: контракт «`false` on cancel»,
+      // ровно как по кнопке «Нет» (ошибка aff5a96c).
+      onClose: () => finish(false),
     });
   });
 }
@@ -169,8 +186,9 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
       return;
     }
     if (await confirmSwitchToMap()) {
-      setActiveView('map');
-      await setFocus(thought.id);
+      // Тот же путь, что у команды «В фокус»: показать карту и сфокусировать
+      // мысль (общий помощник, ошибка 562356a9).
+      await focusThoughtOnMap(thought.id);
     }
     return;
   }

@@ -31,6 +31,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import {
   assertParentValid,
+  computeReparentImpact,
   getRootTypeId,
   typeAncestors,
 } from './type-hierarchy.js';
@@ -271,9 +272,13 @@ export function createLinkType(
  * «inherit from the parent type».
  *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), `DUPLICATE` (409) when
- * renaming to an existing pair, or `VALIDATION_ERROR` (422) when reparenting a
- * type that is still used by links or when the new parent would break the
- * tree (cycle / depth over {@link MAX_TYPE_DEPTH}).
+ * renaming to an existing pair, or `VALIDATION_ERROR` (422) when the new
+ * parent would break the tree (cycle / depth over {@link MAX_TYPE_DEPTH}) or
+ * when a live (non-base) layer holds shadow rows whose `type_id` falls in the
+ * affected set — see `computeReparentImpact` and task 8ea1ab6a (0.8.2). For
+ * link types there is no client confirmation step: the set of properties is
+ * not shown in the editor and a shadow-row mismatch is the only blocking
+ * case.
  */
 export function updateLinkType(
   ndb: NetworkDb,
@@ -337,14 +342,39 @@ export function updateLinkType(
       }
       const nextParent = resolveParentId(ndb, changes.parent_id);
       if (nextParent !== current.parent_id) {
-        const usage = ndb.prepare('SELECT COUNT(*) AS c FROM links_v WHERE type_id = ?').get(id) as {
-          c: number;
-        };
-        if (usage.c > 0) {
+        // 0.8.2, задача 8ea1ab6a: смена parent_id у типа связи разрешена,
+        // если в живой сети перепланирование безопасно. В отличие от типов
+        // мыслей здесь нет интерактивного подтверждения — набор свойств
+        // типов связей в редакторе не показывается (08-ui-spec.md:2283-2284,
+        // грабли 29faa75). Запрет по живым слоям остаётся: если в
+        // не-базовом слое есть связи с типом из затронутого множества —
+        // 422 `reparent_blocked_by_layer`, без флага `confirmed`.
+        const impact = computeReparentImpact(
+          ndb,
+          'link_types',
+          id,
+          current.parent_id,
+          nextParent,
+        );
+        if (impact !== null && impact.layers_open_count > 0) {
+          const sample = impact.layers.slice(0, 5).map((l) => ({
+            layer_id: l.layer_id,
+            layer_title: l.layer_title,
+            count: l.count,
+          }));
           throw new EtnError(
             'VALIDATION_ERROR',
-            `родительский тип изменить нельзя: тип используется в ${usage.c} связях`,
-            { entity: 'link_type', id, in_use: usage.c },
+            `смена родителя запрещена: в ${impact.layers_open_count} живом(ых) слое(ях) есть ${impact.total_count} связей с типом из затронутого множества; сначала слейте или отмените слой.`,
+            {
+              entity: 'link_type',
+              id,
+              kind: 'reparent_blocked_by_layer',
+              affected_type_ids: impact.affected_type_ids,
+              layers: impact.layers,
+              layers_open_count: impact.layers_open_count,
+              total_count: impact.total_count,
+              sample,
+            },
           );
         }
         if (nextParent !== null) {

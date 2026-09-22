@@ -10,6 +10,12 @@
  * Every network-scoped resource re-checks membership through
  * {@link openMemberNetwork}, so the agent can only read networks of its key's
  * user (05 §2.1).
+ *
+ * Веха 9 (задача 937480ca): ресурсы — тонкие обёртки над теми же доменными
+ * функциями, что у инструментов-близнецов. Третья копия логики чтения
+ * исчезла: `etn.thought` считает метрику чтения (`recordReads`) и отдаёт
+ * полный постоянный комментарий (`getThoughtMeta { fullPermanent: true }`)
+ * ровно так же, как `etn.thoughts.get`.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -31,6 +37,7 @@ import {
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
 } from '../domain/property-service.js';
+import { recordReads } from '../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, withSanitizedIcon } from './catalogs.js';
 import { etnErrorText, openMemberNetwork, type McpRuntime } from './context.js';
 
@@ -131,7 +138,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       title: 'Мысль (полная)',
       description:
         'Мысль целиком: свойства, синонимы, тип (с описанием для AI), стили и значения свойств. ' +
-        'Блок `meta` — счётчики связей/вложений/хроники и превью постоянного комментария.',
+        'Блок `meta` — счётчики связей/вложений/хроники и **полный** текст постоянного ' +
+        'комментария (как у `etn.thoughts.get`, задача 3ea09a54).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -142,13 +150,17 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const rawThought = getThoughtOrThrow(ndb, thoughtId);
         const rawType = rawThought.type_id === null ? null : getThoughtType(ndb, rawThought.type_id);
         const properties = getPropertyValuesResolved(ndb, 'thought', thoughtId);
+        // O10: метрика чтения — как у инструмента `etn.thoughts.get`.
+        recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
         // Bug fix (docs/05-mcp-server.md §5.1e): drop an inline `data:` icon
         // URL — see `withSanitizedIcon` in ./catalogs.ts for the rationale.
+        // Полный постоянный комментарий — как у `etn.thoughts.get`
+        // (`getThoughtMeta { fullPermanent: true }`).
         return jsonContents(uri.href, {
           ...withSanitizedIcon(rawThought),
           type: rawType === null ? null : withSanitizedIcon(rawType),
           properties,
-          meta: getThoughtMeta(ndb, thoughtId),
+          meta: getThoughtMeta(ndb, thoughtId, { fullPermanent: true }),
         });
       }),
   );

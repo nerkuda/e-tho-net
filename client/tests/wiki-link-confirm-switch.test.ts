@@ -1,0 +1,167 @@
+/**
+ * Отказ в диалоге «переключиться на карту мыслей?» резолвит промис (ошибка
+ * aff5a96c «Диалог «переключиться на карту мыслей?» не резолвит промис при
+ * закрытии каркаса», 0.8.2).
+ *
+ * Контракт `confirmSwitchToMap` (client/src/renderer/editor/wiki-link.ts):
+ * `true` по «Да», `false` по «Нет» и при закрытии каркаса штатным путём
+ * (Esc, ×) — иначе `await` вызывающего (`openThoughtByRef`) висит вечно.
+ * Завершение повешено на `onClose` (та же правка, что 5c47601 / 4c7fc0f).
+ * Клик по подложке диалог НЕ закрывает и промис не резолвит (задача c9353ce1) —
+ * отдельный кейс проверяет это.
+ *
+ * Модуль импортируется СТАТИЧЕСКИ (как в `wiki-link.test.ts`, без DOM), и лишь
+ * затем ставится шим — так граф импортов codemirror/lezer не видит `window`.
+ *
+ * Дом — минимальный шим (конвенция `add-dialog.test.ts`).
+ */
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import { confirmSwitchToMap } from '../src/renderer/editor/wiki-link.js';
+import { ShimElement } from './dom-shim.js';
+
+/** Слушатели `window` — каркас диалога вешает сюда Esc. */
+const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
+
+function installShim(): { body: ShimElement } {
+  windowListeners.length = 0;
+  const body = new ShimElement('body');
+  (globalThis as any).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: new ShimElement('html'),
+    body,
+  };
+  (globalThis as any).window = {
+    innerWidth: 1200,
+    innerHeight: 800,
+    addEventListener: (type: string, listener: (event: any) => void) => {
+      windowListeners.push({ type, listener });
+    },
+    removeEventListener: (type: string, listener: (event: any) => void) => {
+      const index = windowListeners.findIndex((l) => l.type === type && l.listener === listener);
+      if (index >= 0) windowListeners.splice(index, 1);
+    },
+  };
+  return { body };
+}
+
+/** Нажатие Esc — реальный путь каркаса. */
+function pressEscape(): void {
+  const event = {
+    key: 'Escape',
+    repeat: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    defaultPrevented: false,
+    preventDefault: () => {
+      event.defaultPrevented = true;
+    },
+  };
+  for (const { type, listener } of [...windowListeners]) {
+    if (type === 'keydown') listener(event);
+  }
+}
+
+installShim();
+
+function body(): ShimElement {
+  return (globalThis as any).document.body as ShimElement;
+}
+
+function openBackdrop(): ShimElement {
+  const backdrop = body().children.find((c) => c.className.split(/\s+/).includes('dialog-backdrop'));
+  assert.ok(backdrop !== undefined, 'диалог смонтирован');
+  return backdrop!;
+}
+
+/** Кнопка футера по подписи. */
+function footerButton(backdrop: ShimElement, label: string): ShimElement {
+  const btn = backdrop.querySelectorAll('button').find((b) => b.textContent === label);
+  assert.ok(btn !== undefined, `в футере есть кнопка «${label}»`);
+  return btn!;
+}
+
+/** Клик по подложке мимо тела диалога. */
+function clickBackdrop(backdrop: ShimElement): void {
+  backdrop.emit('click', {
+    target: backdrop,
+    preventDefault: () => undefined,
+    stopPropagation: () => undefined,
+  });
+}
+
+/** Клик по × в заголовке. */
+function clickClose(backdrop: ShimElement): void {
+  const closeBtn = backdrop.querySelector('.dialog-close');
+  assert.ok(closeBtn !== null, 'в заголовке есть ×');
+  closeBtn!.click();
+}
+
+async function resolvesTo<T>(
+  promise: Promise<T>,
+): Promise<{ value: T | undefined; settled: boolean }> {
+  let value: T | undefined;
+  let settled = false;
+  void promise.then((v) => {
+    value = v;
+    settled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  return { value, settled };
+}
+
+describe('confirmSwitchToMap: отказ любым путём закрытия (aff5a96c)', () => {
+  it('Esc резолвит false и снимает диалог', async () => {
+    const { body: b } = installShim();
+    const done = confirmSwitchToMap();
+    pressEscape();
+    const { value, settled } = await resolvesTo(done);
+    assert.equal(settled, true, 'промис завершён, а не висит');
+    assert.equal(value, false, 'Esc — отказ');
+    assert.equal(b.children.length, 0, 'диалог закрыт');
+  });
+
+  it('× в заголовке резолвит false', async () => {
+    installShim();
+    const done = confirmSwitchToMap();
+    clickClose(openBackdrop());
+    const { value } = await resolvesTo(done);
+    assert.equal(value, false, '× — отказ');
+  });
+
+  it('клик по подложке НЕ закрывает диалог и не резолвит отказ', async () => {
+    installShim();
+    const done = confirmSwitchToMap();
+    clickBackdrop(openBackdrop());
+    const { settled } = await resolvesTo(done);
+    assert.equal(settled, false, 'клик мимо не резолвит промис');
+    footerButton(openBackdrop(), 'Нет').click();
+    const { value } = await resolvesTo(done);
+    assert.equal(value, false, 'после клика мимо кнопка «Нет» всё ещё закрывает');
+  });
+
+  it('«Нет» резолвит false', async () => {
+    installShim();
+    const done = confirmSwitchToMap();
+    footerButton(openBackdrop(), 'Нет').click();
+    const { value } = await resolvesTo(done);
+    assert.equal(value, false, 'кнопка отказа');
+  });
+
+  it('«Да» резолвит true и не переигрывается поздним onClose', async () => {
+    const { body: b } = installShim();
+    const done = confirmSwitchToMap();
+    footerButton(openBackdrop(), 'Да').click();
+    const { value, settled } = await resolvesTo(done);
+    assert.equal(settled, true, 'промис завершён');
+    assert.equal(value, true, 'основной путь — согласие, а не отказ');
+    assert.equal(b.children.length, 0, 'диалог закрыт');
+  });
+});

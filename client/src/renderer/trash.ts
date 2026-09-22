@@ -18,17 +18,20 @@ import {
   type Thought,
   type ThoughtDeletionBlocking,
   type ThoughtDeletionCheckResult,
-  type TrashLinkEntry,
-  type TrashThoughtEntry,
+  type TrashListResult,
 } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
-import {
-  applyCloudStyle,
-  applyThoughtIcon,
-  invalidateRef,
-  resolveCloudStyle,
-} from './canvas/canvas.js';
+import { invalidateRef } from './canvas/canvas.js';
+// Слово вместо имени типа связи, когда тип не задан, — то же, что в тултипе
+// ребра локального графа (`edgeTooltip`): подпись связи обязана читаться
+// одинаково в диалоге удаления связи и в строке корзины (ошибки ce687b37,
+// 009784ad).
+import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
+// Мини-облачка строк группового удаления собирает общая фабрика (профиль
+// `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
+// со всеми остальными списками клиента.
+import { createThoughtCloud } from './lib/thought-cloud.js';
 import { reflectThoughtUpdate } from './editor/editor.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
@@ -36,8 +39,8 @@ import { refreshSelectionPanel } from './selection/selection.js';
 import { patchFocusEdge, store } from './state.js';
 import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
 import { button, div, el, setTooltip, span } from './lib/dom.js';
-import { etn } from './lib/etn.js';
 import { svgIcon } from './lib/icons.js';
+import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 
@@ -69,6 +72,100 @@ export function blockingReasons(
 /** Resolve the current version of a thought (for If-Match on mark/delete). */
 async function thoughtVersion(networkId: string, id: string): Promise<number> {
   return (await etn.thoughts.get(networkId, id)).version;
+}
+
+/**
+ * Имя типа связи «вперёд» (сторона источника) из кэша типов сети. Тип не задан
+ * или не резолвится — слово-заглушка {@link UNTYPED_LINK_LABEL}: то же, что
+ * показывает тултип ребра локального графа (`edgeTooltip`), поэтому подпись
+ * связи читается одинаково во всех местах клиента.
+ */
+export function linkTypeForwardName(typeId: string | null): string {
+  if (typeId === null) return UNTYPED_LINK_LABEL;
+  const type = store.state.linkTypes.find((t) => t.id === typeId);
+  if (type === undefined || type.name_forward.trim() === '') return UNTYPED_LINK_LABEL;
+  return type.name_forward;
+}
+
+/**
+ * Подпись связи «<источник> → <назначение> · <тип связи>» — так связь
+ * называют диалог её удаления (ошибка ce687b37: спрашивали, не называя, какую
+ * связь удаляют) и строка корзины (ошибка 009784ad: у ребра в `etn.trash.list`
+ * есть только id концов).
+ *
+ * Названия концов резолвит вызывающий ({@link resolveThoughtTitles}) и отдаёт
+ * картой; имя, которого в карте нет, заменяется самим id — подпись никогда не
+ * остаётся пустой. Направление — фактическое (`source_id` → `target_id`), имя
+ * типа — «вперёд» (свойство источника).
+ */
+export function linkCaption(
+  link: { source_id: string; target_id: string; type_id: string | null },
+  titles: ReadonlyMap<string, string>,
+): string {
+  const source = titles.get(link.source_id) ?? link.source_id;
+  const target = titles.get(link.target_id) ?? link.target_id;
+  return `${source} → ${target} · ${linkTypeForwardName(link.type_id)}`;
+}
+
+/**
+ * Названия мыслей одним батчем (`POST /thoughts/resolve`, как в полосах
+ * истории и закреплённых). Неудача резолва не должна ломать диалог — пустая
+ * карта: подпись покажет id вместо имени.
+ */
+async function resolveThoughtTitles(
+  networkId: string,
+  ids: readonly string[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  try {
+    const refs = await etn.thoughts.resolve(networkId, unique.slice(0, 100));
+    return new Map(refs.map((ref) => [ref.id, ref.title]));
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Число мест использования помеченного элемента — колонка «Ссылок» корзины
+ * (§5a.4, ошибка 009784ad): сколько раз на мысль ссылаются свойствами
+ * (`usage.total`, 03-server-api.md §9.1). У связи использования в свойствах нет
+ * (§5a.3: группа «Используется в свойствах» строится только для мыслей) —
+ * соответствующий аргумент равен `null`, и колонка рисует прочерк, а не ноль;
+ * прочерк же встаёт, если счёт не удалось получить.
+ */
+export function referencesText(total: number | null): string {
+  return total === null ? '—' : String(total);
+}
+
+/**
+ * Модель строки корзины (§5a.4, ошибка 009784ad) — то, что видно в первых двух
+ * колонках таблицы: «что в корзине» и «сколько ссылок». Вынесено из сборки DOM,
+ * потому что это и есть суть исправления (id вместо названий, непонятный счёт
+ * мест использования) — проверяется юнит-тестом без DOM.
+ */
+export interface TrashRowView {
+  /** Колонка 1: название мысли либо подпись связи «источник → назначение · тип». */
+  label: string;
+  /** Колонка 2: мест использования; `null` — показывается прочерком. */
+  count: number | null;
+}
+
+/** Строка помеченной мысли: колонка 1 — название, колонка 2 — `usage.total`. */
+export function thoughtTrashRow(item: { title: string }, usageTotal: number | null): TrashRowView {
+  return { label: `📝 ${item.title}`, count: usageTotal };
+}
+
+/**
+ * Строка помеченного ребра: у связи нет названия, её колонка 1 — подпись
+ * «источник → назначение · тип связи» (имена концов — из `titles`), а колонка 2
+ * пуста: использования в свойствах у связей нет (§5a.3).
+ */
+export function linkTrashRow(
+  link: { source_id: string; target_id: string; type_id: string | null },
+  titles: ReadonlyMap<string, string>,
+): TrashRowView {
+  return { label: `🔗 ${linkCaption(link, titles)}`, count: null };
 }
 
 /** Resolve the current version of a link (for If-Match). */
@@ -216,6 +313,11 @@ export async function openThoughtDeleteDialog(
  * usage and no children, so only the layer arm can block — the base entry when
  * the link lives in the base and the session works in a layer, or other layers
  * that changed the link.
+ *
+ * Диалог обязан назвать удаляемую связь (ошибка ce687b37): подпись
+ * «<источник> → <назначение> · <тип связи>» идёт первой строкой тела. Имена
+ * концов резолвятся батчем (`resolveThoughtTitles`), имя типа — из кэша сети
+ * (`linkTypeForwardName`) — по образцу тултипа ребра локального графа.
  */
 export async function openLinkDeleteDialog(
   networkId: string,
@@ -225,6 +327,7 @@ export async function openLinkDeleteDialog(
   let link: Link;
   let blocked: boolean;
   let blocking: LinkDeletionBlocking;
+  let caption: string;
   try {
     link = await etn.links.get(networkId, linkId);
     const result = (await etn.links.deletionCheck(networkId, [linkId]))[linkId] ?? {
@@ -233,6 +336,10 @@ export async function openLinkDeleteDialog(
     };
     blocked = result.blocked;
     blocking = result.blocking;
+    caption = linkCaption(
+      link,
+      await resolveThoughtTitles(networkId, [link.source_id, link.target_id]),
+    );
   } catch (err) {
     errorDialog('Удалить связь', err);
     return;
@@ -240,6 +347,7 @@ export async function openLinkDeleteDialog(
 
   const alreadyMarked = link.marked_for_deletion;
   const body = div('form-stack');
+  body.append(el('p', 'dialog-text link-caption', caption));
   if (blocked) {
     for (const reason of blockingReasons('связь', blocking)) {
       body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
@@ -360,7 +468,20 @@ function splitChoice(
 }
 
 /** Pure model of the group-delete dialog (08-ui-spec.md §5a.2), unit-tested. */
-export const trashInternals = { defaultChoice, applyMassToggle, splitChoice, blockingReasons };
+export const trashInternals = {
+  defaultChoice,
+  applyMassToggle,
+  splitChoice,
+  blockingReasons,
+  // Подпись связи (ошибка ce687b37) — общее правило диалога удаления связи и
+  // строки корзины, тоже под тестами.
+  linkCaption,
+  linkTypeForwardName,
+  // Число мест использования в колонке «Ссылок» корзины (ошибка 009784ad).
+  referencesText,
+  thoughtTrashRow,
+  linkTrashRow,
+};
 
 export async function openThoughtGroupDeleteDialog(
   networkId: string,
@@ -422,31 +543,15 @@ export async function openThoughtGroupDeleteDialog(
 
   /**
    * Builds the mini-cloud cell: the thought's icon and title rendered with its
-   * real colors/fonts (the same `applyCloudStyle`/`applyThoughtIcon` pair the
-   * pinned/history chips use), dimmed and marked with a red trash glyph when
-   * the thought is already in the trash (§2.2 marks, mini version).
+   * real colors/fonts by the shared cloud factory, dimmed and marked with a
+   * red trash glyph when the thought is already in the trash (§2.2 marks, mini
+   * version).
    */
   const buildCloudCell = (id: string): HTMLElement => {
     const ref = refById.get(id);
-    const cloud = div('group-delete-cloud');
-    if (ref !== undefined) {
-      applyCloudStyle(cloud, resolveCloudStyle(ref));
-      if (!ref.active || ref.marked_for_deletion) cloud.classList.add('dim');
-    }
-    const icon = el('span', 'mini-icon');
-    if (ref !== undefined) {
-      applyThoughtIcon(icon, ref);
-    } else {
-      icon.textContent = '💭';
-    }
-    cloud.append(icon, span(ref?.title ?? id, 'group-delete-cloud-title'));
+    const cloud = createThoughtCloud(ref ?? { id, title: id }, { profile: 'chip' });
+    cloud.classList.add('group-delete-cloud');
     setTooltip(cloud, ref?.title ?? id);
-    if (ref?.marked_for_deletion === true) {
-      const mark = span('', 'list-trash-mark');
-      mark.append(svgIcon('trash', 13));
-      setTooltip(mark, 'Мысль уже находится в корзине');
-      cloud.append(mark);
-    }
     return cloud;
   };
 
@@ -579,72 +684,149 @@ export async function openThoughtGroupDeleteDialog(
 }
 
 /**
- * The trash dialog (08-ui-spec.md §5a.4): every marked thought/link with its
- * precomputed blocking. Rows offer restore / delete / (purge-all at the footer).
+ * The trash dialog (08-ui-spec.md §5a.4; переделан по ошибке 009784ad, 0.8.2):
+ * every marked thought/link with its precomputed blocking, laid out as a table
+ * instead of a wrapping list — «что в корзине» (мысль — название, связь —
+ * «источник → назначение · тип связи»), «Ссылок» (мест использования) и
+ * кнопки-иконки «Восстановить»/«Удалить» с подсказками. «Удалить» активна
+ * только у строки, которую действительно можно удалить физически (`blocked`
+ * приходит из `GET /trash` вместе с `blocking`), у заблокированной её тултип
+ * объясняет причину.
+ *
+ * Имена концов связей и число мест использования мыслей диалог догружает к
+ * одному `GET /trash` — у ребра в ответе только id, а использования он не несёт.
  */
 export async function openTrashDialog(networkId: string): Promise<void> {
-  const body = div('trash-list');
-  const empty = el('p', 'dialog-text', 'Корзина пуста.');
-  body.append(empty);
+  const body = div('trash');
+  const table = div('trash-table');
+  body.append(table);
+
+  /** Кнопка-иконка действия строки — как в остальном UI: svg + тултип. */
+  const actionButton = (
+    icon: 'undo' | 'trash',
+    label: string,
+    danger: boolean,
+    onClick: () => void,
+  ): HTMLButtonElement => {
+    const btn = el('button', danger ? 'icon-btn trash-act trash-act-danger' : 'icon-btn trash-act');
+    btn.type = 'button';
+    btn.append(svgIcon(icon, 15));
+    setTooltip(btn, label);
+    btn.setAttribute('aria-label', label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  };
+
+  /** Колонка действий строки: «Восстановить» всегда, «Удалить» — по блокировке. */
+  const buildActions = (
+    blocked: boolean,
+    reason: string,
+    onRestore: () => Promise<void>,
+    onDelete: () => Promise<void>,
+  ): HTMLElement => {
+    const cell = div('trash-actions');
+    cell.append(actionButton('undo', 'Восстановить', false, () => void onRestore()));
+    const delBtn = actionButton(
+      'trash',
+      blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : 'Удалить совсем',
+      true,
+      () => void onDelete(),
+    );
+    delBtn.disabled = blocked;
+    cell.append(delBtn);
+    return cell;
+  };
+
+  /** Строка таблицы: что в корзине, число мест использования, действия. */
+  const renderRow = (
+    label: string,
+    blocked: boolean,
+    reason: string,
+    count: number | null,
+    onRestore: () => Promise<void>,
+    onDelete: () => Promise<void>,
+  ): HTMLElement => {
+    const row = div('trash-row');
+    const item = div('trash-item');
+    item.append(span(label, 'trash-item-title'));
+    if (blocked) {
+      // Замок — статичная индикация блокировки (§5a.4): видно, не наводя курсор.
+      const lock = span('🔒', 'trash-item-lock');
+      setTooltip(lock, reason || 'заблокировано для удаления');
+      item.append(lock);
+    }
+    setTooltip(item, label);
+    row.append(item);
+    row.append(span(referencesText(count), 'trash-count'));
+    row.append(buildActions(blocked, reason, onRestore, onDelete));
+    return row;
+  };
 
   const render = async (): Promise<void> => {
-    let trash: { thoughts: TrashThoughtEntry[]; links: TrashLinkEntry[] };
+    let trash: TrashListResult;
     try {
       trash = await etn.trash.list(networkId);
     } catch (err) {
       errorDialog('Корзина', err);
       return;
     }
-    while (body.firstChild !== null) body.removeChild(body.firstChild);
 
     if (trash.thoughts.length === 0 && trash.links.length === 0) {
-      body.append(empty.cloneNode(true));
+      table.replaceChildren(el('p', 'dialog-text', 'Корзина пуста.'));
       return;
     }
 
-    const renderRow = (
-      label: string,
-      locked: boolean,
-      reason: string,
-      onRestore: () => Promise<void>,
-      onDelete: () => Promise<void>,
-    ): HTMLElement => {
-      const row = div('trash-row');
-      const title = span(label, 'trash-row-title');
-      if (locked) title.append(span(' 🔒', 'trash-row-lock'));
-      row.append(title);
-      const actions = div('trash-row-actions');
-      actions.append(button('↩ Вернуть', () => void onRestore(), 'link-btn', 'Вернуть из корзины'));
-      const delBtn = button('🗑 Удалить', () => void onDelete(), 'link-btn danger', 'Удалить');
-      delBtn.disabled = locked;
-      if (locked) setTooltip(delBtn, `Удалить нельзя — ${reason || 'заблокировано'}`);
-      actions.append(delBtn);
-      row.append(actions);
-      return row;
-    };
+    // Догрузка к одному `GET /trash`: названия концов связей (в рёбрах только
+    // id) и число мест использования мыслей (`GET /thoughts/{id}/usage`).
+    const titles = await resolveThoughtTitles(
+      networkId,
+      trash.links.flatMap((l) => [l.source_id, l.target_id]),
+    );
+    const usageById = new Map<string, number | null>();
+    await Promise.all(
+      trash.thoughts.map(async (t) => {
+        try {
+          usageById.set(t.id, (await etn.thoughts.usage(networkId, t.id)).total);
+        } catch {
+          usageById.set(t.id, null);
+        }
+      }),
+    );
 
+    const head = div('trash-row trash-head');
+    head.append(
+      span('В корзине', 'trash-head-item'),
+      span('Ссылок', 'trash-head-count'),
+      span('Действия', 'trash-head-actions'),
+    );
+    const rows: HTMLElement[] = [head];
     for (const t of trash.thoughts) {
-      body.append(
+      const view = thoughtTrashRow(t, usageById.get(t.id) ?? null);
+      rows.push(
         renderRow(
-          `📝 ${t.title}`,
+          view.label,
           t.blocked,
           blockingReasons('мысль', t.blocking).join('; '),
+          view.count,
           () => restoreThought(networkId, t.id),
           () => deleteFromTrash(networkId, t.id),
         ),
       );
     }
     for (const l of trash.links) {
-      body.append(
+      const view = linkTrashRow(l, titles);
+      rows.push(
         renderRow(
-          `🔗 ${l.source_id} → ${l.target_id}`,
+          view.label,
           l.blocked,
           blockingReasons('связь', l.blocking).join('; '),
+          view.count,
           () => restoreLink(networkId, l.id),
           () => deleteLinkFromTrash(networkId, l.id),
         ),
       );
     }
+    table.replaceChildren(...rows);
   };
 
   const restoreThought = async (networkId: string, id: string): Promise<void> => {
@@ -702,6 +884,9 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   showDialog({
     title: 'Корзина',
     body,
+    // Ширина задаётся классом (§5a.4, ошибка 009784ad): таблица из трёх колонок
+    // не должна ломать строки переносом, окно растёт вместе с экраном.
+    boxClass: 'trash-box',
     buttons: [
       {
         label: 'Удалить всё, что возможно',

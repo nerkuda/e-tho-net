@@ -41,19 +41,73 @@ function invalidateWikiLinkCacheById(thoughtId: string): void {
   invalidateWikiLinkCache(thoughtId);
 }
 
-/** Reloads both type catalogues into the store (L21 — the hierarchy changed). */
-export async function reloadTypeCatalogues(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  try {
-    const [thoughtTypes, linkTypes] = await Promise.all([
-      etn.types.listThoughtTypes(networkId),
-      etn.types.listLinkTypes(networkId),
-    ]);
-    store.update({ thoughtTypes, linkTypes });
-  } catch {
-    // The network may have just been closed — ignore.
-  }
+/**
+ * Reloads both type catalogues into the store (L21 — the hierarchy changed).
+ *
+ * Параллельные перезапросы (одно realtime-событие о типе уведомляет несколько
+ * слушателей, и редактору нужен именно ОБНОВЛЁННЫЙ каталог) делят один запрос:
+ * пока перезапрос в полёте, повторный вызов возвращает тот же промис. Так
+ * потребитель может дождаться свежего каталога, не порождая второй запрос.
+ */
+export function reloadTypeCatalogues(): Promise<void> {
+  if (typeCataloguesReload !== null) return typeCataloguesReload;
+  const pending = (async () => {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    try {
+      const [thoughtTypes, linkTypes] = await Promise.all([
+        etn.types.listThoughtTypes(networkId),
+        etn.types.listLinkTypes(networkId),
+      ]);
+      store.update({ thoughtTypes, linkTypes });
+    } catch {
+      // The network may have just been closed — ignore.
+    }
+  })().finally(() => {
+    typeCataloguesReload = null;
+  });
+  typeCataloguesReload = pending;
+  return pending;
+}
+
+/** In-flight перезапрос каталогов (см. {@link reloadTypeCatalogues}). */
+let typeCataloguesReload: Promise<void> | null = null;
+
+/**
+ * Запланировать пересчёт всего, что рисует окрестность фокуса: холст (секторы
+ * родителей/потомков/родственников и линии рёбер — перечитываются свежим
+ * ответом `focus()`), «Структуры» и «Хроника» (обе держат собственные снимки
+ * страницы/дерева и сами по смене данных не перестраиваются).
+ *
+ * ЕДИНСТВЕННОЕ место, где задан этот набор: realtime-ветки изменения
+ * соседей/рёбер (`thought.reordered`, `link.*`, `property-value.*`) и смены
+ * каталога типов (`scheduleTypeRepaint`) зовут его же. Локальные производители
+ * зовут его сами — своё realtime-эхо до рендерера не доходит (G8 applier),
+ * а потому без такого вызова карта не узнаёт о своей же правке.
+ */
+export function scheduleNeighbourhoodRepaint(): void {
+  scheduleRefresh();
+  scheduleStructuresRefresh();
+  scheduleChronicleRefresh();
+}
+
+/**
+ * Пересчёт всего, что рисует имена и оформление ТИПОВ, — тот же набор
+ * «окрестность фокуса + Структуры + Хроника» (см.
+ * {@link scheduleNeighbourhoodRepaint}): холст резолвит подписи и линии рёбер
+ * из каталога типов (`canvas/links.ts`), «Структуры»/«Хроника» держат снимки.
+ *
+ * Это набор realtime-ветки `*-type.*` / `property-definition.*`; локальные
+ * производители (менеджер свойств после правки/удаления типа связи) дёргают его
+ * сами — своё realtime-эхо до рендерера не доходит (G8 applier).
+ *
+ * Каталог типов НЕ перечитывает: вызывающий, которому нужен свежий каталог ДО
+ * своей отрисовки, сначала дожидается `reloadTypeCatalogues()` (in-flight дележ
+ * работает только для одновременных вызовов), и лишь затем зовёт пересчёт —
+ * так локальный путь не порождает второго перезапроса каталога.
+ */
+export function scheduleTypeRepaint(): void {
+  scheduleNeighbourhoodRepaint();
 }
 
 /** True when the thought id participates in the current focus neighbourhood. */
@@ -68,8 +122,31 @@ export function inNeighbourhood(id: string): boolean {
   );
 }
 
+/**
+ * Виден ли владелец значения в текущей окрестности фокуса: мысль — сам фокус
+ * или его сосед, связь — ребро этой окрестности (`focus.edges`). Локальные
+ * производители (сохранение значения свойства-связи) по этому признаку решают,
+ * нужен ли пересчёт холста: правка невидимой сущности карту не меняет, и
+ * перечитывать окрестность из-за неё не нужно (ошибка f0b959dd).
+ */
+export function inFocusNeighbourhood(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+): boolean {
+  const focus = store.state.focus;
+  if (focus === null) return false;
+  return ownerType === 'thought'
+    ? inNeighbourhood(ownerId)
+    : focus.edges.some((edge) => edge.id === ownerId);
+}
+
 /** Applies one accepted realtime event to the UI state. */
 export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
+  // Шину событий слушают все открытые вкладки-сети разом, а этот обработчик
+  // правит ОБЩИЙ store (активную вкладку): событие чужой сети не должно
+  // пересчитывать её окрестность/панели (ошибка f0b959dd — realtime-путь
+  // изменения значений свойств-связей обязан уважать границу сети).
+  if (evt.network_id !== store.state.networkId) return;
   switch (evt.type) {
     case 'thought.deleted':
       invalidateIndicators(evt.data.id);
@@ -113,11 +190,13 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'link.created':
     case 'link.updated':
     case 'link.deleted':
+    // Свойство-СВЯЗЬ меняет рёбра на сервере (структурные «Родители»/
+    // «Потомки», типизированные, «Свойства вне типа»), скаляр — нет; набор
+    // пересчёта для обоих событий один и тот же — окрестность фокуса
+    // (прецедент 270b8454: тот же набор, что у правок типов связи).
     case 'property-value.set':
     case 'property-value.deleted':
-      scheduleRefresh();
-      scheduleStructuresRefresh();
-      scheduleChronicleRefresh();
+      scheduleNeighbourhoodRepaint();
       break;
 
     case 'comment.created':
@@ -153,6 +232,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'attachment.created':
+      // Вложения — подобъекты сущности и фокус-ответ не меняют (см. rationale
+      // ниже). Сам факт создания в окрестности фокуса освежает холст; вкладку
+      // «Вложения» открытого редактора обновляет его собственный realtime-хук
+      // (editor.ts, гейт по показанной сущности — ошибка abd25adb).
       invalidateIndicators(evt.data.attachment.owner_id);
       if (inNeighbourhood(evt.data.attachment.owner_id)) scheduleRefresh();
       break;
@@ -164,14 +247,22 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Calling `scheduleRefresh` here forced an unrelated store update on
       // every remote attachment write, which in turn fired the editor's
       // `store.subscribe` callback — bug 206e33a1. The canvas indicator
-      // cache is invalidated; the editor owns its own «Вложения» tab and
-      // updates it via its own realtime hook (attachments.ts).
+      // cache is invalidated; the open editor's «Вложения» tab updates itself
+      // through its own realtime hook in editor.ts (ошибка abd25adb), which
+      // resolves the owner of these ownerless events from the list index.
       invalidateIndicators(null);
       break;
 
     case 'user-preference.updated':
       if (evt.data.key === 'show_inactive') {
         store.update({ showInactive: evt.data.value === true });
+        scheduleRefresh();
+        scheduleStructuresRefresh();
+      } else if (evt.data.key === PREF_KEY.SHOW_TRASH) {
+        // «Показывать содержимое корзины» (77923b49) — правка другого клиента:
+        // карта, локальный граф и структуры перечитываются (сервер фильтрует
+        // помеченных по этой настройке).
+        store.update({ showTrash: evt.data.value !== false });
         scheduleRefresh();
         scheduleStructuresRefresh();
       } else if (evt.data.key === PREF_KEY.CANVAS_LINK_FILTER) {
@@ -216,9 +307,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Another client changed the type catalogues (L21): reload both lists
       // and repaint everything that renders type styles/names.
       void reloadTypeCatalogues();
-      scheduleRefresh();
-      scheduleStructuresRefresh();
-      scheduleChronicleRefresh();
+      scheduleTypeRepaint();
       break;
 
     case 'thought-type-view.created':

@@ -32,6 +32,7 @@ import {
   EVENT_AREA_W_DEFAULT_RATIO,
   EVENT_AREA_W_MAX_RATIO,
   EVENT_AREA_W_MIN,
+  parseFilterKeywords,
   REALTIME_EVENT_TYPES,
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
@@ -811,4 +812,278 @@ export function neighborsPreviewBounds(canvasRect: { width: number; height: numb
  *  the neighbours-preview list order (task requirement). */
 export function sortRefsByTitle<T extends { title: string }>(refs: readonly T[]): T[] {
   return [...refs].sort((a, b) => a.title.localeCompare(b.title));
+}
+
+// ---------------------------------------------------------------------------
+// Строка поиска карты: политика закрытия выпадающей панели
+// (08-ui-spec.md §3; ошибка 72a06e01)
+// ---------------------------------------------------------------------------
+
+/**
+ * Куда пришлось нажатие относительно выпадающей панели поиска.
+ *
+ * `insidePanel` — сама панель (оболочка, строка поиска, шестерёнка опций);
+ * `insideSuggest` — открытая общая выпадашка подсказок (живёт в
+ * `document.body`, см. `lib/suggest-dropdown.ts`); `insideDialog` — открытый
+ * модальный диалог (`lib/dialog.ts`).
+ */
+export interface SearchPanelTapLayers {
+  insidePanel: boolean;
+  insideSuggest: boolean;
+  insideDialog: boolean;
+}
+
+/**
+ * Закрывать ли панель поиска по нажатию. Панель скрывается только кликом
+ * вне себя — вне самой панели и вне всплывающих слоёв, открытых ИЗ неё
+ * (выпадашка подсказок, модальный диалог). Клик по подсказке или по диалогу
+ * панель не закрывает: иначе поле теряет фокус, список подсказок исчезает до
+ * `click`, и выбранный тип (фокус, тип связи) не доезжает до отбора
+ * (ошибка 72a06e01). `Escape` — отдельный путь закрытия, политика его не
+ * касается.
+ */
+export function searchPanelClosesOnTap(layers: SearchPanelTapLayers): boolean {
+  return !layers.insidePanel && !layers.insideSuggest && !layers.insideDialog;
+}
+
+// ---------------------------------------------------------------------------
+// Строка поиска карты: зона «Настройки поиска» (задача a3247f84, 0.8.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Минимальная ширина окна, при которой зона «Настройки поиска» размещается
+ * справа от результатов. Уже неё (≤ этого значения) настройки встают сверху
+ * над результатами — иначе обеим зонам не хватает ширины.
+ */
+export const SEARCH_SETTINGS_SIDE_MIN_WIDTH = 1000;
+
+/** Положение зоны настроек в выпадающей панели поиска. */
+export type SearchSettingsPlacement = 'side' | 'top';
+
+/**
+ * Куда класть «Настройки поиска» при данной ширине окна: шире порога
+ * {@link SEARCH_SETTINGS_SIDE_MIN_WIDTH} — справа от результатов (`side`),
+ * иначе — сверху (`top`). Чистая функция: клиент вызывает её заново на каждом
+ * ресайзе окна, поэтому переключение положения не требует перезапуска.
+ */
+export function searchSettingsPlacement(windowWidth: number): SearchSettingsPlacement {
+  return windowWidth > SEARCH_SETTINGS_SIDE_MIN_WIDTH ? 'side' : 'top';
+}
+
+/**
+ * Читает сохранённую нажатость переключателя «Настройки поиска» из L4
+ * `ui_state`. По умолчанию (нет записи, мусор) — отжат (`false`): впервые
+ * открытая панель показывает только результаты.
+ */
+export function isSearchSettingsOpenStored(raw: string | null): boolean {
+  return raw === '1' || raw === 'true';
+}
+
+// ---------------------------------------------------------------------------
+// Подсветка совпадений в заголовках результатов поиска (задача a1766c7d, 0.8.2)
+// ---------------------------------------------------------------------------
+
+/** Отрезок заголовка: подсвеченное совпадение (`hit`) либо обычный текст. */
+export interface HighlightRun {
+  text: string;
+  /** true — отрезок попал в один из термов подсветки. */
+  hit: boolean;
+}
+
+/**
+ * Термы подсветки заголовков по запросу строки поиска. Правило — то же, что у
+ * серверного сниппета (`server/src/domain/search-service.ts`): берутся только
+ * include-слова мини-синтаксиса (исключения `-слово` не подсвечиваются),
+ * `*` разворачивается в разделитель, слова чистятся от кавычек и пробелов и
+ * повторно не берутся.
+ *
+ * Сниппеты приходят от сервера уже с `<mark>`, а название мысли — нет: клиент
+ * подсвечивает в нём ровно те же вхождения, что сервер подсветил бы в тексте.
+ */
+export function searchHighlightTerms(query: string): string[] {
+  const terms: string[] = [];
+  for (const word of parseFilterKeywords(query).include) {
+    for (const raw of word.replace(/\*/g, ' ').split(/\s+/)) {
+      const term = raw.replace(/"/g, '').trim();
+      if (term === '') continue;
+      const key = term.toLowerCase();
+      if (terms.some((t) => t.toLowerCase() === key)) continue;
+      terms.push(term);
+    }
+  }
+  return terms;
+}
+
+/**
+ * Режет текст на отрезки по всем вхождениям любого терма без учёта регистра
+ * (все вхождения, каждое — один отрезок `hit`). Пересекающиеся совпадения
+ * сливаются в один отрезок; пустые термы игнорируются. Совпадений нет —
+ * один отрезок `hit: false` с исходным текстом.
+ *
+ * Чистая функция: DOM-обёртка — {@link renderHighlightedText} в `lib/dom.ts`.
+ */
+export function splitHighlightRuns(text: string, terms: readonly string[]): HighlightRun[] {
+  const lower = text.toLowerCase();
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const term of terms) {
+    const needle = term.toLowerCase();
+    if (needle === '') continue;
+    let idx = lower.indexOf(needle);
+    while (idx >= 0) {
+      spans.push({ start: idx, end: idx + needle.length });
+      idx = lower.indexOf(needle, idx + needle.length);
+    }
+  }
+  if (spans.length === 0) return [{ text, hit: false }];
+  spans.sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && span.start <= last.end) {
+      last.end = Math.max(last.end, span.end);
+      continue;
+    }
+    merged.push({ start: span.start, end: span.end });
+  }
+  const runs: HighlightRun[] = [];
+  let pos = 0;
+  for (const span of merged) {
+    if (span.start > pos) runs.push({ text: text.slice(pos, span.start), hit: false });
+    runs.push({ text: text.slice(span.start, span.end), hit: true });
+    pos = span.end;
+  }
+  if (pos < text.length) runs.push({ text: text.slice(pos), hit: false });
+  return runs;
+}
+
+// ---------------------------------------------------------------------------
+// Общий каркас панелей отбора: скрываемость, положение, размер
+// (задача 2ebe4206, 0.8.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Минимальная ширина ПОЛОТНА вида (окно приложения минус панель редактора), при
+ * которой панель отбора размещается слева от результатов. Уже неё панель встаёт
+ * сверху: слева ей и результатам не хватит ширины вместе.
+ *
+ * Порог задан пользователем: «если ширина меньше 1000 пикселей, размещать панель
+ * отбора вверху, иначе — слева». Ровно 1000 px — уже «слева» (меньше порога только
+ * строго меньшая ширина).
+ */
+export const FILTER_PANEL_SIDE_MIN_WIDTH = 1000;
+
+/** Положение панели отбора на полотне вида. */
+export type FilterPanelPlacement = 'side' | 'top';
+
+/**
+ * Куда класть панель отбора при данной ширине полотна: меньше порога
+ * {@link FILTER_PANEL_SIDE_MIN_WIDTH} — сверху (`top`), иначе — слева (`side`).
+ * Чистая функция: экран вызывает её заново на каждом ресайзе, поэтому смена
+ * положения не требует перезапуска.
+ */
+export function filterPanelPlacement(canvasWidth: number): FilterPanelPlacement {
+  return canvasWidth < FILTER_PANEL_SIDE_MIN_WIDTH ? 'top' : 'side';
+}
+
+/** Сохранённое локально (L4 `ui_state`) состояние панели отбора. */
+export interface FilterPanelState {
+  /** Панель скрыта плавающей кнопкой. */
+  hidden: boolean;
+  /** Ширина панели в боковом положении, px (null — пользователь ещё не тянул). */
+  width: number | null;
+  /** Высота панели в верхнем положении, px (null — не тянул). */
+  height: number | null;
+}
+
+/** Пустое состояние панели: видна, размер по умолчанию (CSS). */
+export const DEFAULT_FILTER_PANEL_STATE: FilterPanelState = {
+  hidden: false,
+  width: null,
+  height: null,
+};
+
+/** Положительное конечное число пикселей или null. */
+function positivePxOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+/**
+ * Читает сохранённое состояние панели из L4 `ui_state`. Устойчив к мусору:
+ * нет записи, не JSON, чужие поля — видимая панель без заданного размера.
+ */
+export function parseFilterPanelState(raw: string | null): FilterPanelState {
+  if (raw === null || raw === '') return { ...DEFAULT_FILTER_PANEL_STATE };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...DEFAULT_FILTER_PANEL_STATE };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ...DEFAULT_FILTER_PANEL_STATE };
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    hidden: record['hidden'] === true,
+    width: positivePxOrNull(record['width']),
+    height: positivePxOrNull(record['height']),
+  };
+}
+
+/** Сериализует состояние панели для L4 `ui_state` (обратен парсеру). */
+export function serializeFilterPanelState(state: FilterPanelState): string {
+  return JSON.stringify({
+    hidden: state.hidden,
+    width: state.width,
+    height: state.height,
+  });
+}
+
+/** Ограничивает размер панели диапазоном перетаскивания (px). */
+export function clampFilterPanelSize(value: number, min: number, max: number): number {
+  const rounded = Math.round(value);
+  if (!Number.isFinite(rounded)) return Math.round(min);
+  return Math.min(max, Math.max(min, rounded));
+}
+
+// ---------------------------------------------------------------------------
+// Сохранённые отборы: поиск по именам, копия, навигация (задача 2ebe4206)
+// ---------------------------------------------------------------------------
+
+/**
+ * Фильтрует сохранённые отборы по подстроке имени (регистр не важен). Пустой
+ * запрос возвращает весь список — строка поиска в диалоге выбора отбора.
+ */
+export function filterSavedByName<T extends { name: string }>(
+  entries: readonly T[],
+  query: string,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...entries];
+  return entries.filter((entry) => entry.name.toLowerCase().includes(needle));
+}
+
+/**
+ * Имя копии сохранённого отбора: к исходному имени добавляется « (копия)».
+ * Если такое имя уже занято, добавляется числовой суффикс — имена уникальны
+ * (сервер отвергает дубль), поэтому копия обязана получить свободное имя.
+ */
+export function duplicateFilterName(name: string, existingNames: readonly string[]): string {
+  const taken = new Set(existingNames.map((n) => n.toLowerCase()));
+  const base = `${name} (копия)`;
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = `${name} (копия ${i})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return base;
+}
+
+/**
+ * Сдвиг курсора в списке диалога выбора отбора на `delta` строк (↑/↓) с
+ * зажимом в границы. Пустой список — курсор -1.
+ */
+export function moveSavedFilterCursor(index: number, count: number, delta: number): number {
+  if (count <= 0) return -1;
+  return Math.min(count - 1, Math.max(0, index + delta));
 }

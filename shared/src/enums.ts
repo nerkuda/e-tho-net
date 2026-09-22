@@ -97,6 +97,13 @@ export type SearchScope = (typeof SEARCH_SCOPES)[number];
 export const SEARCH_GROUPS = ['names', 'texts', 'links', 'chronology'] as const;
 export type SearchGroup = (typeof SEARCH_GROUPS)[number];
 
+/**
+ * How a duplicate candidate matched the query, in descending priority order
+ * (`GET /thoughts/duplicates`, задача 120385ba).
+ */
+export const DUPLICATE_MATCH_KINDS = ['title', 'synonym', 'partial'] as const;
+export type DuplicateMatchKind = (typeof DUPLICATE_MATCH_KINDS)[number];
+
 /** Direction of a focus zone on the canvas (02-data-model.md §3.10.3). The
  *  MCP-only `both` value (0.7.2) reads both incoming and outgoing neighbours
  *  in a single call (each entry carries its own `direction: "in"|"out"`); REST
@@ -117,10 +124,11 @@ export type SortOrder = (typeof SORT_ORDERS)[number];
 
 /**
  * Sort kinds available to the structures query (03-server-api.md §6.10).
- * A subset of {@link SORT_KINDS}: `manual` has no global meaning outside a
- * focus zone, so it is not accepted.
+ * `manual` has no global meaning outside a focus zone, so it is not
+ * accepted; `updated` («по дате изменения», `thoughts.updated_at`)
+ * добавлен в 0.8.2 (ошибка 4dd14aa3).
  */
-export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed'] as const;
+export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed', 'updated'] as const;
 export type StructureSort = (typeof STRUCTURE_SORTS)[number];
 
 /**

@@ -11,14 +11,13 @@
  *   rejects a key foreign to the owner's type, so the client filters first).
  */
 
-import type { EffectiveTypeProperty, PropertyValueType, ThoughtRef } from '@etn/shared';
+import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { buildLinkValueEditor, buildValueOptionsCaret } from '../editor/properties.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { buildValueEditor } from '../editor/value-editor.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -42,13 +41,27 @@ function focusCombo(combo: HTMLElement): void {
 
 /**
  * Asks for a link type. Resolves the chosen type id, `null` for "no type", or
- * `undefined` when cancelled. The pick also becomes the add-dialog default
- * (`last_used_link_type_id`, L4).
+ * `undefined` when cancelled — including dismissal by any close path
+ * («Отмена», Esc, ×, backdrop click). The pick also becomes the add-dialog
+ * default (`last_used_link_type_id`, L4).
  */
 export function pickLinkType(title: string): Promise<string | null | undefined> {
   return new Promise((resolve) => {
-    const combo = createTypeCombobox({
-      options: () => linkTypeOptions(store.state.linkTypes),
+    /**
+     * Единственная точка завершения промиса. Отмена — ЛЮБОЙ путь закрытия
+     * каркаса (ошибка a68bacff): кнопки завершают его явно, а Esc и × —
+     * через `onClose`. Флаг `settled` не даёт позднему событию
+     * `remove` переиграть уже принятое решение.
+     */
+    let settled = false;
+    const finish = (value: string | null | undefined): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const combo = buildEntityCombo({
+      networkId: requireNetworkId(),
+      kind: 'link-types',
       value: store.state.lastUsedLinkTypeId,
       emptyLabel: 'Без типа',
       placeholder: 'Поиск типа связи…',
@@ -59,17 +72,20 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
       body: combo.root,
       width: 420,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(undefined) },
+        { label: 'Отмена', onClick: () => finish(undefined) },
         {
           label: 'OK',
           primary: true,
           onClick: () => {
             const id = combo.value();
             store.update({ lastUsedLinkTypeId: id });
-            resolve(id);
+            finish(id);
           },
         },
       ],
+      // Esc и × — отмена: контракт «`undefined` on cancel»,
+      // ровно как по кнопке «Отмена» (ошибка a68bacff).
+      onClose: () => finish(undefined),
       onMount: () => focusCombo(combo.root),
     });
   });
@@ -81,12 +97,21 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
 
 /**
  * Asks for a thought type. Resolves the chosen type id, `null` to clear the
- * type, or `undefined` when cancelled.
+ * type, or `undefined` when cancelled — including dismissal by any close path
+ * («Отмена», Esc, ×, backdrop click).
  */
 export function pickThoughtType(initial: string | null): Promise<string | null | undefined> {
   return new Promise((resolve) => {
-    const combo = createTypeCombobox({
-      options: () => thoughtTypeOptions(store.state.thoughtTypes),
+    /** Единственная точка завершения промиса — см. {@link pickLinkType}. */
+    let settled = false;
+    const finish = (value: string | null | undefined): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const combo = buildEntityCombo({
+      networkId: requireNetworkId(),
+      kind: 'thought-types',
       value: initial,
       emptyLabel: 'Без типа',
       placeholder: 'Поиск типа…',
@@ -97,13 +122,16 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
       body: combo.root,
       width: 420,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(undefined) },
+        { label: 'Отмена', onClick: () => finish(undefined) },
         {
           label: 'OK',
           primary: true,
-          onClick: () => resolve(combo.value()),
+          onClick: () => finish(combo.value()),
         },
       ],
+      // Esc и × — отмена: контракт «`undefined` on cancel»,
+      // ровно как по кнопке «Отмена» (ошибка a68bacff).
+      onClose: () => finish(undefined),
       onMount: () => focusCombo(combo.root),
     });
   });
@@ -224,100 +252,33 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     );
   })();
 
-  /** Builds the value editor cell for one property row. */
+  /** Builds the value editor cell for one property row.
+   *  Поле строит общий редактор значения `editor/value-editor.ts`
+   *  (стандарт S2, задача 77e7cafd): вид, `config.multiple` (чипы),
+   *  `config.options`; для связи — чип-редактор целей с живым поиском и
+   *  пикером. «Применить» уже пишет по одному свойству за раз через
+   *  `etn.properties.set`, поэтому `save` здесь только буферизует выбор в
+   *  `state.value` (сеть трогает лишь `applyAll`). Для да/нет — трёхзначное
+   *  поле («—» = оставить без изменений); история последних значений — по
+   *  id свойства (требование f6399882). */
   function buildValueCell(state: PropertyRowState): HTMLTableCellElement {
     const cell = el('td');
-    const def = state.def;
-    const valueType: PropertyValueType = def.value_type;
-    if (valueType === 'text' || valueType === 'url') {
-      const input = el('input', 'text-input prop-editor');
-      input.type = 'text';
-      if (valueType === 'url') {
-        input.placeholder = 'https://… или путь к файлу';
-        input.title = 'URL или путь к файлу';
-      }
-      input.addEventListener('blur', () => {
-        state.value = input.value.trim() === '' ? null : input.value;
-      });
-      // A text property with predefined options gets the same picker as the
-      // editor's properties table (08-ui-spec.md §6.3).
-      const options =
-        valueType === 'text' ? (def.config?.options ?? []).filter((o) => o !== '') : [];
-      if (options.length > 0) {
-        const row = div('form-row');
-        row.style.marginBottom = '0';
-        row.append(
-          input,
-          buildValueOptionsCaret(
-            input,
-            options,
-            def.config?.multiple === true,
-            (value) => {
-              state.value = value === '' ? null : value;
-            },
-            () => {
-              input.value = '';
-            },
-          ),
-        );
-        cell.append(row);
-      } else {
-        cell.append(input);
-      }
-      return cell;
-    }
-    if (valueType === 'number') {
-      const input = el('input', 'text-input prop-editor');
-      input.type = 'number';
-      input.addEventListener('input', () => {
-        const n = Number(input.value);
-        state.value = input.value === '' || !Number.isFinite(n) ? null : n;
-      });
-      cell.append(input);
-      return cell;
-    }
-    if (valueType === 'date') {
-      const input = el('input', 'text-input prop-editor');
-      input.type = 'date';
-      input.addEventListener('input', () => {
-        state.value = input.value === '' ? null : input.value;
-      });
-      cell.append(input);
-      return cell;
-    }
-    if (valueType === 'bool') {
-      // Unlike the editor's checkbox, a select — the dialog needs an explicit
-      // "leave unchanged" state ('—') next to да/нет.
-      const select = el('select', 'select-input');
-      select.append(
-        el('option', undefined, '—'),
-        el('option', undefined, 'да'),
-        el('option', undefined, 'нет'),
-      );
-      select.value = '';
-      select.addEventListener('change', () => {
-        state.value = select.value === '' ? null : select.value === 'да';
-      });
-      cell.append(select);
-      return cell;
-    }
-    // Свойство-связь: унифицированный чип-редактор (инструкция a47947c8) —
-    // тот же компонент, что в редакторе мысли. «Применить» уже пишет по
-    // одному свойству за раз через `etn.properties.set`, поэтому `save`
-    // здесь только буферизует выбор в `state.value` (список id целей или
-    // `null` при пустом наборе) — сеть трогает лишь `applyAll`.
-    const editor = buildLinkValueEditor({
-      networkId,
-      ownerType: 'thought',
-      ownerId: '',
-      definition: def,
-      values: [],
-      save: async (next) => {
-        state.value = next;
-        return true;
-      },
-    });
-    cell.append(editor);
+    cell.append(
+      buildValueEditor({
+        networkId,
+        ownerType: 'thought',
+        ownerId: '',
+        definition: state.def,
+        value: null,
+        save: async (next) => {
+          state.value = next;
+          return true;
+        },
+        commitOn: 'change',
+        historyPropertyId: state.def.property_id,
+        boolTriState: true,
+      }),
+    );
     return cell;
   }
 }

@@ -74,7 +74,13 @@ export interface ThoughtTypeInput {
 /** Input accepted by `PATCH /thought-types/{id}` (03-server-api.md §8). */
 export interface ThoughtTypeUpdateInput {
   name?: string;
-  /** Changing the parent is rejected while the type is in use by thoughts. */
+  /**
+   * Changing the parent is rejected while the type is in use by thoughts in
+   * any live (non-base) layer. For a type used only by thoughts in the base
+   * layer, the server returns 422 with `details.kind === 'reparent_impact'`;
+   * clients show a confirmation dialog and re-issue PATCH with
+   * `confirmed: true`. See task 8ea1ab6a (0.8.2).
+   */
   parent_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
@@ -87,6 +93,14 @@ export interface ThoughtTypeUpdateInput {
   description?: string | null;
   /** Шаблон постоянного комментария мысли (см. {@link ThoughtType.comment_template_md}). */
   comment_template_md?: string | null;
+  /**
+   * Подтверждение смены `parent_id` поверх перечня затронутых мыслей.
+   * Устанавливается клиентом только в ответ на 422 `reparent_impact`. Для
+   * типов связей флаг не используется — смена parent_id у них сразу
+   * применяется (без интерактивного подтверждения) либо отвергается по
+   * живым слоям.
+   */
+  confirmed?: boolean;
 }
 
 /**
@@ -213,8 +227,20 @@ export interface PropertyConfig {
    * Default value applied to future items of the type. Scalar kinds use
    * string/number/boolean; a link property uses `string[]` — the default set
    * of target thought ids, applied by creating edges (0.8.1, bb67e546).
+   *
+   * Для свойства-связи это общее значение стороны **источников**: привязка
+   * со стороной `source` получает эти цели (0.8.2, ADR «дефолт свойства
+   * живёт на привязке»).
    */
   default_value?: string | number | boolean | string[];
+  /**
+   * For `value_type = 'link'` only: общее значение по умолчанию для стороны
+   * **назначений** (0.8.2, ADR «дефолт свойства живёт на привязке») — массив
+   * id мыслей-источников. При создании мысли типа, привязанного со стороной
+   * `target`, рёбра создаются канонически (источник → новая мысль).
+   * Отсутствие ключа (или пустой массив) — значения нет.
+   */
+  default_value_target?: string[] | null;
   /**
    * For `value_type = 'link'`: тип связи, обязательный. Проекция —
    * рёбра этого типа.
@@ -359,6 +385,17 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
   /** Сторона привязки (0.8.1): пробрасывается из `type_properties.side`
    *  физической строки либо из зеркала. См. {@link PropertyDefinition.side}. */
   side?: LinkPropertySide | null;
+  /**
+   * Допустимые типы значения свойства-связи (0.8.2, ошибка a6513df0):
+   * типы мыслей, к которым ЭТО свойство привязано с ПРОТИВОПОЛОЖНОЙ стороны
+   * (`type_properties.side` реестра привязок, а не `config` владельца). Для
+   * привязки-источника это типы назначений («какие цели допустимы»), для
+   * привязки-назначения — типы источников («какие источники допустимы»).
+   * Пусто — ограничения нет (кандидаты любые). Типы раскрываются на
+   * поддеревья на клиенте (L21). Вычисляет сервер при чтении эффективного
+   * набора; у скалярных и структурных свойств отсутствует.
+   */
+  allowed_opposite_type_ids?: string[];
 }
 
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */

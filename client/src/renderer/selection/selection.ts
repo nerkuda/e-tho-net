@@ -21,7 +21,10 @@ import {
   showSelectionThoughtContextMenu,
 } from '../canvas/context-menu.js';
 import { buildMultiThoughtSnapshot, type SnapshotDeps } from '../canvas/clipboard.js';
-import { applyThoughtIcon, getRef, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
+import { getRef, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
+// Строки панели выделенных рисует общая фабрика облачка мысли (профиль `chip`):
+// значок, цвета, начертание, бледность и метка корзины — как в любом списке.
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
@@ -31,7 +34,6 @@ import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { svgIcon } from '../lib/icons.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
@@ -127,51 +129,47 @@ async function renderList(ids: string[]): Promise<void> {
   }
   listHost.replaceChildren();
   for (const id of ids) {
-    const item = div('selection-item');
+    const ref = refs.get(id);
+    // Строка — фабричное мини-облачко (профиль `chip`): значок, цвета мысли,
+    // бледность неактуальной и метка корзины у помеченной — раньше панель
+    // показывала только подпись без цветов (расхождение, закрытое вехой 2).
+    const item = createThoughtCloud(
+      ref ?? { id, title: id },
+      {
+        profile: 'chip',
+        // Ширина — по строке панели выбранных: имя обрезается многоточием
+        // по ней, а не растягивает панель.
+        width: 'container',
+        actions: {
+          onClick: (targetId) => {
+            // Click on the row focuses the thought (canvas + editor repaint);
+            // it stays in the selection.
+            void setFocus(targetId).catch(() => undefined);
+          },
+          onContextMenu: (event) => {
+            event.stopPropagation();
+            // Same context menu as a canvas cloud, minus the selection toggle
+            // (§5.1).
+            showSelectionThoughtContextMenu(event, {
+              id,
+              title: ref?.title ?? id,
+              dir: 'siblings',
+            });
+          },
+        },
+      },
+    );
+    item.classList.add('selection-item');
     // A row drags onto the canvas like a zone cloud (§5.5): link onto a
     // cloud, Ctrl for reparent, drop into parents/children to link to focus.
     wireExternalDragSource(item, id, 'selection');
-    const iconBox = span('', 'mini-icon');
-    const ref = refs.get(id);
-    if (ref !== undefined) {
-      applyThoughtIcon(iconBox, ref);
-    } else {
-      iconBox.textContent = '💭';
-    }
-    item.append(iconBox);
-    // A thought in the trash (S13, §5a.2): the row shows the red trash mark
-    // next to the title and dims — the same "marked" reading as the canvas
-    // badge, scaled down to the list.
-    if (ref?.marked_for_deletion === true) {
-      item.classList.add('dim');
-      const mark = span('', 'list-trash-mark');
-      mark.append(svgIcon('trash', 12));
-      item.append(mark);
-    }
-    const title = el('span', 'sel-title', refs.get(id)?.title ?? id);
-    item.append(title);
     // Stage 3: no per-indicator icons in the selection list — Ctrl+hover on
     // the row shows the thought's permanent comment.
-    markThoughtCommentPreview(item, id, refs.get(id)?.title ?? id);
+    markThoughtCommentPreview(item, id, ref?.title ?? id);
     const removeBtn = button('✕', () => toggleSelection([id]), 'btn small', 'Убрать из выделения');
     // Keep the row click (focus) from firing alongside the removal.
     removeBtn.addEventListener('click', (event) => event.stopPropagation());
     item.append(removeBtn);
-    item.addEventListener('click', () => {
-      // Click on the row focuses the thought (canvas + editor repaint); it
-      // stays in the selection.
-      void setFocus(id).catch(() => undefined);
-    });
-    // Same context menu as a canvas cloud, minus the selection toggle (§5.1).
-    item.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      showSelectionThoughtContextMenu(event, {
-        id,
-        title: refs.get(id)?.title ?? id,
-        dir: 'siblings',
-      });
-    });
     listHost.append(item);
   }
 }

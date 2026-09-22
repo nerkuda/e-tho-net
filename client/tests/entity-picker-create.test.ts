@@ -1,7 +1,7 @@
 /**
- * Unit tests for the «Создать новый» row decision of the type combobox
- * (client/src/renderer/lib/type-combobox.ts, карточка ETN «Быстрое создание
- * типа из поля ввода»).
+ * Unit tests for the «Создать новый» row decision of the entity picker
+ * (client/src/renderer/lib/entity-picker.ts, карточка ETN «Быстрое создание
+ * типа из поля ввода»; прежний `lib/type-combobox.ts` поглощён пикером).
  *
  * Pure logic — no DOM (client tests run without jsdom, per the existing
  * convention for DOM-heavy client modules): the decision when the create row
@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createRowName } from '../src/renderer/lib/type-combobox.js';
+import { createRowName } from '../src/renderer/lib/entity-picker.js';
 
 test('строка создания появляется при непустом запросе без совпадений', () => {
   assert.equal(createRowName('задача', 0, true), 'задача');

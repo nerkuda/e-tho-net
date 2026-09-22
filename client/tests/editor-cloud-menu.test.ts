@@ -19,7 +19,9 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 const SRC = {
-  properties: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+  // Чипы значений свойств (редактируемые и внетиповые) живут в общем
+  // редакторе значения свойства (задача 77e7cafd, веха 4).
+  valueEditor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
   miniGraph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
   contextMenu: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'context-menu.ts'),
 };
@@ -72,7 +74,7 @@ describe('меню облачка в редакторе — единый кон�
   });
 
   it('чип значения свойства зовёт общий конструктор и добавляет «Убрать из значения»', () => {
-    const src = readText(SRC.properties);
+    const src = readText(SRC.valueEditor);
     const chip = functionBody(src, 'async function showLinkChipMenu(');
     assert.ok(
       chip.includes('await openThoughtCloudMenu(') && chip.includes("label: 'Убрать из значения'"),
@@ -107,13 +109,20 @@ describe('меню облачка в редакторе — единый кон�
     );
   });
 
-  it('внетиповое ребро («Свойства вне типа») зовёт тот же конструктор без «Убрать из значения»', () => {
-    const src = readText(SRC.properties);
-    const helper = functionBody(src, 'const openReadonlyMenu = (): void => {', '\n    };');
-    assert.ok(helper.includes('void openThoughtCloudMenu('), 'delegates to the shared menu');
+  it('внетиповое ребро («Свойства вне типа») зовёт тот же конструктор и умеет «Убрать из значения»', () => {
+    const src = readText(SRC.valueEditor);
+    const helper = functionBody(src, 'async function openReadonlyChipMenu(');
+    assert.ok(helper.includes('openThoughtCloudMenu('), 'delegates to the shared menu');
+    // Ошибка 748b80fd: у внетипового ребра появился ключ записи (display-имя
+    // стороны связи), поэтому меню принимает extraItems с «Убрать из значения».
     assert.ok(
-      !helper.includes('extraItems'),
-      'the edge of an outside-type property is not part of the value — nothing to remove',
+      helper.includes('extraItems'),
+      'the outside edge may carry «Убрать из значения» when it has a write key',
+    );
+    const chip = functionBody(src, 'export function buildOutsideReadonlyEdgeChip(');
+    assert.ok(
+      chip.includes("label: 'Убрать из значения'"),
+      '748b80fd: the outside edge is removable by its display name',
     );
   });
 

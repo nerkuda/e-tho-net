@@ -1,44 +1,35 @@
 /**
- * Pure-logic tests for the property manager list (task d4e23670, fd4d4927).
+ * Тесты модели строк общего списка свойств (задача d4e23670, fd4d4927;
+ * задача 6ebde54e — модель переехала в общий модуль `lib/property-list.ts`).
  *
- * The dialog is the same staged-form pattern as the type managers: the list
- * re-renders from a cached snapshot, search filters without a network round
- * trip and alphabetical order must stay stable across re-renders. These
- * three helpers — `sortRegistryRows`, `annotateRows` and `filterRegistryRows`
- * — are the only logic exported for testing; the dialog itself is rendered
- * against the live DOM (`happy-dom`).
- *
- * 0.8.1: `annotateRows` now also precomputes the link-type side names (so the
- * search field can hit «родитель» and find the underlying link-property).
- * The names are pulled from `store.state.linkTypes`; tests pre-fill the store.
+ * Список свойств — единый компонент: сортировка (единый алфавит по
+ * отображаемому имени), фильтр (каждое слово запроса в имени, любом имени пары
+ * связи или описании) и сборка строк (скаляр — одна строка, свойство-связь —
+ * две). Клиентские тесты идут без DOM (конвенция соседних тестов) — проверяется
+ * чистая модель; рендер и режимы закреплены якорями исходника
+ * (`property-list.test.ts`).
  */
 
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
-import type { LinkType, NetworkProperty } from '@etn/shared';
+import type { LinkType } from '@etn/shared';
 
 import {
-  annotateRows,
-  filterRegistryRows,
-  sortRegistryRows,
-} from '../src/renderer/screens/property-manager.js';
+  buildPropertyListRows,
+  filterPropertyListRows,
+  sortPropertyListRows,
+  type PropertyRegistryRow,
+} from '../src/renderer/lib/property-list.js';
 import { store } from '../src/renderer/state.js';
 
-type RegistryRow = NetworkProperty & {
-  types_count: number;
-  values_count: number;
-  types_source_count?: number;
-  types_target_count?: number;
-};
-
-/** Build a minimal registry row for the table-driven tests. */
+/** Минимальная реестровая строка для табличных тестов. */
 function row(
   id: string,
   name: string,
   description: string | null = null,
-  overrides: Partial<RegistryRow> = {},
-): RegistryRow {
+  overrides: Partial<PropertyRegistryRow> = {},
+): PropertyRegistryRow {
   return {
     id,
     name,
@@ -53,7 +44,7 @@ function row(
   };
 }
 
-/** Build a minimal link-type row for the catalogue store snapshot. */
+/** Минимальная строка каталога типов связей. */
 function linkType(id: string, name_forward: string, name_reverse: string): LinkType {
   return {
     id,
@@ -76,128 +67,137 @@ afterEach(() => {
   store.update({ linkTypes: [] });
 });
 
-describe('sortRegistryRows', () => {
-  it('orders rows alphabetically (ru locale, case-insensitive)', () => {
-    const sorted = sortRegistryRows([
-      row('c', 'Яблоко'),
-      row('b', 'Арбуз'),
-      row('a', 'ананас'),
-    ]);
-    // ru locale: ананас → Арбуз → Яблоко (case-insensitive collation)
-    assert.deepEqual(
-      sorted.map((r) => r.name),
-      ['ананас', 'Арбуз', 'Яблоко'],
+describe('buildPropertyListRows — скаляры и пары концов связи', () => {
+  it('скаляр даёт одну строку со стороной null', () => {
+    const rows = buildPropertyListRows([row('1', 'Приоритет')], []);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.name, 'Приоритет');
+    assert.equal(rows[0]!.side, null);
+    assert.equal(rows[0]!.linkNames, null);
+    assert.equal(rows[0]!.typesCount, 0);
+  });
+
+  it('свойство-связь даёт две строки: имя источника и имя назначения', () => {
+    const rows = buildPropertyListRows(
+      [
+        row('p1', 'место жительства', 'где живёт', {
+          value_type: 'link',
+          config: { link_type_id: 'lt-1' },
+          types_source_count: 3,
+          types_target_count: 5,
+        }),
+      ],
+      [linkType('lt-1', 'место жительства', 'жители')],
     );
+    assert.deepEqual(
+      rows.map((r) => ({ name: r.name, side: r.side, id: r.id, count: r.typesCount })),
+      [
+        { name: 'место жительства', side: 'source', id: 'p1:source', count: 3 },
+        { name: 'жители', side: 'target', id: 'p1:target', count: 5 },
+      ],
+    );
+    // Обе строки — одна реестровая запись; для поиска несут оба имени.
+    assert.equal(rows[0]!.propertyId, 'p1');
+    assert.equal(rows[1]!.propertyId, 'p1');
+    assert.deepEqual(rows[0]!.linkNames, { forward: 'место жительства', reverse: 'жители' });
   });
 
-  it('does not mutate the input array (re-render safety)', () => {
-    const input = [row('z', 'Zeta'), row('a', 'Alpha'), row('m', 'Mu')];
-    const inputCopy = [...input];
-    sortRegistryRows(input);
-    assert.deepEqual(input, inputCopy);
-  });
-});
-
-describe('annotateRows', () => {
-  it('precomputes lower-cased name and description for the filter', () => {
-    const [a] = annotateRows([row('1', 'Приоритет', 'ВАЖНО: проверить')]);
-    assert.ok(a !== undefined);
-    assert.equal(a.lowerName, 'приоритет');
-    assert.equal(a.lowerDescription, 'важно: проверить');
-    assert.equal(a.lowerLinkNames, '');
+  it('тип связи ещё не в каталоге — одна строка (реестровое имя, source)', () => {
+    const rows = buildPropertyListRows(
+      [row('p1', 'место жительства', null, { value_type: 'link', config: { link_type_id: 'lt-x' } })],
+      [],
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.name, 'место жительства');
+    assert.equal(rows[0]!.side, 'source');
+    assert.equal(rows[0]!.linkNames, null);
   });
 
-  it('treats a null description as the empty string', () => {
-    const [a] = annotateRows([row('1', 'Foo', null)]);
-    assert.ok(a !== undefined);
-    assert.equal(a.lowerDescription, '');
-  });
-
-  it('pulls link-type side names from the link-type catalogue (0.8.1)', () => {
-    store.update({
-      linkTypes: [linkType('lt-1', 'parent_of', 'has_parent')],
-    });
-    const linkRow = row('p-link', 'component_of', null, {
-      value_type: 'link',
-      config: { direction: 'out', link_type_id: 'lt-1' },
-    });
-    const [a] = annotateRows([linkRow]);
-    assert.ok(a !== undefined);
-    assert.equal(a.lowerLinkNames, 'parent_of\nhas_parent');
-  });
-
-  it('keeps linkNames empty when the link-type is missing from the catalogue', () => {
-    store.update({ linkTypes: [] });
-    const linkRow = row('p-link', 'component_of', null, {
-      value_type: 'link',
-      config: { direction: 'out', link_type_id: 'lt-missing' },
-    });
-    const [a] = annotateRows([linkRow]);
-    assert.ok(a !== undefined);
-    assert.equal(a.lowerLinkNames, '');
+  it('структурная связь — одна системная строка', () => {
+    const rows = buildPropertyListRows(
+      [row('st', 'Родители', null, { value_type: 'link', config: { structural: true } })],
+      [],
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.structural, true);
+    assert.equal(rows[0]!.side, null);
+    assert.equal(rows[0]!.visual, null);
   });
 });
 
-describe('filterRegistryRows', () => {
-  const sample = annotateRows(
-    sortRegistryRows([
-      row('1', 'Приоритет', 'важность задачи'),
-      row('2', 'Исполнитель', 'ссылка на мысль человека'),
-      row('3', 'Дедлайн', 'дата сдачи'),
-      row('4', 'Тег', 'короткая метка'),
-      row('5', 'Примечание', null),
-    ]),
+describe('sortPropertyListRows', () => {
+  it('единый алфавит по отображаемому имени: скаляры и концы связей вперемешку', () => {
+    const rows = buildPropertyListRows(
+      [
+        row('a', 'Яблоко'),
+        row('b', 'Арбуз'),
+        row('c', 'ананас'),
+        row('p', 'Брат', null, {
+          value_type: 'link',
+          config: { link_type_id: 'lt-1' },
+        }),
+      ],
+      [linkType('lt-1', 'Брат', 'Сестра')],
+    );
+    const sorted = sortPropertyListRows(rows).map((r) => r.name);
+    // ru locale: ананас → Арбуз → Брат → Сестра (конец связи) → Яблоко
+    assert.deepEqual(sorted, ['ананас', 'Арбуз', 'Брат', 'Сестра', 'Яблоко']);
+  });
+
+  it('не мутирует входной массив (безопасность перерисовки)', () => {
+    const rows = buildPropertyListRows([row('z', 'Zeta'), row('a', 'Alpha'), row('m', 'Mu')], []);
+    const copy = [...rows];
+    sortPropertyListRows(rows);
+    assert.deepEqual(rows, copy);
+  });
+});
+
+describe('filterPropertyListRows', () => {
+  const sample = sortPropertyListRows(
+    buildPropertyListRows(
+      [
+        row('1', 'Приоритет', 'важность задачи'),
+        row('2', 'Исполнитель', 'ссылка на мысль человека'),
+        row('3', 'Дедлайн', 'дата сдачи'),
+        row('4', 'Тег', 'короткая метка'),
+        row('5', 'Примечание', null),
+        row('p', 'место жительства', 'адрес', {
+          value_type: 'link',
+          config: { link_type_id: 'lt-1' },
+        }),
+      ],
+      [linkType('lt-1', 'место жительства', 'жители')],
+    ),
   );
 
-  it('returns every row for an empty query', () => {
-    assert.equal(filterRegistryRows(sample, '').length, sample.length);
-    assert.equal(filterRegistryRows(sample, '   ').length, sample.length);
+  it('пустой запрос оставляет все строки', () => {
+    assert.equal(filterPropertyListRows(sample, '').length, sample.length);
+    assert.equal(filterPropertyListRows(sample, '   ').length, sample.length);
   });
 
-  it('matches every whitespace-separated fragment against name OR description', () => {
-    const hits = filterRegistryRows(sample, 'приоритет важность');
+  it('каждое слово запроса ищется в имени ИЛИ описании (AND по словам)', () => {
+    const hits = filterPropertyListRows(sample, 'приоритет важность');
     assert.equal(hits.length, 1);
-    const hit = hits[0];
-    assert.ok(hit !== undefined);
-    assert.equal(hit.property.name, 'Приоритет');
+    assert.equal(hits[0]!.name, 'Приоритет');
   });
 
-  it('is case-insensitive (Cyrillic)', () => {
-    const hits = filterRegistryRows(sample, 'ПРИОРИТЕТ');
+  it('регистронезависим (кириллица)', () => {
+    assert.equal(filterPropertyListRows(sample, 'ПРИОРИТЕТ').length, 1);
+  });
+
+  it('находит по описанию, а не только по имени', () => {
+    const hits = filterPropertyListRows(sample, 'человек');
     assert.equal(hits.length, 1);
+    assert.equal(hits[0]!.name, 'Исполнитель');
   });
 
-  it('matches the description as well as the name', () => {
-    const hits = filterRegistryRows(sample, 'человек');
-    assert.equal(hits.length, 1);
-    const hit = hits[0];
-    assert.ok(hit !== undefined);
-    assert.equal(hit.property.name, 'Исполнитель');
+  it('пустой результат при отсутствии совпадений', () => {
+    assert.equal(filterPropertyListRows(sample, 'нет такого').length, 0);
   });
 
-  it('returns no rows when nothing matches', () => {
-    assert.equal(filterRegistryRows(sample, 'нет такого').length, 0);
-  });
-
-  it('keeps every row when the query fragments conflict (AND semantics)', () => {
-    // A name containing «приоритет» AND a description containing «дата» —
-    // no single row satisfies both fragments.
-    assert.equal(filterRegistryRows(sample, 'приоритет дата').length, 0);
-  });
-
-  it('matches a link-property by its type-side name (0.8.1)', () => {
-    store.update({
-      linkTypes: [linkType('lt-1', 'родитель', 'потомок')],
-    });
-    const linkRow = row('p-link', 'component_of', null, {
-      value_type: 'link',
-      config: { direction: 'out', link_type_id: 'lt-1' },
-    });
-    const annotated = annotateRows([linkRow]);
-    const hits = filterRegistryRows(annotated, 'родитель');
-    assert.equal(hits.length, 1);
-    const hit = hits[0];
-    assert.ok(hit !== undefined);
-    assert.equal(hit.property.id, 'p-link');
+  it('находит оба конца связи по противоположному имени пары', () => {
+    const hits = filterPropertyListRows(sample, 'жители');
+    // Строка источника и строка назначения несут ОБА имени пары — находятся обе.
+    assert.deepEqual(hits.map((r) => r.name).sort(), ['жители', 'место жительства']);
   });
 });

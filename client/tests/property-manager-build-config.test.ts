@@ -3,13 +3,17 @@
  *
  * The pre-fix version had no `value_type = 'link'` branch at all: any edit of
  * an existing link property through the «Свойства» dialog rebuilt `config`
- * from scratch and lost `link_type_id`/`direction`/`allowed_target_type_ids`/
- * `show_on_map`/`blocks_target_deletion` — the server then rejected the patch
+ * from scratch and lost `link_type_id`/`direction`/`show_on_map`/
+ * `blocks_target_deletion` — the server then rejected the patch
  * with `VALIDATION_ERROR` («свойство-связь требует config.link_type_id»), so
  * saving (or creating) a link property through the GUI was impossible. These
  * tests pin the fixed behaviour: a full round trip of every link-only field,
  * the structural (system-seeded) variant, and that the plain scalar path is
  * unaffected.
+ *
+ * Ограничение типов значения (`allowed_target_type_ids`/`allowed_source_type_ids`)
+ * из этой утилиты убрано (ошибка a6513df0): источник истины — привязки
+ * противоположной стороны свойства, а не ключи `config`.
  */
 
 import assert from 'node:assert/strict';
@@ -23,7 +27,6 @@ function linkDraft(overrides: Partial<LinkConfigDraft> = {}): LinkConfigDraft {
     structural: false,
     linkTypeId: null,
     direction: 'out',
-    allowedTargetTypeIds: [],
     showOnMap: false,
     blocksTargetDeletion: false,
     legacyMultiple: false,
@@ -45,17 +48,12 @@ describe('buildConfig — value_type "link"', () => {
     assert.deepEqual(config, { direction: 'out' });
   });
 
-  it('includes allowed_target_type_ids only when non-empty', () => {
-    const empty = buildConfig('link', null, { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft({
+  it('never writes type-restriction config keys (source of truth — bindings, a6513df0)', () => {
+    const config = buildConfig('link', null, { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft({
       linkTypeId: 'lt-1',
     }));
-    assert.equal('allowed_target_type_ids' in (empty ?? {}), false);
-
-    const filled = buildConfig('link', null, { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft({
-      linkTypeId: 'lt-1',
-      allowedTargetTypeIds: ['tt-1', 'tt-2'],
-    }));
-    assert.deepEqual(filled?.allowed_target_type_ids, ['tt-1', 'tt-2']);
+    assert.equal('allowed_target_type_ids' in (config ?? {}), false);
+    assert.equal('allowed_source_type_ids' in (config ?? {}), false);
   });
 
   it('includes show_on_map / blocks_target_deletion only when true', () => {

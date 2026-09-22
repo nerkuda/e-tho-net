@@ -29,7 +29,6 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 import { openNetworkDb } from '../src/db/network-db.js';
 

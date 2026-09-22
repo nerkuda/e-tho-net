@@ -5,14 +5,15 @@
  * Two entry points share the same underlying registry (`properties` +
  * `link_types`) and the same editor (`openPropertyManagerEditor`):
  *
- * - `showPropertyManagerDialog` («Свойства и связи», бывший «Свойства») — a
- *   FLAT list mixing scalar properties and link-properties in a single
- *   alphabetical table (registry rows are not hierarchical like the type
- *   catalogues). Scalar rows show «имя · вид значения · описание · сколько
- *   типов подключено». Link rows show «имя в источнике / имя в назначении ·
- *   описание» and the per-side type counters from the server
- *   (`types_source_count` / `types_target_count`); structural «Родители» /
- *   «Потомки» are listed with a lock glyph and no «✕».
+ * - `showPropertyManagerDialog` («Свойства», до 0.8.2 — «Свойства и связи») —
+ *   the shared property list (`lib/property-list.ts`, задача 6ebde54e) in
+ *   manager mode: a single alphabetical stream where a scalar is one row and a
+ *   link-property is always TWO rows (source name `→`, target name `←`), with
+ *   columns «Имя» (value-type icon / coloured link arrow), «Тип значения»
+ *   (`связь (имя - имя)`, names cut at 30 chars, ⓘ with the description) and
+ *   «Кол-во типов» (per-side `types_source_count` / `types_target_count`).
+ *   Structural «Родители» / «Потомки» are listed with a lock glyph; deletion
+ *   lives in the row context menu («Изменить» / «Удалить»), not a «✕» button.
  *
  * - `showLinkTypesTreeDialog` («Типы связей», 0.8.1) — the same property
  *   editor reached through a tree of `link_types`: each row renders the
@@ -37,6 +38,18 @@
  * — с подтверждением по правилу единого жизненного цикла
  * (`links_becoming_structural`).
  *
+ * Колонка «Значение по умолчанию» каждой строки таблиц — редактор значения
+ * (0.8.2, ADR «дефолт свойства живёт на привязке», тех.проект 43870285):
+ * заполнено — дефолт этой привязки (`type_property_overrides.default_value`,
+ * `setPropertyDefaultOverride`), пусто — при создании мысли действует общее
+ * значение стороны (подсказка — в тултипе пустой ячейки). Режимов
+ * «(общее)»/«частное» больше нет. Общие значения — под своими таблицами: у
+ * скаляра одно поле «Значение по умолчанию» (`config.default_value`), у
+ * свойства-связи два поля «Значение по умолчанию для всех типов» — под
+ * «Типами источников» (`config.default_value`) и под «Типами назначений»
+ * (`config.default_value_target`), каждое с отбором целей по типам
+ * противоположной таблицы (задача 99312ffa).
+ *
  * Deletion paths:
  *   * scalar property — refused with 409 while bound or filled; the editor
  *     shows `types_count` / `values_count` and a hint about the cleanup
@@ -55,6 +68,8 @@
 
 import type {
   AnyRealtimeEvent,
+  EffectiveTypeProperty,
+  LinkPropertyValueItem,
   LinkType,
   LinkStyle,
   NetworkProperty,
@@ -69,6 +84,7 @@ import {
   confirmDialog,
   errorDialog,
   field,
+  raiseOpenDialog,
   showDialog,
 } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -78,21 +94,35 @@ import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
 import {
-  linkTypeOptions,
-  thoughtTypeOptions,
   buildTypeTree,
   flattenTypeTree,
   resolveLinkTypeVisual,
   typeSearchVisibleIds,
   type FlatTypeRow,
-  expandTypeIdsToSubtree,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
-import { buildChipListField } from './thought-type/value-combo.js';
-import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { openThoughtTypesPicker } from '../lib/type-picker.js';
+import { reloadTypeCatalogues, scheduleTypeRepaint } from '../realtime-ui.js';
+// Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
+// доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
+// правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
+// СВЯЗАННОГО ТИПА СВЯЗИ единым жизненным циклом свойства-связи (7dfad7d4).
+import {
+  linkTypeFieldsFromPropertyChanges,
+  notifyPropertyRegistryChanged,
+  notifyTypeChanged,
+  notifyTypeDefinitionsChanged,
+  typeDeletedFacts,
+  typeUpdateFacts,
+} from '../lib/type-definitions.js';
+import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
+import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
+import {
+  buildPropertyList,
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  type PropertyRegistryRow,
+} from '../lib/property-list.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -118,295 +148,77 @@ const SELECTABLE_VALUE_TYPES: PropertyValueType[] = [
 ];
 
 /**
- * A registry row as returned by `GET /networks/{nid}/properties` (with counters).
- *
- * For link-properties (0.8.1, требование d7177d1d) the server also returns
- * `types_source_count` and `types_target_count` so the flat list can render
- * the per-side usage next to the link-type names. For non-link properties
- * those fields are absent.
+ * Реестровая строка свойства (`GET /networks/{nid}/properties` со счётчиками).
+ * Определение живёт в общем модуле списка свойств
+ * (`lib/property-list.ts`, задача 6ebde54e) — здесь только привычное имя для
+ * потребителей этого файла (редактор, дерево типов связей).
  */
-export type RegistryRow = NetworkProperty & {
-  types_count: number;
-  values_count: number;
-  types_source_count?: number;
-  types_target_count?: number;
-};
-
-/** One row of the registry list after sorting + filtering. */
-interface PropertyRow {
-  property: RegistryRow;
-  lowerName: string;
-  lowerDescription: string;
-  /** For link-properties only: `name_forward\nname_reverse` of the
-   *  underlying link-type, lowercased. Empty string for scalars so the
-   *  filter's `every` short-circuits the same way as before. */
-  lowerLinkNames: string;
-}
+export type RegistryRow = PropertyRegistryRow;
 
 /**
- * Pure helpers (exported for tests). The list is always alphabetised; the
- * filter keeps the rows whose name OR description contains every whitespace-
- * separated fragment of `query`, ignoring case.
- *
- * For link-properties (0.8.1, fd4d4927) the haystack also includes the
- * type-side names (`config.link_type_id` → `name_forward` / `name_reverse`
- * from the link-type catalogue) so a user can search «родитель» and find
- * the underlying property too.
+ * Открывает диалог «Свойства» (меню «Мыслесеть»; до 0.8.2 — «Свойства и
+ * связи»). Список — общий компонент `buildPropertyList` в режиме менеджера
+ * (задача 6ebde54e): скаляры и оба конца связей отдельными строками, иконки
+ * видов значения / линии со стрелками, колонки «Имя» / «Тип значения» /
+ * «Кол-во типов», поиск по имени и описанию, ↑/↓ и единая активация Enter/клик,
+ * контекстное меню «Изменить»/«Удалить». Ширина — 900 px (≈ на 25 % шире
+ * прежних 720 px).
  */
-export function sortRegistryRows(rows: RegistryRow[]): RegistryRow[] {
-  return [...rows].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-}
-
-export function annotateRows(rows: RegistryRow[]): PropertyRow[] {
-  return rows.map((property) => {
-    // Для свойства-связи ищем имена типа связи в каталоге linkTypes
-    // (`store.state.linkTypes` — синхронный снимок realtime-канала, отдельной
-    // инжекции не нужно; тесты предзаполняют стор).
-    const ltId = property.config?.link_type_id;
-    const lt =
-      ltId !== undefined && ltId !== null && ltId !== ''
-        ? store.state.linkTypes.find((t) => t.id === ltId)
-        : null;
-    const lowerLinkNames =
-      lt !== null && lt !== undefined
-        ? `${lt.name_forward}\n${lt.name_reverse}`.toLowerCase()
-        : '';
-    return {
-      property,
-      lowerName: property.name.toLowerCase(),
-      lowerDescription: (property.description ?? '').toLowerCase(),
-      lowerLinkNames,
-    };
-  });
-}
-
-/**
- * Filter the registry list against the search box. Matches every whitespace-
- * separated fragment (case-insensitive) against the property name OR
- * description OR link-type names — same shape as `etn.thoughts.query`'s
- * keyword mini-syntax. Empty query keeps every row.
- */
-export function filterRegistryRows(
-  annotated: PropertyRow[],
-  query: string,
-): PropertyRow[] {
-  const fragments = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((s) => s.length > 0);
-  if (fragments.length === 0) return annotated;
-  return annotated.filter((row) => {
-    const haystack = `${row.lowerName}\n${row.lowerDescription}\n${row.lowerLinkNames}`;
-    return fragments.every((f) => haystack.includes(f));
-  });
-}
-
-/** Opens the property-manager dialog. Wired from the «Мыслесеть» menu. */
 export function showPropertyManagerDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = span('', 'error-text');
-  const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '340px';
-  const body = div('form-stack');
-
-  const toolbar = div('form-row type-list-toolbar');
-  const searchInput = el('input', 'text-input') as HTMLInputElement;
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск по имени или описанию…';
-  toolbar.append(
-    button('Добавить', () => openPropertyManagerEditor(null, onChanged), 'btn small', 'Создать свойство'),
-    searchInput,
-  );
-  body.append(toolbar, tableWrap, errorLine);
-
-  let searchQuery = '';
-  // Last loaded registry snapshot — search/edit/delete re-render from this
-  // cache, so a keystroke does not flicker or jump the scroll position.
   let cachedRows: RegistryRow[] | null = null;
 
-  const onChanged = (): void => void reload();
+  const list = buildPropertyList({
+    mode: 'manager',
+    searchPlaceholder: 'Поиск по имени или описанию…',
+    callbacks: {
+      onAdd: () => openPropertyManagerEditor(null, onChanged),
+      onActivate: (row) => openPropertyManagerEditor(row.registry, onChanged),
+      onEdit: (row) => openPropertyManagerEditor(row.registry, onChanged),
+      onDelete: (row) => void removeRow(row.registry),
+    },
+  });
 
-  async function reload(useCache = false): Promise<void> {
-    const scrollTop = tableWrap.scrollTop;
+  const body = div('form-stack');
+  body.append(list.root, errorLine);
+
+  function onChanged(): void {
+    cachedRows = null;
+    void reload();
+  }
+
+  async function reload(): Promise<void> {
     let rows: RegistryRow[];
-    if (useCache && cachedRows !== null) {
+    if (cachedRows !== null) {
       rows = cachedRows;
     } else {
-      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
       try {
         rows = await etn.propertyRegistry.list(networkId);
       } catch (err) {
-        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        errorLine.textContent = `Ошибка: ${errText(err)}`;
         return;
       }
       cachedRows = rows;
     }
-    // Хелпер аннотирования читает имена типа связи из `store.state.linkTypes` —
-    // синхронный доступ к стейту не конфликтует с realtime (каталог типов связей
-    // обновляется через `link-type.*` события, на которые у этого диалога
-    // подписка ниже).
-    const annotated = annotateRows(sortRegistryRows(rows));
-    const visible = filterRegistryRows(annotated, searchQuery);
-    const searching = searchQuery.trim() !== '';
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Имя'),
-      el('th', undefined, 'Тип значения'),
-      el('th', undefined, 'Описание'),
-      el('th', undefined, 'Подключено к типам'),
-      el('th'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    if (visible.length === 0) {
-      const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет свойств.');
-      emptyCell.colSpan = 5;
-      emptyRow.append(emptyCell);
-      tbody.append(emptyRow);
-    }
-    /** Имя сторон ссылки (`forward / reverse`) в строке списка — заполняется
-     *  при первом рендере из `store.state.linkTypes` или после догрузки
-     *  `etn.types.getLinkType`. Хранится отдельно, чтобы догрузка могла
-     *  обновить только эту ячейку без полного перерендера. */
-    interface PendingLinkType {
-      ltId: string;
-      nameSpan: HTMLElement;
-      tr: HTMLElement;
-    }
-    const pendingLinkTypes: PendingLinkType[] = [];
-
-    for (const row of visible) {
-      const property = row.property;
-      const tr = el('tr');
-      const isStructuralLink = property.value_type === 'link' && property.config?.structural === true;
-      const isLink = property.value_type === 'link';
-      // Строка свойства-связи: имя свойства, далее имена обеих сторон через
-      // косую черту (как в диалоге «Типы связей»). Структурные «Родители» /
-      // «Потомки» идут без `link_type_id` — показываем системную подпись.
-      const ltId = property.config?.link_type_id;
-      const lt =
-        ltId !== undefined && ltId !== null && ltId !== ''
-          ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
-          : null;
-      const nameCell = el('td');
-      nameCell.style.whiteSpace = 'nowrap';
-      if (isLink && lt !== null) {
-        // Превью линии под именем — эффективный цвет/стиль/ширина (L21).
-        const resolved = resolveLinkTypeVisual(store.state.linkTypes, lt.id);
-        const swatch = span('', 'link-type-swatch');
-        swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width ?? 2))}px ${
-          resolved.style ?? 'solid'
-        } ${resolved.color ?? '#9aa3b2'}`;
-        swatch.style.display = 'inline-block';
-        swatch.style.width = '32px';
-        swatch.style.marginRight = '8px';
-        swatch.style.verticalAlign = 'middle';
-        nameCell.append(swatch);
-        nameCell.append(
-          span(property.name, 'prop-name'),
-          span(`  (${lt.name_forward} / ${lt.name_reverse})`, 'muted'),
-        );
-        setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
-      } else if (isLink && ltId !== undefined && ltId !== '' && lt === null) {
-        // link_type ещё не пришёл из realtime — рендерим заглушку и помечаем
-        // строку как «pending»: после догрузки ниже заменим содержимое ячейки.
-        nameCell.append(span(property.name, 'prop-name'));
-        const pendingSpan = span('  (загрузка…)', 'muted');
-        nameCell.append(pendingSpan);
-        pendingLinkTypes.push({ ltId, nameSpan: pendingSpan, tr });
-        setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
-      } else if (isStructuralLink) {
-        nameCell.append(span(property.name, 'prop-name'), span('  🔒 (структурное)', 'muted'));
-        setTooltip(
-          nameCell,
-          'Системное свойство-связь для нетипизированных рёбер «Родители/Потомки». Не редактируется и не удаляется из этого диалога.',
-        );
-      } else {
-        nameCell.append(span(property.name));
-      }
-      const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[property.value_type]);
-      const descCell = el('td', 'muted', (property.description ?? '').slice(0, 160));
-      descCell.style.maxWidth = '280px';
-      descCell.style.overflow = 'hidden';
-      descCell.style.textOverflow = 'ellipsis';
-      descCell.style.whiteSpace = 'nowrap';
-      if (property.description !== null) setTooltip(descCell, property.description);
-      // Свойство-связь: показываем счётчики сторон («источник»/«назначение»).
-      // Скаляр: единое число типов (как было).
-      const countCell = el('td', 'muted');
-      countCell.style.textAlign = 'right';
-      countCell.style.whiteSpace = 'nowrap';
-      if (isLink && !isStructuralLink) {
-        const src = property.types_source_count ?? 0;
-        const tgt = property.types_target_count ?? 0;
-        countCell.append(
-          span(`ист. ${src}`, 'prop-count-side'),
-          span(' / ', 'muted'),
-          span(`назн. ${tgt}`, 'prop-count-side'),
-        );
-        setTooltip(countCell, `Источник: ${src} ${pluralType(src)}. Назначение: ${tgt} ${pluralType(tgt)}.`);
-      } else {
-        countCell.append(String(property.types_count));
-      }
-      const actions = el('td');
-      actions.style.whiteSpace = 'nowrap';
-      // Структурные свойства-связи удалять нельзя (миграция 039).
-      if (!isStructuralLink) {
-        actions.append(button('✕', () => void removeRow(property), 'btn small', 'Удалить свойство'));
-      }
-      tr.append(nameCell, typeCell, descCell, countCell, actions);
-      // Clicks on the ✕ button must not open the editor; structural rows stay
-      // visible but inert — no editor opens on click.
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        if (isStructuralLink) return;
-        openPropertyManagerEditor(property, onChanged);
-      });
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    tableWrap.scrollTop = scrollTop;
-    // Догружаем имена сторон для свойств-ссылок, чей link_type ещё не
-    // подтянулся realtime-ом. Без этого строка показывает только
-    // `property.name`, а пользователь видит «Мишени» вместо
-    // «Мишени (мишени / стрелки)».
-    for (const pending of pendingLinkTypes) {
-      void fetchLinkTypeForRow(networkId, pending);
-    }
+    // Имена сторон и эффективное оформление линий берутся из каталога типов
+    // связей — догружаем недостающие до сборки строк.
+    await ensurePropertyLinkTypes(networkId, rows);
+    list.setRows(buildPropertyListRows(rows, store.state.linkTypes));
   }
 
-  searchInput.addEventListener('input', () => {
-    searchQuery = searchInput.value;
-    void reload(true);
-  });
-
   /**
-   * Удаление свойства из плоского списка (fd4d4927). Скалярные свойства
+   * Удаление свойства из контекстного меню строки. Скалярные свойства
    * отвергаются сервером с 409 при `types_count > 0` или `values_count > 0`
    * — диалог ошибки подсказывает порядок. Свойство-связь требует
    * подтверждения с числом рёбер, которые потеряют `type_id`
    * (`links_becoming_structural`); сервер возвращает это поле вместе с 200
-   * (требование 09f692ff), но значение известно заранее — для
-   * не-удаляемого случая поможет текущий счётчик рёбер `link-type-counts`,
-   * а для разрешённого — сервер сам кинет окончательное число.
-   *
-   * Здесь `links_becoming_structural` запрашивается на лету через
-   * `link-type-counts` для контекста диалога; фактический счёт возвращает
-   * DELETE-ответ и тосты «Структурных рёбер: N» после применения.
+   * (требование 09f692ff). Структурные строки меню не получают.
    */
   async function removeRow(property: RegistryRow): Promise<void> {
     const isLink = property.value_type === 'link';
     const isStructuralLink = isLink && property.config?.structural === true;
-    if (isStructuralLink) {
-      // защита — структурных строк в таблице нет «✕», но на всякий случай:
-      return;
-    }
+    if (isStructuralLink) return;
     if (!isLink && (property.types_count > 0 || property.values_count > 0)) {
       const parts: string[] = [];
       if (property.types_count > 0) {
@@ -428,12 +240,15 @@ export function showPropertyManagerDialog(): void {
     // `links_becoming_structural` ответа DELETE и пере-озвучивается тостом.
     let linksBecoming = 0;
     let linkEstimateOk = false;
+    // Тип связи, который уйдёт вместе со свойством (единый жизненный цикл
+    // 0.8.1): он нужен и для оценки числа рёбер, и для локального уведомления
+    // открытого редактора после удаления (ошибка 7dfad7d4).
+    const linkTypeId = isLink ? property.config?.link_type_id : undefined;
     if (isLink) {
       try {
         const counts = await etn.types.getLinkTypeCounts(networkId);
-        const ltId = property.config?.link_type_id;
-        if (ltId !== undefined && ltId !== null && ltId !== '') {
-          linksBecoming = counts[ltId] ?? 0;
+        if (linkTypeId !== undefined && linkTypeId !== null && linkTypeId !== '') {
+          linksBecoming = counts[linkTypeId] ?? 0;
           linkEstimateOk = true;
         }
       } catch {
@@ -443,9 +258,8 @@ export function showPropertyManagerDialog(): void {
     let prompt: string;
     if (isLink) {
       const lt = (() => {
-        const ltId = property.config?.link_type_id;
-        return ltId !== undefined && ltId !== null && ltId !== ''
-          ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
+        return linkTypeId !== undefined && linkTypeId !== null && linkTypeId !== ''
+          ? store.state.linkTypes.find((t) => t.id === linkTypeId) ?? null
           : null;
       })();
       const names = lt !== null ? `«${lt.name_forward} / ${lt.name_reverse}»` : `«${property.name}»`;
@@ -463,6 +277,33 @@ export function showPropertyManagerDialog(): void {
     if (!ok) return;
     try {
       const result = await etn.propertyRegistry.remove(networkId, property.id);
+      // Свойство реестра исчезло (ошибка 98aa0889): открытый редактор мысли
+      // обязан перечитать набор — свойство могло быть привязано к типу или
+      // покрывать его зеркалом. Своё realtime-эхо до рендерера не доходит
+      // (G8 applier), поэтому уведомляем локально.
+      notifyPropertyRegistryChanged(property.id);
+      // Свойство-связь уносит и связанный тип связи (единый жизненный цикл
+      // 0.8.1, серверный `deleteProperty` → `deleteLinkType` с force). Открытый
+      // редактор показанной СВЯЗИ этого типа обязан пометить тип исчезнувшим и
+      // перечитать саму связь (её `type_id` сервер обнулил, отдельного события
+      // о связи не шлёт) — ошибка 7dfad7d4. Каталог типов перечитываем ДО
+      // уведомления: шапка редактора резолвит подпись и линию из него, а своё
+      // realtime-эхо (которое перечитало бы каталог) отброшено. Признак
+      // реального удаления типа — числовой `links_becoming_structural` в ответе
+      // (сервер считает его только для удалённого link_type).
+      if (
+        typeof result.links_becoming_structural === 'number' &&
+        typeof linkTypeId === 'string' &&
+        linkTypeId !== ''
+      ) {
+        await reloadTypeCatalogues();
+        notifyTypeChanged(typeDeletedFacts({ ownerType: 'link_type', ownerId: linkTypeId }));
+        // Исчезнувший тип связи: отвязанные рёбра на холсте перерисовываются
+        // только по свежему фокусу (сервер обнулил их `type_id`, отдельного
+        // события о связи не шлёт), а «Структуры»/«Хроника» держат собственные
+        // снимки — тот же набор пересчёта, что и realtime-эхо (270b8454).
+        scheduleTypeRepaint();
+      }
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
       // для скаляров) — тостом подтверждаем выполнение.
@@ -484,10 +325,12 @@ export function showPropertyManagerDialog(): void {
   }
 
   showDialog({
-    title: 'Свойства и связи',
+    title: 'Свойства',
     body,
-    width: 720,
+    width: 900,
     buttons: [{ label: 'Закрыть', primary: true }],
+    // Фокус в поиске: ↑/↓ и Enter сразу работают по списку (требование 9).
+    onMount: () => list.focusSearch(),
   });
 
   // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —
@@ -571,12 +414,16 @@ function categoryOf(valueType: PropertyValueType): ValueCategory {
 /** Строка таблицы «Типы мыслей» (и зеркальных «Типы источников» / «Типов
  *  назначений»). Для скаляров и связи единая форма — одинаковый набор
  *  колонок (тип · обязательное · значение по умолчанию). */
-interface TypeRowDraft {
+export interface TypeRowDraft {
   /** Id привязки (`type_properties.id`). `null` для ещё не сохранённой
    *  строки — она появится только после `apply` и POST на сервер. */
   id: string | null;
   thoughtTypeId: string;
   required: boolean;
+  /** Дефолт ЭТОЙ привязки (`type_property_overrides.default_value`; 0.8.2):
+   *  для свойства-связи — набор id целей, для скаляра — значение по виду
+   *  свойства. `null` — собственного дефолта нет, при создании мысли
+   *  действует общее значение стороны привязки. */
   defaultValue: unknown;
   /** Сторона привязки для свойства-связи (`source`/`target`) — для скаляра
    *  всегда `null`. Сохраняется в `type_properties.side`. */
@@ -584,10 +431,16 @@ interface TypeRowDraft {
   /** Снимок текущего состояния на сервере — для отслеживания изменений
    *  при `apply`. */
   dirty: boolean;
+  /**
+   * Снимок дефолта привязки на момент загрузки строки: override шлётся только
+   * когда дефолт реально менялся. Не задан у строк, добавленных вручную
+   * (они только создаются — override для них ещё не существует).
+   */
+  initialDefaultValue?: unknown;
 }
 
 /** Единый черновик единого диалога (задача 09201bd4, спека 465495a9). */
-interface PropertyDraft {
+export interface PropertyDraft {
   name: string;
   description: string;
   valueType: PropertyValueType;
@@ -612,9 +465,12 @@ interface PropertyDraft {
   linkWidth: number | null;
   showOnMap: boolean;
   blocksTargetDeletion: boolean;
-  /** Значение по умолчанию для скаляра (`unknown`, см. типы `PropertyConfig.default_value`)
-   *  и для свойства-связи (`string[] | null`). */
+  /** Общее значение стороны **источников** (для скаляра — единственное):
+   *  `config.default_value` справочника (0.8.2). */
   defaultValue: unknown;
+  /** Общее значение стороны **назначений** свойства-связи —
+   *  `config.default_value_target` (0.8.2); у скаляра не используется. */
+  defaultValueTarget: unknown;
   /** Строки таблиц «Типы мыслей» / «Типы источников» / «Типы назначений». */
   typeRows: TypeRowDraft[];
 }
@@ -630,11 +486,191 @@ function applyLinkTypeToDraft(lt: LinkType, draft: PropertyDraft): void {
   draft.linkWidth = lt.width ?? null;
 }
 
-/** Кросс-фильтр типов для поля «Значение по умолчанию» свойства-связи:
+/**
+ * Изменился ли дефолт строки относительно серверного снимка: override шлётся
+ * только при реальном изменении — правка одного «обязательного» не должна
+ * создавать лишний override. Без снимка (строка добавлена вручную) —
+ * изменений по определению нет: у неё нет серверного состояния.
+ */
+export function defaultValueChanged(row: TypeRowDraft): boolean {
+  if (row.initialDefaultValue === undefined) return false;
+  return (
+    stableJson(row.defaultValue ?? null) !==
+    stableJson(row.initialDefaultValue ?? null)
+  );
+}
+
+/**
+ * Операция записи дефолта привязки (`etn.types.setPropertyDefaultOverride`,
+ * 0.8.2). Строка несёт id типа и (для сохранённых привязок) id привязки: у
+ * новой строки (`row.id === null`) override пишется после `attach`.
+ */
+export interface DefaultOverrideOp {
+  row: TypeRowDraft;
+  /** Тело `setPropertyDefaultOverride`: `string[]` целей для связи, скаляр
+   *  по виду значения, либо `null` — сброс override. */
+  value: string | number | boolean | string[] | null;
+}
+
+/**
+ * Операции записи дефолтов привязок из черновика (0.8.2, ADR «дефолт свойства
+ * живёт на привязке»): пишется только то, что реально меняется — у загруженных
+ * строк по снимку {@link defaultValueChanged}, у новых (id ещё нет) лишь
+ * заполненный дефолт — сразу после создания привязки. Строка «обязательное»
+ * без правки дефолта операции не порождает. Чистая — юнит-тест
+ * (`property-manager-apply.test.ts`, приёмочный пример тех.проекта 43870285).
+ */
+export function collectDefaultOverrideOps(
+  rows: readonly TypeRowDraft[],
+  isLink: boolean,
+): DefaultOverrideOp[] {
+  const payloadOf = (row: TypeRowDraft): string | number | boolean | string[] | null =>
+    isLink ? linkDefaultPayload(row.defaultValue) : scalarDefaultPayload(row.defaultValue);
+  const ops: DefaultOverrideOp[] = [];
+  for (const row of rows) {
+    if (row.id === null) {
+      const value = payloadOf(row);
+      if (value !== null) ops.push({ row, value });
+      continue;
+    }
+    if (!defaultValueChanged(row)) continue;
+    ops.push({ row, value: payloadOf(row) });
+  }
+  return ops;
+}
+
+/**
+ * Id типов, уже стоящих в таблице привязок этой стороны, — предзаполнение
+ * пикера «Добавить тип» (ошибка 4e9ad1a0): при открытии диалога уже выбранные
+ * типы отмечены чек-боксами. Сторона — та же, что у таблицы (у скаляра
+ * `null`), поэтому набор совпадает со строками, показанными в ней. Чистая —
+ * юнит-тест.
+ */
+export function currentTypeRowIds(
+  rows: readonly TypeRowDraft[],
+  side: 'source' | 'target' | null,
+): string[] {
+  return rows.filter((r) => r.side === side).map((r) => r.thoughtTypeId);
+}
+
+/**
+ * Приводит строки таблицы привязок к выбору пикера «Добавить тип»:
+ * ПЕРЕЗАПИСЫВАЕТ набор строк своей стороны `picked`-типами (ошибка a3828b28) —
+ * типы, с которых сняли флажок, из черновика уходят (на записи их снимет
+ * `removeTypeProperty`), отмеченные добавляются строками с дефолтами, а
+ * нетронутые сохраняют свои настройки (id привязки, «обязательное», дефолт,
+ * снимок `initialDefaultValue`) как есть. Строки ЧУЖОЙ стороны не трогаются:
+ * таблицы «Типы источников»/«Типы назначений» независимы. Порядок: сперва
+ * сохраняемые строки в исходном порядке, затем новые (в порядке выбора).
+ * Чистая — юнит-тест.
+ */
+export function applyPickedTypeRows(
+  existing: readonly TypeRowDraft[],
+  picked: readonly string[],
+  side: 'source' | 'target' | null,
+): TypeRowDraft[] {
+  const wanted = new Set(picked.filter((id) => id !== ''));
+  const settled = new Set<string>();
+  const next: TypeRowDraft[] = [];
+  for (const row of existing) {
+    if (row.side !== side) {
+      next.push(row);
+      continue;
+    }
+    // Снятый флажок или дубль той же стороны — строку не переносим.
+    if (!wanted.has(row.thoughtTypeId) || settled.has(row.thoughtTypeId)) continue;
+    settled.add(row.thoughtTypeId);
+    next.push(row);
+  }
+  for (const thoughtTypeId of picked) {
+    if (thoughtTypeId === '' || settled.has(thoughtTypeId)) continue;
+    settled.add(thoughtTypeId);
+    next.push({
+      id: null,
+      thoughtTypeId,
+      required: false,
+      defaultValue: null,
+      side,
+      dirty: true,
+    });
+  }
+  return next;
+}
+
+/**
+ * Преобразует черновое значение колонки «Значение по умолчанию» в формат
+ * `etn.types.setPropertyDefaultOverride` для свойства-связи: `string[]`
+ * (набор id целей) или `null` (пусто/сброс override).
+ */
+export function linkDefaultPayload(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    const ids = value.filter((v): v is string => typeof v === 'string' && v !== '');
+    return ids.length > 0 ? ids : null;
+  }
+  return null;
+}
+
+/**
+ * Значение скалярного дефолта для `setPropertyDefaultOverride`:
+ * string/number/boolean или null (пусто/сброс); пустая строка — тоже пусто
+ * (осмысленного дефолта она не несёт, а override с `''` подавил бы общее
+ * значение стороны); прочее — null.
+ */
+export function scalarDefaultPayload(value: unknown): string | number | boolean | null {
+  if (typeof value === 'string') return value === '' ? null : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  return null;
+}
+
+/**
+ * Сохраняет «Родительский тип связи» при правке существующего свойства
+ * (ошибка d56c1ae4): `PATCH /properties` принимает имена сторон и оформление,
+ * но не `parent_id` — иерархия типов связей правится отдельным служебным
+ * `PATCH /link-types/{id}` (0.8.1, задача d7177d1d). При создании свойства
+ * родитель уходит в `POST /properties` (`parent_link_type_id`).
+ *
+ * Родителя и его версию берём у сервера непосредственно перед PATCH
+ * (`GET /link-types/{id}`): сохранение свойства-связи идёт одним «Применить»
+ * как `PATCH /properties/{id}` → `syncLinkTypeParent`, и первый вызов уже
+ * поднял версию связанного link_type (имена сторон/оформление синхронизируются
+ * сервером). Снимок `store.state.linkTypes` к этому моменту ещё не получил
+ * realtime-эхо, поэтому PATCH со старой версией падал
+ * `VERSION_CONFLICT: link type version mismatch` — один «Применить»
+ * конфликтовал сам с собой (ошибка e7c077e4). Снимок остаётся запасным
+ * источником, если GET не удался.
+ *
+ * Возвращает `true`, когда `PATCH /link-types/{id}` действительно отправлен:
+ * вызывающий код строит по этому факту локальное уведомление открытого
+ * редактора об изменении типа связи (ошибка 7dfad7d4).
+ */
+export async function syncLinkTypeParent(
+  networkId: string,
+  property: RegistryRow,
+  draft: PropertyDraft,
+): Promise<boolean> {
+  if (draft.valueType !== 'link') return false;
+  const ltId = property.config?.link_type_id;
+  if (ltId === undefined || ltId === null || ltId === '') return false;
+  let lt: LinkType | null = null;
+  try {
+    lt = await etn.types.getLinkType(networkId, ltId);
+  } catch {
+    lt = null;
+  }
+  if (lt === null) lt = store.state.linkTypes.find((t) => t.id === ltId) ?? null;
+  if (lt === null) return false;
+  const nextParent = draft.parentLinkTypeId;
+  if ((lt.parent_id ?? null) === (nextParent ?? null)) return false;
+  await etn.types.updateLinkType(networkId, ltId, { parent_id: nextParent }, lt.version);
+  return true;
+}
+
+/** Кросс-фильтр типов для колонки «Значение по умолчанию» свойства-связи:
  *  список `thoughtTypeId` из **противоположной** стороны таблицы привязок.
  *  Пустой массив означает «фильтр не задан» (противоположная таблица пуста —
- *  можно выбирать любые мысли). Раскрытие иерархии делает вызывающий код
- *  через `expandTypeIdsToSubtree(store.state.thoughtTypes, …)`. */
+ *  можно выбирать любые мысли). Иерархию раскрывает сам чип-редактор
+ *  (`buildLinkValueEditor` → `expandTypeIdsToSubtree`), поэтому здесь
+ *  возвращаются «сырые» id типов. */
 function collectOppositeSideTypeIds(
   rows: readonly TypeRowDraft[],
   side: 'source' | 'target' | null,
@@ -651,6 +687,44 @@ function collectOppositeSideTypeIds(
     out.push(row.thoughtTypeId);
   }
   return out;
+}
+
+/** Подпись поля общего дефолта стороны свойства-связи (задача 99312ffa):
+ *  у обеих сторон одна и та же — «Значение по умолчанию для всех типов».
+ *  Поле стоит в колонке своей таблицы, поэтому «для источников»/«для
+ *  назначений» читается из контекста (тултип уточняет сторону). */
+export const COMMON_SIDE_DEFAULT_LABEL = 'Значение по умолчанию для всех типов';
+
+/** Ограничения и подсказка общего дефолта стороны свойства-связи (задача
+ *  99312ffa): подпись, дословный тултип и набор допустимых типов-кандидатов.
+ *  Ограничение берётся из **противоположной** таблицы живого черновика — та
+ *  же модель (a6513df0), что у колонки «Значение по умолчанию» строк таблиц
+ *  (у источника допустимые цели = типы стороны `target`, и наоборот). Пусто —
+ *  без ограничений. Чистая — юнит-тест. */
+export function commonSideDefaultSpec(
+  rows: readonly TypeRowDraft[],
+  side: 'source' | 'target',
+): { label: string; tooltip: string; allowedTypeIds: string[] } {
+  const tooltip =
+    side === 'source'
+      ? 'Значение по умолчанию для источников любых типов. Может быть переопределено значениями в строках таблицы выше'
+      : 'Значение по умолчанию для назначений любых типов. Может быть переопределено значениями в строках таблицы выше';
+  return {
+    label: COMMON_SIDE_DEFAULT_LABEL,
+    tooltip,
+    allowedTypeIds: linkAllowedTypeIds(collectOppositeSideTypeIds(rows, side)),
+  };
+}
+
+/** Порядок частей колонки стороны свойства-связи (задача 99312ffa): имя
+ *  стороны, таблица типов, общий дефолт — **сразу под своей таблицей**.
+ *  Вынесен ради юнит-теста компоновки (рендер использует его же). */
+export function linkSideColumnParts(parts: {
+  nameField: HTMLElement;
+  tableHost: HTMLElement;
+  commonDefaultHost: HTMLElement;
+}): HTMLElement[] {
+  return [parts.nameField, parts.tableHost, parts.commonDefaultHost];
 }
 
 /**
@@ -670,29 +744,6 @@ async function loadLinkTypeIntoDraft(
     applyLinkTypeToDraft(lt, draft);
   } catch {
     /* догрузка не удалась — пустые поля остаются. */
-  }
-}
-
-/** Поведение `etn.types.getLinkType` с локальным кешем в `store.linkTypes`.
- *  Используется из плоского списка, чтобы дотянуть имена сторон
- *  (`forward / reverse`) для свойств-ссылок, чей link_type ещё не пришёл
- *  realtime-ом. При успехе — дополняем каталог и обновляем заглушку в
- *  строке; при ошибке — оставляем «(загрузка…)». */
-async function fetchLinkTypeForRow(
-  networkId: string,
-  pending: { ltId: string; nameSpan: HTMLElement; tr: HTMLElement },
-): Promise<void> {
-  try {
-    const lt = await etn.types.getLinkType(networkId, pending.ltId);
-    // Дополняем каталог — следующий перерендер уже возьмёт из store.
-    const exists = store.state.linkTypes.some((t) => t.id === lt.id);
-    if (!exists) store.state.linkTypes.push(lt);
-    if (!pending.nameSpan.isConnected) return;
-    pending.nameSpan.textContent = `  (${lt.name_forward} / ${lt.name_reverse})`;
-  } catch {
-    if (pending.nameSpan.isConnected) {
-      pending.nameSpan.textContent = '  (нет данных)';
-    }
   }
 }
 
@@ -748,9 +799,65 @@ function twoColumns(left: HTMLElement, right: HTMLElement): HTMLElement {
   return row;
 }
 
+/** Поле с тултипом на подписи (задача 99312ffa): `field()` несёт только
+ *  текст подписи, а подсказке нужен `title` на элементе подписи. */
+function fieldWithTooltip(label: string, tooltip: string, control: HTMLElement): HTMLElement {
+  const row = field(label, control);
+  const labelEl = row.querySelector('.field-label');
+  if (labelEl !== null) setTooltip(labelEl as HTMLElement, tooltip);
+  return row;
+}
+
+/** Поле «Описание» редактора свойства: textarea, зеркалящая ввод в
+ *  `draft.description` на каждый `input` (ошибка 9f579e69: без слушателя
+ *  черновик хранил прежний текст, и «Применить и закрыть» уходил с пустым
+ *  PATCH). Вынесено в функцию ради юнит-теста слушателя. */
+export function buildDescriptionField(draft: PropertyDraft): HTMLElement {
+  const descArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+  descArea.value = draft.description;
+  descArea.rows = 3;
+  descArea.placeholder =
+    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
+  descArea.addEventListener('input', () => {
+    draft.description = descArea.value;
+  });
+  return descArea;
+}
+
 // ---------------------------------------------------------------------------
 // Основной диалог
 // ---------------------------------------------------------------------------
+
+/**
+ * Ключ редактора ещё не созданного свойства (ошибка 74d9b4ed).
+ *
+ * Сеансовый ключ «новая сущность этого вида»: у свойства, которое ещё не
+ * записано, id нет, но дедупликация нужна и ему — иначе повторный клик по
+ * «Добавить» («Создать новый», «Создать свойство» в пикере) открывает второй
+ * редактор создания с независимым черновиком. Один ключ на ВСЕ точки создания
+ * нового свойства, даже из разных мест — второй вход поднимает уже открытый
+ * редактор.
+ */
+const NEW_PROPERTY_DIALOG_KEY = 'property:new';
+
+/**
+ * Ключ дедупликации диалога редактора свойства (ошибки c2d243bb, 74d9b4ed).
+ *
+ * Идентичность сущности для {@link raiseOpenDialog}: повторное открытие
+ * редактора ЭТОГО свойства (клик по строке списка «Свойства», по строке дерева
+ * типов связей в «Типах связей», по строке журнала активности) поднимает уже
+ * открытый диалог, а не создаёт второй черновик. Свойство другого id — другой
+ * ключ, открывается поверх свободно.
+ *
+ * `id === null` (новое свойство) даёт сеансовый ключ
+ * {@link NEW_PROPERTY_DIALOG_KEY}: пока редактор создания открыт, второго не
+ * будет; после закрытия ключ снимается и следующее «Добавить» открывает свежий
+ * редактор. Ключ остаётся на весь срок жизни диалога, в т.ч. после записи
+ * (диалог закрывается только «Применить и закрыть»).
+ */
+export function propertyDialogKey(id: string | null): string {
+  return id === null ? NEW_PROPERTY_DIALOG_KEY : `property:${id}`;
+}
 
 /**
  * Открывает единый диалог «Свойство / связь» (задача 09201bd4, спека
@@ -768,6 +875,15 @@ function twoColumns(left: HTMLElement, right: HTMLElement): HTMLElement {
  * таблицы при открытии из вкладки «Свойства» редактора типа (задача
  * 935ec90e — следующая; текущий код резерв принимает, но фактический поток
  * подключится там).
+ *
+ * Повторное открытие редактора того же свойства (двойной клик по строке списка
+ * или дерева) второй диалог не создаёт: уже открытый поднимается наверх и
+ * получает фокус ({@link raiseOpenDialog}, ошибка c2d243bb). Свойство другого
+ * id открывается поверх свободно. То же — для ещё не созданного свойства: ключ
+ * `property:new` один на все точки создания («Добавить» в менеджере, «Добавить»
+ * в списке, «Создать свойство» в пикере, «Создать новый» в комбобоксе типа
+ * связи), поэтому повторный вход поднимает уже открытый редактор создания
+ * (ошибка 74d9b4ed).
  */
 export function openPropertyManagerEditor(
   property: RegistryRow | null,
@@ -776,6 +892,15 @@ export function openPropertyManagerEditor(
   options: OpenEditorOptions = {},
 ): void {
   const networkId = requireNetworkId();
+  // Повторное открытие редактора ТОГО ЖЕ свойства не создаёт второй диалог:
+  // уже открытый поднимается наверх и получает фокус (ошибка c2d243bb). Клик по
+  // строке списка/дерева — источник повторного события (двойной клик, клик по
+  // уже открытому из журнала активности). Для НОВОГО свойства (id ещё нет) ключ
+  // тоже есть — `property:new`, поэтому повторный клик по «Добавить»/«Создать
+  // свойство» поднимает уже открытый редактор создания, а не плодит второй
+  // черновик (ошибка 74d9b4ed). Проверка — ДО захвата блокировки и сборки тела
+  // диалога.
+  if (raiseOpenDialog(propertyDialogKey(property?.id ?? null))) return;
   // Server snapshot: starts at the row passed in, refreshed after a successful
   // apply, kept on a failed apply so a retry re-diffs against the same state.
   let current: RegistryRow | null = property;
@@ -795,6 +920,13 @@ export function openPropertyManagerEditor(
   const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
+  /**
+   * Собственные привязки свойства на момент загрузки (id привязки + тип).
+   * По нему на «Применить и закрыть» вычисляются снятые строки таблиц: ✕
+   * убирает строку из черновика, а сервер узнаёт об этом `DELETE` при apply
+   * (ошибка c83f0215 — снятие привязки молча не сохранялось).
+   */
+  let typeRowsSnapshot: Array<{ id: string; thoughtTypeId: string }> = [];
 
   // Initial category — locked after the first write (требование 5a82c709).
   const lockedCategory: ValueCategory | null = lockCategoryFor(property?.value_type ?? null);
@@ -818,6 +950,7 @@ export function openPropertyManagerEditor(
     showOnMap: false,
     blocksTargetDeletion: false,
     defaultValue: null,
+    defaultValueTarget: null,
     typeRows: [],
   };
 
@@ -841,6 +974,9 @@ export function openPropertyManagerEditor(
     draft.blocksTargetDeletion = property?.config?.blocks_target_deletion === true;
     draft.defaultValue = Array.isArray(property?.config?.default_value)
       ? [...(property?.config?.default_value as string[])]
+      : null;
+    draft.defaultValueTarget = Array.isArray(property?.config?.default_value_target)
+      ? [...(property?.config?.default_value_target as string[])]
       : null;
   } else {
     draft.choiceOn = draft.valueType === 'text' && (draft.config?.options?.length ?? 0) > 0;
@@ -891,12 +1027,10 @@ export function openPropertyManagerEditor(
   }
 
   // ---- Описание ----------------------------------------------------------
-  const descArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-  descArea.value = draft.description;
-  descArea.rows = 3;
-  descArea.placeholder =
-    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
-  body.append(field('Описание', descArea));
+  // Поле вынесено в {@link buildDescriptionField}: textarea обязана зеркалить
+  // ввод в draft.description — иначе PATCH уходит со старым описанием
+  // (ошибка 9f579e69: «не сохраняется комментарий свойства»).
+  body.append(field('Описание', buildDescriptionField(draft)));
 
   // ---- Хосты секций -----------------------------------------------------
   const linkFlagsHost = div('form-row');
@@ -967,13 +1101,20 @@ export function openPropertyManagerEditor(
     const typesHost = div('form-stack');
     const optionsHost = div('form-stack');
     buildTypeRowsTable(typesHost, /* isLink */ false, /* side */ null);
-    const optionsBlock = buildScalarOptionsBlock();
+    const optionsBlock = buildScalarOptionsBlockImpl(draft);
     optionsHost.append(optionsBlock);
 
     const defaultsHost = div('form-stack');
     defaultsHost.append(
-      field('Значение по умолчанию', defaultInputFor(draft.scalarKind as PropertyValueType, draft.defaultValue, (v) => {
-        draft.defaultValue = v;
+      field('Значение по умолчанию', buildValueEditor({
+        networkId,
+        definition: scalarDefaultDefinition(draft),
+        value: draft.defaultValue,
+        save: async (next) => {
+          draft.defaultValue = next;
+          return true;
+        },
+        commitOn: 'change',
       })),
     );
 
@@ -1001,24 +1142,50 @@ export function openPropertyManagerEditor(
       draft.nameReverse = nameReverseInput.value;
     });
     // Свойство-связь: name в реестре — одно из имён (см. требование ниже).
-    const leftCol = div('form-stack');
-    leftCol.append(field('Имя в источнике', nameForwardInput));
+    // Колонка стороны — имя стороны, таблица типов, общий дефолт стороны
+    // **сразу под своей таблицей** (задача 99312ffa; порядок частей —
+    // linkSideColumnParts). Общий дефолт пересобирается при правке строк
+    // таблиц: его отбор берётся из живого черновика противоположной таблицы.
     const leftTypesHost = div('form-stack');
-    buildTypeRowsTable(leftTypesHost, /* isLink */ true, /* side */ 'source');
-    leftCol.append(leftTypesHost);
-    const rightCol = div('form-stack');
-    rightCol.append(field('Имя в назначении', nameReverseInput));
     const rightTypesHost = div('form-stack');
-    buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target');
-    rightCol.append(rightTypesHost);
+    const sourceDefaultsHost = div('form-stack');
+    const targetDefaultsHost = div('form-stack');
+    const refreshCommonDefaults = (): void => {
+      sourceDefaultsHost.replaceChildren(buildCommonSideDefaultField('source'));
+      targetDefaultsHost.replaceChildren(buildCommonSideDefaultField('target'));
+    };
+    refreshCommonDefaults();
+    buildTypeRowsTable(leftTypesHost, /* isLink */ true, /* side */ 'source', refreshCommonDefaults);
+    buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target', refreshCommonDefaults);
+    const leftCol = div('form-stack');
+    for (const part of linkSideColumnParts({
+      nameField: field('Имя в источнике', nameForwardInput),
+      tableHost: leftTypesHost,
+      commonDefaultHost: sourceDefaultsHost,
+    })) {
+      leftCol.append(part);
+    }
+    const rightCol = div('form-stack');
+    for (const part of linkSideColumnParts({
+      nameField: field('Имя в назначении', nameReverseInput),
+      tableHost: rightTypesHost,
+      commonDefaultHost: targetDefaultsHost,
+    })) {
+      rightCol.append(part);
+    }
     linkBodyHost.append(twoColumns(leftCol, rightCol));
 
     // Родительский тип связи + кнопка «Оформление»
     const parentRow = div('form-row type-editor-row');
-    const parentCombo = createTypeCombobox({
-      options: () => linkTypeOptions(store.state.linkTypes),
-      value: draft.parentLinkTypeId,
+    // Служебный корень иерархии — «Без родителя», не вариант: он не попадает
+    // в каталог комбо, и без нормализации чип показал бы его сырой id.
+    const linkTypeRootId = store.state.linkTypes.find((t) => t.is_root)?.id;
+    const parentCombo = buildEntityCombo({
+      networkId,
+      kind: 'link-types',
+      value: normalizeParentTypeId(draft.parentLinkTypeId, linkTypeRootId),
       placeholder: 'Без родителя',
+      emptyLabel: 'Без родителя',
       onChange: (id) => {
         draft.parentLinkTypeId = id;
       },
@@ -1027,54 +1194,49 @@ export function openPropertyManagerEditor(
     parentRow.append(parentCombo.root, styleBtn);
     linkBodyHost.append(field('Родительский тип связи', parentRow));
 
-    // Значение по умолчанию для свойства-связи задаётся не здесь, а в
-    // таблицах «Типы источников»/«Типы назначений» (колонка «Значение по
-    // умолчанию», `buildRow` ниже): у каждого типа свой набор целей,
-    // отправляется через `etn.types.setPropertyDefaultOverride` на apply.
-    // Так требует инструкция a47947c8 — унифицированное поле выбора
-    // ссылок в колонке таблицы, а не отдельное поле над ней.
-
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
     draft.name = draft.nameForward;
   }
 
-  function buildScalarOptionsBlock(): HTMLElement {
-    const host = div('form-stack');
-    const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const choiceCheck = el('input') as HTMLInputElement;
-    choiceCheck.type = 'checkbox';
-    choiceCheck.checked = draft.choiceOn;
-    choiceCheck.addEventListener('change', () => {
-      draft.choiceOn = choiceCheck.checked;
-      renderScalarBody();
+  /**
+   * Поле общего дефолта стороны свойства-связи (задача 99312ffa): единое
+   * чип-поле целей «Значение по умолчанию для всех типов» сразу под своей
+   * таблицей типов. `config.default_value` — общий дефолт источников,
+   * `config.default_value_target` — назначений (0.8.2, ADR «дефолт свойства
+   * живёт на привязке»). Отбор кандидатов — по типам противоположной таблицы
+   * живого черновика (`commonSideDefaultSpec`, та же модель a6513df0, что у
+   * строк таблиц); пусто — без ограничений. Пересобирается при правке строк
+   * (`refreshCommonDefaults`), поэтому фильтр не отстаёт от черновика.
+   */
+  function buildCommonSideDefaultField(side: 'source' | 'target'): HTMLElement {
+    const spec = commonSideDefaultSpec(draft.typeRows, side);
+    const isSource = side === 'source';
+    const picker = buildLinkValueEditor({
+      networkId,
+      definition: {
+        config: {},
+        required: false,
+        allowed_opposite_type_ids: spec.allowedTypeIds,
+      },
+      values: defaultLinkValues(isSource ? draft.defaultValue : draft.defaultValueTarget),
+      save: async (next) => {
+        const payload = linkDefaultPayload(next);
+        if (isSource) draft.defaultValue = payload;
+        else draft.defaultValueTarget = payload;
+        return true;
+      },
     });
-    choiceRow.append(choiceCheck, span('выбирать из списка'));
-    host.append(choiceRow);
-    if (draft.choiceOn) {
-      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-      area.value = draft.optionsText;
-      area.rows = 4;
-      area.placeholder = 'Варианты значения — по одному в строке';
-      area.addEventListener('input', () => {
-        draft.optionsText = area.value;
-      });
-      host.append(area);
-    }
-    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const multiCheck = el('input') as HTMLInputElement;
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = draft.multipleOn;
-    multiCheck.addEventListener('change', () => {
-      draft.multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений'));
-    host.append(multiRow);
-    return host;
+    return fieldWithTooltip(spec.label, spec.tooltip, picker);
   }
 
   // ---- Таблица «Типы мыслей» / «Источники» / «Назначения» --------------
-  function buildTypeRowsTable(host: HTMLElement, isLink: boolean, side: 'source' | 'target' | null): void {
+  function buildTypeRowsTable(
+    host: HTMLElement,
+    isLink: boolean,
+    side: 'source' | 'target' | null,
+    onRowsChanged?: () => void,
+  ): void {
     host.append(sectionLabel(isLink ? (side === 'source' ? 'Типы источников' : 'Типы назначений') : 'Типы мыслей'));
     const tableWrap = div('admin-table-wrap');
     tableWrap.style.maxHeight = '160px';
@@ -1134,84 +1296,57 @@ export function openPropertyManagerEditor(
       reqCell.append(reqCheck);
       tr.append(reqCell);
 
-      // Значение по умолчанию: для скаляра — текстовое поле; для свойства-связи
-      // — унифицированный чип-пикер мыслей (инструкция a47947c8,
-      // требование 3181389d). Хранится в `type_properties.default_value`,
-      // применяется через `etn.types.setPropertyDefaultOverride` на apply.
-      // Фильтр по типам целей — из **противоположной** таблицы (с раскрытием
-      // иерархии): типы «источников» ограничивают поиск целей в строках
-      // «назначений», и наоборот. Если противоположная таблица пуста — фильтра
-      // нет (можно выбирать любые мысли).
+      // Колонка «Значение по умолчанию» — редактор значения без режимов
+      // (0.8.2, ADR «дефолт свойства живёт на привязке»): заполнено — дефолт
+      // ЭТОЙ привязки (`setPropertyDefaultOverride` на apply), пусто — при
+      // создании мысли действует общее значение соответствующей стороны
+      // (подсказка в тултипе пустой ячейки). Свойство-связь — унифицированный
+      // чип-пикер целей (инструкция a47947c8): отбор целей по типам
+      // **противоположной** таблицы с раскрытием иерархии (раскрывает сам
+      // редактор; пустая противоположная таблица — цели любые). Скаляр —
+      // общий редактор значения.
       const dvCell = el('td');
+      const defaultHost = div('prop-default-cell');
       if (isLink) {
         const oppositeIds = collectOppositeSideTypeIds(draft.typeRows, side);
-        const filterIds = oppositeIds.length > 0
-          ? expandTypeIdsToSubtree(store.state.thoughtTypes, oppositeIds)
-          : [];
-        const linkDefaults = buildChipListField({
-          getValues: () =>
-            Array.isArray(row.defaultValue) ? (row.defaultValue as string[]) : [],
-          onChange: (values) => {
-            row.defaultValue = values.length > 0 ? values : null;
-            row.dirty = true;
-          },
-          getOptions: async (query) => {
-            const trimmed = query.trim();
-            if (trimmed === '') return [];
-            try {
-              const hits = await etn.thoughts.findDuplicates(
-                networkId,
-                trimmed,
-                undefined,
-                filterIds.length > 0 ? filterIds : undefined,
-              );
-              return hits.map((h) => ({ value: h.id, label: h.title }));
-            } catch {
-              return [];
-            }
-          },
-          renderLabel: async (id) => {
-            try {
-              const t = await etn.thoughts.get(networkId, id);
-              return t.title;
-            } catch {
-              return `${id.slice(0, 8)}…`;
-            }
-          },
-          placeholder: 'Заголовок мысли-цели…',
-          picker: {
-            label: 'выбрать…',
-            open: async (managed) => {
-              const result = await pickThoughtsDialog({
-                networkId,
-                allowCreate: false,
-                allowLinkType: false,
-                searchTypeIds: filterIds.length > 0 ? filterIds : undefined,
-                defaultNewThoughtTypeId: filterIds[0] ?? null,
-                selectedIds: managed,
-                title: 'Выбрать мысли',
-                applyLabel: 'Выбрать',
-              });
-              return result === null ? null : pickedThoughtIds(result);
+        defaultHost.append(
+          buildLinkValueEditor({
+            networkId,
+            definition: {
+              config: {},
+              required: false,
+              // Источник ограничения — привязки противоположной стороны
+              // (тот же контракт, что у `listTypeProperties` в редакторе
+              // мысли): у ещё не сохранённого черновика таблицы —
+              // единственный доступный снимок; после apply сервер отдаёт то
+              // же через `allowed_opposite_type_ids`.
+              allowed_opposite_type_ids: linkAllowedTypeIds(oppositeIds),
             },
-          },
-        });
-        dvCell.append(linkDefaults.root);
+            values: defaultLinkValues(row.defaultValue),
+            save: async (next) => {
+              row.defaultValue = linkDefaultPayload(next);
+              row.dirty = true;
+              return true;
+            },
+          }),
+        );
       } else {
-        const dvInput = el('input', 'text-input') as HTMLInputElement;
-        dvInput.type = 'text';
-        dvInput.placeholder = '(пусто)';
-        dvInput.value =
-          row.defaultValue === null || row.defaultValue === undefined
-            ? ''
-            : String(row.defaultValue);
-        dvInput.addEventListener('input', () => {
-          const v = dvInput.value.trim();
-          row.defaultValue = v === '' ? null : v;
-          row.dirty = true;
-        });
-        dvCell.append(dvInput);
+        defaultHost.append(
+          buildValueEditor({
+            networkId,
+            definition: scalarDefaultDefinition(draft),
+            value: row.defaultValue,
+            save: async (next) => {
+              row.defaultValue = next;
+              row.dirty = true;
+              return true;
+            },
+            commitOn: 'change',
+          }),
+        );
       }
+      if (isEmptyDefault(row.defaultValue)) defaultHost.append(emptyDefaultHint());
+      dvCell.append(defaultHost);
       tr.append(dvCell);
 
       // Удалить строку
@@ -1225,26 +1360,53 @@ export function openPropertyManagerEditor(
     function removeRow(row: TypeRowDraft): void {
       draft.typeRows = draft.typeRows.filter((r) => r !== row);
       renderTable();
+      // Противоположная таблица изменилась — общий дефолт пересобирает отбор
+      // по её живому черновику (задача 99312ffa).
+      onRowsChanged?.();
     }
 
     async function addRow(): Promise<void> {
-      const picked = await openThoughtTypesPicker(networkId, []);
-      if (picked === null || picked.length === 0) return;
-      const thoughtTypeId: string = picked[0] as string;
-      // Дубль строки (та же сторона для связи) запрещён.
-      if (draft.typeRows.some((r) => r.thoughtTypeId === thoughtTypeId && r.side === side)) return;
-      draft.typeRows = [
-        ...draft.typeRows,
-        {
-          id: null,
-          thoughtTypeId,
-          required: false,
-          defaultValue: null,
-          side,
-          dirty: true,
-        },
-      ];
+      // Мультивыбор (ошибка e6d92dbf): общий пикер в режиме чек-листа —
+      // отметки чек-боксами, применение кнопкой «Применить и закрыть»,
+      // рядом «Отмена». Команды — иконками в одной строке с поиском
+      // (ошибка bd8b78a0): «Отметить все»; «Очистить» (ластик) пикер
+      // добавляет сам. Пустой поиск показывает полный список каталога.
+      const title = isLink
+        ? side === 'source'
+          ? 'Типы источников'
+          : 'Типы назначений'
+        : 'Типы мыслей';
+      const picked = await pickEntitiesModal({
+        networkId,
+        kind: 'thought-types',
+        title,
+        // Уже выбранные типы этой таблицы отмечены чек-боксами при открытии
+        // диалога (ошибка 4e9ad1a0); применение ПЕРЕЗАПИСЫВАЕТ набор строк
+        // стороны: снятые флажки убирают строки, отмеченные — добавляют,
+        // нетронутые сохраняют настройки (ошибка a3828b28).
+        currentIds: currentTypeRowIds(draft.typeRows, side),
+        allowEmpty: false,
+        applyLabel: 'Применить и закрыть',
+        commands: (ctx) => [
+          {
+            icon: 'check-check',
+            title: 'Отметить все',
+            onClick: () => {
+              for (const t of store.state.thoughtTypes) {
+                if (!t.is_root) ctx.checked.add(t.id);
+              }
+              ctx.rerender();
+            },
+          },
+        ],
+      });
+      if (picked === null) return;
+      const next = applyPickedTypeRows(draft.typeRows, picked, side);
+      draft.typeRows = next;
       renderTable();
+      // Обе стороны общего дефолта зависят от строк обеих таблиц — отбор
+      // пересобирается по живому черновику (задача 99312ffa).
+      onRowsChanged?.();
     }
 
     host.append(
@@ -1257,24 +1419,50 @@ export function openPropertyManagerEditor(
   /** Загрузка строк таблицы привязок для существующего свойства: список
    *  типов мыслей сети + для каждого типа запрос `listTypeProperties`
    *  фильтрует по нашему `property_id`. Для свойства-связи — две стороны
-   *  (`source`/`target`) согласно `type_properties.side`. */
+   *  (`source`/`target`) согласно `type_properties.side`.
+   *
+   *  `listTypeProperties` отдаёт ЭФФЕКТИВНЫЙ (наследование-зависимый) список,
+   *  поэтому строкой «своей» привязки считается только `inherited !== true`
+   *  (ошибка c59bbd64). Без этого унаследованная привязка попадала в черновик
+   *  по разу на КАЖДЫЙ тип-потомок с ОДНИМ И ТЕМ ЖЕ id привязки-предка: снимок
+   *  получал дубли, а `applyTypeRows` слал повторный `DELETE` того же id —
+   *  сервер отвечал `property <id> not found`, и запись переноса падала.
+   *  Заодно «✕» такой фантомной строки отвязывал привязку ПРЕДКА, а не
+   *  потомка. Наследование правится в редакторе ТИПА (вкладка «Свойства»),
+   *  а не в таблицах сторон свойства.
+   *
+   *  Зеркальные записи (`mirrored`) пропускаются: у них нет физической
+   *  привязки, к которой писался бы override. */
   async function loadTypeRowsFor(propertyId: string): Promise<void> {
     const types = store.state.thoughtTypes;
     if (types.length === 0) return;
     const collected: TypeRowDraft[] = [];
+    const seenBindingIds = new Set<string>();
     await Promise.all(
       types.map(async (tt) => {
         try {
           const defs = await etn.types.listTypeProperties(networkId, 'thought_type', tt.id);
           for (const def of defs) {
             if (def.property_id !== propertyId) continue;
+            // Эффективный список: наследованная привязка принадлежит предку.
+            if (def.inherited === true) continue;
+            if (def.mirrored === true) continue;
+            // Одна физическая привязка — одна строка (защита от дубля id).
+            if (seenBindingIds.has(def.id)) continue;
+            seenBindingIds.add(def.id);
+            // Колонка показывает СОБСТВЕННЫЙ дефолт привязки: пусто — при
+            // создании мысли действует общее значение стороны (тултип
+            // пустой ячейки), поэтому эффективный дефолт без override сюда
+            // не подставляется.
+            const ownDefault = def.overridden_here === true ? def.default_value ?? null : null;
             collected.push({
               id: def.id,
               thoughtTypeId: tt.id,
               required: def.required === true,
-              defaultValue: def.default_value ?? null,
+              defaultValue: ownDefault,
               side: (def.side ?? null) as 'source' | 'target' | null,
               dirty: false,
+              initialDefaultValue: ownDefault,
             });
           }
         } catch {
@@ -1283,6 +1471,12 @@ export function openPropertyManagerEditor(
       }),
     );
     draft.typeRows = collected;
+    // Снимок СОБСТВЕННЫХ привязок на момент загрузки — по нему на
+    // «Применить и закрыть» вычисляются снятые строки (✕), которые надо
+    // удалить на сервере (ошибка c83f0215).
+    typeRowsSnapshot = collected.flatMap((row) =>
+      row.id === null ? [] : [{ id: row.id, thoughtTypeId: row.thoughtTypeId }],
+    );
     rerenderBody();
   }
 
@@ -1415,19 +1609,9 @@ export function openPropertyManagerEditor(
         await applyTypeRows(created.id);
         onCreated?.(created);
       } else {
-        const changes: NetworkPropertyUpdateInput = { name };
-        if (draft.valueType !== current.value_type) changes.value_type = draft.valueType;
-        const newDescription = draft.description.trim() === '' ? null : draft.description.trim();
-        if (newDescription !== (current.description ?? null)) changes.description = newDescription;
-        const newConfig = buildConfigForUpdate(draft, current.config);
-        if (!sameConfig(newConfig, current.config)) changes.config = newConfig;
-        if (draft.valueType === 'link') {
-          if (draft.nameForward.trim() !== '') changes.name_forward = draft.nameForward.trim();
-          if (draft.nameReverse.trim() !== '') changes.name_reverse = draft.nameReverse.trim();
-          if (draft.linkColor !== null) changes.link_color = draft.linkColor;
-          if (draft.linkStyle !== null) changes.link_style = draft.linkStyle;
-          if (draft.linkWidth !== null) changes.link_width = draft.linkWidth;
-        }
+        // Сбор PATCH-тела вынесен в чистую функцию {@link buildUpdateChanges}
+        // (регрессионный тест property-manager-apply.test.ts).
+        const changes = buildUpdateChanges(draft, current);
         if (Object.keys(changes).length === 0) {
           // Применим только привязки (если есть dirty), потом закроем.
           await applyTypeRows(current.id);
@@ -1451,17 +1635,60 @@ export function openPropertyManagerEditor(
           current.id,
           changes,
         );
+        // Ответ сервера — САМО свойство, дополненное счётчиками конверсии
+        // (`{ ...property, converted, dropped }`), а не обёртка
+        // `{ property, converted, dropped }`: раньше здесь читалось
+        // `result.property`, из-за чего `current` терял `id`, а следующая
+        // запись привязок уходила с `property_id: undefined` и падала 422
+        // (ошибка c83f0215). Счётчики читаются с того же плоского объекта.
         current = {
-          ...result.property,
+          ...result,
           types_count: current.types_count,
           values_count: current.values_count,
         };
+        // Правка самого свойства реестра — имя, вид значения, `config`
+        // (в т.ч. списки допустимых типов свойства-связи) — меняет таблицу
+        // «Свойства» у ВСЕХ типов, где оно показано, а не только у привязок
+        // этого диалога (ошибка 98aa0889). Редактор находит владельца по id
+        // свойства в индексе показанных определений.
+        notifyPropertyRegistryChanged(current.id, changes);
         if (changes.value_type !== undefined) {
           notice(
             result.dropped > 0 || result.converted > 0
               ? `Обработка выполнена: преобразовано ${result.converted}, удалено ${result.dropped}.`
               : 'Обработка выполнена.',
           );
+        }
+        // Родительский тип связи (ошибка d56c1ae4): PATCH /properties его не
+        // принимает — иерархия правится отдельным PATCH /link-types/{id}.
+        const parentChanged = await syncLinkTypeParent(networkId, current, draft);
+        // Тип связи свойства-связи — часть единого жизненного цикла (0.8.1):
+        // PATCH /properties применил пару имён и оформление линии к связанному
+        // `link_type`, а родителя — `syncLinkTypeParent` строкой выше. Открытый
+        // редактор показанной СВЯЗИ этого типа обязан перерисовать шапку —
+        // ошибка 7dfad7d4 (симметрично правке самого типа, 5d41589). Своё
+        // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+        // локально, а каталог типов перечитываем ДО уведомления: шапка
+        // резолвит подпись и вид линии из него.
+        const linkTypeFields = linkTypeFieldsFromPropertyChanges(changes);
+        if (parentChanged) linkTypeFields.parent_id = draft.parentLinkTypeId;
+        const linkTypeId = current.config?.link_type_id;
+        if (
+          Object.keys(linkTypeFields).length > 0 &&
+          typeof linkTypeId === 'string' &&
+          linkTypeId !== ''
+        ) {
+          await reloadTypeCatalogues();
+          notifyTypeChanged(
+            typeUpdateFacts({ ownerType: 'link_type', ownerId: linkTypeId }, linkTypeFields),
+          );
+          // Холст и панели («Структуры», «Хроника») рисуют подпись и вид линии
+          // ребра из каталога типов, а свои страницы держат в собственных
+          // снимках — локальная правка типа связи доводится до них ТЕМ ЖЕ
+          // набором пересчёта, что и realtime-эхо (ошибка 270b8454). Каталог уже
+          // перечитан строкой выше, поэтому пересчёт не перезапрашивает его
+          // повторно.
+          scheduleTypeRepaint();
         }
         // Применим привязки к типам мыслей.
         await applyTypeRows(current.id);
@@ -1474,20 +1701,56 @@ export function openPropertyManagerEditor(
   }
 
   /** Сохранение строк таблицы привязок. На входе — черновик; на выходе —
-   *  строки применены через `etn.types.createTypeProperty/updateTypeProperty/
-   *  removeTypeProperty`. Для свойства-связи дополнительно — `default_value`
-   *  через `etn.types.setPropertyDefaultOverride` (требование 3181389d,
-   *  инструкция a47947c8): набор целей `string[]` хранится в
-   *  `type_properties.default_value` и применяется созданием рёбер при
-   *  создании мысли. */
+   *  строки применены через `etn.types.createTypeProperty/updateTypeProperty`.
+   *  Дефолты привязок пишутся отдельными `etn.types.setPropertyDefaultOverride`
+   *  (0.8.2, ADR «дефолт свойства живёт на привязке»): чистой функцией
+   *  {@link collectDefaultOverrideOps} отбираются только реально изменившиеся
+   *  значения, а для добавленных строк — заполненный дефолт сразу после
+   *  создания привязки. Общие значения сторон уезжают в `PATCH /properties`
+   *  (тело собирает {@link buildUpdateChanges}). */
   async function applyTypeRows(propertyId: string): Promise<void> {
-    if (draft.typeRows.length === 0 && !hasRemovedRows()) return;
+    // Снятые строки: есть в снимке загрузки, нет в черновике (✕ в таблице).
+    // Перенос типа между сторонами — это снятие привязки одной стороны плюс
+    // создание другой; без этих `DELETE` снятие терялось (ошибка c83f0215).
+    // Один id привязки удаляется РОВНО один раз: повторный `DELETE` уже
+    // снятого id сервер отвечает `property <id> not found` (ошибка c59bbd64).
+    const survivingIds = new Set(
+      draft.typeRows.flatMap((row) => (row.id === null ? [] : [row.id])),
+    );
+    const removedIds = new Set<string>();
+    const removed: Array<{ id: string; thoughtTypeId: string }> = [];
+    for (const snap of typeRowsSnapshot) {
+      if (survivingIds.has(snap.id) || removedIds.has(snap.id)) continue;
+      removedIds.add(snap.id);
+      removed.push(snap);
+    }
+    if (draft.typeRows.length === 0 && removed.length === 0) return;
+    // Типы, чей набор свойств правится этим проходом (снятые и черновые
+    // строки) — после записи они обязаны уведомить открытый редактор
+    // (ошибка 74b94c26): свой realtime-эхо до рендерера не доходит.
+    const touchedTypeIds = new Set<string>();
+    for (const snap of removed) touchedTypeIds.add(snap.thoughtTypeId);
+    for (const row of draft.typeRows) touchedTypeIds.add(row.thoughtTypeId);
+    // Снятия — первыми: освобождённая пара (тип, сторона) не должна
+    // столкнуться с созданием новой привязки в этом же проходе.
+    for (const snap of removed) {
+      await etn.types.removeTypeProperty(
+        networkId,
+        'thought_type',
+        snap.thoughtTypeId,
+        snap.id,
+      );
+      typeRowsSnapshot = typeRowsSnapshot.filter((s) => s.id !== snap.id);
+    }
     const isLink = draft.valueType === 'link';
+    const overrideByRow = new Map(
+      collectDefaultOverrideOps(draft.typeRows, isLink).map((op) => [op.row, op.value] as const),
+    );
     const ops: Promise<unknown>[] = [];
-    const created = new Map<string, TypeRowDraft>();
     for (const row of draft.typeRows) {
       if (row.id === null) {
-        // Создание: сначала привязка, затем (для связи) — её default.
+        // Создание собственной привязки; её дефолт (если задан) пишется
+        // вторым вызовом — id привязки известен только после создания.
         ops.push(
           (async (): Promise<void> => {
             const def = await etn.types.createTypeProperty(
@@ -1501,19 +1764,19 @@ export function openPropertyManagerEditor(
                 ...(row.side !== null ? { side: row.side } : {}),
               },
             );
-            if (isLink) {
+            const value = overrideByRow.get(row);
+            if (value !== undefined) {
               await etn.types.setPropertyDefaultOverride(
                 networkId,
                 'thought_type',
                 row.thoughtTypeId,
                 def.id,
-                linkDefaultPayload(row.defaultValue),
+                value,
               );
             }
-            created.set(def.id, row);
           })(),
         );
-      } else if (row.dirty) {
+      } else if (row.dirty || overrideByRow.has(row)) {
         ops.push(
           (async (): Promise<void> => {
             await etn.types.updateTypeProperty(
@@ -1523,50 +1786,39 @@ export function openPropertyManagerEditor(
               row.id as string,
               { required: row.required },
             );
-            if (isLink) {
+            const value = overrideByRow.get(row);
+            if (value !== undefined) {
               await etn.types.setPropertyDefaultOverride(
                 networkId,
                 'thought_type',
                 row.thoughtTypeId,
                 row.id as string,
-                linkDefaultPayload(row.defaultValue),
+                value,
               );
             }
           })(),
         );
       }
     }
-    await Promise.all(ops).catch((err) => {
-      throw err;
-    });
-  }
-
-  /** Преобразует черновое значение колонки «Значение по умолчанию» в
-   *  формат `etn.types.setPropertyDefaultOverride` для свойства-связи:
-   *  `string[]` (набор id целей) или `null` (очистить). */
-  function linkDefaultPayload(value: unknown): string[] | null {
-    if (Array.isArray(value)) {
-      const ids = value.filter((v): v is string => typeof v === 'string' && v !== '');
-      return ids.length > 0 ? ids : null;
+    await Promise.all(ops);
+    for (const thoughtTypeId of touchedTypeIds) {
+      notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: thoughtTypeId });
     }
-    return null;
-  }
-
-  /** Возвращает `true`, если среди исходных строк есть удалённые (мы их
-   *  сравниваем с draft). Используется для решения — синхронизировать ли. */
-  function hasRemovedRows(): boolean {
-    // Сложность: loadTypeRowsFor даёт начальный снимок; удалённые строки
-    // просто отсутствуют в draft.typeRows. Чтобы отличить «никогда не было»
-    // от «было и удалили», нужен снимок «было». Здесь упрощённо: если
-    // среди текущих draft-строк есть хоть одна с id !== null — был снимок,
-    // значит удаления отслеживаем. Для остальных случаев no-op.
-    return draft.typeRows.some((r) => r.id !== null);
   }
 
   showDialog({
     title: property === null ? 'Новое свойство' : `Свойство — «${property.name}»`,
     body,
     width: 1240,
+    // Идентичность сущности для повторного открытия (ошибки c2d243bb,
+    // 74d9b4ed): клик по этому же свойству — или по «Добавить» при ещё не
+    // созданном свойстве (`property:new`) — поднимает уже открытый диалог, а
+    // не плодит второй. Ключ живёт до закрытия диалога.
+    dedupeKey: propertyDialogKey(property?.id ?? null),
+    // Строка ошибки записи — в панели кнопок диалога: она обязана быть видна
+    // всегда (ошибка c83f0215 — осиротевшая строка в теле молча глотала
+    // ошибки записи; приём и требование — ошибка add8d09d).
+    footerError: errorLine,
     buttons: [
       { label: 'Отмена' },
       {
@@ -1609,17 +1861,77 @@ function buildConfigForUpdate(draft: PropertyDraft, current: PropertyConfig | nu
   return scalarConfigFromDraft(draft);
 }
 
+/**
+ * Собирает тело `PATCH /networks/{nid}/properties/{id}` из черновика
+ * (ошибка 9f579e69: тело собиралось инлайн в `apply`, что не давало
+ * регрессионного теста; вынос ничего не меняет, кроме читаемости).
+ *
+ * Для свойства-связи включает имена сторон и оформление — их принимает
+ * серверный PATCH (единый жизненный цикл, 0.8.1) и применяет к связанному
+ * типу связи. `name` для связи вычисляется из `name_forward` (сервер
+ * пересчитывает отображаемое имя из link_type).
+ */
+export function buildUpdateChanges(
+  draft: PropertyDraft,
+  current: RegistryRow,
+): NetworkPropertyUpdateInput {
+  const name = draft.valueType === 'link' ? draft.nameForward.trim() : draft.name.trim();
+  const changes: NetworkPropertyUpdateInput = { name };
+  if (draft.valueType !== current.value_type) changes.value_type = draft.valueType;
+  const newDescription = draft.description.trim() === '' ? null : draft.description.trim();
+  if (newDescription !== (current.description ?? null)) changes.description = newDescription;
+  const newConfig = buildConfigForUpdate(draft, current.config);
+  if (!sameConfig(newConfig, current.config)) changes.config = newConfig;
+  if (draft.valueType === 'link') {
+    if (draft.nameForward.trim() !== '') changes.name_forward = draft.nameForward.trim();
+    if (draft.nameReverse.trim() !== '') changes.name_reverse = draft.nameReverse.trim();
+    if (draft.linkColor !== null) changes.link_color = draft.linkColor;
+    if (draft.linkStyle !== null) changes.link_style = draft.linkStyle;
+    if (draft.linkWidth !== null) changes.link_width = draft.linkWidth;
+  }
+  return changes;
+}
+
+/**
+ * Ключи `config` свойства-связи, которые собираются из полей единого диалога
+ * «Свойство / связь». Всё остальное (`allowed_target_type_ids`,
+ * `allowed_source_type_ids`, legacy-маркер `multiple` и любые произвольные
+ * ключи, заданные через MCP/онтологию) диалог не редактирует и обязан
+ * переносить без изменений: серверный `PATCH /properties/{id}` заменяет
+ * `config` целиком (`updateNetworkProperty`: `finalConfig = changes.config`),
+ * поэтому иначе любое сохранение стирало бы их (ошибка a13b3845).
+ */
+const LINK_CONFIG_MANAGED_KEYS: ReadonlySet<string> = new Set([
+  'link_type_id',
+  'structural',
+  'direction',
+  'show_on_map',
+  'blocks_target_deletion',
+  'default_value',
+  'default_value_target',
+]);
+
 /** Конфиг свойства-связи из черновика. Никогда не `null` — сервер требует
  *  `direction` для ссылки. */
 function linkConfigFromDraft(draft: PropertyDraft, current?: PropertyConfig | null): PropertyConfig | null {
   if (draft.valueType !== 'link') return null;
+  // Сначала переносим из текущего конфига всё, чем диалог не управляет
+  // (round-trip: ограничения типов, legacy-флаги, произвольные доп. ключи).
+  // Порядок важен: управляемые ключи перезаписывают одноимённые ниже —
+  // иначе, например, снятый флаг `show_on_map` не удалился бы.
+  const cfg: PropertyConfig = {};
+  if (current != null) {
+    for (const [key, value] of Object.entries(current)) {
+      if (value === undefined || LINK_CONFIG_MANAGED_KEYS.has(key)) continue;
+      cfg[key] = value;
+    }
+  }
   // Для уже существующего свойства — сохраняем `link_type_id`/`structural`
   // из текущего конфига (они задаются на create и не вычисляются из draft).
   // Без этого PATCH отклоняется сервером: VALIDATION_ERROR «свойство-связь
   // требует config.link_type_id» (баг cab38479-фикс2). Для нового — сервер
   // создаст link_type автоматически (задача dd37a66) по паре имён сторон,
   // и `config.link_type_id` придёт в ответе на create.
-  const cfg: PropertyConfig = {};
   if (current?.link_type_id !== undefined && current.link_type_id !== '') {
     cfg.link_type_id = current.link_type_id;
   }
@@ -1629,9 +1941,15 @@ function linkConfigFromDraft(draft: PropertyDraft, current?: PropertyConfig | nu
   cfg.direction = 'out';
   if (draft.showOnMap) cfg.show_on_map = true;
   if (draft.blocksTargetDeletion) cfg.blocks_target_deletion = true;
-  if (Array.isArray(draft.defaultValue) && draft.defaultValue.length > 0) {
-    cfg.default_value = [...new Set(draft.defaultValue as string[])];
-  }
+  // Общие значения сторон (0.8.2, ADR «дефолт свойства живёт на привязке»):
+  // «Значение по умолчанию для всех типов» под «Типами источников» —
+  // `config.default_value`, под «Типами назначений» — `config.default_value_target`.
+  // Пусто — ключ не пишется (PATCH config заменяет конфиг целиком, поэтому
+  // очистка поля снимает общее значение).
+  const sources = linkDefaultPayload(draft.defaultValue);
+  if (sources !== null) cfg.default_value = [...new Set(sources)];
+  const targets = linkDefaultPayload(draft.defaultValueTarget);
+  if (targets !== null) cfg.default_value_target = [...new Set(targets)];
   return cfg;
 }
 
@@ -1669,7 +1987,6 @@ export interface LinkConfigDraft {
   structural: boolean;
   linkTypeId: string | null;
   direction: 'out' | 'in';
-  allowedTargetTypeIds: string[];
   showOnMap: boolean;
   blocksTargetDeletion: boolean;
   legacyMultiple: boolean;
@@ -1686,15 +2003,16 @@ export function buildConfig(
   },
   link: LinkConfigDraft,
 ): PropertyConfig | null {
-  if (valueType === 'link') {
+  // Сравнения вида значения — данные конфигурации, не построение поля ввода
+  // (диспетчер по виду значения живёт только в общем редакторе, S2).
+  const isLink = valueType === 'link';
+  const isText = valueType === 'text';
+  if (isLink) {
     const config: PropertyConfig = { direction: link.direction };
     if (link.structural) {
       config.structural = true;
     } else if (link.linkTypeId !== null) {
       config.link_type_id = link.linkTypeId;
-    }
-    if (link.allowedTargetTypeIds.length > 0) {
-      config.allowed_target_type_ids = [...link.allowedTargetTypeIds];
     }
     if (link.showOnMap) config.show_on_map = true;
     if (link.blocksTargetDeletion) config.blocks_target_deletion = true;
@@ -1708,7 +2026,7 @@ export function buildConfig(
   if (defaultValue !== null && defaultValue !== undefined) {
     config.default_value = defaultValue as string | number | boolean;
   }
-  if (valueType === 'text' && options.choiceOn) {
+  if (isText && options.choiceOn) {
     const list = options.optionsText
       .split(/\r?\n/)
       .map((s) => s.trim())
@@ -1725,56 +2043,125 @@ export function buildConfig(
 // Value-type-specific default-value input
 // ---------------------------------------------------------------------------
 
+/** Пусто ли значение колонки «Значение по умолчанию» (0.8.2): `null`,
+ *  `undefined`, пустая строка или пустой набор целей. Пустое значение —
+ *  «действует общее значение стороны привязки». Чистая — юнит-тест. */
+export function isEmptyDefault(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value === '';
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/** Подпись пустой ячейки «Значение по умолчанию» (0.8.2): при создании мысли
+ *  берётся общее значение соответствующей стороны привязки. Общая для обоих
+ *  редакторов (диалог свойства и вкладка «Свойства» редактора типа). */
+export function emptyDefaultHint(): HTMLElement {
+  const hint = span('—', 'muted prop-default-hint');
+  setTooltip(hint, 'Пусто — при создании мысли используется общее значение стороны привязки.');
+  return hint;
+}
+
 /**
- * Builds a default-value input matching `valueType`; `read(value)` is called
- * once when the input commits (blur/change). Link defaults (the target-set
- * chip field, bb67e546) are wired directly inside the link block — the stub
- * below is a defensive fallback for the «link» case when the chip field has
- * not been mounted yet (e.g. while the dialog is mid-render).
+ * Значение по умолчанию свойства-связи как рёбра редактора: черновик хранит
+ * набор id целей (`string[] | null`), общий редактор значения-связи работает
+ * с формой `LinkPropertyValueItem[]` (подписи догружаются резолвом).
  */
-function defaultInputFor(
-  valueType: PropertyValueType,
-  current: unknown,
-  read: (value: unknown) => void,
-): HTMLElement {
-  switch (valueType) {
-    case 'text':
-    case 'url': {
-      const input = el('input', 'text-input') as HTMLInputElement;
-      input.type = 'text';
-      input.value = typeof current === 'string' ? current : '';
-      input.placeholder = valueType === 'url' ? 'https://… или путь к файлу' : 'текст по умолчанию';
-      input.addEventListener('change', () => read(input.value.trim() === '' ? null : input.value.trim()));
-      return input;
-    }
-    case 'number': {
-      const input = el('input', 'text-input') as HTMLInputElement;
-      input.type = 'number';
-      input.value = typeof current === 'number' ? String(current) : '';
-      input.addEventListener('change', () => {
-        read(input.value === '' ? null : Number(input.value));
-      });
-      return input;
-    }
-    case 'date': {
-      const input = el('input', 'text-input') as HTMLInputElement;
-      input.type = 'date';
-      input.value = typeof current === 'string' ? current : '';
-      input.addEventListener('change', () => read(input.value === '' ? null : input.value));
-      return input;
-    }
-    case 'bool': {
-      const input = el('input') as HTMLInputElement;
-      input.type = 'checkbox';
-      input.checked = current === true;
-      input.addEventListener('change', () => read(input.checked));
-      return input;
-    }
-    case 'link':
-      return span('управляется в блоке связи', 'muted');
-    case 'thought_ref':
-      return span('упразднено', 'muted');
-  }
+export function defaultLinkValues(value: unknown): LinkPropertyValueItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === 'string' && v !== '')
+    .map((id) => ({
+      link_id: '',
+      target_id: id,
+      target_title: null,
+      target_type_id: null,
+      comment: null,
+    }));
+}
+
+/**
+ * Заглушка определения свойства для поля «Значение по умолчанию» черновика
+ * (свойство ещё не существует — определения нет): редактору значения нужны
+ * только вид, `config.options` (текстовые варианты из текста черновика) и
+ * `config.multiple` (чип-ввод нескольких значений, веха 4).
+ */
+function scalarDefaultDefinition(draft: PropertyDraft): EffectiveTypeProperty {
+  const options =
+    draft.valueType === 'text' && draft.choiceOn
+      ? draft.optionsText
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : [];
+  const config: PropertyConfig = {};
+  if (options.length > 0) config.options = options;
+  if (draft.multipleOn) config.multiple = true;
+  return {
+    id: '',
+    property_id: '',
+    owner_type: 'thought_type',
+    owner_id: '',
+    key: 'default',
+    value_type: draft.scalarKind ?? 'text',
+    config: Object.keys(config).length > 0 ? config : null,
+    required: false,
+    position: 0,
+    description: null,
+    inherited: false,
+    defined_on: '',
+    defined_on_name: '',
+    default_value: null,
+    overridden_here: false,
+    description_overridden: false,
+  };
+}
+
+/**
+ * Блок «Выбирать из списка» + «Несколько значений» для скалярной ветки
+ * редактора свойства (ошибка 322a2694: прежний обработчик флажка вызывал
+ * `renderScalarBody`, и каждый клик дописывал в `mainBodyHost` ещё одну
+ * копию секции «Скалярное свойство»).
+ *
+ * Поле вариантов живёт в DOM всё время; видимость — производная от
+ * флажка «выбирать из списка». Тоггл `display` решает задачу без перерисовки:
+ * черновик (`draft.optionsText`) не теряется, фокус в соседних полях (имя,
+ * флажок «несколько значений») не сбрасывается. Работает по `draft`
+ * (поля `choiceOn`/`optionsText`/`multipleOn`) и общим `el/div/span/button`
+ * из `dom.js` — экспортируется для юнит-теста сценария пользователя
+ * (включение/выключение флажка, многократные переключения, сохранение
+ * черновика).
+ */
+export function buildScalarOptionsBlockImpl(draft: PropertyDraft): HTMLElement {
+  const host = div('form-stack');
+  const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
+  const choiceCheck = el('input') as HTMLInputElement;
+  choiceCheck.type = 'checkbox';
+  choiceCheck.checked = draft.choiceOn;
+  const area = el('textarea', 'textarea-input prop-options-area') as HTMLTextAreaElement;
+  area.value = draft.optionsText;
+  area.rows = 4;
+  area.placeholder = 'Варианты значения — по одному в строке';
+  area.style.display = draft.choiceOn ? '' : 'none';
+  area.addEventListener('input', () => {
+    draft.optionsText = area.value;
+  });
+  choiceCheck.addEventListener('change', () => {
+    draft.choiceOn = choiceCheck.checked;
+    area.style.display = draft.choiceOn ? '' : 'none';
+  });
+  choiceRow.append(choiceCheck, span('выбирать из списка'));
+  host.append(choiceRow, area);
+  const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
+  const multiCheck = el('input') as HTMLInputElement;
+  multiCheck.type = 'checkbox';
+  multiCheck.checked = draft.multipleOn;
+  multiCheck.addEventListener('change', () => {
+    draft.multipleOn = multiCheck.checked;
+  });
+  multiRow.append(multiCheck, span('несколько значений'));
+  host.append(multiRow);
+  return host;
 }
 
 // ---------------------------------------------------------------------------

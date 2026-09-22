@@ -12,33 +12,12 @@
  */
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import {
-  BASE_LAYER_ID,
-  EtnError,
-  type LayerEcho,
-  type RealtimeEventMap,
-  type RealtimeEventType,
-} from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, type LayerEcho } from '@etn/shared';
 
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
-import { getComment } from '../domain/comment-service.js';
-import { getLink } from '../domain/link-service.js';
-import { getThought } from '../domain/thought-service.js';
 import { emitDomainEvent, type DomainEventActor } from '../realtime/emit.js';
-import {
-  recordAttachmentActivity,
-  recordCommentActivity,
-  recordLayerActivity,
-  recordLinkActivity,
-  recordLinkTypeActivity,
-  recordOwnerActivity,
-  recordPropertyActivity,
-  recordThoughtActivity,
-  recordThoughtTypeActivity,
-  recordTypePropertyActivity,
-} from '../domain/activity-service.js';
 import type { ResolvedMcpLimits } from './limits.js';
 import { resolveMcpLimits, WriteRateLimiter } from './limits.js';
 import type { McpDeps } from './types.js';
@@ -163,308 +142,42 @@ export function actorOf(rt: McpRuntime): DomainEventActor {
   return { user_id: rt.deps.auth.userId, client_id: null };
 }
 
+export type { WriteFx } from '../domain/write-wrapper.js';
+export { actionOfChanges, runWrite } from '../domain/write-wrapper.js';
+import type { WriteFx } from '../domain/write-wrapper.js';
+
 /**
- * Emit a domain event so agent-made changes fan out like human ones (05 §7).
- *
- * @param layerIdOverride - attribute the event to a specific layer instead of
- *   the calling key's session layer — used exactly once, by `etn.layers.merge`
- *   (task S10): its single `layer.merged` event is attributed to the merge
- *   **target**, not to whatever layer the agent happens to be sitting on
- *   (mirrors the REST merge route, 13-layers.md §12).
+ * Контекст записи MCP-фасада для обёртки домена ({@link runWrite},
+ * ADR 162d8e7a): актор — владелец API-ключа, слой — сессия ключа, транспорт
+ * событий — тот же, что у REST (04-realtime.md §7), аудит — одна строка
+ * `category=data` на tool-вызов (05 §6.1). События с опцией `layerId`
+ * атрибутируются ей (например, `layer.merged` — целевому слою).
  */
-export function emitAgentEvent<E extends RealtimeEventType>(
+export function mcpWriteFx(
   rt: McpRuntime,
   networkId: string,
-  type: E,
-  data: RealtimeEventMap[E],
   requestId?: string | number,
-  layerIdOverride?: string,
-): void {
-  emitDomainEvent(
-    { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
+): WriteFx {
+  return {
     networkId,
-    type,
-    data,
-    actorOf(rt),
-    {
-      ...(requestId === undefined ? {} : { meta: { request_id: String(requestId) } }),
-      // Task S10 (13-layers.md §10.2): tag the event with the calling key's
-      // actual session layer, not a hardcoded base — visibility fan-out
-      // (04-realtime.md §11) depends on it just like it does for REST writes.
-      layerId: layerIdOverride ?? resolveRuntimeLayer(rt, networkId).id,
-    },
-  );
-}
-
-/**
- * Emit a real-time event AND append a matching row to `activity_log` (задача
- * f2eca5a4, требование b0c7a57c). Captures (`edit.*`) и per-user события не
- * пишутся — вызывающий код просто не дёргает эту обёртку для них. Запись в
- * `activity_log` идёт в отдельной транзакции (сбой не отменяет бизнес-операцию).
- */
-export function emitAgentActivityEvent<E extends RealtimeEventType>(
-  rt: McpRuntime,
-  networkId: string,
-  type: E,
-  data: RealtimeEventMap[E],
-  ndb: NetworkDb,
-  requestId?: string | number,
-  layerIdOverride?: string,
-): void {
-  emitAgentEvent(rt, networkId, type, data, requestId, layerIdOverride);
-  recordAgentActivity(rt, networkId, type, data, ndb, layerIdOverride);
-}
-
-/**
- * Действие журнала для update-события: только пометка на удаление имеет
- * выделенные действия `trashed`/`restored` (так же записывают REST-роуты —
- * `PATCH /links` и batch-операция `trash` в `routes/thoughts.ts`,
- * требование b0c7a57c), прочие правки — `updated`.
- */
-function actionOfChanges(
-  changes: { marked_for_deletion?: boolean } | undefined,
-): 'trashed' | 'restored' | 'updated' {
-  if (changes?.marked_for_deletion === true) return 'trashed';
-  if (changes?.marked_for_deletion === false) return 'restored';
-  return 'updated';
-}
-
-/**
- * Append an `activity_log` row for one MCP-initiated mutation. Dispatches on
- * the event catalogue type to pick the right `recordXxxActivity` helper.
- * Захваты (`edit.acquired` / `edit.released` / `edit.cleared`) и per-user
- * события (`audience: 'user'`) не пишутся — это требование b0c7a57c.
- *
- * Update-события несут только `{ id, changes, version }`, поэтому полный
- * снимок диспетчер дочитывает из строки после обновления — это тот же
- * пост-обновлённый DTO, который REST-роут получает из `updateThought`/
- * `updateLink`/`updateComment` и передаёт в `record*Activity`. Удаления
- * (`*.deleted`) и операции слоёв диспетчер разобрать не может (строки уже
- * нет / события не эмитятся вовсе) — их записывают сами MCP-обработчики
- * снимком, взятым ДО мутации, ровно как REST-роуты.
- */
-function recordAgentActivity<E extends RealtimeEventType>(
-  rt: McpRuntime,
-  networkId: string,
-  type: E,
-  data: RealtimeEventMap[E],
-  ndb: NetworkDb,
-  layerIdOverride?: string,
-): void {
-  const userId = rt.deps.auth.userId;
-  const layerId = layerIdOverride ?? resolveRuntimeLayer(rt, networkId).id;
-  // Cast на string — `E extends RealtimeEventType` не сужается в switch,
-  // а фактические значения — литералы из того же объединения.
-  const evt = type as unknown as string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const payload = data as any;
-  switch (evt) {
-    case 'thought.created':
-      recordThoughtActivity(ndb, {
+    userId: rt.deps.auth.userId,
+    layerId: resolveRuntimeLayer(rt, networkId).id,
+    emit: (type, data, options) =>
+      emitDomainEvent(
+        { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
         networkId,
-        userId,
-        action: 'created',
-        thought: payload.thought,
-        layerId,
-      });
-      return;
-    case 'thought.updated': {
-      const ev = payload as { id: string; changes?: { marked_for_deletion?: boolean } };
-      const thought = getThought(ndb, ev.id);
-      if (thought !== null) {
-        recordThoughtActivity(ndb, {
-          networkId,
-          userId,
-          action: actionOfChanges(ev.changes),
-          thought,
-          layerId,
-        });
-      }
-      return;
-    }
-    case 'thought.deleted':
-      // Строки после удаления уже нет: снимок берётся в MCP-обработчике
-      // ДО deleteThought (как `getThought` в REST-роуте) и записывается
-      // там же явно через recordThoughtActivity.
-      return;
-    case 'thought.reordered':
-      // Реордеризация ссылок — это правки мысли-владельца, отдельной
-      // записи не требуется (требование b0c7a57c фиксирует лишь CRUD).
-      return;
-    case 'link.created':
-      recordLinkActivity(ndb, {
-        networkId,
-        userId,
-        action: 'created',
-        link: payload.link,
-        layerId,
-      });
-      return;
-    case 'link.updated': {
-      const ev = payload as { id: string; changes?: { marked_for_deletion?: boolean } };
-      const link = getLink(ndb, ev.id);
-      if (link !== null) {
-        recordLinkActivity(ndb, {
-          networkId,
-          userId,
-          action: actionOfChanges(ev.changes),
-          link,
-          layerId,
-        });
-      }
-      return;
-    }
-    case 'link.deleted':
-      // Снимок берётся в MCP-обработчике ДО deleteLink и записывается
-      // явно (как `getLink` в REST-роуте DELETE /links/:id).
-      return;
-    case 'thought-type.created':
-      recordThoughtTypeActivity(ndb, {
-        networkId,
-        userId,
-        action: 'created',
-        type: payload.type,
-        layerId,
-      });
-      return;
-    case 'thought-type.updated':
-      return;
-    case 'thought-type.deleted':
-      return;
-    case 'link-type.created':
-      recordLinkTypeActivity(ndb, {
-        networkId,
-        userId,
-        action: 'created',
-        type: payload.type,
-        layerId,
-      });
-      return;
-    case 'link-type.updated':
-      return;
-    case 'link-type.deleted':
-      return;
-    case 'property-registry.created':
-      recordPropertyActivity(ndb, {
-        networkId,
-        userId,
-        action: 'created',
-        property: payload.property,
-        layerId,
-      });
-      return;
-    case 'property-registry.updated':
-      return;
-    case 'property-registry.deleted':
-      return;
-    case 'property-definition.created':
-    case 'property-definition.updated':
-    case 'property-definition.deleted':
-      // Привязка свойства к типу — это правка типа-владельца; в журнале
-      // фиксируем как обновление самого типа. Имя берём из определения,
-      // id владельца — из payload.definition.owner_id (если есть).
-      {
-        const def = payload.definition as
-          | { owner_id?: string; id: string; key?: string }
-          | undefined;
-        if (def?.owner_id !== undefined) {
-          recordTypePropertyActivity(ndb, {
-            networkId,
-            userId,
-            action: 'updated',
-            typeId: def.owner_id,
-            typeName: def.key ?? def.id,
-            layerId,
-          });
-        }
-      }
-      return;
-    case 'property-value.set':
-    case 'property-value.deleted': {
-      // В журнал идёт обновление самой сущности-владельца (мысли/связи) —
-      // как в REST PUT/DELETE properties: снимок полного владельца, а не
-      // голый id (требование b0c7a57c).
-      const ev = payload as {
-        owner_type: 'thought' | 'link';
-        owner_id: string;
-      };
-      const entity =
-        ev.owner_type === 'thought' ? getThought(ndb, ev.owner_id) : getLink(ndb, ev.owner_id);
-      recordOwnerActivity(ndb, {
-        networkId,
-        userId,
-        entityType: ev.owner_type,
-        entity: entity ?? { id: ev.owner_id },
-        layerId,
-      });
-      return;
-    }
-    case 'comment.created':
-      recordCommentActivity(ndb, {
-        networkId,
-        userId,
-        action: 'created',
-        comment: payload.comment,
-        layerId,
-      });
-      return;
-    case 'comment.updated': {
-      const ev = payload as { id: string };
-      const comment = getComment(ndb, ev.id);
-      if (comment !== null) {
-        recordCommentActivity(ndb, {
-          networkId,
-          userId,
-          action: 'updated',
-          comment,
-          layerId,
-        });
-      }
-      return;
-    }
-    case 'comment.deleted':
-      // Снимок берётся в MCP-обработчике ДО deleteComment и записывается
-      // явно (как `getComment` в REST-роуте DELETE /comments/:id).
-      return;
-    case 'attachment.created':
-      recordAttachmentActivity(ndb, {
-        networkId,
-        userId,
-        action: 'created',
-        attachment: payload.attachment,
-        layerId,
-      });
-      return;
-    case 'attachment.updated':
-      return;
-    case 'attachment.deleted':
-      return;
-    case 'layer.created':
-    case 'layer.updated':
-    case 'layer.deleted':
-    case 'layer.merged':
-    case 'layer.selected':
-      // Инструменты слоёв не эмитят этих real-time событий (кроме
-      // `layer.merged`), а полезной нагрузки события для снимка не хватает:
-      // create/update/delete записывают журнал явно в самих MCP-обработчиках
-      // (как REST-роуты слоёв). `select` журнал не пишет вовсе — переключение
-      // сессии не меняет сам слой (REST `/select` тоже не пишет); `merge`
-      // опирается на авто-свёртку журнала внутри mergeLayer (6bcccd2b).
-      return;
-    case 'edit.acquired':
-    case 'edit.released':
-    case 'edit.cleared':
-    case 'thought-view.updated':
-    case 'user-preference.updated':
-    case 'saved-filter.created':
-    case 'saved-filter.updated':
-    case 'saved-filter.deleted':
-      // Захваты и per-user события НЕ пишутся в журнал (требование
-      // b0c7a57c, граница b0c7a57c).
-      return;
-    default:
-      return;
-  }
+        type,
+        data,
+        actorOf(rt),
+        {
+          ...(requestId === undefined ? {} : { meta: { request_id: String(requestId) } }),
+          ...(options?.audience !== undefined ? { audience: options.audience } : {}),
+          layerId: options?.layerId ?? resolveRuntimeLayer(rt, networkId).id,
+        },
+      ),
+    audit: (entry) =>
+      auditAgentCall(rt, entry.action, networkId, entry.targetType, entry.targetId, entry.details),
+  };
 }
 
 /**

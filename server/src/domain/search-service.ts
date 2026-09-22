@@ -68,6 +68,8 @@ import {
   synonymPatternSource,
   synonymPatternToRegex,
   TRAVERSAL_DEFAULTS,
+  type DuplicateHit,
+  type DuplicateMatchKind,
   type IconKind,
   type MentionHit,
   type MentionPrefilterMarkers,
@@ -81,6 +83,11 @@ import {
   type SearchScope,
   type SearchTextHit,
 } from '@etn/shared';
+
+// Формы дублей переехали в общий модуль (задача 120385ba): одна форма ответа
+// `GET /thoughts/duplicates` на сервер и клиент. Реэкспорт — для существующих
+// импортов из домена.
+export type { DuplicateHit, DuplicateMatchKind };
 
 import type { NetworkDb } from '../db/network-db.js';
 import {
@@ -1027,38 +1034,6 @@ export function search(
 // ---------------------------------------------------------------------------
 // Public: findDuplicates (add-thought dialog + MCP find_duplicates)
 // ---------------------------------------------------------------------------
-
-/** How a candidate matched the query (in descending priority order). */
-export type DuplicateMatchKind = 'title' | 'synonym' | 'partial';
-
-/** A candidate returned by {@link findDuplicates}. */
-export interface DuplicateHit {
-  id: string;
-  title: string;
-  /** Display forms of the candidate's synonyms. */
-  synonyms: string[];
-  /** Strongest match found. */
-  matched_on: DuplicateMatchKind;
-  /** Synonym text that matched, when `matched_on === 'synonym'`. */
-  matched_synonym?: string;
-  /** The candidate's own thought type (for icon/style resolution). */
-  type_id: string | null;
-  /** Own icon, when set; the caller falls back to the type's icon. */
-  icon: string | null;
-  icon_kind: IconKind;
-  /** Own style overrides (nullable: inherit the type defaults, 02-data-model.md §3.1.1). */
-  fg_color: string | null;
-  bg_color: string | null;
-  font_bold: boolean | null;
-  font_italic: boolean | null;
-  font_underline: boolean | null;
-  font_strike: boolean | null;
-  /**
-   * Title of one parent (lexicographically first), so the add dialog can
-   * disambiguate equal titles under different parents.
-   */
-  parent_title: string | null;
-}
 
 /** Normalise a title/synonym the way the thought service does (NFC+trim+lower). */
 function norm(value: string): string {

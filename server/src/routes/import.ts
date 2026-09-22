@@ -23,14 +23,19 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { EtnError, ETNX_MAX_BYTES, type ImportSummary } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
-import { importFromEtnx, previewFromEtnx } from '../domain/import-service.js';
-import { getThoughtOrThrow } from '../domain/thought-service.js';
 import {
-  recordCommentActivity,
-  recordLinkActivity,
-  recordThoughtActivity,
-} from '../domain/activity-service.js';
+  openRouteNetworkDb,
+  restWriteFx,
+  runWrite,
+  type AnyWriteEvent,
+  type RouteDeps,
+  type WriteActivityEntry,
+} from './helpers.js';
+import { parseRest, RestImportCommit, RestImportPreview } from '../contracts.js';
+import { importFromEtnx, previewFromEtnx } from '../domain/import-service.js';
+import { getThought, getThoughtOrThrow } from '../domain/thought-service.js';
+import { getLink } from '../domain/link-service.js';
+import { getComment } from '../domain/comment-service.js';
 
 /** `/api/v1/networks*` import routes plugin factory. */
 export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -42,8 +47,8 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/import/preview',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (request: FastifyRequest, reply) => {
-        const body = requestBody(request);
-        const archiveB64 = readArchiveB64(body, request.id);
+        const input = parseRest(RestImportPreview, request);
+        const archiveB64 = input.archive_b64 as string;
         const buf = decodeArchive(archiveB64, request.id);
         const preview = await previewFromEtnx(buf, app.appLogger);
         return sendSuccess(reply, preview);
@@ -57,11 +62,11 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler],
       },
       async (request: FastifyRequest, reply) => {
-        const networkId = (request.params as { networkId: string }).networkId;
+        const input = parseRest(RestImportCommit, request);
+        const networkId = input.network_id;
         const ndb = openRouteNetworkDb(deps, request, networkId, app.appLogger);
-        const body = requestBody(request);
-        const archiveB64 = readArchiveB64(body, request.id);
-        const parentThoughtId = readParentThoughtId(body, request.id);
+        const archiveB64 = input.archive_b64 as string;
+        const parentThoughtId = input.parent_thought_id as string;
 
         // Validate parent up-front so the import transaction does not have to
         // roll back half-way through. Errors here surface as 4xx instead of 5xx.
@@ -69,7 +74,10 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const buf = decodeArchive(archiveB64, request.id);
         const actorUserId = request.auth!.user.id;
-        const slices = readImportSlices(body);
+        const slices = input.etnx as Parameters<typeof importFromEtnx>[2]['slices'] | undefined;
+        // `importFromEtnx` сам держит весь импорт одной транзакцией; она же
+        // асинхронна (разбор zip), поэтому обёртка здесь исполняет только
+        // пост-коммитные эффекты: события и журнал — из результата импорта.
         const result = await importFromEtnx(
           ndb,
           buf,
@@ -77,66 +85,43 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
           app.appLogger,
         );
 
-        const layerId = request.layerEcho?.id ?? null;
         // Fire realtime events so other clients (and the importer's own
         // canvas/panels) refresh — the canvas, focus history, and selection
         // cache all listen to thought.created / link.created / comment.updated.
-        for (const id of result.createdThoughtIds) {
-          const thought = ndb
-            .prepare(
-              'SELECT id, title, title_norm, type_id, icon, icon_kind, active, is_protected, is_root, fg_color, bg_color, font_bold, font_italic, font_underline, font_strike, version, created_at, created_by, updated_at, updated_by FROM thoughts_v WHERE id = ?',
-            )
-            .get(id) as unknown as import('@etn/shared').Thought | undefined;
-          if (thought === undefined) continue;
-          deps.emit(request, networkId, 'thought.created', { thought });
-          recordThoughtActivity(ndb, {
-            networkId,
-            userId: actorUserId,
-            action: 'created',
-            thought,
-            layerId,
-          });
-        }
-        for (const id of result.createdLinkIds) {
-          const link = ndb
-            .prepare(
-              'SELECT id, source_id, target_id, type_id, color, style, width, active, version, created_at, updated_at, created_by, updated_by FROM links_v WHERE id = ?',
-            )
-            .get(id) as unknown as import('@etn/shared').Link | undefined;
-          if (link === undefined) continue;
-          deps.emit(request, networkId, 'link.created', { link });
-          recordLinkActivity(ndb, {
-            networkId,
-            userId: actorUserId,
-            action: 'created',
-            link,
-            layerId,
-          });
-        }
-        for (const id of result.updatedCommentIds) {
-          const comment = ndb
-            .prepare(
-              'SELECT id, owner_type, owner_id, kind, title, body_md, body_html, valid_from, valid_to, version, created_at, updated_at, created_by, updated_by FROM comments_v WHERE id = ?',
-            )
-            .get(id) as unknown as import('@etn/shared').Comment | undefined;
-          if (comment === undefined) continue;
-          deps.emit(request, networkId, 'comment.updated', {
-            id: comment.id,
-            changes: {
-              body_md: comment.body_md,
-              body_html: comment.body_html,
-              title: comment.title,
-            },
-            version: comment.version,
-          });
-          recordCommentActivity(ndb, {
-            networkId,
-            userId: actorUserId,
-            action: 'updated',
-            comment,
-            layerId,
-          });
-        }
+        runWrite(ndb, restWriteFx(deps, request, networkId), () => {
+          const events: AnyWriteEvent[] = [];
+          const activity: WriteActivityEntry[] = [];
+          for (const id of result.createdThoughtIds) {
+            const thought = getThought(ndb, id);
+            if (thought === null) continue;
+            events.push({ type: 'thought.created', data: { thought } });
+            activity.push({ kind: 'thought', action: 'created', thought });
+          }
+          for (const id of result.createdLinkIds) {
+            const link = getLink(ndb, id);
+            if (link === null) continue;
+            events.push({ type: 'link.created', data: { link } });
+            activity.push({ kind: 'link', action: 'created', link });
+          }
+          for (const id of result.updatedCommentIds) {
+            const comment = getComment(ndb, id);
+            if (comment === null) continue;
+            events.push({
+              type: 'comment.updated',
+              data: {
+                id: comment.id,
+                changes: {
+                  body_md: comment.body_md,
+                  body_html: comment.body_html,
+                  title: comment.title,
+                },
+                version: comment.version,
+              },
+            });
+            activity.push({ kind: 'comment', action: 'updated', comment });
+          }
+          return { result: undefined, events, activity };
+        });
 
         const {
           thoughtIdRemap: _remap,
@@ -156,79 +141,6 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
   };
 }
 
-/** Extract `archive_b64` (string) from a JSON body. */
-function readArchiveB64(body: Record<string, unknown>, requestId: string): string {
-  const value = body['archive_b64'];
-  if (typeof value !== 'string' || value === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Поле archive_b64 обязательно и должно быть непустой строкой.',
-      { field: 'archive_b64' },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/** Extract `parent_thought_id` (UUID) from a JSON body. */
-function readParentThoughtId(body: Record<string, unknown>, requestId: string): string {
-  const value = body['parent_thought_id'];
-  if (typeof value !== 'string' || value === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Поле parent_thought_id обязательно и должно быть UUID.',
-      { field: 'parent_thought_id' },
-      requestId,
-    );
-  }
-  return value;
-}
-
-/** Type alias for the `slices` parameter of `importFromEtnx`. */
-type ImportSlices = NonNullable<Parameters<typeof importFromEtnx>[2]['slices']>;
-
-/**
- * Extract the optional `etnx` slice toggles from a JSON body. Returns
- * `undefined` when the field is absent — the import service then defaults
- * to importing every slice.
- */
-function readImportSlices(body: Record<string, unknown>): ImportSlices | undefined {
-  const raw = body['etnx'];
-  if (raw === undefined) return undefined;
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Поле etnx должно быть объектом.', {
-      field: 'etnx',
-    });
-  }
-  const obj = raw as Record<string, unknown>;
-  const slices: ImportSlices = {};
-  if (obj['include_types'] !== undefined) {
-    if (typeof obj['include_types'] !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'etnx.include_types должен быть boolean.', {
-        field: 'etnx.include_types',
-      });
-    }
-    slices.include_types = obj['include_types'];
-  }
-  if (obj['include_attachments'] !== undefined) {
-    if (typeof obj['include_attachments'] !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'etnx.include_attachments должен быть boolean.', {
-        field: 'etnx.include_attachments',
-      });
-    }
-    slices.include_attachments = obj['include_attachments'];
-  }
-  if (obj['include_chronology'] !== undefined) {
-    if (typeof obj['include_chronology'] !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'etnx.include_chronology должен быть boolean.', {
-        field: 'etnx.include_chronology',
-      });
-    }
-    slices.include_chronology = obj['include_chronology'];
-  }
-  return slices;
-}
-
 /**
  * Decode a base64 archive string and check its size against the configured
  * maximum. The actual archive parsing (zip layout, manifest schema) happens
@@ -237,12 +149,7 @@ function readImportSlices(body: Record<string, unknown>): ImportSlices | undefin
 function decodeArchive(archiveB64: string, requestId: string): Buffer {
   const buf = Buffer.from(archiveB64, 'base64');
   if (buf.length === 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Архив пустой или не base64.',
-      undefined,
-      requestId,
-    );
+    throw new EtnError('VALIDATION_ERROR', 'Архив пустой или не base64.', undefined, requestId);
   }
   if (buf.length > ETNX_MAX_BYTES) {
     throw new EtnError(

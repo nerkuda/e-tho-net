@@ -15,15 +15,18 @@
  * эмитятся в тот же момент, когда меняется состояние таблицы `object_locks`,
  * — после успешной мутации и до ответа клиенту, чтобы клиент и его соседи
  * увидели новое состояние согласованно с REST-ответом.
+ *
+ * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`
+ * (та же валидация, что у MCP `etn.locks.*`).
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import {
-  EtnError,
   type EditAcquiredData,
   type EditClearedData,
   type EditReleasedData,
+  type LocksClearResult,
 } from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
@@ -36,20 +39,12 @@ import {
 } from '../domain/lock-service.js';
 import {
   openRouteNetworkDb,
-  queryStrings,
-  requestBody,
+  restWriteFx,
+  runWrite,
+  type AnyWriteEvent,
   type RouteDeps,
 } from './helpers.js';
-
-/** Route params for `:networkId`. */
-interface NetworkIdParams {
-  networkId: string;
-}
-
-/** Route params for the DELETE-by-lock-id variant. */
-interface LockIdParams extends NetworkIdParams {
-  lockId: string;
-}
+import { LocksAcquire, LocksClear, LocksList, LocksRelease, parseRest } from '../contracts.js';
 
 /** `/api/v1/networks*` locks routes plugin factory. */
 export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -63,19 +58,21 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
+        const input = parseRest(LocksAcquire, req);
         const auth = req.auth!;
-        const body = requestBody(req);
-        const entityType = stringField(body, 'entity_type', req.id);
-        const entityId = stringField(body, 'entity_id', req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const lock = acquireLock(ndb, {
-          entityType,
-          entityId,
-          userId: auth.user.id,
-          clientId: auth.clientId,
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const lock = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const acquired = acquireLock(ndb, {
+            entityType: input.entity_type,
+            entityId: input.entity_id,
+            userId: auth.user.id,
+            clientId: auth.clientId,
+          });
+          return {
+            result: acquired,
+            events: [editAcquiredEvent(auth.user.id, auth.clientId, acquired)],
+          };
         });
-        emitEditAcquired(deps, req, networkId, auth.user.id, auth.clientId, lock);
         sendSuccess(reply, lock, { request_id: req.id });
       },
     );
@@ -87,11 +84,13 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks/:lockId',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, lockId } = req.params as LockIdParams;
+        const input = parseRest(LocksRelease, req);
         const auth = req.auth!;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const released = releaseLock(ndb, lockId, auth.user.id);
-        emitEditReleased(deps, req, networkId, released);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const released = releaseLock(ndb, input.lock_id, auth.user.id);
+          return { result: undefined, events: [editReleasedEvent(released)] };
+        });
         // 204 — успешный release без тела.
         void reply.code(204).send();
       },
@@ -104,22 +103,11 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const q = req.query as Record<string, unknown>;
-        const userIds = queryStrings(q['user_id']);
-        const clientIds = queryStrings(q['client_id']);
-        if (userIds.length > 1 || clientIds.length > 1) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'user_id и client_id принимают ровно одно значение.',
-            { field: 'user_id|client_id' },
-            req.id,
-          );
-        }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const input = parseRest(LocksList, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const locks = listLocks(ndb, {
-          userId: userIds[0] ?? null,
-          clientId: clientIds[0] ?? null,
+          userId: input.user_id ?? null,
+          clientId: input.client_id ?? null,
         });
         sendList(reply, locks, locks.length, 0, locks.length);
       },
@@ -132,33 +120,29 @@ export function createLocksRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/locks/clear',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-        const targetUserId = stringField(body, 'user_id', req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const removed = clearLocksForUser(ndb, targetUserId);
-        for (const lock of removed) {
-          emitEditCleared(deps, req, networkId, lock, 'manual');
-        }
-        sendSuccess(reply, { cleared: removed.length }, { request_id: req.id });
+        const input = parseRest(LocksClear, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const removed = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const cleared = clearLocksForUser(ndb, input.user_id);
+          return {
+            result: cleared,
+            events: cleared.map((lock) => editClearedEvent(lock, 'manual')),
+          };
+        });
+        sendSuccess(reply, { cleared: removed.length } satisfies LocksClearResult, {
+          request_id: req.id,
+        });
       },
     );
   };
 }
 
 // ---------------------------------------------------------------------------
-// Event-emission helpers
+// Event builders (payload — из результата записи; публикует обёртка `runWrite`)
 // ---------------------------------------------------------------------------
 
-/** Emit `edit.acquired` for `lock` (caller has already inserted the row). */
-function emitEditAcquired(
-  deps: RouteDeps,
-  req: FastifyRequest,
-  networkId: string,
-  userId: string,
-  clientId: string | null,
-  lock: LockRow,
-): void {
+/** Событие `edit.acquired` для `lock` (строка уже вставлена). */
+function editAcquiredEvent(userId: string, clientId: string | null, lock: LockRow): AnyWriteEvent {
   const data: EditAcquiredData = {
     entity_type: lock.entity_type,
     entity_id: lock.entity_id,
@@ -168,16 +152,11 @@ function emitEditAcquired(
     acquired_at_ms: lock.acquired_at_ms,
   };
   // Аудитория — network: индикацию должны увидеть все участники сети.
-  deps.emit(req, networkId, 'edit.acquired', data);
+  return { type: 'edit.acquired', data };
 }
 
-/** Emit `edit.released` for a lock the owner just dropped. */
-function emitEditReleased(
-  deps: RouteDeps,
-  req: FastifyRequest,
-  networkId: string,
-  lock: LockRow,
-): void {
+/** Событие `edit.released` для замка, который владелец только что снял. */
+function editReleasedEvent(lock: LockRow): AnyWriteEvent {
   const data: EditReleasedData = {
     entity_type: lock.entity_type,
     entity_id: lock.entity_id,
@@ -185,17 +164,11 @@ function emitEditReleased(
     user_id: lock.user_id,
     client_id: lock.client_id,
   };
-  deps.emit(req, networkId, 'edit.released', data);
+  return { type: 'edit.released', data };
 }
 
-/** Emit `edit.cleared` for a server-side reset (reason in `data.reason`). */
-function emitEditCleared(
-  deps: RouteDeps,
-  req: FastifyRequest,
-  networkId: string,
-  lock: LockRow,
-  reason: EditClearedData['reason'],
-): void {
+/** Событие `edit.cleared` для серверного сброса (reason в `data.reason`). */
+function editClearedEvent(lock: LockRow, reason: EditClearedData['reason']): AnyWriteEvent {
   const data: EditClearedData = {
     entity_type: lock.entity_type,
     entity_id: lock.entity_id,
@@ -204,19 +177,5 @@ function emitEditCleared(
     client_id: lock.client_id,
     reason,
   };
-  deps.emit(req, networkId, 'edit.cleared', data);
-}
-
-/** Read a required string field, throw `VALIDATION_ERROR` when absent. */
-function stringField(obj: Record<string, unknown>, key: string, requestId: string): string {
-  const v = obj[key];
-  if (typeof v !== 'string' || v.length === 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `${key} обязателен и должен быть непустой строкой.`,
-      { field: key },
-      requestId,
-    );
-  }
-  return v;
+  return { type: 'edit.cleared', data };
 }

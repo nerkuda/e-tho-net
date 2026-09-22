@@ -28,9 +28,13 @@ import {
   createComment,
   createCommentWithTargets,
 } from '../src/domain/comment-service.js';
-import { queryThoughts as structuresQuery } from '../src/domain/structure-service.js';
 import { parseChronicleQueryBody, queryChronicle } from '../src/domain/chronicle-service.js';
-import { queryThoughts as mcpQueryThoughts } from '../src/domain/query-service.js';
+import {
+  mcpRequestToQuery,
+  queryThoughts as domainQueryThoughts,
+  structureRequestToQuery,
+} from '../src/domain/query-service.js';
+import type { StructureQueryRequest, ThoughtQueryRequest } from '@etn/shared';
 
 const ALICE = '00000000-0000-4000-8000-00000000a11ce';
 const BOB = '00000000-0000-4000-8000-00000000b0b00';
@@ -72,18 +76,26 @@ function seedAuthorshipFixture(ndb: NetworkDb): {
   return { tAliceOnly, tBobEdited, tBobCreated };
 }
 
+/**
+ * REST-фильтр через единый движок (задача c5265deb): `StructureQueryRequest`
+ * переводится в канон адаптером и исполняется с REST-контрактом (пустой
+ * фильтр → HOME+сироты).
+ */
 function structuresQueryIds(
   ndb: NetworkDb,
-  filter: Partial<Parameters<typeof structuresQuery>[2]> = {},
+  filter: Partial<StructureQueryRequest> = {},
 ): string[] {
-  const request = {
-    sort: 'alpha' as const,
-    order: 'asc' as const,
+  const request: StructureQueryRequest = {
+    sort: 'alpha',
+    order: 'asc',
     limit: 100,
     offset: 0,
     ...filter,
   };
-  const result = structuresQuery(ndb, ALICE, request, 'test-request');
+  const result = domainQueryThoughts(ndb, ALICE, structureRequestToQuery(request), {
+    emptyFilterMode: 'home_orphans',
+    includeDirections: true,
+  });
   return result.items.map((t) => t.id);
 }
 
@@ -99,12 +111,22 @@ function chronicleQueryIds(
   return result.rows.map((r) => r.id);
 }
 
+/**
+ * MCP-запрос через единый движок: wire-`ThoughtQueryRequest` переводится
+ * адаптером и исполняется с MCP-контрактом (пустой фильтр — обычный
+ * критериальный запрос).
+ */
 function mcpQueryIds(
   ndb: NetworkDb,
-  filter: Partial<Parameters<typeof mcpQueryThoughts>[1]> = {},
+  filter: Partial<ThoughtQueryRequest> = {},
 ): string[] {
-  const result = mcpQueryThoughts(ndb, filter, { maxNodes: 200 });
-  return result.hits.map((h) => h.id);
+  const result = domainQueryThoughts(
+    ndb,
+    ALICE,
+    mcpRequestToQuery(filter as ThoughtQueryRequest, { maxNodes: 200 }),
+    { emptyFilterMode: 'all', maxLimit: 200 },
+  );
+  return result.items.map((h) => h.id);
 }
 
 describe(

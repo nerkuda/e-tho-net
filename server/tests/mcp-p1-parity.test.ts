@@ -20,8 +20,10 @@ import { describe, it } from 'node:test';
 
 import {
   buildMcpContext,
+  callWrite,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
   toolJson,
   toolText,
@@ -109,7 +111,7 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
           arguments: { network_id: ctx.networkId, thought_ids: ids },
         });
         assert.equal(result.isError, true);
-        assert.match(toolText(result), /Invalid arguments|too large/i);
+        assert.match(toolText(result), /ETN error \[VALIDATION_ERROR\]: thought_ids должен содержать не более/);
       } finally {
         await handle.close();
       }
@@ -123,27 +125,12 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const created = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: {
-              network_id: ctx.networkId,
-              title: 'С большим комментарием',
-              link: { direction: 'parent', target_thought_id: ctx.homeId },
-            },
-          }),
-        );
         // 3000 символов — больше, чем preview-лимит 2000.
         const big = 'x'.repeat(3000);
-        await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: created.id,
-            kind: 'permanent',
-            body_md: big,
-          },
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'С большим комментарием',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+          comment: { body_md: big },
         });
         const result = toolJson<{
           items: Array<{ id: string; comment_preview: { body_md: string } | null }>;
@@ -302,8 +289,35 @@ describe('etn.thoughts.bulk_update (0.7.2)', { skip: !nativeAvailable() }, () =>
           },
         });
         assert.equal(result.isError, true);
-        assert.match(toolText(result), /Invalid arguments/);
-        assert.match(toolText(result), /type_id or type/);
+        assert.match(toolText(result), /ETN error \[VALIDATION_ERROR\]: provide at most one of type_id or type/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('неизвестный ключ верхнего уровня (parent_ids вне args) → VALIDATION_ERROR (ea4581c5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.bulk_update',
+          arguments: {
+            network_id: ctx.networkId,
+            ids: [ctx.homeId],
+            op: 'link_parents',
+            // `parent_ids` должны жить внутри `args` — раньше тихо терялись.
+            parent_ids: [ctx.homeId],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('parent_ids'), `expected offending field in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
       } finally {
         await handle.close();
       }
@@ -352,18 +366,18 @@ describe('etn.chronicle.query (0.7.2)', { skip: !nativeAvailable() }, () => {
       try {
         // Создаём хроно-комментарий с уникальным словом.
         const today = new Date().toISOString().slice(0, 10);
-        await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: ctx.homeId,
-            kind: 'chronological',
-            title: 'Заметка',
-            body_md: 'уникальный-маркер-для-фильтрации',
-            valid_from: today,
+        await callWrite(handle.client, ctx.networkId, [
+          {
+            thought_id: ctx.homeId,
+            chronicle: [
+              {
+                title: 'Заметка',
+                body_md: 'уникальный-маркер-для-фильтрации',
+                valid_from: today,
+              },
+            ],
           },
-        });
+        ]);
         const found = toolJson<{
           rows: Array<{ id: string; body_md?: string; snippet: string }>;
           meta: { total: number };

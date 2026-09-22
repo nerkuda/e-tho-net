@@ -22,7 +22,6 @@ import {
   buildRestContext,
   closeRestContext,
   nativeAvailable,
-  type RestTestContext,
 } from './rest-helpers.js';
 
 describe(
@@ -381,6 +380,91 @@ describe(
       }
     });
 
+    it('POST /thought-types/{id}/properties с side создаёт привязку с указанной стороной (ошибка 9f579e69)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const mkType = async (name: string): Promise<string> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/thought-types`,
+            headers: h,
+            payload: { name },
+          });
+          assert.equal(res.statusCode, 201);
+          return (res.json().data as { id: string }).id;
+        };
+        const source = await mkType('Источник');
+        const target = await mkType('Назначение');
+
+        const propRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'связь',
+            value_type: 'link',
+            name_forward: 'связь',
+            name_reverse: 'обратная',
+          },
+        });
+        assert.equal(propRes.statusCode, 201);
+        const prop = (propRes.json().data as { id: string }).id;
+
+        // «Добавить тип» в таблицу «Типы источников»: side='source'.
+        const attachSrc = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${source}/properties`,
+          headers: h,
+          payload: { property_id: prop, required: false, side: 'source' },
+        });
+        assert.equal(attachSrc.statusCode, 201, attachSrc.body?.toString());
+        const srcSide = (attachSrc.json().data as { side: string | null }).side;
+        assert.equal(srcSide, 'source');
+
+        // Та же привязка со стороны назначения: side='target'.
+        const attachTgt = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${target}/properties`,
+          headers: h,
+          payload: { property_id: prop, required: true, side: 'target' },
+        });
+        assert.equal(attachTgt.statusCode, 201, attachTgt.body?.toString());
+        const tgtSide = (attachTgt.json().data as { side: string | null }).side;
+        assert.equal(tgtSide, 'target');
+
+        // Переоткрытие: стороны видны в эффективном списке типа.
+        const listRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${target}/properties`,
+          headers: h,
+        });
+        assert.equal(listRes.statusCode, 200);
+        const rows = listRes.json().data as Array<{
+          property_id: string;
+          side: string | null;
+          required: boolean;
+        }>;
+        const row = rows.find((r) => r.property_id === prop);
+        assert.ok(row, 'привязка видна в списке');
+        assert.equal(row.side, 'target');
+        assert.equal(row.required, true);
+
+        // Невалидная сторона → 422.
+        const badSide = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${source}/properties`,
+          headers: h,
+          payload: { property_id: prop, side: 'sideways' },
+        });
+        assert.equal(badSide.statusCode, 422, badSide.body?.toString());
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('PATCH value_type скаляр ↔ связь возвращает 422 VALIDATION_ERROR (требование 5a82c709)', async () => {
       const ctx = await buildRestContext();
       try {
@@ -408,6 +492,88 @@ describe(
         };
         assert.equal(body.error.code, 'VALIDATION_ERROR');
         assert.match(body.error.details.reason ?? '', /связ|конверта/i);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+    it('смена родителя после PATCH /properties: устаревшая версия link_type — 409, свежая — 200 (ошибка e7c077e4)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const mkLinkProp = async (
+          name: string,
+        ): Promise<{ propertyId: string; linkTypeId: string }> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/properties`,
+            headers: h,
+            payload: { name, value_type: 'link', name_forward: name, name_reverse: `${name}-rev` },
+          });
+          assert.equal(res.statusCode, 201, res.body?.toString());
+          const data = res.json().data as { id: string; config: { link_type_id: string } };
+          return { propertyId: data.id, linkTypeId: data.config.link_type_id };
+        };
+        const getLt = async (id: string): Promise<{ version: number; parent_id: string | null }> => {
+          const res = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${nid}/link-types/${id}`,
+            headers: h,
+          });
+          assert.equal(res.statusCode, 200, res.body?.toString());
+          return res.json().data as { version: number; parent_id: string | null };
+        };
+        const patchLt = async (
+          id: string,
+          expectedVersion: number,
+          parentId: string | null,
+        ): Promise<number> => {
+          const res = await ctx.app.inject({
+            method: 'PATCH',
+            url: `/api/v1/networks/${nid}/link-types/${id}`,
+            headers: { ...h, 'if-match': String(expectedVersion) },
+            payload: { parent_id: parentId },
+          });
+          return res.statusCode;
+        };
+
+        const a = await mkLinkProp('prop-a');
+        const b = await mkLinkProp('prop-b');
+        const before = await getLt(a.linkTypeId);
+
+        // Один «Применить» клиента: PATCH /properties синхронизирует связанный
+        // link_type (пара имён и оформление) и поднимает его версию.
+        const propPatch = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${a.propertyId}`,
+          headers: h,
+          payload: { name: 'prop-a', name_forward: 'prop-a', name_reverse: 'prop-a-rev', link_color: '#123456' },
+        });
+        assert.equal(propPatch.statusCode, 200, propPatch.body?.toString());
+        const bumped = await getLt(a.linkTypeId);
+        assert.equal(bumped.version, before.version + 1, 'PATCH /properties поднял версию link_type');
+
+        // Следующий вызов со устаревшей версией (как делал клиент) — конфликт.
+        assert.equal(
+          await patchLt(a.linkTypeId, before.version, b.linkTypeId),
+          409,
+          'устаревшая версия даёт VERSION_CONFLICT',
+        );
+
+        // Свежая версия из GET (логика фикса) — PATCH проходит.
+        const fresh = await getLt(a.linkTypeId);
+        assert.equal(await patchLt(a.linkTypeId, fresh.version, b.linkTypeId), 200, 'свежая версия проходит');
+        assert.equal((await getLt(a.linkTypeId)).parent_id, b.linkTypeId);
+
+        // Обратный сценарий: снять родителя (на корневой тип) свежей версией.
+        const cur = await getLt(a.linkTypeId);
+        assert.equal(await patchLt(a.linkTypeId, cur.version, null), 200, 'снятие родителя проходит');
+
+        // Реальная конкурентная правка (версия изменена извне) — по-прежнему 409.
+        const v = (await getLt(a.linkTypeId)).version;
+        assert.equal(await patchLt(a.linkTypeId, v, b.linkTypeId), 200, 'первый из конкурентов проходит');
+        assert.equal(await patchLt(a.linkTypeId, v, null), 409, 'второй конфликтует');
       } finally {
         await closeRestContext(ctx);
       }

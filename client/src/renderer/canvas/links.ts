@@ -33,9 +33,10 @@
 import type { FocusEdge, FocusResponse, LinkType } from '@etn/shared';
 
 import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
-import { div, el } from '../lib/dom.js';
+import { div, el, setTooltip } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview } from '../lib/hover-preview.js';
+import { svgIcon } from '../lib/icons.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';
@@ -72,6 +73,23 @@ const LABEL_OFFSET = 8;
  *  long edges from growing huge loops. */
 const BEND_MIN = 24;
 const BEND_MAX = 140;
+
+/**
+ * Ребро помечено на удаление (корзина, ошибка 355319d4): линия приглушается и
+ * становится пунктирной — та же логика, что у помеченной мысли (облачко
+ * бледнеет). Помеченную сущность НЕ прячем: пользователь должен видеть, что
+ * ребро есть, но лежит в корзине.
+ */
+const TRASHED_STROKE = 'var(--link-default, #9aa3b2)';
+const TRASHED_DASH = '4 4';
+const TRASHED_OPACITY = '0.45';
+/** Суффикс подписи типа у помеченного ребра («входит в (в корзине)»). */
+const TRASHED_LABEL_SUFFIX = ' (в корзине)';
+/**
+ * Где на кривой живёт метка корзины (доля параметра Безье): НЕ в середине —
+ * там подпись типа и бейдж-счётчик пачки, метка корзины их не перекрывает.
+ */
+const TRASH_BADGE_T = 0.3;
 
 /** A directed pair of thoughts with the links between them. */
 interface Bundle {
@@ -401,6 +419,9 @@ function edgesFromNeighbours(focus: FocusResponse): FocusEdge[] {
       source_id: n.id,
       target_id: fid,
       type_id: n.link_type_id,
+      // The neighbour DTO carries the edge's trash flag, so the fallback marks
+      // a trashed edge exactly like server-provided `focus.edges` does.
+      link_marked_for_deletion: n.link_marked_for_deletion === true,
       // Override unknown in this fallback; inherit from the type.
       color: null,
       style: null,
@@ -413,6 +434,8 @@ function edgesFromNeighbours(focus: FocusResponse): FocusEdge[] {
       source_id: fid,
       target_id: n.id,
       type_id: n.link_type_id,
+      link_marked_for_deletion: n.link_marked_for_deletion === true,
+      // Override unknown in this fallback; inherit from the type.
       color: null,
       style: null,
       width: null,
@@ -479,19 +502,44 @@ export function edgeGeometry(
   from: { x: number; y: number },
   to: { x: number; y: number },
 ): EdgeGeometry {
+  const { c1, c2 } = edgeControlPoints(from, to);
+  return {
+    d: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`,
+    mid: edgePointAt(from, to, 0.5),
+  };
+}
+
+/** Control points of the edge curve (see {@link edgeGeometry}). */
+function edgeControlPoints(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): { c1: { x: number; y: number }; c2: { x: number; y: number } } {
   const dy = Math.abs(to.y - from.y);
   const dist = Math.hypot(to.x - from.x, to.y - from.y);
   const bend = Math.min(BEND_MAX, Math.max(BEND_MIN, Math.max(dy * 0.45, dist * 0.18)));
-  const c1 = { x: from.x, y: from.y + bend };
-  const c2 = { x: to.x, y: to.y - bend };
-  // Cubic Bézier at t = 0.5: (P0 + 3·P1 + 3·P2 + P3) / 8.
-  const mid = {
-    x: (from.x + 3 * c1.x + 3 * c2.x + to.x) / 8,
-    y: (from.y + 3 * c1.y + 3 * c2.y + to.y) / 8,
-  };
+  return { c1: { x: from.x, y: from.y + bend }, c2: { x: to.x, y: to.y - bend } };
+}
+
+/**
+ * Point on the edge curve at parameter `t` (0..1) — the same cubic Bézier the
+ * line is drawn with. `edgeGeometry` exposes only `t = 0.5` (the label/badge
+ * anchor); the trash badge wants an off-centre anchor so it never collides
+ * with the type label or the bundle count badge (ошибка 355319d4).
+ */
+export function edgePointAt(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  t: number,
+): { x: number; y: number } {
+  const { c1, c2 } = edgeControlPoints(from, to);
+  const u = 1 - t;
+  const b0 = u * u * u;
+  const b1 = 3 * u * u * t;
+  const b2 = 3 * u * t * t;
+  const b3 = t * t * t;
   return {
-    d: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`,
-    mid,
+    x: b0 * from.x + b1 * c1.x + b2 * c2.x + b3 * to.x,
+    y: b0 * from.y + b1 * c1.y + b2 * c2.y + b3 * to.y,
   };
 }
 
@@ -561,6 +609,7 @@ function drawVisualLine(
   if (svg === null) return;
   const count = bundle.edges.length;
   const style = linkStyle(bundle);
+  const trashed = bundleTrashed(bundle);
   // Line widths scale with the canvas zoom (L9).
   const zoom = store.state.canvasZoom;
   const lineWidth =
@@ -569,21 +618,34 @@ function drawVisualLine(
 
   // Gradient source→target colour (L14): an endpoint's identity colour (own
   // or type background) wins, else the line style colour. Same colours on
-  // both ends → plain solid stroke, no gradient is built.
+  // both ends → plain solid stroke, no gradient is built. A trashed edge takes
+  // the neutral dimmed stroke instead, so the gradient is not built at all.
   const fromColor = endpointColor(bundle.sourceId) ?? style.color;
   const toColor = endpointColor(bundle.targetId) ?? style.color;
-  const stroke = fromColor !== toColor ? ensureEdgeGradient(from, to, fromColor, toColor) : fromColor;
+  const stroke = trashed
+    ? TRASHED_STROKE
+    : fromColor !== toColor
+      ? ensureEdgeGradient(from, to, fromColor, toColor)
+      : fromColor;
 
   const line = document.createElementNS(SVG_NS, 'path');
   line.classList.add('link-line');
   line.setAttribute('d', geo.d);
   line.setAttribute('stroke', stroke);
   line.setAttribute('stroke-width', String(lineWidth));
-  line.setAttribute('stroke-dasharray', style.dash);
-  line.setAttribute('stroke-opacity', '0.75');
+  line.setAttribute('stroke-dasharray', trashed ? TRASHED_DASH : style.dash);
+  line.setAttribute('stroke-opacity', trashed ? TRASHED_OPACITY : '0.75');
   line.setAttribute('fill', 'none');
   line.dataset['key'] = bundle.key;
   line.dataset['links'] = bundle.edges.map((e) => e.id).join(',');
+  // Trash marker (ошибка 355319d4): dimmed dashed line + plain-language title;
+  // the clickable restore badge is drawn by `drawHitLine`.
+  if (trashed) {
+    line.classList.add('link-trashed');
+    const trashTitle = document.createElementNS(SVG_NS, 'title');
+    trashTitle.textContent = 'Связь в корзине';
+    line.append(trashTitle);
+  }
   // S11 (§10.3): mark bundles where at least one edge is overridden by the
   // current layer — dashed violet styling tells the user the link carries a
   // layer version without changing its geometry.
@@ -639,9 +701,67 @@ function drawVisualLine(
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));
     text.setAttribute('dominant-baseline', 'middle');
-    text.textContent = linkLabel(bundle, type);
+    text.textContent = linkLabel(bundle, type) + (trashed ? TRASHED_LABEL_SUFFIX : '');
     svg.append(text);
   }
+}
+
+/**
+ * Ребро (точнее — вся пачка рёбер одной направленной пары) в корзине: так
+ * считается, когда КАЖДОЕ её ребро помечено на удаление. Смешанная пачка
+ * (живое + помеченное) рисуется обычной линией — связь между мыслями есть,
+ * помечать всю линию было бы ложью (ошибка 355319d4).
+ */
+function bundleTrashed(bundle: Bundle): boolean {
+  return bundle.edges.length > 0 && bundle.edges.every((e) => e.link_marked_for_deletion === true);
+}
+
+/**
+ * Метка корзины на помеченной линии: чёрный кружок с красной иконкой корзины
+ * (тот же язык, что у метки помеченного облачка, §2.2). Кликабельна —
+ * открывает диалог связи «Вернуть из корзины» / «Удалить совсем»; это и есть
+ * «восстановление через корзину» для ребра (у мыслей метку открывает
+ * `onTrashBadgeClick` → тот же класс диалога).
+ *
+ * Рисуется только у пачки из ОДНОГО ребра: у пачки из нескольких непонятно,
+ * какое из них восстанавливать, а вся линия помечена лишь когда помечены все —
+ * такой редкий случай остаётся с приглушением, пунктиром и подсказкой.
+ */
+function drawTrashBadge(
+  parent: SVGSVGElement,
+  bundle: Bundle,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): void {
+  const linkId = bundle.edges.length === 1 ? bundle.edges[0]?.id : undefined;
+  if (linkId === undefined) return;
+  const zoom = store.state.canvasZoom;
+  const size = Math.max(BADGE_RADIUS * 2 * zoom, 16);
+  const at = edgePointAt(from, to, TRASH_BADGE_T);
+  const fo = document.createElementNS(SVG_NS, 'foreignObject');
+  fo.setAttribute('x', String(at.x - size / 2));
+  fo.setAttribute('y', String(at.y - size / 2));
+  fo.setAttribute('width', String(size));
+  fo.setAttribute('height', String(size));
+  const badge = el('button', 'link-trash-badge');
+  badge.type = 'button';
+  badge.append(svgIcon('trash', Math.round(size * 0.55)));
+  setTooltip(badge, 'Связь в корзине — нажмите, чтобы восстановить');
+  badge.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    // Ленивый импорт: статический замкнул бы цикл
+    // canvas/links → trash → canvas/canvas → canvas/links.
+    void import('../trash.js').then(({ openLinkDeleteDialog }) =>
+      openLinkDeleteDialog(networkId, linkId),
+    );
+  });
+  // Метка — свой «остров» наведения, как попап: без этого уход курсора с
+  // линии на метку гасил бы попап, пока пользователь тянется к кнопке.
+  badge.addEventListener('mouseenter', () => cancelPopoverHide());
+  fo.append(badge);
+  parent.append(fo);
 }
 
 /**
@@ -698,6 +818,9 @@ function drawHitLine(
   hit.addEventListener('click', (event) => void onLineClick(bundle, event));
   hit.addEventListener('contextmenu', (event) => onLineContextMenu(bundle, event));
   svgHit.append(hit);
+  // Restore affordance for a trashed edge (ошибка 355319d4) — lives in the
+  // interactive layer, so it is clickable and survives the top-overlay redraws.
+  if (bundleTrashed(bundle)) drawTrashBadge(svgHit, bundle, from, to);
 }
 
 /** Renders the highlighted copy of a curve on the above-clouds overlay,
@@ -712,6 +835,9 @@ function drawTopLine(
   const baseWidth = count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : linkStyle(bundle).width;
   const zoom = store.state.canvasZoom;
   const geo = edgeGeometry(from, to);
+  // A trashed bundle keeps its dashes when highlighted, so hovering does not
+  // momentarily «un-trash» the line (ошибка 355319d4).
+  const trashed = bundleTrashed(bundle);
   const line = document.createElementNS(SVG_NS, 'path');
   line.classList.add('link-line', 'link-line-active');
   line.setAttribute('d', geo.d);
@@ -719,6 +845,7 @@ function drawTopLine(
   line.setAttribute('stroke', 'var(--warn, #c98a06)');
   line.setAttribute('stroke-width', String(baseWidth * zoom + 2));
   line.setAttribute('stroke-opacity', '1');
+  if (trashed) line.setAttribute('stroke-dasharray', TRASHED_DASH);
   svgTop.append(line);
 
   // The label rides along in the selection colour: a count badge for bundles,
@@ -756,7 +883,7 @@ function drawTopLine(
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));
     text.setAttribute('dominant-baseline', 'middle');
-    text.textContent = linkLabel(bundle, type);
+    text.textContent = linkLabel(bundle, type) + (trashed ? TRASHED_LABEL_SUFFIX : '');
     svgTop.append(text);
   }
 }
@@ -892,7 +1019,10 @@ function showPopover(bundle: Bundle): void {
   hidePopover();
   popover = div('link-popover');
   popover.dataset['key'] = bundle.key;
-  const title = bundleTypeNames(bundle);
+  // Trashed edge: the popover states it in words — the dimmed dashed line plus
+  // the badge say «корзина», the text says it unambiguously (ошибка 355319d4).
+  const trashed = bundleTrashed(bundle);
+  const title = bundleTypeNames(bundle) + (trashed ? ' · в корзине' : '');
   popover.append(el('div', 'link-popover-types', title));
   // Single-link bundles carry the Ctrl-hover preview marker for the link's
   // permanent comment (the engine shows nothing when it has none). A bundle of
@@ -1021,6 +1151,8 @@ export const linksInternals = {
   ellipsePoint,
   linkStyle,
   groupBundles,
+  bundleTrashed,
   rectFitsInside,
   edgeGeometry,
+  edgePointAt,
 };

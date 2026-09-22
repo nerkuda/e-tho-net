@@ -55,10 +55,7 @@ import { listAttachments } from './attachment-service.js';
 import { listComments } from './comment-service.js';
 import { traverse } from './graph-traversal.js';
 import { findDuplicates } from './search-service.js';
-import {
-  getThought,
-  getThoughtOrThrow,
-} from './thought-service.js';
+import { getThought } from './thought-service.js';
 import { copyThoughtsBatch } from './thought-copy-service.js';
 import { getLinkType } from './link-type-service.js';
 import { getThoughtType } from './thought-type-service.js';

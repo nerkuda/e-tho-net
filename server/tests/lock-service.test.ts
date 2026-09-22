@@ -26,13 +26,11 @@ import { EtnError } from '@etn/shared';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
-import type { NetworkDb } from '../src/db/network-db.js';
 import {
   acquireLock,
   clearAllLocks,
   clearLocksForClient,
   clearLocksForUser,
-  enforceLock,
   listLocks,
   releaseLock,
 } from '../src/domain/lock-service.js';
@@ -98,7 +96,6 @@ describe(
             clientId: 'cli-old',
           });
           // Force a different ms timestamp.
-          // eslint-disable-next-line no-restricted-syntax
           const tick = (): void => {
             const start = Date.now();
             while (Date.now() === start) {

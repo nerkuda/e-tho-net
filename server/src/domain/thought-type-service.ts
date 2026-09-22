@@ -30,6 +30,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import {
   assertParentValid,
+  computeReparentImpact,
   getRootTypeId,
   typeAncestors,
 } from './type-hierarchy.js';
@@ -264,9 +265,13 @@ export function createThoughtType(
  * `version` is bumped on every successful update.
  *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), `DUPLICATE` (409) when
- * renaming to an existing name, or `VALIDATION_ERROR` (422) when reparenting a
- * type that is still used by thoughts (docs/08-ui-spec.md §8.1) or when the
- * new parent would break the tree (cycle / depth over {@link MAX_TYPE_DEPTH}).
+ * renaming to an existing name, or `VALIDATION_ERROR` (422) when reparenting
+ * would break the tree (cycle / depth over {@link MAX_TYPE_DEPTH}) or when
+ * a live (non-base) layer holds shadow rows whose `type_id` falls in the
+ * affected set — see `computeReparentImpact` and task 8ea1ab6a (0.8.2). The
+ * latter carries `details.kind === 'reparent_impact'` and counts thoughts
+ * per layer; clients must re-issue PATCH with `opts.confirmed === true` after
+ * a confirmation dialog.
  */
 export function updateThoughtType(
   ndb: NetworkDb,
@@ -274,6 +279,7 @@ export function updateThoughtType(
   changes: ThoughtTypeUpdateInput,
   expectedVersion: number | undefined,
   actorUserId: string,
+  opts: UpdateThoughtTypeOptions = {},
 ): ThoughtType {
   return ndb.transaction(() => {
     const current = getThoughtTypeOrThrow(ndb, id);
@@ -315,17 +321,71 @@ export function updateThoughtType(
       }
       const nextParent = resolveParentId(ndb, changes.parent_id);
       if (nextParent !== current.parent_id) {
-        // Reparenting is locked while any thought still uses the type
-        // (docs/08-ui-spec.md §8.1).
-        const usage = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id = ?').get(id) as {
-          c: number;
-        };
-        if (usage.c > 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            `родительский тип изменить нельзя: тип используется в ${usage.c} мыслях`,
-            { entity: 'thought_type', id, in_use: usage.c },
-          );
+        // 0.8.2, задача 8ea1ab6a: смена parent_id у типа мысли разрешена,
+        // если в живой сети перепланирование безопасно:
+        //   (1) запрет по живым слоям — если в любом не-базовом слое есть
+        //       мысли с типом из {изменяемый + потомки + старый/новый родитель},
+        //       это потенциально рассогласует base_version теневых строк при
+        //       слиянии — отказ без флага;
+        //   (2) иначе — диалог подтверждения: перечень живых мыслей, которые
+        //       поменяют эффективный набор свойств, плюс риск висячих
+        //       override'ов; первый PATCH без `confirmed` отдаёт 422 с details
+        //       `reparent_impact` и счётчиками, повторный с `confirmed=true`
+        //       выполняет правку.
+        const impact = computeReparentImpact(
+          ndb,
+          'thought_types',
+          id,
+          current.parent_id,
+          nextParent,
+        );
+        if (impact !== null) {
+          if (impact.layers_open_count > 0) {
+            // (1) живой слой с теневыми строками — отказ.
+            const sample = impact.layers.slice(0, 5).map((l) => ({
+              layer_id: l.layer_id,
+              layer_title: l.layer_title,
+              count: l.count,
+            }));
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              `смена родителя запрещена: в ${impact.layers_open_count} живом(ых) слое(ях) есть ${impact.total_count} мыслей с типом из затронутого множества; сначала слейте или отмените слой.`,
+              {
+                entity: 'thought_type',
+                id,
+                kind: 'reparent_blocked_by_layer',
+                affected_type_ids: impact.affected_type_ids,
+                layers: impact.layers,
+                layers_open_count: impact.layers_open_count,
+                total_count: impact.total_count,
+                sample,
+              },
+            );
+          }
+          // (2) без живых слоёв — требуем подтверждение у пользователя
+          // ТОЛЬКО когда у типа есть живые мысли в базе. Пустой тип
+          // (нетронутая смена родителя у только что созданного или
+          // неиспользуемого типа) — обычный PATCH без подтверждения:
+          // менять цепочку наследования не у чего.
+          const usage = ndb
+            .prepare(
+              `SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id IN (${impact.affected_type_ids.map(() => '?').join(',')})`,
+            )
+            .get(...impact.affected_type_ids) as { c: number };
+          if (usage.c > 0 && opts.confirmed !== true) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              `смена родителя повлияет на ${usage.c} живых мыслей: у них изменится эффективный набор свойств; переопределения дефолтов могут стать висячими. Подтвердите правку (confirmed=true) или отмените её.`,
+              {
+                entity: 'thought_type',
+                id,
+                kind: 'reparent_impact',
+                affected_type_ids: impact.affected_type_ids,
+                thoughts_count: usage.c,
+                requires_confirmation: true,
+              },
+            );
+          }
         }
         if (nextParent !== null) {
           assertParentValid(ndb, 'thought_types', id, nextParent);
@@ -370,6 +430,21 @@ export function updateThoughtType(
       .run(...args);
     return getThoughtTypeOrThrow(ndb, id);
   });
+}
+
+/** Options for {@link updateThoughtType}. */
+export interface UpdateThoughtTypeOptions {
+  /**
+   * Подтверждение смены `parent_id` поверх перечня затронутых мыслей
+   * (задача 8ea1ab6a, версия 0.8.2). По умолчанию `false`: первый вызов с
+   * реальной сменой родителя у типа, у которого есть живые мысли в живых
+   * (не базовых) слоях, отвечает `422 VALIDATION_ERROR` с details
+   * `{ kind: 'reparent_impact', total_count, layers_open_count, layers[] }`;
+   * запрет по живым слоям действует без флага — `confirmed=true` его
+   * не отменяет. UI должен показать диалог с перечнем слоёв и мыслей и
+   * повторить PATCH с `confirmed=true`.
+   */
+  confirmed?: boolean;
 }
 
 /** Options for {@link deleteThoughtType}. */

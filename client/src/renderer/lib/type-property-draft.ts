@@ -65,6 +65,22 @@ export interface DraftProperty {
   value_type: PropertyValueType;
   config: PropertyConfig | null;
   description: string | null;
+  /**
+   * Типы противоположной стороны привязок свойства-связи
+   * (`EffectiveTypeProperty.allowed_opposite_type_ids`, сервер считает по
+   * реестру `type_properties`): допустимые цели дефолт-пикера колонки
+   * «По умолчанию». Снимок для рендера — тип-редактор его не пишет.
+   */
+  allowedOppositeTypeIds?: string[];
+  /**
+   * Дефолт ЭТОЙ привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+   * `type_property_overrides.default_value` — набор id целей у свойства-связи,
+   * значение по виду у скаляра; `null` — собственного дефолта нет, при создании
+   * мысли действует общее значение стороны привязки. Заполняется снимком
+   * эффективного списка при загрузке; запись идёт НЕ через план diff, а сразу
+   * `setPropertyDefaultOverride` (колонка «По умолчанию» вкладки «Свойства»).
+   */
+  defaultValue?: unknown;
 }
 
 let draftCounter = 0;
@@ -75,9 +91,57 @@ export function nextDraftPropertyId(): string {
   return `draft:${draftCounter}`;
 }
 
+/**
+ * Показывать ли у строки кнопки порядка ▲/▼. Порядок принадлежит ТИПУ, а не
+ * стороне свойства-связи: кнопки есть у всех строк таблицы «Свойства типа» —
+ * у источника, у назначения и у скалярных/структурных (задача b044237d,
+ * решение пользователя 2026-09-20). Раньше строки стороны «назначение»
+ * перемещать было нельзя (условие `side !== 'target'`, оставшееся от
+ * требования 15b88319 «порядок — в пределах стороны источника»).
+ *
+ * Вынесено из DOM-компонента: контракт проверяется юнит-тестом без документа.
+ */
+export function canReorderBinding(row: Pick<DraftProperty, 'side'>): boolean {
+  return row.side === 'source' || row.side === 'target' || row.side === null;
+}
+
+/**
+ * Переставляет строку черновика на `delta` позиций (▲ = `-1`, ▼ = `+1`) и
+ * возвращает НОВЫЙ массив; если строка не найдена или ход выходит за границы —
+ * возвращает исходный массив тем же референсом (вызывающий отличает no-op).
+ *
+ * Порядок один на весь тип: строки обеих сторон привязки двигаются в общей
+ * последовательности (задача b044237d). Серверный `position` — тоже общий
+ * столбец привязок, независимый для каждого типа.
+ */
+export function moveDraftRow<T extends { id: string }>(
+  rows: readonly T[],
+  rowId: string,
+  delta: number,
+): readonly T[] {
+  const from = rows.findIndex((r) => r.id === rowId);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= rows.length) return rows;
+  const next = [...rows];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved as T);
+  return next;
+}
+
 /** Builds the initial staged list from a type's own (non-inherited)
- *  bindings, ordered as the server returns them (`position`, then `key`). */
-export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftProperty[] {
+ *  bindings, ordered as the server returns them (`position`, then `key`).
+ *
+ *  Принимает и эффективные определения (`EffectiveTypeProperty`): из них
+ *  берётся дефолт привязки — `default_value` читается только когда строка
+ *  override есть у самой привязки (`overridden_here`), иначе `null`
+ *  («действует общее значение стороны»). */
+export function draftPropertiesFrom(
+  own: readonly (PropertyDefinition & {
+    default_value?: unknown;
+    overridden_here?: boolean;
+    allowed_opposite_type_ids?: string[];
+  })[],
+): DraftProperty[] {
   return own.map((d) => ({
     id: d.id,
     isNew: false,
@@ -88,6 +152,8 @@ export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftPr
     value_type: d.value_type,
     config: d.config,
     description: d.description,
+    allowedOppositeTypeIds: d.allowed_opposite_type_ids ?? [],
+    defaultValue: d.overridden_here === true ? d.default_value ?? null : null,
   }));
 }
 

@@ -1,10 +1,11 @@
 /**
  * Search (H13, 08-ui-spec.md §3; 09-scenarios.md B3).
  *
- * - toolbar input + options gear + drop panel with four collapsible result
- *   groups («Найдено по именам/текстам/связям/в хронологии»), snippets render
- *   server `<mark>` highlights via innerHTML;
- * - activation (Ctrl+F / focus / gear) reveals the drop panel and restores the
+ * - toolbar input + drop panel with two zones: «результаты поиска» (four
+ *   collapsible groups «Найдено по именам/текстам/связям/в хронологии»,
+ *   snippets render server `<mark>` highlights via innerHTML) and «настройки
+ *   поиска», revealed by the funnel toggle in the panel's top corner;
+ * - activation (Ctrl+F / focus) reveals the drop panel and restores the
  *   previous `search_state` (text + options) from L4 ui_state; Escape hides the
  *   panel again;
  * - the server search runs for queries of 3+ characters: debounced 250 ms while
@@ -13,62 +14,86 @@
  *   and resolves the thought via `thoughts.get` into a single
  *   «Мысль по ID» section (absent thought → explicit notice);
  * - empty result groups render collapsed; ↑/↓ walk group headers and hits,
- *   Ctrl+↑/↓ jump to the first/last row, Enter (or Ctrl+Enter) toggles a group
- *   header or activates a hit (hiding the panel); the next activation
- *   re-highlights the last chosen hit;
+ *   Ctrl+↑/↓ jump to the first/last row, Enter activates the selected row
+ *   exactly like a click on it (group header — collapse/expand, thought hit —
+ *   focus, link hit — editor) and reruns the search when no row is selected;
+ *   the next activation re-highlights the last chosen hit;
+ * - the query is highlighted inside the result clouds' titles
+ *   (`searchHighlightTerms` + the factory's `highlightTerms` option): every
+ *   case-insensitive occurrence of any query term is wrapped in `<mark>`, the
+ *   same look the server snippets use; a hit whose match is in its text or
+ *   synonyms keeps an unhighlighted title (задача a1766c7d);
  * - the panel is a bordered dropdown: left edge aligned with the search input
  *   (JS-anchored), right margin 10% and max height 50% of the window;
- * - options: subtree (subroot via the thought picker, default = current
- *   focus), group checkboxes (мысли/связи/хронология), thought/link type
- *   multi-select, show_inactive (default = the network preference);
+ * - the «настройки поиска» zone sits right of the results (30% of the panel
+ *   width) on windows wider than 1000 px and above them otherwise; the switch
+ *   reacts to window resizes without a restart (`searchSettingsPlacement`);
+ * - the settings zone is three rows: (1) the «ограничить потомками мыслей:»
+ *   checkbox + a thought chip field (the same picker as «Родительские мысли»
+ *   in the structures filter panel; the field is enabled only while the
+ *   checkbox is on), (2) «Места поиска:» + мысли/связи/хроники/неактуальные/
+ *   корзина checkboxes, (3) «Ограничения:» + thought/link type chip fields and
+ *   the Автор/редактор selects; rows wrap when narrow;
+ * - the zone's visibility is toggled by the funnel button in the panel's top
+ *   corner (default off) and remembered in L4 `ui_state`
+ *   (`search_settings_open`), like `search_state`;
  * - clicking a thought hit focuses it; clicking a link hit focuses its source
  *   and opens the link in the editor (spec §3.1).
  */
 
 import { setFocus } from '../app.js';
-import {
-  applyCloudStyle,
-  applyThoughtIcon,
-  resolveCloudStyle,
-} from '../canvas/canvas.js';
-import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
+// Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
+// `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
+import type { ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { openLinkInEditor } from '../editor/editor.js';
-import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
+import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { isInsideDialog } from '../lib/dialog.js';
+import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
-import { orderedTypeRows } from '../lib/type-tree.js';
+import { svgIcon } from '../lib/icons.js';
+import {
+  isNotFoundError,
+  isSearchSettingsOpenStored,
+  parseThoughtIdQuery,
+  searchHighlightTerms,
+  searchPanelClosesOnTap,
+  searchSettingsPlacement,
+} from '../lib/pure.js';
+import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
+import {
+  buildEntityChipField,
+  linkTypeEntityOptions,
+  thoughtEntityOption,
+  thoughtTypeEntityOptions,
+  type EntityOption,
+} from '../lib/entity-picker.js';
+import {
+  buildSearchCriteriaWire,
+  defaultSearchCriteriaState,
+  parseSearchCriteria,
+  searchCriteriaToStored,
+  searchSubtreeRoots,
+  type SearchCriteriaState,
+} from '../lib/filter-builder.js';
 import { buildUserSelectWidget } from '../lib/users.js';
 import {
   UI_STATE_KEY,
-  type SearchNameHit,
   type SearchResponse,
   type SearchScope,
-  type SearchTextHit,
   type Thought,
 } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 
-/** Search options persisted in `search_state` (08-ui-spec.md §3.2). */
-export interface SearchOptions {
-  subtree: boolean;
-  subrootId: string | null;
-  onlyThoughts: boolean;
-  onlyLinks: boolean;
-  onlyChrono: boolean;
-  typeIds: string[];
-  linkTypeIds: string[];
-  showInactive: boolean;
-  /** S13: include thoughts/links marked for deletion in search results. */
-  trashed: boolean;
-  /**
-   * Задача 59119797 «Фильтры Автор/Редактор»: id пользователя-автора
-   * (`author_id`/`editor_id`). Пустая строка — фильтр не применяется.
-   */
-  authorId: string;
-  editorId: string;
-}
+/**
+ * Настройки строки поиска карты (§3.2): критерии — общая модель конструктора
+ * отбора (`lib/filter-builder.ts`); собственной модели (`SearchOptions`) и
+ * собственного парсера сохранённого больше нет. Своё у поиска — группы
+ * результатов и поддерево, они лежат в расширении общей модели.
+ */
+export type SearchOptions = SearchCriteriaState;
 
 /** Minimum trimmed query length for a server search (08-ui-spec.md §3.1). */
 export const MIN_QUERY_LENGTH = 3;
@@ -78,29 +103,22 @@ export function isSearchableQuery(q: string): boolean {
   return q.length >= MIN_QUERY_LENGTH;
 }
 
-const DEFAULT_OPTIONS: SearchOptions = {
-  subtree: false,
-  subrootId: null,
-  onlyThoughts: false,
-  onlyLinks: false,
-  onlyChrono: false,
-  typeIds: [],
-  linkTypeIds: [],
-  showInactive: false,
-  trashed: false,
-  authorId: '',
-  editorId: '',
-};
+const DEFAULT_OPTIONS: SearchOptions = defaultSearchCriteriaState();
 
-/** Search panel chrome (input + gear + results panel). */
+/** Search panel chrome (input + drop panel with both zones). */
 export interface SearchChrome {
   input: HTMLInputElement;
-  optionsButton: HTMLButtonElement;
   host: HTMLElement;
 }
 
 let chrome: SearchChrome | null = null;
 let options: SearchOptions = { ...DEFAULT_OPTIONS };
+/** Переключатель-лейка зоны настроек (в верхнем углу панели). */
+let settingsToggle: HTMLButtonElement | null = null;
+/** Зона «настройки поиска» внутри панели. */
+let settingsZone: HTMLElement | null = null;
+/** Показана ли зона настроек (нажата ли лейка). */
+let settingsOpen = false;
 let lastResults: SearchResponse | null = null;
 let searchTimer: number | null = null;
 let restored = false;
@@ -109,26 +127,66 @@ let lastSelectedKey: string | null = null;
 /** Flat navigation index over group headers + hits of expanded groups. */
 let cursor: number | null = null;
 
-/** Mounts the search panel (called from the workspace builder). */
+/**
+ * Активация строки результата — ровно то, что выполнит клик по ней (одна
+ * функция на строку). Enter берёт действие отсюда, а не синтезирует
+ * `element.click()` по строке: у хита-мысли обработчик живёт на
+ * облачке-ребёнке, и синтетический клик по строке до него не доходит —
+ * кнопка Enter молча ничего не делала (задача a1766c7d). Реестр на строку,
+ * а не на ключ: строки перерисовываются, старые записи собирает GC.
+ */
+const rowActivations = new WeakMap<HTMLElement, () => void>();
+
+/** Облачка уже выбранных мыслей-подкорней (догружаются по id). */
+const subrootClouds = new Map<string, ThoughtCloudInput>();
+/** Id, по которым догрузка облачков уже запускалась (защита от цикла
+ *  «rebuild → resolve → rebuild», если сервер не вернёт мысль). */
+const subrootCloudsRequested = new Set<string>();
+
+/**
+ * Mounts the search panel (called from the workspace builder). The panel holds
+ * the results zone plus the toggleable settings zone; the funnel toggle sits in
+ * the panel's top corner (the old toolbar gear is gone, задача a3247f84).
+ */
 export function mountSearch(next: SearchChrome): void {
   chrome = next;
 
-  const { host, input, optionsButton } = next;
+  const { host, input } = next;
   host.replaceChildren();
 
-  const optionsRow = div('search-options-row hidden');
-  buildOptionsRow(optionsRow);
-  const results = div('search-results');
-  host.append(optionsRow, results);
-
-  optionsButton.addEventListener('click', () => {
-    positionPanel();
-    host.classList.remove('hidden');
-    optionsRow.classList.toggle('hidden');
+  const toggle = el('button', 'tb-btn tb-icon search-settings-toggle', '');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-pressed', 'false');
+  toggle.append(svgIcon('filter'));
+  setTooltip(toggle, 'Настройки поиска');
+  toggle.addEventListener('click', () => {
+    setSettingsOpen(!settingsOpen);
+    persistSettingsOpen();
   });
+
+  // Кнопка-лейка — в верхнем углу панели (заголовочная строка, прижата вправо).
+  const panelHeader = div('search-panel-header');
+  panelHeader.append(toggle);
+
+  const panelBody = div('search-panel-body');
+  const results = div('search-results');
+  const settings = div('search-settings');
+  buildSettingsZone(settings);
+  panelBody.append(results, settings);
+  host.append(panelHeader, panelBody);
+
+  settingsToggle = toggle;
+  settingsZone = settings;
+  setSettingsOpen(settingsOpen);
+  // Нажатость лейки — клиентское состояние (переживает перезапуск); читаем
+  // сразу при монтировании, не дожидаясь первого фокуса инпута. Ширина окна
+  // определяет положение зоны и пересчитывается на каждом ресайзе.
+  applySettingsPlacement();
+  void loadSettingsOpen();
 
   input.addEventListener('focus', () => {
     positionPanel();
+    applySettingsPlacement();
     host.classList.remove('hidden');
     if (!restored) {
       restored = true;
@@ -147,8 +205,11 @@ export function mountSearch(next: SearchChrome): void {
       const rows = collectNavRows();
       const row = cursor === null ? undefined : rows[cursor];
       if (row !== undefined) {
-        row.el.click();
+        // Действие строки — то же, что клик по ней (см. activateRow).
+        row.activate();
       } else {
+        // Ни одна строка не выбрана: Enter — команда поиска (документация
+        // рекомендует её для крупных сетей).
         void run();
       }
     } else if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
@@ -172,17 +233,33 @@ export function mountSearch(next: SearchChrome): void {
     }
   });
 
-  // Keep the dropdown anchored to the input while the search row/window resizes.
-  window.addEventListener('resize', positionPanel);
+  // Keep the dropdown anchored to the input while the search row/window
+  // resizes; the same resize re-decides where the settings zone goes (right of
+  // the results or above them, задача a3247f84) — no restart needed.
+  window.addEventListener('resize', () => {
+    positionPanel();
+    applySettingsPlacement();
+  });
   new ResizeObserver(positionPanel).observe(input);
 
-  // Close the panel on any click outside it (the input and the gear keep it
-  // open) and on Escape while it is visible, even if the input lost focus.
+  // Close the panel on any click outside it (the input and the toggle inside
+  // the panel keep it open) and on Escape while it is visible, even if the
+  // input lost focus.
+  // Клик по всплывающему слою, открытому ИЗ панели, — не «вне панели»:
+  // общая выпадашка подсказок и модальный диалог живут в `document.body`.
+  // Иначе нажатие на строку подсказки прячет панель, поле теряет фокус,
+  // список подсказок закрывается до `click` — выбранный тип (фокус, тип
+  // связи) не доезжает до отбора (ошибка 72a06e01).
   document.addEventListener('pointerdown', (event) => {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
     if (!(target instanceof Node)) return;
-    if (host.contains(target) || input.contains(target) || optionsButton.contains(target)) {
+    if (!searchPanelClosesOnTap({
+      // Панель и её поле поиска (поле живёт в строке L18, вне хоста панели).
+      insidePanel: host.contains(target) || input.contains(target),
+      insideSuggest: isInsideSuggestDropdown(target),
+      insideDialog: isInsideDialog(target),
+    })) {
       return;
     }
     hidePanel();
@@ -193,6 +270,53 @@ export function mountSearch(next: SearchChrome): void {
       hidePanel();
     }
   });
+}
+
+/**
+ * Shows/hides the «настройки поиска» zone and reflects the state on the funnel
+ * toggle (pressed class + `aria-pressed`).
+ */
+function setSettingsOpen(open: boolean): void {
+  settingsOpen = open;
+  if (settingsZone !== null) settingsZone.classList.toggle('hidden', !open);
+  if (settingsToggle !== null) {
+    settingsToggle.classList.toggle('pressed', open);
+    settingsToggle.setAttribute('aria-pressed', open ? 'true' : 'false');
+  }
+}
+
+/**
+ * Puts the settings zone right of the results (`side`) or above them (`top`)
+ * depending on the app window width; re-applied on every resize.
+ */
+function applySettingsPlacement(): void {
+  if (chrome === null) return;
+  const mode = searchSettingsPlacement(window.innerWidth);
+  chrome.host.classList.toggle('search-settings-side', mode === 'side');
+  chrome.host.classList.toggle('search-settings-top', mode === 'top');
+}
+
+/**
+ * Restores the toggle state from the local L4 `ui_state` — that is what makes
+ * it survive a panel reopen and a client restart (per client × user × network).
+ */
+async function loadSettingsOpen(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const raw = await etn.ui
+    .getState(networkId, UI_STATE_KEY.SEARCH_SETTINGS_OPEN)
+    .catch(() => null);
+  if (chrome === null) return;
+  setSettingsOpen(isSearchSettingsOpenStored(raw));
+}
+
+/** Persists the toggle state to the local L4 `ui_state`. */
+function persistSettingsOpen(): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void etn.ui
+    .setState(networkId, UI_STATE_KEY.SEARCH_SETTINGS_OPEN, settingsOpen ? '1' : '0')
+    .catch(() => undefined);
 }
 
 /** Anchors the drop panel: left edge under the search input, below its row. */
@@ -243,6 +367,24 @@ export function refreshSearchIfVisible(): void {
 interface NavRow {
   el: HTMLElement;
   kind: 'header' | 'hit';
+  /**
+   * Действие строки — то же, что клик по ней. Заголовок сворачивает/разворачивает
+   * группу, хит выполняет свою активацию (мысль — в фокус, связь/хронология —
+   * хит открывается).
+   */
+  activate: () => void;
+}
+
+/**
+ * Запускает действие строки так же, как это сделал бы клик по ней. Хиты берут
+ * зарегистрированную активацию — ту же функцию обслуживает и клик; строки без
+ * записи (например, собранные вне рендера результатов) падают на обычный
+ * `click()`, который сворачивает/разворачивает группу или всплывает к строке.
+ */
+function activateRow(el: HTMLElement): void {
+  const activate = rowActivations.get(el);
+  if (activate !== undefined) activate();
+  else el.click();
 }
 
 /** Collects navigable rows from the results DOM (headers + visible hits). */
@@ -255,10 +397,14 @@ function collectNavRows(): NavRow[] {
     if (!(group instanceof HTMLElement)) continue;
     const header = group.querySelector<HTMLElement>(':scope > .search-group-header');
     const body = group.querySelector<HTMLElement>(':scope > .search-group-body');
-    if (header !== null) rows.push({ el: header, kind: 'header' });
+    if (header !== null) {
+      rows.push({ el: header, kind: 'header', activate: () => activateRow(header) });
+    }
     if (body !== null && !body.classList.contains('hidden')) {
       for (const hit of Array.from(body.querySelectorAll(':scope > .search-hit'))) {
-        if (hit instanceof HTMLElement) rows.push({ el: hit, kind: 'hit' });
+        if (hit instanceof HTMLElement) {
+          rows.push({ el: hit, kind: 'hit', activate: () => activateRow(hit) });
+        }
       }
     }
   }
@@ -333,9 +479,9 @@ async function restoreState(): Promise<void> {
       chrome.input.value = parsed.q;
     }
     if (typeof parsed.options === 'object' && parsed.options !== null) {
-      options = { ...DEFAULT_OPTIONS, ...(parsed.options as Partial<SearchOptions>) };
+      options = parseSearchCriteria(parsed.options);
       if (chrome !== null) {
-        rebuildOptionsRow();
+        rebuildSettingsZone();
       }
     }
     if (chrome !== null && chrome.input.value !== '') void run();
@@ -356,7 +502,9 @@ function persistState(): void {
       .setState(
         networkId,
         UI_STATE_KEY.SEARCH_STATE,
-        JSON.stringify({ q: chrome.input.value, options }),
+        // Набор сохраняемых ключей — конвертер конструктора (совместим с
+        // записанным до 0.8.2: те же имена полей).
+        JSON.stringify({ q: chrome.input.value, options: searchCriteriaToStored(options) }),
       )
       .catch(() => undefined);
   }, 300);
@@ -414,25 +562,26 @@ async function run(): Promise<void> {
     return;
   }
   const scopes = scopesFor(options);
+  // Серверный поиск принимает ОДИН подкорень (`from_thought_id`), а мыслей-
+  // подкорней пользователь может указать несколько: объединяем результаты по
+  // каждому поддереву — так же, как результаты нескольких scope. Пустой набор
+  // при включённом флажке наследует прежнее поведение: подкорень = фокус.
+  const roots = searchSubtreeRoots(options, store.state.focus?.focused.id ?? null);
   try {
+    // Критерии отбора — единый конвертер конструктора; `q`/`scope`/подкорень
+    // остаются параметрами самого поиска.
+    const criteriaWire = buildSearchCriteriaWire(options);
     const responses = await Promise.all(
-      scopes.map((scope) =>
-        etn.thoughts.search(networkId, {
-          q,
-          scope,
-          in: options.subtree ? 'subtree' : undefined,
-          from_thought_id: options.subtree
-            ? (options.subrootId ?? store.state.focus?.focused.id)
-            : undefined,
-          type_id: options.typeIds.length > 0 ? options.typeIds : undefined,
-          link_type_id: options.linkTypeIds.length > 0 ? options.linkTypeIds : undefined,
-          show_inactive: options.showInactive,
-          trashed: options.trashed,
-          // Задача 59119797 «Фильтры Автор/Редактор»: пустая строка —
-          // «не применять» (REST/MCP принимают оба варианта).
-          author_id: options.authorId.trim() !== '' ? options.authorId : undefined,
-          editor_id: options.editorId.trim() !== '' ? options.editorId : undefined,
-        }),
+      scopes.flatMap((scope) =>
+        roots.map((root) =>
+          etn.thoughts.search(networkId, {
+            q,
+            scope,
+            in: options.subtree ? 'subtree' : undefined,
+            from_thought_id: options.subtree ? (root ?? undefined) : undefined,
+            ...criteriaWire,
+          }),
+        ),
       ),
     );
     lastResults = mergeResponses(responses);
@@ -490,49 +639,34 @@ function renderIdResult(thought: Thought | null): void {
     syncCursorAfterToggle(header);
   });
   if (thought !== null) {
-    const row = div('search-hit');
+    const row = div('search-hit search-hit-cloud');
     const key = `thought:${thought.id}`;
     row.dataset['key'] = key;
+    // The «Мысль по ID» row is the only thought fetched via `thoughts.get`,
+    // so its full DTO carries every cloud-style field. The row shows the same
+    // factory-built cloud as the canvas (08-ui-spec.md §2.2) with the id as
+    // the snippet.
+    // Клик и Enter выполняют одну и ту же активацию строки (задача a1766c7d).
+    const activate = activateHit(key, () => void setFocus(thought.id));
+    rowActivations.set(row, activate);
+    row.append(
+      createThoughtCloud(thought, {
+        profile: 'tree',
+        // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+        // многоточием по списку, а не по холстовым 200px.
+        width: 'container',
+        highlightTerms: currentHighlightTerms(),
+        actions: { onClick: activate, onCtrlClick: activate },
+      }),
+    );
     const info = div('search-hit-info');
     info.style.flex = '1';
     info.style.minWidth = '0';
-    info.append(el('div', 'hit-title', thought.title));
     info.append(el('div', 'hit-snippet', thought.id));
-    row.append(
-      thoughtIconEl({
-        thought_id: thought.id,
-        icon: thought.icon,
-        icon_kind: thought.icon_kind,
-        icon_attachment_id: thought.icon_attachment_id,
-        type_id: thought.type_id,
-      }),
-      info,
-    );
-    // The «Мысль по ID» row is the only thought fetched via `thoughts.get`,
-    // so its full DTO carries every cloud-style field. Apply it here too so
-    // the search list matches the canvas uniformly (08-ui-spec.md §2.2).
-    applyThoughtHitStyle(row, {
-      fg_color: thought.fg_color,
-      bg_color: thought.bg_color,
-      font_bold: thought.font_bold,
-      font_italic: thought.font_italic,
-      font_underline: thought.font_underline,
-      font_strike: thought.font_strike,
-      type_id: thought.type_id,
-      active: thought.active,
-    });
+    row.append(info);
     // Stage 3: no per-indicator comment/chrono/attachment icons on this row —
     // Ctrl+hover over the row itself shows the thought's permanent comment.
     markThoughtCommentPreview(row, thought.id, thought.title);
-    row.addEventListener('click', () => {
-      lastSelectedKey = key;
-      applySelection(key, true);
-      hidePanel();
-      // A synthetic Enter click keeps focus in the input; leave it so the
-      // canvas/editor receives the following keystrokes.
-      if (chrome !== null) chrome.input.blur();
-      void setFocus(thought.id);
-    });
     body.append(row);
   } else {
     body.append(el('p', 'muted', 'Мысль с указанным ID отсутствует.'));
@@ -542,60 +676,32 @@ function renderIdResult(thought: Thought | null): void {
   applySelection(lastSelectedKey, false);
 }
 
-/** Builds a hit icon element from the thought's own icon (💭 fallback). */
-function thoughtIconEl(hit: {
-  thought_id: string;
-  icon: string | null;
-  icon_kind: import('@etn/shared').IconKind;
-  icon_attachment_id: string | null;
-  type_id: string | null;
-}): HTMLElement {
-  const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, {
-    id: hit.thought_id,
-    icon: hit.icon,
-    icon_kind: hit.icon_kind,
-    // `type_id` is needed for the type-chain icon fallback — without it the
-    // row would show 💭 for every thought whose own icon is unset, even when
-    // its type carries one (08-ui-spec.md §2.2).
-    type_id: hit.type_id,
-    icon_attachment_id: hit.icon_attachment_id,
-  });
-  return icon;
+/**
+ * Активация хитов поиска (единая для всех групп): запоминает выбранный хит,
+ * подсвечивает его, прячет панель и возвращает фокус инпуту поиска — затем
+ * выполняет действие хита. Возвращённая функция — и обработчик клика, и
+ * действие записанной строки для Enter (см. {@link rowActivations}).
+ */
+function activateHit(key: string, open: () => void): () => void {
+  return () => {
+    lastSelectedKey = key;
+    applySelection(key, true);
+    hidePanel();
+    // A synthetic Enter click keeps focus in the input; leave it so the
+    // canvas/editor receives the following keystrokes.
+    if (chrome !== null) chrome.input.blur();
+    open();
+  };
 }
 
 /**
- * Visual style of a thought hit: the same colour/font/active flags the cloud
- * carries on the canvas. Reused for `by_names`, `by_texts` and the «Мысль по
- * ID» row (which carries the full `Thought` DTO). Link/chrono rows do not
- * carry a thought style (no thought to inherit from).
+ * Термы подсветки названий результатов — из текущего запроса строки поиска.
+ * Совпадение в названии подсвечивается прямо в облачке (фабричная опция
+ * `highlightTerms`); хит, совпавший только по тексту или синониму, остаётся
+ * с названием без подсветки — так и должно быть (задача a1766c7d).
  */
-function applyThoughtHitStyle(
-  row: HTMLElement,
-  hit: {
-    fg_color: string | null;
-    bg_color: string | null;
-    font_bold: boolean | null;
-    font_italic: boolean | null;
-    font_underline: boolean | null;
-    font_strike: boolean | null;
-    type_id: string | null;
-    active: boolean;
-  },
-): void {
-  const style = resolveCloudStyle({
-    fg_color: hit.fg_color,
-    bg_color: hit.bg_color,
-    font_bold: hit.font_bold,
-    font_italic: hit.font_italic,
-    font_underline: hit.font_underline,
-    font_strike: hit.font_strike,
-    type_id: hit.type_id,
-  });
-  applyCloudStyle(row, style);
-  // Inactive thoughts render dim — the same treatment the canvas applies to
-  // an inactive neighbour's cloud (08-ui-spec.md §6.7).
-  if (!hit.active) row.classList.add('dim');
+function currentHighlightTerms(): string[] {
+  return chrome === null ? [] : searchHighlightTerms(chrome.input.value);
 }
 
 /** Renders the four result groups. */
@@ -608,18 +714,35 @@ function renderResults(response: SearchResponse | null): void {
     resultsBox.append(el('p', 'muted', 'Введите запрос (минимум 3 символа).'));
     return;
   }
+  // Группы результатов. Для мыслей иконка, название, цвета и начертание
+  // приходят из общей фабрики облачка (мысли выглядят как на холсте); строки
+  // связей и хронологии не несут мысли и остаются простыми строками.
+  // Термы подсветки — из текущего запроса: совпадения в названии подсвечены
+  // прямо в облачке (задача a1766c7d).
+  const highlightTerms = currentHighlightTerms();
   const groups: Array<{
     key: 'names' | 'texts' | 'links' | 'chronology';
     title: string;
     hits: Array<{
-      iconEl: HTMLElement;
-      title: string;
+      /** Фабричное облачко мысли либо глиф-иконка для не-мысленных хитов. */
+      lead: HTMLElement;
+      /** Заголовок простой строки (связи/хронология); у мыслей — в облачке. */
+      title?: string;
+      /**
+       * Хит-мысль: облачко занимает всю ширину списка (название обрезается
+       * по ней, а не по ширине холстового облачка `--cloud-width`), snippet
+       * с `<mark>` уходит под облачко (ошибка 265cdb5f).
+       */
+      isThought: boolean;
       snippet: string;
       /** Stable row key for selection restore + keyboard navigation. */
       key: string;
-      /** Original hit — used by `applyThoughtHitStyle` to colour the row. */
-      hit?: SearchNameHit | SearchTextHit;
-      open: () => void;
+      /**
+       * Активация хита — одна функция на клик и на Enter (задача a1766c7d):
+       * у хита-мысли её же исполняют жесты облачка, у простой строки — её
+       * обработчик клика.
+       */
+      activate: () => void;
       /** Stage 3: Ctrl+hover on the row shows the owner's permanent comment
        *  (no per-indicator icons in this list). */
       markPreview: (row: HTMLElement) => void;
@@ -628,52 +751,91 @@ function renderResults(response: SearchResponse | null): void {
     {
       key: 'names',
       title: 'Найдено по именам',
-      hits: response.by_names.map((hit) => ({
-        iconEl: thoughtIconEl(hit),
-        title: hit.title,
-        snippet: hit.snippet,
-        key: `thought:${hit.thought_id}`,
-        hit,
-        open: () => void setFocus(hit.thought_id),
-        markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
-      })),
+      hits: response.by_names.map((hit) => {
+        const key = `thought:${hit.thought_id}`;
+        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        return {
+          lead: createThoughtCloud(
+            { ...hit, id: hit.thought_id },
+            {
+              profile: 'tree',
+              // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+              // многоточием по списку, а не по холстовым 200px.
+              width: 'container',
+              highlightTerms,
+              actions: { onClick: activate, onCtrlClick: activate },
+            },
+          ),
+          isThought: true,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
+        };
+      }),
     },
     {
       key: 'texts',
       title: 'Найдено по текстам',
-      hits: response.by_texts.map((hit) => ({
-        iconEl: thoughtIconEl(hit),
-        title: hit.title,
-        snippet: hit.snippet,
-        key: `thought:${hit.thought_id}`,
-        hit,
-        open: () => void setFocus(hit.thought_id),
-        markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
-      })),
+      hits: response.by_texts.map((hit) => {
+        const key = `thought:${hit.thought_id}`;
+        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        return {
+          lead: createThoughtCloud(
+            { ...hit, id: hit.thought_id },
+            {
+              profile: 'tree',
+              // Ширина — по строке выпадашки (ошибка 265cdb5f): имя обрезается
+              // многоточием по списку, а не по холстовым 200px.
+              width: 'container',
+              // Совпадение только в тексте — название остаётся без подсветки,
+              // если запроса в нём нет.
+              highlightTerms,
+              actions: { onClick: activate, onCtrlClick: activate },
+            },
+          ),
+          isThought: true,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
+        };
+      }),
     },
     {
       key: 'links',
       title: 'Найдено связей',
-      hits: response.by_links.map((hit) => ({
-        iconEl: span('🔗'),
-        title: hit.type_name,
-        snippet: hit.snippet,
-        key: `link:${hit.link_id}`,
-        open: () => void openLinkHit(hit.link_id),
-        markPreview: (row) => markCommentPreview(row, 'link', hit.link_id, hit.type_name),
-      })),
+      hits: response.by_links.map((hit) => {
+        const key = `link:${hit.link_id}`;
+        const activate = activateHit(key, () => void openLinkHit(hit.link_id));
+        return {
+          lead: span('🔗'),
+          title: hit.type_name,
+          isThought: false,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) => markCommentPreview(row, 'link', hit.link_id, hit.type_name),
+        };
+      }),
     },
     {
       key: 'chronology',
       title: 'Найдено в хронологии',
-      hits: response.by_chrono.map((hit) => ({
-        iconEl: span('📅'),
-        title: hit.valid_from.slice(0, 10),
-        snippet: hit.snippet,
-        key: `chrono:${hit.owner}:${hit.owner_id}`,
-        open: () => void openChronoHit(hit.owner, hit.owner_id),
-        markPreview: (row) => markCommentPreview(row, hit.owner, hit.owner_id, hit.valid_from.slice(0, 10)),
-      })),
+      hits: response.by_chrono.map((hit) => {
+        const key = `chrono:${hit.owner}:${hit.owner_id}`;
+        const activate = activateHit(key, () => void openChronoHit(hit.owner, hit.owner_id));
+        return {
+          lead: span('📅'),
+          title: hit.valid_from.slice(0, 10),
+          isThought: false,
+          snippet: hit.snippet,
+          key,
+          activate,
+          markPreview: (row) =>
+            markCommentPreview(row, hit.owner, hit.owner_id, hit.valid_from.slice(0, 10)),
+        };
+      }),
     },
   ];
 
@@ -699,29 +861,31 @@ function renderResults(response: SearchResponse | null): void {
       for (const hit of group.hits) {
         const row = div('search-hit');
         row.dataset['key'] = hit.key;
+        // Активация строки для Enter — та же функция, что обслуживает клик
+        // (задача a1766c7d).
+        rowActivations.set(row, hit.activate);
+        // Хит-мысль — облачко на всю ширину списка и snippet под ним
+        // (ошибка 265cdb5f); строки связи/хронологии остаются в одну строку
+        // с глифом-иконкой.
+        if (hit.isThought) row.classList.add('search-hit-cloud');
+        row.append(hit.lead);
         const info = div('search-hit-info');
         info.style.flex = '1';
         info.style.minWidth = '0';
-        const title = el('div', 'hit-title', hit.title);
+        if (hit.title !== undefined) {
+          info.append(el('div', 'hit-title', hit.title));
+        }
         const snippet = el('div', 'hit-snippet');
         renderHtml(snippet, hit.snippet);
-        info.append(title, snippet);
-        row.append(hit.iconEl, info);
-        // Thought hits pick up the cloud's own colour/font/active (08-ui-spec.md
-        // §2.2, §6.7) — the search list shows the same icon and style as the
-        // canvas. Link/chrono rows have no thought to inherit from and stay
-        // on the default theme.
-        if (hit.hit !== undefined) applyThoughtHitStyle(row, hit.hit);
+        info.append(snippet);
+        row.append(info);
         hit.markPreview(row);
-        row.addEventListener('click', () => {
-          lastSelectedKey = hit.key;
-          applySelection(hit.key, true);
-          hidePanel();
-          // A synthetic Enter click keeps focus in the input; leave it so the
-          // canvas/editor receives the following keystrokes.
-          if (chrome !== null) chrome.input.blur();
-          hit.open();
-        });
+        // Мысль активируется облачком (у него свои действия) и записью в
+        // реестре строк; строки связи и хронологии — своим кликом. Ошибка
+        // 65382113: после перевода на фабрику облачка обработчик клика
+        // перестал доставаться этим строкам — связь и хронология не
+        // открывались ни мышью, ни Enter.
+        if (!hit.isThought) row.addEventListener('click', hit.activate);
         body.append(row);
       }
     }
@@ -757,46 +921,103 @@ async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promis
   }
 }
 
-/** Builds the options row controls. */
-function buildOptionsRow(row: HTMLElement): void {
-  row.replaceChildren();
+/** Догружает облачка уже выбранных мыслей-подкорней (по id). */
+function resolveSubrootClouds(): void {
+  const networkId = store.state.networkId;
+  const missing = options.subrootIds.filter(
+    (id) => !subrootClouds.has(id) && !subrootCloudsRequested.has(id),
+  );
+  if (networkId === null || missing.length === 0) return;
+  for (const id of missing) subrootCloudsRequested.add(id);
+  void etn.thoughts
+    .resolve(networkId, missing)
+    .then((refs) => {
+      for (const ref of refs) subrootClouds.set(ref.id, { ...ref });
+      rebuildSettingsZone();
+    })
+    .catch(() => undefined);
+}
 
+/** Live-search кандидаты мыслей для чип-листа «ограничить потомками мыслей». */
+async function subrootThoughtOptions(query: string): Promise<EntityOption[]> {
+  const needle = query.trim();
+  if (needle === '') return [];
+  try {
+    const hits = await etn.thoughts.findDuplicates(requireNetworkId(), needle, [], []);
+    return hits.map((hit) => {
+      subrootClouds.set(hit.id, { ...hit });
+      return thoughtEntityOption(hit);
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Builds the «настройки поиска» zone — three rows (задача a3247f84):
+ * 1) «ограничить потомками мыслей:» + thought chip field (enabled only while
+ *    the checkbox is on; the same picker as «Родительские мысли»);
+ * 2) «Места поиска:» + мысли/связи/хроники/неактуальные/корзина checkboxes;
+ * 3) «Ограничения:» + thought/link type chip fields and Автор/редактор.
+ * Narrow settings fall back to stacking the row items (`flex-wrap`), keeping
+ * the inter-row gaps.
+ */
+function buildSettingsZone(zone: HTMLElement): void {
+  zone.replaceChildren();
+
+  // --- 1-я строка: ограничение поддеревом ----------------------------------
+  const subtreeRow = div('search-settings-row');
   const subtreeLabel = el('label', 'checkbox-row');
   const subtreeCheck = el('input');
   subtreeCheck.type = 'checkbox';
   subtreeCheck.checked = options.subtree;
+  subtreeLabel.append(subtreeCheck, span('ограничить потомками мыслей:'));
+
+  // Поле мыслей-подкорней — общий чип-лист пикера (инструкция «Использовать
+  // унифицированные поля выбора ссылок в диалогах»), тот же, что у поля
+  // «Родительские мысли» панели отбора «Структур». Своих надписей-подсказок
+  // («текущий фокус») у поля нет.
+  const subrootField = buildEntityChipField({
+    getValues: () => options.subrootIds,
+    onChange: (values) => {
+      options = { ...options, subrootIds: values };
+      persistState();
+      refreshSearchIfVisible();
+    },
+    loadOptions: (query) => subrootThoughtOptions(query),
+    optionsHeader: 'Мысли',
+    cloudOf: (id) => subrootClouds.get(id) ?? null,
+    placeholder: 'Мысль…',
+    picker: {
+      label: 'выбрать…',
+      open: async () => {
+        const result = await pickThoughtsDialog({
+          networkId: requireNetworkId(),
+          allowCreate: false,
+          allowLinkType: false,
+          selectedIds: options.subrootIds,
+          title: 'Ограничить потомками мыслей',
+          applyLabel: 'Применить',
+        });
+        return result === null ? null : pickedThoughtIds(result);
+      },
+    },
+  });
+  setTooltip(subrootField.root, 'Поиск будет осуществляться только среди потомков указанных мыслей');
   subtreeCheck.addEventListener('change', () => {
     options = { ...options, subtree: subtreeCheck.checked };
+    subrootField.setDisabled(!subtreeCheck.checked);
     persistState();
     refreshSearchIfVisible();
   });
-  subtreeLabel.append(subtreeCheck, span('только в подчинённых мыслях'));
+  // Поле доступно только при установленном флажке.
+  subrootField.setDisabled(!options.subtree);
+  subtreeRow.append(subtreeLabel, subrootField.root);
 
-  const subrootButton = button(
-    'подкорень: —',
-    () => {
-      void pickThoughtsDialog({
-        networkId: requireNetworkId(),
-        allowCreate: false,
-        allowLinkType: false,
-      }).then((result) => {
-        const id = firstPickedThoughtId(result);
-        if (id !== null) {
-          options = { ...options, subrootId: id };
-          rebuildOptionsRow();
-          persistState();
-          refreshSearchIfVisible();
-        }
-      });
-    },
-    'btn small',
-  );
-  const subrootTitle = store.state.focus?.focused.title ?? 'текущий фокус';
-  subrootButton.textContent = `подкорень: ${options.subrootId !== null ? options.subrootId.slice(0, 8) : subrootTitle.slice(0, 14)}`;
-
-  const mkGroupCheck = (
+  // --- 2-я строка: места поиска --------------------------------------------
+  const mkCheck = (
     label: string,
-    key: 'onlyThoughts' | 'onlyLinks' | 'onlyChrono',
+    key: 'onlyThoughts' | 'onlyLinks' | 'onlyChrono' | 'showInactive' | 'trashed',
   ): HTMLElement => {
     const wrap = el('label', 'checkbox-row');
     const check = el('input');
@@ -810,74 +1031,44 @@ function buildOptionsRow(row: HTMLElement): void {
     wrap.append(check, span(label));
     return wrap;
   };
+  const placesRow = div('search-settings-row');
+  placesRow.append(
+    span('Места поиска:', 'search-settings-label'),
+    mkCheck('мысли', 'onlyThoughts'),
+    mkCheck('связи', 'onlyLinks'),
+    mkCheck('хроники', 'onlyChrono'),
+    mkCheck('неактуальные', 'showInactive'),
+    mkCheck('корзина', 'trashed'),
+  );
 
-  const typeSelect = el('select', 'select-input');
-  typeSelect.style.width = '170px';
-  const typePlaceholder = el('option', undefined, 'Типы мыслей: все');
-  typePlaceholder.value = '';
-  typeSelect.append(typePlaceholder);
-  // L21: the type tree with indent dots; the root type is not selectable (it
-  // would mean «every type»). Selecting a parent matches its whole subtree —
-  // the server expands type filters (docs/03-server-api.md §12).
-  for (const row of orderedTypeRows(store.state.thoughtTypes)) {
-    if (row.type.is_root) continue;
-    const option = el('option', undefined, `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name}`);
-    option.value = row.type.id;
-    typeSelect.append(option);
-  }
-  typeSelect.value = options.typeIds[0] ?? '';
-  typeSelect.addEventListener('change', () => {
-    options = { ...options, typeIds: typeSelect.value === '' ? [] : [typeSelect.value] };
-    persistState();
-    refreshSearchIfVisible();
+  // --- 3-я строка: ограничения ---------------------------------------------
+  // L21: the type tree rendered by the common entity chip field (ADR «выбор
+  // сущности — один пикер»). Список типов — МАССИВ (как в состоянии и в
+  // `type_id` запроса): прежнее комбо хранило один id и молча теряло
+  // остальные (задача 3742dd59). Корень иерархии не выбирается.
+  const typeField = buildEntityChipField({
+    getValues: () => options.typeIds,
+    onChange: (values) => {
+      options.typeIds = values;
+      persistState();
+      refreshSearchIfVisible();
+    },
+    loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+    optionsHeader: 'Типы мыслей',
+    placeholder: 'Тип мысли…',
   });
 
-  const linkTypeSelect = el('select', 'select-input');
-  linkTypeSelect.style.width = '170px';
-  const linkPlaceholder = el('option', undefined, 'Типы связей: все');
-  linkPlaceholder.value = '';
-  linkTypeSelect.append(linkPlaceholder);
-  for (const row of orderedTypeRows(store.state.linkTypes)) {
-    if (row.type.is_root) continue;
-    const option = el(
-      'option',
-      undefined,
-      `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name_forward}`,
-    );
-    option.value = row.type.id;
-    linkTypeSelect.append(option);
-  }
-  linkTypeSelect.value = options.linkTypeIds[0] ?? '';
-  linkTypeSelect.addEventListener('change', () => {
-    options = {
-      ...options,
-      linkTypeIds: linkTypeSelect.value === '' ? [] : [linkTypeSelect.value],
-    };
-    persistState();
-    refreshSearchIfVisible();
+  const linkTypeField = buildEntityChipField({
+    getValues: () => options.linkTypeIds,
+    onChange: (values) => {
+      options.linkTypeIds = values;
+      persistState();
+      refreshSearchIfVisible();
+    },
+    loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+    optionsHeader: 'Типы связей',
+    placeholder: 'Тип связи…',
   });
-
-  const inactiveLabel = el('label', 'checkbox-row');
-  const inactiveCheck = el('input');
-  inactiveCheck.type = 'checkbox';
-  inactiveCheck.checked = options.showInactive;
-  inactiveCheck.addEventListener('change', () => {
-    options = { ...options, showInactive: inactiveCheck.checked };
-    persistState();
-    refreshSearchIfVisible();
-  });
-  inactiveLabel.append(inactiveCheck, span('показывать неактуальные'));
-
-  const trashedLabel = el('label', 'checkbox-row');
-  const trashedCheck = el('input');
-  trashedCheck.type = 'checkbox';
-  trashedCheck.checked = options.trashed;
-  trashedCheck.addEventListener('change', () => {
-    options = { ...options, trashed: trashedCheck.checked };
-    persistState();
-    refreshSearchIfVisible();
-  });
-  trashedLabel.append(trashedCheck, span('показывать помеченные на удаление'));
 
   // Задача 59119797 «Фильтры Автор/Редактор»: два селекта пользователей
   // сети. Пустая строка в состоянии — «не применять» (REST/MCP это и так
@@ -901,26 +1092,23 @@ function buildOptionsRow(row: HTMLElement): void {
     },
   });
 
-  row.append(
-    subtreeLabel,
-    subrootButton,
-    mkGroupCheck('мысли', 'onlyThoughts'),
-    mkGroupCheck('связи', 'onlyLinks'),
-    mkGroupCheck('хронологию', 'onlyChrono'),
-    typeSelect,
-    linkTypeSelect,
+  const limitsRow = div('search-settings-row');
+  limitsRow.append(
+    span('Ограничения:', 'search-settings-label'),
+    typeField.root,
+    linkTypeField.root,
     authorSelect,
     editorSelect,
-    inactiveLabel,
-    trashedLabel,
   );
+
+  zone.append(subtreeRow, placesRow, limitsRow);
+  resolveSubrootClouds();
 }
 
-/** Rebuilds the options row after options change (checkbox state refresh). */
-function rebuildOptionsRow(): void {
-  if (chrome === null) return;
-  const row = chrome.host.querySelector<HTMLElement>('.search-options-row');
-  if (row !== null) buildOptionsRow(row);
+/** Rebuilds the settings zone after options change (checkbox state refresh). */
+function rebuildSettingsZone(): void {
+  if (chrome === null || settingsZone === null) return;
+  buildSettingsZone(settingsZone);
 }
 
 /** Test seam. */

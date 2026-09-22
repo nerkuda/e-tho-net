@@ -23,6 +23,7 @@ import {
   nativeAvailable,
   toolJson,
   toolText,
+  upsertPermanentViaWrite,
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 
@@ -81,18 +82,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-append', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## Раздел\nИзначальный текст',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Раздел\nИзначальный текст');
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -124,18 +114,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-append-2', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## Раздел\nA',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Раздел\nA');
         // Делаем три append подряд; между блоками не должно быть `\n\n\n`.
         for (let i = 0; i < 3; i++) {
           await handle.client.callTool({
@@ -169,18 +148,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-prepend', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## Раздел\nТело',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Раздел\nТело');
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -209,24 +177,13 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-replace', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: [
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, [
                 '## Запрет',
                 'Нельзя делать X.',
                 '',
                 '## Прочее',
                 'Оставить как есть.',
-              ].join('\n'),
-            },
-          }),
-        );
+              ].join('\n'));
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -265,18 +222,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-replace-nohead', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## Запрет\nСтарое содержимое',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Запрет\nСтарое содержимое');
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -311,15 +257,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-delete', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: [
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, [
                 '## A',
                 'один',
                 '',
@@ -328,10 +266,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
                 '',
                 '## C',
                 'три',
-              ].join('\n'),
-            },
-          }),
-        );
+              ].join('\n'));
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -363,18 +298,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-delete-only', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## Только',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Только');
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -407,18 +331,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-not-found', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: ['## Альфа', 'A', '', '## Бета', 'B'].join('\n'),
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, ['## Альфа', 'A', '', '## Бета', 'B'].join('\n'));
         const err = await handle.client.callTool({
           name: 'etn.comments.edit',
           arguments: {
@@ -448,18 +361,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-dupes', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: ['## Дубль', 'A', '', '## Дубль', 'B'].join('\n'),
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, ['## Дубль', 'A', '', '## Дубль', 'B'].join('\n'));
         const err = await handle.client.callTool({
           name: 'etn.comments.edit',
           arguments: {
@@ -486,18 +388,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-virtual', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: 'Просто текст без заголовков.\nВторая строка.',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, 'Просто текст без заголовков.\nВторая строка.');
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -560,18 +451,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const initial = ['## X', 'раз', '', '## Y', 'два'].join('\n');
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: initial,
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
         // Первая op прошла бы (append), но вторая — NOT_FOUND.
         const err = await handle.client.callTool({
           name: 'etn.comments.edit',
@@ -605,18 +485,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-version', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## X\nраз',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## X\nраз');
 
         // Корректный expected_version=1 → успех.
         const ok = toolJson<EditResult>(
@@ -662,16 +531,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-by-thought', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        await handle.client.callTool({
-          name: 'etn.comments.upsert',
-          arguments: {
-            network_id: ctx.networkId,
-            owner_type: 'thought',
-            owner_id: thoughtId,
-            kind: 'permanent',
-            body_md: '## X\nраз',
-          },
-        });
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## X\nраз');
         const result = toolJson<EditResult>(
           await handle.client.callTool({
             name: 'etn.comments.edit',
@@ -752,18 +612,7 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
       const thoughtId = makeThought(ndb, 'edit-activity', ctx.adminId);
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const upserted = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.comments.upsert',
-            arguments: {
-              network_id: ctx.networkId,
-              owner_type: 'thought',
-              owner_id: thoughtId,
-              kind: 'permanent',
-              body_md: '## X\nраз',
-            },
-          }),
-        );
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## X\nраз');
         await handle.client.callTool({
           name: 'etn.comments.edit',
           arguments: {

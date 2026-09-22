@@ -21,11 +21,13 @@
  *
  * Операции обслуживания необратимы; UI/клиент должен показывать
  * подтверждение, сервер сам по себе ничего не блокирует (требование 6bcccd2b).
+ *
+ * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { EtnError } from '@etn/shared';
+import type { ActivityRollupResult, ActivityTruncateResult } from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
 import {
@@ -34,20 +36,8 @@ import {
   rollupActivity,
   truncateActivity,
 } from '../domain/activity-service.js';
-import {
-  bodyObject,
-  fieldNullableInt,
-  openRouteNetworkDb,
-  queryInt,
-  queryStrings,
-  requestBody,
-  type RouteDeps,
-} from './helpers.js';
-
-/** Route params for `:networkId`. */
-interface NetworkIdParams {
-  networkId: string;
-}
+import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { parseRest, RestActivityList, RestActivityRollup, RestActivityTruncate } from '../contracts.js';
 
 /** `/api/v1/networks*` activity routes plugin factory. */
 export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -61,52 +51,17 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/activity',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const query = req.query as Record<string, unknown>;
-        // `user_id`/`entity_type`/`entity_id` — одиночные строки, чтобы не
-        // множить комбинации. Множественные значения отвергаются валидацией.
-        const userIds = queryStrings(query['user_id']);
-        const entityTypes = queryStrings(query['entity_type']);
-        const entityIds = queryStrings(query['entity_id']);
-        if (userIds.length > 1 || entityTypes.length > 1 || entityIds.length > 1) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'user_id, entity_type и entity_id принимают ровно одно значение.',
-            { field: 'user_id|entity_type|entity_id' },
-            req.id,
-          );
-        }
-        const fromMs = queryInt(query['from_ms'], 0, {
-          field: 'from_ms',
-          min: 0,
-          requestId: req.id,
-        });
-        const toMs = queryInt(query['to_ms'], Number.MAX_SAFE_INTEGER, {
-          field: 'to_ms',
-          min: 0,
-          requestId: req.id,
-        });
-        const limit = queryInt(query['limit'], 50, {
-          field: 'limit',
-          min: 1,
-          requestId: req.id,
-        });
-        const offset = queryInt(query['offset'], 0, {
-          field: 'offset',
-          min: 0,
-          requestId: req.id,
-        });
-
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const input = parseRest(RestActivityList, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const result = listActivity(ndb, {
-          networkId,
-          from_ms: fromMs,
-          to_ms: toMs,
-          user_id: userIds[0],
-          entity_type: entityTypes[0],
-          entity_id: entityIds[0],
-          limit: Math.min(ACTIVITY_LIMIT_MAX, limit),
-          offset,
+          networkId: input.network_id,
+          from_ms: input.from_ms ?? 0,
+          to_ms: input.to_ms ?? Number.MAX_SAFE_INTEGER,
+          user_id: input.user_id,
+          entity_type: input.entity_type,
+          entity_id: input.entity_id,
+          limit: Math.min(ACTIVITY_LIMIT_MAX, input.limit ?? 50),
+          offset: input.offset ?? 0,
         });
         sendList(reply, result.data, result.total, result.offset, result.limit);
       },
@@ -123,27 +78,9 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/activity/rollup',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = bodyObject(requestBody(req), req.id);
-        const untilMs = fieldNullableInt(body, 'until_ms', req.id);
-        if (untilMs === undefined || untilMs === null) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'until_ms обязателен и должен быть неотрицательным целым.',
-            { field: 'until_ms' },
-            req.id,
-          );
-        }
-        if (untilMs < 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'until_ms должен быть неотрицательным целым.',
-            { field: 'until_ms' },
-            req.id,
-          );
-        }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = rollupActivity(ndb, networkId, untilMs);
+        const input = parseRest(RestActivityRollup, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const result: ActivityRollupResult = rollupActivity(ndb, input.network_id, input.until_ms);
         sendSuccess(reply, result);
       },
     );
@@ -159,27 +96,9 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/activity/truncate',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = bodyObject(requestBody(req), req.id);
-        const untilMs = fieldNullableInt(body, 'until_ms', req.id);
-        if (untilMs === undefined || untilMs === null) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'until_ms обязателен и должен быть неотрицательным целым.',
-            { field: 'until_ms' },
-            req.id,
-          );
-        }
-        if (untilMs < 0) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'until_ms должен быть неотрицательным целым.',
-            { field: 'until_ms' },
-            req.id,
-          );
-        }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = truncateActivity(ndb, networkId, untilMs);
+        const input = parseRest(RestActivityTruncate, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const result: ActivityTruncateResult = truncateActivity(ndb, input.network_id, input.until_ms);
         sendSuccess(reply, result);
       },
     );

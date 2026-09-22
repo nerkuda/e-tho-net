@@ -32,6 +32,7 @@ import {
   createThoughtType,
   getRootThoughtType,
 } from '../src/domain/thought-type-service.js';
+import { createNetworkProperty, createTypeProperty } from '../src/domain/property-service.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
@@ -562,6 +563,73 @@ describe(
               assert.equal((err as EtnError).code, 'NOT_FOUND');
               return true;
             },
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('валидация definition: обратное имя свойства-связи (задача df992826)', () => {
+      /** Тип + свойство-связь, привязанное стороной источника (`source`). */
+      function setupLinkProp(): { ndb: NetworkDb; typeId: string } {
+        const ndb = createInMemoryNetworkDb();
+        const tt = createThoughtType(ndb, { name: 'Категория организации' }, USER);
+        const prop = createNetworkProperty(
+          ndb,
+          {
+            name: 'организации категории',
+            value_type: 'link',
+            name_forward: 'организации категории',
+            name_reverse: 'категория организации',
+          },
+          USER,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          { key: prop.name, value_type: 'link', config: prop.config, side: 'source' },
+          USER,
+        );
+        return { ndb, typeId: tt.id };
+      }
+
+      it('токен $thought.[<обратное имя>] принимается — привязка адресует обе стороны', () => {
+        const { ndb, typeId } = setupLinkProp();
+        try {
+          const definition = JSON.stringify({
+            properties: [
+              {
+                property_id: 'категория организации',
+                op: 'eq',
+                value: '$thought.[категория организации]',
+              },
+            ],
+          });
+          const created = createThoughtTypeView(
+            ndb,
+            typeId,
+            { name: 'Организации категории', definition },
+            USER,
+          );
+          assert.ok(created.id, 'отбор с обратным именем свойства-связи сохраняется');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('неизвестное имя свойства по-прежнему отвергается (unknown_property)', () => {
+        const { ndb, typeId } = setupLinkProp();
+        try {
+          const definition = JSON.stringify({
+            properties: [
+              { property_id: 'нет такого', op: 'eq', value: '$thought.[нет такого]' },
+            ],
+          });
+          assert.throws(
+            () => createThoughtTypeView(ndb, typeId, { name: 'X', definition }, USER),
+            /не подключено/,
           );
         } finally {
           ndb.close();

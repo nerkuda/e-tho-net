@@ -197,6 +197,75 @@ describe('RestClient — URL & query', () => {
   });
 });
 
+describe('RestClient — раскрытие дерева «Структур» (L15, ошибка db504c1a)', () => {
+  /** Пустой ответ одного уровня иерархии — важен только собранный URL. */
+  const EMPTY_HIERARCHY = {
+    status: 200,
+    body: {
+      data: { neighbors: [], edges: [], truncated: false, has_more: false, directions: {} },
+    },
+  };
+
+  it('getHierarchy кладёт фильтр обхода по связям в query-параметр link_filter', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_HIERARCHY]);
+    const client = makeClient(fetch);
+    await client.getHierarchy('net1', 't1', {
+      dir: 'children',
+      showInactive: false,
+      excludeIds: ['a', 'b'],
+      linkFilter: { type_ids: ['lt1'], include_structural: true },
+    });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.get('dir'), 'children');
+    assert.equal(url.searchParams.get('exclude_ids'), 'a,b');
+    // Форма значения — та же, что у поля `link_filter` тела `POST /thoughts/query`.
+    assert.deepEqual(JSON.parse(url.searchParams.get('link_filter') ?? 'null'), {
+      type_ids: ['lt1'],
+      include_structural: true,
+    });
+  });
+
+  it('без фильтра обхода link_filter в запрос не попадает (прежнее поведение)', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_HIERARCHY]);
+    const client = makeClient(fetch);
+    await client.getHierarchy('net1', 't1', { dir: 'parents' });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.has('link_filter'), false);
+    assert.equal(url.searchParams.get('dir'), 'parents');
+  });
+});
+
+describe('RestClient — превью соседей на холсте (ошибка e5cee08e)', () => {
+  /** Пустой список соседей — важен только собранный URL. */
+  const EMPTY_NEIGHBORS = { status: 200, body: { data: [] } };
+
+  it('getNeighbors кладёт фильтр типов связей в query-параметры link_type_id + include_structural', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_NEIGHBORS]);
+    const client = makeClient(fetch);
+    await client.getNeighbors('net1', 't1', {
+      dir: 'children',
+      limit: 200,
+      linkFilter: { type_ids: ['lt1', 'lt2'], include_structural: true },
+    });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.get('dir'), 'children');
+    // Та же форма, что разбирает сервер (`parseLinkTypeFilterQuery`):
+    // повторяемый link_type_id + include_structural.
+    assert.deepEqual(url.searchParams.getAll('link_type_id'), ['lt1', 'lt2']);
+    assert.equal(url.searchParams.get('include_structural'), 'true');
+  });
+
+  it('без фильтра query-параметров фильтра нет (прежнее поведение)', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_NEIGHBORS]);
+    const client = makeClient(fetch);
+    await client.getNeighbors('net1', 't1', { dir: 'parents' });
+    const url = new URL(calls[0]!.url);
+    assert.equal(url.searchParams.has('link_type_id'), false);
+    assert.equal(url.searchParams.has('include_structural'), false);
+    assert.equal(url.searchParams.get('dir'), 'parents');
+  });
+});
+
 describe('RestClient — response parsing', () => {
   it('returns the data field of the success envelope and captures meta', async () => {
     const { fetch } = makeFetch([
@@ -357,6 +426,51 @@ describe('RestClient — retry & timeout', () => {
         return true;
       },
     );
+  });
+});
+
+describe('RestClient — сохранённые отборы «Структур» (ошибка 0a8b9da3)', () => {
+  it('lists/creates/updates/deletes structure saved filters with view=structures', async () => {
+    const filter = {
+      id: 'f1',
+      view: 'structures',
+      name: 'Все персоны',
+      definition: { sort: 'alpha', order: 'asc' },
+      created_at: '2024',
+      updated_at: '2024',
+    };
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [filter] } },
+      { status: 201, body: { data: filter } },
+      { status: 200, body: { data: { ...filter, name: 'Все женщины' } } },
+      { status: 204, body: undefined },
+    ]);
+    const client = makeClient(fetch);
+
+    const list = await client.listSavedFilters('net1');
+    assert.equal(list.length, 1);
+    assert.ok(calls[0]!.url.includes('/saved-filters?'), 'чтение идёт по тому же адресу');
+    assert.ok(calls[0]!.url.includes('view=structures'), 'вид «Структур» задан явно');
+
+    await client.createSavedFilter('net1', {
+      name: 'Все женщины',
+      definition: { sort: 'alpha', order: 'asc' },
+    });
+    const createdBody = JSON.parse((calls[1]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(
+      createdBody['view'],
+      'structures',
+      'POST обязан нести view — иначе сервер отвечает VALIDATION_ERROR «Недопустимый view»',
+    );
+    assert.equal(createdBody['name'], 'Все женщины');
+
+    await client.updateSavedFilter('net1', 'f1', { name: 'Все женщины' });
+    const updatedBody = JSON.parse((calls[2]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(updatedBody['view'], 'structures');
+    assert.equal(updatedBody['name'], 'Все женщины');
+
+    await client.deleteSavedFilter('net1', 'f1');
+    assert.equal(calls[3]!.url, 'http://localhost:3000/api/v1/networks/net1/saved-filters/f1');
   });
 });
 

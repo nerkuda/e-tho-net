@@ -3,11 +3,16 @@
  *
  * Dialogs form a stack: opening one on top of another (a type editor over the
  * type list, a confirmation over an editor) keeps the lower dialog open, and
- * Escape / backdrop click / × close only the topmost one. Ctrl/Cmd+Enter
+ * Escape / × close only the topmost one. Ctrl/Cmd+Enter
  * confirms the topmost dialog — it clicks its primary button, so «OK»,
  * «Применить», «Сохранить» etc. are reachable from any field without tabbing
  * to the footer. `promptDialog` and `confirmDialog` are convenience wrappers
  * for the most common inputs.
+ *
+ * Entity editors add a duplicate-open guard on top of the stack: a dialog may
+ * declare `dedupeKey` (the entity it edits), and the caller first asks
+ * {@link raiseOpenDialog} — a repeated click on the same row raises and focuses
+ * the already-open editor instead of stacking a second one (ошибка c2d243bb).
  */
 
 import { button, div, el, errText } from './dom.js';
@@ -52,6 +57,20 @@ export interface DialogOptions {
    */
   customFooter?: HTMLElement;
   /**
+   * Строка ошибки в панели кнопок (футере) — видна при активной ЛЮБОЙ вкладке
+   * диалога (ошибка add8d09d «Сообщения об ошибках диалогов с вкладками видны
+   * на любой вкладке»).
+   *
+   * Футер лежит вне тела диалога и не переключается вместе с вкладками,
+   * поэтому у диалога с вкладками глобальное сообщение о неудачной записи
+   * выводится сюда, а не в тело вкладки. Вызывающий создаёт элемент сам
+   * (`span('', 'error-text')`) и пишет в него текст (`footerError.textContent = …`).
+   * Ошибки, относящиеся к конкретному полю вкладки, допустимо дублировать на
+   * месте; относится только к дефолтному футеру ({@link buttons}), при
+   * {@link customFooter} вызывающий кладёт строку в свой футер.
+   */
+  footerError?: HTMLElement;
+  /**
    * Extra keyboard shortcuts handled while this dialog is on top. Esc closes
    * the dialog (built-in); Ctrl/Cmd+Enter clicks the primary button
    * (built-in via {@link DialogButton.confirm}).
@@ -82,10 +101,25 @@ export interface DialogOptions {
    * means triggers it exactly once.
    */
   onClose?: () => void;
+  /**
+   * Identity of the ENTITY this dialog edits (`thought-type:<id>`,
+   * `property:<id>`; for an entity not created yet — the session key
+   * `thought-type:new` / `property:new`, ошибка 74d9b4ed). Registered on the
+   * stack so {@link raiseOpenDialog} can find the already-open dialog of the
+   * same entity; the duplicate-open guard itself lives in the callers (they
+   * call `raiseOpenDialog(key)` BEFORE building the body, taking a lock or
+   * creating a promise — see `showThoughtTypeEditor` /
+   * `openPropertyManagerEditor`, ошибки c2d243bb / 74d9b4ed). Dialogs without
+   * an entity identity leave it unset and always stack.
+   */
+  dedupeKey?: string;
 }
 
 /** Open dialogs, bottom first. */
 const stack: HTMLDivElement[] = [];
+
+/** Entity identity of every open dialog that declared one ({@link DialogOptions.dedupeKey}). */
+const dialogKeys = new WeakMap<HTMLDivElement, string>();
 
 /** The subset of KeyboardEvent fields the dialog shortcuts inspect. */
 export interface ShortcutEventLike {
@@ -128,6 +162,78 @@ export function closeDialog(): void {
 }
 
 /**
+ * Принадлежит ли узел открытому модальному диалогу. Нужно панелям, которые
+ * закрываются кликом вне себя (строка поиска карты): клик внутри диалога,
+ * открытого ИЗ этой панели, — не клик «вне панели» (ошибка 72a06e01).
+ */
+export function isInsideDialog(node: Node | null): boolean {
+  if (node === null) return false;
+  for (const backdrop of stack) {
+    if (backdrop.contains(node)) return true;
+  }
+  return false;
+}
+
+/**
+ * Поднимает уже открытый диалог сущности наверх и отдаёт ему фокус. Хук
+ * повторного открытия (ошибка c2d243bb): двойной клик по строке списка даёт
+ * ДВА события `click`, и без этой проверки редактор одной и той же сущности
+ * открывался дважды — двумя независимыми черновиками друг поверх друга (один
+ * из путей к DUPLICATE-рассинхрону 0bfd7180).
+ *
+ * Ищет диалог, зарегистрированный под `key` ({@link DialogOptions.dedupeKey}):
+ * нет такого — возвращает `false`, и вызывающий открывает новый диалог обычным
+ * порядком. Есть — переносит его в конец стопки (Esc/Ctrl+Enter снова
+ * действуют на него), в конец DOM (перекрывает прочие диалоги), подсвечивает
+ * и ставит фокус в первое поле; возвращает `true`, и вызывающий НЕ создаёт
+ * второй диалог.
+ *
+ * Правило — «повторное открытие редактора той же сущности не создаёт второй
+ * диалог, уже открытый поднимается»: намерение пользователя «открой мне это»
+ * сохраняется, а не игнорируется. Редактор ДРУГОЙ сущности (другой ключ)
+ * открывается поверх свободно — стопка диалогов не ломается.
+ */
+export function raiseOpenDialog(key: string): boolean {
+  for (const backdrop of stack) {
+    if (dialogKeys.get(backdrop) !== key) continue;
+    raiseDialog(backdrop);
+    return true;
+  }
+  return false;
+}
+
+/** Moves an open dialog to the top of the stack and the DOM, focuses and flashes it. */
+function raiseDialog(backdrop: HTMLDivElement): void {
+  const index = stack.indexOf(backdrop);
+  if (index >= 0) {
+    stack.splice(index, 1);
+    stack.push(backdrop);
+  }
+  // `append` MOVES a node that is already in the document — this re-inserts the
+  // backdrop after every other one, so it paints above the rest of the stack.
+  document.body.append(backdrop);
+  // Flash so the user sees which dialog the repeated click landed on. The class
+  // is removed and re-added to restart the animation on a repeated raise.
+  backdrop.classList.remove('dialog-raised');
+  void backdrop.offsetWidth;
+  backdrop.classList.add('dialog-raised');
+  focusFirstField(backdrop);
+}
+
+/** Best-effort focus into the raised dialog's first text field (the box itself as a fallback). */
+function focusFirstField(backdrop: HTMLDivElement): void {
+  const body = backdrop.querySelector<HTMLElement>('.dialog-body');
+  if (body === null) return;
+  for (const tag of ['input', 'textarea', 'select'] as const) {
+    const control = body.querySelector<HTMLElement>(tag);
+    if (control !== null) {
+      control.focus();
+      return;
+    }
+  }
+}
+
+/**
  * Shows a modal dialog. Returns its close function. Opening while another
  * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */
@@ -159,6 +265,12 @@ export function showDialog(opts: DialogOptions): () => void {
     box.append(opts.customFooter);
   } else if (opts.buttons !== undefined && opts.buttons.length > 0) {
     const footer = div('dialog-footer');
+    // Строка ошибки в панели кнопок — видна на любой вкладке (ошибка add8d09d).
+    // Кнопки прижимаются вправо, ошибка занимает свободное место слева.
+    if (opts.footerError !== undefined) {
+      footer.classList.add('dialog-footer-with-error');
+      footer.append(opts.footerError);
+    }
     for (const item of opts.buttons) {
       const btn = button(
         item.label,
@@ -238,14 +350,35 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onCtrlShiftEnter);
 
+  // Клик по подложке мимо тела диалога НЕ ЗАКРЫВАЕТ диалог (правило задачи
+  // c9353ce1, отменяющее cc28ee10): модальный диалог закрывают только кнопки,
+  // выбор из списка и Esc. Правило «клик мимо закрывает» отменено — при
+  // выделении текста мышью с отпусканием кнопки за пределами окна диалог
+  // закрывался без сохранения и терял правки пользователя. Клик по самому
+  // боксу и его содержимому приходит как `target`, отличный от подложки.
+  //
+  // Событие всё равно гасится (`preventDefault` + `stopPropagation`): клик
+  // мимо не должен проваливаться на холст и всплывающие панели, закрывающиеся
+  // кликом вне себя (панель поиска карты — `isInsideDialog`). Это поведение
+  // сохраняется с cc28ee10, снято только закрытие.
+  const onBackdropClick = (event: MouseEvent): void => {
+    if (event.target !== backdrop) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  backdrop.addEventListener('click', onBackdropClick);
+
   backdrop.append(box);
   document.body.append(backdrop);
   stack.push(backdrop);
+  if (opts.dedupeKey !== undefined) dialogKeys.set(backdrop, opts.dedupeKey);
   backdrop.addEventListener('remove', () => {
+    dialogKeys.delete(backdrop);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', onConfirm);
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
+    backdrop.removeEventListener('click', onBackdropClick);
     opts.onClose?.();
   });
   opts.onMount?.(close);
@@ -253,7 +386,8 @@ export function showDialog(opts: DialogOptions): () => void {
 }
 
 /**
- * Simple text prompt dialog. Resolves the entered text or `null` on cancel.
+ * Simple text prompt dialog. Resolves the entered text, or `null` when the
+ * dialog is dismissed (any close path — «Отмена», Esc, ×).
  */
 export function promptDialog(title: string, label: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
@@ -266,10 +400,21 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
     const body = div('form-stack');
     body.append(row);
 
+    /** Закрывающая функция каркаса — нужна обработчику Enter. */
+    let closeSelf: (() => void) | null = null;
+    let settled = false;
+    /**
+     * Единственная точка завершения промиса. Промис обязан резолвиться на
+     * ЛЮБОМ пути закрытия диалога (ошибка e0360076): кнопки завершают его
+     * явно, а Esc и × — через `onClose`. Флаг `settled` не даёт позднему
+     * событию `remove` переиграть уже принятое решение.
+     */
     const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
       resolve(value);
     };
-    showDialog({
+    closeSelf = showDialog({
       title,
       body,
       buttons: [
@@ -280,6 +425,9 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
           onClick: () => finish(input.value),
         },
       ],
+      // Esc и × — отмена: контракт «`null` on cancel», ровно как по кнопке
+      // «Отмена» (ошибка e0360076).
+      onClose: () => finish(null),
       onMount: () => {
         input.focus();
         input.select();
@@ -287,7 +435,7 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
           if (event.key === 'Enter') {
             event.preventDefault();
             finish(input.value);
-            closeDialog();
+            closeSelf?.();
           }
         });
       },
@@ -296,11 +444,16 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
 }
 
 /**
- * Confirmation dialog with a message. Resolves `true` on confirm.
+ * Confirmation dialog with a message. Resolves `true` on confirm and `false`
+ * when the dialog is dismissed (any close path — «Отмена», Esc, ×).
  */
 export function confirmDialog(title: string, message: string, danger = false): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false;
+    /** Единственная точка завершения промиса — см. {@link promptDialog}. */
     const finish = (value: boolean): void => {
+      if (settled) return;
+      settled = true;
       resolve(value);
     };
     showDialog({
@@ -316,6 +469,9 @@ export function confirmDialog(title: string, message: string, danger = false): P
           onClick: () => finish(true),
         },
       ],
+      // Esc и × — отказ: контракт «`false` on cancel», ровно как по кнопке
+      // «Отмена» (ошибка e0360076).
+      onClose: () => finish(false),
     });
   });
 }

@@ -31,7 +31,6 @@ import {
   EtnError,
   LINK_PROPERTY_DIRECTIONS,
   LINK_PROPERTY_SIDES,
-  LINK_STYLES,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
   typeNameKey,
@@ -49,9 +48,12 @@ import {
   type PropertyDefinitionInput,
   type PropertyDefinitionUpdateInput,
   type PropertyOwnerType,
+  type PropertyUsageBinding,
+  type PropertyUsageReport,
   type PropertyValueType,
   type PropertyValue,
   type PropertyValueValue,
+  type RegistryPropertyCounters,
   type ResolvedLinkProperty,
   type ResolvedPropertyValue,
   type ThoughtCardWarning,
@@ -59,6 +61,11 @@ import {
   type ThoughtUsageGroup,
   type TypeOwnerType,
 } from '@etn/shared';
+
+// Формы usage-отчёта и счётчиков справочника переехали в общий модуль
+// `@etn/shared` (задача 120385ba): одна форма ответа на обе стороны.
+// Реэкспорт сохранён для существующих импортов из домена.
+export type { PropertyUsageBinding, PropertyUsageReport, RegistryPropertyCounters };
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
@@ -323,6 +330,38 @@ export function linkPropertySideFromBinding(row: {
   return linkPropertySideFromConfig(row.value_type, row.config);
 }
 
+/**
+ * Сторона привязки свойства-связи у конкретного владельца-мысли (0.8.2, ошибка
+ * c67676f3). Направление ЗАПИСИ рёбер обязано совпадать с направлением ЧТЕНИЯ
+ * (`emitExplicit`): обе стороны определяет привязка (`type_properties.side`) в
+ * цепочке типов владельца, а не `config.direction`. Ищем первое определение
+ * свойства в эффективном наборе типа владельца (собственная привязка или
+ * унаследованная; зеркала попадают туда же). `side` привязки имеет приоритет,
+ * при NULL — fallback на `config.direction` (привязки до миграции 041).
+ *
+ * `null` — свойства нет в цепочке типов владельца (внетиповое заполнение):
+ * вызывающий откатывается на `config.direction`, сохраняя прежнее поведение.
+ * Для структурных свойств («Родители»/«Потомки») сторона не определена — тоже
+ * `null`, направление берётся из `config.direction`.
+ */
+export function resolveOwnerBindingSide(
+  ndb: NetworkDb,
+  ownerId: string,
+  propertyId: string,
+): LinkPropertySide | null {
+  const row = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(ownerId) as
+    | { type_id: string | null }
+    | undefined;
+  const typeId = row?.type_id ?? getRootTypeId(ndb, 'thought_types');
+  if (typeId === null) return null;
+  for (const def of listEffectiveTypeProperties(ndb, 'thought_type', typeId)) {
+    if (def.property_id !== propertyId || def.value_type !== 'link') continue;
+    if (isStructuralLinkProperty(def.config)) return null;
+    return def.side ?? linkPropertySideFromConfig(def.value_type, def.config);
+  }
+  return null;
+}
+
 /** `source` ↔ `target`. Для вычисления зеркала из исходной стороны. */
 export function oppositeSide(side: LinkPropertySide): LinkPropertyDirection {
   return side === 'source' ? 'in' : 'out';
@@ -354,6 +393,30 @@ function linkPropertyDisplayName(
   const lt = getLinkType(ndb, linkTypeId);
   if (lt === null) return linkTypeId;
   return direction === 'in' ? lt.name_reverse : lt.name_forward;
+}
+
+/**
+ * Имя ПРОТИВОПОЛОЖНОЙ стороны свойства-связи (задача df992826): привязка
+ * любой стороной делает в условии отбора доступными обе стороны — прямое имя
+ * (`name_forward`, сторона источника) и обратное (`name_reverse`, сторона
+ * цели). Единая точка интерпретации направления — {@link linkPropertyDirection},
+ * чтобы имя совпадало с тем, что показывает чтение карточки мысли.
+ *
+ * `null` — у скалярных, структурных («Родители»/«Потомки» уже двусторонние,
+ * см. миграцию 039) и свойств без типа связи противоположной стороны нет.
+ */
+export function oppositeLinkPropertyDisplayName(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  side: LinkPropertySide | null,
+): string | null {
+  const cfg = config ?? {};
+  if (isStructuralLinkProperty(cfg)) return null;
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  if (linkTypeId === null) return null;
+  const current = linkPropertyDirection(cfg, side);
+  const opposite: LinkPropertyDirection = current === 'out' ? 'in' : 'out';
+  return linkPropertyDisplayName(ndb, linkTypeId, opposite);
 }
 
 /**
@@ -457,6 +520,12 @@ function validateLinkConfig(
   // чтобы неработающий дефолт не сохранился в реестр.
   if (cfg.default_value !== undefined && cfg.default_value !== null) {
     normalizeLinkDefaultValue(ndb, { id: '', name: field, value_type: 'link', config: cfg }, cfg.default_value);
+  }
+  // Дефолт стороны назначений (0.8.2): набор источников. Валидируется
+  // существование id; отбор по типам назначений не применяется — значения
+  // относятся к стороне источников.
+  if (cfg.default_value_target !== undefined && cfg.default_value_target !== null) {
+    normalizeLinkDefaultValueTarget(ndb, field, cfg.default_value_target);
   }
   return cfg;
 }
@@ -801,8 +870,41 @@ function linkEndpoints(
   return direction === 'out' ? [ownerId, targetId] : [targetId, ownerId];
 }
 
-/** Проверить, что цель существует и подходит под `allowed_target_type_ids`. */
-function validateLinkTargetType(ndb: NetworkDb, prop: PropertyLike, targetId: string): void {
+/**
+ * Типы-кандидаты значения свойства-связи с ПРОТИВОПОЛОЖНОЙ стороны привязки
+ * владельца (0.8.2, ошибка c67676f3): реестр привязок — единственный источник
+ * истины ограничения (та же единая точка `loadBindingTypesBySide`, что и
+ * `allowed_opposite_type_ids` при чтении карточки, см.
+ * {@link attachAllowedOppositeTypeIds}). Привязка со стороны источника
+ * ограничивает цели (типы стороны назначения), со стороны назначения —
+ * источники. Поддеревья раскрываются (L21). Пусто — ограничения по реестру нет.
+ */
+function allowedOppositeTypeIdsForValidation(
+  ndb: NetworkDb,
+  propertyId: string,
+  side: LinkPropertySide,
+): string[] {
+  const entry = loadBindingTypesBySide(ndb, [propertyId]).get(propertyId);
+  if (entry === undefined) return [];
+  const types = side === 'source' ? entry.target : entry.source;
+  if (types.length === 0) return [];
+  return expandTypeIdsToSubtree(ndb, 'thought_types', types);
+}
+
+/**
+ * Проверить, что цель существует и подходит по типу. Тип-отбор берётся с
+ * противоположной стороны привязки владельца (`side`, 0.8.2, ошибка c67676f3) —
+ * единая точка {@link allowedOppositeTypeIdsForValidation}; при отсутствии
+ * привязки (`side === null`) или пустом реестровом ограничении — legacy
+ * `config.allowed_target_type_ids` (совместимость с привязками до миграции 041
+ * и валидацией дефолтов реестра).
+ */
+function validateLinkTargetType(
+  ndb: NetworkDb,
+  prop: PropertyLike,
+  targetId: string,
+  side: LinkPropertySide | null = null,
+): void {
   const target = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(targetId) as
     | { type_id: string | null }
     | undefined;
@@ -812,11 +914,16 @@ function validateLinkTargetType(ndb: NetworkDb, prop: PropertyLike, targetId: st
       ref: targetId,
     });
   }
-  const allowedIds = expandTypeIdsToSubtree(
-    ndb,
-    'thought_types',
-    (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
-  );
+  const registryAllowed =
+    side === null ? [] : allowedOppositeTypeIdsForValidation(ndb, prop.id, side);
+  const allowedIds =
+    registryAllowed.length > 0
+      ? registryAllowed
+      : expandTypeIdsToSubtree(
+          ndb,
+          'thought_types',
+          (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
+        );
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
     throw new EtnError('VALIDATION_ERROR', `thought ${targetId} is not of a required type`, {
       key: prop.name,
@@ -847,6 +954,50 @@ function normalizeLinkDefaultValue(
   const ids = [...new Set(value)];
   for (const id of ids) validateLinkTargetType(ndb, prop, id);
   return ids.length > 0 ? ids : null;
+}
+
+/**
+ * Дефолт стороны назначений свойства-связи (0.8.2, ADR «дефолт свойства живёт
+ * на привязке»): массив id мыслей-источников. В отличие от `default_value`
+ * отбор `allowed_target_type_ids` НЕ применяется — значения принадлежат
+ * стороне источников. Проверяется существование, дедупликация, пустой набор
+ * приводится к `null`.
+ */
+function normalizeLinkDefaultValueTarget(
+  ndb: NetworkDb,
+  field: string,
+  value: unknown,
+): string[] | null {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || id === '')) {
+    throw new EtnError('VALIDATION_ERROR', 'default_value_target — массив id мыслей', {
+      field: `${field}.default_value_target`,
+    });
+  }
+  const ids = [...new Set(value)];
+  for (const id of ids) {
+    const row = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(id);
+    if (!row) {
+      throw new EtnError('VALIDATION_ERROR', `мысль ${id} не найдена`, {
+        field: `${field}.default_value_target`,
+        id,
+      });
+    }
+  }
+  return ids.length > 0 ? ids : null;
+}
+
+/**
+ * Отфильтровать источники target-дефолта, применимые СЕЙЧАС (0.8.2): живые
+ * (не помеченные на удаление) и существующие. Отбор по типам не применяется —
+ * протухший источник молча пропускается, создание мысли не падает.
+ */
+export function filterApplicableLinkDefaultSources(ndb: NetworkDb, ids: string[]): string[] {
+  return ids.filter((id) => {
+    const row = ndb
+      .prepare('SELECT marked_for_deletion FROM thoughts_v WHERE id = ?')
+      .get(id) as { marked_for_deletion: number } | undefined;
+    return row !== undefined && row.marked_for_deletion === 0;
+  });
 }
 
 /**
@@ -955,13 +1106,22 @@ function setLinkPropertyTargets(
   prop: PropertyLike,
   targetIds: string[],
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): string[] {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  const direction = linkPropertyDirection(cfg);
+  // Направление — из display-имени стороны внетиповой записи (0.8.2, ошибка
+  // 748b80fd), иначе — по стороне привязки владельца (0.8.2, ошибка c67676f3),
+  // fallback на config.direction вне типа владельца.
+  const bindingSide = resolveOwnerBindingSide(ndb, ownerId, prop.id);
+  const direction = nameDirection ?? linkPropertyDirection(cfg, bindingSide);
+  // Валидация цели: у внетипового display-ключа (`nameDirection` задан)
+  // привязки у владельца нет — ограничение сторон не применяем, остаётся
+  // legacy `config.allowed_target_type_ids`; иначе — сторона привязки.
+  const side = nameDirection !== null ? null : bindingSide;
 
-  for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId);
+  for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId, side);
   for (const targetId of targetIds) {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     if (src === dst) {
@@ -999,6 +1159,45 @@ function setLinkPropertyTargets(
     result.push(targetId);
   });
   return result;
+}
+
+/**
+ * Заполнить свойство-связь со стороны НАЗНАЧЕНИЙ (0.8.2, ADR «дефолт свойства
+ * живёт на привязке»): `ownerId` — цель, `sourceIds` — источники; рёбра
+ * создаются канонически (источник → владелец). Применяется при создании мысли
+ * типа с привязкой `side = 'target'`. Валидация целей — существование и
+ * живость (отбор `allowed_type_ids` не применяется: значения — сторона
+ * источников). Самосвязь молча пропускается. Полная замена набора:
+ * недостающие рёбра создаются, лишние помечаются на удаление.
+ */
+export function setLinkPropertySourcesForTarget(
+  ndb: NetworkDb,
+  ownerId: string,
+  prop: PropertyLike,
+  sourceIds: string[],
+  actorUserId: string,
+): string[] {
+  return ndb.transaction(() => {
+    const cfg = prop.config ?? {};
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    // owner — цель: рёбра ищем направлением `in`, противоположный конец — источник.
+    const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in');
+    const wanted = new Set(sourceIds);
+    for (const [sourceId, link] of existing) {
+      if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
+    }
+    const result: string[] = [];
+    for (const sourceId of sourceIds) {
+      if (sourceId === ownerId) continue;
+      if (existing.has(sourceId)) {
+        result.push(sourceId);
+        continue;
+      }
+      insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId);
+      result.push(sourceId);
+    }
+    return result;
+  });
 }
 
 /** Переставить ребро на позицию `position` (структурный порядок детей). */
@@ -1044,13 +1243,19 @@ function addLinkPropertyTarget(
   targetId: string,
   comment: string | null,
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): string {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  const direction = linkPropertyDirection(cfg);
+  // Направление — из display-имени (748b80fd), иначе сторона привязки
+  // владельца (c67676f3).
+  const bindingSide = resolveOwnerBindingSide(ndb, ownerId, prop.id);
+  const direction = nameDirection ?? linkPropertyDirection(cfg, bindingSide);
+  // Внетиповой display-ключ: привязки у владельца нет — без ограничения сторон.
+  const side = nameDirection !== null ? null : bindingSide;
 
-  validateLinkTargetType(ndb, prop, targetId);
+  validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
   if (src === dst) {
     throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
@@ -1079,10 +1284,15 @@ function removeLinkPropertyTarget(
   prop: PropertyLike,
   targetId: string,
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): string | null {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  const direction = linkPropertyDirection(cfg);
+  // Направление — из display-имени (748b80fd), иначе сторона привязки
+  // владельца (c67676f3).
+  const direction =
+    nameDirection ??
+    linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing === undefined) return null;
   markLinkForDeletion(ndb, existing.id, actorUserId);
@@ -1181,6 +1391,101 @@ export function resolvePropertyIdByName(ndb: NetworkDb, name: string): string {
 }
 
 /**
+ * Резолвинг ссылки условия на свойство (задача df992826): условие отбора или
+ * прямого structure-запроса адресует свойство либо registry id, либо ИМЕНЕМ.
+ * Имя может быть:
+ *
+ *   * каноническим именем строки реестра (скаляры; у свойства-связи это одна
+ *     из сторон — та, что соответствует `config.direction`/привязке);
+ *   * ПРЯМЫМ (`name_forward`, сторона источника) или ОБРАТНЫМ
+ *     (`name_reverse`, сторона цели) именем свойства-связи — тогда условие
+ *     матчит рёбра с противоположным направлением (резолвинг обеих сторон).
+ *
+ * Направление берётся из имени: `name_forward` ⇒ `out`, `name_reverse` ⇒ `in`
+ * (единая точка интерпретации — {@link linkPropertyDirection}, без дублирования
+ * логики зеркал из чтения свойств мысли).
+ *
+ * Коллизия (обратное имя одного свойства-связи совпало с прямым именем другого
+ * свойства или с именем скаляра) НЕ проглатывается: бросается
+ * `VALIDATION_ERROR` со списком кандидатов — молчаливый выбор «первого»
+ * превратил бы условие в непредсказуемое.
+ *
+ * `null` — ссылка не распознана как свойство (условие отбрасывается движком,
+ * как и раньше для неизвестного `property_id`).
+ */
+export interface ResolvedConditionPropertyRef {
+  propertyId: string;
+  /**
+   * Направление рёбер, заданное именем стороны свойства-связи. `null` —
+   * ссылка адресована id или каноническим именем: направление, как и раньше,
+   * вычисляется из `config`/стороны привязки в движке отбора.
+   */
+  direction: LinkPropertyDirection | null;
+}
+
+export function resolveConditionPropertyRef(
+  ndb: NetworkDb,
+  ref: string,
+  requestId?: string,
+): ResolvedConditionPropertyRef | null {
+  // 1. Id реестра — прежний путь; направление остаётся за config/привязкой
+  //    (обратная совместимость сохранённых отборов и фильтров).
+  if (getNetworkProperty(ndb, ref) !== null) {
+    return { propertyId: ref, direction: null };
+  }
+  const key = typeNameKey(ref);
+  if (key === '') return null;
+
+  const candidates = new Map<string, ResolvedConditionPropertyRef>();
+  const add = (propertyId: string, direction: LinkPropertyDirection | null): void => {
+    candidates.set(`${propertyId}|${direction ?? ''}`, { propertyId, direction });
+  };
+
+  // 2. Каноническое имя строки реестра (скаляры, каноническое имя связи).
+  const byStored = getNetworkPropertyByName(ndb, ref);
+  if (byStored !== null) {
+    const cfg = byStored.config ?? {};
+    add(
+      byStored.id,
+      byStored.value_type === 'link' && !isStructuralLinkProperty(cfg)
+        ? linkPropertyDirection(cfg)
+        : null,
+    );
+  }
+
+  // 3. Обе стороны каждого свойства-связи: прямое имя — 'out', обратное — 'in'.
+  //    Структурные пропускаем — «Родители»/«Потомки» уже двусторонние.
+  for (const prop of listNetworkProperties(ndb)) {
+    if (prop.value_type !== 'link') continue;
+    const cfg = prop.config ?? {};
+    if (isStructuralLinkProperty(cfg)) continue;
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    if (linkTypeId === null) continue;
+    if (typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'out')) === key) {
+      add(prop.id, 'out');
+    }
+    if (typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'in')) === key) {
+      add(prop.id, 'in');
+    }
+  }
+
+  if (candidates.size === 0) return null;
+  if (candidates.size > 1) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Имя свойства «${ref}» неоднозначно: совпадает с несколькими сторонами свойств-связей.`,
+      {
+        field: 'property_id',
+        name: ref,
+        candidates: [...candidates.values()],
+      },
+      requestId,
+    );
+  }
+  return [...candidates.values()][0]!;
+}
+
+/**
  * Throw `DUPLICATE` (409) when another visible property already holds the
  * name. Uniqueness is checked against `properties_v` — the layer's view, not
  * the physical table: the same name may coexist in different layers and only
@@ -1258,6 +1563,7 @@ export function createNetworkProperty(
           linkPropertyDirection(config),
         );
   } else {
+    assertNoTargetDefaultForScalar(config);
     name = validateKey(input.name);
   }
   const configJson = config === null ? null : JSON.stringify(config);
@@ -1375,6 +1681,8 @@ export function updateNetworkProperty(
       );
       linkTypeIdForUpdate = validatedConfig.link_type_id as string;
     }
+  } else if (changes.config !== undefined) {
+    assertNoTargetDefaultForScalar(finalConfig);
   }
 
   // Единый жизненный цикл свойства-связи (0.8.1, требование 09f692ff):
@@ -1670,15 +1978,57 @@ function getOverrideRow(
 }
 
 /**
+ * `config.default_value_target` осмыслен только для свойства-связи (0.8.2):
+ * у скаляра единственная сторона — `default_value`.
+ */
+function assertNoTargetDefaultForScalar(config: PropertyConfig | null): void {
+  if (
+    config !== null &&
+    config.default_value_target !== undefined &&
+    config.default_value_target !== null
+  ) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'config.default_value_target допустим только для свойства-связи',
+      { field: 'config.default_value_target' },
+    );
+  }
+}
+
+/**
+ * Общее значение по умолчанию стороны привязки свойства (0.8.2, ADR «дефолт
+ * свойства живёт на привязке»): у свойства-связи со стороной `target` — ключ
+ * `config.default_value_target` (набор источников), в остальных случаях —
+ * `config.default_value` (единственная сторона скаляра либо сторона
+ * источников). Отсутствие ключа — `null`.
+ */
+function commonSideDefaultValue(def: PropertyDefinition): PropertyValueValue {
+  if (def.value_type !== 'link') return def.config?.default_value ?? null;
+  const side = def.side ?? linkPropertySideFromConfig(def.value_type, def.config);
+  if (side === 'target') return def.config?.default_value_target ?? null;
+  return def.config?.default_value ?? null;
+}
+
+/**
  * Effective properties of a type (L21 + 0.6.5, docs/02-data-model.md §3.4.1):
  * the type's own bindings plus everything inherited from its ancestors,
  * ordered from the root down to the type. One property appears once in the
  * chain — ancestors win by position, and the «attach to ancestor drops
  * descendants' bindings» rule keeps the invariant on write.
  *
- * `default_value` and `description` are override-aware and transitive: the
- * deepest type between the defining type and this one that stored an override
- * wins, until a deeper type overrides it again.
+ * `description` is override-aware and transitive: the deepest type between the
+ * defining type and this one that stored an override wins, until a deeper type
+ * overrides it again.
+ *
+ * `default_value` (0.8.2, ADR «дефолт свойства живёт на привязке»): только
+ * override-строка САМОГО типа, без транзитивности, иначе — общее значение
+ * стороны привязки (`config.default_value` для стороны источников,
+ * `config.default_value_target` для стороны назначений). `overridden_here` —
+ * у самого типа есть строка override с дефолтом.
+ *
+ * `allowed_opposite_type_ids` (0.8.2, ошибка a6513df0): у свойств-связей —
+ * типы привязок этого свойства с ПРОТИВОПОЛОЖНОЙ стороны (`type_properties.side`),
+ * вычисляются по реестру привязок (см. {@link attachAllowedOppositeTypeIds}).
  */
 export function listEffectiveTypeProperties(
   ndb: NetworkDb,
@@ -1691,30 +2041,32 @@ export function listEffectiveTypeProperties(
   for (const typeId of chainRootFirst) {
     for (const def of listTypeProperties(ndb, ownerType, typeId)) {
       const inherited = typeId !== ownerId;
-      // Transitive overrides: walk from the type itself up to (excluding) the
-      // defining type; the first override row found wins (02-data-model.md
-      // §3.4.1 «Транзитивность»).
-      let override: PropertyValueValue = null;
+      // Дефолт привязки (0.8.2, ADR «дефолт свойства живёт на привязке»):
+      // override-строка САМОГО типа, БЕЗ транзитивности — пусто означает общее
+      // значение стороны привязки, а не дефолт предка.
+      const ownOverrideRow = getOverrideRow(ndb, ownerType, ownerId, def.property_id);
+      const ownOverrideDefault = ownOverrideRow === null ? null : ownOverrideRow.default_value;
+      // Описания остаются транзитивными: идём от типа вверх до (не включая)
+      // определяющий тип; первая строка с описанием побеждает
+      // (02-data-model.md §3.4.1 «Транзитивность»).
       let descOverride: string | null = null;
-      let overriddenHere = false;
       let descriptionOverridden = false;
       if (inherited) {
         for (const t of chainSelfFirst) {
           if (t === typeId) break;
           const row = getOverrideRow(ndb, ownerType, t, def.property_id);
           if (row === null) continue;
-          if (override === null && row.default_value !== null) {
-            override = row.default_value;
-            overriddenHere = t === ownerId;
-          }
           if (descOverride === null && row.description !== null) {
             descOverride = row.description;
             descriptionOverridden = t === ownerId;
           }
-          if (override !== null && descOverride !== null) break;
+          if (descOverride !== null) break;
         }
       }
-      const ownDefault = def.config?.default_value ?? null;
+      // Общее значение стороны привязки: у стороны назначений — свой ключ
+      // `config.default_value_target`, иначе `config.default_value`.
+      const ownDefault = commonSideDefaultValue(def);
+      const overriddenHere = ownOverrideDefault !== null;
       // Направление для отображения имени (0.8.1): привязка source/target
       // через `type_properties.side` имеет приоритет над `config.direction`.
       // Для встречных свойств, созданных до миграции 041, `side` может быть
@@ -1739,7 +2091,7 @@ export function listEffectiveTypeProperties(
         inherited,
         defined_on: typeId,
         defined_on_name: ownerTypeName(ndb, ownerType, typeId),
-        default_value: inherited ? (override ?? ownDefault) : ownDefault,
+        default_value: ownOverrideDefault !== null ? ownOverrideDefault : ownDefault,
         overridden_here: overriddenHere,
         description: inherited ? (descOverride ?? def.description) : def.description,
         description_overridden: descriptionOverridden,
@@ -1749,7 +2101,75 @@ export function listEffectiveTypeProperties(
   if (ownerType === 'thought_type') {
     appendMirroredLinkProperties(ndb, ownerId, out);
   }
+  attachAllowedOppositeTypeIds(ndb, out);
   return out;
+}
+
+/**
+ * Проставить эффективным определениям свойства-связи допустимые типы значения
+ * (0.8.2, ошибка a6513df0): это типы ПРОТИВОПОЛОЖНОЙ стороны реестра привязок
+ * этого свойства (`type_properties.side`), а не `config` владельца. У привязки
+ * со стороны источника ограничены цели (типы привязок со стороны назначения),
+ * у привязки со стороны назначения — источники. Пусто — ограничения нет.
+ *
+ * Реестр привязок — единственный источник истины ограничения: `config`-ключи
+ * `allowed_*_type_ids` моделью 0.8.1 не предусмотрены и UI не пишутся.
+ * Поддеревья типов раскрывает клиент (L21).
+ */
+function attachAllowedOppositeTypeIds(ndb: NetworkDb, out: EffectiveTypeProperty[]): void {
+  const linkPropIds = [
+    ...new Set(
+      out
+        .filter((d) => d.value_type === 'link' && !isStructuralLinkProperty(d.config))
+        .map((d) => d.property_id),
+    ),
+  ];
+  if (linkPropIds.length === 0) return;
+  const bySide = loadBindingTypesBySide(ndb, linkPropIds);
+  for (const def of out) {
+    if (def.value_type !== 'link' || isStructuralLinkProperty(def.config)) continue;
+    const side = def.side ?? linkPropertySideFromConfig(def.value_type, def.config);
+    const entry = bySide.get(def.property_id);
+    def.allowed_opposite_type_ids =
+      side === 'source'
+        ? [...(entry?.target ?? [])]
+        : side === 'target'
+          ? [...(entry?.source ?? [])]
+          : [];
+  }
+}
+
+/**
+ * Типы мыслей, к которым свойство привязано по сторонам (`type_properties.side`)
+ * — карта `property_id → { source, target }`. Одна подготовленная выборка на
+ * набор свойств: зеркальные записи физических привязок не имеют и не влияют
+ * (их `property_id` — это же свойство реестра, а сторона зеркала вычисляется
+ * вызывающим).
+ */
+function loadBindingTypesBySide(
+  ndb: NetworkDb,
+  propertyIds: readonly string[],
+): Map<string, { source: string[]; target: string[] }> {
+  const map = new Map<string, { source: string[]; target: string[] }>();
+  const rows = ndb
+    .prepare(
+      `SELECT DISTINCT property_id, side, owner_id
+         FROM type_properties_v
+        WHERE property_id IN (${propertyIds.map(() => '?').join(', ')})
+          AND owner_type = 'thought_type'
+          AND side IS NOT NULL`,
+    )
+    .all(...propertyIds) as Array<{ property_id: string; side: string; owner_id: string }>;
+  for (const row of rows) {
+    let entry = map.get(row.property_id);
+    if (entry === undefined) {
+      entry = { source: [], target: [] };
+      map.set(row.property_id, entry);
+    }
+    if (row.side === 'source') entry.source.push(row.owner_id);
+    else if (row.side === 'target') entry.target.push(row.owner_id);
+  }
+  return map;
 }
 
 /**
@@ -1766,6 +2186,10 @@ export function listEffectiveTypeProperties(
  * не добавляется (та же свёртка, что в `listThoughtLinkProperties`).
  * Структурные свойства («Родители»/«Потомки») зеркал не порождают: у
  * нетипизированных рёбер обратная сторона уже покрыта парой самих свойств.
+ *
+ * Дефолт зеркала (0.8.2): только общее значение для назначений
+ * (`config.default_value_target`) — пер-типового override у зеркальной записи
+ * нет, привязки как таковой не существует.
  */
 function appendMirroredLinkProperties(
   ndb: NetworkDb,
@@ -1818,7 +2242,7 @@ function appendMirroredLinkProperties(
       inherited: defining !== ownerId,
       defined_on: defining,
       defined_on_name: ownerTypeName(ndb, 'thought_type', defining),
-      default_value: null,
+      default_value: cfg.default_value_target ?? null,
       overridden_here: false,
       description_overridden: false,
     });
@@ -1829,19 +2253,27 @@ function appendMirroredLinkProperties(
  * Shared guard of both override setters (default value, description): the type
  * must resolve in the connection's layer context, and the addressed property
  * (by binding id OR registry property id — legacy REST clients address the
- * ancestor's binding, new ones the registry property) must be **inherited from
- * an ancestor** — a property attached by the type itself is edited in the
- * registry (its default and description apply to everyone).
+ * ancestor's binding, new ones the registry property) must be attached in the
+ * type's chain.
+ *
+ * `requireInherited` различает сеттеры: описание правится только у
+ * **унаследованной** привязки (собственная — в справочнике, 422), а дефолт
+ * (0.8.2, ADR «дефолт свойства живёт на привязке») допускается и на
+ * собственной привязке.
+ *
+ * Returns the registry property plus the side of the nearest binding in the
+ * chain (for a link property — `source`/`target`, иначе `null`).
  *
  * Throws `NOT_FOUND` (404) for a missing type/property and `VALIDATION_ERROR`
- * (422) for an own or out-of-chain property.
+ * (422) for an own property when `requireInherited`, or an out-of-chain one.
  */
-function assertOverridableInheritedProperty(
+function assertOverridableProperty(
   ndb: NetworkDb,
   ownerType: TypeOwnerType,
   ownerId: string,
   propertyId: string,
-): PropertyLike {
+  options: { requireInherited: boolean },
+): { prop: PropertyLike; side: LinkPropertySide | null } {
   validateTypeOwnerType(ownerType);
   // S5 (13-layers.md §13): the owner must resolve in the connection's layer
   // context — the `_v` view hides types tombstoned in this chain and keeps
@@ -1866,38 +2298,51 @@ function assertOverridableInheritedProperty(
     });
   }
   const chain = visibleTypeChain(ndb, ownerType, ownerId);
+  let bindingSide: string | null = null;
+  let foundInChain = false;
   for (const typeId of chain) {
     const own = ndb
       .prepare(
-        'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        'SELECT id, side FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
       )
-      .get(ownerType, typeId, registryId) as { id: string } | undefined;
+      .get(ownerType, typeId, registryId) as { id: string; side: string | null } | undefined;
     if (!own) continue;
-    if (typeId === ownerId) {
+    if (typeId === ownerId && options.requireInherited) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'собственные свойства правятся в справочнике — дефолт и описание сразу для всех типов',
+        'собственные свойства правятся в справочнике — описание сразу для всех типов',
         { entity: 'type_property', id: registryId, owner_id: ownerId },
       );
     }
-    break; // found on the nearest chain member — inheritance confirmed
+    bindingSide = own.side;
+    foundInChain = true;
+    break; // nearest chain member — the binding whose side applies
   }
   // Not attached anywhere in the chain at all → cannot be overridden here.
-  const attached = ndb
-    .prepare(
-      `SELECT 1 FROM type_properties_v
+  if (!foundInChain) {
+    const attached = ndb
+      .prepare(
+        `SELECT 1 FROM type_properties_v
        WHERE owner_type = ? AND property_id = ? AND owner_id IN (${chain.map(() => '?').join(', ')})
        LIMIT 1`,
-    )
-    .get(ownerType, registryId, ...chain);
-  if (!attached) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'переопределять можно только свойства, подключённые предками этого типа',
-      { entity: 'type_property', id: registryId, owner_id: ownerId },
-    );
+      )
+      .get(ownerType, registryId, ...chain);
+    if (!attached) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'переопределять можно только свойства, подключённые предками этого типа',
+        { entity: 'type_property', id: registryId, owner_id: ownerId },
+      );
+    }
   }
-  return { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config };
+  return {
+    prop: { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config },
+    side: linkPropertySideFromBinding({
+      side: bindingSide,
+      value_type: prop.value_type,
+      config: prop.config,
+    }),
+  };
 }
 
 /** The visible override rows of (type, property) — ids plus both payloads. */
@@ -1919,14 +2364,21 @@ function listOverrideRows(
 }
 
 /**
- * Set or clear a type's default-value override of an inherited property
- * (docs/03-server-api.md §8). `value = null` resets the default back to the
- * registry's own — an override row that also carries a description override
- * survives with `default_value = 'null'` (JSON null: "no default override").
+ * Set or clear a type's default-value override (0.8.2, ADR «дефолт свойства
+ * живёт на привязке»). Разрешено для **любой** привязки в цепочке типа — и
+ * унаследованной, и собственной; `value = null` снимает дефолт (действует
+ * общее значение стороны привязки).
+ *
+ * Для свойства-связи значение нормализуется по стороне привязки: сторона
+ * `source` — набор целей (`normalizeLinkDefaultValue`), сторона `target` —
+ * набор источников (`normalizeLinkDefaultValueTarget`, без отбора по типам).
  *
  * Throws `NOT_FOUND` (404) when the property or the type does not exist, and
- * `VALIDATION_ERROR` (422) when the property is attached by the type itself
- * or does not come from an ancestor.
+ * `VALIDATION_ERROR` (422) when the property is not attached in the chain.
+ *
+ * Возвращает `true`, если эффективный дефолт привязки изменился (запись
+ * батч-онтологии по этому признаку отличает `updated` от идемпотентного
+ * `unchanged`), `false` — если значение уже было таким.
  */
 export function setTypePropertyDefaultOverride(
   ndb: NetworkDb,
@@ -1935,23 +2387,32 @@ export function setTypePropertyDefaultOverride(
   propertyId: string,
   value: PropertyValueValue,
   actorUserId: string,
-): void {
-  ndb.transaction(() => {
-    const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
-    // Дефолт свойства-связи — набор целей (bb67e546): нормализация (дедуп +
-    // валидация каждой цели) вместо скалярной coerce; пустой набор = сброс.
+): boolean {
+  return ndb.transaction(() => {
+    const { prop, side } = assertOverridableProperty(ndb, ownerType, ownerId, propertyId, {
+      requireInherited: false,
+    });
+    // Дефолт свойства-связи — набор целей (bb67e546) либо источников
+    // (0.8.2, сторона назначений): нормализация (дедуп + валидация каждого id)
+    // вместо скалярной coerce; пустой набор = сброс.
     const normalized =
       value === null
         ? null
         : prop.value_type === 'link'
-          ? normalizeLinkDefaultValue(ndb, prop, value)
+          ? side === 'target'
+            ? normalizeLinkDefaultValueTarget(ndb, prop.name, value)
+            : normalizeLinkDefaultValue(ndb, prop, value)
           : (validateAndCoerce(ndb, prop, value), value);
     const now = new Date().toISOString();
+    // «Дефолт изменился» — сравнение эффективного собственного значения:
+    // запись той же величины не должна выдаваться за `updated`.
+    let changed = false;
     if (normalized === null) {
       // Reset the default only: a row that still carries a description
       // override survives with default_value = 'null' (JSON null reads back
       // as "no override"); a row overriding nothing is removed.
       for (const row of listOverrideRows(ndb, ownerType, ownerId, prop.id)) {
+        if (JSON.parse(row.default_value) !== null) changed = true;
         if (row.description === null) {
           // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
           deleteRowLayered(ndb, 'type_property_overrides', row.id);
@@ -1971,7 +2432,12 @@ export function setTypePropertyDefaultOverride(
       // description override held by the same row survives.
       const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
       if (existingOverride) {
+        changed =
+          JSON.stringify(JSON.parse(existingOverride.default_value)) !==
+          JSON.stringify(normalized);
         materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
+      } else {
+        changed = true;
       }
       ndb
         .prepare(
@@ -1987,6 +2453,7 @@ export function setTypePropertyDefaultOverride(
     // Любая правка дефолта (включая сброс) — это правка настроек типа:
     // обновим авторство самого типа (требование e6d4165e, приравнивание).
     touchType(ndb, ownerType, ownerId, actorUserId);
+    return changed;
   });
 }
 
@@ -2008,7 +2475,9 @@ export function setTypePropertyDescriptionOverride(
 ): void {
   const normalized = normalizeDescription(description);
   ndb.transaction(() => {
-    const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
+    const { prop } = assertOverridableProperty(ndb, ownerType, ownerId, propertyId, {
+      requireInherited: true,
+    });
     const now = new Date().toISOString();
     if (normalized === null) {
       // Reset the description only: a row that still carries a default-value
@@ -2150,7 +2619,10 @@ function materializeMirroredTargetBindings(
  *
  * Then the binding is created with the given `required`/`position`/`side`.
  * Attaching to a type whose ANCESTOR already binds the property is rejected
- * with `DUPLICATE` — the property is already inherited. Attaching to a type
+ * with `DUPLICATE` — the property is already inherited. Re-attaching a
+ * property the type ALREADY binds is **idempotent** (ошибка `0bfd7180`):
+ * the existing binding is updated in place (same row, same logical id) —
+ * never a second row and never `DUPLICATE`. Attaching to a type
  * drops the same property's redundant bindings across the type's whole
  * SUBTREE in the same transaction (02-data-model.md §3.4.1); values are never
  * touched — they address the property, not the binding.
@@ -2198,23 +2670,28 @@ export function createTypeProperty(
     }
 
     // A binding on an ancestor means the property is already inherited — the
-    // effective list must keep exactly one entry per property per chain. A
-    // visible binding on the type itself is a duplicate attach.
+    // effective list must keep exactly one entry per property per chain, so
+    // that stays `DUPLICATE`.
+    //
+    // A visible binding on the type ITSELF is a repeat attach, and a repeat is
+    // idempotent (ошибка `0bfd7180`; прецедент — MCP `etn.ontology.write`
+    // `type_properties[].action` `unchanged`/`updated` и `on_duplicate: reuse`
+    // у `etn.thoughts.write`): привязка не дублируется и не пересоздаётся,
+    // а до-писывается тем же upsert ниже (`ON CONFLICT … DO UPDATE`), сохраняя
+    // исходный логический id. Порядок при этом не переезжает: без явного
+    // `position` берётся позиция существующей привязки, а не «в конец».
     const chain = visibleTypeChain(ndb, ownerType, ownerId);
+    let existingOwnPosition: number | null = null;
     for (const typeId of chain) {
       const clash = ndb
         .prepare(
-          'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+          'SELECT id, position FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
         )
-        .get(ownerType, typeId, prop.id) as { id: string } | undefined;
+        .get(ownerType, typeId, prop.id) as { id: string; position: number } | undefined;
       if (!clash) continue;
       if (typeId === ownerId) {
-        throw new EtnError('DUPLICATE', `свойство «${key}» уже подключено к этому типу`, {
-          owner_type: ownerType,
-          owner_id: ownerId,
-          key,
-          clash_owner_id: typeId,
-        });
+        existingOwnPosition = clash.position;
+        continue;
       }
       throw new EtnError(
         'DUPLICATE',
@@ -2230,6 +2707,8 @@ export function createTypeProperty(
 
     // Уникальность пары (тип связи + сторона) в наборе собственных свойств
     // типа (требование b9562306). Совпадение с внетиповым свойством — не ошибка.
+    // Собственная привязка этого же свойства исключается: при повторном
+    // attach она и есть обновляемая строка, а не соперник (ошибка 0bfd7180).
     if (prop.value_type === 'link') {
       assertLinkPropertyPairUnique(
         ndb,
@@ -2237,7 +2716,7 @@ export function createTypeProperty(
         ownerId,
         linkPropertyLinkTypeId(prop.config),
         finalSide,
-        null,
+        prop.id,
       );
     }
 
@@ -2259,6 +2738,7 @@ export function createTypeProperty(
 
     const position =
       input.position ??
+      existingOwnPosition ??
       (
         ndb
           .prepare(
@@ -2711,6 +3191,42 @@ function attachedPropertyIds(
 }
 
 /**
+ * Результат {@link resolveDefinition}: определение свойства плюс направление рёбер,
+ * выведенное из display-имени стороны (0.8.2, ошибка 748b80fd). `direction`
+ * заполнен, когда ключ совпал с display-именем стороны внетиповой записи
+ * свойства-связи (`name_forward` → `out`, `name_reverse` → `in`): запись и
+ * удаление рёбер обязаны идти из имени стороны, а не из стороны привязки
+ * владельца. `null` — ключ адресован канонически (id, скаляр, ключ
+ * эффективного набора типа): направление определяет привязка владельца
+ * (0.8.2, ошибка c67676f3).
+ */
+export interface ResolvedDefinition extends PropertyLike {
+  direction: LinkPropertyDirection | null;
+}
+
+/**
+ * Направление рёбер, заданное display-именем стороны свойства-связи
+ * (`name_forward` ⇒ `out`, `name_reverse` ⇒ `in`) — как в
+ * {@link resolveConditionPropertyRef}. `null` — имя не совпало ни с одной
+ * текущей стороной (например, устаревший снимок имени строки реестра, когда
+ * тип связи переименовали) либо свойство скалярное/структурное.
+ */
+function linkPropertyDirectionFromDisplayName(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  key: string,
+): LinkPropertyDirection | null {
+  const cfg = config ?? {};
+  if (isStructuralLinkProperty(cfg)) return null;
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  if (linkTypeId === null) return null;
+  const k = typeNameKey(key);
+  if (k === typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'out'))) return 'out';
+  if (k === typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'in'))) return 'in';
+  return null;
+}
+
+/**
  * Resolve a property by the key the READ side shows. Names are unique per
  * network since 0.6.5, so a scalar name alone addresses the property — but a
  * link property reads under its DISPLAY name computed from the link type and
@@ -2726,22 +3242,28 @@ function attachedPropertyIds(
  *     a link hit is unambiguous; a display name clashing with a scalar's name
  *     surfaces as an explicit ambiguity error;
  *  2. the registry by stored name (unattached scalars, canonical link names);
- *  3. link properties of the registry by display name — the outside-type
+ *  3. link properties of the registry by EITHER display side — the outside-type
  *     write arm (требование dfaacb05: запись значения свойства-связи, не
  *     подключённого к типу владельца).
  *
+ * Шаги 2–3 возвращают `direction` из display-имени (имя стороны адресует
+ * направление однозначно, 0.8.2, ошибка 748b80fd): у внетипового ключа
+ * `name_forward` пишет/удаляет ИСХОДЯЩИЕ рёбра, `name_reverse` — входящие.
+ * Шаг 1 (типовой ключ эффективного набора) направление не задаёт — его, как и
+ * раньше, определяет сторона привязки владельца (ошибка c67676f3).
+ *
  * Connectivity to the owner's type is NOT checked here — callers decide
  * (writes reject unattached properties with 422, deletes of outside-type
- * values must succeed). Exported for the MCP facade (`etn.properties.set`),
- * which needs the resolved `value_type` to coerce stringified scalars at the
- * transport boundary (docs/05-mcp-server.md §5.2).
+ * values must succeed). До 0.8.2 экспортировалась для фасада
+ * `etn.properties.set` (удалён, задача 937480ca); остальные пользователи —
+ * внутри домена.
  */
 export function resolveDefinition(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
   key: string,
-): PropertyLike | null {
+): ResolvedDefinition | null {
   if (ownerType === 'thought') {
     // 1) Эффективный набор типа владельца — ключи, которые отдаёт чтение.
     const row = ndb
@@ -2754,7 +3276,14 @@ export function resolveDefinition(
       );
       if (matches.length === 1) {
         const def = matches[0]!;
-        return { id: def.property_id, name: def.key, value_type: def.value_type, config: def.config };
+        // Типовой ключ: направление — за привязкой владельца (c67676f3).
+        return {
+          id: def.property_id,
+          name: def.key,
+          value_type: def.value_type,
+          config: def.config,
+          direction: null,
+        };
       }
       if (matches.length > 1) {
         throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
@@ -2765,34 +3294,48 @@ export function resolveDefinition(
       }
     }
   }
-  // 2) Канонический путь — имя строки реестра.
+  // 2) Канонический путь — имя строки реестра. Для свойства-связи имя строки —
+  //    display-имя ОДНОЙ из сторон: если оно совпало с текущей стороной типа
+  //    связи, направление берём из имени (748b80fd).
   const prop = getNetworkPropertyByName(ndb, key);
   if (prop) {
-    return { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config };
+    return {
+      id: prop.id,
+      name: prop.name,
+      value_type: prop.value_type,
+      config: prop.config,
+      direction:
+        prop.value_type === 'link'
+          ? linkPropertyDirectionFromDisplayName(ndb, prop.config, key)
+          : null,
+    };
   }
   // 3) Внетиповая запись свойства-связи (dfaacb05): ключ может быть
-  //    display-именем link-свойства реестра, не подключённого к типу владельца.
+  //    display-именем любой стороны link-свойства реестра, не подключённого к
+  //    типу владельца; направление — из имени стороны (748b80fd).
   if (ownerType === 'thought') {
-    const byDisplay = new Map<string, NetworkProperty>();
+    const byDisplay = new Map<string, { prop: NetworkProperty; direction: LinkPropertyDirection }>();
     for (const p of listNetworkProperties(ndb)) {
       if (p.value_type !== 'link') continue;
-      const cfg = p.config ?? {};
-      if (isStructuralLinkProperty(cfg)) continue;
-      const ltId = linkPropertyLinkTypeId(cfg);
-      if (ltId === null) continue;
-      if (linkPropertyDisplayName(ndb, ltId, linkPropertyDirection(cfg)) === key) {
-        byDisplay.set(p.id, p);
-      }
+      const direction = linkPropertyDirectionFromDisplayName(ndb, p.config, key);
+      if (direction === null) continue;
+      byDisplay.set(p.id, { prop: p, direction });
     }
     if (byDisplay.size === 1) {
-      const p = [...byDisplay.values()][0]!;
-      return { id: p.id, name: p.name, value_type: p.value_type, config: p.config };
+      const hit = [...byDisplay.values()][0]!;
+      return {
+        id: hit.prop.id,
+        name: hit.prop.name,
+        value_type: hit.prop.value_type,
+        config: hit.prop.config,
+        direction: hit.direction,
+      };
     }
     if (byDisplay.size > 1) {
       throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
         field: 'property',
         name: key,
-        candidates: [...byDisplay.values()].map((p) => ({ id: p.id, name: p.name })),
+        candidates: [...byDisplay.values()].map((h) => ({ id: h.prop.id, name: h.prop.name })),
       });
     }
   }
@@ -3071,21 +3614,73 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
   return { total, groups, holding_layers: [] };
 }
 
-/** Свойства-связи, чьё ребро блокирует удаление цели (blocks_target_deletion). */
-function listBlockingLinkProperties(
-  ndb: NetworkDb,
-): Array<{ property_id: string; name: string; direction: LinkPropertyDirection; link_type_id: string | null }> {
-  const out: Array<{ property_id: string; name: string; direction: LinkPropertyDirection; link_type_id: string | null }> = [];
+/** Запись учёта блокирующих ссылок: свойство + направление, в котором оно блокирует. */
+interface BlockingLinkProperty {
+  property_id: string;
+  name: string;
+  /** Направление ребра у ВЛАДЕЛЬЦА: `out` — владелец источник (блокируется цель),
+   *  `in` — владелец цель (блокируется источник). */
+  direction: LinkPropertyDirection;
+  link_type_id: string | null;
+}
+
+/**
+ * Свойства-связи, чьё ребро блокирует удаление значения
+ * (`config.blocks_target_deletion`), с направлением, РАЗРЕШЁННЫМ ПО ПРИВЯЗКАМ
+ * (ошибка 083dcde5; класс ошибки c67676f3).
+ *
+ * Направление свойства-связи живёт в привязке (`type_properties.side`,
+ * миграция 042), а не в `config`: одна реестровая строка может быть привязана
+ * и источником, и назначением на разные типы владельцев. Поэтому возвращаем по
+ * записи на каждую ПАРУ `(property_id, direction)`, а не одну запись на
+ * свойство: привязка-источник блокирует цель ребра (`out`), привязка-назначение
+ * — источник (`in`). У свойства без привязок сохраняем прежний fallback на
+ * `config.direction` (внетиповое заполнение, привязки до миграции 041).
+ *
+ * Симметрично чтению ({@link listThoughtLinkProperties}, `emitExplicit`):
+ * направление каждой записи вычисляет {@link linkPropertyDirection} по стороне
+ * привязки.
+ */
+function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
+  // Стороны, которыми свойство привязано у типов владельцев. Без привязок
+  // свойство остаётся с fallback-направлением из config.
+  const bindingSides = new Map<string, Set<LinkPropertySide | null>>();
+  const rows = ndb
+    .prepare(
+      `SELECT DISTINCT tp.property_id AS property_id, tp.side AS side
+         FROM type_properties_v tp
+         JOIN properties_v p ON p.id = tp.property_id
+        WHERE p.value_type = 'link'
+          AND json_extract(p.config, '$.blocks_target_deletion') = 1`,
+    )
+    .all() as Array<{ property_id: string; side: string | null }>;
+  for (const row of rows) {
+    let sides = bindingSides.get(row.property_id);
+    if (sides === undefined) {
+      sides = new Set();
+      bindingSides.set(row.property_id, sides);
+    }
+    sides.add(row.side === 'source' || row.side === 'target' ? row.side : null);
+  }
+
+  const out: BlockingLinkProperty[] = [];
   for (const prop of listNetworkProperties(ndb)) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
     if (cfg.blocks_target_deletion !== true) continue;
-    out.push({
-      property_id: prop.id,
-      name: prop.name,
-      direction: linkPropertyDirection(cfg),
-      link_type_id: linkPropertyLinkTypeId(cfg),
-    });
+    const sides = bindingSides.get(prop.id);
+    const directions: LinkPropertyDirection[] =
+      sides === undefined || sides.size === 0
+        ? [linkPropertyDirection(cfg, null)]
+        : [...new Set([...sides].map((side) => linkPropertyDirection(cfg, side)))];
+    for (const direction of directions) {
+      out.push({
+        property_id: prop.id,
+        name: prop.name,
+        direction,
+        link_type_id: linkPropertyLinkTypeId(cfg),
+      });
+    }
   }
   return out;
 }
@@ -3397,7 +3992,16 @@ export function setPropertyValue(
         key,
       });
     }
-    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, { key }, actorUserId);
+    return setPropertyValueForProperty(
+      ndb,
+      ownerType,
+      ownerId,
+      prop,
+      value,
+      { key },
+      actorUserId,
+      prop.direction,
+    );
   });
 }
 
@@ -3461,6 +4065,7 @@ function setPropertyValueForProperty(
   value: PropertyValueValue,
   errKey: { key: string },
   actorUserId: string,
+  nameDirection: LinkPropertyDirection | null = null,
 ): PropertyValue {
   // Свойство-связь: запись — создание/правка рёбер, а не значение в
   // property_values (ADR «свойство-связь — проекция ребра»). Запись вне типа
@@ -3478,6 +4083,7 @@ function setPropertyValueForProperty(
       prop,
       normalizeLinkTargets(value, errKey.key),
       actorUserId,
+      nameDirection,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     const nowMs = Date.now();
@@ -3682,9 +4288,20 @@ export function addLinkPropertyValue(
       ndb,
       ownerId,
       linkPropertyLinkTypeId(prop.config),
-      linkPropertyDirection(prop.config),
+      // Направление — из display-имени (748b80fd), иначе сторона привязки
+      // владельца (0.8.2, ошибка c67676f3).
+      prop.direction ??
+        linkPropertyDirection(prop.config, resolveOwnerBindingSide(ndb, ownerId, prop.id)),
     ).get(targetId);
-    const id = addLinkPropertyTarget(ndb, ownerId, prop, targetId, comment, actorUserId);
+    const id = addLinkPropertyTarget(
+      ndb,
+      ownerId,
+      prop,
+      targetId,
+      comment,
+      actorUserId,
+      prop.direction,
+    );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id, created: existing === undefined };
   });
@@ -3716,7 +4333,14 @@ export function removeLinkPropertyValue(
         key,
       });
     }
-    const id = removeLinkPropertyTarget(ndb, ownerId, prop, targetId, actorUserId);
+    const id = removeLinkPropertyTarget(
+      ndb,
+      ownerId,
+      prop,
+      targetId,
+      actorUserId,
+      prop.direction,
+    );
     if (id !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id };
   });
@@ -3857,4 +4481,309 @@ export function deletePropertyValue(
     // without a second lookup.
     return { property_id: prop.id, deleted: true };
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// Счётчики и usage справочника свойств (ADR 8c93f03a, веха 7 версии 0.8.2).
+// Раньше этот сырой SQL жил в фасаде `routes/properties-registry.ts` —
+// вынесен сюда, чтобы роут остался тонким, а запросы покрывались доменными
+// тестами. Поведение перенесено дословно.
+// ---------------------------------------------------------------------------
+
+/** Счётчики одного свойства справочника (перенос `readCounters` из роута). */
+export function getPropertyRegistryCounters(
+  ndb: NetworkDb,
+  propertyId: string,
+  valueType?: PropertyValueType,
+): RegistryPropertyCounters {
+  const typesCount = (
+    ndb
+      .prepare('SELECT COUNT(*) AS c FROM type_properties_v WHERE property_id = ?')
+      .get(propertyId) as { c: number }
+  ).c;
+  const valuesCount = (
+    ndb
+      .prepare('SELECT COUNT(*) AS c FROM property_values_v WHERE property_id = ?')
+      .get(propertyId) as { c: number }
+  ).c;
+  const result: RegistryPropertyCounters = {
+    types_count: typesCount,
+    values_count: valuesCount,
+  };
+  if (valueType === 'link') {
+    // Split by side. `side IS NULL` rows are legacy bindings (миграция 041) —
+    // they keep counting in the total but not in either side.
+    const sourceCount = (
+      ndb
+        .prepare(
+          "SELECT COUNT(*) AS c FROM type_properties_v WHERE property_id = ? AND side = 'source'",
+        )
+        .get(propertyId) as { c: number }
+    ).c;
+    const targetCount = (
+      ndb
+        .prepare(
+          "SELECT COUNT(*) AS c FROM type_properties_v WHERE property_id = ? AND side = 'target'",
+        )
+        .get(propertyId) as { c: number }
+    ).c;
+    result.types_source_count = sourceCount;
+    result.types_target_count = targetCount;
+  }
+  return result;
+}
+
+/** Групповые счётчики всего справочника — четыре агрегата за четыре запроса. */
+export function getPropertyCounterMaps(ndb: NetworkDb): {
+  typesByProp: Map<string, number>;
+  valuesByProp: Map<string, number>;
+  linkSourceByProp: Map<string, number>;
+  linkTargetByProp: Map<string, number>;
+} {
+  const typeRows = ndb
+    .prepare('SELECT property_id, COUNT(*) AS c FROM type_properties_v GROUP BY property_id')
+    .all() as Array<{ property_id: string; c: number }>;
+  const valueRows = ndb
+    .prepare('SELECT property_id, COUNT(*) AS c FROM property_values_v GROUP BY property_id')
+    .all() as Array<{ property_id: string; c: number }>;
+  // Per-side counters for link properties (0.8.1, задача d7177d1d).
+  const linkSourceRows = ndb
+    .prepare(
+      "SELECT property_id, COUNT(*) AS c FROM type_properties_v WHERE side = 'source' GROUP BY property_id",
+    )
+    .all() as Array<{ property_id: string; c: number }>;
+  const linkTargetRows = ndb
+    .prepare(
+      "SELECT property_id, COUNT(*) AS c FROM type_properties_v WHERE side = 'target' GROUP BY property_id",
+    )
+    .all() as Array<{ property_id: string; c: number }>;
+  return {
+    typesByProp: new Map(typeRows.map((r) => [r.property_id, r.c])),
+    valuesByProp: new Map(valueRows.map((r) => [r.property_id, r.c])),
+    linkSourceByProp: new Map(linkSourceRows.map((r) => [r.property_id, r.c])),
+    linkTargetByProp: new Map(linkTargetRows.map((r) => [r.property_id, r.c])),
+  };
+}
+
+/**
+ * Walk every stored value of a property and classify it as convertible or
+ * droppable for the requested `value_type`. Used to surface `converted`/
+ * `dropped` counters from the PATCH endpoint without changing the service's
+ * signature. Rules mirror {@link convertStoredValue}; NULL always stays NULL.
+ */
+export function classifyStoredValues(
+  ndb: NetworkDb,
+  propertyId: string,
+  from: PropertyValueType,
+  to: PropertyValueType,
+): { converted: number; dropped: number } {
+  const rows = ndb
+    .prepare(
+      `SELECT value_text, value_date, value_number, value_bool
+       FROM property_values_v WHERE property_id = ?`,
+    )
+    .all(propertyId) as Array<{
+    value_text: string | null;
+    value_date: string | null;
+    value_number: number | null;
+    value_bool: number | null;
+  }>;
+
+  let converted = 0;
+  let dropped = 0;
+  for (const row of rows) {
+    // Read the stored value as its declared type, then try to convert.
+    let value: string | number | boolean | string[] | null = null;
+    switch (from) {
+      case 'text':
+      case 'url':
+        value = row.value_text;
+        break;
+      case 'date':
+        value = row.value_date;
+        break;
+      case 'number':
+        value = row.value_number;
+        break;
+      case 'bool':
+        value = row.value_bool === null ? null : row.value_bool === 1;
+        break;
+      case 'link':
+        value = null;
+        break;
+    }
+    // Same conversion rules as {@link convertStoredValue}.
+    if (canStoredValueConvert(value, to)) converted += 1;
+    else dropped += 1;
+  }
+  return { converted, dropped };
+}
+
+/** Классификатор одного значения для {@link classifyStoredValues}. */
+function canStoredValueConvert(
+  value: string | number | boolean | string[] | null,
+  to: PropertyValueType,
+): boolean {
+  if (value === null) return true; // NULL always stays NULL
+  if (Array.isArray(value)) {
+    return to === 'text' || to === 'url';
+  }
+  switch (to) {
+    case 'text':
+    case 'url':
+      return true;
+    case 'number': {
+      if (typeof value === 'number') return true;
+      if (typeof value === 'boolean') return true;
+      const trimmed = value.trim();
+      if (trimmed === '') return false;
+      const n = Number(trimmed);
+      return Number.isFinite(n);
+    }
+    case 'date':
+      return typeof value === 'string' && ISO_DATE_RE.test(value) && !Number.isNaN(Date.parse(value));
+    case 'bool':
+      if (typeof value === 'boolean') return true;
+      if (typeof value === 'number' && (value === 0 || value === 1)) return true;
+      if (typeof value === 'string') {
+        const s = value.trim().toLowerCase();
+        return s === 'true' || s === 'да' || s === '1' || s === 'false' || s === 'нет' || s === '0';
+      }
+      return false;
+    case 'link':
+      return false;
+    case 'thought_ref':
+      // Legacy (миграция 040): таких свойств в живой БД не остаётся.
+      return false;
+  }
+}
+
+/**
+ * Usage-отчёт свойства: привязки к типам с именами и счётчиками значений
+ * «in-type» (по точному совпадению типа владельца с привязкой) и суммарный
+ * счётчик «out-of-type» (значения на владельцах, чей тип не входит в набор
+ * привязок). Перенос блока из `GET /networks/{id}/properties/{id}/usage`.
+ */
+export function getPropertyUsage(ndb: NetworkDb, propertyId: string): PropertyUsageReport {
+  // Bindings: every type (thought or link) that attaches the property.
+  const bindingRows = ndb
+    .prepare(
+      `SELECT tp.owner_type AS owner_type, tp.owner_id AS owner_id,
+              tp.required AS required
+       FROM type_properties_v tp
+       WHERE tp.property_id = ?
+       ORDER BY tp.owner_type, tp.owner_id`,
+    )
+    .all(propertyId) as Array<{
+    owner_type: 'thought_type' | 'link_type';
+    owner_id: string;
+    required: number;
+  }>;
+
+  const thoughtTypeIds = bindingRows
+    .filter((b) => b.owner_type === 'thought_type')
+    .map((b) => b.owner_id);
+  const linkTypeIds = bindingRows
+    .filter((b) => b.owner_type === 'link_type')
+    .map((b) => b.owner_id);
+
+  const thoughtNameById = new Map<string, string>();
+  if (thoughtTypeIds.length > 0) {
+    const rows = ndb
+      .prepare(
+        `SELECT id, name FROM thought_types_v WHERE id IN (${thoughtTypeIds.map(() => '?').join(', ')})`,
+      )
+      .all(...thoughtTypeIds) as Array<{ id: string; name: string }>;
+    for (const r of rows) thoughtNameById.set(r.id, r.name);
+  }
+  const linkNameById = new Map<string, string>();
+  if (linkTypeIds.length > 0) {
+    const rows = ndb
+      .prepare(
+        `SELECT id, name_forward, name_reverse FROM link_types_v WHERE id IN (${linkTypeIds.map(() => '?').join(', ')})`,
+      )
+      .all(...linkTypeIds) as Array<{
+      id: string;
+      name_forward: string;
+      name_reverse: string;
+    }>;
+    for (const r of rows) linkNameById.set(r.id, `${r.name_forward} / ${r.name_reverse}`);
+  }
+
+  // For each binding, count stored values on owners whose type id matches
+  // this binding exactly. The "in-type" notion is by the binding row's
+  // owner type (a thought_type binding covers thoughts whose type_id
+  // equals it).
+  const bindings: PropertyUsageBinding[] = [];
+  for (const b of bindingRows) {
+    const ownerTable = b.owner_type === 'thought_type' ? 'thoughts_v' : 'links_v';
+    const name =
+      b.owner_type === 'thought_type'
+        ? (thoughtNameById.get(b.owner_id) ?? b.owner_id)
+        : (linkNameById.get(b.owner_id) ?? b.owner_id);
+    const count = (
+      ndb
+        .prepare(
+          `SELECT COUNT(*) AS c
+           FROM property_values_v pv
+           JOIN ${ownerTable} o ON o.id = pv.owner_id
+           WHERE pv.property_id = ? AND pv.owner_type = ? AND o.type_id = ?`,
+        )
+        .get(
+          propertyId,
+          b.owner_type === 'thought_type' ? 'thought' : 'link',
+          b.owner_id,
+        ) as { c: number }
+    ).c;
+    bindings.push({
+      owner_type: b.owner_type,
+      owner_id: b.owner_id,
+      owner_name: name,
+      required: b.required === 1,
+      values_in_type_count: count,
+    });
+  }
+
+  // «Out-of-type»: stored values whose owner's type is not in the
+  // attached set. Walk thought/link owners separately: a thought_type
+  // binding covers thoughts, never links, so a thought's outside-type
+  // status is computed against the thought_type bindings only.
+  const thoughtTypeIdSet = new Set(thoughtTypeIds);
+  const linkTypeIdSet = new Set(linkTypeIds);
+
+  const thoughtOutsideCount = (
+    ndb
+      .prepare(
+        `SELECT COUNT(*) AS c
+         FROM property_values_v pv
+         LEFT JOIN thoughts_v t ON t.id = pv.owner_id
+         WHERE pv.property_id = ? AND pv.owner_type = 'thought'
+           AND (t.type_id IS NULL OR t.type_id NOT IN (${thoughtTypeIds.length > 0 ? thoughtTypeIds.map(() => '?').join(', ') : 'NULL'}))`,
+      )
+      .get(propertyId, ...(thoughtTypeIds.length > 0 ? thoughtTypeIds : [])) as { c: number }
+  ).c;
+
+  const linkOutsideCount = (
+    ndb
+      .prepare(
+        `SELECT COUNT(*) AS c
+         FROM property_values_v pv
+         LEFT JOIN links_v l ON l.id = pv.owner_id
+         WHERE pv.property_id = ? AND pv.owner_type = 'link'
+           AND (l.type_id IS NULL OR l.type_id NOT IN (${linkTypeIds.length > 0 ? linkTypeIds.map(() => '?').join(', ') : 'NULL'}))`,
+      )
+      .get(propertyId, ...(linkTypeIds.length > 0 ? linkTypeIds : [])) as { c: number }
+  ).c;
+
+  const valuesInTypeCount = bindings.reduce((acc, b) => acc + b.values_in_type_count, 0);
+  const valuesOutsideTypeCount = thoughtOutsideCount + linkOutsideCount;
+
+  return {
+    bindings,
+    values_in_type_count: valuesInTypeCount,
+    values_outside_type_count: valuesOutsideTypeCount,
+    thought_types: Array.from(thoughtTypeIdSet),
+    link_types: Array.from(linkTypeIdSet),
+  };
 }

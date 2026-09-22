@@ -17,27 +17,39 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  SAVED_FILTER_VIEWS,
   STRUCTURES_EDGES_MAX_IDS,
   STRUCTURES_PAGE_SIZE,
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
-  STRUCTURE_SORTS,
-  SORT_ORDERS,
+  type FocusEdge,
   type SavedFilterView,
+  type StructureIdsQueryResponse,
   type StructureQueryRequest,
+  type StructureQueryResponse,
   type StructureSort,
   type SortOrder,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
-  fieldString,
   openRouteNetworkDb,
-  queryBoolean,
   requestBody,
+  resolveShowTrash,
+  restWriteFx,
+  runWrite,
   type RouteDeps,
 } from './helpers.js';
+import {
+  csvToList,
+  parseBody,
+  parseRest,
+  RestEdgesBody,
+  RestHierarchyQuery,
+  RestSavedFilterCreateBody,
+  RestSavedFilterPatchBody,
+  RestSavedFilterViewQuery,
+  RestStructureQueryBody,
+} from '../contracts.js';
 import {
   createSavedFilter,
   deleteSavedFilter,
@@ -45,22 +57,19 @@ import {
   listSavedFilters,
   parseSavedFilterDefinition,
   parseStructureFilter,
-  queryThoughtIds,
-  queryThoughts,
   updateSavedFilter,
 } from '../domain/structure-service.js';
+import {
+  queryThoughtIds,
+  queryThoughts,
+  structureRequestToQuery,
+} from '../domain/query-service.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
-import { getEdgesAmong } from '../domain/link-service.js';
+import { getEdgesAmong, toFocusEdge } from '../domain/link-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
   networkId: string;
-}
-
-/** Route params for a network + thought id. */
-interface ThoughtIdParams {
-  networkId: string;
-  id: string;
 }
 
 /** Route params for a network + saved-filter id. */
@@ -69,108 +78,22 @@ interface SavedFilterIdParams {
   fid: string;
 }
 
-/** Validate `view` against the shared enum tuple (default 'structures'). */
-function parseView(value: unknown, requestId?: string): SavedFilterView {
-  if (value === undefined || value === null || value === '') return 'structures';
-  if (typeof value !== 'string' || !(SAVED_FILTER_VIEWS as readonly string[]).includes(value)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимый view.', {
-      field: 'view',
-      allowed: SAVED_FILTER_VIEWS,
-    }, requestId);
-  }
-  return value as SavedFilterView;
-}
-
-/** Validate `sort` against the shared enum tuple. */
-function parseSort(value: unknown, requestId?: string): StructureSort {
-  if (typeof value !== 'string' || !(STRUCTURE_SORTS as readonly string[]).includes(value)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимый sort.', {
-      field: 'sort',
-      allowed: STRUCTURE_SORTS,
-    }, requestId);
-  }
-  return value as StructureSort;
-}
-
-/** Validate `order` against the shared enum tuple. */
-function parseOrder(value: unknown, requestId?: string): SortOrder {
-  if (typeof value !== 'string' || !(SORT_ORDERS as readonly string[]).includes(value)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимый order.', {
-      field: 'order',
-      allowed: SORT_ORDERS,
-    }, requestId);
-  }
-  return value as SortOrder;
-}
-
-/**
- * Keys `POST /thoughts/query` accepts (03-server-api.md §6.10 + `ids_only`/
- * `limit`/`offset`). Any other body key is a caller error: the REST and MCP
- * filter names diverge (`parent_ids` vs `in_subtree_of`), and an MCP name
- * leaked into a REST body used to be silently ignored — the server answered
- * `200` with an empty page and the caller drew a wrong conclusion (0.4.3).
- */
-const QUERY_BODY_KEYS = new Set([
-  'keywords',
-  'keyword_scope',
-  'parent_ids',
-  'type_ids',
-  'link_type_ids',
-  // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра, по
-  // которым `parent_ids` раскрывается в поддерево (паритет с MCP
-  // `link_filter` и панелью «Структур»).
-  'link_filter',
-  'show_inactive',
-  'has_properties',
-  'has_comment',
-  'has_attachments',
-  'has_chronology',
-  'active',
-  'trashed',
-  'properties',
-  // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»):
-  // `created_by`/`updated_by` — id пользователя. Паритет с MCP
-  // `author_id`/`editor_id` (имена расходятся по слоям).
-  'created_by',
-  'updated_by',
-  // Границы дат создания/изменения (задача 7032e55a, паритет с MCP
-  // `etn.thoughts.query.created_after/created_before/updated_after/updated_before`
-  // и панелью «Структур» §15.3). ISO-8601; обе границы включающие и
-  // необязательные; валидация формата — на парсере фильтра.
-  'created_after',
-  'created_before',
-  'updated_after',
-  'updated_before',
-  'sort',
-  'order',
-  'ids_only',
-  'limit',
-  'offset',
-]);
-
-/** Parse the body of `POST /thoughts/query` into a typed request. */
-function parseQueryBody(body: Record<string, unknown>, requestId: string): StructureQueryRequest {
-  const unknown = Object.keys(body).filter((key) => !QUERY_BODY_KEYS.has(key));
-  if (unknown.length > 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Неизвестные поля запроса: ${unknown.join(', ')}.`,
-      { fields: unknown, allowed: [...QUERY_BODY_KEYS] },
-      requestId,
-    );
-  }
+/** Разобрать тело POST /thoughts/query: обёртку валидирует контракт,
+ *  фильтр — shared-парсер parseStructureFilter (домен); лимиты — как раньше.
+ *  `show_trash` — REST-only поле обёртки (ошибка 331ffb94): собирается в
+ *  результат отдельно, чтобы `meta.directions` считались по той же видимости
+ *  корзины, что и раскрытие дерева. */
+function parseQueryBody(
+  body: Record<string, unknown>,
+  requestId: string,
+): StructureQueryRequest & { show_trash?: boolean } {
+  const out = parseBody(RestStructureQueryBody, body, requestId);
   const filter = parseStructureFilter(body, requestId);
-  const sort = parseSort(body['sort'] ?? 'created', requestId);
-  const order = parseOrder(body['order'] ?? 'asc', requestId);
-  const idsOnly = body['ids_only'] === true;
-  const limitRaw = body['limit'];
-  const limit =
-    typeof limitRaw === 'number' && Number.isInteger(limitRaw)
-      ? limitRaw
-      : STRUCTURES_PAGE_SIZE;
-  const offsetRaw = body['offset'];
-  const offset =
-    typeof offsetRaw === 'number' && Number.isInteger(offsetRaw) ? offsetRaw : 0;
+  const sort = (out.sort ?? 'created') as StructureSort;
+  const order = (out.order ?? 'asc') as SortOrder;
+  const idsOnly = out.ids_only === true;
+  const limit = (out.limit as number | undefined) ?? STRUCTURES_PAGE_SIZE;
+  const offset = (out.offset as number | undefined) ?? 0;
   const maxLimit = idsOnly ? STRUCTURES_QUERY_IDS_MAX_LIMIT : STRUCTURES_QUERY_MAX_LIMIT;
   if (limit < 1 || limit > maxLimit) {
     throw new EtnError(
@@ -181,20 +104,22 @@ function parseQueryBody(body: Record<string, unknown>, requestId: string): Struc
     );
   }
   if (offset < 0) {
-    throw new EtnError('VALIDATION_ERROR', 'offset должен быть целым числом ≥ 0.', {
-      field: 'offset',
-    }, requestId);
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'offset должен быть целым числом ≥ 0.',
+      { field: 'offset' },
+      requestId,
+    );
   }
-  return { ...filter, sort, order, limit, offset, ...(idsOnly ? { ids_only: true } : {}) };
-}
-
-/** Parse the `exclude_ids` query parameter: a comma-separated id list. */
-function parseExcludeIds(value: unknown): string[] {
-  if (typeof value !== 'string' || value === '') return [];
-  return value
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part !== '');
+  return {
+    ...filter,
+    sort,
+    order,
+    limit,
+    offset,
+    ...(idsOnly ? { ids_only: true } : {}),
+    ...(typeof out.show_trash === 'boolean' ? { show_trash: out.show_trash } : {}),
+  };
 }
 
 /** `/api/v1/networks*` structures routes plugin factory. */
@@ -211,14 +136,39 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const query = parseQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Единый движок выборки (задача c5265deb): REST-фильтр переводится в
+        // канонический запрос и исполняется общей доменной функцией.
         // ids_only (L22): bare ids for the bulk filter commands — the same
         // candidate set and ordering, a higher limit ceiling, no meta flags.
         if (query.ids_only === true) {
-          const result = queryThoughtIds(ndb, req.auth!.user.id, query, req.id);
-          sendSuccess(reply, { ids: result.ids, total: result.total });
+          const result = queryThoughtIds(ndb, req.auth!.user.id, structureRequestToQuery(query), {
+            maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
+            emptyFilterMode: 'home_orphans',
+          });
+          sendSuccess(reply, { ids: result.ids, total: result.total } satisfies StructureIdsQueryResponse);
           return;
         }
-        const result = queryThoughts(ndb, req.auth!.user.id, query, req.id);
+        const result: StructureQueryResponse = queryThoughts(
+          ndb,
+          req.auth!.user.id,
+          structureRequestToQuery(query),
+          {
+            maxLimit: STRUCTURES_QUERY_MAX_LIMIT,
+            emptyFilterMode: 'home_orphans',
+            includeDirections: true,
+            // Эллипс раскрываемости считает те же рёбра, что и раскрытие
+            // (ошибка 331ffb94): directionsOf обязан смотреть на корзину тем
+            // же флагом, что getHierarchy, иначе заполненный эллипс
+            // разворачивается в пустую ветвь. Флаг резолвится как везде
+            // (задача 77923b49): переопределение тела сильнее настройки сети.
+            showTrash: resolveShowTrash(
+              app,
+              req.auth!.user.id,
+              networkId,
+              query.show_trash,
+            ),
+          },
+        );
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,
         });
@@ -231,26 +181,28 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/:id/hierarchy',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as ThoughtIdParams;
-        const query = req.query as Record<string, unknown>;
-        const dir = query['dir'];
-        if (dir !== 'parents' && dir !== 'children') {
-          throw new EtnError('VALIDATION_ERROR', 'dir должен быть parents или children.', {
-            field: 'dir',
-          }, req.id);
-        }
-        const showInactive =
-          queryBoolean(query['show_inactive'], 'show_inactive', req.id) ?? false;
-        const offsetRaw = query['offset'];
-        const offset =
-          typeof offsetRaw === 'string' && offsetRaw !== '' && Number.isInteger(Number(offsetRaw))
-            ? Math.max(0, Number(offsetRaw))
-            : 0;
+        const input = parseRest(RestHierarchyQuery, req);
+        const networkId = input.network_id as string;
+        const dir = input.dir as 'parents' | 'children';
+        const showInactive = (input.show_inactive as boolean | undefined) ?? false;
+        // Показывать содержимое корзины (задача 77923b49): дерево «Структур»
+        // прячет помеченных, когда настройка выключена (default — видны).
+        const showTrash = resolveShowTrash(
+          app,
+          req.auth!.user.id,
+          networkId,
+          input.show_trash as boolean | undefined,
+        );
+        const offset = input.offset ?? 0;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const data = getHierarchy(ndb, id, dir, {
+        const data = getHierarchy(ndb, input.thought_id, dir, {
           showInactive,
-          excludeIds: parseExcludeIds(query['exclude_ids']),
+          showTrash,
+          excludeIds: csvToList((req.query as Record<string, unknown>)['exclude_ids']),
           offset,
+          // Фильтр обхода по связям (ошибка db504c1a): раскрытие ветви обязано
+          // идти по тем же рёбрам, что и спуск отбора `parent_ids`.
+          linkFilter: input.link_filter,
         });
         sendSuccess(reply, data);
       },
@@ -262,27 +214,23 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/edges',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-        const idsRaw = body['ids'];
-        if (!Array.isArray(idsRaw) || idsRaw.some((v) => typeof v !== 'string')) {
-          throw new EtnError('VALIDATION_ERROR', 'ids должен быть массивом строк.', {
-            field: 'ids',
-          }, req.id);
-        }
-        const showInactive = body['show_inactive'] === true;
-        const ids = (idsRaw as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
+        const input = parseRest(RestEdgesBody, req);
+        const networkId = input.network_id as string;
+        const ids = (input.ids as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
+        const showInactive = input.show_inactive === true;
+        const showTrash = resolveShowTrash(
+          app,
+          req.auth!.user.id,
+          networkId,
+          input.show_trash as boolean | undefined,
+        );
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const edges = getEdgesAmong(ndb, ids, showInactive).map((l) => ({
-          id: l.id,
-          source_id: l.source_id,
-          target_id: l.target_id,
-          type_id: l.type_id,
-          // Per-link line-style override (null = inherit from the type), §6.12.
-          color: l.color,
-          style: l.style,
-          width: l.width,
-        }));
+        // Same projection as the focus response (`toFocusEdge`) — including
+        // the trash flag from 355319d4, so the tree lines mark trashed edges
+        // exactly like the map does.
+        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive, undefined, showTrash).map(
+          toFocusEdge,
+        );
         sendSuccess(reply, { edges });
       },
     );
@@ -294,7 +242,8 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const view = parseView((req.query as Record<string, unknown>)['view'], req.id);
+        const view = (parseRest(RestSavedFilterViewQuery, req).view ??
+          'structures') as SavedFilterView;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, listSavedFilters(ndb, req.auth!.user.id, view));
       },
@@ -305,25 +254,28 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-        const view = parseView(body['view'], req.id);
-        const name = fieldString(body, 'name', req.id);
-        if (name === undefined) {
-          throw new EtnError('VALIDATION_ERROR', 'name обязателен.', { field: 'name' }, req.id);
-        }
-        const definitionRaw = body['definition'];
-        if (typeof definitionRaw !== 'object' || definitionRaw === null) {
-          throw new EtnError('VALIDATION_ERROR', 'definition обязателен.', {
-            field: 'definition',
-          }, req.id);
-        }
+        const input = parseRest(RestSavedFilterCreateBody, req);
+        const view = (input.view ?? 'structures') as SavedFilterView;
+        const name = input.name as string;
+        const definitionRaw = input.definition;
         const definition =
           view === 'chronicle'
             ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
             : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const filter = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
-        deps.emit(req, networkId, 'saved-filter.created', { filter }, { audience: 'user' });
+        const filter = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const created = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
+          return {
+            result: created,
+            events: [
+              {
+                type: 'saved-filter.created',
+                data: { filter: created },
+                options: { audience: 'user' },
+              },
+            ],
+          };
+        });
         sendCreated(reply, filter, { request_id: req.id });
       },
     );
@@ -333,28 +285,34 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, fid } = req.params as SavedFilterIdParams;
-        const body = requestBody(req);
-        const view = parseView(body['view'], req.id);
-        const name = fieldString(body, 'name', req.id);
-        let definition;
-        const definitionRaw = body['definition'];
+        const input = parseRest(RestSavedFilterPatchBody, req);
+        const view = (input.view ?? 'structures') as SavedFilterView;
+        const name = input.name as string | undefined;
+        let definition: Parameters<typeof updateSavedFilter>[3]['definition'];
+        const definitionRaw = input.definition;
         if (definitionRaw !== undefined) {
-          if (typeof definitionRaw !== 'object' || definitionRaw === null) {
-            throw new EtnError('VALIDATION_ERROR', 'definition должен быть объектом.', {
-              field: 'definition',
-            }, req.id);
-          }
           definition =
             view === 'chronicle'
               ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
               : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const filter = updateSavedFilter(ndb, req.auth!.user.id, fid, {
-          ...(name !== undefined ? { name } : {}),
-          ...(definition !== undefined ? { definition } : {}),
+        const filter = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const updated = updateSavedFilter(ndb, req.auth!.user.id, fid, {
+            ...(name !== undefined ? { name } : {}),
+            ...(definition !== undefined ? { definition } : {}),
+          });
+          return {
+            result: updated,
+            events: [
+              {
+                type: 'saved-filter.updated',
+                data: { filter: updated },
+                options: { audience: 'user' },
+              },
+            ],
+          };
         });
-        deps.emit(req, networkId, 'saved-filter.updated', { filter }, { audience: 'user' });
         sendSuccess(reply, filter, { request_id: req.id });
       },
     );
@@ -365,8 +323,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, fid } = req.params as SavedFilterIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        deleteSavedFilter(ndb, req.auth!.user.id, fid);
-        deps.emit(req, networkId, 'saved-filter.deleted', { id: fid }, { audience: 'user' });
+        runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: deleteSavedFilter(ndb, req.auth!.user.id, fid),
+          events: [
+            { type: 'saved-filter.deleted', data: { id: fid }, options: { audience: 'user' } },
+          ],
+        }));
         sendSuccess(reply, { id: fid });
       },
     );

@@ -238,3 +238,173 @@ export function toolText(result: ClientCallToolResult): string {
 export function toolJson<T = unknown>(result: ClientCallToolResult): T {
   return JSON.parse(toolText(result)) as T;
 }
+
+// ---------------------------------------------------------------------------
+// Миграция тестов с удалённых инструментов (веха 9, задача 937480ca)
+// ---------------------------------------------------------------------------
+// `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`,
+// `etn.properties.set`, `etn.comments.upsert` удалены в 0.8.2 — их
+// единственная замена `etn.thoughts.write`. Фикстуры тестов переведены на
+// батч через эти обёртки; форма результатов совпадает со старыми
+// инструментами там, где тесты на неё опирались.
+
+/** Один элемент батча `etn.thoughts.write` (тестовое подмножество). */
+export interface WriteThoughtFixture {
+  ref?: string;
+  thought_id?: string;
+  thought?: {
+    title: string;
+    synonyms?: string[];
+    type_id?: string | null;
+    type?: string;
+    active?: boolean;
+  };
+  on_duplicate?: 'fail' | 'reuse' | 'update';
+  comment?: { title?: string | null; body_md: string; valid_from?: string; valid_to?: string | null };
+  chronicle?: Array<{
+    title?: string | null;
+    body_md: string;
+    valid_from?: string;
+    valid_to?: string | null;
+  }>;
+  properties?: Record<string, unknown>;
+  links?: Array<{
+    direction: 'parent' | 'child';
+    target_id?: string;
+    target_ref?: string;
+    type_id?: string | null;
+    type?: string;
+  }>;
+  attachments?: Array<{
+    kind: string;
+    url?: string | null;
+    file_path?: string | null;
+    title?: string | null;
+    description?: string | null;
+  }>;
+}
+
+/** Один элемент результата `etn.thoughts.write`. */
+export interface WriteItemResult {
+  id: string;
+  version: number;
+  thought_action: 'created' | 'updated' | 'reused';
+  matched_on: string | null;
+  warnings: unknown[];
+  comment?: { id: string; version: number; action: 'created' | 'updated' };
+  chronicle?: Array<{ id: string; version: number }>;
+  properties?: Record<string, { id: string }>;
+  links?: Array<{ id: string; version: number }>;
+  attachments?: Array<{ id: string }>;
+}
+
+/** Результат `etn.thoughts.write`. */
+export interface WriteToolResult {
+  items: WriteItemResult[];
+  warnings: unknown[];
+  layer: { id: string; title: string };
+  request_id?: string;
+}
+
+/** Вызвать `etn.thoughts.write` и распарсить результат. */
+export async function callWrite(
+  client: Client,
+  networkId: string,
+  thoughts: WriteThoughtFixture[],
+): Promise<WriteToolResult> {
+  const result = await client.callTool({
+    name: 'etn.thoughts.write',
+    arguments: { network_id: networkId, thoughts },
+  });
+  assert.equal(result.isError, undefined, toolText(result));
+  return toolJson<WriteToolResult>(result);
+}
+
+/** Замена удалённого `etn.thoughts.create`: одна мысль через батч. */
+export async function createThoughtViaWrite(
+  client: Client,
+  networkId: string,
+  args: {
+    title: string;
+    synonyms?: string[];
+    type_id?: string | null;
+    type?: string;
+    active?: boolean;
+    link?: { direction: 'parent' | 'child'; target_thought_id: string; type_id?: string | null; type?: string };
+    properties?: Record<string, unknown>;
+    comment?: { body_md: string };
+  },
+): Promise<{ id: string; version: number }> {
+  const result = await callWrite(client, networkId, [
+    {
+      ref: 'created',
+      thought: {
+        title: args.title,
+        ...(args.synonyms === undefined ? {} : { synonyms: args.synonyms }),
+        ...(args.type_id === undefined ? {} : { type_id: args.type_id }),
+        ...(args.type === undefined ? {} : { type: args.type }),
+        ...(args.active === undefined ? {} : { active: args.active }),
+      },
+      ...(args.comment === undefined ? {} : { comment: { body_md: args.comment.body_md } }),
+      ...(args.properties === undefined ? {} : { properties: args.properties }),
+      ...(args.link === undefined
+        ? {}
+        : {
+            links: [
+              {
+                direction: args.link.direction,
+                target_id: args.link.target_thought_id,
+                ...(args.link.type_id === undefined ? {} : { type_id: args.link.type_id }),
+                ...(args.link.type === undefined ? {} : { type: args.link.type }),
+              },
+            ],
+          }),
+    },
+  ]);
+  return { id: result.items[0]!.id, version: result.items[0]!.version };
+}
+
+/** Замена удалённого `etn.properties.set`: свойства через батч. */
+export async function setPropertiesViaWrite(
+  client: Client,
+  networkId: string,
+  ownerId: string,
+  properties: Record<string, unknown>,
+): Promise<{ id: string; version: number }> {
+  const result = await callWrite(client, networkId, [
+    { thought_id: ownerId, properties },
+  ]);
+  return { id: result.items[0]!.id, version: result.items[0]!.version };
+}
+
+/** Замена удалённого `etn.comments.upsert`: постоянный комментарий через батч. */
+export async function upsertPermanentViaWrite(
+  client: Client,
+  networkId: string,
+  ownerId: string,
+  bodyMd: string,
+): Promise<{ id: string; version: number; action: 'created' | 'updated' }> {
+  const result = await callWrite(client, networkId, [
+    { thought_id: ownerId, comment: { body_md: bodyMd } },
+  ]);
+  const comment = result.items[0]!.comment!;
+  return { id: comment.id, version: comment.version, action: comment.action };
+}
+
+/** Замена удалённого `etn.comments.upsert` (kind=chronological): хроника через батч. */
+export async function addChronicleViaWrite(
+  client: Client,
+  networkId: string,
+  ownerId: string,
+  bodyMd: string,
+  validFrom?: string,
+): Promise<{ id: string; version: number }> {
+  const result = await callWrite(client, networkId, [
+    {
+      thought_id: ownerId,
+      chronicle: [{ body_md: bodyMd, ...(validFrom === undefined ? {} : { valid_from: validFrom }) }],
+    },
+  ]);
+  const entry = result.items[0]!.chronicle![0]!;
+  return { id: entry.id, version: entry.version };
+}

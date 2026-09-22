@@ -16,8 +16,6 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-
 import { openNetworkDb } from '../src/db/network-db.js';
 
 import {
@@ -27,6 +25,7 @@ import {
   nativeAvailable,
   toolJson,
   toolText,
+  upsertPermanentViaWrite,
 } from './mcp-helpers.js';
 
 interface InstructionSummary {
@@ -113,28 +112,6 @@ function makeThoughtType(
   return id;
 }
 
-/** Upsert a permanent comment through the public MCP tool
- *  (`etn.comments.upsert`) — keeps the test aligned with the real flow
- *  (which also renders and persists `body_html`). */
-async function upsertPermanent(
-  client: Client,
-  networkId: string,
-  thoughtId: string,
-  body: string,
-): Promise<string> {
-  const result = await client.callTool({
-    name: 'etn.comments.upsert',
-    arguments: {
-      network_id: networkId,
-      owner_type: 'thought',
-      owner_id: thoughtId,
-      kind: 'permanent',
-      body_md: body,
-    },
-  });
-  return toolJson<{ id: string }>(result).id;
-}
-
 /** Set the network's `type_roles` via the system DB. */
 function setTypeRoles(
   ctx: Awaited<ReturnType<typeof buildMcpContext>>,
@@ -183,9 +160,9 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const alpha = makeThought(ndb, 'Alpha', { typeId: instructionsTypeId }, ctx.adminId);
-        await upsertPermanent(handle.client, ctx.networkId, alpha, 'Первая инструкция.');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, alpha, 'Первая инструкция.');
         const beta = makeThought(ndb, 'Beta', { typeId: instructionsTypeId }, ctx.adminId);
-        await upsertPermanent(handle.client, ctx.networkId, beta, 'Вторая инструкция.');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, beta, 'Вторая инструкция.');
         makeThought(ndb, 'Noise', { typeId: otherTypeId }, ctx.adminId);
 
         setTypeRoles(ctx, { instructions: instructionsTypeId });
@@ -230,21 +207,21 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
           { typeId: instructionsTypeId, active: 1 },
           ctx.adminId,
         );
-        await upsertPermanent(handle.client, ctx.networkId, active, 'видимая');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, active, 'видимая');
         const inactive = makeThought(
           ndb,
           'Inactive',
           { typeId: instructionsTypeId, active: 0 },
           ctx.adminId,
         );
-        await upsertPermanent(handle.client, ctx.networkId, inactive, 'скрытая');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, inactive, 'скрытая');
         const trashed = makeThought(
           ndb,
           'Trashed',
           { typeId: instructionsTypeId, trashed: 1 },
           ctx.adminId,
         );
-        await upsertPermanent(handle.client, ctx.networkId, trashed, 'удалено');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, trashed, 'удалено');
 
         setTypeRoles(ctx, { instructions: instructionsTypeId });
 
@@ -282,7 +259,7 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
           { typeId: instructionsTypeId },
           ctx.adminId,
         );
-        await upsertPermanent(handle.client, ctx.networkId, thoughtId, longBody);
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, longBody);
 
         setTypeRoles(ctx, { instructions: instructionsTypeId });
 
@@ -369,11 +346,11 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const a = makeThought(ndb, 'Setup', { typeId: instructionsTypeId }, ctx.adminId);
-        await upsertPermanent(handle.client, ctx.networkId, a, '...');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, a, '...');
         const b = makeThought(ndb, 'Cleanup', { typeId: instructionsTypeId }, ctx.adminId);
-        await upsertPermanent(handle.client, ctx.networkId, b, '...');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, b, '...');
         const c = makeThought(ndb, 'Build', { typeId: instructionsTypeId }, ctx.adminId);
-        await upsertPermanent(handle.client, ctx.networkId, c, '...');
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, c, '...');
 
         setTypeRoles(ctx, { instructions: instructionsTypeId });
 

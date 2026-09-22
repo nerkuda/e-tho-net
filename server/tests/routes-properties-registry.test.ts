@@ -539,6 +539,87 @@ describe(
       }
     });
 
+    it('re-attaching a property the same type already binds is idempotent (ошибка 0bfd7180)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const type = (
+          await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types`,
+            headers: h,
+            payload: { name: 'Категория софта' },
+          })
+        ).json().data as { id: string };
+
+        // Шаг «Создать свойство» из диалога редактора типа: форма
+        // `{ key, value_type }` создаёт запись справочника и сразу привязывает
+        // её к типу.
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { key: 'категория', value_type: 'text' },
+        });
+        assert.equal(created.statusCode, 201);
+        const first = created.json().data as {
+          id: string;
+          property_id: string;
+          position: number;
+        };
+
+        // Шаг «Применить и закрыть» шлёт attach того же свойства: повтор
+        // идемпотентен — та же строка привязки, никакого 409 DUPLICATE.
+        const repeat = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { property_id: first.property_id },
+        });
+        assert.equal(repeat.statusCode, 201);
+        const second = repeat.json().data as {
+          id: string;
+          property_id: string;
+          position: number;
+        };
+        assert.equal(second.id, first.id, 'привязка переиспользуется, а не создаётся заново');
+        assert.equal(second.property_id, first.property_id);
+        assert.equal(second.position, first.position, 'порядок без явного position не переезжает');
+
+        // В эффективном списке ровно одна собственная привязка «категория».
+        const listRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+        });
+        const listed = (
+          listRes.json().data as Array<{
+            id: string;
+            key: string;
+            inherited: boolean;
+            mirrored?: boolean;
+          }>
+        ).filter((p) => p.key === 'категория');
+        assert.equal(listed.length, 1);
+        assert.equal(listed[0]!.id, first.id);
+        assert.equal(listed[0]!.inherited, false);
+
+        // Явно переданная роль применяется к той же строке, а не к новой.
+        const withRole = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { property_id: first.property_id, required: true },
+        });
+        assert.equal(withRole.statusCode, 201);
+        const updated = withRole.json().data as { id: string; required: boolean };
+        assert.equal(updated.id, first.id);
+        assert.equal(updated.required, true);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('POST { key, value_type } with a name already taken returns 409 + property_id of the holder', async () => {
       const ctx = await buildRestContext();
       try {
@@ -710,6 +791,100 @@ describe(
       }
     });
 
+    it('PATCH свойства-связи правит имена сторон и оформление link_type (ошибка 9f579e69)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        // Свойство-связь: один POST = свойство + тип связи.
+        const createRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'работает в',
+            value_type: 'link',
+            name_forward: 'работает в',
+            name_reverse: 'сотрудники',
+          },
+        });
+        assert.equal(createRes.statusCode, 201, createRes.body?.toString());
+        const created = createRes.json().data as {
+          id: string;
+          config: { link_type_id: string } | null;
+        };
+        const ltId = created.config?.link_type_id;
+        assert.ok(ltId, 'config.link_type_id заполнен');
+
+        // PATCH с именами сторон и оформлением — раньше поля молча
+        // отбрасывались `parseUpdateBody`, и «Применить и закрыть» терял их.
+        const patchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${created.id}`,
+          headers: h,
+          payload: {
+            name_forward: 'состоит в',
+            name_reverse: 'включает',
+            link_color: '#123456',
+            link_style: 'dashed',
+            link_width: 3,
+          },
+        });
+        assert.equal(patchRes.statusCode, 200, patchRes.body?.toString());
+        const patched = patchRes.json().data as { name: string };
+        // Отображаемое имя свойства пересчитано из нового name_forward.
+        assert.equal(patched.name, 'состоит в');
+
+        // Тип связи пережил правку: имена и оформление видны после
+        // переоткрытия каталога (GET /link-types).
+        const ltList = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types`,
+          headers: h,
+        });
+        assert.equal(ltList.statusCode, 200);
+        const lt = (ltList.json().data as Array<{
+          id: string;
+          name_forward: string;
+          name_reverse: string;
+          color: string | null;
+          style: string | null;
+          width: number | null;
+        }>).find((t) => t.id === ltId);
+        assert.ok(lt, 'тип связи присутствует');
+        assert.equal(lt.name_forward, 'состоит в');
+        assert.equal(lt.name_reverse, 'включает');
+        assert.equal(lt.color, '#123456');
+        assert.equal(lt.style, 'dashed');
+        assert.equal(lt.width, 3);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('PATCH link-полей на скалярное свойство → 422 VALIDATION_ERROR', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const scalar = await createRegistryProperty(ctx, {
+          name: 'вес',
+          value_type: 'number',
+        });
+        const patchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${scalar.id}`,
+          headers: h,
+          payload: { name_forward: 'некуда писать' },
+        });
+        assert.equal(patchRes.statusCode, 422, patchRes.body?.toString());
+        const err = patchRes.json() as { error: { code: string } };
+        assert.equal(err.error.code, 'VALIDATION_ERROR');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('DELETE a property value with nothing stored is an idempotent 204 (error cefb4db0)', async () => {
       const ctx = await buildRestContext();
       try {
@@ -779,6 +954,62 @@ describe(
           headers: h,
         });
         assert.equal(unknownRes.statusCode, 404);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('PATCH …/properties принимает config.default_value_target (0.8.2, задача eb24beed)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const sourceThought = await createChild(ctx, 'Потенциальный источник');
+
+        const propRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/properties`,
+          headers: h,
+          payload: {
+            name: 'общий-дефолт-назначений',
+            value_type: 'link',
+            name_forward: 'общий-дефолт-назначений',
+            name_reverse: 'обратно-общий-дефолт-назначений',
+          },
+        });
+        assert.equal(propRes.statusCode, 201, propRes.body?.toString());
+        const prop = propRes.json().data as { id: string; config: { link_type_id: string } | null };
+        const ltId = prop.config?.link_type_id;
+        assert.ok(ltId, 'свойство-связь получило тип связи');
+
+        // Валидный target-дефолт: массив id источников.
+        const patchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${prop.id}`,
+          headers: h,
+          payload: { config: { link_type_id: ltId, default_value_target: [sourceThought] } },
+        });
+        assert.equal(patchRes.statusCode, 200, patchRes.body?.toString());
+        const updated = patchRes.json().data as { config: { default_value_target?: string[] } | null };
+        assert.deepEqual(updated.config?.default_value_target, [sourceThought]);
+
+        // Несуществующий id — 422.
+        const badRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${prop.id}`,
+          headers: h,
+          payload: { config: { link_type_id: ltId, default_value_target: ['00000000-0000-4000-8000-0000000000ff'] } },
+        });
+        assert.equal(badRes.statusCode, 422);
+
+        // У скаляра ключ недопустим.
+        const scalar = await createRegistryProperty(ctx, { name: 'скаляр-цель-дефолта', value_type: 'text' });
+        const scalarBad = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${scalar.id}`,
+          headers: h,
+          payload: { config: { default_value_target: [sourceThought] } },
+        });
+        assert.equal(scalarBad.statusCode, 422);
       } finally {
         await closeRestContext(ctx);
       }

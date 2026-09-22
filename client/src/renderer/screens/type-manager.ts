@@ -39,14 +39,19 @@
  *    type that binds it and lives in the registry; the table's «✎» button
  *    jumps to the property manager dialog with a banner warning about the
  *    network-wide impact.
- *  - «Унаследованные свойства» — read-only bindings inherited from the
- *    ancestors; only the default value and description may be overridden per
- *    type (and the override can be reset back to the ancestor's value). The
- *    override dialogs keep their own explicit «Применить» and write
- *    immediately. `required` is NOT editable on inherited bindings — it
- *    belongs to the type that attached the binding, the inherited view is a
- *    preview of the effective value. For a type that is still being created
- *    the section previews what the picked parent will pass down.
+ *  - «Унаследованные свойства» — bindings inherited from the ancestors. The
+ *    default value of a binding is editable right in the table (0.8.2, ADR
+ *    «дефолт свойства живёт на привязке»): filled = the default of THIS
+ *    binding, empty = the common value of the binding's side (tooltip in the
+ *    empty cell); clearing the field resets the override. No
+ *    «(общее)»/«частное»/«сбросить» modes. Черновик дефолтов пишется одним
+ *    набором `setPropertyDefaultOverride` на «Применить и закрыть», как и
+ *    остальные правки вкладки. The description override keeps its own small
+ *    dialog with an explicit «Применить» and writes immediately.
+ *    `required` is NOT editable on inherited bindings — it belongs to the
+ *    type that attached the binding, the inherited view is a preview of the
+ *    effective value. For a type that is still being created the section
+ *    previews what the picked parent will pass down.
  *
  * Link-type editor: forward/reverse names, ⚙ (line-style dialog, type mode —
  * a reset inherits the parent's style since L21), description and the same
@@ -56,7 +61,9 @@
 import type {
   EffectiveTypeProperty,
   IconKind,
+  LinkPropertySide,
   LinkType,
+  PropertyConfig,
   PropertyDefinition,
   PropertyValueType,
   ThoughtType,
@@ -65,12 +72,14 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
-import { buildLinkValueEditor } from '../editor/properties.js';
-import { typeNameKey } from '@etn/shared';
+import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
+import { typeNameKey, EtnError } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
-import { applyThoughtIcon } from '../canvas/canvas.js';
-import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../lib/dialog.js';
+// Иконки превью типов — каноном общей фабрики облачка (пилюля типа — не
+// мысль, но использует тот же единый канон).
+import { applyThoughtIcon } from '../lib/thought-cloud.js';
+import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
@@ -85,26 +94,51 @@ import {
   resolveLinkTypeVisual,
   resolveThoughtTypeVisual,
   subtreeTypeIds,
+  typeChainOf,
   typeDepth,
   subtreeHeight,
   typeSearchVisibleIds,
   type FlatTypeRow,
 } from '../lib/type-tree.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
+import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
+// Локальные уведомления открытого редактора об изменении набора свойств типа
+// (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
+// realtime-эхо до рендерера не доходит (G8 applier).
+import {
+  notifyTypeChanged,
+  notifyTypeDefinitionsChanged,
+  typeDeletedFacts,
+  typeUpdateFacts,
+} from '../lib/type-definitions.js';
 import {
   cacheAttachedRegistryRow,
+  canReorderBinding,
   draftPropertiesFrom,
+  moveDraftRow,
   nextDraftPropertyId,
   opToAttachInput,
   planPropertyDiff,
   type DraftProperty,
 } from '../lib/type-property-draft.js';
 import {
+  defaultLinkValues,
+  emptyDefaultHint,
+  isEmptyDefault,
+  linkDefaultPayload,
   openPropertyManagerEditor,
+  scalarDefaultPayload,
   type RegistryRow,
 } from './property-manager.js';
+import {
+  buildPropertyList,
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  rowBlockReason,
+  type PropertyListRow,
+} from '../lib/property-list.js';
 import { buildViewsTab } from './thought-type/views-tab.js';
 import { store } from '../state.js';
+import { renderNewTypeHint } from '../lib/type-editor-hints.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
@@ -203,6 +237,107 @@ export function buildCreateTypeInput(
   return input;
 }
 
+/**
+ * Builds the minimal `PATCH /thought-types/{id}` payload from the staged draft:
+ * only the fields that actually differ from the last server-side state go out
+ * (If-Match uses that state's version). Consistent with
+ * {@link buildCreateTypeInput}: the trimmed description and the template are
+ * normalised to `null` when empty, so an emptied field clears the value.
+ *
+ * Used by BOTH save paths of the editor — «Записать» (save, stay open) and
+ * «Применить и закрыть»: the two differ only in whether the dialog closes,
+ * the payload is identical.
+ */
+export function buildTypePatchInput(
+  current: ThoughtType,
+  draft: ThoughtTypeDraft,
+  descriptionRaw: string,
+  nextTemplate: string | null,
+): ThoughtTypeUpdateInput {
+  const input: ThoughtTypeUpdateInput = {};
+  const name = draft.name.trim();
+  if (name !== current.name) input.name = name;
+  if (draft.parent_id !== (current.parent_id ?? null)) input.parent_id = draft.parent_id;
+  if (draft.icon !== current.icon) {
+    input.icon = draft.icon;
+    input.icon_kind = draft.icon_kind;
+  }
+  if (draft.fg_color !== current.fg_color) input.fg_color = draft.fg_color;
+  if (draft.bg_color !== current.bg_color) input.bg_color = draft.bg_color;
+  if (draft.font_bold !== current.font_bold) input.font_bold = draft.font_bold;
+  if (draft.font_italic !== current.font_italic) input.font_italic = draft.font_italic;
+  if (draft.font_underline !== current.font_underline) input.font_underline = draft.font_underline;
+  if (draft.font_strike !== current.font_strike) input.font_strike = draft.font_strike;
+  const description = descriptionRaw.trim() === '' ? null : descriptionRaw.trim();
+  if (description !== (current.description ?? null)) input.description = description;
+  if (nextTemplate !== (current.comment_template_md ?? null)) {
+    input.comment_template_md = nextTemplate;
+  }
+  return input;
+}
+
+/**
+ * Свежая серверная версия типа мысли — для PATCH /thought-types/{id} с
+ * `If-Match`. За время сессии редактора тип могли поправить извне
+ * (realtime-эхо до `current` ещё не дошло) или из самого редактора
+ * (вложенное создание свойства с привязкой к этому типу через диалог
+ * свойства поднимает версию через `touchType`, ошибка 5bcfa04b). Прецедент
+ * — `syncLinkTypeParent` в property-manager (33fdffb): GET перед PATCH;
+ * снимок остаётся запасным источником, если GET не удался (сеть/race).
+ * Конфликт остаётся только для реальной конкурентной правки полей извне.
+ *
+ * Экспортирована ради юнит-теста: регрессия 5bcfa04b должна убедиться, что
+ * устаревший снимок `current.version` не перекрывает свежую серверную
+ * версию.
+ */
+export async function readFreshTypeVersion(
+  networkId: string,
+  typeId: string,
+  fallback: number,
+): Promise<number> {
+  try {
+    const fresh = await etn.types.getThoughtType(networkId, typeId);
+    return fresh.version;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Свежий снимок типа мысли с сервера — после серии вложенных операций
+ * (`props.applyChanges` мог поднять версию через `touchType` на каждый
+ * attach/update/remove привязки или её дефолта). Если GET не удался — на
+ * снимке остаётся прежний `current`; следующий apply всё равно прочитает
+ * свежую версию через {@link readFreshTypeVersion} перед PATCH. Экспортирована
+ * ради юнит-теста.
+ */
+export async function readFreshTypeSnapshot(
+  networkId: string,
+  previous: ThoughtType,
+): Promise<ThoughtType> {
+  try {
+    return await etn.types.getThoughtType(networkId, previous.id);
+  } catch {
+    return previous;
+  }
+}
+
+/**
+ * Ids of the ancestors that must be expanded for the row of `typeId` to be
+ * visible in a type tree. The edited type itself is excluded (its own row is
+ * shown once its ancestors are open). Used by the type list to reveal the
+ * «current row» right after a save (ошибка 51732f9b): a freshly created type
+ * under a collapsed parent was otherwise invisible and had to be searched for.
+ */
+export function typeRowRevealIds(
+  types: readonly ThoughtType[],
+  typeId: string | null,
+): string[] {
+  return typeChainOf(types, typeId)
+    .slice(1)
+    .map((t) => t.id);
+}
+
 // ---------------------------------------------------------------------------
 // Tree rows for the catalogue dialogs (L21): expand/collapse per dialog.
 // ---------------------------------------------------------------------------
@@ -265,8 +400,19 @@ export function showThoughtTypesDialog(): void {
   // expanding/collapsing/typing does not flicker or jump the scroll position.
   let cachedTypes: ThoughtType[] | null = null;
   let cachedCounts: Record<string, number> | null = null;
+  // «Текущая строка» списка: тип, который пользователь только что
+  // отредактировал (или создал) в открытом отсюда редакторе. Строка
+  // подсвечивается, её цепочка родителей разворачивается, и список
+  // прокручивается к ней — иначе новый тип приходилось искать вручную
+  // (ошибка 51732f9b).
+  let currentRowId: string | null = null;
 
-  const onChanged = (): void => void reload();
+  // Редактор сообщает id записанного типа («Применить и закрыть» и «Записать»)
+  // вторым аргументом — он и становится текущей строкой.
+  const onChanged = (appliedTypeId?: string): void => {
+    if (appliedTypeId !== undefined) currentRowId = appliedTypeId;
+    void reload();
+  };
 
   async function reload(useCache = false): Promise<void> {
     const scrollTop = tableWrap.scrollTop;
@@ -298,9 +444,19 @@ export function showThoughtTypesDialog(): void {
     // Searching shows every matched branch fully expanded (task's «ветви до
     // совпадений разворачиваются автоматически»); otherwise the manual
     // expand/collapse state applies as before.
-    const rows = (
+    let rows = (
       searching ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id))) : visibleRows(types, expanded)
     ).filter((row) => keepIds.has(row.type.id));
+    // Текущая строка обязана быть видна: если её цепочка родителей свёрнута,
+    // разворачиваем её (при поиске ветви и так раскрыты). Иначе после создания
+    // типа с нестандартным родителем строку пришлось бы искать вручную.
+    if (currentRowId !== null && !searching && !rows.some((row) => row.type.id === currentRowId)) {
+      const reveal = typeRowRevealIds(types, currentRowId);
+      if (reveal.some((id) => !expanded.has(id))) {
+        expanded = new Set([...expanded, ...reveal]);
+        rows = visibleRows(types, expanded).filter((row) => keepIds.has(row.type.id));
+      }
+    }
     const table = el('table', 'table-list');
     const head = el('thead');
     const headRow = el('tr');
@@ -320,10 +476,15 @@ export function showThoughtTypesDialog(): void {
       emptyRow.append(emptyCell);
       tbody.append(emptyRow);
     }
+    let currentTr: HTMLElement | null = null;
     for (const row of rows) {
       const type = row.type;
       const tr = el('tr');
       if (type.is_root) tr.classList.add('type-tree-root');
+      if (type.id === currentRowId) {
+        tr.classList.add('selected');
+        currentTr = tr;
+      }
       const nameCell = el('td');
       nameCell.style.whiteSpace = 'nowrap';
       const nameWrap = span('', 'type-tree-name');
@@ -368,6 +529,9 @@ export function showThoughtTypesDialog(): void {
     table.append(tbody);
     tableWrap.replaceChildren(table);
     tableWrap.scrollTop = scrollTop;
+    // Список прокручивается к текущей строке — она может быть ниже видимой
+    // части (высота обёртки ограничена).
+    currentTr?.scrollIntoView({ block: 'nearest' });
   }
 
   /** Expands/collapses a node and re-renders from the cache (no round-trip). */
@@ -407,6 +571,15 @@ export function showThoughtTypesDialog(): void {
       await etn.types.removeThoughtType(networkId, type.id, type.version, true);
       await refreshThoughtTypes();
       scheduleRefresh();
+      // Удалённый тип уходит из цепочки типов показанной сущности (ошибка
+      // 7dfad7d4): открытый редактор обязан пометить тип исчезнувшим,
+      // перечитать «Свойства» и отвязать показанную сущность. Своё
+      // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+      // локально — каталог перечитан строкой выше, значит шапку можно
+      // перерисовать сразу и по свежим данным.
+      notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: type.id }));
+      // Удалённый тип не может остаться текущей строкой.
+      if (currentRowId === type.id) currentRowId = null;
       onChanged();
     } catch (err) {
       errorDialog('Удалить тип', err);
@@ -447,58 +620,55 @@ function buildParentPicker(opts: {
   const types = (): typeof store.state.thoughtTypes | typeof store.state.linkTypes =>
     kinds === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
   const rootId = types().find((t) => t.is_root)?.id ?? null;
-  const combo = createTypeCombobox({
-    options: () => {
-      // Candidate parents: every type except the root, the edited one and its
-      // descendants; the depth cap must hold for the resulting subtree.
-      const allowed = (id: string): boolean => {
-        if (id === rootId) return false;
-        const selfId = currentId();
-        if (selfId !== null) {
-          if (id === selfId) return false;
-          if (subtreeTypeIds(types(), selfId).has(id)) return false;
-        }
-        const subtree = selfId !== null ? subtreeHeight(types(), selfId) : 1;
-        return typeDepth(types(), id) + subtree <= MAX_TYPE_DEPTH;
-      };
-      if (kinds === 'thought') {
-        return orderedTypeRows(store.state.thoughtTypes)
-          .filter((row) => allowed(row.type.id))
-          .map((row) => ({
-            id: row.type.id,
-            label: row.type.name,
-            parent_id: row.type.parent_id,
-            depth: row.depth,
-            has_children: row.hasChildren,
-            selectable: true,
-            icon: { icon: row.type.icon, kind: row.type.icon_kind },
-            style: {
-              fg: row.type.fg_color,
-              bg: row.type.bg_color,
-              bold: row.type.font_bold ?? false,
-              italic: row.type.font_italic ?? false,
-              underline: row.type.font_underline ?? false,
-              strike: row.type.font_strike ?? false,
-            },
-          }));
+  const optionRows = (): EntityOption[] => {
+    // Candidate parents: every type except the root, the edited one and its
+    // descendants; the depth cap must hold for the resulting subtree.
+    const allowed = (id: string): boolean => {
+      if (id === rootId) return false;
+      const selfId = currentId();
+      if (selfId !== null) {
+        if (id === selfId) return false;
+        if (subtreeTypeIds(types(), selfId).has(id)) return false;
       }
-      return orderedTypeRows(store.state.linkTypes)
+      const subtree = selfId !== null ? subtreeHeight(types(), selfId) : 1;
+      return typeDepth(types(), id) + subtree <= MAX_TYPE_DEPTH;
+    };
+    if (kinds === 'thought') {
+      return orderedTypeRows(store.state.thoughtTypes)
         .filter((row) => allowed(row.type.id))
-        .map((row) => {
-          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
-          return {
-            id: row.type.id,
-            label: `${row.type.name_forward} / ${row.type.name_reverse}`,
-            parent_id: row.type.parent_id,
-            depth: row.depth,
-            has_children: row.hasChildren,
-            selectable: true,
-            line: { color: line.color, style: line.style, width: line.width },
-          };
-        });
-    },
-    // The root id is not an option — normalize it to the «без родителя» entry.
-    value: value !== null && value === rootId ? null : value,
+        .map((row) => ({
+          id: row.type.id,
+          title: row.type.name,
+          parentId: row.type.parent_id,
+          depth: row.depth - 1,
+          hasChildren: row.hasChildren,
+          selectable: true,
+          cloud: { id: row.type.id, title: row.type.name, type_id: row.type.id },
+        }));
+    }
+    return orderedTypeRows(store.state.linkTypes)
+      .filter((row) => allowed(row.type.id))
+      .map((row) => {
+        const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+        const title = `${row.type.name_forward} / ${row.type.name_reverse}`;
+        return {
+          id: row.type.id,
+          title,
+          parentId: row.type.parent_id,
+          depth: row.depth - 1,
+          hasChildren: row.hasChildren,
+          selectable: true,
+          cloud: { id: row.type.id, title, icon: '🔗', icon_kind: 'emoji' as const },
+          line: { color: line.color, style: line.style, width: line.width },
+        };
+      });
+  };
+  const combo = buildEntityCombo({
+    networkId: store.state.networkId ?? '',
+    kind: kinds === 'thought' ? 'thought-types' : 'link-types',
+    options: optionRows,
+    // Служебный корень иерархии — «без родителя», не вариант выбора.
+    value: normalizeParentTypeId(value, rootId),
     placeholder: 'без родителя',
     emptyLabel: 'без родителя',
     expandAll: true,
@@ -521,30 +691,103 @@ export interface TypeEditorExtras {
 }
 
 /**
+ * Ширина диалога редактора типа мысли (ошибка 3c7213ec).
+ *
+ * Самое широкое содержимое диалога — таблица «Свойства типа» на вкладке
+ * «Свойства»: шесть колонок, где «По умолчанию» держит редактор значения
+ * (у свойства-связи — `.link-value-wrap` с полом 220px), а последняя —
+ * кнопки ▲/▼/✎/✕ с `nowrap`. Таблица остаётся на auto-раскладке, поэтому её
+ * ширина упирается в min-content строки: замер зондом на Chromium (реальный
+ * `styles.css`, самый длинный набор свойств сети ETN) даёт 688px. Прежние
+ * 600px отдавали таблице ≈560px — и `.admin-table-wrap` получал
+ * горизонтальную прокрутку. 760px — наименьшая из стандартных «широких»
+ * ширин проекта (столько же у «Настроек», «Администрирования» и диалога
+ * отборов) и даёт таблице ≈720px, то есть запас над замеренным min-content.
+ */
+const TYPE_EDITOR_DIALOG_WIDTH = 760;
+
+/**
+ * Ключ редактора ещё не созданного типа мысли (ошибка 74d9b4ed).
+ *
+ * Сеансовый ключ «новая сущность этого вида»: у типа, который ещё не записан,
+ * id нет, но дедупликация нужна и ему — иначе повторный клик по «Добавить»
+ * («Создать новый» в комбобоксе) открывает второй редактор создания с
+ * независимым черновиком (тот же путь к DUPLICATE-рассинхрону 0bfd7180).
+ * Один ключ на ВСЕ точки создания нового типа мысли: второй вход поднимает уже
+ * открытый редактор, а не плодит свой.
+ */
+const NEW_THOUGHT_TYPE_DIALOG_KEY = 'thought-type:new';
+
+/**
+ * Ключ дедупликации диалога редактора типа мысли (ошибки c2d243bb, 74d9b4ed).
+ *
+ * Идентичность сущности для {@link raiseOpenDialog}: повторное открытие
+ * редактора ЭТОГО типа поднимает уже открытый диалог, а не плодит второй
+ * черновик. Тип другого id — другой ключ, открывается поверх свободно.
+ *
+ * `id === null` (новый тип) даёт сеансовый ключ
+ * {@link NEW_THOUGHT_TYPE_DIALOG_KEY}: пока редактор создания открыт, второго
+ * не будет; после закрытия ключ снимается (каркас диалогов) и следующее
+ * «Добавить» открывает свежий редактор. Ключ остаётся и после «Записать» —
+ * диалог не закрывается, id в черновике не меняет идентичность ключа.
+ */
+export function thoughtTypeDialogKey(id: string | null): string {
+  return id === null ? NEW_THOUGHT_TYPE_DIALOG_KEY : `thought-type:${id}`;
+}
+
+/**
  * Opens the thought-type editor; `type === null` edits a NEW type (L6/L21).
  *
  * One and the same form for a new and an existing type (task «Улучшить диалог
  * редактирования типов мыслей и связей»): the icon, colours/font style,
  * comment template, parent and the own property definitions are editable
- * right away — nothing is inert — and nothing touches the server until
- * «Применить и закрыть» is pressed. «Отмена» (also Esc/×/backdrop) closes the
- * dialog discarding the whole draft; no type is created on that path. The
- * inherited-default overrides of an existing type keep their own explicit
- * «Применить»/«Сбросить» buttons inside their small dialog (as before).
+ * right away — nothing is inert — and nothing touches the server until a save
+ * button is pressed. Two save buttons (ошибка 51732f9b): «Записать» commits
+ * the draft and KEEPS the dialog open, refreshing everything that depended on
+ * the write (the «Отборы» tab of a just-created type becomes live, «Метаданные»
+ * shows the real id/dates, the title stops saying «Новый»), and «Применить и
+ * закрыть» commits and closes. «Отмена» (also Esc/×/backdrop) closes the
+ * dialog discarding the whole draft; no type is created on that path. Дефолт
+ * привязки (0.8.2) правится прямо в колонке «По умолчанию» и тоже уезжает на
+ * запись; override описания сохраняет свой маленький диалог.
  * Reparenting validation is unchanged: the parent picker filters
  * cycles/depth client-side and the server re-checks on apply.
  *
- * `extras.initialName` prefills the name of a new type (the type-combobox
+ * `onChanged` is called after every successful save with the id of the type
+ * written in this session — the type list uses it to make that row «current».
+ *
+ * `extras.initialName` prefills the name of a new type (the entity combo's
  * «Создать новый» row). The returned promise resolves when the dialog closes:
  * with the id of the type created in this session, or `null` when the dialog
  * closed without creating one (also for an existing type).
+ *
+ * Повторное открытие редактора того же типа (двойной клик по строке списка)
+ * второй диалог не создаёт: уже открытый поднимается наверх и получает фокус
+ * ({@link raiseOpenDialog}, ошибка c2d243bb) — и тогда promise сразу резолвится
+ * в `null`. Тип другого id открывается поверх свободно. То же — для ещё не
+ * созданного типа: ключ `thought-type:new` один на все точки создания, поэтому
+ * повторный клик по «Добавить»/«Создать новый» поднимает уже открытый редактор
+ * создания (ошибка 74d9b4ed).
  */
 export function showThoughtTypeEditor(
   type: ThoughtType | null,
-  onChanged: () => void,
+  onChanged: (appliedTypeId?: string) => void,
   extras?: TypeEditorExtras,
 ): Promise<string | null> {
   const networkId = requireNetworkId();
+  // Повторное открытие редактора ТОГО ЖЕ типа не создаёт второй диалог: уже
+  // открытый поднимается наверх и получает фокус (ошибка c2d243bb). Двойной
+  // клик по строке списка даёт два события click — без этой проверки
+  // открывались два редактора одного типа с независимыми черновиками (один из
+  // путей к DUPLICATE-рассинхрону 0bfd7180). Для НОВОГО типа (id ещё нет) ключ
+  // тоже есть — `thought-type:new`, поэтому повторный клик по «Добавить»
+  // поднимает уже открытый редактор создания, а не плодит второй черновик
+  // (ошибка 74d9b4ed). Проверка стоит ДО захвата блокировки и сборки тела
+  // диалога: второй вызов не должен ни брать замок, ни строить черновик, ни
+  // создавать неразрешимый Promise. Тип другого id не дедуплицируется.
+  if (raiseOpenDialog(thoughtTypeDialogKey(type?.id ?? null))) {
+    return Promise.resolve(null);
+  }
   // Auto-acquire the type lock for the lifetime of the dialog (task
   // 4f141756): the editor commits on «Применить и закрыть», so the lock
   // must outlive the entire edit session. For a NEW type (id is null) we
@@ -622,6 +865,10 @@ export function showThoughtTypeEditor(
   const DUP_NAME_MSG = 'Тип с таким именем уже существует.';
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
+  let saveBtn: HTMLButtonElement | null = null;
+  /** Заголовок диалога — после первой записи «Новый тип мысли» становится
+   *  «Тип мысли»: содержимое диалога обновилось, шапка не должна врать. */
+  let dialogTitleEl: HTMLElement | null = null;
 
   // ---- The staged draft: every editable field, applied only on demand ----
   const draft = {
@@ -703,9 +950,11 @@ export function showThoughtTypeEditor(
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
   descriptionPane.append(descArea);
 
-  // errorLine живёт в «Описание»: имя и пометка «дубликат имени» относятся
-  // именно к этой вкладке.
-  descriptionPane.append(errorLine);
+  // Строка ошибки диалога живёт в панели кнопок (футер), а не в теле вкладки:
+  // сообщение о неудачной записи обязано быть видно на ЛЮБОЙ вкладке
+  // (ошибка add8d09d). В футер её кладёт `footerError` в `showDialog` ниже.
+  // Сюда же пишут ошибки записи стадийных свойств (`buildStagedPropertySection`)
+  // и подсветка дубликата имени.
 
   // Шаблон постоянного комментария мысли (08-ui-spec.md §8.4, 02-data-model.md
   // §3.3). Поле — как у всех markdown-полей приложения: HTML-просмотр по
@@ -744,6 +993,10 @@ export function showThoughtTypeEditor(
   // Property sections (own staged + inherited). For a new type the inherited
   // preview follows the picked parent; for an existing type the inherited
   // defaults keep their explicit per-dialog «Применить» (as before).
+  // `onSave` для заглушки несохранённого типа (задача e7352642) — команда
+  // кнопки «Сохранить» в подсказке «Сохраните тип, чтобы добавлять
+  // свойства…»: та же `apply('stay', …)`, что и «Записать» в футере.
+  // Колбэк ленив — `apply` объявлена ниже, но в момент клика уже готова.
   const props = buildStagedPropertySection({
     networkId,
     ownerType: 'thought_type',
@@ -751,27 +1004,41 @@ export function showThoughtTypeEditor(
     previewParentId: () =>
       draft.parent_id ?? findRootType(store.state.thoughtTypes)?.id ?? null,
     onOverrideApplied: onChanged,
+    // Ошибки записи привязок идут в общую строку панели кнопок: пользователь
+    // может находиться на любой вкладке (ошибка add8d09d).
+    errorLine,
+    onSave: () => {
+      // Эмулируем клик по «Записать» — `close` тут no-op, диалог не закрываем.
+      void apply('stay', () => undefined);
+    },
   });
   propertiesPane.append(props.root);
 
   // Вкладка «Метаданные» — автор, даты, id сущности (задача 04cd9794). Для
-  // нового типа показываем подсказку «id будет присвоен при сохранении».
-  if (type !== null) {
-    metadataPane.append(buildMetadataRowsFromType(type));
-  } else {
-    metadataPane.append(
-      el('p', 'muted', 'id появится после первой записи типа.'),
+  // нового типа до первой записи показываем подсказку «id будет присвоен при
+  // сохранении»; после «Записать» вкладка перерисовывается настоящими
+  // метаданными (ошибка 51732f9b: раньше подсказка оставалась до переоткрытия).
+  function renderMetadataPane(): void {
+    metadataPane.replaceChildren(
+      current !== null
+        ? buildMetadataRowsFromType(current)
+        : el('p', 'muted', 'id появится после первой записи типа.'),
     );
   }
+  renderMetadataPane();
 
   // Вкладка «Отборы» — собственная подписка на realtime-события
   // (thought-type-view.{created,updated,deleted}); диалог вызывает dispose()
-  // на onClose.
+  // на onClose. `onSave` (задача e7352642) — та же команда «Сохранить», что
+  // и в «Свойствах»/футере; передаём одну лямбду на обе вкладки.
   const viewsTab = buildViewsTab({
     networkId,
     getTypeId: () => current?.id ?? null,
     typeName: () => draft.name,
     onChanged,
+    onSave: () => {
+      void apply('stay', () => undefined);
+    },
   });
   viewsPane.append(viewsTab.root);
 
@@ -787,15 +1054,16 @@ export function showThoughtTypeEditor(
     );
   }
 
-  /** Live duplicate check on the name field: warn + disable the apply button. */
+  /** Live duplicate check on the name field: warn + disable both save buttons. */
   function revalidateName(): void {
-    if (nameClash(nameInput.value) !== null) {
+    const clash = nameClash(nameInput.value) !== null;
+    if (clash) {
       errorLine.textContent = DUP_NAME_MSG;
-      if (applyBtn !== null) applyBtn.disabled = true;
-    } else {
-      if (errorLine.textContent === DUP_NAME_MSG) errorLine.textContent = '';
-      if (applyBtn !== null) applyBtn.disabled = false;
+    } else if (errorLine.textContent === DUP_NAME_MSG) {
+      errorLine.textContent = '';
     }
+    if (applyBtn !== null) applyBtn.disabled = clash;
+    if (saveBtn !== null) saveBtn.disabled = clash;
   }
 
   // Fresh catalogue for the live duplicate check (the server re-checks anyway).
@@ -826,8 +1094,21 @@ export function showThoughtTypeEditor(
     draft.description = descArea.value;
   });
 
-  /** Applies the whole draft to the server, then closes the dialog. */
-  async function apply(close: () => void): Promise<void> {
+  /**
+   * Saves the whole draft to the server.
+   *
+   * The payload is identical for both save buttons — `mode` only decides what
+   * happens after a successful write: `'close'` («Применить и закрыть»)
+   * dismisses the dialog, `'stay'` («Записать») keeps it open and refreshes
+   * everything that depended on the write — the title, «Метаданные», the
+   * «Отборы» tab (`getTypeId()` starts returning the id of a freshly created
+   * type) and the type list's current row. A failed save keeps the dialog open
+   * on both paths, showing the error.
+   */
+  async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
+    // Строка ошибки в панели кнопок общая для диалога: перед новой попыткой
+    // гасим прошлое сообщение (иначе оно «залипает» и видно на всех вкладках).
+    errorLine.textContent = '';
     const name = nameInput.value.trim();
     if (name === '') {
       errorLine.textContent = 'Название типа обязательно.';
@@ -839,6 +1120,10 @@ export function showThoughtTypeEditor(
     }
     const description = descArea.value.trim();
     const nextTemplate = templateMd.trim() === '' ? null : templateMd;
+    // Поля САМОГО типа, ушедшие на сервер этой записью (ошибка 8dd5dfed): из
+    // них строятся факты локального уведомления открытого редактора. При
+    // создании типа уведомлять нечего — его ещё никто не показывает.
+    let savedTypeFields: object | null = null;
     try {
       if (current === null) {
         // New type: one create carries every staged field at once. The
@@ -854,38 +1139,110 @@ export function showThoughtTypeEditor(
         createdId = current.id;
       } else {
         // Existing type: patch only the changed fields (If-Match version).
-        const input: ThoughtTypeUpdateInput = {};
-        if (name !== current.name) input.name = name;
-        if (draft.parent_id !== (current.parent_id ?? null)) input.parent_id = draft.parent_id;
-        if (draft.icon !== current.icon) {
-          input.icon = draft.icon;
-          input.icon_kind = draft.icon_kind;
-        }
-        if (draft.fg_color !== current.fg_color) input.fg_color = draft.fg_color;
-        if (draft.bg_color !== current.bg_color) input.bg_color = draft.bg_color;
-        if (draft.font_bold !== current.font_bold) input.font_bold = draft.font_bold;
-        if (draft.font_italic !== current.font_italic) input.font_italic = draft.font_italic;
-        if (draft.font_underline !== current.font_underline) input.font_underline = draft.font_underline;
-        if (draft.font_strike !== current.font_strike) input.font_strike = draft.font_strike;
-        if ((description === '' ? null : description) !== current.description) {
-          input.description = description === '' ? null : description;
-        }
-        if (nextTemplate !== (current.comment_template_md ?? null)) {
-          input.comment_template_md = nextTemplate;
-        }
+        const input = buildTypePatchInput(current, draft, description, nextTemplate);
         if (Object.keys(input).length > 0) {
-          current = await etn.types.updateThoughtType(networkId, current.id, input, current.version);
+          // Серверная версия могла уйти вперёд за время сессии редактора:
+          // вложенное создание свойства с привязкой к этому типу
+          // (через диалог свойства, 5bcfa04b) вызывает attach у этого типа
+          // и поднимает версию на сервере (`touchType`), но `current` в
+          // черновике по-прежнему хранит снимок с прошлой записи. Прецедент
+          // — `syncLinkTypeParent` (33fdffb): перед PATCH читаем свежую
+          // версию у сервера; снимок остаётся запасным источником, если GET
+          // не удался (race/сеть). Конфликт остаётся только для реальной
+          // конкурентной правки полей извне.
+          const freshVersion = await readFreshTypeVersion(networkId, current.id, current.version);
+          try {
+            current = await etn.types.updateThoughtType(
+              networkId,
+              current.id,
+              input,
+              freshVersion,
+            );
+          } catch (err) {
+            // 0.8.2, задача 8ea1ab6a: смена parent_id у используемого типа
+            // мысли требует подтверждения. Сервер сначала отдаёт 422 с
+            // `details.kind === 'reparent_impact'` и счётчиком мыслей;
+            // диалог подтверждения → повторный PATCH с `confirmed: true`.
+            // Перед повторным PATCH снова берём свежую версию (тот же класс
+            // ошибки 5bcfa04b — пользователь тратит время на подтверждение,
+            // версия может снова уйти).
+            if (
+              err instanceof EtnError &&
+              err.code === 'VALIDATION_ERROR' &&
+              isReparentImpact(err.details)
+            ) {
+              if (
+                !(await confirmReparentImpactDialog(
+                  input.parent_id !== undefined && input.parent_id !== current.parent_id
+                    ? (current.parent_id ?? null)
+                    : null,
+                  err.details.thoughts_count,
+                ))
+              ) {
+                errorLine.textContent = 'Смена родителя отменена.';
+                return;
+              }
+              const reparentVersion = await readFreshTypeVersion(
+                networkId,
+                current.id,
+                current.version,
+              );
+              current = await etn.types.updateThoughtType(
+                networkId,
+                current.id,
+                { ...input, confirmed: true },
+                reparentVersion,
+              );
+            } else {
+              throw err;
+            }
+          }
+          savedTypeFields = input;
         }
       }
       // Staged property definitions go after the type itself exists.
       if (!(await props.applyChanges(current.id))) return; // error shown, dialog stays
+      // applyChanges мог поднять версию типа на сервере (`touchType` на каждый
+      // attach/update свойства или его дефолта) — обновим снимок, чтобы
+      // следующий «Записать»/«Применить и закрыть» этого же диалога не
+      // конфликтовал с собой (5bcfa04b). Снимок остаётся запасным источником,
+      // если GET не удался: следующий apply прочитает свежую версию через
+      // readFreshTypeVersion всё равно.
+      current = await readFreshTypeSnapshot(networkId, current);
+      // Набор свойств типа изменился (ошибка 74b94c26): открытый редактор
+      // мысли этого типа (или его потомка) обязан перечитать таблицу
+      // «Свойства». Своё realtime-эхо до рендерера не доходит, поэтому
+      // редактор уведомляется локально.
+      notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: current.id });
       await refreshThoughtTypes();
       scheduleRefresh();
-      onChanged();
-      close();
+      // Оформление и подпись САМОГО типа (ошибка 8dd5dfed): шапка открытого
+      // редактора мысли этого типа резолвит их из цепочки типов, а каталог
+      // перечитан строкой выше — значит, шапку можно перерисовать сразу и по
+      // свежим данным. Своё realtime-эхо до рендерера не доходит (G8 applier).
+      if (savedTypeFields !== null) {
+        notifyTypeChanged(
+          typeUpdateFacts({ ownerType: 'thought_type', ownerId: current.id }, savedTypeFields),
+        );
+      }
+      // Содержимое диалога, зависевшее от записи, обновляется: шапка,
+      // «Метаданные» (у нового типа появились id/даты) и вкладка «Отборы»
+      // (её getTypeId() теперь отдаёт id). Список типов получает id
+      // записанного типа — строка становится текущей.
+      syncDialogTitle();
+      renderMetadataPane();
+      void viewsTab.refresh();
+      onChanged(current.id);
+      if (mode === 'close') close();
     } catch (err) {
       errorLine.textContent = errText(err);
     }
+  }
+
+  /** Шапка диалога: «Новый тип мысли» пока тип не записан, дальше — «Тип мысли». */
+  function syncDialogTitle(): void {
+    if (dialogTitleEl === null) return;
+    dialogTitleEl.textContent = current === null ? 'Новый тип мысли' : 'Тип мысли';
   }
 
   function openStyle(): void {
@@ -921,25 +1278,52 @@ export function showThoughtTypeEditor(
   }
 
   // The promise resolves on dialog close (`onClose` fires from the backdrop's
-  // remove event — Esc, × and both footer buttons all land there).
+  // remove event — Esc, × and every footer button all land there).
   return new Promise<string | null>((resolve) => {
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
       body,
-      width: 600,
+      width: TYPE_EDITOR_DIALOG_WIDTH,
+      // Идентичность сущности для повторного открытия (ошибки c2d243bb,
+      // 74d9b4ed): второй клик по строке этого типа — или по «Добавить» при
+      // ещё не созданном типе (`thought-type:new`) — поднимает этот диалог,
+      // а не плодит второй. Ключ остаётся и после «Записать»: диалог живёт до
+      // закрытия.
+      dedupeKey: thoughtTypeDialogKey(type?.id ?? null),
+      // Ошибка записи живёт в панели кнопок, а не в теле вкладки: она должна
+      // быть видна на любой вкладке диалога (ошибка add8d09d).
+      footerError: errorLine,
       buttons: [
         { label: 'Отмена' },
+        // «Записать» — запись без закрытия: диалог остаётся открытым, а его
+        // содержимое обновляется (отборы нового типа становятся доступны,
+        // «Метаданные» показывают id/даты) — ошибка 51732f9b.
+        {
+          label: 'Записать',
+          keepOpen: true,
+          onClick: (close) => void apply('stay', close),
+          ref: (btn) => {
+            saveBtn = btn;
+          },
+        },
         {
           label: 'Применить и закрыть',
           primary: true,
           keepOpen: true,
-          onClick: (close) => void apply(close),
+          onClick: (close) => void apply('close', close),
           ref: (btn) => {
             applyBtn = btn;
           },
         },
       ],
-      onMount: () => nameInput.focus(),
+      onMount: () => {
+        // Шапку диалога можно переписать после первой записи: находим её от
+        // тела диалога (оба уже в DOM к моменту onMount).
+        dialogTitleEl =
+          body.closest('.dialog-box')?.querySelector<HTMLElement>('.dialog-title') ?? null;
+        syncDialogTitle();
+        nameInput.focus();
+      },
       onClose: () => {
         viewsTab.dispose();
         void releaseHeld(editLock);
@@ -969,6 +1353,13 @@ interface StagedPropertySection {
    * re-diffs only what is still missing.
    */
   applyChanges(typeId: string): Promise<boolean>;
+  /**
+   * Команда «Сохранить» из заглушки несохранённого типа (задача e7352642):
+   * та же логика, что у кнопки «Записать» в футере диалога — запись без
+   * закрытия, после которой у типа появляется id и секция свойств оживает
+   * (через общий `reload()` из `applyChanges` и перерисовку вкладки).
+   * Присутствует только когда `typeId === null`; иначе — `undefined`. */
+  onSave?: () => void;
 }
 
 /**
@@ -1010,37 +1401,49 @@ function buildStagedPropertySection(opts: {
   previewParentId: () => string | null;
   /** Fired after an inherited default override was applied on the server. */
   onOverrideApplied?: () => void;
+  /**
+   * Общая строка ошибки диалога (в панели кнопок): ошибки записи привязок
+   * выводятся сюда, чтобы быть видимыми на любой вкладке (ошибка add8d09d).
+   */
+  errorLine: HTMLElement;
+  /** Команда «Сохранить» для заглушки несохранённого типа (задача e7352642):
+   *  запись без закрытия диалога; после неё секция свойств оживает (id
+   *  появляется). У существующего типа — `undefined`, заглушка не нужна. */
+  onSave?: () => void;
 }): StagedPropertySection {
-  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied } = opts;
+  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine, onSave } = opts;
+  // Текущее «живое» id типа: для НОВОГО — стартует `null`, после успешного
+  // `applyChanges(targetId)` обновляется до созданного id — заглушка
+  // (задача e7352642) перестаёт показываться, секция оживает. У
+  // существующего типа совпадает с `typeId` всё время.
+  let liveTypeId: string | null = typeId;
   const box = div('form-stack');
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '220px';
   // The first load often starts before the dialog mounts this box — show the
   // placeholder up front instead of a blank gap.
   tableWrap.append(el('span', 'muted', 'Загрузка…'));
-  const errorLine = span('', 'error-text');
-  const label = el('p', 'muted', 'Свойства');
-  label.style.margin = '8px 0 2px';
-  box.append(label, tableWrap, errorLine);
-  // Кнопки добавления свойства. Двусторонняя вкладка (задача 935ec90e):
-  // обе кнопки сначала спрашивают сторону привязки (источник/назначение),
-  // затем открывают соответствующий поток — пикер реестра («Добавить…»)
-  // или единый диалог свойства/связи («Создать…»).
+  // Заголовка «Свойства» над таблицей нет (ошибка 3c7213ec): вкладка уже
+  // называется «Свойства», подпись только дублировала её. Подзаголовок
+  // «Свойства типа» остаётся — он отличает собственную таблицу от
+  // унаследованной. Строки ошибки здесь нет: ошибки записи уходят в футер
+  // диалога (ошибка add8d09d).
+  box.append(tableWrap);
+  // Кнопка добавления свойства (задача 298fe6f3): в списке диалога «Добавить
+  // свойство» свойство-связь показано парой КОНКРЕТНЫХ имён — прямое
+  // (`name_forward`, сторона `source`) и обратное (`name_reverse`, сторона
+  // `target`); выбор имени сразу задаёт сторону привязки, отдельного диалога
+  // «Сторона привязки» нет. «Создать свойство» — кнопка самого диалога выбора,
+  // отдельной кнопки вкладки нет.
   const actions = div('form-row');
   actions.style.gap = '8px';
   actions.style.flexWrap = 'wrap';
   actions.append(
     button(
       'Добавить свойство…',
-      () => void askSideThen('attach'),
+      () => void openAttachPropertyDialog(),
       'btn small',
-      'Подключить существующее свойство из справочника сети',
-    ),
-    button(
-      'Создать свойство…',
-      () => void askSideThen('create'),
-      'btn small',
-      'Создать новое свойство через единый диалог свойства/связи',
+      'Подключить свойство из справочника сети (новое создаётся кнопкой «Создать свойство» в диалоге выбора)',
     ),
   );
   box.append(actions);
@@ -1067,36 +1470,43 @@ function buildStagedPropertySection(opts: {
    * «Добавить свойство» dialog: pick an existing registry property (или
    * создать новое в общем редакторе свойства и затем выбрать его). Returns
    * the staged row the caller appends to {@link ownDraft} (or `null` when
-   * the user cancelled). `side` — сторона привязки (`source`/`target`)
-   * для свойств-связей; `null` для скаляров (сторона неприменима).
+   * the user cancelled). Строка списка — конкретное имя свойства (задача
+   * 298fe6f3): у свойства-связи их две, по имени на сторону, и выбор имени
+   * сразу задаёт `side` — отдельного шага «Сторона привязки» нет.
    */
-  async function openAttachPropertyDialog(side: 'source' | 'target' | null): Promise<void> {
+  async function openAttachPropertyDialog(): Promise<void> {
     // The warning's «descendants» check needs the edited type's id and name;
     // both exist only for an already-created type.
     const editedType =
-      typeId === null
+      liveTypeId === null
         ? null
         : ownerType === 'thought_type'
-          ? store.state.thoughtTypes.find((t) => t.id === typeId) ?? null
-          : store.state.linkTypes.find((t) => t.id === typeId) ?? null;
+          ? store.state.thoughtTypes.find((t) => t.id === liveTypeId) ?? null
+          : store.state.linkTypes.find((t) => t.id === liveTypeId) ?? null;
+    // Занятые стороны подключённых свойств-связей (проверка дубля ИМЕНИ в
+    // списке — имя однозначно определяет сторону; скаляр — пустой набор).
+    const existingSides = new Map<string, Set<LinkPropertySide>>();
+    for (const d of ownDraft) {
+      let set = existingSides.get(d.property_id);
+      if (set === undefined) {
+        set = new Set<LinkPropertySide>();
+        existingSides.set(d.property_id, set);
+      }
+      if (d.side === 'source' || d.side === 'target') set.add(d.side);
+    }
     const picked = await openAttachDialog({
       networkId,
       ownerType,
       types: pickTypeList(),
-      typeId,
+      typeId: liveTypeId,
       editedTypeName:
         editedType === null
           ? null
           : 'name' in editedType
             ? editedType.name
             : editedType.name_forward,
-      existingPropertyIds: new Set(
-        ownDraft
-          .filter((d) => side === null || d.side === side)
-          .map((d) => d.property_id),
-      ),
+      existingSides,
       inheritedPropertyIds: new Set(inherited.map((d) => d.property_id)),
-      side,
     });
     if (picked === null) return;
     // Merge the picked property into the section's own registry snapshot
@@ -1111,118 +1521,99 @@ function buildStagedPropertySection(opts: {
     render();
   }
 
-  /**
-   * Диалог выбора стороны привязки для «Добавить свойство…» / «Создать
-   * свойство…» (задача 935ec90e — двусторонняя вкладка «Свойства»).
-   * Скалярные свойства не имеют стороны — для них поток не меняется.
-   *
-   * Поведение:
-   *   * `kind === 'attach'` — после выбора стороны открывает пикер реестра
-   *     ({@link openAttachPropertyDialog}) с указанной стороной.
-   *   * `kind === 'create'` — после выбора стороны открывает единый диалог
-   *     свойства/связи ({@link openPropertyManagerEditor}) с предзаполненной
-   *     таблицей текущей стороны.
-   */
-  async function askSideThen(kind: 'attach' | 'create'): Promise<void> {
-    const side = await pickBindingSide();
-    if (side === 'cancel') return;
-    if (kind === 'attach') {
-      await openAttachPropertyDialog(side);
-    } else {
-      if (typeId === null) {
-        // Новый тип ещё не имеет id — единый диалог всё равно примет
-        // initialThoughtTypeId, но он будет бесполезен до apply. Делегируем
-        // тот же поток, что и для attach — пикер реестра; пользователь
-        // сможет выбрать существующее свойство или создать новое через
-        // «Добавить…» внутри пикера.
-        await openAttachPropertyDialog(side);
-        return;
-      }
-      openPropertyManagerEditor(
-        null,
-        () => void reload(),
-        undefined,
-        { initialThoughtTypeId: typeId, initialSide: side },
-      );
-    }
-  }
-
-  /**
-   * Маленький диалог «с какой стороны подключить свойство-связь»:
-   * «Источник» / «Назначение» / «Отмена». Возвращает выбранную сторону
-   * или `'cancel'`. Для скалярных свойств (`value_type !== 'link'`) шаг
-   * не имеет смысла, но единая точка входа сейчас этого не различает —
-   * диалог короткий, а при создании скаляра пользователь всё равно
-   * проходит мимо лишней кнопки (выбор запоминается как `null`).
-   */
-  function pickBindingSide(): Promise<'source' | 'target' | 'cancel'> {
-    return new Promise((resolve) => {
-      const errorLine = span('', 'error-text');
-      const hint = el(
-        'p',
-        'muted',
-        'Для свойства-связи выберите сторону привязки к этому типу: ' +
-          '«Источник» — имя `name_forward`, «Назначение» — имя `name_reverse`.',
-      );
-      hint.style.margin = '0 0 8px';
-      const body = div('form-stack');
-      body.append(hint, errorLine);
-      const choose = (side: 'source' | 'target' | null): void => {
-        close();
-        if (side === null) resolve('cancel');
-        else resolve(side);
-      };
-      const close = showDialog({
-        title: 'Сторона привязки',
-        body,
-        width: 460,
-        buttons: [
-          {
-            label: 'Отмена',
-            onClick: () => choose(null),
-          },
-          {
-            label: 'Источник',
-            keepOpen: true,
-            onClick: () => choose('source'),
-          },
-          {
-            label: 'Назначение',
-            primary: true,
-            keepOpen: true,
-            onClick: () => choose('target'),
-          },
-        ],
-      });
-    });
-  }
-
   /** The list of types that the «already bound to a descendant» warning
    *  walks through when the user picks a property the server will dedupe
    *  from the subtree. `null` while the type is being created — the editor
    *  has no id yet, so the warning would be empty anyway. */
   function pickTypeList(): ThoughtType[] | LinkType[] | null {
-    if (typeId === null) return null;
+    if (liveTypeId === null) return null;
     return ownerType === 'thought_type' ? store.state.thoughtTypes : store.state.linkTypes;
   }
 
-  /** Opens the default-override dialog of an inherited property (L21) —
-   *  unchanged instant behaviour, the small dialog owns its «Применить». */
-  function showOverrideDialog(def: EffectiveTypeProperty): void {
-    openDefaultOverrideDialog({
-      networkId,
-      ownerType,
-      typeId: typeId as string,
-      def,
-      onDone: () => {
-        onOverrideApplied?.();
-        void reload();
-      },
-    });
+  /** Черновики дефолтов привязок (0.8.2): ключ — registry `property_id`;
+   *  значения уезжают на «Применить и закрыть» одним набором
+   *  `setPropertyDefaultOverride`. Живут рядом с `ownDraft` и переживают
+   *  перерисовку вкладки. */
+  const bindingDefaults = new Map<string, BindingDefaultDraft>();
+
+  /** Ленивый черновик дефолта привязки: `initial` фиксируется при первом
+   *  рендере поля и дальше не меняется — по нему считается diff при apply. */
+  function bindingDefaultDraft(
+    propertyId: string,
+    valueType: PropertyValueType,
+    initial: unknown,
+  ): BindingDefaultDraft {
+    let draftEntry = bindingDefaults.get(propertyId);
+    if (draftEntry === undefined) {
+      draftEntry = { propertyId, valueType, initial, value: initial };
+      bindingDefaults.set(propertyId, draftEntry);
+    }
+    return draftEntry;
   }
 
-  /** Opens the description-override dialog of an inherited property — the
-   *  description analogue of {@link showOverrideDialog}. */
+  /**
+   * Ячейка «По умолчанию» привязки (0.8.2, ADR «дефолт свойства живёт на
+   * привязке»): редактор значения без режимов — заполнено = дефолт этой
+   * привязки, пусто = общее значение стороны (подсказка в тултипе пустой
+   * ячейки). Значение копится в черновике и пишется на «Применить и закрыть»
+   * (`setPropertyDefaultOverride(значение | null)`); очистка поля снимает
+   * override. Общая для собственной и унаследованной таблиц.
+   */
+  function buildBindingDefaultCell(opts: {
+    propertyId: string;
+    valueType: PropertyValueType;
+    config: PropertyConfig | null;
+    /** Типы противоположной стороны привязок свойства-связи
+     *  (`allowed_opposite_type_ids` определения): допустимые цели
+     *  дефолт-пикера. Пусто — целей не ограничиваем. */
+    allowedOppositeTypeIds: readonly string[];
+    /** Дефолт привязки на сервере; `null` — его нет (общее стороны). */
+    initial: unknown;
+  }): HTMLElement {
+    const cell = div('prop-default-cell');
+    const draftEntry = bindingDefaultDraft(opts.propertyId, opts.valueType, opts.initial);
+    const write = async (next: unknown): Promise<boolean> => {
+      draftEntry.value = next;
+      render();
+      return true;
+    };
+    if (opts.valueType === 'link') {
+      const filterIds = linkAllowedTypeIds(opts.allowedOppositeTypeIds);
+      cell.append(
+        buildLinkValueEditor({
+          networkId,
+          // Отбор целей — по типам противоположной стороны привязки, тот же
+          // хелпер, что у поля значения в редакторе мысли (иерархию
+          // раскрывает сам редактор); пусто — цели любые.
+          definition: {
+            config: {},
+            required: false,
+            allowed_opposite_type_ids: filterIds,
+          },
+          values: defaultLinkValues(draftEntry.value),
+          save: (next) => write(next),
+        }),
+      );
+    } else {
+      cell.append(
+        buildValueEditor({
+          networkId,
+          definition: {
+            value_type: opts.valueType,
+            config: opts.config,
+            required: false,
+            default_value: null,
+          },
+          value: draftEntry.value ?? null,
+          save: (next) => write(next),
+        }),
+      );
+    }
+    if (isEmptyDefault(draftEntry.value)) cell.append(emptyDefaultHint());
+    return cell;
+  }
+
+  /** Opens the description-override dialog of an inherited property. */
   function showDescriptionOverrideDialog(def: EffectiveTypeProperty): void {
     openDescriptionOverrideDialog({
       networkId,
@@ -1247,12 +1638,13 @@ function buildStagedPropertySection(opts: {
     }
   }
 
-  /** Moves a draft row one slot up/down (the order is applied on save). */
+  /** Moves a draft row one slot up/down (the order is applied on save).
+   *  Порядок общий для всего типа — двигаются строки обеих сторон привязки
+   *  (задача b044237d). */
   function move(rowId: string, delta: -1 | 1): void {
-    const from = ownDraft.findIndex((d) => d.id === rowId);
-    const to = from + delta;
-    if (from < 0 || to < 0 || to >= ownDraft.length) return;
-    ownDraft.splice(to, 0, ...ownDraft.splice(from, 1));
+    const next = moveDraftRow(ownDraft, rowId, delta);
+    if (next === ownDraft) return;
+    ownDraft = [...next];
     draftTouched = true;
     render();
   }
@@ -1318,11 +1710,28 @@ function buildStagedPropertySection(opts: {
   function render(): void {
     tableWrap.replaceChildren();
 
+    // Заглушка несохранённого типа (задача e7352642): свойства и отборы
+    // недоступны, пока у типа нет id — «Типы источников»/«Типы назначений»
+    // для нового свойства не настроить, потому что создаваемого типа ещё нет
+    // в списках. Тот же подход, что на «Отборах» (уже было): единая
+    // разметка-заглушка с кнопкой «Сохранить» (зелёная, та же команда, что
+    // «Записать» в футере — пишет накопленный черновик без закрытия диалога,
+    // после чего обе вкладки оживают).
+    if (liveTypeId === null) {
+      tableWrap.append(
+        renderNewTypeHint({
+          message: 'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
+          onSave,
+        }),
+      );
+      return;
+    }
+
     if (inherited.length > 0) {
       const inhLabel = el(
         'p',
         'muted',
-        typeId === null
+        liveTypeId === null
           ? 'Унаследованные свойства (передадутся от выбранного родителя)'
           : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание; обязательность задаётся на типе, который подключил свойство)',
       );
@@ -1357,39 +1766,39 @@ function buildStagedPropertySection(opts: {
           ? `зеркало · ${def.defined_on_name}`
           : def.defined_on_name;
         row.append(el('td', 'muted', sourceLabel));
-        row.append(
-          el(
-            'td',
-            'muted',
-            formatDefault(def.default_value) +
-              (def.overridden_here ? ' ●' : '') +
-              (def.description_overridden ? ' ◆' : ''),
-          ),
-        );
+        // Колонка «По умолчанию» — редактор дефолта привязки (0.8.2): без
+        // режимов, заполнено/пусто; пусто = общее значение стороны. У
+        // зеркальной записи (mirrored) физической привязки нет — только
+        // показ эффективного значения.
+        const overridable = def.mirrored !== true;
+        const dvCell = el('td');
+        if (overridable) {
+          dvCell.append(
+            buildBindingDefaultCell({
+              propertyId: def.property_id,
+              valueType: def.value_type,
+              config: def.config,
+              allowedOppositeTypeIds: def.allowed_opposite_type_ids ?? [],
+              initial: def.overridden_here === true ? def.default_value ?? null : null,
+            }),
+          );
+        } else {
+          dvCell.append(el('span', 'muted', formatDefault(def.default_value)));
+        }
+        row.append(dvCell);
         const actions = el('td');
         actions.style.whiteSpace = 'nowrap';
-        // Override buttons exist only for an already-created type: the
-        // override row needs a server id to attach to. A mirrored link
-        // property (dde92461) has no physical binding to override at all —
-        // its nature lives in the source property's config. Own (non-mirror)
-        // link properties carry a target-set default (bb67e546).
-        const overridable = typeId !== null && def.mirrored !== true;
-        if (overridable) {
-          actions.append(
-            button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
-          );
-        }
-        if (typeId !== null && def.mirrored !== true) {
+        // Кнопка дефолта/«сбросить» убрана (0.8.2): значение правится прямо в
+        // колонке «По умолчанию», очистка поля снимает override — режимов нет.
+        // Override описания сохраняет свой маленький диалог (транзитивность
+        // описаний не менялась). Зеркальная запись (dde92461) не имеет
+        // физической привязки — переопределять нечего.
+        if (liveTypeId !== null && def.mirrored !== true) {
           actions.append(
             button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
           );
         }
-        if (typeId !== null && def.overridden_here) {
-          actions.append(
-            button('сбросить', () => void clearOverride(def), 'btn small', 'Сбросить переопределение'),
-          );
-        }
-        if (typeId !== null && def.description_overridden) {
+        if (liveTypeId !== null && def.description_overridden) {
           actions.append(
             button('сбросить ◆', () => void clearDescriptionOverride(def), 'btn small', 'Сбросить переопределение описания'),
           );
@@ -1442,12 +1851,26 @@ function buildStagedPropertySection(opts: {
       });
       requiredCell.append(requiredCheck);
       tr.append(requiredCell);
-      tr.append(el('td', 'muted', formatDefault(row.config?.default_value ?? null)));
+      // Колонка «По умолчанию» — тот же редактор без режимов (0.8.2):
+      // значение копится в черновике и уезжает на «Применить и закрыть» (для
+      // только что добавляемой привязки — после её создания).
+      const dvCell = el('td');
+      dvCell.append(
+        buildBindingDefaultCell({
+          propertyId: row.property_id,
+          valueType: row.value_type,
+          config: row.config,
+          allowedOppositeTypeIds: row.allowedOppositeTypeIds ?? [],
+          initial: row.defaultValue ?? null,
+        }),
+      );
+      tr.append(dvCell);
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
-      // Порядок (▲/▼) — в пределах стороны источника, как сейчас
-      // (требование 15b88319: «порядок — в пределах стороны источника»).
-      if (row.side !== 'target') {
+      // Порядок (▲/▼) — у всех строк таблицы, включая привязки стороны
+      // «назначение» (задача b044237d): порядок принадлежит типу, а не
+      // стороне свойства-связи.
+      if (canReorderBinding(row)) {
         actions.append(
           button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
           button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),
@@ -1485,25 +1908,6 @@ function buildStagedPropertySection(opts: {
     return row.side === 'source' ? lt.name_forward : lt.name_reverse;
   }
 
-  /** Подпись стороны для колонки «Сторона»: «источник» / «назначение» /
-   *  «—» (для скаляров и структурных). */
-  function sideLabel(side: DraftProperty['side']): string {
-    if (side === 'source') return 'источник';
-    if (side === 'target') return 'назначение';
-    return '—';
-  }
-
-  /** Drops the type's default-value override (back to the ancestor default). */
-  async function clearOverride(def: EffectiveTypeProperty): Promise<void> {
-    try {
-      await etn.types.setPropertyDefaultOverride(networkId, ownerType, typeId as string, def.id, null);
-      onOverrideApplied?.();
-      await reload();
-    } catch (err) {
-      errorDialog('Сбросить переопределение', err);
-    }
-  }
-
   /** Loads (or reloads) the bindings from the server, plus the registry
    *  snapshot the «✎» button uses to jump into the property manager. */
   let everMounted = false;
@@ -1512,7 +1916,7 @@ function buildStagedPropertySection(opts: {
     // while still detached and must proceed. Skip only bodies that were
     // mounted and then discarded (the dialog closed or a newer body took over).
     if (everMounted && !box.isConnected) return;
-    const sourceId = typeId ?? previewParentId();
+    const sourceId = liveTypeId ?? previewParentId();
     if (sourceId === null) {
       // No catalogue at all (mid-migration) — show the empty state rather
       // than a forever-«Загрузка…» placeholder.
@@ -1529,7 +1933,7 @@ function buildStagedPropertySection(opts: {
         etn.propertyRegistry.list(networkId),
       ]);
       registryCache = new Map(registryRows.map((row) => [row.id, row]));
-      if (typeId !== null) {
+      if (liveTypeId !== null) {
         // An existing type: own rows seed the draft (once), inherited shown.
         // Mirrored link properties (dde92461) are synthesized by the server —
         // they have no `type_properties` binding, so they must never seed the
@@ -1560,6 +1964,11 @@ function buildStagedPropertySection(opts: {
    * attaches/creates, then `set-role` patches, one trailing reorder.
    */
   async function applyChanges(targetId: string): Promise<boolean> {
+    // Задача e7352642: для только что созданного типа после первой записи
+    // `liveTypeId` ещё `null` (исходное значение), и `render()` показал бы
+    // заглушку. Присваиваем сразу — следующий `render()` увидит реальный id
+    // и нарисует живую таблицу свойств.
+    liveTypeId = targetId;
     const plan = planPropertyDiff(originalOwn, ownDraft, deletedIds);
     for (const op of plan.ops) {
       try {
@@ -1617,12 +2026,36 @@ function buildStagedPropertySection(opts: {
         return false;
       }
     }
+    // Дефолты привязок (0.8.2): пишутся после attach/reorder — сервер требует,
+    // чтобы свойство было привязано к типу (для только что добавленных строк
+    // это верно лишь сейчас). Пустое значение — сброс override.
+    const attachedPropertyIds = new Set<string>([
+      ...ownDraft.map((d) => d.property_id),
+      ...inherited.map((d) => d.property_id),
+    ]);
+    for (const write of collectBindingDefaultWrites([...bindingDefaults.values()], attachedPropertyIds)) {
+      try {
+        await etn.types.setPropertyDefaultOverride(
+          networkId,
+          ownerType,
+          targetId,
+          write.propertyId,
+          write.value,
+        );
+      } catch (err) {
+        errorLine.textContent = errText(err);
+        render();
+        return false;
+      }
+      const draftEntry = bindingDefaults.get(write.propertyId);
+      if (draftEntry !== undefined) draftEntry.initial = draftEntry.value;
+    }
     deletedIds = [];
     errorLine.textContent = '';
     render();
     // Refresh the inherited view too: reparenting on the same apply may have
     // changed what this type receives from its ancestors.
-    if (typeId !== null) void reload();
+    if (liveTypeId !== null) void reload();
     return true;
   }
 
@@ -1630,10 +2063,20 @@ function buildStagedPropertySection(opts: {
   return {
     root: box,
     refreshPreview: (): void => {
-      if (typeId === null) void reload();
+      if (liveTypeId === null) void reload();
     },
     applyChanges,
+    onSave,
   };
+}
+
+/** Подпись стороны привязки — колонка «Сторона» таблицы свойств типа и
+ *  списка «Добавить свойство»: «источник» / «назначение» / «—» (скаляры и
+ *  структурные строки). */
+export function sideLabel(side: LinkPropertySide | null): string {
+  if (side === 'source') return 'источник';
+  if (side === 'target') return 'назначение';
+  return '—';
 }
 
 /**
@@ -1654,25 +2097,21 @@ interface AttachDialogResult {
 }
 
 /**
- * «Добавить свойство» dialog (0.6.5, переработан по итогам приёмки — ошибка
- * «Диалог "Добавить свойство" в редакторе типа: непонятный интерфейс»).
+ * «Добавить свойство» dialog (0.6.5; задача 298fe6f3; 0.8.2 — перевод на общий
+ * список `lib/property-list.ts`, задача 6ebde54e).
  *
- * One pick list over the network property registry, one search box, two
- * bottom buttons:
- *   * **Выбрать** — attach the highlighted registry property (double-click on
- *     the row and Ctrl+Enter do the same). Properties the type already
- *     carries — own or inherited — stay VISIBLE but marked «подключено» /
- *     «унаследовано» and cannot be picked (the duplicate check up front; the
- *     server re-checks on attach);
- *   * **Добавить** — open the SHARED property editor (the exact dialog the
- *     property manager uses) to create a brand-new registry row; after
- *     «Записать и закрыть» the list refreshes and the fresh property is the
- *     highlighted row, ready to be picked. One editor everywhere — nothing
- *     is created inline any more.
+ * Список — общий компонент в режиме ПИКЕРА: строки скаляров и обеих сторон
+ * свойства-связи, колонки «Имя» / «Тип значения» / «Кол-во типов», поиск по
+ * имени и описанию, ↑/↓ и единая активация Enter/клик — выбор строки (у конца
+ * связи выбор несёт сторону) и закрытие пикера. Уже подключённые имена этой
+ * стороны заблокированы и помечены, второе имя той же связи остаётся доступным
+ * (правила 0.8.2, коммиты c896aee / 6e17543). Кнопки низа: **Отмена**,
+ * **Создать свойство** (общий редактор свойства — то же диалог, что у
+ * менеджера) и **Выбрать** (активирует выделенную строку).
  *
- * Attaching a property some DESCENDANT of the edited type already carries
- * asks first — naming the concrete types and what exactly happens (their own
- * bindings are taken over by inheritance; values never change).
+ * Привязка свойства, которое кто-то из ПОТОМКОВ типа уже несёт, спрашивает
+ * подтверждение заранее — с именами конкретных типов и тем, что именно
+ * произойдёт (их привязки перенимаются наследованием, значения не меняются).
  */
 async function openAttachDialog(opts: {
   networkId: string;
@@ -1687,17 +2126,15 @@ async function openAttachDialog(opts: {
   typeId: string | null;
   /** The edited type's display name for warning texts (null for a new type). */
   editedTypeName: string | null;
-  /** Property ids the type already carries (own bindings + this session's
-   *  staged rows) — shown as «подключено», not pickable. */
-  existingPropertyIds: ReadonlySet<string>;
+  /** Занятые стороны собственных привязок типа: property_id → стороны
+   *  (пустой набор — скалярное свойство). Блокирует повторный выбор того же
+   *  ИМЕНИ свойства-связи (имя однозначно определяет сторону). */
+  existingSides: ReadonlyMap<string, ReadonlySet<LinkPropertySide>>;
   /** Property ids inherited from the type's ancestors (or the picked parent's
    *  whole set for a new type) — shown as «унаследовано», not pickable. */
   inheritedPropertyIds: ReadonlySet<string>;
-  /** Side of the binding (`source`/`target`) for link-properties; `null`
-   *  for scalar properties or when the dialog is opened generically. */
-  side: 'source' | 'target' | null;
 }): Promise<AttachDialogResult | null> {
-  const { networkId, ownerType, types, typeId, editedTypeName, existingPropertyIds, inheritedPropertyIds, side } = opts;
+  const { networkId, ownerType, types, typeId, editedTypeName, existingSides, inheritedPropertyIds } = opts;
   let registryRows: RegistryRow[];
   try {
     registryRows = await etn.propertyRegistry.list(networkId);
@@ -1705,137 +2142,35 @@ async function openAttachDialog(opts: {
     errorDialog('Добавить свойство', err);
     return null;
   }
+  // Имена сторон берутся из каталога типов связей — догружаем недостающие,
+  // пока диалог ещё не открыт (общий загрузчик списка свойств).
+  await ensurePropertyLinkTypes(networkId, registryRows);
 
   return new Promise((resolve) => {
-    const searchInput = el('input', 'text-input') as HTMLInputElement;
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Поиск по имени или описанию…';
+    const errorLine = span('', 'error-text');
 
-    const resultsWrap = div('admin-table-wrap');
-    resultsWrap.style.maxHeight = '260px';
-
-    /** The highlighted registry row (a PICKABLE one), or null. */
-    let selected: RegistryRow | null = null;
-
-    /** Why a row cannot be picked, or null when it can. */
-    const blockReason = (row: RegistryRow): string | null =>
-      existingPropertyIds.has(row.id)
-        ? 'подключено'
-        : inheritedPropertyIds.has(row.id)
-          ? 'унаследовано'
-          : null;
-
-    /** The registry rows matching the current search query, alphabetical. */
-    const visibleRows = (): RegistryRow[] => {
-      const fragments = searchInput.value
-        .trim()
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((s) => s.length > 0);
-      return registryRows
-        .filter((row) => {
-          const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
-          return fragments.every((f) => haystack.includes(f));
-        })
-        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    };
-
-    const pickableRows = (): RegistryRow[] =>
-      visibleRows().filter((row) => blockReason(row) === null);
-
-    /** Moves the `.selected` row class to the current `selected` row (no list
-     *  rebuild — a click or an arrow key must not flicker the whole table)
-     *  and scrolls it into view. */
-    function applySelection(): void {
-      const selectedId = selected?.id ?? null;
-      for (const tr of resultsWrap.querySelectorAll<HTMLTableRowElement>('tbody tr')) {
-        tr.classList.toggle('selected', tr.dataset['propId'] === selectedId);
-      }
-      resultsWrap
-        .querySelector<HTMLTableRowElement>('tr.selected')
-        ?.scrollIntoView({ block: 'nearest' });
-    }
-
-    /** Re-renders the result list. `preferId` forces the highlight onto that
-     *  row (after the shared editor created it); otherwise the CURRENT
-     *  selection survives when still visible and pickable, and falls back to
-     *  the first pickable row (never null when one exists — «Выбрать» and
-     *  Ctrl+Enter always have a target). */
-    function rerenderResults(preferId?: string): void {
-      const filtered = visibleRows();
-      const isSelectable = (row: RegistryRow): boolean =>
-        blockReason(row) === null && filtered.some((r) => r.id === row.id);
-      if (preferId !== undefined) {
-        const preferred = filtered.find((r) => r.id === preferId);
-        selected = preferred !== undefined && blockReason(preferred) === null ? preferred : null;
-      }
-      if (selected === null || !isSelectable(selected)) {
-        selected = filtered.find((r) => blockReason(r) === null) ?? null;
-      }
-
-      if (filtered.length === 0) {
-        resultsWrap.replaceChildren(el('p', 'muted', 'Ничего не найдено.'));
-        return;
-      }
-      const table = el('table', 'table-list');
-      const tbody = el('tbody');
-      for (const row of filtered) {
-        const blocked = blockReason(row);
-        const tr = el('tr');
-        tr.dataset['propId'] = row.id;
-        if (blocked !== null) tr.classList.add('row-disabled');
-        const nameCell = el('td', undefined, row.name);
-        nameCell.style.whiteSpace = 'nowrap';
-        if (row.description !== null) setTooltip(nameCell, row.description);
-        const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]);
-        const countCell = el('td', 'muted', `в ${row.types_count} типах`);
-        countCell.style.textAlign = 'right';
-        const markCell = el('td', 'muted', blocked ?? '');
-        markCell.style.whiteSpace = 'nowrap';
-        tr.append(nameCell, typeCell, markCell, countCell);
-        if (blocked === null) {
-          tr.addEventListener('click', () => {
-            selected = row;
-            applySelection();
-          });
-          tr.addEventListener('dblclick', () => {
-            selected = row;
-            void choose();
-          });
-        } else {
-          setTooltip(tr, blocked === 'подключено'
-            ? 'Свойство уже подключено к этому типу'
-            : 'Свойство уже наследуется этим типом от предка');
-        }
-        tbody.append(tr);
-      }
-      table.append(tbody);
-      resultsWrap.replaceChildren(table);
-      applySelection();
-    }
-
-    searchInput.addEventListener('input', () => rerenderResults());
-    // Keyboard: ↑/↓ moves the highlight over pickable rows. Ctrl+Enter is
-    // the dialog stack's built-in «click the primary button» — «Выбрать».
-    searchInput.addEventListener('keydown', (event) => {
-      const rows = pickableRows();
-      if (rows.length === 0) return;
-      const at = rows.findIndex((r) => r.id === selected?.id);
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        selected = rows[Math.min(rows.length - 1, at + 1)] ?? rows[0]!;
-        applySelection();
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        selected = rows[Math.max(0, at - 1)] ?? rows[0]!;
-        applySelection();
-      }
+    /** Строки каталога по текущему снимку каталога типов связей. */
+    const list = buildPropertyList({
+      mode: 'picker',
+      searchPlaceholder: 'Поиск по имени или описанию…',
+      callbacks: {
+        rowBlocked: (row) => rowBlockReason(row, existingSides, inheritedPropertyIds),
+        onActivate: (row) => void choose(row),
+        onEdit: (row) =>
+          openPropertyManagerEditor(
+            row.registry,
+            () => void refreshRegistry(null),
+            (created) => void refreshRegistry(created.id),
+          ),
+      },
     });
+    list.setRows(buildPropertyListRows(registryRows, store.state.linkTypes));
 
-    /** Resolves the dialog with the highlighted pickable row. */
-    async function choose(): Promise<void> {
-      if (selected === null) return;
-      const warning = await warnDescendantBindings(networkId, selected, {
+    /** Активация строки: подтверждение перенимаемых привязок потомков, затем
+     *  возврат черновика привязки — выбранное имя задаёт сторону. */
+    async function choose(row: PropertyListRow): Promise<void> {
+      errorLine.textContent = '';
+      const warning = await warnDescendantBindings(networkId, row.registry, {
         ownerType,
         types,
         typeId,
@@ -1846,39 +2181,47 @@ async function openAttachDialog(opts: {
         if (!ok) return;
       }
       close();
-      resolve({ draft: attachDraftFromExisting(selected, side), registry: selected });
+      resolve({
+        draft: attachDraftFromExisting(row.registry, row.side, row.name),
+        registry: row.registry,
+      });
     }
 
-    const body = div('form-stack');
-    body.append(searchInput, resultsWrap);
-    rerenderResults();
-
-    /** Re-fetches the registry (after the shared editor created a row) and
-     *  re-renders, highlighting `highlightId` when present. */
-    const refreshRegistry = async (highlightId: string | null): Promise<void> => {
+    /** Перечитывает реестр (после того как общий редактор создал свойство) и
+     *  перерисовывает список, выделяя строку созданного свойства. */
+    async function refreshRegistry(highlightPropertyId: string | null): Promise<void> {
       try {
         registryRows = await etn.propertyRegistry.list(networkId);
       } catch {
-        /* keep the stale list — the editor already reported its own error */
+        /* оставляем старый список — редактор уже отчитался об ошибке */
       }
-      if (highlightId !== null) rerenderResults(highlightId);
-      else rerenderResults();
-    };
+      await ensurePropertyLinkTypes(networkId, registryRows);
+      list.setRows(buildPropertyListRows(registryRows, store.state.linkTypes));
+      if (highlightPropertyId !== null) {
+        // Новое свойство-связь даёт строку источника (`:source`); скаляр —
+        // строку с самим id. Оба вызова безвредны: отсутствующей строки нет.
+        list.selectRow(`${highlightPropertyId}:source`);
+        list.selectRow(highlightPropertyId);
+      }
+    }
+
+    const body = div('form-stack');
+    body.append(list.root, errorLine);
 
     const close = showDialog({
       title: 'Добавить свойство',
       body,
-      width: 560,
+      width: 760,
       buttons: [
         { label: 'Отмена' },
         {
-          label: 'Добавить…',
+          label: 'Создать свойство',
           keepOpen: true,
           onClick: () => {
             openPropertyManagerEditor(
               null,
               () => void refreshRegistry(null),
-              // Highlight the fresh row so one more Enter/«Выбрать» attaches it.
+              // Выделяем свежую строку, чтобы ещё одно Enter/«Выбрать» её подключило.
               (created) => void refreshRegistry(created.id),
             );
           },
@@ -1887,25 +2230,36 @@ async function openAttachDialog(opts: {
           label: 'Выбрать',
           primary: true,
           keepOpen: true,
-          onClick: () => void choose(),
+          onClick: () => {
+            const row = list.selected();
+            if (row !== null) void choose(row);
+          },
         },
       ],
-      onMount: () => searchInput.focus(),
+      onMount: () => list.focusSearch(),
     });
   });
 }
 
 /** Builds the draft row for «attach existing» — `property_id` set, nature
- *  snapshot copied from the registry row. `side` — выбранная сторона
- *  (`source`/`target`) для свойств-связей; `null` для скаляров. */
-function attachDraftFromExisting(row: RegistryRow, side: 'source' | 'target' | null): DraftProperty {
+ *  snapshot copied from the registry row. `side` — сторона привязки
+ *  (`source`/`target`), заданная выбранным ИМЕНЕМ строки списка (задача
+ *  298fe6f3); `null` для скаляров. `name` — имя выбранной строки (у
+ *  свойства-связи — имя стороны): попадает в снимок `key`, чтобы строка
+ *  таблицы верно называлась, даже если каталог типов связей ещё не догружен.
+ *  Экспортирована для юнит-теста. */
+export function attachDraftFromExisting(
+  row: RegistryRow,
+  side: LinkPropertySide | null,
+  name?: string,
+): DraftProperty {
   return {
     id: nextDraftPropertyId(),
     isNew: true,
     property_id: row.id,
     side,
     required: false,
-    key: row.name,
+    key: name ?? row.name,
     value_type: row.value_type,
     config: row.config,
     description: row.description,
@@ -1985,174 +2339,78 @@ function formatDefault(value: unknown): string {
 }
 
 /**
- * Builds an input for a "default value" field matching a value type, reading
- * its current value into `read()`. Link defaults are the unified target-set
- * chip field (bb67e546, инструкция a47947c8) — `linkContext` supplies the
- * network + definition it filters by. Thought-ref defaults are not supported —
- * a default target makes no sense across thoughts. Shared with the inherited
- * default-override dialog (L21).
+ * Тело `setPropertyDefaultOverride` для колонки «По умолчанию» привязки
+ * (0.8.2, ADR «дефолт свойства живёт на привязке»): свойство-связь — набор id
+ * целей (`string[]`), скаляр — значение по виду свойства; пусто — `null`
+ * (override снимается, действует общее значение стороны). Чистая — юнит-тест
+ * (`type-manager-default.test.ts`).
  */
-function defaultInputFor(
+export function bindingDefaultPayload(
   valueType: PropertyValueType,
-  current: unknown,
-  read: (value: unknown) => void,
-  linkContext?: { networkId: string; def: EffectiveTypeProperty },
-): HTMLElement {
-  switch (valueType) {
-    case 'text':
-    case 'url': {
-      const input = el('input', 'text-input');
-      input.type = 'text';
-      input.value = typeof current === 'string' ? current : '';
-      input.placeholder = valueType === 'url' ? 'https://… или путь к файлу' : 'текст по умолчанию';
-      input.addEventListener('change', () => read(input.value.trim() === '' ? null : input.value.trim()));
-      return input;
-    }
-    case 'number': {
-      const input = el('input', 'text-input');
-      input.type = 'number';
-      input.value = typeof current === 'number' ? String(current) : '';
-      input.addEventListener('change', () => {
-        read(input.value === '' ? null : Number(input.value));
-      });
-      return input;
-    }
-    case 'date': {
-      const input = el('input', 'text-input');
-      input.type = 'date';
-      input.value = typeof current === 'string' ? current : '';
-      input.addEventListener('change', () => read(input.value === '' ? null : input.value));
-      return input;
-    }
-    case 'bool': {
-      const input = el('input');
-      input.type = 'checkbox';
-      input.checked = current === true;
-      input.addEventListener('change', () => read(input.checked));
-      return input;
-    }
-    case 'link': {
-      // Дефолт свойства-связи — набор целей (bb67e546): унифицированное
-      // чип-поле из редактора свойств (инструкция a47947c8) — живой поиск,
-      // мини-облачка, пикер «выбрать». Каждый чип-набор сразу читается в
-      // `value`, «Применить» отправляет его на сервер.
-      if (linkContext === undefined) return span('не задаётся', 'muted');
-      const ids = Array.isArray(current) ? (current as string[]) : [];
-      return buildLinkValueEditor({
-        networkId: linkContext.networkId,
-        definition: linkContext.def,
-        values: ids.map((target_id) => ({
-          link_id: '',
-          target_id,
-          target_title: null,
-          target_type_id: null,
-          comment: null,
-        })),
-        save: async (next) => {
-          read(next);
-          return true;
-        },
-      });
-    }
-    case 'thought_ref':
-      // Legacy (миграция 040): создание свойств этого типа отвергается
-      // рантайм-guard'ом; редактор default-значения недостижим.
-      return span('упразднено', 'muted');
-  }
+  value: unknown,
+): string | number | boolean | string[] | null {
+  return valueType === 'link' ? linkDefaultPayload(value) : scalarDefaultPayload(value);
 }
 
 /**
- * The default-value override dialog (L21): sets the effective default of an
- * inherited property for this type, or resets the override.
+ * Черновик дефолта одной привязки в редакторе типа (0.8.2): вкладка
+ * «Свойства» ничего не пишет на сервер до «Применить и закрыть», поэтому
+ * значение колонки «По умолчанию» копится здесь и уезжает одной пачкой
+ * `setPropertyDefaultOverride`.
  */
-function openDefaultOverrideDialog(opts: {
-  networkId: string;
-  ownerType: TypeOwnerType;
-  typeId: string;
-  def: EffectiveTypeProperty;
-  onDone: () => void;
-}): void {
-  const { networkId, ownerType, typeId, def, onDone } = opts;
-  const errorLine = span('', 'error-text');
-  let value: unknown = def.default_value;
-  const defaultHost = div('form-row');
-  const renderDefault = (): void => {
-    defaultHost.replaceChildren(
-      defaultInputFor(def.value_type, value, (v) => {
-        value = v;
-      }, { networkId, def }),
-    );
-  };
-  renderDefault();
+export interface BindingDefaultDraft {
+  /** Registry `property_id` привязки — сервер принимает его наравне с id
+   *  самой привязки (`type_properties.id`). */
+  propertyId: string;
+  valueType: PropertyValueType;
+  /** Снимок дефолта привязки на момент открытия редактора (для diff). */
+  initial: unknown;
+  /** Текущее значение поля «По умолчанию»; `null` — пусто (общее стороны). */
+  value: unknown;
+}
 
-  const body = div('form-stack');
-  const hint = el(
-    'p',
-    'muted',
-    `Свойство «${def.key}» наследуется от типа «${def.defined_on_name}». ` +
-      'Здесь задаётся значение по умолчанию только для этого типа.',
-  );
-  hint.style.margin = '0';
-  body.append(hint, defaultHost, errorLine);
+/** Запись дефолта привязки, уезжающая на «Применить и закрыть». */
+export interface BindingDefaultWrite {
+  propertyId: string;
+  /** Тело `setPropertyDefaultOverride`: значение или `null` (сброс override). */
+  value: string | number | boolean | string[] | null;
+}
 
-  /** Applies the override (or clears it when the field is empty). */
-  async function apply(close: () => void): Promise<void> {
-    try {
-      await etn.types.setPropertyDefaultOverride(
-        networkId,
-        ownerType,
-        typeId,
-        def.id,
-        (value ?? null) as string | number | boolean | string[] | null,
-      );
-      onDone();
-      close();
-    } catch (err) {
-      errorLine.textContent = errText(err);
-    }
+/**
+ * Отбирает дефолты привязок, которые надо записать на «Применить и закрыть»
+ * (0.8.2): только реально изменившиеся, и только для привязок, которые сейчас
+ * есть в таблицах вкладки (`attached` — registry `property_id` собственных и
+ * унаследованных строк). Пустое значение (`null`) — сброс override, при
+ * создании мысли тогда действует общее значение стороны. Чистая — юнит-тест
+ * (`type-manager-default.test.ts`).
+ */
+export function collectBindingDefaultWrites(
+  drafts: readonly BindingDefaultDraft[],
+  attached: ReadonlySet<string>,
+): BindingDefaultWrite[] {
+  const writes: BindingDefaultWrite[] = [];
+  for (const draftEntry of drafts) {
+    if (!attached.has(draftEntry.propertyId)) continue;
+    const next = bindingDefaultPayload(draftEntry.valueType, draftEntry.value);
+    const before = bindingDefaultPayload(draftEntry.valueType, draftEntry.initial);
+    if (sameDefaultPayload(next, before)) continue;
+    writes.push({ propertyId: draftEntry.propertyId, value: next });
   }
+  return writes;
+}
 
-  showDialog({
-    title: `Значение по умолчанию — «${def.key}»`,
-    body,
-    width: 460,
-    buttons: [
-      { label: 'Отменить' },
-      ...(def.overridden_here
-        ? [
-            {
-              label: 'Сбросить переопределение',
-              keepOpen: true,
-              onClick: (close: () => void): void => {
-                void (async () => {
-                  try {
-                    await etn.types.setPropertyDefaultOverride(
-                      networkId,
-                      ownerType,
-                      typeId,
-                      def.id,
-                      null,
-                    );
-                    onDone();
-                    close();
-                  } catch (err) {
-                    errorLine.textContent = errText(err);
-                  }
-                })();
-              },
-            } satisfies DialogButton,
-          ]
-        : []),
-      { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
-    ],
-  });
+/** Одинаковы ли два тела `setPropertyDefaultOverride` (порядок набора целей
+ *  значим — как его отдаёт редактор чипов). */
+function sameDefaultPayload(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 /**
  * The description-override dialog (task «Добавить описание (description) к
- * определениям свойств типов»): the description analogue of {@link
- * openDefaultOverrideDialog} — sets the effective description of an inherited
+ * определениям свойств типов»): sets the effective description of an inherited
  * property for this type, or resets the override. Empty field = no override.
+ * Дефолт значения такой диалог больше не имеет (0.8.2): он правится прямо в
+ * колонке «По умолчанию» вкладки «Свойства».
  */
 function openDescriptionOverrideDialog(opts: {
   networkId: string;
@@ -2260,3 +2518,57 @@ function buildMetadataRowsFromLinkType(type: LinkType): HTMLElement {
   };
   return buildMetadataRows(fields);
 }
+
+// ---------------------------------------------------------------------------
+// Reparent confirmation (задача 8ea1ab6a, 0.8.2)
+//
+// Смена parent_id у используемого типа мысли проходит через двухшаговый
+// сценарий: первый PATCH → 422 с details.kind = 'reparent_impact' и
+// thoughts_count; UI показывает таблицу последствий и просит подтвердить;
+// повторный PATCH с confirmed=true применяет правку. Ниже — узкие помощники:
+// type guard на структуру details и сама модалка подтверждения. Импорт
+// находится в шапке файла, чтобы не тянуть confirmDialog во все вложенные
+// области.
+// ---------------------------------------------------------------------------
+
+/** Структура details, возвращаемых сервером при 422 reparent_impact. */
+export interface ReparentImpactDetails {
+  kind: 'reparent_impact';
+  affected_type_ids: string[];
+  /** Число живых мыслей, у которых поменяется эффективный набор свойств. */
+  thoughts_count: number;
+  requires_confirmation: true;
+}
+
+/**
+ * Type guard для 422, требующего подтверждения смены родителя. Сервер
+ * присылает `details.kind === 'reparent_impact'` и `requires_confirmation:
+ * true`; см. задачу 8ea1ab6а (0.8.2).
+ */
+export function isReparentImpact(details: unknown): details is ReparentImpactDetails {
+  if (typeof details !== 'object' || details === null) return false;
+  const d = details as Record<string, unknown>;
+  return d.kind === 'reparent_impact' && d.requires_confirmation === true;
+}
+
+/**
+ * Диалог подтверждения смены родителя у типа мысли. Контракт — `confirmDialog`
+ * из `lib/dialog.ts`: `true` — пользователь подтвердил, `false` — отменил
+ * (Esc, ×, кнопка «Отмена»). Текст строится по правилам задачи: без
+ * вопросов о визуале, по существу — что именно поменяется у живых мыслей
+ * и каков риск висячих override'ов.
+ */
+export async function confirmReparentImpactDialog(
+  _currentParentId: string | null,
+  thoughtsCount: number,
+): Promise<boolean> {
+  const noun = thoughtsCount === 1 ? 'мысли' : thoughtsCount < 5 ? 'мыслей' : 'мыслей';
+  const verb = thoughtsCount === 1 ? 'изменится' : 'изменится';
+  const message =
+    `Смена родителя повлияет на ${thoughtsCount} ${noun}: у ${thoughtsCount === 1 ? 'неё' : 'них'} ` +
+    `изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения ` +
+    `дефолтов и описаний могут стать висячими — значения сохранятся как «вне типа» и будут ` +
+    `видны только на чтение. Продолжить?`;
+  return confirmDialog('Смена родителя типа мысли', message);
+}
+

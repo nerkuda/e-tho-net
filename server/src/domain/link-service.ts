@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  type FocusEdge,
   type IconKind,
   type Link,
   type LinkCreateInput,
@@ -241,12 +242,17 @@ export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
  * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы возвращаемых рёбер
  * (типы с потомками + опционально структурные) — фокус-ответ с фильтром не
  * должен рисовать линии, которые обход отфильтровал.
+ *
+ * `showTrash` (задача 77923b49, 0.8.2): `false` прячет рёбра, помеченные на
+ * удаление, — настройка сети «Показывать содержимое корзины». По умолчанию
+ * `true` (пометка видна, как после 355319d4).
  */
 export function getEdgesAmong(
   ndb: NetworkDb,
   ids: string[],
   showInactive: boolean,
   linkFilter?: LinkTypeFilterInput,
+  showTrash = true,
 ): Link[] {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
@@ -257,10 +263,39 @@ export function getEdgesAmong(
     .prepare(
       `SELECT l.* FROM links_v l
        WHERE l.source_id IN (${placeholders}) AND l.target_id IN (${placeholders})
-         AND (l.active = 1 OR ?)${typeSql}`,
+         AND (l.active = 1 OR ?) AND (l.marked_for_deletion = 0 OR ?)${typeSql}`,
     )
-    .all(...ids, ...ids, showInactive ? 1 : 0, ...typeParams) as LinkRow[];
+    .all(
+      ...ids,
+      ...ids,
+      showInactive ? 1 : 0,
+      showTrash ? 1 : 0,
+      ...typeParams,
+    ) as LinkRow[];
   return rows.map(rowToLink);
+}
+
+/**
+ * Project a link onto the {@link FocusEdge} DTO — the shape carried by
+ * `focus.edges` (03-server-api.md §6.2) and `POST /thoughts/edges`
+ * (§6.12). Single place for the projection so the two responses can never
+ * drift apart: the trash flag (`link_marked_for_deletion`, ошибка 355319d4)
+ * was added here once and reaches both call sites.
+ */
+export function toFocusEdge(l: Link): FocusEdge {
+  return {
+    id: l.id,
+    source_id: l.source_id,
+    target_id: l.target_id,
+    type_id: l.type_id,
+    // Trash flag: the edge is still drawn, but marked (dimmed/dashed + trash
+    // badge), never hidden — symmetry with a marked thought.
+    link_marked_for_deletion: l.marked_for_deletion,
+    // Per-link line-style override (null = inherit from the type); 08-ui-spec.md §6.9.
+    color: l.color,
+    style: l.style,
+    width: l.width,
+  };
 }
 
 /**
@@ -271,11 +306,18 @@ export function getEdgesAmong(
  * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы учитываемых рёбер —
  * с фильтром эллипсы показывают раскрываемость по тем же типам, по которым
  * ходит обход.
+ *
+ * `showTrash` (задача 77923b49, ошибка 331ffb94, 0.8.2): `false` — настройка
+ * сети «Показывать содержимое корзины» выключена, и эллипс обязан обещать
+ * ровно тот уровень, который отдаст раскрытие. Поэтому не считаются ни рёбра
+ * с `marked_for_deletion`, ни рёбра, ведущие в помеченную на удаление мысль
+ * (узел дерева/фокус её не покажет). По умолчанию `true` — прежнее поведение.
  */
 export function getLinkDirections(
   ndb: NetworkDb,
   ids: string[],
   linkFilter?: LinkTypeFilterInput,
+  showTrash = true,
 ): Map<string, { has_in: boolean; has_out: boolean }> {
   const result = new Map<string, { has_in: boolean; has_out: boolean }>();
   if (ids.length === 0) return result;
@@ -284,12 +326,25 @@ export function getLinkDirections(
   const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
   const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
   const typeParams = typeClause === null ? [] : typeClause.params;
+  // Скрытая корзина прячет и помеченный сосед по ребру: узел не попадёт в
+  // выдачу (`getHierarchy`/`getNeighbors` фильтруют мысль тем же флагом), а
+  // эллипс без этого условия остался бы заполненным — «обещание» пустой ветви.
+  const trashSql = showTrash
+    ? ''
+    : ` AND NOT EXISTS (SELECT 1 FROM thoughts_v tv WHERE tv.marked_for_deletion = 1
+         AND (tv.id = l.source_id OR tv.id = l.target_id))`;
   const rows = ndb
     .prepare(
       `SELECT l.source_id, l.target_id FROM links_v l WHERE l.active = 1
-         AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}`,
+         AND (l.marked_for_deletion = 0 OR ?)
+         AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}${trashSql}`,
     )
-    .all(...ids, ...ids, ...typeParams) as Array<{ source_id: string; target_id: string }>;
+    .all(
+      showTrash ? 1 : 0,
+      ...ids,
+      ...ids,
+      ...typeParams,
+    ) as Array<{ source_id: string; target_id: string }>;
   for (const row of rows) {
     const src = result.get(row.source_id);
     if (src !== undefined) src.has_out = true;
@@ -744,6 +799,8 @@ export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number |
 export interface ListLinksOptions {
   /** Include inactive links/thoughts when true (preferences.show_inactive). */
   showInactive?: boolean;
+  /** Include trashed (marked-for-deletion) links/thoughts when true (77923b49). */
+  showTrash?: boolean;
 }
 
 /**
@@ -752,7 +809,8 @@ export interface ListLinksOptions {
  * carrying the opponent thought as `target_thought`), untyped links split into
  * `untyped_parents` (opponent is the source) and `untyped_children` (opponent
  * is the target). Inactive links and thoughts are filtered out unless
- * `opts.showInactive` is set.
+ * `opts.showInactive` is set; trashed (marked-for-deletion) links and thoughts
+ * are filtered out unless `opts.showTrash` is set (77923b49).
  *
  * `type_name` is the link type's `name_forward` (source → target) label; the
  * editor can flip it for the reverse side if needed.
@@ -763,6 +821,7 @@ export function listLinksByThought(
   opts: ListLinksOptions = {},
 ): ThoughtLinksGrouped {
   const showInactive = opts.showInactive === true ? 1 : 0;
+  const showTrash = opts.showTrash !== false ? 1 : 0;
   const rows = ndb
     .prepare(
       `SELECT l.id, l.source_id, l.target_id, l.type_id, l.color, l.style, l.width,
@@ -786,7 +845,9 @@ export function listLinksByThought(
        JOIN thoughts_v t ON t.id = (CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END)
        WHERE (l.source_id = ? OR l.target_id = ?)
          AND (l.active = 1 OR ?)
-         AND (t.active = 1 OR ?)`,
+         AND (t.active = 1 OR ?)
+         AND (l.marked_for_deletion = 0 OR ?)
+         AND (t.marked_for_deletion = 0 OR ?)`,
     )
     .all(
       thoughtId,
@@ -796,6 +857,8 @@ export function listLinksByThought(
       thoughtId,
       showInactive,
       showInactive,
+      showTrash,
+      showTrash,
     ) as IncidentLinkRow[];
 
   const byType = new Map<

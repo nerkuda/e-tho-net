@@ -24,7 +24,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { BASE_LAYER_ID } from '@etn/shared';
 
 import { runMigrations } from '../src/db/migrator.js';
-import { createInMemoryNetworkDb, type NetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
+import { createInMemoryNetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import { createComment } from '../src/domain/comment-service.js';
 import { createLink, deleteLink, checkLinkDeletion } from '../src/domain/link-service.js';
@@ -286,6 +286,7 @@ describe(
           '040_thought_ref_to_link_properties.sql',
           '041_type_property_side.sql',
           '042_unified_property_link_registry.sql',
+          '043_type_properties_canonical_unique.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

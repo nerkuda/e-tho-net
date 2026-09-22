@@ -30,10 +30,13 @@ import { before, describe, it } from 'node:test';
 
 import type {
   EffectiveTypeProperty,
+  LinkType,
   NetworkProperty,
   PropertyValueType,
   ThoughtType,
 } from '@etn/shared';
+
+import { withReverseLinkPropertySides } from '../src/renderer/lib/filter-builder.js';
 
 import { store } from '../src/renderer/state.js';
 
@@ -646,9 +649,11 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const wire = module.buildWireDefinition(state, registry);
     assert.deepEqual(wire.created_by, ['u1', 'u2']);
     assert.equal(wire.created_by_op, 'in');
-    // not_empty emits nothing for updated_by, but the op hint is also omitted.
+    // `not_empty` не несёт значения, но ОПЕРАТОР обязан доехать до запроса —
+    // иначе выбранное «заполнено» молча терялось (дефект, найденный тестом
+    // единого конвертера, задача 3742dd59).
     assert.equal(wire.updated_by, undefined);
-    assert.equal(wire.updated_by_op, undefined);
+    assert.equal(wire.updated_by_op, 'not_empty');
   });
 
   it('wire format: date bounds are trimmed and emitted only when non-empty', () => {
@@ -811,5 +816,86 @@ describe('единый редактор значения условия — ко
     assert.equal(module.filterComboOptions(options, 'нет совпадений').length, 0);
     // Пустой запрос — весь список без фильтрации (полное открытие меню).
     assert.equal(module.filterComboOptions(options, '   ').length, 2);
+  });
+
+  // Задача df992826 (доработка по замечаниям приёмки): список имён условий
+  // строится из ВСЕГО реестра свойств, и каждая связь реестра даёт ОБЕ
+  // стороны — прямую (прежняя запись по registry id) и обратную
+  // (синтетическая запись с ЧИСТЫМ именем, без служебного суффикса).
+  // Хелпер живёт в общем конструкторе (`lib/filter-builder.ts`), а не в модуле
+  // экрана: у него два потребителя (диалог отбора типа и панель «Структур»).
+  it('реестр условий даёт обе стороны каждой связи реестра с чистым именем (задача df992826)', () => {
+    const linkTypes = [
+      { id: 'lt-1', name_forward: 'организации категории', name_reverse: 'категория организации' },
+      { id: 'lt-2', name_forward: 'работники/контакты', name_reverse: 'место работы' },
+    ] as unknown as LinkType[];
+    const registry = new Map<string, NetworkProperty>([
+      [
+        'p-link',
+        {
+          id: 'p-link',
+          name: 'организации категории',
+          value_type: 'link',
+          config: { link_type_id: 'lt-1' },
+          description: null,
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        },
+      ],
+      [
+        'p-jobs',
+        {
+          id: 'p-jobs',
+          name: 'работники/контакты',
+          value_type: 'link',
+          config: { link_type_id: 'lt-2' },
+          description: null,
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        },
+      ],
+    ]);
+
+    const withSides = withReverseLinkPropertySides(registry, linkTypes);
+    const names = [...withSides.values()].map((p) => p.name);
+
+    // Прямые стороны остались прежними записями по registry id.
+    assert.equal(withSides.get('p-link')?.name, 'организации категории');
+    assert.equal(withSides.get('p-jobs')?.name, 'работники/контакты');
+
+    // Обратная сторона добавлена по ИМЕНИ (сервер резолвит сторону по имени
+    // и берёт направление рёбер из него) и носит ЧИСТОЕ имя свойства —
+    // служебного суффикса «· обратная сторона» больше нет.
+    const reverse = withSides.get('категория организации');
+    assert.ok(reverse, 'обратная сторона связи добавлена');
+    assert.equal(reverse!.name, 'категория организации', 'имя обратной стороны — чистое имя свойства');
+    assert.equal(reverse!.value_type, 'link');
+
+    // Связь, НЕ входящая ни в какую цепочку типа, тоже даёт обратную сторону
+    // (замечание приёмки: «место работы» не появлялось, хотя «работники/контакты»
+    // было видно).
+    assert.ok(names.includes('место работы'), 'обратная сторона чужой связи присутствует');
+    assert.ok(names.includes('работники/контакты'), 'прямая сторона чужой связи присутствует');
+
+    // Входной реестр не мутируется.
+    assert.equal(registry.size, 2);
+  });
+
+  it('skips structural link properties when adding the reverse side (задача df992826)', () => {
+    const structural = {
+      id: 'p-children',
+      name: 'Потомки',
+      value_type: 'link',
+      config: { structural: true, direction: 'out' },
+      description: null,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    } as unknown as NetworkProperty;
+    const registry = new Map<string, NetworkProperty>([[structural.id, structural]]);
+    const linkTypes = [
+      { id: 'lt-1', name_forward: 'родители', name_reverse: 'потомки' },
+    ] as unknown as LinkType[];
+    const withSides = withReverseLinkPropertySides(registry, linkTypes);
+    assert.equal(withSides.size, 1, 'структурные «Потомки» не порождают обратную сторону');
   });
 });

@@ -18,6 +18,7 @@ import {
   STRUCTURES_PAGE_SIZE,
   UI_STATE_KEY,
   type FocusEdge,
+  type HierarchyResponse,
   type StructureFilter,
   type StructurePropertyCondition,
   type ThoughtRef,
@@ -25,11 +26,12 @@ import {
 
 import {
   applyCanvasScaleVars,
-  applyCloudStyle,
-  applyThoughtIcon,
   queueIndicatorLoad,
-  resolveCloudStyle,
 } from '../../canvas/canvas.js';
+// Облачка дерева собирает общая фабрика (профиль `tree`): значок, цвета,
+// начертание, бледность и метка корзины; эллипсы и индикаторы дерево
+// добавляет само (домен структур — те же, что на холсте).
+import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { setFocus } from '../../app.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
@@ -62,7 +64,6 @@ import {
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
 import { openFilterCommandsMenu } from './commands.js';
 import {
-  applyPanelWidth,
   buildConditions,
   buildExtraFilter,
   buildKeywordScope,
@@ -72,15 +73,17 @@ import {
   getFilterState,
   mountFilterPanel,
   setFilterState,
-  setPanelWidth,
   type FilterState,
 } from './filter-panel.js';
+import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
 
 let host: HTMLElement | null = null;
+/** Рукоятка общего каркаса панели отбора (скрытость/положение/размер). */
+let structuresFrame: FilterPanelFrameHandle | null = null;
 let resultsHost: HTMLElement | null = null;
 
 /** Filter-result roots in sort order (the visible page, grows with «Показать ещё»). */
@@ -167,6 +170,10 @@ export async function ensureStructuresInitialised(): Promise<void> {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
     }
     if (raw !== null && raw !== '') setFilterState(parseFilterState(raw));
+    // Миграционное значение прежней ширины панели (`structures_state`) —
+    // каркас читает его геттером, поэтому переприменяем состояние после
+    // восстановления снимка (если в `ui_state` своего размера ещё нет).
+    structuresFrame?.apply();
   } catch {
     // Fall back to the empty filter (HOME).
   }
@@ -350,6 +357,29 @@ function neighborsOf(nodeKey: string, _thoughtId: string, dir: HierarchyDir): st
   return hierarchy.get(`${nodeKey}|${dir}`)?.neighbors.map((n) => n.id) ?? [];
 }
 
+/**
+ * Один запрос уровня дерева (раскрытие узла, «Показать ещё», перезапрос после
+ * realtime). ЕДИНСТВЕННАЯ точка, откуда уходит `etn.structures.hierarchy(...)`:
+ * здесь к запросу добавляется фильтр обхода по связям — ровно применённый к
+ * текущему отбору (`appliedQuery.filter.link_filter`, тот же, что у спуска от
+ * «Родительских мыслей»). Без этого раскрытая ветвь показывала соседей по
+ * нетипизированным связям, которых отбор не включал (ошибка db504c1a).
+ */
+function fetchHierarchy(
+  networkId: string,
+  thoughtId: string,
+  dir: HierarchyDir,
+  opts: { excludeIds?: string[]; offset?: number } = {},
+): Promise<HierarchyResponse> {
+  return etn.structures.hierarchy(networkId, thoughtId, {
+    dir,
+    showInactive: store.state.showInactive,
+    excludeIds: opts.excludeIds,
+    offset: opts.offset,
+    linkFilter: appliedQuery?.filter.link_filter,
+  });
+}
+
 /** Expands or folds one node direction (ellipse click). */
 async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
   const networkId = store.state.networkId;
@@ -382,11 +412,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
   // Expand: fetch one level with the per-branch dedup ids (§15.5).
   const excludeIds = branchThoughtIds(currentRows(), row.rootId);
   try {
-    const data = await etn.structures.hierarchy(networkId, row.thoughtId, {
-      dir,
-      showInactive: store.state.showInactive,
-      excludeIds,
-    });
+    const data = await fetchHierarchy(networkId, row.thoughtId, dir, { excludeIds });
     // Every neighbor is already shown in this branch (per-branch dedup) —
     // nothing to reveal, so nothing changes (no shift, no expansion flag).
     if (data.neighbors.length === 0) return;
@@ -412,12 +438,7 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
   const offset = cached?.neighbors.length ?? 0;
   const excludeIds = branchThoughtIds(currentRows(), rootId);
   try {
-    const data = await etn.structures.hierarchy(networkId, thoughtId, {
-      dir,
-      showInactive: store.state.showInactive,
-      excludeIds,
-      offset,
-    });
+    const data = await fetchHierarchy(networkId, thoughtId, dir, { excludeIds, offset });
     hierarchy.set(cacheKey, {
       neighbors: [...(cached?.neighbors ?? []), ...data.neighbors],
       hasMore: data.has_more,
@@ -501,8 +522,18 @@ export function mountStructures(hostEl: HTMLElement): void {
   const results = div('st-results');
   host.append(panel, splitter, results);
   resultsHost = results;
-  applyPanelWidth();
-  wirePanelSplitter(splitter, panel);
+  // Общий каркас панели отбора (задача 2ebe4206): скрываемость плавающей
+  // кнопкой, положение по ширине полотна (слева/вверху), перетаскивание
+  // границы; состояние — локально в `ui_state.structures_filter_panel`.
+  structuresFrame = mountFilterPanelFrame({
+    container: host,
+    panel,
+    splitter,
+    stateKey: UI_STATE_KEY.STRUCTURES_FILTER_PANEL,
+    minSize: FILTER_W_MIN,
+    maxSize: FILTER_W_MAX,
+    legacySize: () => getFilterState().panelWidth,
+  });
   initStructuresKbdNav(results, {
     openThought: (id) => void openStructuresThought(id),
     toggleExpand: toggleExpandFor,
@@ -560,52 +591,6 @@ export function mountStructures(hostEl: HTMLElement): void {
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
-}
-
-/**
- * Draggable splitter on the panel/results seam (§15.2): pointer drag resizes
- * the filter panel (clamped to {@link FILTER_W_MIN}..{@link FILTER_W_MAX}),
- * the result tree takes the rest. The width is kept in the filter state and
- * persisted to L4 `structures_state` via the panel's persist callback.
- */
-function wirePanelSplitter(splitter: HTMLElement, panel: HTMLElement): void {
-  let dragging = false;
-  let startX = 0;
-  let startW = 0;
-
-  const onMove = (event: PointerEvent): void => {
-    if (!dragging) return;
-    const width = Math.min(FILTER_W_MAX, Math.max(FILTER_W_MIN, startW + (event.clientX - startX)));
-    panel.style.setProperty('--st-filter-w', `${width}px`);
-    setPanelWidth(width);
-  };
-  const onUp = (event: PointerEvent): void => {
-    if (!dragging) return;
-    dragging = false;
-    splitter.classList.remove('dragging');
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onUp);
-    try {
-      splitter.releasePointerCapture(event.pointerId);
-    } catch {
-      /* capture already released */
-    }
-  };
-
-  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    dragging = true;
-    startX = event.clientX;
-    startW = getFilterState().panelWidth ?? panel.clientWidth;
-    splitter.classList.add('dragging');
-    try {
-      splitter.setPointerCapture(event.pointerId);
-    } catch {
-      /* capture unavailable — window listeners still track the drag */
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  });
 }
 
 /** Signature of the inputs the tree rendering depends on (redundant rebuilds). */
@@ -867,9 +852,55 @@ function buildMoreButton(marker: MoreMarker, node: TreeRow): HTMLElement {
 /** Builds one thought cloud: same visual language as the canvas (§15.4). */
 function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   const ref = refs.get(row.thoughtId) ?? null;
-  const cloud = div('st-cloud cloud');
-  cloud.dataset['id'] = row.thoughtId;
-  if (ref !== null && !ref.active) cloud.classList.add('dim');
+  // Базовая часть облачка — общая фабрика (профиль `tree`): значок, цвета и
+  // начертание мысли, бледность неактуальной/помеченной, метка корзины и
+  // единые жесты. Дерево добавляет домен структур: эллипсы, индикаторы,
+  // клавиатуру и «открыть в редакторе» контекстом меню.
+  const cloud = createThoughtCloud(
+    ref ?? { id: row.thoughtId, title: '—' },
+    {
+      profile: 'tree',
+      // Ширина — по колонке дерева: имя обрезается многоточием по ней
+      // (раньше это делал контекстный селектор `.st-row .st-cloud.cloud`).
+      width: 'container',
+      actions: {
+        onClick: (id) => void openStructuresThought(id),
+        onCtrlClick: (id) => toggleSelection([id]),
+        // Метка корзины на облачке узла (ошибка 8bbc9542): сосед-мысль в
+        // корзине виден и помечен, как на карте, и клик по метке открывает
+        // тот же диалог восстановления/удаления. Импорт ленивый — trash.ts
+        // статически тянет этот модуль (scheduleStructuresRefresh), статический
+        // импорт замкнул бы цикл.
+        onTrashBadgeClick: (id) => {
+          const networkId = store.state.networkId;
+          if (networkId === null) return;
+          void import('../../trash.js').then(({ openThoughtDeleteDialog }) =>
+            openThoughtDeleteDialog(networkId, {
+              id,
+              title: refs.get(id)?.title ?? row.thoughtId,
+            }),
+          );
+        },
+        onContextMenu: (event, id) => {
+          event.stopPropagation();
+          showThoughtContextMenu(
+            event,
+            { id, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
+            {
+              openHandler: (targetId) => void openStructuresThought(targetId),
+              findOnMapHandler: (targetId) => {
+                // «Найти на карте мыслей» (L23, §15.8): switch the view first so
+                // the map is visible while the focus response arrives.
+                setActiveView('map');
+                void setFocus(targetId);
+              },
+            },
+          );
+        },
+      },
+    },
+  );
+  cloud.classList.add('st-cloud');
   if (selection.has(row.thoughtId)) cloud.classList.add('selected');
   // Halo of the active thought (§15.7): the same accent ring around the cloud
   // as the canvas (§2.2.4) instead of the old full-width band. The "current
@@ -881,21 +912,6 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   if (currentThoughtId() === row.thoughtId) {
     cloud.classList.add('halo');
   }
-
-  applyCloudStyle(
-    cloud,
-    resolveCloudStyle(
-      ref ?? {
-        type_id: null,
-        fg_color: null,
-        bg_color: null,
-        font_bold: false,
-        font_italic: false,
-        font_underline: false,
-        font_strike: false,
-      },
-    ),
-  );
 
   // Ellipses (§15.5): filled when the thought has parents/children at all —
   // known from the hierarchy directions accumulated so far.
@@ -938,11 +954,6 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     ellipse.addEventListener('mouseleave', () => setLinksHoverThought(null));
   }
 
-  const iconBox = div('cloud-icon');
-  applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-  const title = el('div', 'cloud-title', ref?.title ?? '—');
-  setTooltip(title, ref?.title ?? '');
-
   // Indicator row identical to the canvas cloud (§15.4: 📝/📅/📎, patched
   // asynchronously via the shared indicator queue of canvas.ts).
   const ind = div('cloud-ind');
@@ -953,41 +964,19 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   markChronoPreview(chrono, 'thought', row.thoughtId, ref?.title ?? '—');
   markAttachmentsPreview(att, 'thought', row.thoughtId, ref?.title ?? '—');
   ind.append(perm, chrono, att);
+  // Индикаторы — под названием в колонке облачка (та же разметка, что на
+  // холсте: `.cloud-main > .cloud-title + .cloud-ind`).
+  const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
+  main?.append(ind);
 
-  const main = div('cloud-main');
-  main.append(title, ind);
-  cloud.append(topEllipse, iconBox, main, bottomEllipse);
+  // Порядок эллипсов — как на холсте: верхний перед значком, нижний в конце.
+  cloud.prepend(topEllipse);
+  cloud.append(bottomEllipse);
 
   // Click opens the editor without moving the canvas focus; Ctrl toggles the
-  // shared selection; right-click reuses the canvas context menu with the
-  // editor-opening variant of «Открыть редактор» (§15.8).
-  cloud.tabIndex = 0;
-  cloud.addEventListener('click', (event) => {
-    if (event.ctrlKey || event.metaKey) {
-      toggleSelection([row.thoughtId]);
-      return;
-    }
-    void openStructuresThought(row.thoughtId);
-  });
+  // shared selection (unit gestures already mounted by the factory).
   cloud.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void openStructuresThought(row.thoughtId);
-  });
-  cloud.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    showThoughtContextMenu(
-      event,
-      { id: row.thoughtId, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
-      {
-        openHandler: (id) => void openStructuresThought(id),
-        findOnMapHandler: (id) => {
-          // «Найти на карте мыслей» (L23, §15.8): switch the view first so the
-          // map is visible while the focus response arrives.
-          setActiveView('map');
-          void setFocus(id);
-        },
-      },
-    );
   });
   return cloud;
 }
@@ -1067,6 +1056,12 @@ async function refreshEdges(): Promise<void> {
   const signature = `${store.state.showInactive ? 1 : 0}|${ids.slice().sort().join(',')}`;
   if (signature === edgesSignature) return;
   edgesSignature = signature;
+  if (ids.length === 0) {
+    // §6.12 requires a non-empty ids list; an empty tree just drops the lines.
+    edges.clear();
+    drawLinks();
+    return;
+  }
   try {
     const list = await etn.structures.edges(networkId, ids, store.state.showInactive);
     edges.clear();
@@ -1336,11 +1331,7 @@ async function reloadAll(): Promise<void> {
       seen.add(cacheKey);
       const excludeIds = branchThoughtIds(currentRows(), row.rootId);
       try {
-        const data = await etn.structures.hierarchy(networkId, row.thoughtId, {
-          dir,
-          showInactive: store.state.showInactive,
-          excludeIds,
-        });
+        const data = await fetchHierarchy(networkId, row.thoughtId, dir, { excludeIds });
         hierarchy.set(cacheKey, { neighbors: data.neighbors, hasMore: data.has_more });
         for (const ref of data.neighbors) refs.set(ref.id, ref);
         for (const [id, flags2] of Object.entries(data.directions)) directions.set(id, flags2);

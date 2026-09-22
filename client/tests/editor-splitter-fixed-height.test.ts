@@ -55,8 +55,14 @@ describe('always-fixed политика сплиттера (bug 4cc6248c, тре
       'applyGroupClamp sets flex-grow: 0 (no flex-fill past the saved size)',
     );
     assert.ok(
-      /group\.style\.maxHeight\s*=\s*''/.test(body),
-      'applyGroupClamp clears any stale inline max-height',
+      /group\.style\.maxHeight\s*=\s*'none'/.test(body),
+      'applyGroupClamp нейтрализует max-height значением none (ошибка 78562781: пустая ' +
+        'декларация снимала только инлайновый потолок и отдавала высоту CSS-правилу)',
+    );
+    assert.ok(
+      !/group\.style\.maxHeight\s*=\s*''/.test(body),
+      'applyGroupClamp не ограничивается снятием инлайнового потолка — стилевой max-height ' +
+        'вернул бы высоту (ошибка 78562781)',
     );
     assert.ok(
       !/group\.style\.maxHeight\s*=\s*`\$\{px\}px`/.test(body),

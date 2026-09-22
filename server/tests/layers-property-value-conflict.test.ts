@@ -247,7 +247,7 @@ describe(
       try {
         insertLayerA(ndb);
         const type = createThoughtType(ndb, { name: 'Задача 4' }, USER);
-        const def = createTypeProperty(
+        createTypeProperty(
           ndb,
           'thought_type',
           type.id,

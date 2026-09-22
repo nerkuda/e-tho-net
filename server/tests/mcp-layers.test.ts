@@ -16,9 +16,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { Layer, LayerMergeReport, McpMutationResult } from '@etn/shared';
+import type { Layer, LayerMergeReport } from '@etn/shared';
 
-import { buildMcpContext, closeMcpContext, connectMcpClient, nativeAvailable, toolJson } from './mcp-helpers.js';
+import { buildMcpContext, callWrite, closeMcpContext, connectMcpClient, nativeAvailable, toolJson } from './mcp-helpers.js';
 
 describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
   it('create → select → write → isolation → merge → auto-repoint on delete', async () => {
@@ -111,27 +111,25 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         assert.equal(observerList.find((l) => l.is_base)!.current, true);
 
         // --- Write while on the layer: every existing tool honours it. ---
-        const thought = toolJson<McpMutationResult & { title?: string }>(
-          await agent.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Мысль слоя' },
-          }),
-        );
+        const written = await callWrite(agent.client, ctx.networkId, [
+          { ref: 'l', thought: { title: 'Мысль слоя' } },
+        ]);
+        const thoughtId = written.items[0]!.id;
         // The mutation echoes the session's current layer (§7.1) — the
         // sandbox, not the base.
-        assert.equal((thought as unknown as { layer: { id: string } }).layer.id, sandboxId);
+        assert.equal(written.layer.id, sandboxId);
 
         // Isolation (§4.1): the agent's own key sees it (same layer)…
         const seenByAgent = await agent.client.callTool({
           name: 'etn.thoughts.get',
-          arguments: { network_id: ctx.networkId, thought_id: thought.id },
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
         });
         assert.notEqual(seenByAgent.isError, true);
 
         // …the observer key (still on the base) does not.
         const seenByObserver = await observer.client.callTool({
           name: 'etn.thoughts.get',
-          arguments: { network_id: ctx.networkId, thought_id: thought.id },
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
         });
         assert.equal(seenByObserver.isError, true);
 
@@ -148,7 +146,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         // Transparency after merge: the base-bound observer now sees it.
         const seenAfterMerge = await observer.client.callTool({
           name: 'etn.thoughts.get',
-          arguments: { network_id: ctx.networkId, thought_id: thought.id },
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
         });
         assert.notEqual(seenAfterMerge.isError, true);
 
@@ -196,27 +194,23 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
           name: 'etn.layers.select',
           arguments: { network_id: ctx.networkId, layer_id: created.id },
         });
-        const parent = toolJson<McpMutationResult>(
-          await agent.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Родитель' },
-          }),
-        );
-        const child = toolJson<McpMutationResult>(
-          await agent.client.callTool({
-            name: 'etn.thoughts.create',
-            arguments: { network_id: ctx.networkId, title: 'Ребёнок' },
-          }),
-        );
+        const parentWrite = await callWrite(agent.client, ctx.networkId, [
+          { ref: 'p', thought: { title: 'Родитель' } },
+        ]);
+        const parentId = parentWrite.items[0]!.id;
+        const childWrite = await callWrite(agent.client, ctx.networkId, [
+          { ref: 'c', thought: { title: 'Ребёнок' } },
+        ]);
+        const childId = childWrite.items[0]!.id;
         const link = toolJson<{ link_id: string }>(
           await agent.client.callTool({
             name: 'etn.properties.add',
             arguments: {
               network_id: ctx.networkId,
               owner_type: 'thought',
-              owner_id: parent.id,
+              owner_id: parentId,
               key: 'Потомки',
-              value: child.id,
+              value: childId,
             },
           }),
         );

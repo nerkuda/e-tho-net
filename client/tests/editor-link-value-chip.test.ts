@@ -3,95 +3,23 @@
  * модель связей; правка — инструкция «Использовать унифицированные поля
  * выбора ссылок в диалогах», a47947c8) — редактор значения свойства-связи на
  * мысль: мини-облачко(-а) выбранных мыслей + «✕» + кнопка «выбрать»
- * (`pickThoughtsDialog`) + живой поиск (`wireThoughtRefSearch`) для пустого
- * поля / добавления.
+ * (`pickThoughtsDialog`) + живой поиск (общая выпадашка подсказок,
+ * `lib/suggest-dropdown.ts`) для пустого поля / добавления.
  *
- * Здесь намеренно избегаем dispatch('input') (внутренняя `wireThoughtRefSearch`
- * запускает асинхронную цепочку `etn.thoughts.findDuplicates →
- * document.body.append → positionBodyDropdown`, в shim-среде зависающую на
- * неопределённое время) — тесты покрывают статическую структуру DOM и факт
- * регистрации click/dblclick/contextmenu/keydown обработчиков облачка.
+ * Здесь намеренно избегаем dispatch('input') (выпадашка запускает
+ * асинхронную цепочку `etn.thoughts.findDuplicates → document.body.append →
+ * positionBodyDropdown`, в shim-среде зависающую на неопределённое время) —
+ * тесты покрывают статическую структуру DOM и факт регистрации
+ * click/dblclick/contextmenu/keydown обработчиков облачка.
  */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-/** Element-stub с поддержкой keydown / contextmenu / dataset / setAttribute. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  placeholder = '';
-  autocomplete = '';
-  isConnected = true;
-  tabIndex = -1;
-  dataset: Record<string, string> = {};
-  attributes: Record<string, string> = {};
-  listeners: Record<string, Array<(event?: any) => void>> = {};
-  style: Record<string, string> = {};
-  parent: ShimElement | null = null;
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: ShimElement[]): void {
-    this.children.push(...nodes);
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = nodes;
-  }
-  removeChild(node: ShimElement): void {
-    this.children = this.children.filter((c) => c !== node);
-  }
-  remove(): void {
-    this.parent = null;
-  }
-  addEventListener(type: string, handler: (event?: any) => void): void {
-    (this.listeners[type] ??= []).push(handler);
-  }
-  removeEventListener(): void {}
-  dispatch(type: string, event?: any): void {
-    for (const handler of this.listeners[type] ?? []) handler(event);
-  }
-  setAttribute(name: string, value: string): void {
-    this.attributes[name] = value;
-  }
-  getAttribute(name: string): string | null {
-    return this.attributes[name] ?? null;
-  }
-  contains(): boolean {
-    return false;
-  }
-  focus(): void {}
-  click(): void {
-    this.dispatch('click');
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
-  }
-}
 
 let sharedWindow: Record<string, unknown> = {};
 /** Ids requested via `etn.thoughts.resolve` (style/metadata resolve). */
@@ -99,10 +27,10 @@ let seenResolves: string[] = [];
 
 /**
  * Установка шима: document/window + минимальные `etn.thoughts.resolve` /
- * `etn.thoughts.findDuplicates` (для `wireThoughtRefSearch`, не вызывается в
- * этих тестах, но должен существовать, чтобы модуль импортировался).
- * `lib/etn.ts` привязывается к `window.etn` при первом импорте — оставляем
- * ОДИН глобальный объект на весь test-файл.
+ * `etn.thoughts.findDuplicates` (для живой выпадашки редактора, не
+ * вызывается в этих тестах, но должен существовать, чтобы модуль
+ * импортировался). `lib/etn.ts` привязывается к `window.etn` при первом
+ * импорте — оставляем ОДИН глобальный объект на весь test-файл.
  */
 function installShim(): void {
   seenResolves = [];
@@ -167,6 +95,21 @@ function findAllClouds(root: ShimElement): ShimElement[] {
   return out;
 }
 
+/**
+ * Клик по кнопке открытого диалога снятия значения-связи (задача 96d27fc0):
+ * снятие теперь спрашивает способ — «В корзину» / «Удалить совсем».
+ */
+function clickRemovalDialog(label: string): void {
+  const body = (globalThis as any).document.body as ShimElement;
+  const backdrop = body.children.find((c) => c.classList.contains('dialog-backdrop'));
+  assert.ok(backdrop !== undefined, 'диалог снятия значения смонтирован');
+  const btn = backdrop!
+    .querySelectorAll('button')
+    .find((b) => b.textContent === label);
+  assert.ok(btn !== undefined, `в диалоге есть кнопка «${label}»`);
+  btn!.emit('click');
+}
+
 const baseDefinition = {
   property_id: 'lk-prop',
   key: 'Связь',
@@ -195,7 +138,7 @@ function edge(id: string, title: string | null = null) {
 describe('buildLinkValueEditor — всегда чип-режим, поле живого поиска не пропадает', () => {
   it('empty value renders the chip field with a live-search input + «выбрать» button', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -240,7 +183,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     // конфиге вовсе — по спеке модели 0.8.1 у link-свойств числа целей нет,
     // редактор обязан всегда работать в чип-режиме.
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -271,7 +214,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
 
   it('«✕» corner button clears the whole value set at once', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const saved: unknown[] = [];
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -291,13 +234,18 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     )!;
     const clearBtn = corner.children.find((c) => c.textContent === '✕')!;
     clearBtn.dispatch('click', { stopPropagation: () => undefined });
+    // Снятие значения спрашивает способ (96d27fc0): «В корзину» — прежний путь.
+    clickRemovalDialog('В корзину');
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(saved, [null], 'corner «✕» clears all values (persists null)');
   });
 
-  it('chip label is clipped at 200 chars; the tooltip keeps the full title', async () => {
+  it('chip label is NOT clipped by character count; the tooltip keeps the full title', async () => {
+    // Обрезка названия — раскладкой (ADR «Обрезка текста — раскладкой, а не
+    // подсчётом символов»): в DOM лежит полное имя, видимая длина режется
+    // CSS-многоточием профиля `chip`, а полный текст — в подсказке.
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const longTitle = 'Д'.repeat(500);
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -310,9 +258,8 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
 
     const cloud = findAllClouds(editor)[0]!;
     const title = cloud.children.find((c) => c.className === 'prc-title')!;
-    assert.equal(title.textContent!.length, 201, 'label clipped to 200 chars + ellipsis');
-    assert.equal(title.textContent!.endsWith('…'), true, 'clipped label ends with …');
-    assert.equal(cloud.title, longTitle, 'tooltip carries the FULL title');
+    assert.equal(title.textContent, longTitle, 'label carries the FULL title (CSS clips it)');
+    assert.equal(title.title, longTitle, 'tooltip carries the FULL title');
   });
 
   it('setAndPersist re-resolves chip metadata so a freshly picked target shows its title, not the id', async () => {
@@ -323,7 +270,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     // Проверка исходника: воспроизведение требует живого дропдауна поиска
     // (зависающая в shim-среде цепочка, см. шапку файла).
     const src = readFileSync(
-      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
       'utf8',
     );
     const start = src.indexOf('const setAndPersist = (next: string[]): void => {');
@@ -345,7 +292,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
 describe('buildLinkValueEditor — чип-режим мини-облачков (a47947c8)', () => {
   it('renders one mini-cloud per stored id with a «+ ещё одну мысль» add input', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -387,7 +334,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('empty multi-mode renders the «Название мысли…» seed placeholder', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -411,7 +358,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('cloud registers click / dblclick / contextmenu / keydown listeners', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -433,7 +380,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('cloud click handler is wired (smoke: dispatch does not throw)', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -455,7 +402,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('«✕» on a chip cloud removes only that id and persists the rest', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const saved: unknown[] = [];
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -475,6 +422,8 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
       c.className.split(' ').includes('st-f-clear-inline'),
     )!;
     firstRemove.dispatch('click', { stopPropagation: () => undefined });
+    // Снятие цели спрашивает способ (96d27fc0): «В корзину» — прежний путь.
+    clickRemovalDialog('В корзину');
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(
       saved,
@@ -488,7 +437,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
     // LinkPropertyValues — готовый target_title подставляется в облачко
     // сразу, синхронно с первым рендером.
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -514,14 +463,14 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
       .children.find((c) => c.className === 'prc-title');
     assert.equal(
       unknownTitle?.textContent,
-      'ta-unkno…',
-      'unknown title falls back to the truncated id before resolve',
+      'ta-unknown',
+      'unknown title falls back to the raw id before resolve (layout clips it visually)',
     );
   });
 
   it('resolves full metadata (icon/colours/active) for every current id via etn.thoughts.resolve', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',

@@ -72,6 +72,12 @@ export interface AppState {
   /** L3 `show_inactive` preference of the open network. */
   showInactive: boolean;
   /**
+   * L3 `show_trash` preference of the open network (задача 77923b49):
+   * `false` — помеченные на удаление мысли/связи скрыты на карте, локальном
+   * графе и в структурах. Default `true` (пометка видна, как после 355319d4).
+   */
+  showTrash: boolean;
+  /**
    * L3 `canvas_link_filter` preference of the open network — the user's
    * explicit canvas link-type filter, or `null` when unset (the effective
    * filter is then the live `show_on_map`-derived default). See module
@@ -201,6 +207,7 @@ const initial: AppState = {
   networkId: null,
   focus: null,
   showInactive: false,
+  showTrash: true,
   canvasLinkFilter: null,
   cloudWidth: CLOUD_WIDTH_DEFAULT,
   cloudGap: CLOUD_GAP_DEFAULT,
@@ -281,6 +288,7 @@ class Store {
       networkId: null,
       focus: null,
       showInactive: false,
+      showTrash: true,
       canvasLinkFilter: null,
       selection: [],
       selectedLinkId: null,
@@ -317,7 +325,9 @@ export const store = new Store();
  *
  * The canvas shows the active-only neighbourhood (focus is requested without
  * `show_inactive`): a deactivated link loses its edge, a reactivated one gains
- * it back when both endpoints are visible.
+ * it back when both endpoints are visible. A link marked for deletion (or
+ * restored from the trash) keeps its edge but repaints as marked/unmarked at
+ * once — `link_marked_for_deletion` rides along in the patch (ошибка 355319d4).
  */
 export function patchFocusEdge(link: Link): void {
   const focus = store.state.focus;
@@ -335,6 +345,7 @@ export function patchFocusEdge(link: Link): void {
     source_id: link.source_id,
     target_id: link.target_id,
     type_id: link.type_id,
+    link_marked_for_deletion: link.marked_for_deletion,
     color: link.color,
     style: link.style,
     width: link.width,

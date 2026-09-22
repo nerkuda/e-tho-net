@@ -9,6 +9,11 @@
  * described by {@link TabLayout} (equal fixed widths for the workspace,
  * content-sized buttons for the editor).
  *
+ * **Один источник ширины.** Ширину кнопок задаёт только этот модуль
+ * (`style.width`); CSS обеих полос объявляет `flex: 0 0 auto`. Числовой
+ * `flex-basis` в CSS фиксировал бы ширину и перебивал inline-стиль —
+ * так было у вкладок рабочего стола (ошибка 1786ff94).
+ *
  * The function is fully generic over the item type: callers pass `allItems`
  * (the source of truth — e.g. `store.state.tabs` or the editor's TABS array)
  * and a `renderRow` callback that produces a dropdown row DOM. The callback
@@ -75,8 +80,10 @@ function contentBoxWidth(root: HTMLElement): number {
  * `elements.hidden`, and shows/hides the overflow button.
  *
  * Кнопки `elements.visible` обязаны быть flex-элементами без растягивания
- * (`flex: 0 0 auto` в CSS) — иначе в режиме `content` браузер сжимает их
- * меньше содержимого, и замеренные ширины перестают быть «нужными».
+ * (`flex: 0 0 auto` в CSS): в режиме `content` иначе браузер сжимает их
+ * меньше содержимого, и замеренные ширины перестают быть «нужными»; в режиме
+ * `fixed` числовой `flex-basis` в CSS просто перебил бы выставляемый здесь
+ * `style.width` (ошибка 1786ff94).
  */
 export function recomputeOverflow<T>(
   elements: StripElements<T>,
@@ -101,7 +108,9 @@ export function recomputeOverflow<T>(
 
   if (layout.kind === 'fixed') {
     // Pick the largest item width that lets all items fit alongside the
-    // reserved controls.
+    // reserved controls. Ширина кнопки — только здесь: CSS вкладок воркспейса
+    // объявляет `flex: 0 0 auto`, иначе заданный тут `style.width` не действовал
+    // бы (ошибка 1786ff94).
     const available = boxWidth - reserveForAccessory - reserveForOverflow;
     let itemWidth = layout.defaultWidth;
     if (total * itemWidth > available) {

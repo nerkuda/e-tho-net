@@ -143,6 +143,13 @@ export const WS_PONG_TIMEOUT_MS = 60_000;
 export const PREF_KEY = {
   SHOW_INACTIVE: 'show_inactive',
   /**
+   * Показывать содержимое корзины (задача 77923b49, 0.8.2): `true` —
+   * помеченные на удаление мысли/связи видны на карте, локальном графе и в
+   * структурах (как было после фикса 355319d4); `false` — скрыты. По умолчанию
+   * (`true`) поведение не меняется: пометка видна с признаком корзины.
+   */
+  SHOW_TRASH: 'show_trash',
+  /**
    * Canvas link-type filter (task «Фильтр типов связей на карте мыслей»,
    * 0.8.1): `{ type_ids: string[], include_structural: boolean } | null`.
    * `null`/absent — the client derives the live default from `show_on_map`
@@ -164,6 +171,18 @@ export const UI_STATE_KEY = {
   CLOUD_WIDTH: 'cloud_width',
   CLOUD_GAP: 'cloud_gap',
   SEARCH_STATE: 'search_state',
+  /** Нажатость переключателя-лейки «Настройки поиска» в выпадающей панели
+   *  строки поиска карты (задача a3247f84, 0.8.2): видна/скрыта зона настроек.
+   *  Хранится локально на клиенте (L4 `ui_state`), как `search_state`. */
+  SEARCH_SETTINGS_OPEN: 'search_settings_open',
+  /** Состояние панели отбора вида «Структуры мыслей» (задача 2ebe4206):
+   *  `{ hidden, width, height }` — скрытость плавающей кнопкой и размер,
+   *  заданный перетаскиванием границы. Хранится локально (L4 `ui_state`). */
+  STRUCTURES_FILTER_PANEL: 'structures_filter_panel',
+  /** То же для панели отбора вида «Хроника» (задача 2ebe4206). */
+  CHRONICLE_FILTER_PANEL: 'chronicle_filter_panel',
+  /** То же для панели отбора вида «События» (задача 2ebe4206). */
+  ACTIVITY_FILTER_PANEL: 'activity_filter_panel',
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   EDITOR_LIST_HEIGHTS: 'editor_list_heights',

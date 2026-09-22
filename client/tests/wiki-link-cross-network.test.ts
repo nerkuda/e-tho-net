@@ -30,6 +30,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { TabDto } from '../src/main/ipc/contract.js';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -48,36 +49,6 @@ function tab(tabId: string, networkId: string, slotIdx: number): TabDto {
     layer_id: null,
     last_active_at: '2026-09-09T00:00:00.000Z',
   };
-}
-
-/**
- * Minimal element stub that survives the `notice()` path — `openWikiIdTarget`
- * calls it when the mocked `openNetwork` fails (same shim as
- * `copy-hotkey.test.ts`).
- */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  style = { setProperty: () => undefined, removeProperty: () => undefined };
-  textContent = '';
-  isConnected = true;
-  classList = { add: () => undefined, remove: () => undefined, toggle: () => undefined };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      this.children.push(typeof node === 'string' ? new ShimElement('#text', undefined, node) : node);
-    }
-  }
-  remove(): void {
-    /* no-op */
-  }
-  addEventListener(): void {}
-  removeEventListener(): void {}
 }
 
 (globalThis as any).HTMLElement = class {};

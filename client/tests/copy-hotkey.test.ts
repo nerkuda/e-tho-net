@@ -22,51 +22,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-/** Minimal element stub that survives the notice() path. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  style: {
-    setProperty: (name: string, value: string) => void;
-    removeProperty: (name: string) => void;
-  } = { setProperty: () => undefined, removeProperty: () => undefined };
-  dataset: Record<string, string> = {};
-  textContent = '';
-  title = '';
-  isConnected = true;
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      this.children.push(el);
-    }
-  }
-  remove(): void {
-    /* no-op */
-  }
-  addEventListener(): void {}
-  removeEventListener(): void {}
-  closest(): ShimElement | null {
-    return null;
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-}
 
 /**
  * Minimal `document`/`window` shims. Must run BEFORE the first dynamic

@@ -9,19 +9,25 @@
  * «Автор / Редактор», «Даты») — сворачиваемые, по умолчанию свёрнуты; заголовок
  * любой группы, чьи условия не пусты, подсвечивается и помечается `*`.
  *
- * Значения условий редактируются единым компонентом (задача 27472616,
- * `value-combo.ts`): комбобокс с живым поиском по подстроке среди
- * токенов-кандидатов (собранных по типу, которому принадлежит отбор — поля
- * мысли + свойства типа и его предков + `$today`/`$now`/`$user`) И
- * произвольным текстом; для списочных условий (в списке/не в списке) и для
- * «Родительские мысли»/«Типы мыслей»/«Типы связей» — chip-модель: несколько
- * литералов и токенов свободно смешиваются в одном списке, а чек-лист/поиск
- * мыслей (кнопка «выбрать…») ДОБАВЛЯЕТ к чипам, а не подменяет их. Список
- * токенов ограничен операцией условия: списочные токены предлагаются только
- * в «в списке» и «не в списке».
+ * Значения условий редактирует ОБЩИЙ редактор значения
+ * (`editor/value-editor.ts`, стандарт S2): вид значения выбирает он, а
+ * токены-кандидаты (поля мысли + свойства типа и его предков + `$today`/
+ * `$now`/`$user`, собранные по типу отбора) вызывающий передаёт источником
+ * подсказок (`extraSuggest`). Список токенов ограничен операцией условия:
+ * списочные токены предлагаются только в «в списке» и «не в списке».
+ * «Родительские мысли»/«Типы мыслей»/«Типы связей» и списки автора/редактора
+ * строит общий чип-лист сущностей (`lib/entity-picker.ts`) с тем же
+ * источником токенов: несколько литералов и токенов свободно смешиваются, а
+ * чек-лист/поиск (кнопка «выбрать…») ДОБАВЛЯЕТ к чипам, а не подменяет их.
  *
  * Сохранение: `etn.thoughtTypeViews.create`/`.update` через IPC. Пустой отбор
  * (ни одного условия) сохранить нельзя — ошибка показывается под формой.
+ *
+ * Условия отбора строит единый конструктор `lib/filter-builder.ts`
+ * (задача 48b59d00, веха 5 версии 0.8.2): модель состояния, словарь
+ * операторов, наборы сортировок/направлений, конвертер в wire и строка
+ * условия «автор/редактор» импортируются оттуда; диалог держит только
+ * кандидатов-токены и раскладку групп.
  */
 
 import {
@@ -42,15 +48,32 @@ import {
 } from '@etn/shared';
 
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
+import { div, el, errText, span } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
+import {
+  buildAuthorshipSection,
+  buildConditionsSection,
+  buildDatesSection,
+  buildEntityChipSection,
+  buildExtrasSection,
+  buildKeywordsSection,
+  buildSortSection,
+  type EntityChipSection,
+  type FilterFormContext,
+  type FilterSection,
+} from '../../lib/filter-form.js';
 import { notice } from '../../lib/notice.js';
 import {
-  openLinkTypesPicker as openLinkTypesPickerLib,
-  openThoughtTypesPicker as openThoughtTypesPickerLib,
-} from '../../lib/type-picker.js';
-import { orderedTypeRows } from '../../lib/type-tree.js';
+  buildEntityChipField,
+  pickEntitiesModal,
+  thoughtEntityOption,
+  thoughtTypeEntityOptions,
+  linkTypeEntityOptions,
+  type EntityOption,
+} from '../../lib/entity-picker.js';
+import { wireSuggest, type SuggestEntry, type SuggestSource } from '../../lib/suggest-dropdown.js';
+import { type ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
 import { store } from '../../state.js';
 
@@ -68,13 +91,8 @@ import {
   type DialogPropertyCondition,
   type ViewToken,
 } from './filter-dialog-pure.js';
-import {
-  buildChipListField,
-  replaceComboValue,
-  replaceTrailingWord,
-  trailingWordQuery,
-  wireTokenCombo,
-} from './value-combo.js';
+
+import { withReverseLinkPropertySides } from '../../lib/filter-builder.js';
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -134,14 +152,18 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const chainProps = await loadTypeChainProperties(networkId, chain);
   activeChainProps = chainProps;
   // Property registry (registry-level metadata, e.g. name and multiple flag
-  // for each property binding on the chain).
-  const registryById = new Map<string, NetworkProperty>();
+  // for each property binding on the chain). Задача df992826: к реестру
+  // добавляются обратные стороны ВСЕХ свойств-связей реестра — в конструкторе
+  // условий обе стороны адресуемы (обе стороны каждой связи, не только
+  // цепочки редактируемого типа).
+  let baseRegistry = new Map<string, NetworkProperty>();
   try {
     const list = await etn.propertyRegistry.list(networkId);
-    for (const row of list) registryById.set(row.id, row);
+    for (const row of list) baseRegistry.set(row.id, row);
   } catch {
     /* empty registry — picker just shows none of the property tokens */
   }
+  const registryById = withReverseLinkPropertySides(baseRegistry, store.state.linkTypes);
 
   // 2. Initialise the form state from the existing view (or defaults).
   const isEdit = opts.view !== null;
@@ -404,93 +426,17 @@ interface CriteriaBuilder {
   hasAnyCriteria: () => boolean;
 }
 
-/** A group title whose conditions may be non-empty: the head is highlighted
- *  and its `*` marker toggled by {@link refreshGroupTitles}. */
-interface GroupMarker {
-  head: HTMLElement;
-  star: HTMLElement;
-  isNonEmpty: () => boolean;
-}
-
-/** Plain section with a title and a group-marker star. */
-function block(title: string): { box: HTMLElement; body: HTMLElement; head: HTMLElement; star: HTMLElement } {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title');
-  head.append(el('span', '', title));
-  const star = el('span', 'st-f-star', '');
-  head.append(star);
-  const body = div('st-f-body');
-  box.append(head, body);
-  return { box, body, head, star };
-}
-
-/** Collapsible section; `refresh()` toggles the caret and the body. */
-function collapsibleBlock(
-  title: string,
-  getCollapsed: () => boolean,
-  setCollapsed: (v: boolean) => void,
-): { box: HTMLElement; body: HTMLElement; head: HTMLElement; star: HTMLElement; refresh: () => void } {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title st-f-collapsible-title');
-  const caret = el('span', 'st-f-caret', getCollapsed() ? '▸' : '▾');
-  head.append(caret, el('span', '', title));
-  const star = el('span', 'st-f-star', '');
-  head.append(star);
-  const body = div('st-f-body');
-  box.append(head, body);
-  const refresh = (): void => {
-    const collapsed = getCollapsed();
-    body.classList.toggle('hidden', collapsed);
-    caret.textContent = collapsed ? '▸' : '▾';
-  };
-  head.addEventListener('click', () => {
-    setCollapsed(!getCollapsed());
-    refresh();
-  });
-  refresh();
-  return { box, body, head, star, refresh };
-}
-
-/** Условие «Автор» или «Редактор» активно (для маркера группы). */
-function authorFieldActive(op: StructureAuthorOp, single: string, list: string[]): boolean {
-  if (op === 'empty' || op === 'not_empty') return true;
-  if (op === 'in' || op === 'not_in') return list.length > 0;
-  return single !== '';
-}
-
-/** Условие «Даты» активно (задана хотя бы одна граница). */
-function datesActive(state: DialogCriteriaState): boolean {
-  return (
-    state.createdAfter !== '' ||
-    state.createdBefore !== '' ||
-    state.updatedAfter !== '' ||
-    state.updatedBefore !== ''
-  );
-}
-
-/** Условие «Дополнительно» активно. */
-function extrasActive(state: DialogCriteriaState): boolean {
-  return (
-    state.hasProperties !== null ||
-    state.hasComment !== null ||
-    state.hasAttachments !== null ||
-    state.hasChronology !== null ||
-    state.active !== null ||
-    state.trashed
-  );
-}
-
 /**
- * Builds a self-contained criteria form. Unlike the previous implementation,
- * the form is built once and mutated in place: input handlers update `state`
- * and refresh group markers WITHOUT rebuilding the DOM (which used to drop
- * focus on every keystroke). Only structural changes (add/remove condition,
- * switch operator, reorder the author list) rebuild the affected subtree.
+ * Строит форму критериев отбора. Состав и порядок секций — параметр сборки
+ * этого места; вид и поведение каждого элемента — общий каркас
+ * `lib/filter-form.ts` (задача 3742dd59). Форма строится один раз и меняется
+ * на месте: ввод обновляет состояние и маркеры секций БЕЗ перерисовки DOM
+ * (иначе терялся бы фокус). Токены-кандидаты (`$today`, `$thought.*`,
+ * свойства цепочки типов) — источники подсказок вызывающего.
  */
 function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   const { networkId, registryById } = opts;
   const state = opts.initial;
-  const root = div('st-f-layout view-editor-criteria');
 
   // Transient collapse state (default collapsed, §e0257ca5).
   let propsCollapsed = true;
@@ -498,314 +444,113 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   let authorCollapsed = true;
   let datesCollapsed = true;
 
-  // Uniform «group carries values» marking.
-  const markers: GroupMarker[] = [];
-  const refreshGroupTitles = (): void => {
-    for (const m of markers) {
-      const active = m.isNonEmpty();
-      m.head.classList.toggle('st-f-title-active', active);
-      m.star.textContent = active ? ' *' : '';
-    }
+  const sections: FilterSection[] = [];
+  const touch = (): void => {
+    for (const section of sections) section.refresh();
   };
-  /** Persist-less touch: refresh markers only (no DOM rebuild). */
-  const touch = (): void => refreshGroupTitles();
+  const ctx: FilterFormContext = {
+    networkId,
+    getState: () => state,
+    registry: registryById,
+    touch,
+  };
 
-  // --- Ключевые слова -------------------------------------------------------
-  const kw = block('Ключевые слова');
-  markers.push({ head: kw.head, star: kw.star, isNonEmpty: () => state.keywords.trim() !== '' });
+  // --- Ключевые слова (составное поле: токен заменяет слово у каретки) ------
+  sections.push(
+    buildKeywordsSection(ctx, {
+      placeholder: 'счет* -вод*',
+      tooltip: 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
+      showScope: true,
+      composite: true,
+      suggestSource: tokenSourceFor({ kind: 'keywords' }),
+    }),
+  );
 
-  const kwWrap = div('st-f-kw-wrap');
-  const kwInput = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
-  kwInput.type = 'text';
-  kwInput.value = state.keywords;
-  kwInput.placeholder = 'счет* -вод*';
-  setTooltip(kwInput, 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.');
-  kwInput.addEventListener('input', () => {
-    state.keywords = kwInput.value;
-    touch();
-  });
-  // Составное поле (несколько слов) — живой поиск фильтрует по последнему
-  // «слову» у каретки, а выбор токена заменяет только его, не всё значение.
-  wireTokenCombo({
-    input: kwInput,
-    getOptions: (query) => getTokenOptions({ kind: 'keywords' }, query),
-    onPick: (token) => {
-      replaceTrailingWord(kwInput, token, (v) => {
-        state.keywords = v;
-        touch();
-      });
-    },
-    queryOf: trailingWordQuery,
-  });
-  const kwClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
-  kwClear.type = 'button';
-  setTooltip(kwClear, 'Очистить');
-  kwClear.addEventListener('click', () => {
-    state.keywords = '';
-    kwInput.value = '';
-    touch();
-  });
-  kwWrap.append(kwInput, kwClear);
-  kw.body.append(kwWrap);
-  kw.body.append(buildKeywordScopeRow(state, touch));
-
-  // --- Родительские мысли -----------------------------------------------
-  // Chip-список (задача 27472616): живой поиск мыслей + токен `$thought`
-  // добавляют чипы по мере ввода; кнопка «выбрать…» открывает диалог поиска
-  // мыслей и ДОБАВЛЯЕТ его результат к уже набранным чипам, а не подменяет
-  // список целиком.
-  const pt = block('Родительские мысли');
-  markers.push({ head: pt.head, star: pt.star, isNonEmpty: () => state.parentIds.length > 0 });
-  const parentField = buildChipListField({
+  // --- Родительские мысли ---------------------------------------------------
+  const parentSection = buildEntityChipSection(ctx, {
+    title: 'Родительские мысли',
     getValues: () => state.parentIds,
-    onChange: (values) => {
+    setValues: (values) => {
       state.parentIds = values;
-      touch();
     },
-    getOptions: (query) => parentComboOptions(networkId, query),
-    renderLabel: (value) => resolveParentChipLabel(networkId, value),
+    loadOptions: (query) => parentThoughtOptions(networkId, query),
+    optionsHeader: 'Мысли',
+    extraSources: [tokenSourceFor({ kind: 'parent' })],
+    cloudOf: (value) => (value.startsWith('$') ? null : (parentClouds.get(value) ?? null)),
     placeholder: 'Название мысли или токен…',
+    tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
     picker: { label: 'выбрать…', open: (managed) => pickParentThoughts(networkId, managed) },
   });
-  setTooltip(parentField.root, 'Ограничить отбор мыслями, подчинёнными указанным');
-  pt.body.append(parentField.root);
+  sections.push(parentSection);
+  // Догрузить облачка уже выбранных мыслей (в каталоге живого поиска их нет).
+  void resolveParentClouds(networkId, state.parentIds).then(() => parentSection.fieldRefresh());
 
-  // --- Типы мыслей --------------------------------------------------------
-  const tt = block('Типы мыслей');
-  markers.push({ head: tt.head, star: tt.star, isNonEmpty: () => state.typeIds.length > 0 });
-  const typeField = buildChipListField({
-    getValues: () => state.typeIds,
-    onChange: (values) => {
-      state.typeIds = values;
-      touch();
-    },
-    getOptions: (query) => typeComboOptions('thought', query),
-    renderLabel: (value) => typeChipLabel('thought', value),
-    placeholder: 'Название типа или токен…',
-    picker: { label: 'список типов…', open: (managed) => openThoughtTypesPicker(networkId, managed) },
-  });
-  tt.body.append(typeField.root);
-
-  // --- Типы связей ----------------------------------------------------------
-  const lt = block('Типы связей');
-  markers.push({ head: lt.head, star: lt.star, isNonEmpty: () => state.linkTypeIds.length > 0 });
-  const linkTypeField = buildChipListField({
-    getValues: () => state.linkTypeIds,
-    onChange: (values) => {
-      state.linkTypeIds = values;
-      touch();
-    },
-    getOptions: (query) => typeComboOptions('link', query),
-    renderLabel: (value) => typeChipLabel('link', value),
-    placeholder: 'Название типа или токен…',
-    picker: { label: 'список типов…', open: (managed) => openLinkTypesPicker(networkId, managed) },
-  });
-  lt.body.append(linkTypeField.root);
-
-  // --- Свойства (сворачиваемая группа) -------------------------------------
-  const props = collapsibleBlock('Свойства', () => propsCollapsed, (v) => (propsCollapsed = v));
-  markers.push({ head: props.head, star: props.star, isNonEmpty: () => state.properties.length > 0 });
-  const condsBox = div('st-f-conds');
-  const renderConditions = (): void => {
-    clear(condsBox);
-    if (state.properties.length === 0) {
-      condsBox.append(el('div', 'st-f-empty', 'Условий нет'));
-      return;
-    }
-    state.properties.forEach((cond, idx) => {
-      condsBox.append(buildConditionRow({ networkId, cond, index: idx, state, registryById, touch, renderConditions }));
-    });
-  };
-  renderConditions();
-  const addCond = el('button', 'st-f-add', '+ условие по свойству') as HTMLButtonElement;
-  addCond.type = 'button';
-  addCond.addEventListener('click', () => {
-    const firstReg = registryById.values().next().value as NetworkProperty | undefined;
-    if (firstReg === undefined) {
-      notice('В реестре свойств сети пока нет ни одного свойства.', 'info');
-      return;
-    }
-    const firstOp = OPS_BY_TYPE[firstReg.value_type][0]!.op;
-    state.properties = [...state.properties, { propertyId: firstReg.id, op: firstOp, values: [''] }];
-    renderConditions();
-    touch();
-  });
-  props.body.append(condsBox, addCond);
-
-  // --- Дополнительно (сворачиваемая группа) ---------------------------------
-  const extra = collapsibleBlock('Дополнительно', () => extraCollapsed, (v) => (extraCollapsed = v));
-  markers.push({ head: extra.head, star: extra.star, isNonEmpty: () => extrasActive(state) });
-  const triRow = (
-    label: string,
-    get: () => boolean | null,
-    set: (v: boolean | null) => void,
-    options?: { yes: string; no: string },
-  ): HTMLElement => {
-    const row = div('st-f-tri-row');
-    row.append(el('span', 'st-f-tri-label', label));
-    const select = el('select', 'st-f-input') as HTMLSelectElement;
-    for (const opt of [
-      { v: '', label: 'не важно' },
-      { v: 'true', label: options?.yes ?? 'да' },
-      { v: 'false', label: options?.no ?? 'нет' },
-    ]) {
-      const o = el('option', '', opt.label) as HTMLOptionElement;
-      o.value = opt.v;
-      select.append(o);
-    }
-    const cur = get();
-    select.value = cur === null ? '' : cur ? 'true' : 'false';
-    select.addEventListener('change', () => {
-      set(select.value === '' ? null : select.value === 'true');
-      touch();
-    });
-    row.append(select);
-    return row;
-  };
-  extra.body.append(
-    triRow('Есть значение свойства', () => state.hasProperties, (v) => (state.hasProperties = v)),
-    triRow('Есть постоянный комментарий', () => state.hasComment, (v) => (state.hasComment = v)),
-    triRow('Есть вложения', () => state.hasAttachments, (v) => (state.hasAttachments = v)),
-    triRow('Есть хронология', () => state.hasChronology, (v) => (state.hasChronology = v)),
-    triRow('Только актуальные', () => state.active, (v) => (state.active = v), { yes: 'актуальные', no: 'не актуальные' }),
-  );
-  const trashedRow = div('st-f-tri-row');
-  const trashedLbl = el('label', 'checkbox-row') as HTMLLabelElement;
-  const trashedCb = el('input') as HTMLInputElement;
-  trashedCb.type = 'checkbox';
-  trashedCb.checked = state.trashed;
-  trashedCb.addEventListener('change', () => {
-    state.trashed = trashedCb.checked;
-    touch();
-  });
-  trashedLbl.append(trashedCb, span('Включая помеченные на удаление'));
-  trashedRow.append(el('span', 'st-f-tri-label', 'Корзина'), trashedLbl);
-  extra.body.append(trashedRow);
-
-  // --- Автор / Редактор (сворачиваемая группа) ------------------------------
-  const authorship = collapsibleBlock('Автор / Редактор', () => authorCollapsed, (v) => (authorCollapsed = v));
-  markers.push({
-    head: authorship.head,
-    star: authorship.star,
-    isNonEmpty: () =>
-      authorFieldActive(state.authorOp, state.authorId, state.authorIds) ||
-      authorFieldActive(state.editorOp, state.editorId, state.editorIds),
-  });
-  const authorRows = div('st-f-author-rows');
-  const renderAuthor = (): void => {
-    clear(authorRows);
-    authorRows.append(
-      buildAuthorRow({
-        label: 'Автор',
-        field: 'author',
-        op: state.authorOp,
-        singleId: state.authorId,
-        listIds: state.authorIds,
-        onOpChange: (op) => {
-          state.authorOp = op;
-          if (op !== 'eq' && op !== 'ne') state.authorId = '';
-          if (op !== 'in' && op !== 'not_in') state.authorIds = [];
-          renderAuthor();
-          touch();
-        },
-        onSingleChange: (id) => {
-          state.authorId = id;
-          touch();
-        },
-        onListChange: (ids) => {
-          state.authorIds = ids;
-          touch();
-        },
-      }),
-      buildAuthorRow({
-        label: 'Редактор',
-        field: 'editor',
-        op: state.editorOp,
-        singleId: state.editorId,
-        listIds: state.editorIds,
-        onOpChange: (op) => {
-          state.editorOp = op;
-          if (op !== 'eq' && op !== 'ne') state.editorId = '';
-          if (op !== 'in' && op !== 'not_in') state.editorIds = [];
-          renderAuthor();
-          touch();
-        },
-        onSingleChange: (id) => {
-          state.editorId = id;
-          touch();
-        },
-        onListChange: (ids) => {
-          state.editorIds = ids;
-          touch();
-        },
-      }),
-    );
-  };
-  renderAuthor();
-  authorship.body.append(authorRows);
-
-  // --- Даты (сворачиваемая группа) ------------------------------------------
-  const dates = collapsibleBlock('Даты', () => datesCollapsed, (v) => (datesCollapsed = v));
-  markers.push({ head: dates.head, star: dates.star, isNonEmpty: () => datesActive(state) });
-  dates.body.append(
-    buildDateRangeRow('Создано', state.createdAfter, state.createdBefore, (from, to) => {
-      state.createdAfter = from;
-      state.createdBefore = to;
-      touch();
+  // --- Типы мыслей и связи --------------------------------------------------
+  sections.push(
+    buildEntityChipSection(ctx, {
+      title: 'Типы мыслей',
+      getValues: () => state.typeIds,
+      setValues: (values) => {
+        state.typeIds = values;
+      },
+      loadOptions: (query) =>
+        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
+      optionsHeader: 'Типы мыслей',
+      extraSources: [tokenSourceFor({ kind: 'thought_type' })],
+      placeholder: 'Название типа или токен…',
+      picker: { label: 'список типов…', open: (managed) => openThoughtTypesPicker(networkId, managed) },
     }),
-    buildDateRangeRow('Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
-      state.updatedAfter = from;
-      state.updatedBefore = to;
-      touch();
+    buildEntityChipSection(ctx, {
+      title: 'Типы связей',
+      getValues: () => state.linkTypeIds,
+      setValues: (values) => {
+        state.linkTypeIds = values;
+      },
+      loadOptions: (query) =>
+        filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
+      optionsHeader: 'Типы связей',
+      extraSources: [tokenSourceFor({ kind: 'link_type' })],
+      placeholder: 'Название типа или токен…',
+      picker: { label: 'список типов…', open: (managed) => openLinkTypesPicker(networkId, managed) },
     }),
   );
 
-  // --- Сортировка -----------------------------------------------------------
-  const sort = block('Сортировка');
-  const sortRow = div('st-f-sort');
-  const sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'created', label: 'по дате создания' },
-    { v: 'updated', label: 'по дате изменения' },
-    { v: 'alpha', label: 'по алфавиту' },
-  ]) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    sortSelect.append(o);
-  }
-  sortSelect.value = state.sort;
-  sortSelect.addEventListener('change', () => {
-    state.sort = sortSelect.value as StructureSort;
-  });
-  const orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'asc', label: 'по возрастанию' },
-    { v: 'desc', label: 'по убыванию' },
-  ]) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    orderSelect.append(o);
-  }
-  orderSelect.value = state.order;
-  orderSelect.addEventListener('change', () => {
-    state.order = orderSelect.value as SortOrder;
-  });
-  sortRow.append(sortSelect, orderSelect);
-  sort.body.append(sortRow);
-
-  root.append(
-    kw.box,
-    pt.box,
-    tt.box,
-    lt.box,
-    props.box,
-    extra.box,
-    authorship.box,
-    dates.box,
-    sort.box,
+  // --- Свойства / Дополнительно / Автор-Редактор / Даты / Сортировка --------
+  sections.push(
+    buildConditionsSection(
+      ctx,
+      { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) },
+      {
+        // Токены значений — у тех же видов, где они были (text/url/date/link).
+        extraSuggestFor: (cond) => {
+          const def = registryById.get(cond.propertyId);
+          const valueType = def?.value_type ?? 'text';
+          const editorType = valueType === 'thought_ref' ? 'link' : valueType;
+          const withTokens =
+            editorType === 'link' || valueType === 'text' || valueType === 'url' || valueType === 'date';
+          return withTokens ? [tokenSourceFor({ kind: 'property', valueType, op: cond.op })] : [];
+        },
+      },
+    ),
+    buildExtrasSection(ctx, { get: () => extraCollapsed, set: (v) => (extraCollapsed = v) }),
+    buildAuthorshipSection(
+      ctx,
+      { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) },
+      {
+        // Редакторы значения — с токенами и живым поиском пользователей.
+        editors: {
+          buildSingle: ({ currentId, onChange }) => buildAuthorSingleEditor(currentId, onChange),
+          buildList: ({ currentIds, onChange }) => buildAuthorListEditor(currentIds, onChange),
+        },
+      },
+    ),
+    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }),
+    buildSortSection(ctx),
   );
 
-  refreshGroupTitles();
+  const root = div('st-f-layout view-editor-criteria');
+  for (const section of sections) root.append(section.box);
+  touch();
 
   return {
     root,
@@ -815,341 +560,64 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Keyword scope row
+// Кандидаты «Родительские мысли» (живой поиск мыслей) — общий пикер
 // ---------------------------------------------------------------------------
 
-function buildKeywordScopeRow(state: DialogCriteriaState, touch: () => void): HTMLElement {
-  const row = div('st-f-kw-scope');
-  const items: Array<{ label: string; get: () => boolean; set: (v: boolean) => void; input: HTMLInputElement | null }> = [
-    { label: 'наименование', get: () => state.keywordInTitle, set: (v) => (state.keywordInTitle = v), input: null },
-    { label: 'синонимы', get: () => state.keywordInSynonyms, set: (v) => (state.keywordInSynonyms = v), input: null },
-    { label: 'комментарий', get: () => state.keywordInComment, set: (v) => (state.keywordInComment = v), input: null },
-  ];
-  for (const item of items) {
-    const lbl = el('label', 'checkbox-row st-f-kw-scope-item') as HTMLLabelElement;
-    const cb = el('input') as HTMLInputElement;
-    cb.type = 'checkbox';
-    cb.checked = item.get();
-    item.input = cb;
-    cb.addEventListener('change', () => {
-      item.set(cb.checked);
-      // Last checked guard: default back to title+synonyms when all cleared.
-      if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
-        state.keywordInTitle = true;
-        state.keywordInSynonyms = true;
-      }
-      for (const other of items) other.input!.checked = other.get();
-      touch();
-    });
-    lbl.append(cb, span(item.label));
-    row.append(lbl);
-  }
-  return row;
-}
+/** Облачка выбранных мыслей «Родительских мыслей» (id → данные облачка). */
+const parentClouds = new Map<string, ThoughtCloudInput>();
 
-// ---------------------------------------------------------------------------
-// Property condition row + value editor
-// ---------------------------------------------------------------------------
-
-interface ConditionRowOpts {
-  networkId: string;
-  cond: DialogPropertyCondition;
-  index: number;
-  state: DialogCriteriaState;
-  registryById: Map<string, NetworkProperty>;
-  touch: () => void;
-  renderConditions: () => void;
-}
-
-function buildConditionRow(opts: ConditionRowOpts): HTMLElement {
-  const { networkId, cond, index, state, registryById, touch, renderConditions } = opts;
-  const row = div('st-f-cond');
-  const def = registryById.get(cond.propertyId);
-
-  // Property picker.
-  const propSelect = el('select', 'st-f-input st-f-prop') as HTMLSelectElement;
-  if (!registryById.has(cond.propertyId)) {
-    const placeholder = el('option', '', cond.propertyId === '' ? '— свойство —' : '?') as HTMLOptionElement;
-    placeholder.value = cond.propertyId;
-    propSelect.append(placeholder);
-  }
-  for (const [id, entry] of registryById) {
-    const opt = el('option', '', entry.name) as HTMLOptionElement;
-    opt.value = id;
-    propSelect.append(opt);
-  }
-  propSelect.value = cond.propertyId;
-  propSelect.addEventListener('change', () => {
-    const nextId = propSelect.value;
-    const nextDef = registryById.get(nextId);
-    const nextType: PropertyValueType = nextDef?.value_type ?? 'text';
-    const ops = OPS_BY_TYPE[nextType];
-    const nextOp = ops.some((o) => o.op === cond.op) ? cond.op : ops[0]!.op;
-    state.properties[index] = { propertyId: nextId, op: nextOp, values: [''] };
-    renderConditions();
-    touch();
-  });
-
-  // Operator picker.
-  const opSelect = el('select', 'st-f-input st-f-op') as HTMLSelectElement;
-  const ops = OPS_BY_TYPE[def?.value_type ?? 'text'];
-  for (const op of ops) {
-    const option = el('option', '', op.label) as HTMLOptionElement;
-    option.value = op.op;
-    opSelect.append(option);
-  }
-  if (!ops.some((o) => o.op === cond.op)) {
-    cond.op = ops[0]!.op;
-  }
-  opSelect.value = cond.op;
-  opSelect.addEventListener('change', () => {
-    const live = state.properties[index] ?? cond;
-    state.properties[index] = { ...live, op: opSelect.value as StructurePropertyOp, values: [''] };
-    renderConditions();
-    touch();
-  });
-
-  // Value editor.
-  const valueBox = buildConditionValueEditor({
-    networkId,
-    cond,
-    index,
-    state,
-    registryById,
-    touch,
-  });
-
-  const remove = el('button', 'st-f-remove', '×') as HTMLButtonElement;
-  remove.type = 'button';
-  remove.addEventListener('click', () => {
-    state.properties = state.properties.filter((_, i) => i !== index);
-    renderConditions();
-    touch();
-  });
-
-  row.append(propSelect, opSelect, valueBox, remove);
-  return row;
-}
-
-interface ConditionValueOpts {
-  networkId: string;
-  cond: DialogPropertyCondition;
-  index: number;
-  state: DialogCriteriaState;
-  registryById: Map<string, NetworkProperty>;
-  touch: () => void;
-}
-
-function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
-  const { networkId, cond, index, state, registryById, touch } = opts;
-  const def = registryById.get(cond.propertyId);
-  const valueType: PropertyValueType = def?.value_type ?? 'text';
-  const box = div('st-f-values');
-  const isList = cond.op === 'in' || cond.op === 'not_in';
-  const isPresence = cond.op === 'is_empty' || cond.op === 'not_empty';
-  if (isPresence) {
-    box.append(el('span', 'st-f-value-hint', 'значение не требуется'));
-    return box;
-  }
-
-  const live = (): DialogPropertyCondition => state.properties[index] ?? cond;
-  const setValue = (i: number, v: string): void => {
-    const current = live();
-    const values = [...current.values];
-    while (values.length <= i) values.push('');
-    values[i] = v;
-    state.properties[index] = { ...current, values };
-    touch();
-  };
-
-  const buildScalar = (i: number): HTMLElement => {
-    if (valueType === 'number') {
-      return buildScalarInput('number', live().values[i] ?? '', (v) => setValue(i, v));
-    }
-    if (valueType === 'date') {
-      return buildDateValueRow(networkId, live().values[i] ?? '', cond.op, (v) => setValue(i, v));
-    }
-    if (valueType === 'bool') {
-      return buildBoolSelect(live().values[i] ?? '', (v) => setValue(i, v));
-    }
-    // text/url: free input + token button.
-    return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => setValue(i, v));
-  };
-
-  if (!isList) {
-    box.append(buildScalar(0));
-    return box;
-  }
-
-  // List editor: chip-модель (задача 27472616) — несколько литералов и
-  // токенов свободно смешиваются.
-  const chipField = buildChipListField({
-    getValues: () => live().values.filter((v) => v !== ''),
-    onChange: (values) => {
-      const current = live();
-      state.properties[index] = { ...current, values: values.length > 0 ? values : [''] };
-      touch();
-    },
-    getOptions: (query) => propertyValueComboOptions(networkId, valueType, cond.op, def, query),
-    renderLabel: (value) => propertyValueChipLabel(networkId, valueType, value),
-    placeholder: 'Добавить значение…',
-  });
-  box.append(chipField.root);
-  return box;
-}
-
-function buildScalarInput(
-  type: 'text' | 'number' | 'date',
-  value: string,
-  onChange: (v: string) => void,
-): HTMLInputElement {
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = type;
-  input.value = value;
-  input.addEventListener('input', () => onChange(input.value));
-  return input;
-}
-
-function buildBoolSelect(value: string, onChange: (v: string) => void): HTMLSelectElement {
-  const select = el('select', 'st-f-input') as HTMLSelectElement;
-  const yes = el('option', '', 'да') as HTMLOptionElement;
-  yes.value = 'true';
-  const no = el('option', '', 'нет') as HTMLOptionElement;
-  no.value = 'false';
-  select.append(yes, no);
-  select.value = value === 'false' ? 'false' : 'true';
-  select.addEventListener('change', () => onChange(select.value));
-  return select;
-}
-
-function buildTextValueRow(
-  networkId: string,
-  value: string,
-  valueType: PropertyValueType,
-  op: StructurePropertyOp,
-  onChange: (v: string) => void,
-): HTMLElement {
-  const row = div('st-f-value-row');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.value = value;
-  input.addEventListener('input', () => onChange(input.value));
-  wireTokenCombo({
-    input,
-    getOptions: (query) => getTokenOptions({ kind: 'property', valueType, op }, query),
-    onPick: (token) => replaceComboValue(input, token, onChange),
-  });
-  row.append(input);
-  return row;
-}
-
-/** Кэш id → название мысли для отображения ссылочных значений (e8365d29). */
-const refTitleCache = new Map<string, string>();
-
-/** Live-search кандидаты мыслей для комбобоксов (задача 27472616):
- *  найденные заголовки резолвятся в `refTitleCache`, а сам поиск честно
- *  ищет по подстроке — тот же движок, что у «выбрать». */
-async function findThoughtCandidates(
-  networkId: string,
-  query: string,
-  typeIds: string[],
-): Promise<ComboOption[]> {
+/** Live-search кандидаты мыслей для чип-листа «Родительские мысли». */
+async function parentThoughtOptions(networkId: string, query: string): Promise<EntityOption[]> {
+  const needle = query.trim();
+  if (needle === '') return [];
   try {
-    const hits = await etn.thoughts.findDuplicates(networkId, query, [], typeIds);
-    return hits.map((h) => {
-      refTitleCache.set(h.id, h.title);
-      return { value: h.id, label: h.title, section: 'Мысли' };
+    const hits = await etn.thoughts.findDuplicates(networkId, needle, [], []);
+    return hits.map((hit) => {
+      parentClouds.set(hit.id, { ...hit });
+      return thoughtEntityOption(hit);
     });
   } catch {
     return [];
   }
 }
 
-/** Value editor for `date` conditions: literal ISO date or token with ±Nd. */
-function buildDateValueRow(
-  networkId: string,
-  value: string,
-  op: StructurePropertyOp,
-  onChange: (v: string) => void,
+/** Дозаполняет облачка уже выбранных родительских мыслей (резолв по id). */
+async function resolveParentClouds(networkId: string, ids: readonly string[]): Promise<void> {
+  const missing = ids.filter((id) => !id.startsWith('$') && !parentClouds.has(id));
+  if (missing.length === 0) return;
+  try {
+    const refs = await etn.thoughts.resolve(networkId, [...missing]);
+    for (const ref of refs) parentClouds.set(ref.id, { ...ref });
+  } catch {
+    // Оффлайн — чипы останутся с сырым id.
+  }
+}
+
+/**
+ * Редактор одиночного значения: живой поиск (id, токен или пользователь по
+ * имени) + выбор пользователя из каталога.
+ */
+function buildAuthorSingleEditor(
+  currentId: string,
+  onChange: (id: string) => void,
 ): HTMLElement {
-  const row = div('st-f-value-row');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.value = value;
-  input.placeholder = 'YYYY-MM-DD или токен ($today+7d)…';
-  input.addEventListener('input', () => onChange(input.value));
-  wireTokenCombo({
-    input,
-    getOptions: (query) => getTokenOptions({ kind: 'property', valueType: 'date', op }, query),
-    onPick: (token) => replaceComboValue(input, token, onChange),
-  });
-  row.append(input);
-  return row;
-}
-
-// ---------------------------------------------------------------------------
-// Author condition row
-// ---------------------------------------------------------------------------
-
-interface AuthorRowOpts {
-  label: string;
-  field: 'author' | 'editor';
-  op: StructureAuthorOp;
-  singleId: string;
-  listIds: string[];
-  onOpChange: (op: StructureAuthorOp) => void;
-  onSingleChange: (id: string) => void;
-  onListChange: (ids: string[]) => void;
-}
-
-const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
-};
-
-function buildAuthorRow(opts: AuthorRowOpts): HTMLElement {
-  const row = div('author-cond-row');
-  row.append(el('span', 'author-cond-label', opts.label));
-
-  const opSelect = el('select', 'select-input author-cond-op') as HTMLSelectElement;
-  for (const op of ['eq', 'ne', 'in', 'not_in', 'empty', 'not_empty'] as StructureAuthorOp[]) {
-    const o = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
-    o.value = op;
-    opSelect.append(o);
-  }
-  opSelect.value = opts.op;
-  opSelect.addEventListener('change', () => opts.onOpChange(opSelect.value as StructureAuthorOp));
-  row.append(opSelect);
-
-  if (opts.op === 'empty' || opts.op === 'not_empty') {
-    row.append(el('span', 'author-cond-hint', 'значение не требуется'));
-    return row;
-  }
-
-  const isList = opts.op === 'in' || opts.op === 'not_in';
-  if (isList) {
-    row.append(buildAuthorListEditor(opts));
-    return row;
-  }
-
-  // Одиночное значение: живой поиск (id, токен или пользователь по имени) +
-  // выбор пользователя из каталога.
   const single = div('author-single-wrap');
   const input = el('input', 'st-f-input') as HTMLInputElement;
   input.type = 'text';
-  input.value = opts.singleId === '' || opts.singleId.startsWith('$') ? opts.singleId : (resolveUserName(opts.singleId) ?? opts.singleId);
+  input.value = currentId === '' || currentId.startsWith('$') ? currentId : (resolveUserName(currentId) ?? currentId);
   input.placeholder = 'Пользователь, id или токен…';
-  input.addEventListener('input', () => opts.onSingleChange(input.value));
-  wireTokenCombo({
-    input,
-    getOptions: (query) => authorComboOptions(opts.field, query),
-    onPick: (value) => {
-      input.value = value.startsWith('$') ? value : (resolveUserName(value) ?? value);
-      opts.onSingleChange(value);
+  input.addEventListener('input', () => onChange(input.value));
+  // Живой поиск — общая выпадашка (источник вариантов — её параметр):
+  // выбранная строка подставляется в поле, свободный текст фиксирует
+  // `input`-обработчик выше.
+  wireSuggest(input, {
+    sources: [
+      { when: 'always', load: (query) => comboToEntries(authorComboOptions(query)) },
+    ],
+    pickFirstOnEnter: false,
+    onPick: (entry) => {
+      input.value = entry.value.startsWith('$') ? entry.value : (resolveUserName(entry.value) ?? entry.value);
+      onChange(entry.value);
       input.focus();
     },
   });
@@ -1157,21 +625,22 @@ function buildAuthorRow(opts: AuthorRowOpts): HTMLElement {
     input,
     buildUserSelectWidget({
       label: '',
-      currentId: opts.singleId,
+      currentId,
       onChange: (id) => {
         input.value = resolveUserName(id) ?? id;
-        opts.onSingleChange(id);
+        onChange(id);
       },
     }),
   );
-  row.append(single);
-  return row;
+  return single;
 }
 
 /** Live-search кандидаты для полей «Автор»/«Редактор»: токены (`$…`) +
  *  пользователи сети, отфильтрованные по имени/логину (задача 27472616). */
-function authorComboOptions(field: 'author' | 'editor', query: string): ComboOption[] {
-  const tokenOpts = tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], field), null);
+function authorComboOptions(query: string): ComboOption[] {
+  // Для обоих полей набор токенов один и тот же (`$thought.author`,
+  // `$thought.editor`, `$user`) — см. `buildTokensForSpecialField`.
+  const tokenOpts = tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], 'author'), null);
   const userOpts: ComboOption[] = listUsers().map((u) => ({
     value: u.id,
     label: `${u.display_name ?? u.username} (${u.username})`,
@@ -1181,154 +650,102 @@ function authorComboOptions(field: 'author' | 'editor', query: string): ComboOpt
 }
 
 /**
- * Chip-редактор списка автора/редактора (задача 27472616): чипы выбранных
+ * Чип-редактор списка автора/редактора (задача 27472616): чипы выбранных
  * значений (имена пользователей или тексты токенов) + живой поиск,
- * смешивающий пользователей сети и токены в одном поле ввода.
+ * смешивающий пользователей сети и токены в одном поле ввода. Чипы строит
+ * общий чип-лист сущностей (`lib/entity-picker.ts`).
  */
-function buildAuthorListEditor(opts: AuthorRowOpts): HTMLElement {
-  const field = buildChipListField({
-    getValues: () => opts.listIds,
-    onChange: (values) => opts.onListChange(values),
-    getOptions: (query) => authorComboOptions(opts.field, query),
-    renderLabel: (value) => (value.startsWith('$') ? value : (resolveUserName(value) ?? value)),
+function buildAuthorListEditor(
+  currentIds: string[],
+  onChange: (ids: string[]) => void,
+): HTMLElement {
+  // Локальная копия — владелец состояния обновится через `onChange`, а чипы
+  // обязаны перерисоваться сразу (замкнутый массив к этому моменту устарел).
+  let ids = [...currentIds];
+  const fieldEl = buildEntityChipField({
+    getValues: () => ids,
+    onChange: (values) => {
+      ids = values;
+      onChange(values);
+    },
+    loadOptions: () => usersEntityOptions(),
+    optionsHeader: 'Пользователи',
+    extraSources: [
+      { when: 'always', load: (query) => comboToEntries(authorTokenOptions(query)) },
+    ],
+    cloudOf: (value) =>
+      value.startsWith('$')
+        ? null
+        : { id: value, title: resolveUserName(value) ?? value, icon: '👤', icon_kind: 'emoji' },
     placeholder: 'Пользователь или токен…',
   });
-  return field.root;
+  return fieldEl.root;
 }
 
-// ---------------------------------------------------------------------------
-// Date range row
-// ---------------------------------------------------------------------------
+/** Варианты пользователей сети для чип-листа автора/редактора. */
+function usersEntityOptions(): EntityOption[] {
+  return listUsers().map((u) => ({
+    id: u.id,
+    title: `${u.display_name ?? u.username} (${u.username})`,
+    selectable: true,
+    cloud: { id: u.id, title: u.display_name ?? u.username, icon: '👤', icon_kind: 'emoji' },
+  }));
+}
 
-function buildDateRangeRow(
-  label: string,
-  from: string,
-  to: string,
-  onChange: (from: string, to: string) => void,
-): HTMLElement {
-  const row = div('st-f-date-row');
-  row.append(el('span', 'st-f-date-label', label));
-
-  const buildField = (value: string, set: (v: string) => void): HTMLElement => {
-    const wrap = div('st-f-date-field');
-    const input = el('input', 'st-f-input st-f-date-input') as HTMLInputElement;
-    input.type = 'text';
-    input.value = value;
-    input.placeholder = 'YYYY-MM-DD или токен…';
-    input.addEventListener('input', () => set(input.value));
-    wireTokenCombo({
-      input,
-      getOptions: (query) => getTokenOptions({ kind: 'property', valueType: 'date', op: null }, query),
-      onPick: (token) => replaceComboValue(input, token, set),
-    });
-    wrap.append(input);
-    return wrap;
-  };
-
-  row.append(
-    span('от', 'st-f-date-tag'),
-    buildField(from, (v) => onChange(v, to)),
-    span('до', 'st-f-date-tag'),
-    buildField(to, (v) => onChange(from, v)),
+/** Токен-кандидаты полей «Автор»/«Редактор» (без пользователей). */
+function authorTokenOptions(query: string): ComboOption[] {
+  return filterComboOptions(
+    tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], 'author'), null),
+    query,
   );
-  return row;
 }
 
-// ---------------------------------------------------------------------------
-// Operator set per property value type (mirrors filter-panel.ts OPS_BY_TYPE)
-// ---------------------------------------------------------------------------
 
-const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
-  text: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  url: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  date: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  number: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  bool: [{ op: 'eq', label: 'равно' }],
-  // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
-  // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже.
-  // Паритет с `OPS_BY_TYPE` в `filter-panel.ts` обязателен — иначе UI
-  // предложит операцию, которую сервер отвергнет (ошибка 31a05292), а
-  // `buildConditionRow` упадёт на пустом списке при открытии существующего
-  // отбора с условием на `link`.
-  link: [
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
-  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
-  // Должно совпадать с `OPS_BY_TYPE` в `filter-panel.ts` — иначе при открытии
-  // диалога по существующему отбору с условием на legacy-`thought_ref`
-  // падает «Cannot read properties of undefined (reading 'op')» (ошибка
-  // f7080aea): `OPS_BY_TYPE['thought_ref']` пуст, а `buildConditionRow` берёт
-  // `ops[0]!.op` для восстановления валидной операции.
-  thought_ref: [
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
-};
 
 // ---------------------------------------------------------------------------
-// Pickers (parent / thought types / link types) — задача 27472616: каждый
-// возвращает `Promise<string[] | null>` (`null` — отменено) над УПРАВЛЯЕМЫМ
-// подмножеством чипов, а не над всем списком, — см. {@link ChipPickerOptions}
-// в `value-combo.ts` для того, как это сочетается с токенами.
+// Pickers (parent / thought types / link types) — каждый возвращает
+// `Promise<string[] | null>` (`null` — отменено) над УПРАВЛЯЕМЫМ подмножеством
+// значений чип-листа; чипы-токены сохраняются (см. `buildEntityChipField`).
 // ---------------------------------------------------------------------------
 
-async function pickParentThoughts(networkId: string, managedIds: string[]): Promise<string[] | null> {
+async function pickParentThoughts(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
   const result = await pickThoughtsDialog({
     networkId,
     allowCreate: false,
     allowLinkType: false,
-    selectedIds: managedIds,
+    selectedIds: [...managedIds],
   });
   if (result === null) return null;
   return pickedThoughtIds(result);
 }
 
-async function openThoughtTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  return openThoughtTypesPickerLib(networkId, managedIds);
+async function openThoughtTypesPicker(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
+  return pickEntitiesModal({
+    networkId,
+    kind: 'thought-types',
+    title: 'Типы мыслей',
+    currentIds: managedIds,
+  });
 }
 
-async function openLinkTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  return openLinkTypesPickerLib(networkId, managedIds);
+async function openLinkTypesPicker(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
+  return pickEntitiesModal({
+    networkId,
+    kind: 'link-types',
+    title: 'Типы связей',
+    currentIds: managedIds,
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Value-combo wiring — кандидаты и подписи чипов для каждого поля условия
-// (задача 27472616). Формат хранимых значений не меняется: строка (литерал
-// или `$token`); резолвер токенов на сервере не трогается.
+// Токены и кандидаты полей (задача 27472616). Формат хранимых значений НЕ
+// меняется: строка (литерал или `$token`) для скалярных условий, массив строк
+// для списочных; резолвер токенов на сервере не трогается. Токены — источник
+// подсказок вызывающего: их получает либо общий редактор значения
+// (`extraSuggest`), либо общий чип-лист сущностей (`extraSources`).
 // ---------------------------------------------------------------------------
 
-/** Поле, к которому пристёгнут комбобокс значения условия. */
+/** Поле, к которому пристёгнут источник токенов. */
 type TokenPickerField =
   | { kind: 'property'; valueType: PropertyValueType; op: StructurePropertyOp | null }
   | { kind: 'keywords' }
@@ -1356,75 +773,32 @@ function getTokenOptions(field: TokenPickerField, query: string): ComboOption[] 
   return filterComboOptions(tokenOptions(field), query);
 }
 
-/** Живой поиск для «Родительские мысли»: токен `$thought` + мысли сети. */
-async function parentComboOptions(networkId: string, query: string): Promise<ComboOption[]> {
-  const tokenOpts = getTokenOptions({ kind: 'parent' }, query);
-  if (query.trim() === '') return tokenOpts;
-  return [...tokenOpts, ...(await findThoughtCandidates(networkId, query, []))];
+/** Строка общей выпадашки по кандидату-токену. */
+function comboToEntries(options: readonly ComboOption[]): SuggestEntry[] {
+  return options.map((o) => ({
+    value: o.value,
+    label: o.label,
+    ...(o.section !== undefined ? { section: o.section } : {}),
+    ...(o.disabled === true ? { disabled: true } : {}),
+  }));
 }
 
-/** Подпись чипа «Родительские мысли»: название мысли или текст токена. */
-async function resolveParentChipLabel(networkId: string, value: string): Promise<string> {
-  if (value.startsWith('$')) return value;
-  const cached = refTitleCache.get(value);
-  if (cached !== undefined) return cached;
-  try {
-    const [ref] = await etn.thoughts.resolve(networkId, [value]);
-    if (ref === undefined) return '(не найдено)';
-    refTitleCache.set(ref.id, ref.title);
-    return ref.title;
-  } catch {
-    return '(не найдено)';
-  }
+/** Источник подсказок «токены поля» — параметр общего редактора/пикера. */
+function tokenSourceFor(field: TokenPickerField): SuggestSource {
+  return {
+    when: 'always',
+    load: (query) => comboToEntries(getTokenOptions(field, query)),
+  };
 }
 
-/** Живой поиск для «Типы мыслей»/«Типы связей»: токены цепочки типов +
- *  сам каталог типов, отфильтрованный по названию. */
-function typeComboOptions(kind: 'thought' | 'link', query: string): ComboOption[] {
-  const tokenOpts = tokenOptions(kind === 'thought' ? { kind: 'thought_type' } : { kind: 'link_type' });
-  const section = kind === 'thought' ? 'Типы мыслей' : 'Типы связей';
-  // Separate branches keep `orderedTypeRows`'s generic bound to one concrete
-  // type — a union array (`ThoughtType[] | LinkType[]`) fails inference.
-  const typeOpts: ComboOption[] =
-    kind === 'thought'
-      ? orderedTypeRows(store.state.thoughtTypes)
-          .filter((row) => !row.type.is_root)
-          .map((row) => ({ value: row.type.id, label: row.type.name, section }))
-      : orderedTypeRows(store.state.linkTypes)
-          .filter((row) => !row.type.is_root)
-          .map((row) => ({ value: row.type.id, label: row.type.name_forward, section }));
-  return filterComboOptions([...tokenOpts, ...typeOpts], query);
+/** Кандидаты-сущности, отфильтрованные по подстроке (пустой запрос — все). */
+function filterEntityOptions(options: readonly EntityOption[], query: string): EntityOption[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...options];
+  return options.filter(
+    (o) =>
+      o.title.toLowerCase().includes(needle) ||
+      (o.searchText ?? '').toLowerCase().includes(needle),
+  );
 }
 
-/** Подпись чипа «Типы мыслей»/«Типы связей»: название типа или токен. */
-function typeChipLabel(kind: 'thought' | 'link', value: string): string {
-  if (value.startsWith('$')) return value;
-  const catalogue = kind === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
-  const t = catalogue.find((x) => x.id === value);
-  if (t === undefined) return value;
-  return 'name' in t ? t.name : t.name_forward;
-}
-
-/** Живой поиск для списочных условий по свойству (`in`/`not_in`): токены +
- *  свойства со списочными операторами). */
-async function propertyValueComboOptions(
-  networkId: string,
-  valueType: PropertyValueType,
-  op: StructurePropertyOp,
-  def: NetworkProperty | undefined,
-  query: string,
-): Promise<ComboOption[]> {
-  void def;
-  return getTokenOptions({ kind: 'property', valueType, op }, query);
-}
-
-/** Подпись чипа списочного условия: значение как есть. */
-function propertyValueChipLabel(
-  networkId: string,
-  valueType: PropertyValueType,
-  value: string,
-): string | Promise<string> {
-  void networkId;
-  void valueType;
-  return value;
-}

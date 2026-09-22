@@ -313,6 +313,35 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     assert.ok(/min-width:\s*0\b/.test(body), '.editor-tabs has min-width: 0');
     assert.ok(/overflow:\s*hidden\b/.test(body), '.editor-tabs has overflow: hidden');
   });
+
+  it('регрессия: `.editor-tabs` не сжимается по высоте при длинном комментарии (79193e82)', () => {
+    // `.editor-scroll` — column-flex: при длинном комментарии суммарная высота
+    // детей превышает контейнер, и flex-shrink (по умолчанию 1) сжимал полосу
+    // до 1px — кнопки вкладок пропадали (`overflow: hidden` обнуляет
+    // автоматический минимум). Высота полосы обязана не зависеть от длины
+    // содержимого панели.
+    const css = readText(SRC.css);
+    const block = css.match(/\.editor-tabs\s*\{[^}]*\}/);
+    assert.ok(block !== null, '.editor-tabs CSS block found');
+    assert.ok(
+      /flex:\s*0\s+0\s+auto/.test(block![0]),
+      '.editor-tabs must not shrink (flex: 0 0 auto)',
+    );
+  });
+
+  it('регрессия: `.tab` не фиксирует ширину — `flex: 0 0 auto`, `--tab-w` удалён (1786ff94)', () => {
+    // Один источник ширины вкладки рабочего стола — раскладка: `recomputeOverflow`
+    // (режим fixed) ставит `style.width` 180→120px. Числовой `flex-basis` в CSS
+    // перебивал inline-ширину: сжатие не работало, кнопки уезжали под
+    // `overflow: hidden`, `▾N` не появлялся.
+    const css = readText(SRC.css);
+    const block = css.match(/\.tab\s*\{[^}]*\}/);
+    assert.ok(block !== null, '.tab CSS block found');
+    const body = block![0];
+    assert.ok(/flex:\s*0\s+0\s+auto/.test(body), '.tab declares flex: 0 0 auto');
+    assert.ok(!/var\(--tab-w\)/.test(body), '.tab must not fix flex-basis via --tab-w');
+    assert.ok(!/--tab-w\s*:/.test(body), '--tab-w custom property is gone from .tab');
+  });
 });
 
 /** Source slice of a `const <name> … ];` array literal. */
@@ -377,9 +406,13 @@ describe('набор вкладок зависит от сущности (0.8.1,
     const src = readText(SRC.editor);
     assert.ok(/function displayTab\(/.test(src), 'displayTab is declared');
     assert.ok(/let shownTab: EditorTabId/.test(src), 'shownTab tracks the actually displayed tab');
+    // Инвалидация кэша вкладок при смене типа (ошибка 786bcd69) перерисовывает
+    // именно ПОКАЗАННУЮ вкладку (shownTab), а не сохранённое предпочтение
+    // (activeTab): сброшенную вкладку, на которую пользователь смотрит, надо
+    // собрать заново, а предпочтение — не трогать.
     assert.ok(
-      /if \(shownTab === 'main'\) displayTab\('main'\)/.test(src),
-      'invalidateMainPane reads shownTab (not activeTab)',
+      /builtPanes\.delete\(shownTab\)[\s\S]{0,400}?displayTab\(shownTab\)/.test(src),
+      'invalidateTypeDependentPanes reads shownTab (not activeTab)',
     );
     assert.ok(/if \(shownTab !== 'main'\)/.test(src), 'focusEditorComment reads shownTab');
   });
@@ -405,13 +438,9 @@ describe('вкладка «Мысли» редактора связи — обл
   it('облачко размечено и ведёт себя как облачко на холсте', () => {
     const src = readText(SRC.links);
     for (const anchor of [
-      "div('cloud')",
-      'applyCloudStyle(',
-      'resolveCloudStyle(',
-      'applyThoughtIcon(',
-      'setTooltip(',
+      'createThoughtCloud(',
+      "profile: 'tree'",
       'markThoughtCommentPreview(cloud',
-      'deferSingleClick(',
       'openThoughtInEditor(',
       'setFocus(',
       'toggleSelection(',
@@ -419,8 +448,12 @@ describe('вкладка «Мысли» редактора связи — обл
     ]) {
       assert.ok(src.includes(anchor), `cloud behaviour anchor missing: ${anchor}`);
     }
-    // Полное название в тултипе + бледность неактуальной мысли.
-    assert.ok(src.includes("classList.add('dim')"), 'inactive endpoint cloud is dimmed');
+    // Значок, цвета, бледность неактуальной и жесты рисует общая фабрика
+    // облачка (веха 2) — сборка облачка мимо неё запрещена.
+    assert.ok(
+      src.includes('createThoughtCloud(ref, {'),
+      'the endpoint cloud is built by the shared factory',
+    );
   });
 
   it('у облачков концов нет строки счётчиков 📝/📅/📎 (class cloud-ind)', () => {
@@ -436,14 +469,23 @@ describe('вкладка «Мысли» редактора связи — обл
     );
   });
 
-  it('CSS даёт блокам колонку, подписи — приглушённый вид, облачку — растяжение', () => {
+  it('CSS даёт блокам колонку, подписи — приглушённый вид, облачку — ширину по колонке', () => {
     const css = readText(SRC.css);
+    const src = readText(SRC.links);
     assert.ok(/\.link-thoughts-tab\s*\{/.test(css), '.link-thoughts-tab style');
     assert.ok(/\.link-endpoint\s*\{/.test(css), '.link-endpoint style');
     assert.ok(/\.link-endpoint-label\s*\{/.test(css), '.link-endpoint-label style');
+    // Ширину «по колонке вкладки» объявляет вызов фабрики (опция
+    // width: 'container'), а не контекстный селектор `.link-endpoint .cloud`
+    // (закрыт сторожем guard-thought-cloud).
+    assert.match(
+      src,
+      /profile: 'tree',\n(?:\s*\/\/[^\n]*\n)+\s*width: 'container',/,
+      'endpoint cloud declares the container width at the factory call',
+    );
     assert.ok(
-      /\.link-endpoint\s+\.cloud\s*\{[^}]*width:\s*auto/.test(css),
-      'endpoint cloud stretches to the panel width',
+      !/\.link-endpoint\s+\.cloud\s*\{/.test(css),
+      '.link-endpoint .cloud width override is gone (library class instead)',
     );
   });
 });

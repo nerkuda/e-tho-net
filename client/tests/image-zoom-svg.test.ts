@@ -85,19 +85,27 @@ describe('«лупа» на SVG-иконках (ошибка e4ef6a27)', () => {
     }
   });
 
-  it('мини-граф помечает SVG-иконку данными вложения (полная картинка, L16)', () => {
-    const src = readText(SRC.graph);
+  it('данные вложения для «лупы» ставит фабрика облачка; мини-граф передаёт ей карточку целиком', () => {
+    // После перевода узлов мини-графа на фабрику (веха 2) маркировку
+    // `data-zoom-thought`/`data-zoom-attachment` на иконке делает
+    // `applyThoughtIcon` общей фабрики (тот же контракт L16); мини-граф
+    // передаёт фабрике полную карточку мысли (с `icon_attachment_id`).
+    const graph = readText(SRC.graph);
     assert.ok(
-      /img\.dataset\['zoomThought'\] = node\.ref\.id/.test(src),
-      'the SVG icon carries the thought id',
+      graph.includes('createThoughtCloud(node.ref'),
+      'the local graph hands the full thought card to the factory',
+    );
+    const cloud = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'lib', 'thought-cloud.ts'),
+      'utf8',
     );
     assert.ok(
-      /img\.dataset\['zoomAttachment'\] = attachmentId/.test(src),
-      'the SVG icon carries the backing attachment id',
+      /img\.dataset\['zoomThought'\] = thought\.id/.test(cloud),
+      'the factory marks the icon with the thought id',
     );
     assert.ok(
-      /\?\? null;\s*if \(attachmentId !== null\)/.test(src),
-      'the zoom data is set only when the icon is attachment-backed',
+      /img\.dataset\['zoomAttachment'\] = thought\.icon_attachment_id/.test(cloud),
+      'the factory marks the icon with the backing attachment id',
     );
   });
 });

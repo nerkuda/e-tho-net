@@ -28,7 +28,7 @@ import { EtnError } from '@etn/shared';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
-import { createTypeProperty, setPropertyValue } from '../src/domain/property-service.js';
+import { createTypeProperty } from '../src/domain/property-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import {
   createThoughtTypeView,

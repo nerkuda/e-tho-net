@@ -15,7 +15,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { SERVER_VERSION } from '../version.js';
-import { createRuntime, type McpRuntime } from './context.js';
+import { contractFor, mcpValidationError } from '../contracts.js';
+import { createRuntime, etnErrorText, type McpRuntime } from './context.js';
 import { registerPrompts } from './prompts.js';
 import { registerResources } from './resources.js';
 import { registerTools } from './tools.js';
@@ -104,6 +105,52 @@ function isToolErrorResult(result: unknown): boolean {
 }
 
 /**
+ * Единая валидация входа (задача c9d5f21e, веха 8 версии 0.8.2): SDK
+ * проверяет `inputSchema` инструмента ДО вызова обработчика и на неудаче
+ * возвращает собственный английский текст. Перехватчик регистрирует
+ * `tools/call`-обёртку поверх SDK-обработчика: вход каждого инструмента
+ * сначала валидируется его контрактом из {@link contractFor}, и одинаковый
+ * невалидный вход даёт тот же код и то же сообщение, что REST — в
+ * стандартном MCP-виде `ETN error [VALIDATION_ERROR]: …`.
+ *
+ * Точка подключения — патч `mcp.server.setRequestHandler` ДО первой
+ * регистрации инструмента: SDK ставит свой `tools/call`-обработчик при
+ * первом `registerTool`, и обёртка ложится вокруг него (тот же приём, что
+ * `instrumentToolCalls` использует для `registerTool`).
+ */
+function installCanonicalToolValidation(mcp: McpServer): void {
+  const server = mcp.server;
+  const original = server.setRequestHandler.bind(server);
+  const methodOf = (schema: unknown): string | undefined => {
+    const shape = (schema as { shape?: { method?: { value?: unknown } } })?.shape;
+    return shape?.method?.value === undefined ? undefined : String(shape.method.value);
+  };
+  const wrapped = ((requestSchema: unknown, handler: unknown) => {
+    if (methodOf(requestSchema) === 'tools/call') {
+      const inner = handler as (request: unknown, extra: unknown) => Promise<unknown> | unknown;
+      const validating = (request: unknown, extra: unknown): Promise<unknown> | unknown => {
+        const params = (request as { params?: { name?: unknown; arguments?: unknown } }).params;
+        const name = typeof params?.name === 'string' ? params.name : undefined;
+        const contract = name === undefined ? undefined : contractFor(name);
+        if (contract !== undefined) {
+          const err = mcpValidationError(contract, params?.arguments);
+          if (err !== null) {
+            return {
+              content: [{ type: 'text', text: etnErrorText(err) }],
+              isError: true,
+            };
+          }
+        }
+        return inner(request, extra);
+      };
+      return original(requestSchema as never, validating as never);
+    }
+    return original(requestSchema as never, handler as never);
+  }) as unknown as typeof server.setRequestHandler;
+  server.setRequestHandler = wrapped;
+}
+
+/**
  * Assemble an SDK {@link McpServer} over the given runtime (deps + auth +
  * limits). Registration order is fixed: resources, tools, prompts.
  */
@@ -120,6 +167,7 @@ export function buildEtnMcpServer(rt: McpRuntime): McpServer {
     },
   );
   instrumentToolCalls(mcp, rt);
+  installCanonicalToolValidation(mcp);
   registerResources(mcp, rt);
   registerTools(mcp, rt);
   registerPrompts(mcp, rt);

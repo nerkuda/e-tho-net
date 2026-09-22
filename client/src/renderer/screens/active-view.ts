@@ -32,3 +32,24 @@ export function setActiveView(view: WorkspaceView): void {
   if (view === 'chronicle') void ensureChronicleInitialised();
   if (view === 'activity') void ensureActivityInitialised();
 }
+
+/**
+ * Единый путь команды «В фокус»: показать экран «Карта мыслей» и поставить в
+ * фокус эту мысль (спецификация «Контекстное меню мысли», 08-ui-spec.md §17).
+ *
+ * Смена фокуса без переключения вида незаметна, если пользователь находится на
+ * другом экране («Структуры», «Хроника», «События»), — команда обязана всегда
+ * приводить к результату (ошибка 562356a9). Вызывают её оба входа меню мысли:
+ * подменю «Действия ▾» шапки редактора и контекстное меню облачка (мини-облачко
+ * таблицы свойств, пилюля локального графа) — общий помощник, а не копии пары
+ * «setActiveView + setFocus», иначе входы расходятся.
+ *
+ * На самой карте `setActiveView('map')` — no-op (`setActiveView` выходит сразу,
+ * если вид уже этот), поэтому лишних переключений и перерисовок не возникает.
+ */
+export async function focusThoughtOnMap(id: string): Promise<void> {
+  setActiveView('map');
+  // Ленивый импорт: статический замкнул бы цикл app → … → active-view.
+  const { setFocus } = await import('../app.js');
+  await setFocus(id);
+}

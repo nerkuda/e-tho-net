@@ -159,11 +159,6 @@ const SCALAR_OPS: ReadonlySet<string> = new Set([
   'lte',
 ]);
 
-/**
- * Списковые операции условий свойства. Для них множественный токен
- * допустим — резолвер вернёт массив.
- */
-const LIST_OPS: ReadonlySet<string> = new Set(['in', 'not_in']);
 
 // ---------------------------------------------------------------------------
 // Парсинг токенов в строке
@@ -662,7 +657,7 @@ function resolveGlobal(
   unresolved: TokenIssue[],
   path: string,
 ): string | number | boolean | string[] | null {
-  const head = tok.raw.slice(1).split(/[+\-]/)[0]!;
+  const head = tok.raw.slice(1).split(/[+-]/)[0]!;
   let raw: string | number | boolean;
   if (head === 'today') raw = todayIso(now());
   else if (head === 'now') raw = now().toISOString();
@@ -829,7 +824,7 @@ function readPath(root: unknown, path: string): unknown {
   let cur: unknown = root;
   for (const part of parts) {
     if (cur === null || cur === undefined || typeof cur !== 'object') return undefined;
-    const m = /^([^\[]+)?(\[(\d+)\])?$/.exec(part);
+    const m = /^([^[]+)?(\[(\d+)\])?$/.exec(part);
     if (m === null) return undefined;
     const key = m[1];
     const idx = m[3];

@@ -10,104 +10,34 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** Smallest element stub that survives the properties render path. */
-class ShimElement {
-  tagName: string;
-  className = '';
-  children: ShimElement[] = [];
-  style: Record<string, string> = {};
-  dataset: Record<string, string> = {};
-  attributes: Record<string, string> = {};
-  textContent = '';
-  value = '';
-  type = '';
-  checked = false;
-  title = '';
-  placeholder = '';
-  readOnly = false;
-  disabled = false;
-  isConnected = true;
-  tabIndex = -1;
-  role = '';
-  classList = {
-    add: () => undefined,
-    remove: () => undefined,
-    toggle: () => undefined,
-    contains: () => false,
-  };
-  constructor(tag: string, className?: string, text?: string) {
-    this.tagName = tag;
-    if (className !== undefined) this.className = className;
-    if (text !== undefined) this.textContent = text;
-  }
-  append(...nodes: ShimElement[]): void {
-    this.children.push(...nodes);
-  }
-  replaceChildren(...nodes: ShimElement[]): void {
-    this.children = nodes;
-  }
-  remove(): void {
-    this.parent = null;
-  }
-  parent: ShimElement | null = null;
-  listeners: Record<string, Array<(event?: any) => void>> = {};
-  addEventListener(type: string, handler: (event?: any) => void): void {
-    (this.listeners[type] ??= []).push(handler);
-  }
-  removeEventListener(type: string, handler: (event?: any) => void): void {
-    const list = this.listeners[type];
-    if (list === undefined) return;
-    this.listeners[type] = list.filter((h) => h !== handler);
-  }
-  dispatch(type: string, event?: any): void {
-    for (const handler of this.listeners[type] ?? []) handler(event);
-  }
-  setAttribute(name: string, value: string): void {
-    this.attributes[name] = value;
-    if (name === 'aria-label' || name === 'role') {
-      if (name === 'aria-label') this.ariaLabel = value;
-      if (name === 'role') this.role = value;
-    }
-  }
-  getAttribute(name: string): string | null {
-    return this.attributes[name] ?? null;
-  }
-  hasAttribute(name: string): boolean {
-    return name in this.attributes;
-  }
-  focus(): void {
-    /* no-op in tests */
-  }
-  blur(): void {
-    this.dispatch('blur');
-  }
-  click(): void {
-    this.dispatch('click');
-  }
-  closest(): ShimElement | null {
-    return null;
-  }
-  querySelector(): ShimElement | null {
-    return null;
-  }
-  querySelectorAll(): ShimElement[] {
-    return [];
-  }
-  contains(node: ShimElement | null): boolean {
-    if (node === null) return false;
-    return node === this;
-  }
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
-  }
-  ariaLabel = '';
-}
-
 /** Memoized properties module for the pure-helper tests. */
 let loadedModule: any = null;
+/** Memoized value-editor module (общий редактор значения, веха 4). */
+let loadedValueEditor: any = null;
+
+/**
+ * Дополняет шим window слушателями и таймерами: общая выпадашка
+ * (`lib/suggest-dropdown.ts`) вешает window-слушатели при подключении к полю,
+ * жесты облачка откладывают одиночный клик через `window.setTimeout`
+ * (веха 4, задача 77e7cafd).
+ */
+function ensureWindowShims(win: Record<string, unknown>): void {
+  if (win['addEventListener'] === undefined) win['addEventListener'] = () => undefined;
+  if (win['removeEventListener'] === undefined) win['removeEventListener'] = () => undefined;
+  if (win['setTimeout'] === undefined) {
+    // Отложенный, а не синхронный вызов: `deferSingleClick` в фабрике облачка
+    // присваивает `timer` ПОСЛЕ `setTimeout` — синхронный вызов колбека упал
+    // бы в TDZ («Cannot access 'timer' before initialization»).
+    win['setTimeout'] = (fn: () => void) => setTimeout(fn, 0) as unknown as number;
+  }
+  if (win['clearTimeout'] === undefined) {
+    win['clearTimeout'] = (t: unknown) => clearTimeout(t as NodeJS.Timeout);
+  }
+}
 
 /**
  * Minimal `document` shim. `documentElement.style` covers CodeMirror 6's
@@ -133,6 +63,9 @@ async function buildWithFixtures(): Promise<ShimElement> {
   // tests can rebind `etn.system.openExternal` through `sharedWindow`.
   sharedWindow = (globalThis as any).window ?? {};
   (globalThis as any).window = sharedWindow;
+  // Общая выпадашка (lib/suggest-dropdown.ts) вешает window-слушатели в
+  // момент подключения к полю — шим обязан их принимать (веха 4, 77e7cafd).
+  ensureWindowShims(sharedWindow);
   if (sharedWindow['etn'] === undefined) {
     sharedWindow['etn'] = {};
   }
@@ -337,6 +270,7 @@ describe('editor properties group body (DOM-shimmed)', () => {
     shimDocument();
     sharedWindow = (globalThis as any).window ?? {};
     (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
     if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
     const etnApi = sharedWindow['etn'] as Record<string, unknown>;
     etnApi['types'] = { listTypeProperties: async () => definitions };
@@ -662,6 +596,7 @@ describe('editor properties — «Свойства вне типа» group (0.6.
     shimDocument();
     sharedWindow = (globalThis as any).window ?? {};
     (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
     if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
     const etnApi = sharedWindow['etn'] as Record<string, unknown>;
     if (etnApi['system'] === undefined) etnApi['system'] = {};
@@ -858,47 +793,51 @@ describe('editor properties — внетиповые свойства-связи
     assert.ok(json.includes('Сотрудники (связь)'), 'outside-type link row is rendered');
     assert.ok(json.includes('Иванов'), 'edge target chip #1');
     assert.ok(json.includes('Петров'), 'edge target chip #2');
-    // Read-only для рёбер без ключа реестра: нет маркеров редактора
-    // (кнопки «выбрать»/«очистить») у этой строки.
+    // Read-only для рёбер без ключа реестра: нет маркеров редактора-поля
+    // («выбрать») у этой строки.
     assert.equal(
       json.includes('link-value-corner'),
       false,
       'registry-less link chips must not carry editor corner buttons',
     );
+    // Ошибка 748b80fd: у внетипового ребра появился крестик очистки набора
+    // (ключ записи — display-имя стороны связи), поэтому крестиков теперь два —
+    // у скаляра и у набора рёбер.
+    const clearButtons = json.split('prop-outside-remove').length - 1;
+    assert.equal(clearButtons, 2, '748b80fd: outside-type link set gained a clear button');
   });
 });
 
-describe('property value autocomplete helpers (pure)', () => {
-  /** Imports the module (once) with the DOM shims installed. */
+describe('property value helpers (pure)', () => {
+  /** Imports the modules (once) with the DOM shims installed. */
   async function loadPropsModule(): Promise<any> {
     if (loadedModule === null) {
       shimDocument();
-      (globalThis as any).window = { etn: {} };
+      (globalThis as any).window = {
+        etn: {},
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
       loadedModule = await import('../src/renderer/editor/properties.js');
     }
     return loadedModule;
   }
-
-  it('autocompleteFragment: whole input in single mode, tail after the last comma otherwise', async () => {
-    const { autocompleteFragment } = await loadPropsModule();
-    assert.equal(autocompleteFragment('Москва', false), 'москва');
-    assert.equal(autocompleteFragment('  СПб ', false), 'спб');
-    assert.equal(autocompleteFragment('Москва,  СПб', true), 'спб');
-    assert.equal(autocompleteFragment('Москва,', true), '');
-    assert.equal(autocompleteFragment('Москва', true), 'москва');
-  });
-
-  it('filterOptionsByFragment: case-insensitive substring, empty fragment shows all', async () => {
-    const { filterOptionsByFragment } = await loadPropsModule();
-    const options = ['Москва', 'СПб', 'Нижний Новгород'];
-    assert.deepEqual(filterOptionsByFragment(options, ''), options);
-    assert.deepEqual(filterOptionsByFragment(options, 'спб'), ['СПб']);
-    assert.deepEqual(filterOptionsByFragment(options, 'ниж'), ['Нижний Новгород']);
-    assert.deepEqual(filterOptionsByFragment(options, 'нет такого'), []);
-  });
+  /** Хелперы ввода значений переехали в общий редактор (веха 4, 77e7cafd). */
+  async function loadValueEditorModule(): Promise<any> {
+    if (loadedValueEditor === null) {
+      shimDocument();
+      (globalThis as any).window = {
+        etn: {},
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      loadedValueEditor = await import('../src/renderer/editor/value-editor.js');
+    }
+    return loadedValueEditor;
+  }
 
   it('splitMultiValue keeps trimmed non-empty parts only', async () => {
-    const { splitMultiValue } = await loadPropsModule();
+    const { splitMultiValue } = await loadValueEditorModule();
     assert.deepEqual(splitMultiValue('a, b ,, в '), ['a', 'b', 'в']);
     assert.deepEqual(splitMultiValue(''), []);
   });
@@ -912,47 +851,79 @@ describe('property value autocomplete helpers (pure)', () => {
     assert.equal(propertyHint({ description: '   ' }), null);
     assert.equal(propertyHint({}), null);
   });
+});
 
-  /** Extracts the option labels currently rendered in the dropdown list. */
-  function visibleRowLabels(list: ShimElement): string[] {
-    return list.children
-      .filter((row) => row.className === 'type-combo-item')
-      .map((row) => row.children[row.children.length - 1]?.textContent ?? '');
+describe('value-editor: кнопка «✕» очистки значения (ошибка a8e9eef1)', () => {
+  /** Загружает общий редактор с DOM-шимами (модуль кешируется на файл). */
+  async function loadValueEditor(): Promise<any> {
+    if (loadedValueEditor === null) {
+      shimDocument();
+      (globalThis as any).window = {
+        etn: {},
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      loadedValueEditor = await import('../src/renderer/editor/value-editor.js');
+    }
+    return loadedValueEditor;
   }
 
-  it('buildValueOptionsCaret: caret click on a filled field shows the whole catalogue, typing narrows it (defect 19105687)', async () => {
-    const { buildValueOptionsCaret } = await loadPropsModule();
-    (globalThis as any).window = {
-      etn: {},
-      innerWidth: 1024,
-      innerHeight: 768,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
+  interface FieldFixture {
+    root: ShimElement;
+    input: ShimElement;
+    btn: ShimElement;
+    saved: unknown[];
+  }
+
+  /** Собирает скалярное поле общего редактора и отдаёт корень/инпут/кнопку. */
+  async function buildField(valueType: string, value: unknown): Promise<FieldFixture> {
+    const { buildValueEditor } = await loadValueEditor();
+    const saved: unknown[] = [];
+    const root = buildValueEditor({
+      networkId: 'n',
+      definition: { value_type: valueType, config: null, required: false, default_value: null },
+      value,
+      commitOn: 'change',
+      save: (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as ShimElement;
+    return {
+      root,
+      input: root.children[0] as ShimElement,
+      btn: root.children[root.children.length - 1] as ShimElement,
+      saved,
     };
+  }
 
-    const input = new ShimElement('input') as unknown as HTMLInputElement;
-    (input as unknown as ShimElement).value = 'Москва';
-    const options = ['Москва', 'СПб', 'Нижний Новгород'];
-    const caret = buildValueOptionsCaret(
-      input,
-      options,
-      false,
-      () => undefined,
-      () => undefined,
-    ) as unknown as ShimElement;
+  it('дата очищается одним кликом крестика; после очистки крестик скрыт', async () => {
+    const { input, btn, saved } = await buildField('date', '2026-09-18');
+    assert.equal(btn.textContent, '✕');
+    assert.equal(btn.hidden, false, 'крестик виден у заполненного поля');
+    btn.dispatch('click', { stopPropagation: () => undefined });
+    assert.equal(input.value, '');
+    assert.deepEqual(saved, [null]);
+    assert.equal(btn.hidden, true, 'после очистки крестик скрыт');
+  });
 
-    // Explicit open via the caret button (no typing) must show every option,
-    // not just the one matching the field's current value.
-    caret.dispatch('click');
-    const body = (globalThis as any).document.body as ShimElement;
-    const list = body.children[body.children.length - 1];
-    assert.ok(list !== undefined, 'options list must be mounted');
-    assert.deepEqual(visibleRowLabels(list), options);
+  it('у пустого поля крестик скрыт (date/number/text)', async () => {
+    for (const valueType of ['date', 'number', 'text']) {
+      const { btn } = await buildField(valueType, '');
+      assert.equal(btn.hidden, true, `${valueType}: крестик скрыт у пустого поля`);
+    }
+  });
 
-    // Typing narrows the already-open list down to the typed fragment.
-    (input as unknown as ShimElement).value = 'моск';
-    (input as unknown as ShimElement).dispatch('input');
-    assert.deepEqual(visibleRowLabels(list), ['Москва']);
+  it('число и строка очищаются одним кликом', async () => {
+    const num = await buildField('number', 42);
+    num.btn.dispatch('click', { stopPropagation: () => undefined });
+    assert.equal(num.input.value, '');
+    assert.deepEqual(num.saved, [null]);
+
+    const text = await buildField('text', 'привет');
+    text.btn.dispatch('click', { stopPropagation: () => undefined });
+    assert.equal(text.input.value, '');
+    assert.deepEqual(text.saved, [null]);
   });
 });
 
@@ -994,6 +965,7 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
     // recreate the minimal `etn` stub here — the test only cares about
     // `types` / `properties` / `thoughts` calls in this describe.
     if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    ensureWindowShims(sharedWindow);
     (globalThis as any).window = sharedWindow;
     const etnApi = sharedWindow['etn'] as Record<string, unknown>;
     const calls: PropertyCalls = { removed: [], set: [] };
@@ -1185,11 +1157,15 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
 });
 
 /**
- * Tests for the multi-value `url` editor (task 0.6.2). The DOM shim is the
- * same `ShimElement` used elsewhere in this file; `etn.system.openExternal` is
- * stubbed so the «Открыть» button does not hit a real OS handler.
+ * Tests for the multi-value `url` editor (task 0.6.2). В вехе 4 (77e7cafd)
+ * множественные значения вводятся ЧИПАМИ общего редактора значения
+ * (`buildValueEditor` с `config.multiple`): прежний список строк
+ * `buildMultiUrlEditor` упразднён — вместо него чипы-облачка фабрики
+ * (профиль `chip`) с кнопкой «✕», клик по чипу открывает URL, Enter в поле
+ * добавления создаёт чип. `etn.system.openExternal` застаблен, чтобы
+ * «Открыть» не попадал в реальный системный обработчик.
  */
-describe('buildMultiUrlEditor (DOM-shimmed)', () => {
+describe('buildValueEditor — множественный url чипами (веха 4, 77e7cafd)', () => {
   /** Loads the module under test with a stubbed `etn.system.openExternal`. */
   async function loadModule(): Promise<any> {
     shimDocument();
@@ -1200,16 +1176,36 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
     if ((globalThis as any).window === undefined) {
       (globalThis as any).window = {};
     }
-    if ((globalThis as any).window.etn === undefined) {
-      (globalThis as any).window.etn = {};
-    }
-    if ((globalThis as any).window.etn.system === undefined) {
-      (globalThis as any).window.etn.system = {};
-    }
-    if ((globalThis as any).window.etn.system.openExternal === undefined) {
-      (globalThis as any).window.etn.system.openExternal = async () => '';
-    }
-    return import('../src/renderer/editor/properties.js');
+    const win = (globalThis as any).window as Record<string, unknown>;
+    ensureWindowShims(win);
+    if (win['etn'] === undefined) win['etn'] = {};
+    const etnApi = win['etn'] as Record<string, unknown>;
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    const system = etnApi['system'] as Record<string, unknown>;
+    system['openExternal'] = async () => '';
+    return import('../src/renderer/editor/value-editor.js');
+  }
+
+  /** Определение множественного url-свойства для общего редактора. */
+  function urlDefinition(): any {
+    return {
+      id: '',
+      property_id: 'rp-u',
+      owner_type: 'thought_type',
+      owner_id: '',
+      key: 'Сайты',
+      value_type: 'url',
+      config: { multiple: true },
+      required: false,
+      position: 0,
+      description: null,
+      inherited: false,
+      defined_on: '',
+      defined_on_name: '',
+      default_value: null,
+      overridden_here: false,
+      description_overridden: false,
+    };
   }
 
   /** Returns true if `node` carries the given CSS class. */
@@ -1217,54 +1213,54 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
     return node.className.split(' ').includes(cls);
   }
 
-  it('renders one input row per stored URL, each with its own «Открыть» and «×»', async () => {
-    const { buildMultiUrlEditor } = await loadModule();
-    const editor = buildMultiUrlEditor({
-      urls: ['https://a.test', 'https://b.test'],
-      save: () => undefined,
+  /** Собирает чипы (профиль `chip` фабрики облачка) из корня редактора. */
+  function findChips(editor: ShimElement): ShimElement[] {
+    return editor.children.filter((c) => hasClass(c, 'prop-ref-cloud'));
+  }
+
+  it('renders one chip per stored URL and an add input', async () => {
+    const { buildValueEditor } = await loadModule();
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test', 'https://b.test'],
+      save: async () => true,
     }) as unknown as ShimElement;
 
-    const rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
-    assert.equal(rows.length, 2, 'one row per stored URL');
-    const firstRow = rows[0]!;
-    const input = firstRow.children.find((c) => hasClass(c, 'multi-url-input'));
-    assert.ok(input !== undefined, 'first row has an input');
-    assert.equal(input?.value, 'https://a.test', 'input is pre-filled with the stored URL');
-    const openBtn = firstRow.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'Открыть',
-    );
-    assert.ok(openBtn !== undefined, 'first row has an «Открыть» button');
-    assert.notEqual((openBtn as ShimElement & { disabled?: boolean }).disabled, true);
-    const removeBtn = firstRow.children.find((c) => hasClass(c, 'multi-url-remove'));
-    assert.ok(removeBtn !== undefined, 'first row has a «×» remove button');
+    const chips = findChips(editor);
+    assert.equal(chips.length, 2, 'one chip per stored URL');
+    const titles = chips.map((c) => c.children.find((x) => hasClass(x, 'prc-title'))?.textContent);
+    assert.deepEqual(titles, ['https://a.test', 'https://b.test'], 'chip carries the full URL');
+    const addInput = editor.children.find((c) => hasClass(c, 'value-chips-input'));
+    assert.ok(addInput !== undefined, 'add input is present');
+    assert.equal(addInput?.placeholder, 'https://… или путь к файлу');
   });
 
-  it('«+» button appends a new empty row and focuses it', async () => {
-    const { buildMultiUrlEditor } = await loadModule();
-    const editor = buildMultiUrlEditor({
-      urls: ['https://a.test'],
-      save: () => undefined,
+  it('Enter on free text adds a chip and saves the array', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
     }) as unknown as ShimElement;
 
-    const addBtn = editor.children.find(
-      (c) => c.tagName === 'button' && hasClass(c, 'multi-url-add'),
-    );
-    assert.ok(addBtn !== undefined, '«+» button is present');
-    addBtn!.dispatch('click');
+    const addInput = editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+    (addInput as unknown as ShimElement).value = 'https://b.test';
+    addInput.dispatch('keydown', { key: 'Enter', defaultPrevented: false, preventDefault: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
-    assert.equal(rows.length, 2, '«+» adds a new row');
-    const inputs = rows.map((r) => r.children.find((c) => hasClass(c, 'multi-url-input')));
-    assert.equal(inputs[1]?.value, '', 'new row starts empty');
+    assert.deepEqual(saved, [['https://a.test', 'https://b.test']], 'save called with the extended array');
+    const chips = findChips(editor);
+    assert.equal(chips.length, 2, 'a chip was added');
   });
 
-  it('«Открыть» invokes `etn.system.openExternal` with the trimmed URL', async () => {
-    const { buildMultiUrlEditor } = await loadModule();
-    // Replace the spy on `window.etn.system.openExternal` — the live target
-    // the etn Proxy reads from on every property access (lib/etn.ts). Other
-    // describe blocks in this file occasionally REPLACE `globalThis.window`
-    // (the autocomplete-helpers describe), so we go through the live global
-    // instead of the captured `sharedWindow` reference.
+  it('chip click opens the URL via `etn.system.openExternal`', async () => {
+    const { buildValueEditor } = await loadModule();
     const seen: string[] = [];
     const win = (globalThis as any).window as Record<string, unknown>;
     const etnApi = win['etn'] as Record<string, unknown>;
@@ -1274,56 +1270,60 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
       return '';
     };
     etnApi['system'] = system;
-    const editor = buildMultiUrlEditor({
-      urls: ['  https://trim.test  '],
-      save: () => undefined,
+
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['  https://trim.test  '],
+      save: async () => true,
     }) as unknown as ShimElement;
 
-    const row = editor.children.find((c) => hasClass(c, 'multi-url-row'))!;
-    const openBtn = row.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'Открыть',
-    );
-    openBtn!.dispatch('click');
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const chip = findChips(editor)[0]!;
+    chip.dispatch('click', { ctrlKey: false, metaKey: false });
+    await new Promise((resolve) => setTimeout(resolve, 40));
     assert.deepEqual(seen, ['https://trim.test'], 'openExternal called with the trimmed URL');
   });
 
-  it('removing a row writes the array without that URL', async () => {
-    const { buildMultiUrlEditor } = await loadModule();
-    const saved: (string[] | null)[] = [];
-    const editor = buildMultiUrlEditor({
-      urls: ['https://a.test', 'https://b.test'],
-      save: (urls: string[]) => {
-        saved.push(urls);
+  it('chip «✕» removes the URL and saves the remainder', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test', 'https://b.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
       },
     }) as unknown as ShimElement;
 
-    const rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
-    const removeBtn = rows[0]!.children.find((c) => hasClass(c, 'multi-url-remove'))!;
-    removeBtn.dispatch('click');
+    const chips = findChips(editor);
+    const removeBtn = chips[0]!.children.find((c) => hasClass(c, 'st-f-clear-inline'))!;
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
     assert.deepEqual(saved, [['https://b.test']], 'save called with the remaining URL');
+    assert.equal(findChips(editor).length, 1, 'the chip is gone');
   });
 
-  it('commit on blur collapses trailing empty rows', async () => {
-    const { buildMultiUrlEditor } = await loadModule();
-    const saved: (string[] | null)[] = [];
-    const editor = buildMultiUrlEditor({
-      urls: ['https://a.test'],
-      save: (urls: string[]) => {
-        saved.push(urls);
+  it('removing the last chip saves null (clears the value)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
       },
     }) as unknown as ShimElement;
 
-    // Append an empty row via «+» then blur it without typing.
-    const addBtn = editor.children.find((c) => hasClass(c, 'multi-url-add'))!;
-    addBtn.dispatch('click');
-    let rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
-    assert.equal(rows.length, 2, 'two rows before blur');
-    const newInput = rows[1]!.children.find((c) => hasClass(c, 'multi-url-input'))!;
-    newInput.dispatch('blur');
-    rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
-    assert.equal(rows.length, 1, 'empty trailing row collapsed');
-    assert.deepEqual(saved, [['https://a.test']], 'save called without the empty row');
+    const removeBtn = findChips(editor)[0]!.children.find((c) => hasClass(c, 'st-f-clear-inline'))!;
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(saved, [null], 'an empty list clears the property');
   });
 });
 

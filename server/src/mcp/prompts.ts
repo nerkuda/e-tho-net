@@ -142,7 +142,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           `2. При необходимости дополни контекст поиском \`etn.thoughts.search\` и ресурсами типов: \`etn://networks/${args.network_id}/thought-types\`, \`etn://networks/${args.network_id}/link-types\`.`,
           `3. Составь структурированный документ: цель, ключевые мысли, связи, хронология, выводы и открытые вопросы.`,
           ``,
-          `Вывод — готовый Markdown на русском языке. Если хочешь сохранить отчёт — создай хронологический комментарий у корневой мысли через \`etn.comments.upsert\` (kind=chronological).`,
+          `Вывод — готовый Markdown на русском языке. Если хочешь сохранить отчёт — запиши хронологический комментарий у корневой мысли через \`etn.thoughts.write\` (поле \`chronicle\` в элементе батча).`,
         ].join('\n'),
       );
     },
@@ -226,7 +226,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
 
   // `etn.how_to_write_batch` (задача 053751b5, 0.7.2) — пошаговая инструкция
   // для батчевой записи `etn.thoughts.write`. Локальные `ref`/`target_ref`,
-  // циклы, лимиты, миграция с поглощённых инструментов.
+  // циклы, лимиты, миграция с поглощённых инструментов (удалены в 0.8.2).
   mcp.registerPrompt(
     'etn.how_to_write_batch',
     {
@@ -242,9 +242,9 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
         [
           `Как записывать связный фрагмент графа одной транзакцией через \`etn.thoughts.write\` в сети ${args.network_id} (задача 053751b5, 0.7.2).`,
           ``,
-          `1. Зачем: один вызов покрывает сценарии \`etn.thoughts.create\`/\`update\`/\`set_active\`/\`upsert_bundle\`, \`etn.links.create\`, \`etn.properties.set\`, \`etn.comments.upsert\` — те инструменты помечены \`deprecated_since: '0.7.2'\`, \`registerTools\` их в \`tools/list\` больше не выдаёт (но код остался на случай отката и для старых клиентов в период миграции).`,
+          `1. Зачем: один вызов покрывает сценарии \`etn.thoughts.create\`/\`update\`/\`set_active\`/\`upsert_bundle\`, \`etn.links.create\`, \`etn.properties.set\`, \`etn.comments.upsert\` — те инструменты удалены в 0.8.2 (задача 937480ca), их единственная замена — этот батч.`,
           ``,
-          `2. Параметр верхнего уровня: \`thoughts[]\` — массив от 1 до \`MCP_MAX_THOUGHTS_PER_WRITE\` (= 50, живёт в \`@etn/shared\`). Превышение → \`VALIDATION_ERROR\` до транзакции. Один слот write-бюджета на ВЕСЬ вызов, одна строка \`audit_log\` (\`thought_count\`/\`link_count\`/\`item_count\` в details), одна транзакция.`,
+          `2. Параметр верхнего уровня: \`thoughts[]\` — массив от 1 до \`MCP_MAX_THOUGHTS_PER_WRITE\` (= 50, живёт в \`@etn/shared\`). Превышение → \`VALIDATION_ERROR\` до транзакции. Контракт строгий: любой ключ верхнего уровня вне \`network_id\`/\`local_refs\`/\`thoughts\` (например, \`links\` прямо в корне вызова) → \`VALIDATION_ERROR\` с \`details.fields\`, а не тихий игнор. Один слот write-бюджета на ВЕСЬ вызов, одна строка \`audit_log\` (\`thought_count\`/\`link_count\`/\`item_count\` в details), одна транзакция.`,
           ``,
           `3. Локальные \`ref\`: каждая позиция \`thoughts[]\` либо адресует существующую мысль (\`thought_id\`), либо описывает новую (\`thought\` с \`title\`/\`synonyms\`/\`type\`/\`active\`). Ровно одно из двух (XOR) — иначе \`VALIDATION_ERROR\`. Если задано \`thought\` — обязательно объяви \`ref\`; имя действует ТОЛЬКО внутри батча и должно быть уникальным (повтор → \`VALIDATION_ERROR\`). На этапе \`thought\` сервис сначала ищет дубликаты (\`find_duplicates\`), и \`on_duplicate\` решает исход: \`fail\` (по умолчанию, \`details.candidates\`), \`reuse\` (привязывает остальное к существующей), \`update\` (правит title/synonyms/type/active).`,
           ``,

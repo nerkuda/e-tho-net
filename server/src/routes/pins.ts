@@ -6,20 +6,16 @@
  *
  * `GET` is read-only; `PUT` emits `pinned-thoughts.updated` with audience=user
  * so the user's other clients refresh their panels.
+ *
+ * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { EtnError } from '@etn/shared';
-
 import { sendSuccess } from '../http/responses.js';
-import { fieldStringArray, openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import { listPinnedThoughts, setPinnedThoughts } from '../domain/pin-service.js';
-
-/** Route params for `:networkId`. */
-interface NetworkIdParams {
-  networkId: string;
-}
+import { parseRest, RestPinsGet, RestPinsPut } from '../contracts.js';
 
 /** `/api/v1/networks*` pinned-thoughts routes plugin factory. */
 export function createPinsRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -30,8 +26,8 @@ export function createPinsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/pins',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const input = parseRest(RestPinsGet, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         sendSuccess(reply, listPinnedThoughts(ndb, req.auth!.user.id));
       },
     );
@@ -40,19 +36,19 @@ export function createPinsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/pins',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const body = requestBody(req);
-        const orderedIds = fieldStringArray(body, 'ordered_ids', req.id);
-        if (orderedIds === undefined) {
-          throw new EtnError('VALIDATION_ERROR', 'ordered_ids обязателен.', {
-            field: 'ordered_ids',
-          }, req.id);
-        }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const pins = setPinnedThoughts(ndb, req.auth!.user.id, orderedIds);
-        deps.emit(req, networkId, 'pinned-thoughts.updated', { ordered_ids: orderedIds }, {
-          audience: 'user',
-        });
+        const input = parseRest(RestPinsPut, req);
+        const orderedIds = input.ordered_ids as string[];
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const pins = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => ({
+          result: setPinnedThoughts(ndb, req.auth!.user.id, orderedIds),
+          events: [
+            {
+              type: 'pinned-thoughts.updated',
+              data: { ordered_ids: orderedIds },
+              options: { audience: 'user' },
+            },
+          ],
+        }));
         sendSuccess(reply, pins, { request_id: req.id });
       },
     );
