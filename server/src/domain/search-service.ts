@@ -1134,6 +1134,13 @@ export function findDuplicates(
   // Stored synonym patterns containing `*` — matched against each input term
   // with the word-boundary semantics of synonymPatternToRegex (a thought with
   // synonym `Игорян*` matches the input `Игорянский`).
+  // Bug a01893c7-ed1e-4c1b-a215-d4398135e049: `thoughts_v` filters only
+  // tombstoned rows (`deleted = 0`), not trash-marked ones
+  // (`marked_for_deletion = 1`). Adding `AND t.marked_for_deletion = 0`
+  // keeps trashed thoughts out of duplicate candidates — they can't be
+  // matched against anyway, and surfacing them made `etn.thoughts.write`
+  // refuse to create a fresh thought with a DUPLICATE pointing at a
+  // trashed row the user had no way to find via get/query.
   const wildSynRows = ndb
     .prepare(
       `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
@@ -1144,7 +1151,7 @@ export function findDuplicates(
               t.font_manual AS font_manual,
               ts.synonym AS synonym, ts.synonym_norm AS synonym_norm
        FROM thought_synonyms_v ts JOIN thoughts_v t ON t.id = ts.thought_id
-       WHERE ts.synonym LIKE '%*%'${typeJoin}`,
+       WHERE ts.synonym LIKE '%*%' AND t.marked_for_deletion = 0${typeJoin}`,
     )
     .all(...typeArgs) as Array<{
     id: string;
@@ -1165,9 +1172,11 @@ export function findDuplicates(
 
   for (const term of titleTerms) {
     const n = norm(term);
-    // Exact title_norm match (strongest).
+    // Exact title_norm match (strongest). Bug a01893c7: filter trashed rows.
     const titleRows = ndb
-      .prepare(`SELECT ${DUP_COLUMNS} FROM thoughts_v WHERE title_norm = ?${typeDirect}`)
+      .prepare(
+        `SELECT ${DUP_COLUMNS} FROM thoughts_v WHERE title_norm = ? AND marked_for_deletion = 0${typeDirect}`,
+      )
       .all(n, ...typeArgs) as Array<{
       id: string;
       title: string;
@@ -1185,7 +1194,7 @@ export function findDuplicates(
     for (const r of titleRows) {
       ensure(r).matched_on = 'title';
     }
-    // Exact synonym_norm match.
+    // Exact synonym_norm match. Bug a01893c7: filter trashed rows.
     const synRows = ndb
       .prepare(
         `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
@@ -1196,7 +1205,7 @@ export function findDuplicates(
                 t.font_manual AS font_manual,
                 ts.synonym AS synonym
          FROM thought_synonyms_v ts JOIN thoughts_v t ON t.id = ts.thought_id
-         WHERE ts.synonym_norm = ?${typeJoin}`,
+         WHERE ts.synonym_norm = ? AND t.marked_for_deletion = 0${typeJoin}`,
       )
       .all(n, ...typeArgs) as Array<{
       id: string;
@@ -1257,9 +1266,13 @@ export function findDuplicates(
       for (const word of keywords.exclude) push(word, true);
       // `thoughts_v thoughts` — alias keeps the correlated EXISTS reference
       // (`thoughts.id`) valid against the view.
+      // Bug a01893c7-ed1e-4c1b-a215-d4398135e049: filter trashed rows out of
+      // partial-match candidates.
       let partialRows = ndb
         .prepare(
-          `SELECT ${DUP_COLUMNS} FROM thoughts_v thoughts WHERE ${conditions.join(' AND ')}${typeDirect}`,
+          `SELECT ${DUP_COLUMNS} FROM thoughts_v thoughts WHERE ${conditions.join(
+            ' AND ',
+          )} AND thoughts.marked_for_deletion = 0${typeDirect}`,
         )
         .all(...params, ...typeArgs) as Array<{
         id: string;

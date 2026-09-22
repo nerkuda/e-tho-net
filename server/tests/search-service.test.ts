@@ -392,6 +392,37 @@ describe(
       }
     });
 
+    // Bug a01893c7-ed1e-4c1b-a215-d4398135e049: trashed thoughts
+    // (`marked_for_deletion = 1`) must NOT be returned as duplicate
+    // candidates. `thoughts_v` only filters `deleted = 0` (tombstones),
+    // so `findDuplicates` previously surfaced them and
+    // `etn.thoughts.write` failed with DUPLICATE pointing at a row the
+    // user could not find via get/query/trash.
+    it('findDuplicates excludes trashed thoughts from every match tier', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const title = seedThought(ndb, 'Резолв кандидат');
+        const syn = seedThought(ndb, 'Синоним кандидат');
+        seedSynonym(ndb, syn, 'резолв');
+        const partial = seedThought(ndb, 'Что-то про резолв значений');
+        // Trash all three with `marked_for_deletion = 1` (but keep them
+        // alive — `deleted = 0`, so `thoughts_v` still sees them; that's
+        // the state findDuplicates used to leak).
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id IN (?, ?, ?)').run(
+          title,
+          syn,
+          partial,
+        );
+
+        // No candidates from any tier — exact title, exact synonym, partial.
+        assert.deepEqual(findDuplicates(ndb, 'Резолв кандидат'), []);
+        assert.deepEqual(findDuplicates(ndb, 'резолв'), []);
+        assert.deepEqual(findDuplicates(ndb, 'резолв значений'), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findDuplicates carries icon/style and one parent_title per candidate', () => {
       const ndb = createInMemoryNetworkDb();
       try {
