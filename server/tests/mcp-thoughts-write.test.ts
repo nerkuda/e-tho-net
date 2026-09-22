@@ -814,6 +814,95 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Bug 21cbafb8-254b-42e3-a884-3832a3cf6ab5: item-level
+  // title/synonyms/type_id/type are read only for a `thought_id` item. With a
+  // `thought` block they must be rejected, not silently dropped.
+  it('rejects item-level title/synonyms/type together with a `thought` block', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        for (const offender of [
+          { title: 'B' },
+          { synonyms: ['s'] },
+          { type: 'ADR' },
+          { type_id: null },
+        ]) {
+          const res = await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'n1', thought: { title: 'A' }, ...offender }],
+            },
+          });
+          assert.equal(res.isError, true, `must reject ${JSON.stringify(offender)}`);
+          const text = toolText(res);
+          assert.ok(text.includes('VALIDATION_ERROR'), text);
+          assert.ok(text.includes('thought_id'), text);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Bug 21cbafb8: item-level `active` stays valid together with `thought` —
+  // applied to the created thought, with priority over `thought.active`.
+  it('item-level `active` applies to a new thought and wins over `thought.active`', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // inactive via item-level active: false
+        const off = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'n1', thought: { title: 'Неактуальная-при-создании' }, active: false },
+            ],
+          },
+        });
+        assert.notEqual(off.isError, true, toolText(off));
+        const offId = (JSON.parse(toolText(off)) as { items: Array<{ id: string }> }).items[0]!.id;
+        const gotOff = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: offId },
+        });
+        assert.equal((JSON.parse(toolText(gotOff)) as { active: boolean }).active, false);
+
+        // item-level priority: thought.active=true, item-level active=false
+        const priority = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'n2', thought: { title: 'Приоритет-item-level', active: true }, active: false },
+            ],
+          },
+        });
+        assert.notEqual(priority.isError, true, toolText(priority));
+        const pid = (JSON.parse(toolText(priority)) as { items: Array<{ id: string }> }).items[0]!
+          .id;
+        const gotPriority = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: pid },
+        });
+        assert.equal(
+          (JSON.parse(toolText(gotPriority)) as { active: boolean }).active,
+          false,
+          'item-level active must win over thought.active',
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('property key not in the registry → NOT_FOUND', async () => {
     const ctx = await buildMcpContext();
     try {

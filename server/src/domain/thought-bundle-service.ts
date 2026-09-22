@@ -91,6 +91,11 @@ function resolveThought(
   if (spec === undefined) {
     throw new EtnError('VALIDATION_ERROR', 'either thought_id or thought must be provided');
   }
+  // Item-level `active` applies to a NEW thought too and wins over
+  // `thought.active` (bug 21cbafb8), mirroring the existing-thought branch
+  // above. The other item-level fields (`title`/`synonyms`/`type_id`) are
+  // rejected up front for a `thought` item (see `validateEnvelope`).
+  const mergedActive = input.active !== undefined ? input.active : spec.active;
   const policy = input.on_duplicate ?? 'fail';
   const hits = findDuplicates(ndb, spec.title, spec.synonyms ?? []);
   if (hits.length === 0) {
@@ -100,7 +105,7 @@ function resolveThought(
         title: spec.title,
         ...(spec.synonyms === undefined ? {} : { synonyms: spec.synonyms }),
         ...(spec.type_id === undefined ? {} : { type_id: spec.type_id }),
-        ...(spec.active === undefined ? {} : { active: spec.active }),
+        ...(mergedActive === undefined ? {} : { active: mergedActive }),
       },
       actorUserId,
     );
@@ -124,7 +129,7 @@ function resolveThought(
         title: spec.title,
         ...(spec.synonyms === undefined ? {} : { synonyms: spec.synonyms }),
         ...(spec.type_id === undefined ? {} : { type_id: spec.type_id }),
-        ...(spec.active === undefined ? {} : { active: spec.active }),
+        ...(mergedActive === undefined ? {} : { active: mergedActive }),
       },
       undefined,
       actorUserId,

@@ -140,6 +140,27 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
             : 'each batch item must set exactly one of thought_id or thought: neither was given',
         });
       }
+      // Item-level `title`/`synonyms`/`type_id`/`type` patch an EXISTING
+      // thought addressed by `thought_id` (bug 870c0c0d) and are not read
+      // by the domain when the item carries a `thought` block — reject them
+      // explicitly instead of silently dropping (bug 21cbafb8). Item-level
+      // `active` stays allowed for a new thought: the domain applies it to
+      // the created thought, with priority over `thought.active`.
+      if (hasThought) {
+        const offenders = (['title', 'synonyms', 'type_id', 'type'] as const).filter(
+          (f) => v[f] !== undefined,
+        );
+        if (offenders.length > 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [offenders[0]!],
+            message:
+              `item-level ${offenders.join('/')} apply only to an existing thought addressed by ` +
+              `thought_id; for a new thought set them inside the \`thought\` block ` +
+              `(thought.${offenders[0]}) — item-level fields would be ignored otherwise`,
+          });
+        }
+      }
     })
     // Если задано `thought` (новая мысль, XOR гарантирован выше), нужен
     // `ref` для возможных `target_ref` в других элементах батча.
@@ -175,7 +196,10 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
         '`fail`/`reuse`/`update`. Мысль по `thought_id` правят item-level полями ' +
         '`title`/`synonyms`/`type`/`type_id`/`active` — без вложенного `thought` (он для новых ' +
-        'мыслей, XOR); `synonyms` ЗАМЕНЯЮТ весь набор. Циклы `ref`/`target_ref` разрешены ' +
+        'мыслей, XOR); `synonyms` ЗАМЕНЯЮТ весь набор. Item-level `title`/`synonyms`/`type`/' +
+        '`type_id` вместе с `thought` отвергаются `VALIDATION_ERROR` — задавайте их в `thought`; ' +
+        'item-level `active` допустим и с `thought` (приоритетнее `thought.active`). ' +
+        'Циклы `ref`/`target_ref` разрешены ' +
         '(фаза 2 — мысли, фаза 3 — связи). ' +
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
         '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +

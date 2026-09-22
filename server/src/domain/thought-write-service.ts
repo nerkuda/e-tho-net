@@ -127,6 +127,24 @@ function validateEnvelope(input: ThoughtWriteInput): void {
         { field: `thoughts[${index}]` },
       );
     }
+    // Item-level `title`/`synonyms`/`type_id`/`type` patch an EXISTING thought
+    // (addressed by `thought_id`) and are not read for a new `thought` — the
+    // domain would silently ignore them (bug 21cbafb8). Reject them here too,
+    // so the guard holds regardless of the caller layer. Item-level `active`
+    // stays valid for a new thought: it is applied to it.
+    if (hasThought) {
+      for (const field of ['title', 'synonyms', 'type_id', 'type'] as const) {
+        if (item[field] !== undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `item-level \`${field}\` applies only to an existing thought addressed by ` +
+              `thought_id; for a new thought set it inside the \`thought\` block ` +
+              `(thought.${field})`,
+            { field: `thoughts[${index}].${field}` },
+          );
+        }
+      }
+    }
     if (item.ref !== undefined) {
       if (item.ref === '') {
         throw new EtnError('VALIDATION_ERROR', 'ref must be a non-empty string', {

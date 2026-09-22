@@ -516,29 +516,35 @@ export interface McpThoughtWriteItem {
     active?: boolean;
   };
   /**
-   * Apply `active` to the existing thought addressed by `thought_id`,
-   * without supplying a nested `thought` block. Absorbs
-   * `etn.thoughts.set_active` (bug faf56a02-e884-488b-9b7b-39dfd5d5b275):
-   * before the fix the field was silently dropped by Zod (item-level
-   * `active` was unknown). `thought` XOR `thought_id`, so an item never
-   * carries both.
+   * Apply `active` to the item's thought. With `thought_id` — toggles the
+   * existing thought without a nested `thought` block. With `thought` — sets
+   * the created thought's flag and wins over `thought.active` (bug
+   * 21cbafb8-254b-42e3-a884-3832a3cf6ab5). Absorbs `etn.thoughts.set_active`
+   * (bug faf56a02-e884-488b-9b7b-39dfd5d5b275): before that fix the field was
+   * silently dropped by Zod (item-level `active` was unknown).
    */
   active?: boolean;
   /** Item-level `title` — renames the existing thought addressed by
-   *  `thought_id`, without a nested `thought` block. Absorbs the rename half
-   *  of the removed `etn.thoughts.update` (bug
+   *  `thought_id`, without a nested `thought` block. NOT allowed together
+   *  with `thought` (rejected with `VALIDATION_ERROR`): for a new thought set
+   *  `thought.title` instead, otherwise the value would be silently ignored
+   *  (bug 21cbafb8-254b-42e3-a884-3832a3cf6ab5). Absorbs the rename half of
+   *  the removed `etn.thoughts.update` (bug
    *  870c0c0d-dd2d-46b1-a498-780edcf8e18a): the field was absent entirely, so
    *  a batch item addressing an existing thought could not rename it. */
   title?: string;
   /** Item-level `synonyms` — replaces the whole synonym set of the existing
    *  thought addressed by `thought_id` (bug
-   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a). */
+   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a). Not allowed together with
+   *  `thought` (see item-level `title`). */
   synonyms?: string[];
   /** Item-level `type_id` — changes the type of the existing thought
    *  addressed by `thought_id` (bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a,
-   *  sibling of the rename gap). */
+   *  sibling of the rename gap). Not allowed together with `thought` (see
+   *  item-level `title`). */
   type_id?: string | null;
-  /** Type resolution by name (XOR with item-level `type_id`). */
+  /** Type resolution by name (XOR with item-level `type_id`). Not allowed
+   *  together with `thought` (see item-level `title`). */
   type?: string;
   /** How to handle a `find_duplicates` match against `thought.title`/`synonyms`
    *  when `thought_id` is absent. Mirrors `etn.thoughts.upsert_bundle`. */

@@ -97,6 +97,27 @@ describe(
       }
     });
 
+    // Bug 21cbafb8-254b-42e3-a884-3832a3cf6ab5: item-level `active` applies
+    // to a NEW thought too (with priority over `thought.active`).
+    it('applies item-level `active` to a newly created thought', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME');
+        const off = upsertThoughtBundle(ndb, { thought: { title: 'Неактуальная' }, active: false }, USER);
+        assert.equal(off.thought_action, 'created');
+        assert.equal(off.thought.active, false, 'item-level active must reach the created thought');
+
+        const winner = upsertThoughtBundle(
+          ndb,
+          { thought: { title: 'Приоритет', active: true }, active: false },
+          USER,
+        );
+        assert.equal(winner.thought.active, false, 'item-level active wins over thought.active');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('rolls back the whole transaction when a middle step fails (atomicity)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
