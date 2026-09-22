@@ -138,6 +138,7 @@ function makeFocus(focused: Thought, children: string[] = []): FocusResponse {
       link_id: `link-${id}`,
       link_type_id: null,
       link_active: true,
+      link_marked_for_deletion: false,
       has_incoming: false,
       has_outgoing: true,
       manual_position: null,

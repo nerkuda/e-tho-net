@@ -212,7 +212,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
         'full text of the permanent comment (задача 3ea09a54: в `etn.thoughts.get` обрезка отключена; в ' +
         'остальных выборках — preview 2000 chars, `etn.comments.get` для полного). `meta.link_stats` ' +
-        '(0.7.2) — счётчики активных связей по `(link_type_id, direction)` + `link_types`. ' +
+        '(0.7.2) — счётчики активных связей по `(link_type_id, direction)` + `link_types`; ' +
+        'рёбра, помеченные на удаление, НЕ считаются (0.8.2, ошибка 355319d4). ' +
         '`meta.views` (0.7.3, задача c1fa71d4) — эффективный набор отборов для мысли: ' +
         'имя, описание и тип-владелец каждого доступного отбора (без `definition`); ' +
         'исполняется через `etn.views.run { view_name }`. ' +
@@ -339,7 +340,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`) or `both` (0.7.2); ' +
         '`depth > 1` does a bounded BFS walk. `dir: "both"` (0.7.2) — оба направления одним вызовом, ' +
         'записи несут `direction: "in"|"out"`. Рёбра (0.7.2) несут `has_properties`/`has_comment` — ' +
-        'два агрегирующих запроса на весь набор рёбер, не на ребро. На `depth: 1` страница 50 — ' +
+        'два агрегирующих запроса на весь набор рёбер, не на ребро; `link_marked_for_deletion` ' +
+        '(0.8.2, ошибка 355319d4) говорит, что ребро помечено на удаление (корзина) — оно остаётся ' +
+        'видимым, но помеченным. На `depth: 1` страница 50 — ' +
         '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
         '`link_filter` — { type_ids?, include_structural? } ограничивает связи, по которым считается соседство. ' +
         'Справочники `link_types`/`thought_types`.',
@@ -488,7 +491,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'truncated to 2000 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
         '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
-        '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`. ' +
+        '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`; ' +
+        '`link_marked_for_deletion` (0.8.2, ошибка 355319d4) — ребро помечено на удаление (корзина). ' +
         '`meta.views` (0.7.3) для seed-узлов — эффективный набор отборов, ' +
         'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +

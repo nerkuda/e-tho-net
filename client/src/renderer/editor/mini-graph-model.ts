@@ -141,17 +141,36 @@ export function shiftEdgeByLane(
   return { a: { x: a.x + ox, y: a.y + oy }, b: { x: b.x + ox, y: b.y + oy } };
 }
 
+/** Пометка корзины в тултипе ребра (ошибка 355319d4). */
+export const TRASHED_EDGE_TITLE_SUFFIX = '(в корзине)';
+
+/** Штрих помеченного на удаление ребра — приглушённый пунктир. */
+export const TRASHED_EDGE_DASH = '4 4';
+
+/**
+ * Ребро помечено на удаление (корзина, S13). Правило живёт здесь, чтобы
+ * оформление, тултип и метка корзины на графе не разъехались (ошибка
+ * 355319d4). Ребро без записи связи (`null`) помеченным быть не может.
+ */
+export function isTrashedEdge(link: Link | null): boolean {
+  return link !== null && link.marked_for_deletion === true;
+}
+
 /**
  * Тултип ребра: `«<имя типа связи>: <имя источника> -> <имя назначения>»`;
  * тип не задан — вместо имени слово «связь». Направление — фактическое.
+ * `trashed` (ошибка 355319d4) добавляет пометку «(в корзине)» — помеченное
+ * ребро остаётся на графе, но пользователь обязан видеть, что оно в корзине.
  */
 export function edgeTooltip(
   typeName: string,
   sourceTitle: string,
   targetTitle: string,
+  trashed = false,
 ): string {
   const name = typeName === '' ? UNTYPED_LINK_LABEL : typeName;
-  return `${name}: ${sourceTitle} -> ${targetTitle}`;
+  const suffix = trashed ? ` ${TRASHED_EDGE_TITLE_SUFFIX}` : '';
+  return `${name}: ${sourceTitle} -> ${targetTitle}${suffix}`;
 }
 
 /** Эффективное оформление линии: цвет/штрих/толщина в мировых px. */
@@ -187,7 +206,9 @@ export function resolveEdgeVisual(
   const width = link.width ?? type.width;
   return {
     color: color ?? LINK_STYLE_DEFAULTS.color,
-    dash: edgeDash(style),
+    // Помеченное на удаление ребро всегда пунктирное (ошибка 355319d4) — стиль
+    // типа его не «оживляет»; приглушение делает CSS-класс `.trashed`.
+    dash: isTrashedEdge(link) ? TRASHED_EDGE_DASH : edgeDash(style),
     width,
   };
 }

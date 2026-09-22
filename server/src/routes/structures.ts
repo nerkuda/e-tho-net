@@ -64,7 +64,7 @@ import {
   structureRequestToQuery,
 } from '../domain/query-service.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
-import { getEdgesAmong } from '../domain/link-service.js';
+import { getEdgesAmong, toFocusEdge } from '../domain/link-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -184,16 +184,10 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ids = (input.ids as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
         const showInactive = input.show_inactive === true;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive).map((l) => ({
-          id: l.id,
-          source_id: l.source_id,
-          target_id: l.target_id,
-          type_id: l.type_id,
-          // Per-link line-style override (null = inherit from the type), §6.12.
-          color: l.color,
-          style: l.style,
-          width: l.width,
-        }));
+        // Same projection as the focus response (`toFocusEdge`) — including
+        // the trash flag from 355319d4, so the tree lines mark trashed edges
+        // exactly like the map does.
+        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive).map(toFocusEdge);
         sendSuccess(reply, { edges });
       },
     );

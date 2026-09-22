@@ -345,4 +345,36 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'the arrow shares the line colour',
     );
   });
+
+  it('помеченное на удаление ребро отличимо: приглушение, пунктир, тултип, метка корзины — 355319d4', () => {
+    const src = readText(SRC.graph);
+    assert.ok(src.includes('isTrashedEdge('), 'trash state comes from the pure model');
+    assert.ok(
+      src.includes("'mini-graph-edge trashed'") && src.includes("'mini-graph-edge-arrow trashed'"),
+      'the dimming class is applied to the line and its arrow',
+    );
+    assert.ok(
+      /edgeTooltip\(edge\.label, edge\.source\.title, edge\.target\.title, trashed\)/.test(src),
+      'the edge tooltip carries the «(в корзине)» marker',
+    );
+    assert.ok(
+      src.includes("svgEl('foreignObject')") && src.includes("'mini-graph-edge-trash'"),
+      'the trash badge is an SVG foreignObject over the line',
+    );
+    assert.ok(
+      /openTrashedLinkDialog\(linkId\)/.test(src) && src.includes("import('../trash.js')"),
+      'the badge opens the link delete/restore dialog (lazy import, no cycle)',
+    );
+    assert.ok(
+      /badge\.setAttribute\('x', String\(bx - TRASH_BADGE_SIZE \/ 2\)\)/.test(src),
+      'the badge follows the edge geometry every frame',
+    );
+    const css = readText(SRC.css);
+    assert.ok(css.includes('.mini-graph-edge.trashed'), 'CSS dims the trashed line');
+    assert.ok(css.includes('.mini-graph-edge-trash'), 'CSS styles the badge container');
+    // Правило пометки живёт в модели — оформление не может разойтись с тултипом.
+    const model = readText(SRC.model);
+    assert.ok(model.includes('TRASHED_EDGE_DASH'), 'the dash rule lives in the model');
+    assert.ok(model.includes('isTrashedEdge(link)'), 'the model decides the trashed dash');
+  });
 });

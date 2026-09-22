@@ -163,16 +163,23 @@ export function getThoughtMeta(
  * тип.
  *
  * `type_id = null` означает нетипизированное ребро (отдельная группа).
+ *
+ * Считаются только ЖИВЫЕ рёбра: `active = 1 AND marked_for_deletion = 0`
+ * (ошибка 355319d4 — «счётчики активных связей» в описании свойства не
+ * должны включать рёбра корзины).
  */
 export function getLinkStats(ndb: NetworkDb, thoughtId: string): LinkStats {
   const rows = ndb
     .prepare(
+      // `marked_for_deletion = 0` (ошибка 355319d4): счётчики активных связей
+      // не считают рёбра, помеченные на удаление, — иначе профиль влияния
+      // противоречил бы таблице свойств, где такое ребро уже не значится.
       `SELECT type_id AS link_type_id, 'in' AS direction, COUNT(*) AS count
-         FROM links_v WHERE target_id = ? AND active = 1
+         FROM links_v WHERE target_id = ? AND active = 1 AND marked_for_deletion = 0
          GROUP BY type_id
        UNION ALL
        SELECT type_id AS link_type_id, 'out' AS direction, COUNT(*) AS count
-         FROM links_v WHERE source_id = ? AND active = 1
+         FROM links_v WHERE source_id = ? AND active = 1 AND marked_for_deletion = 0
          GROUP BY type_id`,
     )
     .all(thoughtId, thoughtId) as Array<{

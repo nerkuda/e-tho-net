@@ -72,6 +72,7 @@ function neighbor(id: string, linkId: string): FocusNeighbor {
     link_id: linkId,
     link_type_id: null,
     link_active: true,
+    link_marked_for_deletion: false,
     has_incoming: false,
     has_outgoing: false,
     manual_position: null,

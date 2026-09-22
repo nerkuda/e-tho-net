@@ -68,6 +68,7 @@ function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
     link_id: linkId,
     link_type_id: null,
     link_active: true,
+    link_marked_for_deletion: false,
     has_incoming: false,
     has_outgoing: false,
     manual_position: null,
@@ -75,7 +76,16 @@ function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
 }
 
 function edge(id: string, source_id: string, target_id: string): FocusEdge {
-  return { id, source_id, target_id, type_id: null, color: null, style: null, width: null };
+  return {
+    id,
+    source_id,
+    target_id,
+    type_id: null,
+    link_marked_for_deletion: false,
+    color: null,
+    style: null,
+    width: null,
+  };
 }
 
 function ref(overrides: Partial<ThoughtRef> = {}): ThoughtRef {

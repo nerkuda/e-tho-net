@@ -7011,6 +7011,36 @@ table.chron-table thead th {
   stroke-opacity: 0.95;
 }
 
+/* A link marked for deletion (trash, error 355319d4): the line stays visible
+   but reads as «in the trash» — the dimmed dashed stroke is set in
+   canvas/links.ts; the class is the hook for tests and further styling.
+   A marked link is never hidden: symmetry with a marked thought cloud. */
+.link-line.link-trashed {
+  stroke-linecap: round;
+}
+
+/* Trash badge on a trashed line — the same language as the marked cloud's badge
+   (black circle, bright red lucide trash icon). Clickable: opens the link
+   delete/restore dialog. Lives in the hit overlay so it stays interactive. */
+.link-trash-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.link-trash-badge svg {
+  color: #e53935;
+}
+
 /* Layer dialogs: the explaining one-liner and the safe-delete note. */
 .layer-hint {
   font-size: 12px;
@@ -8099,6 +8129,23 @@ table.activity-table thead th {
   stroke-width: 14;
   pointer-events: stroke;
   cursor: help;
+}
+
+/* Помеченное на удаление ребро (ошибка 355319d4): остаётся на графе, но
+   приглушается (пунктир приходит из модели, `TRASHED_EDGE_DASH`); симметрия с
+   бледной пилюлей помеченной мысли. */
+.mini-graph-edge.trashed,
+.mini-graph-edge-arrow.trashed {
+  opacity: 0.45;
+}
+.mini-graph-edge-label.trashed {
+  opacity: 0.6;
+}
+
+/* Метка корзины помеченного ребра: вид даёт общий `.link-trash-badge`, размер —
+   foreignObject (18 px), клик открывает диалог связи. */
+.mini-graph-edge-trash {
+  overflow: visible;
 }
 
 .mini-node {

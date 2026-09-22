@@ -22,7 +22,12 @@
  * §5.3).
  */
 
-import { MCP_DEFAULTS, TRAVERSAL_DEFAULTS, type LinkTypeFilterInput } from '@etn/shared';
+import {
+  MCP_DEFAULTS,
+  TRAVERSAL_DEFAULTS,
+  type LinkTypeFilterInput,
+  type SubgraphEdge,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
@@ -135,7 +140,7 @@ export function subgraph(
   bounds: TraversalBounds = {},
 ): {
   nodes: string[];
-  edges: Array<{ id: string; source_id: string; target_id: string; type_id: string | null }>;
+  edges: SubgraphEdge[];
   truncated: boolean;
 } {
   const { ids, truncated } = traverse(ndb, seedIds, 'both', {
@@ -157,9 +162,13 @@ export function subgraph(
   const typeParams = typeClause === null ? [] : typeClause.params;
 
   const placeholders = ids.map(() => '?').join(',');
+  // `l.marked_for_deletion` (ошибка 355319d4): ребро, помеченное на удаление,
+  // остаётся в подграфе (помеченную сущность не прячем), но ответ несёт
+  // признак корзины — `link_marked_for_deletion`, единый для всех DTO с рёбрами.
   const edges = ndb
     .prepare(
-      `SELECT l.id, l.source_id, l.target_id, l.type_id
+      `SELECT l.id, l.source_id, l.target_id, l.type_id,
+              l.marked_for_deletion AS link_marked_for_deletion
          FROM links_v l
         WHERE l.active = 1
           AND l.source_id IN (${placeholders})
@@ -170,9 +179,20 @@ export function subgraph(
     source_id: string;
     target_id: string;
     type_id: string | null;
+    link_marked_for_deletion: number;
   }>;
 
-  return { nodes: ids, edges, truncated };
+  return {
+    nodes: ids,
+    edges: edges.map((row) => ({
+      id: row.id,
+      source_id: row.source_id,
+      target_id: row.target_id,
+      type_id: row.type_id,
+      link_marked_for_deletion: row.link_marked_for_deletion === 1,
+    })),
+    truncated,
+  };
 }
 
 /**

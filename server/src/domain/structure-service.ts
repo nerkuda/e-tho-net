@@ -48,7 +48,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { getEdgesAmong } from './link-service.js';
+import { getEdgesAmong, toFocusEdge } from './link-service.js';
 import { directionsOf, REF_COLUMNS } from './query-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
@@ -484,15 +484,11 @@ export function getHierarchy(
   const neighbors = page.map(rowToThoughtRef);
 
   const visibleIds = [thoughtId, ...neighbors.map((n) => n.id)];
-  const edges = getEdgesAmong(ndb, visibleIds, opts.showInactive === true, opts.linkFilter).map((l) => ({
-    id: l.id,
-    source_id: l.source_id,
-    target_id: l.target_id,
-    type_id: l.type_id,
-    color: l.color,
-    style: l.style,
-    width: l.width,
-  }));
+  // Same projection as the focus response (`toFocusEdge`) — including the
+  // trash flag (ошибка 355319d4), so the tree marks trashed edges like the map.
+  const edges = getEdgesAmong(ndb, visibleIds, opts.showInactive === true, opts.linkFilter).map(
+    toFocusEdge,
+  );
   // Whether each visible thought has active incoming/outgoing links at all —
   // in the tree these mean "has parents/children to expand", so the ellipses
   // can be filled exactly like on the canvas.

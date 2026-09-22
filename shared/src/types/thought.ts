@@ -276,6 +276,14 @@ export interface FocusNeighbor {
   link_id: string;
   link_type_id: string | null;
   link_active: boolean;
+  /**
+   * `true`, когда ребро `link_id` помечено на удаление (корзина, S13).
+   * Помеченное ребро остаётся физически живым и по-прежнему попадает в
+   * выборки соседей — прятать его нельзя (симметрия с помеченной мыслью),
+   * но клиент обязан показать его помеченным, а не обычным (ошибка
+   * 355319d4). Источник — `links.marked_for_deletion`.
+   */
+  link_marked_for_deletion: boolean;
   /** Whether the neighbour has ANY incoming link (drives the top ellipse fill). */
   has_incoming: boolean;
   /** Whether the neighbour has ANY outgoing link (drives the bottom ellipse fill). */
@@ -326,6 +334,12 @@ export interface SubgraphEdge {
   source_id: string;
   target_id: string;
   type_id: string | null;
+  /**
+   * `true` — ребро помечено на удаление (корзина, S13). Ребро остаётся
+   * видимым в подграфе, флаг говорит агенту и клиенту, что оно в корзине
+   * (ошибка 355319d4). Источник — `links.marked_for_deletion`.
+   */
+  link_marked_for_deletion: boolean;
   /** 0.7.2 — у связи есть хотя бы одно заполненное значение свойства. */
   has_properties?: boolean;
   /** 0.7.2 — у связи есть постоянный или хронологический комментарий. */
@@ -343,6 +357,13 @@ export interface FocusEdge {
   source_id: string;
   target_id: string;
   type_id: string | null;
+  /**
+   * `true` — ребро помечено на удаление (корзина, S13). Линия такого ребра
+   * рисуется помеченной (приглушение + пунктир + метка корзины), но НЕ
+   * исчезает: помеченная сущность обязана быть видна с явным признаком
+   * (ошибка 355319d4). Источник — `links.marked_for_deletion`.
+   */
+  link_marked_for_deletion: boolean;
   /** Per-link override of the type's colour; `null` = inherit from the type. */
   color: string | null;
   /** Per-link override of the type's dash style; `null` = inherit. */
@@ -378,15 +399,17 @@ export interface FocusResponse {
  * One row of `etn.thoughts.get.meta.link_stats` (0.7.2) — link counts for a
  * single link type in one direction. `direction: "in"` — the link points AT
  * this thought (`target_id = thoughtId`); `direction: "out"` — the link
- * originates FROM this thought (`source_id = thoughtId`). Counted over active
- * links only. `link_type_id` is `null` for the untyped-edges group.
+ * originates FROM this thought (`source_id = thoughtId`). Counted over active,
+ * NON-trashed links only (`active = 1 AND marked_for_deletion = 0`) — a link
+ * marked for deletion is not a live connection (ошибка 355319d4).
+ * `link_type_id` is `null` for the untyped-edges group.
  */
 export interface LinkStatEntry {
   /** Registry link type id, or `null` for the untyped-edges group. */
   link_type_id: string | null;
   /** `"in"` — link points at the thought; `"out"` — link originates from it. */
   direction: 'in' | 'out';
-  /** Active-link count for `(link_type_id, direction)`. */
+  /** Live (active, not trashed) link count for `(link_type_id, direction)`. */
   count: number;
 }
 

@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  type FocusEdge,
   type IconKind,
   type Link,
   type LinkCreateInput,
@@ -261,6 +262,29 @@ export function getEdgesAmong(
     )
     .all(...ids, ...ids, showInactive ? 1 : 0, ...typeParams) as LinkRow[];
   return rows.map(rowToLink);
+}
+
+/**
+ * Project a link onto the {@link FocusEdge} DTO — the shape carried by
+ * `focus.edges` (03-server-api.md §6.2) and `POST /thoughts/edges`
+ * (§6.12). Single place for the projection so the two responses can never
+ * drift apart: the trash flag (`link_marked_for_deletion`, ошибка 355319d4)
+ * was added here once and reaches both call sites.
+ */
+export function toFocusEdge(l: Link): FocusEdge {
+  return {
+    id: l.id,
+    source_id: l.source_id,
+    target_id: l.target_id,
+    type_id: l.type_id,
+    // Trash flag: the edge is still drawn, but marked (dimmed/dashed + trash
+    // badge), never hidden — symmetry with a marked thought.
+    link_marked_for_deletion: l.marked_for_deletion,
+    // Per-link line-style override (null = inherit from the type); 08-ui-spec.md §6.9.
+    color: l.color,
+    style: l.style,
+    width: l.width,
+  };
 }
 
 /**

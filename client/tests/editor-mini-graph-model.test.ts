@@ -17,6 +17,7 @@ import {
   EDGE_LANE_GAP,
   MASS_LINK_THRESHOLD,
   PERIPHERY_CAP,
+  TRASHED_EDGE_DASH,
   UNTYPED_LINK_LABEL,
   assignEdgeLanes,
   computeGraphStats,
@@ -24,6 +25,7 @@ import {
   edgeTooltip,
   edgeTypeName,
   graphStatEntries,
+  isTrashedEdge,
   neutralEdgeVisual,
   orientLink,
   resolveEdgeVisual,
@@ -43,7 +45,7 @@ function link(over: Partial<Link> = {}): Link {
     style: over.style ?? null,
     width: over.width ?? null,
     active: true,
-    marked_for_deletion: false,
+    marked_for_deletion: over.marked_for_deletion ?? false,
     marked_for_deletion_at: null,
     marked_for_deletion_by: null,
     version: 1,
@@ -99,6 +101,43 @@ describe('mini-graph-model — направление и тултип ребра
     const text = edgeTooltip('включает', 'Сосед', 'Центр');
     assert.equal(inc.sourceId, OTHER);
     assert.equal(text, 'включает: Сосед -> Центр');
+  });
+
+  it('помеченное на удаление ребро помечается в тултипе «(в корзине)» (355319d4)', () => {
+    assert.equal(
+      edgeTooltip('включает', 'Работа', 'Задача', true),
+      'включает: Работа -> Задача (в корзине)',
+    );
+    assert.equal(
+      edgeTooltip('', 'Работа', 'Задача', true),
+      'связь: Работа -> Задача (в корзине)',
+    );
+    // Живое ребро пометки не получает.
+    assert.equal(edgeTooltip('включает', 'Работа', 'Задача', false), 'включает: Работа -> Задача');
+  });
+});
+
+describe('mini-graph-model — ребро в корзине (ошибка 355319d4)', () => {
+  it('isTrashedEdge различает помеченное ребро и ребро без записи связи', () => {
+    assert.equal(isTrashedEdge(link({ marked_for_deletion: true })), true);
+    assert.equal(isTrashedEdge(link({ marked_for_deletion: false })), false);
+    assert.equal(
+      isTrashedEdge(null),
+      false,
+      'структурное ребро без записи связи помеченным быть не может',
+    );
+  });
+
+  it('оформление помеченного ребра — всегда приглушённый пунктир, стиль типа его не «оживляет»', () => {
+    const type = linkType({ id: 't-solid', color: '#3366ff', style: 'solid', width: 3 });
+    const visual = resolveEdgeVisual(
+      [type],
+      link({ type_id: 't-solid', marked_for_deletion: true }),
+    );
+    assert.equal(visual.dash, TRASHED_EDGE_DASH);
+    // Цвет/толщина остаются типовыми — приглушение делает CSS-класс `.trashed`.
+    assert.equal(visual.color, '#3366ff');
+    assert.equal(visual.width, 3);
   });
 });
 

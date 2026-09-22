@@ -61,7 +61,7 @@ import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-serv
 import { linkTypeFilterClause } from './type-hierarchy.js';
 
 import { getAttachment } from './attachment-service.js';
-import { getEdgesAmong, getLinkDirections } from './link-service.js';
+import { getEdgesAmong, getLinkDirections, toFocusEdge } from './link-service.js';
 import { enforceLock } from './lock-service.js';
 import { getThoughtMeta } from './thought-meta.js';
 import {
@@ -120,6 +120,8 @@ interface NeighborRow {
   link_id: string;
   link_type_id: string | null;
   link_active: number;
+  /** 1 when the incident link is marked for deletion (trash, S13). */
+  link_marked_for_deletion: number;
   /**
    * Populated only when the query opted into the manual-position join
    * (`useManualJoin`, see `buildNeighborsQuery`). `number` for an entry
@@ -215,6 +217,10 @@ function rowToNeighbor(row: NeighborRow): FocusNeighbor {
     link_id: row.link_id,
     link_type_id: row.link_type_id,
     link_active: row.link_active === 1,
+    // Trash flag of the incident link (ошибка 355319d4): a marked link stays
+    // physically alive and is still listed as a neighbour — the client must
+    // show it marked, not hide it (symmetry with a marked thought).
+    link_marked_for_deletion: row.link_marked_for_deletion === 1,
     // Placeholder; `focus()` overwrites these from `getLinkDirections`.
     has_incoming: false,
     has_outgoing: false,
@@ -1350,9 +1356,16 @@ function buildNeighborsQuery(
     (useViewedJoin ? ', tv.last_viewed_at' : '') +
     // Alias is required: rowToNeighbor reads `manual_position` by name.
     (useManualJoin ? ', ufo.position AS manual_position' : '') +
+    // `l.marked_for_deletion` (ошибка 355319d4) rides along with the other
+    // link fields so the DTO can mark trashed edges. Siblings GROUP BY the
+    // neighbour, so several parallel links collapse into one row: `MIN` is the
+    // conservative aggregate — the row counts as trashed only when EVERY
+    // parallel link is trashed (same spirit as `MIN(l.active)` above).
     (dir === 'siblings'
-      ? ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active'
-      : ', l.id AS link_id, l.type_id AS link_type_id, l.active AS link_active');
+      ? ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active,' +
+        ' MIN(l.marked_for_deletion) AS link_marked_for_deletion'
+      : ', l.id AS link_id, l.type_id AS link_type_id, l.active AS link_active,' +
+        ' l.marked_for_deletion AS link_marked_for_deletion');
 
   const joins: string[] = [];
   const params: unknown[] = [];
@@ -1581,16 +1594,11 @@ export function focus(
     ...grouped.children.map((n) => n.id),
     ...grouped.siblings.map((n) => n.id),
   ];
-  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter).map((l) => ({
-    id: l.id,
-    source_id: l.source_id,
-    target_id: l.target_id,
-    type_id: l.type_id,
-    // Per-link line-style override (null = inherit from the type); 08-ui-spec.md §6.9.
-    color: l.color,
-    style: l.style,
-    width: l.width,
-  }));
+  // Projection lives in `link-service` (`toFocusEdge`) — one place for the
+  // focus edges and the structures `/thoughts/edges` response, so a new edge
+  // field cannot reach only one of them (ошибка 355319d4 came from exactly
+  // that kind of drift).
+  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter).map(toFocusEdge);
   // Whether each visible thought has any incoming/outgoing link at all —
   // drives the top/bottom ellipse fill so chains are visible off-screen.
   const directions = getLinkDirections(ndb, visibleIds, opts.linkFilter);

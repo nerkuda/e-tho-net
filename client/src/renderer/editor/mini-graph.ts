@@ -22,7 +22,10 @@
  *    как одна двунаправленная стрелка);
  *  - линии окрашены/штрихованы/утолщены по эффективному оформлению типа связи
  *    (наследование по цепочке предков, как на карте), для связи без типа —
- *    нейтральное оформление приложения;
+ *    нейтральное оформление приложения; помеченное на удаление ребро
+ *    приглушается, становится пунктирным, помечается в тултипе «(в корзине)» и
+ *    получает кликабельную метку корзины (восстановление через диалог связи,
+ *    ошибка 355319d4);
  *  - облачка мыс­лей — как везде: значок (свой, иначе унаследованный от типа по
  *    цепочке предков, иначе 💭) и цвета/шрифт мысли, неактуальная бледная,
  *    помеченная на удаление — с меткой корзины;
@@ -53,7 +56,8 @@ import {
 import { select } from 'd3-selection';
 import { zoom, type D3ZoomEvent } from 'd3-zoom';
 
-import { div, setTooltip, span } from '../lib/dom.js';
+import { div, el, setTooltip, span } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 // Пилюли-узлы мини-графа собирает общая фабрика облачка (профиль `graph`):
 // значок, цвета, начертание, бледность, метка корзины и обрезка названия
 // раскладкой с подсказкой — те же, что во всех списках клиента. HTML-облачко
@@ -68,6 +72,7 @@ import {
   edgeTooltip,
   edgeTypeName,
   graphStatEntries,
+  isTrashedEdge,
   neutralEdgeVisual,
   orientLink,
   resolveEdgeVisual,
@@ -83,6 +88,13 @@ const CLOUD_MIN_W = 48;
 /** Размер стрелки направления на ребре, px. */
 const ARROW_LEN = 9;
 const ARROW_W = 7;
+/** Сторона метки корзины на помеченном ребре, px (мир графа). */
+const TRASH_BADGE_SIZE = 18;
+/**
+ * Где на ребре живёт метка корзины (доля от начала): не в середине — там
+ * постоянная подпись типа связи и чип «+N» (ошибка 355319d4).
+ */
+const TRASH_BADGE_T = 0.3;
 
 export interface MiniGraphOptions {
   /** Текущая редактируемая мысль (центр). */
@@ -289,14 +301,24 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     arrow: SVGPolygonElement;
     label: SVGTextElement | null;
     hit: SVGLineElement;
+    /**
+     * Метка корзины помеченного ребра (ошибка 355319d4) — кликабельна,
+     * позиционируется в `paintEdge`. `null` у живых рёбер и у ребра без
+     * записи связи (структурное ребро вне списка связей).
+     */
+    badge: SVGForeignObjectElement | null;
   }
   const edgeDraws: EdgeDraw[] = [];
   for (const edge of edges) {
     // Оформление линии: собственные переопределения связи → настройки типа по
     // цепочке предков; связь без типа — нейтрально (задача 6811d5e7, п.4).
+    // Помеченное на удаление ребро (ошибка 355319d4) остаётся на графе, но
+    // приглушается и становится пунктирным (dash даёт модель), как помеченная
+    // мысль-пилюля.
+    const trashed = isTrashedEdge(edge.link);
     const visual = edge.link === null ? neutralEdgeVisual() : resolveEdgeVisual(linkTypes, edge.link);
     const line = svgEl('line');
-    line.setAttribute('class', 'mini-graph-edge');
+    line.setAttribute('class', trashed ? 'mini-graph-edge trashed' : 'mini-graph-edge');
     // Цвет — кастомным свойством, а не inline `stroke`: иначе inline-стиль
     // перебил бы CSS подсветки `.mini-graph-edge.hovered` (акцент при наведении).
     if (visual.color !== null) line.style.setProperty('--edge-color', visual.color);
@@ -306,7 +328,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     edgesG.append(line);
     // Стрелка направления: источник → цель (фактическое направление связи).
     const arrow = svgEl('polygon');
-    arrow.setAttribute('class', 'mini-graph-edge-arrow');
+    arrow.setAttribute('class', trashed ? 'mini-graph-edge-arrow trashed' : 'mini-graph-edge-arrow');
     if (visual.color !== null) arrow.style.setProperty('--edge-color', visual.color);
     edgesG.append(arrow);
     // Постоянная подпись на середине ребра (приёмка 0.8.1): имя СТОРОНЫ
@@ -317,7 +339,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     let label: SVGTextElement | null = null;
     if (edge.label !== '') {
       label = svgEl('text');
-      label.setAttribute('class', 'mini-graph-edge-label');
+      label.setAttribute('class', trashed ? 'mini-graph-edge-label trashed' : 'mini-graph-edge-label');
       label.setAttribute('text-anchor', 'middle');
       label.textContent = edge.label;
       edgesG.append(label);
@@ -326,11 +348,35 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     const hit = svgEl('line');
     hit.setAttribute('class', 'mini-graph-edge-hit');
     // Тултип: «<имя типа связи>: <источник> -> <назначение>»; без типа —
-    // слово «связь». Направление — фактическое (задача 6811d5e7, п.3).
+    // слово «связь». Направление — фактическое (задача 6811d5e7, п.3);
+    // у помеченного ребра добавлено «(в корзине)» (ошибка 355319d4).
     const title = svgEl('title');
-    title.textContent = edgeTooltip(edge.label, edge.source.title, edge.target.title);
+    title.textContent = edgeTooltip(edge.label, edge.source.title, edge.target.title, trashed);
     hit.append(title);
     edgesG.append(hit);
+    // Метка корзины помеченного ребра: кликом открывается диалог связи
+    // («Вернуть из корзины» / «Удалить совсем») — та же симметрия с мыслью,
+    // что и на карте (ошибка 355319d4). Ставим её только когда есть сама
+    // запись связи (у структурного ребра без записи восстанавливать нечего).
+    let badge: SVGForeignObjectElement | null = null;
+    if (trashed && edge.link !== null) {
+      const linkId = edge.link.id;
+      badge = svgEl('foreignObject');
+      badge.setAttribute('class', 'mini-graph-edge-trash');
+      const btn = el('button', 'link-trash-badge');
+      btn.type = 'button';
+      btn.append(svgIcon('trash', 12));
+      setTooltip(btn, 'Связь в корзине — нажмите, чтобы восстановить');
+      // Кнопка — самостоятельный элемент: mousedown не должен стартовать
+      // панораму холста (d3-zoom слушает svg), клик — открывать связь.
+      btn.addEventListener('mousedown', (event) => event.stopPropagation());
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void openTrashedLinkDialog(linkId);
+      });
+      badge.append(btn);
+      edgesG.append(badge);
+    }
 
     const raiseNodes = (): void => {
       // g проставлен при отрисовке узлов ниже; к моменту события он есть.
@@ -351,7 +397,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       edge.source.g!.classList.remove('edge-hi');
       edge.target.g!.classList.remove('edge-hi');
     });
-    edgeDraws.push({ edge, visual, line, arrow, label, hit });
+    edgeDraws.push({ edge, visual, line, arrow, label, hit, badge });
   }
 
   // --- Узлы: пилюли-облачка --------------------------------------------------
@@ -453,7 +499,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   // --- Раскладка каждого кадра симуляции ------------------------------------
   const paintEdge = (draw: EdgeDraw): void => {
-    const { edge, line, arrow, label, hit } = draw;
+    const { edge, line, arrow, label, hit, badge } = draw;
     const a0 = edgePoint(edge.source, edge.target);
     const b0 = edgePoint(edge.target, edge.source);
     // Полоса ребра: встречные связи пары уходят в РАЗНЫЕ стороны канонической
@@ -493,6 +539,15 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       }
       label.setAttribute('x', String(mx + px * 6));
       label.setAttribute('y', String(my + py * 6));
+    }
+    // Метка корзины — на трети ребра (не в середине: там подпись типа), в
+    // мировых координатах; положение пересчитывается каждый кадр, чтобы метка
+    // не отклеивалась от линии при перетаскивании узлов (ошибка 355319d4).
+    if (badge !== null) {
+      const bx = a.x + (b.x - a.x) * TRASH_BADGE_T;
+      const by = a.y + (b.y - a.y) * TRASH_BADGE_T;
+      badge.setAttribute('x', String(bx - TRASH_BADGE_SIZE / 2));
+      badge.setAttribute('y', String(by - TRASH_BADGE_SIZE / 2));
     }
   };
 
@@ -632,6 +687,19 @@ const draggedByDrag = new WeakSet<Element>();
 async function openLinkRefInEditor(id: string): Promise<void> {
   const { openThoughtInEditor } = await import('./editor.js');
   openThoughtInEditor(id);
+}
+
+/**
+ * Клик по метке корзины помеченного ребра (ошибка 355319d4): диалог связи —
+ * «Вернуть из корзины» / «Удалить совсем» / «Отмена», тот же, что у команды
+ * «Удалить» контекстного меню связи. Ленивый импорт: статический замкнул бы
+ * цикл editor/mini-graph → trash → editor/editor.
+ */
+async function openTrashedLinkDialog(linkId: string): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const { openLinkDeleteDialog } = await import('../trash.js');
+  await openLinkDeleteDialog(networkId, linkId);
 }
 
 async function focusLinkRef(id: string): Promise<void> {
