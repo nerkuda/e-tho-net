@@ -86,6 +86,66 @@ function childIds(focusData: Record<string, unknown>): string[] {
   return children.map((n) => n.id).sort();
 }
 
+/** Create a child of `parentId` and return `{ id, linkId }` (from the focus row). */
+async function childWithLink(
+  ctx: RestTestContext,
+  parentId: string,
+  title: string,
+): Promise<{ id: string; linkId: string }> {
+  const id = await childOf(ctx, parentId, title);
+  const focus = await focusOf(ctx, parentId);
+  const children = focus['children'] as Array<{ id: string; link_id: string }>;
+  const row = children.find((c) => c.id === id);
+  assert.ok(row !== undefined, `focus не отдал ребро к ${title}`);
+  return { id, linkId: row.link_id };
+}
+
+/** Move a link to the trash (S13). */
+async function trashLink(ctx: RestTestContext, linkId: string): Promise<void> {
+  const res = await ctx.app.inject({
+    method: 'PATCH',
+    url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
+    headers: authHeaders(ctx),
+    payload: { marked_for_deletion: true },
+  });
+  assert.equal(res.statusCode, 200, `trash link ${linkId}: ${res.body}`);
+}
+
+/** Directions of the `POST /thoughts/query` page (`meta.directions`). */
+async function queryDirections(
+  ctx: RestTestContext,
+  payload: Record<string, unknown>,
+): Promise<Record<string, { has_incoming: boolean; has_outgoing: boolean }>> {
+  const res = await ctx.app.inject({
+    method: 'POST',
+    url: `/api/v1/networks/${ctx.networkId}/thoughts/query`,
+    headers: authHeaders(ctx),
+    payload,
+  });
+  assert.equal(res.statusCode, 200, `query: ${res.body}`);
+  const meta = res.json().meta as {
+    directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+  };
+  return meta.directions;
+}
+
+/** Parent (or child) ids of one hierarchy level. */
+async function hierarchyIds(
+  ctx: RestTestContext,
+  thoughtId: string,
+  dir: 'parents' | 'children',
+): Promise<string[]> {
+  const res = await ctx.app.inject({
+    method: 'GET',
+    url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/hierarchy?dir=${dir}`,
+    headers: authHeaders(ctx),
+  });
+  assert.equal(res.statusCode, 200, `hierarchy: ${res.body}`);
+  return (res.json().data as { neighbors: Array<{ id: string }> }).neighbors
+    .map((n) => n.id)
+    .sort();
+}
+
 describe(
   'show_trash на REST-роутах (77923b49)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
@@ -173,6 +233,67 @@ describe(
       // 7. Возврат настройки возвращает помеченного — переключение обратимо.
       await setPreference(ctx, 'show_trash', true);
       assert.deepEqual(childIds(await focusOf(ctx, focusId)), [liveChild, trashedChild].sort());
+    });
+
+    it('directions отбора согласованы с раскрытием при обеих положениях show_trash (331ffb94)', async (t) => {
+      const ctx = await buildRestContext();
+      t.after(async () => closeRestContext(ctx));
+
+      // Корень A — помеченное РЕБРО к живому B; корень C — живое ребро к
+      // помеченной МЫСЛИ D. Оба случая — грани одной настройки: сосед не
+      // приходит в раскрытие, значит и эллипс не должен быть закрашен.
+      const rootA = (await apiCreateThought(ctx, { title: 'Корень запроса A' })).data[
+        'id'
+      ] as string;
+      const { id: b, linkId: abLink } = await childWithLink(ctx, rootA, 'Живой потомок B');
+      await trashLink(ctx, abLink);
+
+      const rootC = (await apiCreateThought(ctx, { title: 'Корень запроса C' })).data[
+        'id'
+      ] as string;
+      const { id: d } = await childWithLink(ctx, rootC, 'Потомок D в корзине');
+      await trashThought(ctx, d);
+
+      const query = { keywords: 'Корень запроса' };
+
+      // Настройка по умолчанию (включена): помеченное видно — эллипс заполнен
+      // и раскрытие отдаёт соседа. Значит согласованность не сломана в другую
+      // сторону (наивный «фикс» не должен гасить эллипс при видимой корзине).
+      const open = await queryDirections(ctx, query);
+      assert.deepEqual(open[rootA], { has_incoming: false, has_outgoing: true });
+      assert.deepEqual(open[rootC], { has_incoming: false, has_outgoing: true });
+      assert.deepEqual(await hierarchyIds(ctx, rootA, 'children'), [b].sort());
+      assert.deepEqual(await hierarchyIds(ctx, rootC, 'children'), [d].sort());
+
+      // Настройка выключена: и направление, и раскрытие пусты — эллипс не
+      // обещает скрытого уровня (ошибка 331ffb94).
+      await setPreference(ctx, 'show_trash', false);
+      const hidden = await queryDirections(ctx, query);
+      assert.deepEqual(
+        hidden[rootA],
+        { has_incoming: false, has_outgoing: false },
+        'помеченное ребро не закрашивает эллипс при скрытой корзине',
+      );
+      assert.deepEqual(
+        hidden[rootC],
+        { has_incoming: false, has_outgoing: false },
+        'ребро в помеченную мысль не закрашивает эллипс при скрытой корзине',
+      );
+      assert.deepEqual(await hierarchyIds(ctx, rootA, 'children'), []);
+      assert.deepEqual(await hierarchyIds(ctx, rootC, 'children'), []);
+
+      // Текущее переопределение в теле сильнее настройки (тот же путь, что у
+      // фокуса/иерархии): при выключенной настройке true возвращает эллипс.
+      assert.deepEqual((await queryDirections(ctx, { ...query, show_trash: true }))[rootA], {
+        has_incoming: false,
+        has_outgoing: true,
+      });
+
+      // Обратная обратимость настройки.
+      await setPreference(ctx, 'show_trash', true);
+      const again = await queryDirections(ctx, query);
+      assert.deepEqual(again[rootA], { has_incoming: false, has_outgoing: true });
+      assert.deepEqual(again[rootC], { has_incoming: false, has_outgoing: true });
     });
   },
 );

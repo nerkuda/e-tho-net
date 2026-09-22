@@ -306,6 +306,12 @@ export function toFocusEdge(l: Link): FocusEdge {
  * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы учитываемых рёбер —
  * с фильтром эллипсы показывают раскрываемость по тем же типам, по которым
  * ходит обход.
+ *
+ * `showTrash` (задача 77923b49, ошибка 331ffb94, 0.8.2): `false` — настройка
+ * сети «Показывать содержимое корзины» выключена, и эллипс обязан обещать
+ * ровно тот уровень, который отдаст раскрытие. Поэтому не считаются ни рёбра
+ * с `marked_for_deletion`, ни рёбра, ведущие в помеченную на удаление мысль
+ * (узел дерева/фокус её не покажет). По умолчанию `true` — прежнее поведение.
  */
 export function getLinkDirections(
   ndb: NetworkDb,
@@ -320,11 +326,18 @@ export function getLinkDirections(
   const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
   const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
   const typeParams = typeClause === null ? [] : typeClause.params;
+  // Скрытая корзина прячет и помеченный сосед по ребру: узел не попадёт в
+  // выдачу (`getHierarchy`/`getNeighbors` фильтруют мысль тем же флагом), а
+  // эллипс без этого условия остался бы заполненным — «обещание» пустой ветви.
+  const trashSql = showTrash
+    ? ''
+    : ` AND NOT EXISTS (SELECT 1 FROM thoughts_v tv WHERE tv.marked_for_deletion = 1
+         AND (tv.id = l.source_id OR tv.id = l.target_id))`;
   const rows = ndb
     .prepare(
       `SELECT l.source_id, l.target_id FROM links_v l WHERE l.active = 1
          AND (l.marked_for_deletion = 0 OR ?)
-         AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}`,
+         AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}${trashSql}`,
     )
     .all(
       showTrash ? 1 : 0,

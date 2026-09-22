@@ -79,8 +79,14 @@ interface SavedFilterIdParams {
 }
 
 /** Разобрать тело POST /thoughts/query: обёртку валидирует контракт,
- *  фильтр — shared-парсер parseStructureFilter (домен); лимиты — как раньше. */
-function parseQueryBody(body: Record<string, unknown>, requestId: string): StructureQueryRequest {
+ *  фильтр — shared-парсер parseStructureFilter (домен); лимиты — как раньше.
+ *  `show_trash` — REST-only поле обёртки (ошибка 331ffb94): собирается в
+ *  результат отдельно, чтобы `meta.directions` считались по той же видимости
+ *  корзины, что и раскрытие дерева. */
+function parseQueryBody(
+  body: Record<string, unknown>,
+  requestId: string,
+): StructureQueryRequest & { show_trash?: boolean } {
   const out = parseBody(RestStructureQueryBody, body, requestId);
   const filter = parseStructureFilter(body, requestId);
   const sort = (out.sort ?? 'created') as StructureSort;
@@ -105,7 +111,15 @@ function parseQueryBody(body: Record<string, unknown>, requestId: string): Struc
       requestId,
     );
   }
-  return { ...filter, sort, order, limit, offset, ...(idsOnly ? { ids_only: true } : {}) };
+  return {
+    ...filter,
+    sort,
+    order,
+    limit,
+    offset,
+    ...(idsOnly ? { ids_only: true } : {}),
+    ...(typeof out.show_trash === 'boolean' ? { show_trash: out.show_trash } : {}),
+  };
 }
 
 /** `/api/v1/networks*` structures routes plugin factory. */
@@ -142,6 +156,17 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             maxLimit: STRUCTURES_QUERY_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
             includeDirections: true,
+            // Эллипс раскрываемости считает те же рёбра, что и раскрытие
+            // (ошибка 331ffb94): directionsOf обязан смотреть на корзину тем
+            // же флагом, что getHierarchy, иначе заполненный эллипс
+            // разворачивается в пустую ветвь. Флаг резолвится как везде
+            // (задача 77923b49): переопределение тела сильнее настройки сети.
+            showTrash: resolveShowTrash(
+              app,
+              req.auth!.user.id,
+              networkId,
+              query.show_trash,
+            ),
           },
         );
         sendList(reply, result.items, result.total, query.offset, query.limit, {

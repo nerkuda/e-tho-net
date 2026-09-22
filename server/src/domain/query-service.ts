@@ -180,6 +180,14 @@ export interface ThoughtQueryOptions {
   emptyFilterMode?: 'home_orphans' | 'all';
   /** Собирать ли флаги направлений связей страницы (REST `meta.directions`). */
   includeDirections?: boolean;
+  /**
+   * Видимость помеченных на удаление рёбер при сборке `directions` (задача
+   * 77923b49, ошибка 331ffb94, 0.8.2). Дефолт `true` — как у остальных
+   * витрин после 355319d4. `false` обязан приходить из того же резолва
+   * `resolveShowTrash`, что и раскрытие дерева (`getHierarchy`), иначе эллипс
+   * раскрываемости обещает уровень, которого соседи не отдают.
+   */
+  showTrash?: boolean;
 }
 
 /** Результат канонической выборки. */
@@ -1207,7 +1215,7 @@ export function queryThoughts(
     )
     .all(...sql.joinParams, ...sql.params, limit, offset) as Array<ThoughtRefRow>;
   const items = rows.map(rowToThoughtRef);
-  const directions = opts.includeDirections === true ? directionsOf(ndb, items.map((i) => i.id), req.link_filter) : {};
+  const directions = opts.includeDirections === true ? directionsOf(ndb, items.map((i) => i.id), req.link_filter, opts.showTrash !== false) : {};
   return {
     items,
     total,

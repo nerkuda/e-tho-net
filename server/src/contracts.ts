@@ -3131,6 +3131,10 @@ export const RestStructureQueryBody = defineContract(
   {
     sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
     order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    // REST-only поле (в общей схеме отсутствует): переопределение видимости
+    // помеченных на удаление для `meta.directions` (ошибка 331ffb94) — тем же
+    // путём, что `show_trash` у фокуса/иерархии/рёбер (задача 77923b49).
+    show_trash: { from: { kind: 'body' }, t: z.boolean().optional(), msg: 'show_trash должен быть boolean.' },
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
