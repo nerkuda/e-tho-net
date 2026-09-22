@@ -104,6 +104,15 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       // nested `thought` block. Wins over `thought.active` when both
       // are set.
       active: z.boolean().optional(),
+      // Item-level `title` / `synonyms` / `type_id` / `type` — the rename
+      // half of the removed `etn.thoughts.update` (bug
+      // 870c0c0d-dd2d-46b1-a498-780edcf8e18a). Applied to the existing
+      // thought addressed by `thought_id` without a nested `thought` block;
+      // each wins over its `thought.*` counterpart when both are set.
+      title: z.string().min(1).optional(),
+      synonyms: z.array(z.string().min(1)).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
       on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
       comment: BundleCommentSchema.optional(),
       chronicle: z.array(WriteChronicleItemSchema).optional(),
@@ -122,6 +131,11 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     // `thought + thought_id` (патч существующей) ref не требует.
     .refine((v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined, {
       message: 'a batch item with `thought` (new thought) must also declare a local `ref`',
+    })
+    // Item-level `type_id`/`type` (bug 870c0c0d): тип задаётся по id ИЛИ по
+    // имени, не одновременно — как у `thought`.
+    .refine((v) => v.type_id === undefined || v.type === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
     });
   const LocalRefsSchema = z.record(z.string().min(1), z.string().uuid()).optional();
   // `.strict()` (ошибка ea4581c5): ключ верхнего уровня вне контракта обязан
@@ -145,7 +159,10 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         ' связанных единиц знания одной транзакцией: ' +
         'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
         '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
-        '`fail`/`reuse`/`update`. Циклы `ref`/`target_ref` разрешены (фаза 2 — мысли, фаза 3 — связи). ' +
+        '`fail`/`reuse`/`update`. Мысль по `thought_id` можно править и item-level полями ' +
+        '`title`/`synonyms`/`type`/`type_id`/`active` — без вложенного `thought`; `synonyms` ' +
+        'ЗАМЕНЯЮТ весь набор, item-level приоритетнее `thought.*`. Циклы `ref`/`target_ref` разрешены ' +
+        '(фаза 2 — мысли, фаза 3 — связи). ' +
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
         '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +
         'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
@@ -168,6 +185,10 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
             ...(item.thought_id === undefined ? {} : { thought_id: item.thought_id }),
             ...(item.thought === undefined ? {} : { thought: item.thought }),
             ...(item.active === undefined ? {} : { active: item.active }),
+            ...(item.title === undefined ? {} : { title: item.title }),
+            ...(item.synonyms === undefined ? {} : { synonyms: item.synonyms }),
+            ...(item.type_id === undefined ? {} : { type_id: item.type_id }),
+            ...(item.type === undefined ? {} : { type: item.type }),
             ...(item.on_duplicate === undefined ? {} : { on_duplicate: item.on_duplicate }),
             ...(item.comment === undefined ? {} : { comment: item.comment }),
             ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),

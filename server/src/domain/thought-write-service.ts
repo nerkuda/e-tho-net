@@ -163,6 +163,12 @@ function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInp
                 ? { type_id: resolveThoughtTypeIdByName(ndb, item.thought.type) }
                 : {}),
             };
+      // Item-level `type` (XOR `type_id`, bug 870c0c0d): тип существующей
+      // мысли, адресованной `thought_id`, тоже задаётся по имени.
+      const itemTypeId =
+        item.type_id === undefined && item.type !== undefined
+          ? resolveThoughtTypeIdByName(ndb, item.type)
+          : undefined;
       const links =
         item.links === undefined
           ? undefined
@@ -179,6 +185,7 @@ function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInp
       return {
         ...item,
         ...(thought === undefined ? {} : { thought }),
+        ...(itemTypeId === undefined ? {} : { type_id: itemTypeId }),
         ...(links === undefined ? {} : { links }),
       };
     }),
@@ -314,6 +321,9 @@ export function writeThoughts(
         ...(item.thought_id !== undefined ? { thought_id: item.thought_id } : {}),
         ...(item.thought !== undefined ? { thought: item.thought } : {}),
         ...(item.active !== undefined ? { active: item.active } : {}),
+        ...(item.title !== undefined ? { title: item.title } : {}),
+        ...(item.synonyms !== undefined ? { synonyms: item.synonyms } : {}),
+        ...(item.type_id !== undefined ? { type_id: item.type_id } : {}),
         ...(item.on_duplicate !== undefined ? { on_duplicate: item.on_duplicate } : {}),
         ...(item.comment === undefined ? {} : { comment: item.comment }),
         ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),

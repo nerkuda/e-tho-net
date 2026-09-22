@@ -523,6 +523,24 @@ export interface McpThoughtWriteItem {
    * `active` was unknown). Wins over `thought.active` when both are set.
    */
   active?: boolean;
+  /** Item-level `title` — renames the existing thought addressed by
+   *  `thought_id`, without a nested `thought` block. Absorbs the rename half
+   *  of the removed `etn.thoughts.update` (bug
+   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a): the field was absent entirely, so
+   *  a batch item addressing an existing thought could not rename it. Wins
+   *  over `thought.title` when both are set. */
+  title?: string;
+  /** Item-level `synonyms` — replaces the whole synonym set of the existing
+   *  thought addressed by `thought_id` (bug
+   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a). Wins over `thought.synonyms` when
+   *  both are set. */
+  synonyms?: string[];
+  /** Item-level `type_id` — changes the type of the existing thought
+   *  addressed by `thought_id` (bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a,
+   *  sibling of the rename gap). Wins over `thought.type_id` when both set. */
+  type_id?: string | null;
+  /** Type resolution by name (XOR with item-level `type_id`). */
+  type?: string;
   /** How to handle a `find_duplicates` match against `thought.title`/`synonyms`
    *  when `thought_id` is absent. Mirrors `etn.thoughts.upsert_bundle`. */
   on_duplicate?: ThoughtBundleOnDuplicate;

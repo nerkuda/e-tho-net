@@ -342,6 +342,108 @@ describe(
           ndb.close();
         }
       });
+
+      // Bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a: item-level `title` /
+      // `synonyms` / `type_id` (the rename half of the removed
+      // `etn.thoughts.update`) must patch the addressed thought even when no
+      // nested `thought` block is supplied.
+      it('with item-level `title` renames the addressed thought', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const created = upsertThoughtBundle(ndb, { thought: { title: 'Старое имя' } }, USER);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought_id: created.thought.id, title: 'Новое имя' },
+            USER,
+          );
+
+          assert.equal(result.thought.id, created.thought.id);
+          assert.equal(result.thought_action, 'updated');
+          assert.equal(result.thought.title, 'Новое имя', 'item-level title must rename');
+          assert.equal(result.thought.version, 2);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('with item-level `synonyms` replaces the whole synonym set', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const created = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Синонимы', synonyms: ['старый', 'лишний'] } },
+            USER,
+          );
+          assert.deepEqual(created.thought.synonyms.sort(), ['лишний', 'старый']);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought_id: created.thought.id, synonyms: ['новый'] },
+            USER,
+          );
+
+          assert.deepEqual(result.thought.synonyms, ['новый'], 'synonyms must be replaced');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('item-level `title`/`synonyms`/`type_id` win over their `thought.*` counterparts', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Книга' }, USER);
+          const created = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Приоритет', synonyms: ['a'] } },
+            USER,
+          );
+
+          const result = upsertThoughtBundle(
+            ndb,
+            {
+              thought_id: created.thought.id,
+              thought: { title: 'Приоритет', synonyms: ['a'], type_id: null },
+              title: 'Победитель',
+              synonyms: ['b'],
+              type_id: tt.id,
+            },
+            USER,
+          );
+
+          assert.equal(result.thought.title, 'Победитель', 'item-level title wins');
+          assert.deepEqual(result.thought.synonyms, ['b'], 'item-level synonyms win');
+          assert.equal(result.thought.type_id, tt.id, 'item-level type_id wins');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('rename to a title colliding with another thought is applied (no dedup on update)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const a = upsertThoughtBundle(ndb, { thought: { title: 'Первая' } }, USER);
+          const b = upsertThoughtBundle(ndb, { thought: { title: 'Вторая' } }, USER);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought_id: b.thought.id, title: 'Первая' },
+            USER,
+          );
+
+          // Parity with the removed `etn.thoughts.update` and with
+          // `PATCH /thoughts/:id`: a rename does not run `find_duplicates`,
+          // so a title collision is allowed (duplicate candidates are only
+          // refused on the create path via `on_duplicate: 'fail'`). This
+          // test pins that behavior so the widening of item-level fields
+          // does not silently change it.
+          assert.equal(result.thought.title, 'Первая');
+          assert.equal(result.thought.id, b.thought.id);
+          assert.equal(a.thought.title, 'Первая');
+        } finally {
+          ndb.close();
+        }
+      });
     });
   },
 );

@@ -49,25 +49,34 @@ function resolveThought(
   if (input.thought_id !== undefined) {
     let thought = getThoughtOrThrow(ndb, input.thought_id);
     let action: ThoughtBundleThoughtAction = 'reused';
-    // `active` at item level (absorbed from `etn.thoughts.set_active`) is
-    // applied even when `thought` is absent: the contract claims
-    // `etn.thoughts.set_active` is absorbed by `etn.thoughts.write`, so the
-    // item-level field must take effect on existing thoughts (bug
-    // faf56a02-e884-488b-9b7b-39dfd5d5b275). When both `input.active` and
-    // `input.thought.active` are present, the item-level field wins — it's
-    // the more specific intent ("just toggle active for this existing
-    // thought").
-    const itemActive = input.active;
-    const thoughtActive = input.thought?.active;
-    const mergedActive = itemActive !== undefined ? itemActive : thoughtActive;
-    if (input.thought !== undefined || mergedActive !== undefined) {
+    // Item-level thought fields (`active`, absorbed from
+    // `etn.thoughts.set_active`, bug faf56a02-e884-488b-9b7b-39dfd5d5b275;
+    // `title`/`synonyms`/`type_id`, the rename half of `etn.thoughts.update`,
+    // bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a) are applied even when
+    // `thought` is absent: the contract claims those tools are absorbed by
+    // `etn.thoughts.write`, so the item-level fields must take effect on
+    // existing thoughts. When both the item-level field and its `thought.*`
+    // counterpart are present, the item-level one wins — it's the more
+    // specific intent ("just patch this field for this existing thought").
+    const mergedActive = input.active !== undefined ? input.active : input.thought?.active;
+    const mergedTitle = input.title !== undefined ? input.title : input.thought?.title;
+    const mergedSynonyms =
+      input.synonyms !== undefined ? input.synonyms : input.thought?.synonyms;
+    const mergedTypeId = input.type_id !== undefined ? input.type_id : input.thought?.type_id;
+    if (
+      input.thought !== undefined ||
+      mergedActive !== undefined ||
+      mergedSynonyms !== undefined ||
+      mergedTypeId !== undefined ||
+      input.title !== undefined
+    ) {
       thought = updateThought(
         ndb,
         thought.id,
         {
-          ...(input.thought?.title === undefined ? {} : { title: input.thought.title }),
-          ...(input.thought?.synonyms === undefined ? {} : { synonyms: input.thought.synonyms }),
-          ...(input.thought?.type_id === undefined ? {} : { type_id: input.thought.type_id }),
+          ...(mergedTitle === undefined ? {} : { title: mergedTitle }),
+          ...(mergedSynonyms === undefined ? {} : { synonyms: mergedSynonyms }),
+          ...(mergedTypeId === undefined ? {} : { type_id: mergedTypeId }),
           ...(mergedActive === undefined ? {} : { active: mergedActive }),
         },
         undefined,

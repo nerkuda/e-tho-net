@@ -85,6 +85,18 @@ export interface ThoughtBundleInput {
    * when both are set.
    */
   active?: boolean;
+  /**
+   * Item-level thought fields applied to the existing thought addressed by
+   * `thought_id` without a nested `thought` block (bug
+   * 870c0c0d-dd2d-46b1-a498-780edcf8e18a). Absorbs the rename half of the
+   * removed `etn.thoughts.update`: `title` renames the thought (with the
+   * same duplicate semantics as any other thought update), `synonyms`
+   * replaces the whole set, `type_id` changes the type. Each item-level
+   * field wins over its `thought.*` counterpart when both are set.
+   */
+  title?: string;
+  synonyms?: string[];
+  type_id?: string | null;
   on_duplicate?: ThoughtBundleOnDuplicate;
   comment?: ThoughtBundleCommentInput;
   /** Chronicle entries appended to the owner's comment log (task 053751b5). */

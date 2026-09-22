@@ -715,6 +715,54 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('item-level `title`/`synonyms` rename the addressed thought without a nested `thought`', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 't1', thought: { title: 'Имя-до-MCP', synonyms: ['старый'] } },
+            ],
+          },
+        });
+        assert.notEqual(created.isError, true, toolText(created));
+        const createdJson = JSON.parse(toolText(created)) as { items: Array<{ id: string }> };
+        const thoughtId = createdJson.items[0]!.id;
+
+        // Bug 870c0c0d: item-level title/synonyms must reach the addressed
+        // thought even without a nested `thought` block.
+        const renamed = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, title: 'Имя-после-MCP', synonyms: ['новый'] }],
+          },
+        });
+        assert.notEqual(renamed.isError, true, toolText(renamed));
+        const renamedJson = JSON.parse(toolText(renamed)) as {
+          items: Array<{ thought_action: string }>;
+        };
+        assert.equal(renamedJson.items[0]!.thought_action, 'updated');
+
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        const gotJson = JSON.parse(toolText(got)) as { title: string; synonyms: string[] };
+        assert.equal(gotJson.title, 'Имя-после-MCP');
+        assert.deepEqual(gotJson.synonyms, ['новый']);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('property key not in the registry → NOT_FOUND', async () => {
     const ctx = await buildMcpContext();
     try {
