@@ -51,8 +51,17 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
   const count = (sql: string, ...params: unknown[]): number =>
     (ndb.prepare(`SELECT COUNT(*) AS c FROM ${sql}`).get(...params) as { c: number }).c;
 
-  const parents_count = count('links_v WHERE target_id = ? AND active = 1', thoughtId);
-  const children_count = count('links_v WHERE source_id = ? AND active = 1', thoughtId);
+  // Только ЖИВЫЕ рёбра — `marked_for_deletion = 0` (ошибка 1a7e8fde): счётчики
+  // должны быть согласованы с `link_stats` (355319d4), где корзинные рёбра
+  // уже не учитываются.
+  const parents_count = count(
+    'links_v WHERE target_id = ? AND active = 1 AND marked_for_deletion = 0',
+    thoughtId,
+  );
+  const children_count = count(
+    'links_v WHERE source_id = ? AND active = 1 AND marked_for_deletion = 0',
+    thoughtId,
+  );
   const attachments_count = count(
     "attachments_v WHERE owner_type = 'thought' AND owner_id = ?",
     thoughtId,
