@@ -2283,12 +2283,17 @@ body.cloud-dragging * {
 
 /* Trash marker in the editor panel header (S13, 08-ui-spec.md §6.2): shown
    next to the word «Мысль» when the edited thought is in the trash — same
-   bright-red trash glyph as the canvas badge. */
+   bright-red trash glyph as the canvas badge. Кликабельная (задача ff991fb2):
+   открывает диалог восстановления/удаления, поэтому сброшены стили кнопки. */
 .editor-title .editor-trash-mark {
   display: inline-flex;
   align-items: center;
   margin-right: 4px;
   color: #e53935;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 /* The title field of a trashed thought (S13, 08-ui-spec.md §6.2.1): shown

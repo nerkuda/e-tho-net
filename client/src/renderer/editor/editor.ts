@@ -1105,15 +1105,39 @@ function repaintEditorHeader(): void {
   patchHeader(live);
 }
 
+/**
+ * Метка корзины в заголовке панели редактора (задача ff991fb2, 0.8.2).
+ *
+ * Помеченную мысль можно открыть явной навигацией (wiki-ссылка, deep-link) и
+ * при выключенной настройке «Показывать содержимое корзины»: ссылки не должны
+ * умирать молча. Поэтому у признака есть команды — клик открывает тот же
+ * диалог восстановления/удаления, что на карте (`openThoughtDeleteDialog`).
+ *
+ * Импорт ленивый: `trash.ts` статически тянет `editor.ts` (`reflectThoughtUpdate`),
+ * статический импорт замкнул бы цикл.
+ */
+function buildTrashTitleMark(thought: Thought): HTMLElement {
+  const mark = el('button', 'editor-trash-mark') as HTMLButtonElement;
+  mark.type = 'button';
+  mark.append(svgIcon('trash', 14));
+  setTooltip(mark, 'Мысль в корзине. Нажмите для восстановления или удаления');
+  mark.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    void import('../trash.js').then(({ openThoughtDeleteDialog }) =>
+      openThoughtDeleteDialog(networkId, { id: thought.id, title: thought.title }),
+    );
+  });
+  return mark;
+}
+
 /** Updates the panel title text + trash marker for the current context. */
 function updateTitleEl(ctx: EditorContext | null): void {
   if (titleEl === null) return;
   clear(titleEl);
   if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
-    const mark = span('', 'editor-trash-mark');
-    mark.append(svgIcon('trash', 14));
-    setTooltip(mark, 'Мысль находится в корзине');
-    titleEl.append(mark);
+    titleEl.append(buildTrashTitleMark(ctx.thought));
   }
   titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
 }
@@ -2214,6 +2238,12 @@ export const editorInternals = {
   buildThoughtHeaderLoading,
   /** Loader-only link header (kept for symmetry with the thought header). */
   buildLinkHeaderLoading,
+  /**
+   * Метка корзины в заголовке панели (задача ff991fb2): тест проверяет, что
+   * помеченная мысль открывается с кликабельным признаком корзины, ведущим в
+   * общий диалог восстановления/удаления.
+   */
+  buildTrashTitleMark,
   /**
    * `saveThought` (template-vs-render ordering regression, карточка
    * e477173f): тест мокает `window.etn` и подписывается на store, проверяя,
