@@ -24,6 +24,11 @@ import {
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
+// Слово вместо имени типа связи, когда тип не задан, — то же, что в тултипе
+// ребра локального графа (`edgeTooltip`): подпись связи обязана читаться
+// одинаково в диалоге удаления связи и в строке корзины (ошибки ce687b37,
+// 009784ad).
+import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
 // Мини-облачка строк группового удаления собирает общая фабрика (профиль
 // `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
 // со всеми остальными списками клиента.
@@ -67,6 +72,58 @@ export function blockingReasons(
 /** Resolve the current version of a thought (for If-Match on mark/delete). */
 async function thoughtVersion(networkId: string, id: string): Promise<number> {
   return (await etn.thoughts.get(networkId, id)).version;
+}
+
+/**
+ * Имя типа связи «вперёд» (сторона источника) из кэша типов сети. Тип не задан
+ * или не резолвится — слово-заглушка {@link UNTYPED_LINK_LABEL}: то же, что
+ * показывает тултип ребра локального графа (`edgeTooltip`), поэтому подпись
+ * связи читается одинаково во всех местах клиента.
+ */
+export function linkTypeForwardName(typeId: string | null): string {
+  if (typeId === null) return UNTYPED_LINK_LABEL;
+  const type = store.state.linkTypes.find((t) => t.id === typeId);
+  if (type === undefined || type.name_forward.trim() === '') return UNTYPED_LINK_LABEL;
+  return type.name_forward;
+}
+
+/**
+ * Подпись связи «<источник> → <назначение> · <тип связи>» — так связь
+ * называют диалог её удаления (ошибка ce687b37: спрашивали, не называя, какую
+ * связь удаляют) и строка корзины (ошибка 009784ad: у ребра в `etn.trash.list`
+ * есть только id концов).
+ *
+ * Названия концов резолвит вызывающий ({@link resolveThoughtTitles}) и отдаёт
+ * картой; имя, которого в карте нет, заменяется самим id — подпись никогда не
+ * остаётся пустой. Направление — фактическое (`source_id` → `target_id`), имя
+ * типа — «вперёд» (свойство источника).
+ */
+export function linkCaption(
+  link: { source_id: string; target_id: string; type_id: string | null },
+  titles: ReadonlyMap<string, string>,
+): string {
+  const source = titles.get(link.source_id) ?? link.source_id;
+  const target = titles.get(link.target_id) ?? link.target_id;
+  return `${source} → ${target} · ${linkTypeForwardName(link.type_id)}`;
+}
+
+/**
+ * Названия мыслей одним батчем (`POST /thoughts/resolve`, как в полосах
+ * истории и закреплённых). Неудача резолва не должна ломать диалог — пустая
+ * карта: подпись покажет id вместо имени.
+ */
+async function resolveThoughtTitles(
+  networkId: string,
+  ids: readonly string[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  try {
+    const refs = await etn.thoughts.resolve(networkId, unique.slice(0, 100));
+    return new Map(refs.map((ref) => [ref.id, ref.title]));
+  } catch {
+    return new Map();
+  }
 }
 
 /** Resolve the current version of a link (for If-Match). */
@@ -214,6 +271,11 @@ export async function openThoughtDeleteDialog(
  * usage and no children, so only the layer arm can block — the base entry when
  * the link lives in the base and the session works in a layer, or other layers
  * that changed the link.
+ *
+ * Диалог обязан назвать удаляемую связь (ошибка ce687b37): подпись
+ * «<источник> → <назначение> · <тип связи>» идёт первой строкой тела. Имена
+ * концов резолвятся батчем (`resolveThoughtTitles`), имя типа — из кэша сети
+ * (`linkTypeForwardName`) — по образцу тултипа ребра локального графа.
  */
 export async function openLinkDeleteDialog(
   networkId: string,
@@ -223,6 +285,7 @@ export async function openLinkDeleteDialog(
   let link: Link;
   let blocked: boolean;
   let blocking: LinkDeletionBlocking;
+  let caption: string;
   try {
     link = await etn.links.get(networkId, linkId);
     const result = (await etn.links.deletionCheck(networkId, [linkId]))[linkId] ?? {
@@ -231,6 +294,10 @@ export async function openLinkDeleteDialog(
     };
     blocked = result.blocked;
     blocking = result.blocking;
+    caption = linkCaption(
+      link,
+      await resolveThoughtTitles(networkId, [link.source_id, link.target_id]),
+    );
   } catch (err) {
     errorDialog('Удалить связь', err);
     return;
@@ -238,6 +305,7 @@ export async function openLinkDeleteDialog(
 
   const alreadyMarked = link.marked_for_deletion;
   const body = div('form-stack');
+  body.append(el('p', 'dialog-text link-caption', caption));
   if (blocked) {
     for (const reason of blockingReasons('связь', blocking)) {
       body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
@@ -358,7 +426,16 @@ function splitChoice(
 }
 
 /** Pure model of the group-delete dialog (08-ui-spec.md §5a.2), unit-tested. */
-export const trashInternals = { defaultChoice, applyMassToggle, splitChoice, blockingReasons };
+export const trashInternals = {
+  defaultChoice,
+  applyMassToggle,
+  splitChoice,
+  blockingReasons,
+  // Подпись связи (ошибка ce687b37) — общее правило диалога удаления связи и
+  // строки корзины, тоже под тестами.
+  linkCaption,
+  linkTypeForwardName,
+};
 
 export async function openThoughtGroupDeleteDialog(
   networkId: string,
