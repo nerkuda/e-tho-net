@@ -64,6 +64,7 @@ import {
 import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import {
   buildEntityChipField,
+  filterEntityOptions,
   linkTypeEntityOptions,
   thoughtEntityOption,
   thoughtTypeEntityOptions,
@@ -1053,7 +1054,8 @@ function buildSettingsZone(zone: HTMLElement): void {
       persistState();
       refreshSearchIfVisible();
     },
-    loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+    loadOptions: (query) =>
+      filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
     optionsHeader: 'Типы мыслей',
     placeholder: 'Тип мысли…',
   });
@@ -1065,7 +1067,8 @@ function buildSettingsZone(zone: HTMLElement): void {
       persistState();
       refreshSearchIfVisible();
     },
-    loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+    loadOptions: (query) =>
+      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
     optionsHeader: 'Типы связей',
     placeholder: 'Тип связи…',
   });

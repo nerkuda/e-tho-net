@@ -28,6 +28,7 @@ import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   buildEntityChipField,
+  filterEntityOptions,
   linkTypeEntityOptions,
   pickEntitiesModal,
   thoughtEntityOption,
@@ -450,7 +451,7 @@ function buildTraversalSection(ctx: FilterFormContext): FilterSection {
       state.linkFilterTypeIds = values;
       ctx.touch();
     },
-    loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+    loadOptions: (query) => filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
     optionsHeader: 'Типы связей',
     placeholder: 'Тип связи…',
     picker: {
@@ -533,7 +534,8 @@ function renderPanel(): void {
       setValues: (values) => {
         state.typeIds = values;
       },
-      loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+      loadOptions: (query) =>
+        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
       optionsHeader: 'Типы мыслей',
       placeholder: 'Название типа…',
       picker: {
@@ -553,7 +555,8 @@ function renderPanel(): void {
       setValues: (values) => {
         state.linkTypeIds = values;
       },
-      loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+      loadOptions: (query) =>
+        filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
       optionsHeader: 'Типы связей',
       placeholder: 'Название типа…',
       picker: {

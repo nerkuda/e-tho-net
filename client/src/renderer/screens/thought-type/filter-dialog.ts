@@ -66,6 +66,7 @@ import {
 import { notice } from '../../lib/notice.js';
 import {
   buildEntityChipField,
+  filterEntityOptions,
   pickEntitiesModal,
   thoughtEntityOption,
   thoughtTypeEntityOptions,
@@ -668,7 +669,7 @@ function buildAuthorListEditor(
       ids = values;
       onChange(values);
     },
-    loadOptions: () => usersEntityOptions(),
+    loadOptions: (query) => filterEntityOptions(usersEntityOptions(), query),
     optionsHeader: 'Пользователи',
     extraSources: [
       { when: 'always', load: (query) => comboToEntries(authorTokenOptions(query)) },
@@ -789,16 +790,5 @@ function tokenSourceFor(field: TokenPickerField): SuggestSource {
     when: 'always',
     load: (query) => comboToEntries(getTokenOptions(field, query)),
   };
-}
-
-/** Кандидаты-сущности, отфильтрованные по подстроке (пустой запрос — все). */
-function filterEntityOptions(options: readonly EntityOption[], query: string): EntityOption[] {
-  const needle = query.trim().toLowerCase();
-  if (needle === '') return [...options];
-  return options.filter(
-    (o) =>
-      o.title.toLowerCase().includes(needle) ||
-      (o.searchText ?? '').toLowerCase().includes(needle),
-  );
 }
 

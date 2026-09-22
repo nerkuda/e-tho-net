@@ -123,6 +123,24 @@ describe('guard: выбор сущности делается только об�
     assertGuardClean(RENDERER_ROOT, [FIELD_BUILD_RULE]);
   });
 
+  it('чип-поля каталогов фильтруют выпадашку по вводу (ошибка 698800be)', () => {
+    // Контракт SuggestSource.load(query) требует, чтобы источник сам сужал
+    // список. `loadOptions: () => <полный каталог типов/пользователей>` без
+    // параметра query возвращал каталог целиком при любом вводе. Обёртка —
+    // filterEntityOptions(options, query) из lib/entity-picker.ts.
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'no-unfiltered-catalogue-load',
+        description:
+          'loadOptions чип-поля каталога (типы мыслей/связей, пользователи) обязан ' +
+          'принимать query и фильтровать через filterEntityOptions: источник без фильтра ' +
+          'показывает весь каталог при любом вводе (ошибка 698800be).',
+        pattern:
+          /loadOptions:\s*\(\s*\)\s*=>\s*(?:thoughtTypeEntityOptions|linkTypeEntityOptions|usersEntityOptions)\s*\(/,
+      },
+    ]);
+  });
+
   it('правило про type-combo-item краснеет на умышленно добавленной копии', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
     try {
@@ -161,6 +179,36 @@ describe('guard: выбор сущности делается только об�
       assert.ok(
         violations.some((v) => v.rule === 'no-own-entity-combo-field'),
         'собственная копия рамки поля одиночного выбора обязана попадать в нарушение',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('правило про нефильтрованный каталог краснеет на loadOptions без query', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'fake-load.ts'),
+        [
+          "import { thoughtTypeEntityOptions } from './lib/entity-picker.js';",
+          "import { store } from './state.js';",
+          'const opts = { loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes) };',
+          'void opts;',
+        ].join('\n'),
+        'utf8',
+      );
+      const violations = collectViolations(dir, [
+        {
+          name: 'no-unfiltered-catalogue-load',
+          description: '',
+          pattern:
+            /loadOptions:\s*\(\s*\)\s*=>\s*(?:thoughtTypeEntityOptions|linkTypeEntityOptions|usersEntityOptions)\s*\(/,
+        },
+      ]);
+      assert.ok(
+        violations.some((v) => v.rule === 'no-unfiltered-catalogue-load'),
+        'loadOptions без query обязан попадать в нарушение',
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
