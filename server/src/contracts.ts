@@ -663,7 +663,8 @@ export const LayersMerge = defineContract(
 
 const SearchFields = z
   .object({
-    network_id: NetworkId,
+    network_id: NetworkId.optional(),
+    network_ids: z.array(NetworkId).optional(),
     query: z.string().min(1),
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
@@ -671,13 +672,30 @@ const SearchFields = z
     type: z.string().min(1).optional(),
     author_id: z.string().optional(),
     editor_id: z.string().optional(),
+    show_inactive: z.boolean().optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): неизвестный ключ верхнего
   // уровня → VALIDATION_ERROR. До `.refine()` — порядок обязателен в zod 4.
   .strict()
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
+  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача eb1a3f43, требование c98d5d19: веерный режим — `network_ids`
+  // рядом с `network_id`, но XOR: либо одна сеть, либо список. Парсер
+  // repeatable создаёт `network_ids: []` при отсутствии параметра в query —
+  // пустой массив трактуется как «не указан».
+  .refine(
+    (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
+    {
+      message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+    },
+  )
+  .refine(
+    (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
+    {
+      message: 'Нужно указать network_id или network_ids.',
+    },
+  );
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
 
 const QueryPropertyFields = z
@@ -703,7 +721,8 @@ const QueryPropertyFields = z
   });
 const QueryFields = z
   .object({
-    network_id: NetworkId,
+    network_id: NetworkId.optional(),
+    network_ids: z.array(NetworkId).optional(),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
@@ -726,7 +745,22 @@ const QueryFields = z
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
+  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
+  // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
+  // query — пустой массив трактуется как «не указан».
+  .refine(
+    (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
+    {
+      message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+    },
+  )
+  .refine(
+    (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
+    {
+      message: 'Нужно указать network_id или network_ids.',
+    },
+  );
 export const ThoughtsQuery = defineContract('etn.thoughts.query', QueryFields, {});
 
 export const ThoughtsGet = defineContract(
@@ -808,11 +842,29 @@ export const ThoughtsDeletionCheck = defineContract(
 
 export const ThoughtsFindDuplicates = defineContract(
   'etn.thoughts.find_duplicates',
-  z.object({
-    network_id: NetworkId,
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId.optional(),
+      network_ids: z.array(NetworkId).optional(),
+      title: z.string().min(1),
+      synonyms: z.array(z.string().min(1)).optional(),
+    })
+    .strict()
+    // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
+    // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
+    // query — пустой массив трактуется как «не указан».
+    .refine(
+      (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
+      {
+        message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+      },
+    )
+    .refine(
+      (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
+      {
+        message: 'Нужно указать network_id или network_ids.',
+      },
+    ),
   {},
 );
 
@@ -2222,23 +2274,34 @@ export const RestImportCommit = defineContract(
 
 export const RestSearchQuery = defineContract(
   'rest:search.query',
-  z.object({
-    network_id: NetworkId,
-    q: z.string().min(1),
-    scope: z.string().optional(),
-    in: z.string().optional(),
-    from_thought_id: z.string().min(1).optional(),
-    type_id: z.array(z.string().min(1)).optional(),
-    link_type_id: z.array(z.string().min(1)).optional(),
-    show_inactive: z.boolean().optional(),
-    trashed: z.boolean().optional(),
-    author_id: z.string().optional(),
-    editor_id: z.string().optional(),
-    limit: z.number().int().min(1).optional(),
-    offset: z.number().int().min(0).optional(),
-  }),
+  z
+    .object({
+      // Задача eb1a3f43, требование c98d5d19: `network_id` из URL-path
+      // (`/networks/:networkId/search`) не валидируется zod-схемой, чтобы
+      // XOR-refine не отвергал кросс-сетевой запрос с `network_ids`. Роут
+      // берёт сеть из `req.params.networkId` и при наличии `network_ids`
+      // дополняет ею веер.
+      // Задача eb1a3f43: веерный режим — `network_ids` опционален.
+      network_ids: z.array(NetworkId).optional(),
+      q: z.string().min(1),
+      scope: z.string().optional(),
+      in: z.string().optional(),
+      from_thought_id: z.string().min(1).optional(),
+      type_id: z.array(z.string().min(1)).optional(),
+      link_type_id: z.array(z.string().min(1)).optional(),
+      show_inactive: z.boolean().optional(),
+      trashed: z.boolean().optional(),
+      author_id: z.string().optional(),
+      editor_id: z.string().optional(),
+      limit: z.number().int().min(1).optional(),
+      offset: z.number().int().min(0).optional(),
+    }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    // `repeatable: true` парсера: при отсутствии параметра в строке запроса
+    // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
+    // проверяет роут (`input.network_ids.length > 0`).
+    network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
     q: {
       from: { kind: 'query' },
       parse: (raw: unknown) => {
@@ -2297,6 +2360,38 @@ export const RestMentionsScan = defineContract(
     },
     show_inactive: { from: { kind: 'body' }, t: z.boolean().optional() },
     exclude_thought_id: { from: { kind: 'body' }, t: z.string().optional() },
+  },
+);
+
+/**
+ * `GET /networks/:networkId/thoughts/duplicates` — контракт для веерного режима
+ * (задача eb1a3f43, требование c98d5d19). `network_ids` задаёт дополнительные
+ * сети для fan-out; `:networkId` интерпретируется как одна из сетей веера.
+ * XOR проверяется в роуте (см. `routes/thoughts.ts`).
+ */
+export const RestThoughtDuplicates = defineContract(
+  'rest:thoughts.duplicates',
+  z
+    .object({
+      // `network_id` из URL-path (`/networks/:networkId/thoughts/duplicates`)
+      // не валидируется zod-схемой: кросс-сетевой запрос всегда несёт и path,
+      // и `network_ids`. Роут читает networkId из path и дополняет веер.
+      network_ids: z.array(NetworkId).optional(),
+      title: z.string().min(1),
+      // Repeatable: ?synonyms=a&synonyms=b или ?synonyms=a,b — оба варианта
+      // принимаются (роут склеивает).
+      synonyms: z.array(z.string().min(1)).optional(),
+      type_ids: z.array(z.string().min(1)).optional(),
+    }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    // `repeatable: true` парсера: при отсутствии параметра в строке запроса
+    // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
+    // проверяет роут (`input.network_ids.length > 0`).
+    network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
+    title: { from: { kind: 'query' }, req: true, msg: 'title обязателен.' },
+    synonyms: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
+    type_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
   },
 );
 
@@ -3126,6 +3221,11 @@ export const RestStructureQueryBody = defineContract(
       ids_only: z.boolean().optional(),
       limit: z.number().int().optional(),
       offset: z.number().int().optional(),
+      // Задача eb1a3f43, требование c98d5d19: веерный режим — массив
+      // дополнительных сетей для fan-out. Опциональный — если передан,
+      // `:networkId` в пути интерпретируется как одна из сетей, а не как
+      // единственная. Взаимоисключающе с `:networkId` (валидируется в роуте).
+      network_ids: z.array(NetworkId).optional(),
     })
     .strict(),
   {
@@ -3138,6 +3238,7 @@ export const RestStructureQueryBody = defineContract(
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
+    network_ids: { from: { kind: 'body' }, t: z.array(NetworkId).min(1).optional() },
   },
 );
 
