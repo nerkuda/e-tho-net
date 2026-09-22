@@ -72,6 +72,19 @@ import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-
 import { propertyValueId } from '../db/property-value-id.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
+import {
+  parseCrossNetworkAddress,
+  isCrossNetworkAddress,
+} from '@etn/shared';
+import {
+  type CrossNetworkAccessContext,
+  deleteSnapshotPayload,
+  readCrossNetworkRefValue,
+  readSnapshotPayload,
+  resolveAndBuildSnapshotsForWrite,
+  type CrossRefSnapshotItem,
+  upsertSnapshotPayload,
+} from './cross-network-ref-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -122,7 +135,8 @@ function validateKey(key: unknown): string {
  * Validate a value type for a NEW or CHANGED registry property definition.
  * `thought_ref` упразднён (ADR «вид значения thought_ref упраздняется»,
  * миграция 040 перевела унаследованные свойства в свойства-связи) — вида
- * нет ни в коде, ни в реестре.
+ * нет ни в коде, ни в реестре. `cross_network_ref` (0.8.3, задача 7849008a)
+ * — допустимый вид: кросс-сетевая ссылка.
  */
 function validateValueType(valueType: unknown): PropertyValueType {
   if (
@@ -2847,6 +2861,11 @@ function convertStoredValue(
       // Legacy: в живой БД таких свойств не остаётся (миграция 040). Для
       // гипотетических строк-«призраков» — конвертация не имеет смысла.
       return null;
+    case 'cross_network_ref':
+      // Кросс-сетевая ссылка: снапшот привязан к адресу и при смене value_type
+      // теряет смысл. Конвертация бессмысленна — значение сбрасывается
+      // (как и для `link` / legacy `thought_ref`).
+      return null;
   }
 }
 
@@ -3101,6 +3120,14 @@ function readValue(
       if (raw.startsWith('[')) return parseRefIds(raw);
       return multiple ? [raw] : raw;
     }
+    case 'cross_network_ref': {
+      // Адрес лежит в value_text: single — строка, multiple — JSON-массив
+      // адресов (та же форма, что у `url` / legacy `thought_ref`).
+      const raw = row.value_text;
+      if (raw === null) return null;
+      if (raw.startsWith('[')) return parseRefIds(raw);
+      return multiple ? [raw] : raw;
+    }
   }
 }
 
@@ -3112,8 +3139,13 @@ function isMultipleProperty(prop: PropertyLike): boolean {
   if (prop.config?.multiple !== true) return false;
   // Legacy (миграция 040): в живой БД thought_ref-свойств быть не должно,
   // но для value-handling (тесты, унаследованные архивы) — multiple
-  // распознаётся и для thought_ref.
-  return prop.value_type === 'url' || prop.value_type === 'thought_ref';
+  // распознаётся и для thought_ref. cross_network_ref (0.8.3, задача
+  // 7849008a) — массив кросс-сетевых адресов.
+  return (
+    prop.value_type === 'url' ||
+    prop.value_type === 'thought_ref' ||
+    prop.value_type === 'cross_network_ref'
+  );
 }
 
 /**
@@ -3902,6 +3934,43 @@ function validateAndCoerce(
       validateThoughtRefTarget(ndb, prop, value);
       return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
     }
+    case 'cross_network_ref': {
+      // Адрес n:<network_id>#<thought_id>; single — строка, multiple —
+      // JSON-массив (как у `url`). Валидация формата адреса — на уровне
+      // общего шага, живой резолв (запрет своей сети + проверка сети и цели) —
+      // снаружи, в {@link setPropertyValueForProperty}, см. шаг «живой
+      // резолв при записи» (требование aa89940c).
+      if (Array.isArray(value)) {
+        if (!isMultipleProperty(prop)) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${prop.name}" does not allow multiple values`,
+            { key: prop.name, expected: 'cross_network_ref', multiple: false },
+          );
+        }
+        const addresses = [...new Set(value)];
+        if (addresses.length === 0) {
+          // An empty selection clears the value (same as null).
+          return { column, raw: null };
+        }
+        if (addresses.some((addr) => typeof addr !== 'string')) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${prop.name}" expects cross-network addresses`,
+            { key: prop.name, expected: 'cross_network_ref' },
+          );
+        }
+        return { column, raw: JSON.stringify(addresses) };
+      }
+      if (typeof value !== 'string') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `property "${prop.name}" expects a cross-network address`,
+          { key: prop.name, expected: 'cross_network_ref' },
+        );
+      }
+      return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
+    }
   }
 }
 
@@ -3956,6 +4025,12 @@ function validateThoughtRefTarget(ndb: NetworkDb, prop: PropertyLike, id: string
  * re-writing an existing outside-type value: attach the property first
  * (02-data-model.md §3.5a).
  *
+ * `crossNetworkAccess` — обязателен для записи значений вида
+ * `cross_network_ref`: запись идёт с одним живым резолвом в чужую сеть
+ * (требование aa89940c). Передаётся REST/MCP-роутами, в юнит-тестах
+ * `property-service.test.ts` — фиктивный контекст (см.
+ * `cross-network-ref-service.ts`).
+ *
  * Throws:
  *   * `NOT_FOUND` (404) if the owner or the property (by name) is missing;
  *   * `VALIDATION_ERROR` (422) if the property is not attached to the owner's
@@ -3968,6 +4043,7 @@ export function setPropertyValue(
   key: string,
   value: PropertyValueValue,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): PropertyValue {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
@@ -4001,6 +4077,7 @@ export function setPropertyValue(
       { key },
       actorUserId,
       prop.direction,
+      crossNetworkAccess,
     );
   });
 }
@@ -4066,6 +4143,7 @@ function setPropertyValueForProperty(
   errKey: { key: string },
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): PropertyValue {
   // Свойство-связь: запись — создание/правка рёбер, а не значение в
   // property_values (ADR «свойство-связь — проекция ребра»). Запись вне типа
@@ -4156,6 +4234,28 @@ function setPropertyValueForProperty(
     )
     .run(id, ndb.layerId, ownerType, ownerId, prop.id, raw, now, actorUserId, actorUserId, nowMs, nowMs);
 
+  // Кросс-сетевая ссылка (задача 7849008a): запись значения идёт с одним
+  // живым резолвом в чужую сеть (требование aa89940c). Снапшот имени
+  // сохраняется рядом со значением в служебной неветбимой таблице
+  // `property_value_cross_refs` (требование c104a0fc). Для `null` —
+  // снапшоты удаляются.
+  if (prop.value_type === 'cross_network_ref') {
+    if (raw === null) {
+      deleteSnapshotPayload(ndb, existingId ?? id);
+    } else {
+      if (crossNetworkAccess === undefined) {
+        throw new EtnError(
+          'INTERNAL',
+          'cross_network_ref: запись требует CrossNetworkAccessContext',
+          { key: errKey.key, owner_type: ownerType, owner_id: ownerId },
+        );
+      }
+      const addresses = parseStoredCrossNetworkAddresses(String(raw));
+      const items = resolveAndBuildSnapshotsForWrite(addresses, crossNetworkAccess);
+      upsertSnapshotPayload(ndb, existingId ?? id, items);
+    }
+  }
+
   // Правка значения — это правка владельца (требование e6d4165e).
   // Без этого `updated_by` карточки мысли/связи застывал бы на создании,
   // и вкладка «Метаданные» показывала бы чужое имя.
@@ -4197,6 +4297,7 @@ export function setPropertyValueById(
   propertyId: string,
   value: PropertyValueValue,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): PropertyValue {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
@@ -4232,6 +4333,8 @@ export function setPropertyValueById(
       value,
       { key: registryProp.name },
       actorUserId,
+      null,
+      crossNetworkAccess,
     );
   });
 }
@@ -4247,14 +4350,43 @@ export function setPropertyValues(
   ownerId: string,
   values: Record<string, PropertyValueValue>,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): Record<string, PropertyValue> {
   return ndb.transaction(() => {
     const stored: Record<string, PropertyValue> = {};
     for (const [key, value] of Object.entries(values)) {
-      stored[key] = setPropertyValue(ndb, ownerType, ownerId, key, value, actorUserId);
+      stored[key] = setPropertyValue(
+        ndb,
+        ownerType,
+        ownerId,
+        key,
+        value,
+        actorUserId,
+        crossNetworkAccess,
+      );
     }
     return stored;
   });
+}
+
+/**
+ * Достать массив адресов из `value_text` строки `cross_network_ref`-значения.
+ * Хранится либо одиночный адрес (без `[`), либо JSON-массив (с `[`).
+ * Парсится один раз — список адресов нужен и для резолва при записи, и для
+ * конверсии при отборе/чтении.
+ */
+function parseStoredCrossNetworkAddresses(raw: string): string[] {
+  if (raw.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((v): v is string => typeof v === 'string' && v !== '');
+      }
+    } catch {
+      // падаем в single-форму
+    }
+  }
+  return [raw];
 }
 
 /**
@@ -4655,6 +4787,10 @@ function canStoredValueConvert(
       return false;
     case 'thought_ref':
       // Legacy (миграция 040): таких свойств в живой БД не остаётся.
+      return false;
+    case 'cross_network_ref':
+      // Кросс-сетевая ссылка: снапшот привязан к адресу и при смене value_type
+      // теряет смысл. Конвертация бессмысленна.
       return false;
   }
 }

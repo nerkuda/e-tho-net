@@ -115,6 +115,17 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
     { op: 'not_empty', label: 'заполнено' },
     { op: 'is_empty', label: 'не заполнено' },
   ],
+  // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81):
+  // отбор по хранимому адресу. eq/ne — точное совпадение; для наборов —
+  // any_of/all_of/none_of (как у `url`). is_empty/not_empty не нужны:
+  // адрес либо точно совпал, либо нет.
+  cross_network_ref: [
+    { op: 'eq', label: 'равно' },
+    { op: 'ne', label: 'не равно' },
+    { op: 'any_of', label: 'содержит любой из' },
+    { op: 'all_of', label: 'содержит все из' },
+    { op: 'none_of', label: 'не содержит ни одного из' },
+  ],
 };
 
 // ---------------------------------------------------------------------------

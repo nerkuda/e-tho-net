@@ -66,6 +66,10 @@ export const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   url: 'URL (сайт или файл)',
   link: 'связь',
   thought_ref: 'ссылка на мысль (legacy, недоступно)',
+  // Кросс-сетевая ссылка (задача 7849008a, ADR ae8346d0): адрес
+  // `n:<network_id>#<thought_id>` другой сети; снапшот имени хранится
+  // служебно, чтение чужой базы не открывает.
+  cross_network_ref: 'кросс-сетевая ссылка',
 };
 
 /** Предел обрезки имени стороны связи в колонке «Тип значения» (задача
@@ -358,6 +362,8 @@ const VALUE_TYPE_ICONS: Partial<Record<PropertyValueType, IconName>> = {
   bool: 'value-bool',
   url: 'value-url',
   thought_ref: 'value-ref',
+  // Кросс-сетевая ссылка (задача 7849008a).
+  cross_network_ref: 'value-cross-network-ref',
 };
 
 export function valueTypeIconName(valueType: PropertyValueType): IconName | null {

@@ -135,6 +135,9 @@ const VALUE_TYPE_LABELS: Record<Exclude<PropertyValueType, 'thought_ref'> | 'tho
   url: 'URL (сайт или файл)',
   link: 'связь',
   thought_ref: 'ссылка на мысль (legacy, недоступно)',
+  // Кросс-сетевая ссылка (задача 7849008a): значение адресует мысль ДРУГОЙ
+  // сети по `n:<network_id>#<thought_id>`; снапшот имени — служебные данные.
+  cross_network_ref: 'кросс-сетевая ссылка',
 };
 
 /** Виды значения, доступные пользователю в выборе — `thought_ref` скрыт. */
@@ -145,6 +148,8 @@ const SELECTABLE_VALUE_TYPES: PropertyValueType[] = [
   'bool',
   'url',
   'link',
+  // Кросс-сетевая ссылка (задача 7849008a) — доступна в выборе.
+  'cross_network_ref',
 ];
 
 /**

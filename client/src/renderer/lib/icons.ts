@@ -53,7 +53,9 @@ export type IconName =
   | 'value-date'
   | 'value-bool'
   | 'value-url'
-  | 'value-ref';
+  | 'value-ref'
+  // Кросс-сетевая ссылка (задача 7849008a): адрес `n:<network_id>#<thought_id>`.
+  | 'value-cross-network-ref';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -163,6 +165,12 @@ const PATHS: Record<IconName, string> = {
   'value-ref':
     '<circle cx="12" cy="12" r="4"/>' +
     '<path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>',
+  // Кросс-сетевая ссылка (задача 7849008a): два концентрических кольца —
+  // метафора «ссылка между двумя сетями».
+  'value-cross-network-ref':
+    '<circle cx="12" cy="12" r="9"/>' +
+    '<circle cx="12" cy="12" r="4"/>' +
+    '<path d="M3 12h4M17 12h4"/>',
 };
 
 /**

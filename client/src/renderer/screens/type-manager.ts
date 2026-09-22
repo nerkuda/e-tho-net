@@ -156,6 +156,8 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
   // типах маркер оставлен для компиляции тестов и импорта архивов.
   thought_ref: 'ссылка на мысль (legacy)',
+  // Кросс-сетевая ссылка (задача 7849008a).
+  cross_network_ref: 'кросс-сетевая ссылка',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
