@@ -184,6 +184,102 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
     default:
       // Legacy (миграция 040): значений этого вида в живых базах нет.
       return span('упразднено', 'muted');
+    case 'cross_network_ref':
+      // Кросс-сетевая ссылка (задача 7849008a): адрес `n:<network>#<thought>`
+      // в текстовом поле + кнопка «обновить снапшот» через IPC
+      // `properties.crossResolve` (REST POST …/properties/{key}/cross-resolve).
+      return buildCrossNetworkRefEditor(opts);
+  }
+}
+
+/**
+ * Редактор кросс-сетевой ссылки (задача 7849008a, требование 95511443).
+ * Значение — адрес `n:<network>#<thought>` (single или JSON-массив для
+ * multiple). Сохраняется через общий save (REST PUT …/properties/{key}).
+ * Кнопка «обновить» дёргает IPC `properties.crossResolve` и обновляет
+ * снапшот имени (служебная запись, без write-бюджета и audit-строки —
+ * требование c104a0fc).
+ */
+function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
+  const isMultiple = opts.definition.config?.multiple === true;
+  // Для multiple в value лежит string[] — нормализуем к одной строке через
+  // запятую, чтобы поле ввода оставалось простым (как url multiple).
+  const stored = Array.isArray(opts.value)
+    ? (opts.value as string[]).filter((s) => typeof s === 'string').join(', ')
+    : typeof opts.value === 'string'
+      ? opts.value
+      : '';
+  const wrapper = div('value-editor value-editor--cross-network-ref');
+  const input = el('input') as HTMLInputElement;
+  input.type = 'text';
+  input.className = 'cross-network-ref-input';
+  input.placeholder = 'n:<network_uuid>#<thought_uuid>';
+  input.value = stored;
+  input.spellcheck = false;
+  const hint = div('cross-network-ref-hint muted');
+  hint.textContent = isMultiple
+    ? 'Несколько адресов — через запятую. Снапшот имени обновляется кнопкой «Обновить».'
+    : 'Снапшот имени обновляется кнопкой «Обновить».';
+  const refreshBtn = el('button', 'Обновить') as HTMLButtonElement;
+  refreshBtn.type = 'button';
+  refreshBtn.className = 'cross-network-ref-resolve';
+  refreshBtn.addEventListener('click', () => {
+    void refreshSnapshot(opts, refreshBtn, hint);
+  });
+  input.addEventListener('blur', () => {
+    const next = input.value.trim();
+    void opts.save(
+      isMultiple
+        ? next
+            .split(',')
+            .map((s) => s.trim())
+            .filter((s) => s !== '')
+        : next === ''
+          ? null
+          : next,
+    );
+  });
+  // commitOn: 'blur' — стандарт таблицы свойств; для change-режима
+  // (конструктор условий) тоже работает, потому что save возвращает Promise.
+  void isMultiple;
+  wrapper.append(input, refreshBtn, hint);
+  return wrapper;
+}
+
+async function refreshSnapshot(
+  opts: ValueEditorOptions,
+  btn: HTMLButtonElement,
+  hint: HTMLElement,
+): Promise<void> {
+  if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
+    hint.textContent = 'Обновление снапшота поддерживается только для мыслей.';
+    return;
+  }
+  const key = opts.definition.key ?? '';
+  if (key === '') return;
+  btn.disabled = true;
+  hint.textContent = 'Обновление…';
+  try {
+    const result = await etn.properties.crossResolve(
+      opts.networkId,
+      opts.ownerId,
+      key,
+    );
+    const unresolved = result.values.filter((v) => v.unresolved).length;
+    hint.textContent =
+      unresolved === 0
+        ? `Снапшоты обновлены (${result.values.length} шт.).`
+        : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`;
+    // Уведомляем вызывающий код через custom-event, чтобы таблица свойств
+    // обновила отображение значений без полного рефреша карточки.
+    opts.ownerId;
+    document.dispatchEvent(
+      new CustomEvent('etn:property-values-refreshed', { detail: { key } }),
+    );
+  } catch (err) {
+    hint.textContent = `Ошибка обновления: ${String(err)}`;
+  } finally {
+    btn.disabled = false;
   }
 }
 
