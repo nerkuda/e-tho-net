@@ -72,13 +72,19 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
   );
   // Использование — два плеча (миграция 040):
   //   * новое: рёбра блокирующих свойств-связей (0.8.1, dbf1e4aa). Направление
-  //     свойства задаёт блокируемый конец: `out` — цель ребра, `in` — источник;
+  //     свойства задаёт блокируемый конец: `out` — цель ребра, `in` — источник.
+  //     Направление живёт в ПРИВЯЗКЕ (`type_properties.side`, миграция 042, ошибка
+  //     083dcde5), поэтому свойство может давать оба направления — по записи на
+  //     пару (property_id, direction), у свойства без привязок fallback на
+  //     `config.direction`;
   //   * legacy: в живой БД thought_ref-свойств быть не должно, но value-handling
   //     (тесты, унаследованные архивы) считает и одиночные значения, и
   //     вхождения id в JSON-массив `value_thought_ref` — иначе счётчик прыгает
   //     после миграции и удаление цели не блокируется.
   // (Зеркало countThoughtRefUsages в property-service; прямой импорт невозможен
-  // из-за цикла thought-service → thought-meta.)
+  // из-за цикла thought-service → thought-meta. Направление по стороне привязки
+  // обязано совпадать с этой функцией — согласованность держит тест
+  // thought-meta.test «usage_count согласован с countThoughtRefUsages».)
   const legacyUsageCount = count(
     `property_values_v
      WHERE owner_type = 'thought'
@@ -88,13 +94,24 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
     `%"${thoughtId.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`,
   );
   const linkUsageCount = count(
-    `links_v l JOIN properties_v p
-        ON p.value_type = 'link' AND p.config IS NOT NULL
-       AND json_extract(p.config, '$.blocks_target_deletion') = 1
-       AND l.type_id = json_extract(p.config, '$.link_type_id')
+    `links_v l JOIN (
+       SELECT DISTINCT property_id, link_type_id, direction FROM (
+         SELECT p.id AS property_id,
+                json_extract(p.config, '$.link_type_id') AS link_type_id,
+                CASE WHEN tp.side = 'source' THEN 'out'
+                     WHEN tp.side = 'target' THEN 'in'
+                     ELSE COALESCE(json_extract(p.config, '$.direction'), 'out') END AS direction
+           FROM properties_v p
+           LEFT JOIN (SELECT DISTINCT property_id, side FROM type_properties_v) tp
+             ON tp.property_id = p.id
+          WHERE p.value_type = 'link' AND p.config IS NOT NULL
+            AND json_extract(p.config, '$.blocks_target_deletion') = 1
+       )
+     ) b
+        ON ((b.link_type_id IS NULL AND l.type_id IS NULL) OR l.type_id = b.link_type_id)
      WHERE l.active = 1 AND l.marked_for_deletion = 0
-       AND ((COALESCE(json_extract(p.config, '$.direction'), 'out') = 'out' AND l.target_id = ?)
-         OR (json_extract(p.config, '$.direction') = 'in' AND l.source_id = ?))`,
+       AND ((b.direction = 'out' AND l.target_id = ?)
+         OR (b.direction = 'in' AND l.source_id = ?))`,
     thoughtId,
     thoughtId,
   );

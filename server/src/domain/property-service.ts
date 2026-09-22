@@ -3614,21 +3614,73 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
   return { total, groups, holding_layers: [] };
 }
 
-/** Свойства-связи, чьё ребро блокирует удаление цели (blocks_target_deletion). */
-function listBlockingLinkProperties(
-  ndb: NetworkDb,
-): Array<{ property_id: string; name: string; direction: LinkPropertyDirection; link_type_id: string | null }> {
-  const out: Array<{ property_id: string; name: string; direction: LinkPropertyDirection; link_type_id: string | null }> = [];
+/** Запись учёта блокирующих ссылок: свойство + направление, в котором оно блокирует. */
+interface BlockingLinkProperty {
+  property_id: string;
+  name: string;
+  /** Направление ребра у ВЛАДЕЛЬЦА: `out` — владелец источник (блокируется цель),
+   *  `in` — владелец цель (блокируется источник). */
+  direction: LinkPropertyDirection;
+  link_type_id: string | null;
+}
+
+/**
+ * Свойства-связи, чьё ребро блокирует удаление значения
+ * (`config.blocks_target_deletion`), с направлением, РАЗРЕШЁННЫМ ПО ПРИВЯЗКАМ
+ * (ошибка 083dcde5; класс ошибки c67676f3).
+ *
+ * Направление свойства-связи живёт в привязке (`type_properties.side`,
+ * миграция 042), а не в `config`: одна реестровая строка может быть привязана
+ * и источником, и назначением на разные типы владельцев. Поэтому возвращаем по
+ * записи на каждую ПАРУ `(property_id, direction)`, а не одну запись на
+ * свойство: привязка-источник блокирует цель ребра (`out`), привязка-назначение
+ * — источник (`in`). У свойства без привязок сохраняем прежний fallback на
+ * `config.direction` (внетиповое заполнение, привязки до миграции 041).
+ *
+ * Симметрично чтению ({@link listThoughtLinkProperties}, `emitExplicit`):
+ * направление каждой записи вычисляет {@link linkPropertyDirection} по стороне
+ * привязки.
+ */
+function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
+  // Стороны, которыми свойство привязано у типов владельцев. Без привязок
+  // свойство остаётся с fallback-направлением из config.
+  const bindingSides = new Map<string, Set<LinkPropertySide | null>>();
+  const rows = ndb
+    .prepare(
+      `SELECT DISTINCT tp.property_id AS property_id, tp.side AS side
+         FROM type_properties_v tp
+         JOIN properties_v p ON p.id = tp.property_id
+        WHERE p.value_type = 'link'
+          AND json_extract(p.config, '$.blocks_target_deletion') = 1`,
+    )
+    .all() as Array<{ property_id: string; side: string | null }>;
+  for (const row of rows) {
+    let sides = bindingSides.get(row.property_id);
+    if (sides === undefined) {
+      sides = new Set();
+      bindingSides.set(row.property_id, sides);
+    }
+    sides.add(row.side === 'source' || row.side === 'target' ? row.side : null);
+  }
+
+  const out: BlockingLinkProperty[] = [];
   for (const prop of listNetworkProperties(ndb)) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
     if (cfg.blocks_target_deletion !== true) continue;
-    out.push({
-      property_id: prop.id,
-      name: prop.name,
-      direction: linkPropertyDirection(cfg),
-      link_type_id: linkPropertyLinkTypeId(cfg),
-    });
+    const sides = bindingSides.get(prop.id);
+    const directions: LinkPropertyDirection[] =
+      sides === undefined || sides.size === 0
+        ? [linkPropertyDirection(cfg, null)]
+        : [...new Set([...sides].map((side) => linkPropertyDirection(cfg, side)))];
+    for (const direction of directions) {
+      out.push({
+        property_id: prop.id,
+        name: prop.name,
+        direction,
+        link_type_id: linkPropertyLinkTypeId(cfg),
+      });
+    }
   }
   return out;
 }

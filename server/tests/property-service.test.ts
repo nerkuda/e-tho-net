@@ -19,7 +19,9 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
+  clearThoughtRefUsages,
   computeThoughtCardWarnings,
+  countThoughtRefUsages,
   createNetworkProperty,
   createTypeProperty,
   deleteNetworkProperty,
@@ -39,6 +41,7 @@ import {
   updateTypeProperty,
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
+import { getThoughtMeta } from '../src/domain/thought-meta.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
@@ -326,6 +329,63 @@ describe(
         assert.equal(otherUsage.total, 1);
         assert.equal(otherUsage.groups[0]!.key, 'editor');
         assert.equal(otherUsage.groups[0]!.thoughts[0]!.id, b2);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('учёт блокирующих ссылок берёт сторону привязки: владелец-цель (ошибка 083dcde5)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'ссылается на', name_reverse: 'упоминается в' },
+          USER,
+        );
+        const holder = createThoughtType(ndb, { name: 'ВладелецЦель' }, USER);
+        const valueType = createThoughtType(ndb, { name: 'ЗначениеЦель' }, USER);
+        // Привязка со стороны НАЗНАЧЕНИЯ: владелец — цель ребра, значение — источник.
+        // Конфиг намеренно без `direction` (миграция 042 снимает его у свойств-связей).
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          holder.id,
+          {
+            key: 'упоминается в',
+            value_type: 'link',
+            config: { link_type_id: lt.id, blocks_target_deletion: true },
+            side: 'target',
+          },
+          USER,
+        );
+        const owner = seedTypedThought(ndb, holder.id);
+        const value = seedTypedThought(ndb, valueType.id);
+        setPropertyValue(ndb, 'thought', owner, 'упоминается в', value, USER);
+
+        // Ребро канонично: значение → владелец.
+        const edge = ndb
+          .prepare('SELECT source_id, target_id FROM links WHERE type_id = ?')
+          .get(lt.id) as { source_id: string; target_id: string } | undefined;
+        assert.equal(edge?.source_id, value);
+        assert.equal(edge?.target_id, owner);
+
+        // Удаление значения (источника) блокируется ссылкой владельца-цели.
+        assert.equal(countThoughtRefUsages(ndb, value), 1);
+        const usage = findThoughtUsage(ndb, value);
+        assert.equal(usage.total, 1);
+        assert.equal(usage.groups[0]!.thoughts[0]!.id, owner);
+
+        // Владелец — не блокируемый конец: его собственное использование пусто.
+        assert.equal(countThoughtRefUsages(ndb, owner), 0);
+
+        // Зеркало в карточке мысли согласовано с проверкой удаления.
+        assert.equal(getThoughtMeta(ndb, value).usage_count, 1);
+        assert.equal(getThoughtMeta(ndb, value).usage_count, countThoughtRefUsages(ndb, value));
+        assert.equal(getThoughtMeta(ndb, owner).usage_count, countThoughtRefUsages(ndb, owner));
+
+        // «Очистить использование» снимает то же ребро (тот же резолв стороны).
+        assert.equal(clearThoughtRefUsages(ndb, value), 1);
+        assert.equal(countThoughtRefUsages(ndb, value), 0);
       } finally {
         ndb.close();
       }
