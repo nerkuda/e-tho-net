@@ -46,6 +46,7 @@ import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
+import { removeLinkValueEdges } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import {
@@ -358,6 +359,30 @@ function buildOutsideLinkCell(
 ): HTMLElement {
     const cell = el('td', 'prop-outside-cell');
 
+    /**
+     * Обычная запись значения-связи ключом `key` (сервер помечает отозванные
+     * рёбра в корзину). Общий `commit` для диалога снятия значения (задача
+     * 96d27fc0) — карта перечитывает окрестность сразу (ошибка f0b959dd).
+     */
+    const writeOutsideEdgeSet = async (key: string, remaining: string[]): Promise<boolean> => {
+      try {
+        await etn.properties.set(
+          networkId,
+          ownerType,
+          ownerId,
+          key,
+          remaining.length > 0 ? remaining : null,
+        );
+        repaintAfterLinkValueWrite(ownerType, ownerId);
+        onRemove();
+        return true;
+      } catch (err) {
+        notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+        return false;
+      }
+    };
+    const clearOutsideLinkValue = (key: string): Promise<boolean> => writeOutsideEdgeSet(key, []);
+
     if (value.property_id !== '') {
       // Внетиповое свойство-связь: определение собирается на лету по ребру,
       // ограничения типов у него нет (`allowed_opposite_type_ids` не задан) —
@@ -410,25 +435,23 @@ function buildOutsideLinkCell(
       // Крестик «×» очищает значение внетипового свойства-связи целиком
       // (cab38479): без него у пользователя нет способа снять значение из
       // группы «Свойства вне типа»; сервер при `set(key, null)` отзовёт
-      // рёбра и real-time события уберут их с карты (если связь видима).
+      // рёбра. Способ снятия спрашивается диалогом — «В корзину» /
+      // «Удалить совсем» (задача 96d27fc0), как у крестика чипа.
       const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
       clearBtn.type = 'button';
       clearBtn.title = 'Удалить значение';
       clearBtn.addEventListener('click', (event) => {
         event.stopPropagation();
-        void (async () => {
-          const ok = await confirmOutsideRemove(value.property_name);
-          if (!ok) return;
-          try {
-            await etn.properties.set(networkId, ownerType, ownerId, value.property_name, null);
-            // Очистка внетипового свойства-связи отзывает рёбра — карта
-            // перечитывает окрестность сразу (ошибка f0b959dd).
-            repaintAfterLinkValueWrite(ownerType, ownerId);
-            onRemove();
-          } catch (err) {
-            notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
-          }
-        })();
+        if (value.values.length === 0) return;
+        void removeLinkValueEdges({
+          networkId,
+          ownerType,
+          ownerId,
+          propertyKey: value.property_name,
+          propertyId: value.property_id,
+          removedTargetIds: value.values.map((edge) => edge.target_id),
+          commit: () => clearOutsideLinkValue(value.property_name),
+        });
       });
       cell.append(clearBtn);
       return cell;
@@ -445,23 +468,19 @@ function buildOutsideLinkCell(
     // стороны, так что удаляется именно это ребро, а не типовое входящее.
     const propertyKey = value.property_name;
     const currentIds = value.values.map((edge) => edge.target_id);
+    // «Убрать из значения» и крестик очистки набора спрашивают способ снятия —
+    // «В корзину» / «Удалить совсем» (задача 96d27fc0) — как у чипа основной
+    // таблицы. Запись значения сервер понимает по display-имени стороны.
     const removeTarget = (targetId: string): void => {
-      void (async () => {
-        const remaining = currentIds.filter((id) => id !== targetId);
-        try {
-          await etn.properties.set(
-            networkId,
-            ownerType,
-            ownerId,
-            propertyKey,
-            remaining.length > 0 ? remaining : null,
-          );
-          repaintAfterLinkValueWrite(ownerType, ownerId);
-          onRemove();
-        } catch (err) {
-          notice(`Не удалось удалить связь: ${errText(err)}`, 'error');
-        }
-      })();
+      void removeLinkValueEdges({
+        networkId,
+        ownerType,
+        ownerId,
+        propertyKey,
+        propertyId: value.property_id,
+        removedTargetIds: [targetId],
+        commit: () => writeOutsideEdgeSet(propertyKey, currentIds.filter((id) => id !== targetId)),
+      });
     };
     const wrap = div('link-value-editor');
     if (value.values.length === 0) {
@@ -472,24 +491,23 @@ function buildOutsideLinkCell(
       wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs, { removeTarget }));
     }
     cell.append(wrap);
-    // Крестик очищает внетиповой набор целиком: `set(key, null)` отзывает все
-    // рёбра выведенной из имени стороны.
+    // Крестик очищает внетиповой набор целиком: запись без целей отзывает все
+    // рёбра выведенной из имени стороны; способ спрашивается диалогом.
     const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
     clearBtn.type = 'button';
     clearBtn.title = 'Удалить значение';
     clearBtn.addEventListener('click', (event) => {
       event.stopPropagation();
-      void (async () => {
-        const ok = await confirmOutsideRemove(value.property_name);
-        if (!ok) return;
-        try {
-          await etn.properties.set(networkId, ownerType, ownerId, propertyKey, null);
-          repaintAfterLinkValueWrite(ownerType, ownerId);
-          onRemove();
-        } catch (err) {
-          notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
-        }
-      })();
+      if (currentIds.length === 0) return;
+      void removeLinkValueEdges({
+        networkId,
+        ownerType,
+        ownerId,
+        propertyKey,
+        propertyId: value.property_id,
+        removedTargetIds: currentIds,
+        commit: () => writeOutsideEdgeSet(propertyKey, []),
+      });
     });
     cell.append(clearBtn);
     // Подтянем стили/иконки батчем (cb73f8d6, как в buildLinkValueEditor);

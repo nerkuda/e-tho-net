@@ -95,6 +95,21 @@ function findAllClouds(root: ShimElement): ShimElement[] {
   return out;
 }
 
+/**
+ * Клик по кнопке открытого диалога снятия значения-связи (задача 96d27fc0):
+ * снятие теперь спрашивает способ — «В корзину» / «Удалить совсем».
+ */
+function clickRemovalDialog(label: string): void {
+  const body = (globalThis as any).document.body as ShimElement;
+  const backdrop = body.children.find((c) => c.classList.contains('dialog-backdrop'));
+  assert.ok(backdrop !== undefined, 'диалог снятия значения смонтирован');
+  const btn = backdrop!
+    .querySelectorAll('button')
+    .find((b) => b.textContent === label);
+  assert.ok(btn !== undefined, `в диалоге есть кнопка «${label}»`);
+  btn!.emit('click');
+}
+
 const baseDefinition = {
   property_id: 'lk-prop',
   key: 'Связь',
@@ -219,6 +234,8 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     )!;
     const clearBtn = corner.children.find((c) => c.textContent === '✕')!;
     clearBtn.dispatch('click', { stopPropagation: () => undefined });
+    // Снятие значения спрашивает способ (96d27fc0): «В корзину» — прежний путь.
+    clickRemovalDialog('В корзину');
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(saved, [null], 'corner «✕» clears all values (persists null)');
   });
@@ -405,6 +422,8 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
       c.className.split(' ').includes('st-f-clear-inline'),
     )!;
     firstRemove.dispatch('click', { stopPropagation: () => undefined });
+    // Снятие цели спрашивает способ (96d27fc0): «В корзину» — прежний путь.
+    clickRemovalDialog('В корзину');
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(
       saved,

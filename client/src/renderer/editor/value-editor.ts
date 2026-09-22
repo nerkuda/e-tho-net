@@ -65,6 +65,7 @@ import {
   type SuggestSource,
 } from '../lib/suggest-dropdown.js';
 import { loadRecentValues, recordRecentValue } from './recent-values.js';
+import { removeLinkValueEdges } from './link-value-removal.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
 import type { MenuItem } from '../lib/menu.js';
@@ -90,7 +91,11 @@ export interface ValueEditorOptions {
   definition: Pick<
     EffectiveTypeProperty,
     'value_type' | 'config' | 'required' | 'default_value' | 'side' | 'allowed_opposite_type_ids'
-  >;
+  > &
+    // `key`/`property_id` нужны только ветке свойства-связи — по ним диалог
+    // снятия значения находит рёбра для «Удалить совсем» (задача 96d27fc0).
+    // Необязательны: конструкторы синтетических определений их не задают.
+    Partial<Pick<EffectiveTypeProperty, 'key' | 'property_id'>>;
   /**
    * Текущее значение: скаляр (`string`/`number`/`boolean`, `string[]` для
    * множественного `url`) либо рёбра `LinkPropertyValueItem[]` для вида
@@ -896,8 +901,7 @@ async function showLinkChipMenu(
   id: string,
   title: string,
   trashed: boolean,
-  currentValue: string[],
-  onChange: (next: string[]) => void,
+  onRemove: () => void,
   anchor: Element,
 ): Promise<void> {
   await openThoughtCloudMenu({
@@ -909,7 +913,7 @@ async function showLinkChipMenu(
     extraItems: [
       {
         label: 'Убрать из значения',
-        onClick: () => onChange(currentValue.filter((v) => v !== id)),
+        onClick: onRemove,
       },
     ],
   });
@@ -1060,7 +1064,9 @@ export function buildLinkValueEditor(opts: {
   definition: Pick<
     EffectiveTypeProperty,
     'config' | 'required' | 'side' | 'allowed_opposite_type_ids'
-  >;
+  > &
+    // `key`/`property_id` — для диалога снятия значения связи (96d27fc0).
+    Partial<Pick<EffectiveTypeProperty, 'key' | 'property_id'>>;
   values: LinkPropertyValueItem[];
   save: (next: unknown) => Promise<boolean>;
   /** Подключает историю последних целей (требование f6399882). */
@@ -1091,11 +1097,12 @@ export function buildLinkValueEditor(opts: {
 
   const root = div('link-value-editor');
 
-  const persist = async (next: string[]): Promise<void> => {
+  const persist = async (next: string[]): Promise<boolean> => {
     const ok = await opts.save(next.length > 0 ? next : null);
     if (ok && opts.historyPropertyId !== undefined) {
       recordTextItemsHistory(networkId, opts.historyPropertyId, next);
     }
+    return ok;
   };
 
   const setAndPersist = (next: string[]): void => {
@@ -1108,6 +1115,39 @@ export function buildLinkValueEditor(opts: {
       if (root.isConnected) render();
     });
     void persist(current);
+  };
+
+  /**
+   * Снять цели из значения с выбором способа (задача 96d27fc0): диалог
+   * «В корзину» / «Удалить совсем». Живые рёбра есть только у владельца
+   * (`ownerType`/`ownerId`) — без него (дефолт свойства в редакторе типа)
+   * набор живёт лишь в `save`, корзины нет: снимаем как раньше, без диалога.
+   */
+  const removeEdges = (removedIds: string[]): void => {
+    const next = current.filter((id) => !removedIds.includes(id));
+    if (ownerType === undefined || ownerId === undefined) {
+      setAndPersist(next);
+      return;
+    }
+    void (async () => {
+      const applied = await removeLinkValueEdges({
+        networkId,
+        ownerType,
+        ownerId,
+        propertyKey: definition.key ?? '',
+        propertyId: definition.property_id,
+        removedTargetIds: removedIds,
+        commit: () => persist(next),
+      });
+      if (!applied) return;
+      // UI обновляем только после решения (отмена диалога ничего не меняет):
+      // `commit` уже записал значение и записал историю.
+      current = next;
+      render();
+      void resolveLinkRefs(networkId, current, refs).then(() => {
+        if (root.isConnected) render();
+      });
+    })();
   };
 
   /**
@@ -1165,8 +1205,7 @@ export function buildLinkValueEditor(opts: {
         id,
         fullTitle,
         ref?.marked_for_deletion === true,
-        current,
-        setAndPersist,
+        () => removeEdges([id]),
         cloud,
       );
     };
@@ -1237,7 +1276,7 @@ export function buildLinkValueEditor(opts: {
     );
     for (const id of ordered) {
       field.append(
-        buildCloud(id, () => setAndPersist(current.filter((v) => v !== id))),
+        buildCloud(id, () => removeEdges([id])),
       );
     }
     const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
@@ -1280,7 +1319,14 @@ export function buildLinkValueEditor(opts: {
     const corner = div('link-value-corner');
     corner.append(
       button('…', openPicker, 'link-value-corner-btn', 'Выбрать или создать мысли'),
-      button('✕', () => setAndPersist([]), 'link-value-corner-btn', 'Очистить значение'),
+      button(
+        '✕',
+        () => {
+          if (current.length > 0) removeEdges([...current]);
+        },
+        'link-value-corner-btn',
+        'Очистить значение',
+      ),
     );
     const wrap = div('link-value-wrap');
     wrap.append(field, corner);

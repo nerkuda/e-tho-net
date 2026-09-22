@@ -78,6 +78,21 @@ function chipRemoveButtons(box: ShimElement): ShimElement[] {
   return collect(box, (el) => el.title === 'Убрать из значения');
 }
 
+/**
+ * Клик по кнопке открытого диалога снятия значения-связи (96d27fc0): снятие
+ * цели спрашивает способ — «В корзину» / «Удалить совсем».
+ */
+function clickRemovalDialog(label: string): void {
+  const body = (globalThis as any).document.body as ShimElement;
+  const backdrop = body.children.find((c) => c.classList.contains('dialog-backdrop'));
+  assert.ok(backdrop !== undefined, 'диалог снятия значения смонтирован');
+  const btn = backdrop!
+    .querySelectorAll('button')
+    .find((b) => b.textContent === label);
+  assert.ok(btn !== undefined, `в диалоге есть кнопка «${label}»`);
+  btn!.emit('click');
+}
+
 /** Прогон: свойство-связь «Соавторы» с двумя целями, удаление целей из чипов. */
 describe('счётчик значений свойства-связи обновляется после своей записи (9ee8e608)', () => {
   it('удаление цели и полная очистка сразу обновляют «(N)» в заголовке строки', async () => {
@@ -189,6 +204,7 @@ describe('счётчик значений свойства-связи обнов
     const removes = chipRemoveButtons(box);
     assert.ok(removes.length >= 2, 'чипы целей несут кнопку «✕»');
     removes[0]!.click();
+    clickRemovalDialog('В корзину');
     await wait(50);
     const afterOne = setCalls[0]?.value;
     assert.ok(Array.isArray(afterOne), 'запись значения-связи ушла массивом целей');
@@ -199,6 +215,7 @@ describe('счётчик значений свойства-связи обнов
     const lastRemove = chipRemoveButtons(box);
     assert.equal(lastRemove.length, 1, 'осталась одна цель-чип');
     lastRemove[0]!.click();
+    clickRemovalDialog('В корзину');
     await wait(50);
     assert.equal(setCalls[1]?.value, null, 'очистка пишется как set(..., null)');
     assert.equal(nameLabelOf(box), 'Соавторы (0)', 'счётчик обнулён сразу после очистки');
