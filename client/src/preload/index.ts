@@ -186,6 +186,9 @@ function buildApi(): EtnApi {
         invoke('properties.set', networkId, ownerType, ownerId, key, value),
       remove: (networkId, ownerType, ownerId, key) =>
         invoke('properties.remove', networkId, ownerType, ownerId, key),
+      // Кросс-сетевой резолв (задача 7849008a): см. EtnApi.properties.crossResolve.
+      crossResolve: (networkId, ownerId, key) =>
+        invoke('properties.crossResolve', networkId, ownerId, key),
     },
     propertyRegistry: {
       list: (networkId) => invoke('propertyRegistry.list', networkId),

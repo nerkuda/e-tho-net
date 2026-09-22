@@ -995,6 +995,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         : rest.deleteLinkProperty(networkId, ownerId, key);
     }),
   );
+  // Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a,
+  // REST `POST …/properties/{key}/cross-resolve`). Пока реализован для
+  // `thought` (спека операции 737ed900) — клиентский UX и link-вариант
+  // добавляются отдельной задачей.
+  handlers.set(
+    'properties.crossResolve',
+    bind((networkId: string, ownerId: string, key: string) =>
+      requireRest(deps).crossResolveThoughtProperty(networkId, ownerId, key),
+    ),
+  );
 
   // --- property registry (0.6.5) --------------------------------------------
   handlers.set(

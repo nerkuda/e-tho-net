@@ -35,7 +35,9 @@ import type {
   CommentTarget,
   CurrentUser,
   CrossNetworkDuplicateResponse,
+  CrossNetworkRefValue,
   CrossNetworkStructureQueryResponse,
+  PropertyCrossResolveResult,
   DuplicateHit,
   DuplicateMatchKind,
   ExportJob,
@@ -718,6 +720,18 @@ export interface EtnApi {
       ownerId: string,
       key: string,
     ): Promise<void>;
+    /**
+     * Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a).
+     * REST `POST …/thoughts|links/{id}/properties/{key}/cross-resolve`.
+     * Возвращает обновлённые снапшоты имён целей и пометки нерезолвленности.
+     * Сейчас реализован для `owner_type === 'thought'` — link-вариант
+     * добавляется отдельной задачей.
+     */
+    crossResolve(
+      networkId: string,
+      ownerId: string,
+      key: string,
+    ): Promise<PropertyCrossResolveResult>;
   };
   /**
    * Property registry (0.6.5). The registry is the single source of a

@@ -93,3 +93,18 @@ export interface CrossNetworkRefValue {
 export type CrossNetworkRefResolveStatus =
   | { kind: 'resolved'; title: string }
   | { kind: 'unresolved'; reason: 'network_not_found' | 'thought_not_found' | 'permission_denied' };
+
+/**
+ * Ответ REST `POST …/thoughts|links/{id}/properties/{key}/cross-resolve`
+ * и MCP `etn.properties.resolve` (задача 7849008a, спеки 737ed900 и
+ * 46df7a8d). Массив `values` — по одной записи на адрес значения
+ * (для multiple — массив той же длины, что и набор адресов).
+ *
+ * Именованная DTO-форма, не inline-объект: сторож
+ * `client/tests/guard-rest-response-contracts.test.ts` требует, чтобы тип
+ * возврата публичных методов `RestClient` был именованным типом из
+ * `@etn/shared` (задача 120385ba, ошибка c83f0215).
+ */
+export interface PropertyCrossResolveResult {
+  values: CrossNetworkRefValue[];
+}

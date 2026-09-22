@@ -1364,6 +1364,24 @@ export class RestClient {
     );
   }
 
+  /**
+   * `POST /networks/{nid}/thoughts/{id}/properties/{key}/cross-resolve`
+   * (задача 7849008a): явный резолв значений `cross_network_ref`.
+   * Возвращает свежие снапшоты имён целей и пометки нерезолвленности.
+   */
+  public async crossResolveThoughtProperty(
+    networkId: string,
+    thoughtId: string,
+    key: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').PropertyCrossResolveResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}/cross-resolve`,
+      { requestOptions: opts },
+    ) as Promise<import('@etn/shared').PropertyCrossResolveResult>;
+  }
+
   /** `GET /networks/{nid}/links/{id}/properties`. */
   public async listLinkProperties(
     networkId: string,

@@ -22,7 +22,11 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { type PropertyOwnerType, type PropertyValueValue } from '@etn/shared';
+import {
+  type PropertyCrossResolveResult,
+  type PropertyOwnerType,
+  type PropertyValueValue,
+} from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
@@ -205,7 +209,10 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
             input.key,
             ctx,
           );
-          sendSuccess(reply, { values });
+          // Типизация ответа через общий DTO `@etn/shared` — сторож
+          // `client/tests/guard-rest-response-contracts.test.ts` паритет.
+          const payload: PropertyCrossResolveResult = { values };
+          sendSuccess(reply, payload);
         },
       );
     };
