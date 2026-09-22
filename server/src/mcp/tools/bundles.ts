@@ -100,15 +100,14 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       thought: BundleThoughtSchema.optional(),
       // Item-level `active` — absorbed from `etn.thoughts.set_active`
       // (bug faf56a02-e884-488b-9b7b-39dfd5d5b275). Applied to the
-      // existing thought addressed by `thought_id` even without a
-      // nested `thought` block. Wins over `thought.active` when both
-      // are set.
+      // existing thought addressed by `thought_id` (item-level `active`
+      // is the only way to toggle it — the item cannot also carry a
+      // nested `thought`, XOR).
       active: z.boolean().optional(),
       // Item-level `title` / `synonyms` / `type_id` / `type` — the rename
       // half of the removed `etn.thoughts.update` (bug
-      // 870c0c0d-dd2d-46b1-a498-780edcf8e18a). Applied to the existing
-      // thought addressed by `thought_id` without a nested `thought` block;
-      // each wins over its `thought.*` counterpart when both are set.
+      // 870c0c0d-dd2d-46b1-a498-780edcf8e18a). Patch the existing thought
+      // addressed by `thought_id`, without a nested `thought` (XOR).
       title: z.string().min(1).optional(),
       synonyms: z.array(z.string().min(1)).optional(),
       type_id: z.string().min(1).nullable().optional(),
@@ -120,16 +119,31 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       links: z.array(WriteLinkSpecSchema).optional(),
       attachments: z.array(WriteAttachmentSpecSchema).optional(),
     })
-    // Каждый элемент должен иметь ХОТЯ БЫ ОДНО из `thought_id` (адресация
-    // существующей мысли) или `thought` (новая/совпадающая мысль). Оба
-    // вместе — норм: `thought_id` адресует мысль, `thought` патчит её поля.
-    .refine((v) => v.thought_id !== undefined || v.thought !== undefined, {
-      message: 'each batch item must set thought_id or thought (at least one)',
+    // Ровно ОДНО из `thought_id` (адресация существующей мысли) или `thought`
+    // (новая/совпадающая мысль) — единый источник истины здесь домен
+    // (`validateEnvelope` в `thought-write-service.ts`, ошибка
+    // 2a679270-75cb-41c6-9c2c-d079f85ca831). Существующую мысль правят
+    // item-level полями `title`/`synonyms`/`type`/`type_id`/`active`, а не
+    // вложенным `thought`; комбинация обоих отвергается схемой явно, а не
+    // неожиданным VALIDATION_ERROR из домена.
+    .superRefine((v, ctx) => {
+      const hasThoughtId = v.thought_id !== undefined;
+      const hasThought = v.thought !== undefined;
+      if (hasThoughtId === hasThought) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['thought_id'],
+          message: hasThoughtId
+            ? 'each batch item must set exactly one of thought_id or thought: ' +
+              'both were given — address an existing thought by thought_id (patch it with ' +
+              'item-level title/synonyms/type/type_id/active) OR supply a new thought block'
+            : 'each batch item must set exactly one of thought_id or thought: neither was given',
+        });
+      }
     })
-    // Если задано `thought` И это новая мысль (нет `thought_id`), нужен
-    // `ref` для возможных `target_ref` в других элементах батча. Случай
-    // `thought + thought_id` (патч существующей) ref не требует.
-    .refine((v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined, {
+    // Если задано `thought` (новая мысль, XOR гарантирован выше), нужен
+    // `ref` для возможных `target_ref` в других элементах батча.
+    .refine((v) => v.thought === undefined || v.ref !== undefined, {
       message: 'a batch item with `thought` (new thought) must also declare a local `ref`',
     })
     // Item-level `type_id`/`type` (bug 870c0c0d): тип задаётся по id ИЛИ по
@@ -159,9 +173,9 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         ' связанных единиц знания одной транзакцией: ' +
         'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
         '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
-        '`fail`/`reuse`/`update`. Мысль по `thought_id` можно править и item-level полями ' +
-        '`title`/`synonyms`/`type`/`type_id`/`active` — без вложенного `thought`; `synonyms` ' +
-        'ЗАМЕНЯЮТ весь набор, item-level приоритетнее `thought.*`. Циклы `ref`/`target_ref` разрешены ' +
+        '`fail`/`reuse`/`update`. Мысль по `thought_id` правят item-level полями ' +
+        '`title`/`synonyms`/`type`/`type_id`/`active` — без вложенного `thought` (он для новых ' +
+        'мыслей, XOR); `synonyms` ЗАМЕНЯЮТ весь набор. Циклы `ref`/`target_ref` разрешены ' +
         '(фаза 2 — мысли, фаза 3 — связи). ' +
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
         '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +

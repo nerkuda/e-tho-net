@@ -520,24 +520,23 @@ export interface McpThoughtWriteItem {
    * without supplying a nested `thought` block. Absorbs
    * `etn.thoughts.set_active` (bug faf56a02-e884-488b-9b7b-39dfd5d5b275):
    * before the fix the field was silently dropped by Zod (item-level
-   * `active` was unknown). Wins over `thought.active` when both are set.
+   * `active` was unknown). `thought` XOR `thought_id`, so an item never
+   * carries both.
    */
   active?: boolean;
   /** Item-level `title` — renames the existing thought addressed by
    *  `thought_id`, without a nested `thought` block. Absorbs the rename half
    *  of the removed `etn.thoughts.update` (bug
    *  870c0c0d-dd2d-46b1-a498-780edcf8e18a): the field was absent entirely, so
-   *  a batch item addressing an existing thought could not rename it. Wins
-   *  over `thought.title` when both are set. */
+   *  a batch item addressing an existing thought could not rename it. */
   title?: string;
   /** Item-level `synonyms` — replaces the whole synonym set of the existing
    *  thought addressed by `thought_id` (bug
-   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a). Wins over `thought.synonyms` when
-   *  both are set. */
+   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a). */
   synonyms?: string[];
   /** Item-level `type_id` — changes the type of the existing thought
    *  addressed by `thought_id` (bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a,
-   *  sibling of the rename gap). Wins over `thought.type_id` when both set. */
+   *  sibling of the rename gap). */
   type_id?: string | null;
   /** Type resolution by name (XOR with item-level `type_id`). */
   type?: string;

@@ -634,14 +634,65 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            thoughts: [
-              { thought_id: ctx.homeId, thought: { title: 'HOME', active: false } },
-            ],
+            thoughts: [{ thought_id: ctx.homeId, active: false }],
           },
         });
         assert.equal(result.isError, true);
         const text = toolText(result);
-        assert.ok(text.includes('VALIDATION_ERROR') || text.includes('PROTECTED'), text);
+        assert.ok(text.includes('PROTECTED'), text);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка 2a679270-75cb-41c6-9c2c-d079f85ca831: MCP-схема допускала
+  // `thought_id` и `thought` вместе (refine «хотя бы одно»), а домен
+  // (`validateEnvelope`) требует ровно одно. Теперь схема отвергает
+  // комбинацию ДО домена — с внятным сообщением, а не неожиданным отказом.
+  it('rejects thought_id + thought in one item at the schema level', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 't1', thought: { title: 'XOR-цель' } }],
+          },
+        });
+        assert.notEqual(created.isError, true, toolText(created));
+        const thoughtId = (JSON.parse(toolText(created)) as { items: Array<{ id: string }> })
+          .items[0]!.id;
+
+        const both = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, thought: { title: 'патч' } }],
+          },
+        });
+        assert.equal(both.isError, true, 'thought_id + thought must be rejected');
+        const text = toolText(both);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('exactly one of thought_id or thought'), text);
+
+        // Ни один из двух должен быть тоже отвергнут — «ровно одно».
+        const neither = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'empty' }],
+          },
+        });
+        assert.equal(neither.isError, true, 'neither thought_id nor thought must be rejected');
+        assert.ok(
+          toolText(neither).includes('exactly one of thought_id or thought'),
+          toolText(neither),
+        );
       } finally {
         await handle.close();
       }
