@@ -125,10 +125,12 @@ describe('guard: слои сервера — фасады без SQL и взаи
         description:
           'В mcp/tools/* запрещён прямой `auditAgentCall(`: аудит вызова ' +
           'исполняет обёртка `runWrite` через `mcpWriteFx` (mcp/context.ts). ' +
-          'Исключение — инструменты жизненного цикла сетей (вне data.db).',
+          'Исключение — инструменты жизненного цикла сетей (вне data.db); ' +
+          '0.8.3 (задача 86ef2ff4) их дом — `mcp/tools/ops.ts` (действия ' +
+          'networks.write/networks.delete).',
         pattern: /auditAgentCall\(/,
         include: (rel) => rel.startsWith('mcp/tools/'),
-        allow: (rel) => rel === 'mcp/tools/networks.ts',
+        allow: (rel) => rel === 'mcp/tools/networks.ts' || rel === 'mcp/tools/ops.ts',
       },
       {
         name: 'no-emit-domain-event-in-facades',
@@ -136,7 +138,8 @@ describe('guard: слои сервера — фасады без SQL и взаи
           'В routes/* и mcp/* запрещён прямой `emitDomainEvent(`: публикация ' +
           'событий — обязанность обёртки `runWrite`. Исключения — события ' +
           'жизненного цикла сетей (network/membership, вне data.db) в ' +
-          'routes/networks.ts, routes/admin-networks.ts, mcp/tools/networks.ts ' +
+          'routes/networks.ts, routes/admin-networks.ts, mcp/tools/networks.ts, ' +
+          'mcp/tools/ops.ts (0.8.3, задача 86ef2ff4 — сети упакованы в etn.ops) ' +
           'и сам транспорт (http/server.ts, mcp/context.ts).',
         pattern: /emitDomainEvent\(/,
         include: inFacades,
@@ -144,6 +147,7 @@ describe('guard: слои сервера — фасады без SQL и взаи
           rel === 'routes/networks.ts' ||
           rel === 'routes/admin-networks.ts' ||
           rel === 'mcp/tools/networks.ts' ||
+          rel === 'mcp/tools/ops.ts' ||
           rel === 'mcp/context.ts',
       },
     ]);

@@ -31,6 +31,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -123,10 +124,7 @@ function setRoles(ctx: McpTestContext, roles: Record<string, string | null>): vo
 /** Выбрать слой для текущей MCP-сессии (ключ). */
 async function selectMcpLayer(client: Client, networkId: string): Promise<string> {
   const created = toolJson<{ id: string; layer: { id: string } }>(
-    await client.callTool({
-      name: 'etn.layers.create',
-      arguments: { network_id: networkId, title: 'Правка в слое' },
-    }),
+    await callOp(client, 'layers.create', { network_id: networkId, title: 'Правка в слое' }),
   );
   const picked = toolJson<{ id: string }>(
     await client.callTool({

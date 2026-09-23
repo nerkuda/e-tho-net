@@ -51,6 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 
 import { contractsByName } from '../src/contracts.js';
+import { OPS_ACTIONS_BY_TOOL } from '../src/mcp/tools/ops-catalog.js';
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -279,10 +280,13 @@ function mcpViewFields(): Array<{ tool: string; field: string; values?: string[]
   return found;
 }
 
-/** `readOnlyHint` инструмента из общей таблицы аннотаций. */
+/** `readOnlyHint` инструмента из общей таблицы аннотаций. Для операций,
+ *  снятых в `etn.ops` (0.8.3, задача 86ef2ff4), признак `readOnly` берётся из
+ *  реестра действий — у них больше нет собственной тул-уровневой аннотации. */
 function readOnlyHint(tool: string): boolean {
   const table = MCP_TOOL_ANNOTATIONS as Readonly<Record<string, { readOnlyHint?: boolean } | undefined>>;
-  return table[tool]?.readOnlyHint === true;
+  if (table[tool]?.readOnlyHint === true) return true;
+  return OPS_ACTIONS_BY_TOOL.get(tool)?.readOnly === true;
 }
 
 const viewKey = (tool: string, field: string): string => `${tool}.${field}`;

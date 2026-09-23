@@ -40,7 +40,10 @@ import { createLogger } from '../src/logger.js';
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import { createLayer, setSessionLayer } from '../src/domain/layer-service.js';
 import { PubSub } from '../src/realtime/pubsub.js';
-import { connectMcpClient, toolJson } from './mcp-helpers.js';
+import {
+  callOp,
+  connectMcpClient, toolJson,
+} from './mcp-helpers.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -534,20 +537,14 @@ describe(
       const handle = await connectMcpClient(mcpCtx, running.owner.key);
       try {
         const baseline = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: running.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: running.networkId, since_seq: 0 }),
         );
         const seenSeq = baseline.cursor.max_seq ?? 0;
         assert.ok(seenSeq >= 2, `expected at least 2 events, got ${seenSeq}`);
 
         // No switch yet: replaying from `seenSeq` is not truncated.
         const before = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: running.networkId, since_seq: seenSeq },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: running.networkId, since_seq: seenSeq }),
         );
         assert.equal(before.truncated, false);
 
@@ -566,19 +563,13 @@ describe(
 
         // The old cursor now spans the switch: forced full resync.
         const after = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: running.networkId, since_seq: seenSeq },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: running.networkId, since_seq: seenSeq }),
         );
         assert.equal(after.truncated, true);
 
         // A cursor already at/after the switch point is fine again.
         const caughtUp = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: running.networkId, since_seq: seenSeq + 1 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: running.networkId, since_seq: seenSeq + 1 }),
         );
         assert.equal(caughtUp.truncated, false);
         void t2;

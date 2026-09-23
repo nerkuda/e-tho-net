@@ -34,6 +34,7 @@ import {
   type RestTestContext,
 } from './rest-helpers.js';
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -509,10 +510,7 @@ describe('Activity maintenance (6bcccd2b)', { skip: !nativeAvailable() }, () => 
         mcpCtx = await buildMcpContext(overrides);
         const handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
         try {
-          const callResult = await handle.client.callTool({
-            name: 'etn.activity.rollup',
-            arguments: { network_id: restCtx.networkId, until_ms: cutoff },
-          });
+          const callResult = await callOp(handle.client, 'activity.rollup', { network_id: restCtx.networkId, until_ms: cutoff });
           assert.equal(callResult.isError, undefined, toolText(callResult));
           const json = toolJson(callResult) as { removed: number; kept: number };
           // После REST обе операции (REST, потом MCP) идемпотентны на
@@ -551,10 +549,7 @@ describe('Activity maintenance (6bcccd2b)', { skip: !nativeAvailable() }, () => 
         mcpCtx = await buildMcpContext(overrides);
         const handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
         try {
-          const callResult = await handle.client.callTool({
-            name: 'etn.activity.truncate',
-            arguments: { network_id: restCtx.networkId, until_ms: midpoint },
-          });
+          const callResult = await callOp(handle.client, 'activity.truncate', { network_id: restCtx.networkId, until_ms: midpoint }, true);
           assert.equal(callResult.isError, undefined, toolText(callResult));
           const json = toolJson(callResult) as { removed: number };
           assert.equal(json.removed, 0);

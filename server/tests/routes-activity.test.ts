@@ -26,6 +26,7 @@ import {
   type RestTestContext,
 } from './rest-helpers.js';
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -320,14 +321,11 @@ describe(
         assert.equal(payload.data[0]!.action, 'created');
 
         // Захват через MCP НЕ пишется в журнал (паритет правила).
-        const capRes = await handle.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: {
+        const capRes = await callOp(handle.client, 'locks.acquire', {
             network_id: ctx.networkId,
             entity_type: 'thought',
             entity_id: thoughtId,
-          },
-        });
+          });
         assert.equal(capRes.isError, undefined, toolText(capRes));
         const after = await handle.client.callTool({
           name: 'etn.activity.list',

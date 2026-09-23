@@ -14,13 +14,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
-import { checkThoughtDeletion, countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
-import { ThoughtsBacklinks, ThoughtsDeletionCheck, ThoughtsFindDuplicates, ThoughtsGet, ThoughtsMentions, ThoughtsNeighbors, ThoughtsPath, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
+import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
+import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
-import { findBacklinks } from '../../domain/backlinks-service.js';
-import { findDuplicates, findMentions, resolveThoughts, search } from '../../domain/search-service.js';
+import { findDuplicates, resolveThoughts, search } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
@@ -32,7 +31,7 @@ import {
   projectThoughtRows,
   stripStructuralLinkProperties,
 } from '../../domain/response-projection.js';
-import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
+import { subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
 import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
@@ -855,81 +854,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         });
       }),
   );
-  mcp.registerTool(
-    'etn.thoughts.path',
-    {
-      title: 'Путь между мыслями',
-      description:
-        'Shortest path between two thoughts through undirected parent/child edges, bounded by ' +
-        '`max_depth`. `link_filter` — { type_ids?, include_structural? } ограничивает рёбра, по ' +
-        'которым ищется путь. Returns the id sequence or `path: null` when unreachable.',
-      inputSchema: ThoughtsPath.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.path'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const path = findPath(
-          ndb,
-          args.from_id,
-          args.to_id,
-          args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
-          args.link_filter,
-        );
-        // Bug fix (§5.1e): sanitize before returning — `resolveThoughts` gives
-        // raw `data:` icon URLs, but the agent can never resolve an image; the
-        // place must mirror `subgraph`/`get`/`neighbors`. The `thoughts[]` rows
-        // also go through the single list serializer (projection.ts).
-        const thoughts =
-          path === null
-            ? undefined
-            : projectThoughtRows(resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t)));
-        return {
-          from_id: args.from_id,
-          to_id: args.to_id,
-          path,
-          ...(thoughts === undefined
-            ? {}
-            : {
-                thoughts,
-                thought_types: thoughtTypeCatalog(ndb, thoughts.map((t) => t.type_id)),
-              }),
-        };
-      }),
-  );
-  mcp.registerTool(
-    'etn.thoughts.mentions',
-    {
-      title: 'Где упоминается мысль',
-      description:
-        'Comments (on thoughts and links) whose text mentions the thought by title or synonym.',
-      inputSchema: ThoughtsMentions.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.mentions'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        return findMentions(ndb, args.thought_id);
-      }),
-  );
-  mcp.registerTool(
-    'etn.thoughts.backlinks',
-    {
-      title: 'Ссылки на мысль',
-      description:
-        'Comments whose `body_md` carries an explicit ID-based wiki reference `[[#<id>]]` or ' +
-        '`[[n:<net>#<id>]]` to this thought. Distinct from `etn.thoughts.mentions` — that one finds implicit ' +
-        'text matches by title/synonym via FTS5, this one explicit UUID references. Returns the same ' +
-        '`MentionHit[]` shape; the thought\'s own comments are excluded.',
-      inputSchema: ThoughtsBacklinks.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.backlinks'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        return findBacklinks(ndb, args.thought_id);
-      }),
-  );
+  // `etn.thoughts.path` / `etn.thoughts.mentions` / `etn.thoughts.backlinks` /
+  // `etn.thoughts.deletion_check` (0.8.3, задача 86ef2ff4) сняты из постоянного
+  // набора — упакованы в `etn.ops` (tools/ops.ts).
   mcp.registerTool(
     'etn.thoughts.usage',
     {
@@ -978,27 +905,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-  mcp.registerTool(
-    'etn.thoughts.deletion_check',
-    {
-      title: 'Проверка блокировки удаления мысли',
-      description:
-        'Check what blocks a thought from being physically deleted: use in blocking link properties, holding ' +
-        'layers, and future orphans among its children. Accepts an array; returns a map id → ' +
-        '{ blocked, blocking, orphaned_children }. See prompt etn.how_to_purge for the two-phase deletion flow.',
-      inputSchema: ThoughtsDeletionCheck.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.deletion_check'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const result: Record<string, unknown> = {};
-        for (const id of [...new Set(args.thought_ids)]) {
-          result[id] = checkThoughtDeletion(ndb, id);
-        }
-        return result;
-      }),
-  );
+  // `etn.thoughts.deletion_check` (0.8.3, задача 86ef2ff4) снят — в `etn.ops`.
 
 }
 

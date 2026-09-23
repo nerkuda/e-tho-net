@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -96,16 +97,13 @@ describe('etn.thoughts.copy_subtree: значения duplicate_policy (стан
           createLink(srcNdb, { source_id: srcRoot, target_id: child }, w.src.adminId);
         }
 
-        const result = await w.handle.client.callTool({
-          name: 'etn.thoughts.copy_subtree',
-          arguments: {
+        const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
             source_network_id: w.src.networkId,
             target_network_id: w.dst.networkId,
             root_thought_ids: [srcRoot],
             max_depth: 1,
             duplicate_policy: policy,
-          },
-        });
+          });
 
         if (policy === 'fail') {
           // Ветка fail: дубль title+synonyms запрещает копирование целиком.
@@ -167,17 +165,14 @@ describe('etn.thoughts.mentions_scan: значения link_direction (стан�
           const source = createThought(ndb, { title: `Источник-${direction}` }, ctx.adminId).id;
           const target = createThought(ndb, { title: `Цель-упоминание-${direction}` }, ctx.adminId).id;
 
-          const result = await handle.client.callTool({
-            name: 'etn.thoughts.mentions_scan',
-            arguments: {
+          const result = await callOp(handle.client, 'thoughts.mentions_scan', {
               network_id: ctx.networkId,
               text: `Сегодня упомянули Цель-упоминание-${direction}.`,
               min_confidence: 0.6,
               create_links: true,
               source_thought_id: source,
               link_direction: direction,
-            },
-          });
+            });
           assert.equal(result.isError, undefined, toolText(result));
           const data = toolJson<{ links_created: number }>(result);
           assert.equal(data.links_created, 1, `${direction}: создана одна связь`);
@@ -226,28 +221,21 @@ describe('etn.import.subgraph: значения collision_policy (стандар
         // В целевой сети уже есть мысль с тем же title — коллизия по title.
         createThought(openNetworkDb(dst.dataDir, dst.networkId), { title: dupTitle }, dst.adminId);
 
-        const exportRes = await srcHandle.client.callTool({
-          name: 'etn.export.subgraph',
-          arguments: {
+        const exportRes = await callOp(srcHandle.client, 'export.subgraph', {
             network_id: src.networkId,
             seed_ids: [root],
             radius: 2,
             format: 'etnx',
             etnx_options: { include_attachments: false },
-          },
-        });
+          });
         assert.equal(exportRes.isError, undefined, toolText(exportRes));
         const { content_b64 } = toolJson<{ content_b64: string }>(exportRes);
 
-        const importRes = await dstHandle.client.callTool({
-          name: 'etn.import.subgraph',
-          arguments: {
+        const importRes = await callOp(dstHandle.client, 'import.subgraph', {
             network_id: dst.networkId,
             source: { kind: 'etnx_base64', content_base64: content_b64 },
-            confirm: true,
             collision_policy: policy,
-          },
-        });
+          }, true);
 
         if (policy === 'fail') {
           assert.ok(importRes.isError, 'fail: коллизия обязана отвергнуть импорт');
@@ -303,28 +291,22 @@ describe('etn.import.subgraph: значения collision_policy (стандар
       createLink(srcNdb, { source_id: root, target_id: child }, src.adminId);
       createThought(openNetworkDb(dst.dataDir, dst.networkId), { title: dupTitle }, dst.adminId);
 
-      const exportRes = await srcHandle.client.callTool({
-        name: 'etn.export.subgraph',
-        arguments: {
+      const exportRes = await callOp(srcHandle.client, 'export.subgraph', {
           network_id: src.networkId,
           seed_ids: [root],
           radius: 2,
           format: 'etnx',
           etnx_options: { include_attachments: false },
-        },
-      });
+        });
       assert.equal(exportRes.isError, undefined, toolText(exportRes));
       const { content_b64 } = toolJson<{ content_b64: string }>(exportRes);
 
       // skip: превью предупреждает о пропуске дубля и его подграфа.
-      const skipRes = await dstHandle.client.callTool({
-        name: 'etn.import.dry_run',
-        arguments: {
+      const skipRes = await callOp(dstHandle.client, 'import.dry_run', {
           network_id: dst.networkId,
           source: { kind: 'etnx_base64', content_base64: content_b64 },
           collision_policy: 'skip',
-        },
-      });
+        });
       assert.equal(skipRes.isError, undefined, toolText(skipRes));
       const skipData = toolJson<{
         plan: { thoughts_to_create: number; thoughts_to_reuse: number; thoughts_to_skip: number };
@@ -335,14 +317,11 @@ describe('etn.import.subgraph: значения collision_policy (стандар
       assert.equal(skipData.conflicts.length, 1, 'skip-превью: конфликт показан');
 
       // rename: превью обещает создание обеих мыслей без конфликтов-пропусков.
-      const renameRes = await dstHandle.client.callTool({
-        name: 'etn.import.dry_run',
-        arguments: {
+      const renameRes = await callOp(dstHandle.client, 'import.dry_run', {
           network_id: dst.networkId,
           source: { kind: 'etnx_base64', content_base64: content_b64 },
           collision_policy: 'rename',
-        },
-      });
+        });
       const renameData = toolJson<{ plan: { thoughts_to_create: number; thoughts_to_skip: number } }>(
         renameRes,
       );
@@ -373,17 +352,14 @@ describe('etn.attachments.add: значения kind (стандарт view-по
 
         for (const value of ['url', 'file'] as const) {
           const created = toolJson<{ id: string }>(
-            await handle.client.callTool({
-              name: 'etn.attachments.add',
-              arguments: {
+            await callOp(handle.client, 'attachments.add', {
                 network_id: ctx.networkId,
                 owner_type: 'thought',
                 owner_id: ctx.homeId,
                 kind: value,
                 title: `вложение-${value}`,
                 ...(value === 'url' ? { url } : { file_path: filePath }),
-              },
-            }),
+              }),
           );
           assert.ok(created.id.length > 0, `${value}: вложение создано`);
 

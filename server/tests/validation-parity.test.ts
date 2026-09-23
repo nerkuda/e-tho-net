@@ -14,7 +14,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildMcpContext, closeMcpContext, connectMcpClient, toolText } from './mcp-helpers.js';
+import {
+  callOp,
+  buildMcpContext, closeMcpContext, connectMcpClient, toolText,
+} from './mcp-helpers.js';
 import { authHeaders, buildRestContext, closeRestContext } from './rest-helpers.js';
 
 /** Совместить REST-мир с MCP-сервером поверх него (тот же admin + сеть). */
@@ -60,10 +63,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       const restErr = restRes.json() as RestError;
       assert.equal(restErr.error.code, 'VALIDATION_ERROR');
 
-      const mcpRes = await w.handle.client.callTool({
-        name: 'etn.layers.create',
-        arguments: { network_id: w.rest.networkId, title: 123 },
-      });
+      const mcpRes = await callOp(w.handle.client, 'layers.create', { network_id: w.rest.networkId, title: 123 });
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
       assert.equal(mcpErr.code, restErr.error.code);
@@ -85,10 +85,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(restRes.statusCode, 422);
       const restErr = restRes.json() as RestError;
 
-      const mcpRes = await w.handle.client.callTool({
-        name: 'etn.layers.create',
-        arguments: { network_id: w.rest.networkId, title: '' },
-      });
+      const mcpRes = await callOp(w.handle.client, 'layers.create', { network_id: w.rest.networkId, title: '' });
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
       assert.equal(mcpErr.code, restErr.error.code);
@@ -135,10 +132,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(restRes.statusCode, 422);
       const restErr = restRes.json() as RestError;
 
-      const mcpRes = await w.handle.client.callTool({
-        name: 'etn.locks.acquire',
-        arguments: { network_id: w.rest.networkId, entity_type: 123, entity_id: 'x' },
-      });
+      const mcpRes = await callOp(w.handle.client, 'locks.acquire', { network_id: w.rest.networkId, entity_type: 123, entity_id: 'x' });
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
       assert.equal(mcpErr.code, restErr.error.code);

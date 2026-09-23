@@ -25,10 +25,17 @@ import type { ThoughtCardWarning } from './thought-card-warning.js';
 import type { Link } from './link.js';
 import type { Thought, ThoughtRef, ThoughtUsage } from './thought.js';
 
-/** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
+/** All tool names exposed by the ETN MCP server (05-mcp-server.md §4).
+ *
+ *  0.8.3 (задача 86ef2ff4, ADR b2eebf8b/8358eea9): состав сокращён — редкие
+ *  операции сняты из постоянного набора и доступны через `etn.guide` +
+ *  `etn.ops` (реестр действий — в `server/src/mcp/tools/ops-catalog.ts`).
+ *  Здесь — только инструменты, реально рекламируемые в `tools/list`. */
 export const MCP_TOOL_NAMES = [
+  // прогрессивное раскрытие (задача 86ef2ff4)
+  'etn.guide',
+  'etn.ops',
   // read (§4.1)
-  'etn.networks.list',
   'etn.networks.structure',
   'etn.instructions',
   'etn.thoughts.search',
@@ -38,82 +45,27 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.bulk_update',
   'etn.thoughts.neighbors',
   'etn.thoughts.subgraph',
-  'etn.thoughts.path',
-  'etn.thoughts.mentions',
-  'etn.thoughts.backlinks',
   'etn.thoughts.usage',
-  'etn.thoughts.deletion_check',
-  'etn.trash.list',
   'etn.comments.get',
-  'etn.export.subgraph',
   'etn.types.list',
-  // `etn.views.run` (задача c1fa71d4, 0.7.3, операция cb8d8e43) — исполнение
-  // именованного отбора типа относительно конкретной мысли. Read-only:
-  // бюджет записи не тратит, `audit_log` не пишет.
   'etn.views.run',
-  'etn.changes.list',
   'etn.chronicle.query',
-  'etn.members.list',
-  'etn.metrics.reads',
-  'etn.metrics.tools',
   'etn.layers.list',
-  'etn.layers.diff',
-  'etn.layers.diff_doc',
+  'etn.activity.list',
   // mutate (§4.2)
-  'etn.networks.write',
-  'etn.networks.delete',
-  'etn.thoughts.delete',
+  'etn.thoughts.write',
   'etn.thoughts.trash',
   'etn.links.restore',
   'etn.comments.update',
   'etn.comments.edit',
-  'etn.comments.delete',
-  'etn.attachments.add',
-  'etn.attachments.copy',
-  'etn.attachments.search',
-  'etn.attachments.update',
-  'etn.attachments.delete',
   'etn.properties.add',
-  'etn.properties.remove',
   // Кросс-сетевая ссылка (задача 7849008a, спека 46df7a8d): явный резолв
-  // снапшота имени цели — открывает целевую сеть, обновляет снапшот; цели/
-  // сети удалены → помечает значение нерезолвленным. Служебная запись
-  // (требование c104a0fc).
+  // снапшота имени цели; служебная запись (требование c104a0fc).
   'etn.properties.resolve',
-  // `etn.thoughts.write` (task 053751b5, 0.7.2) — батч-запись: одна транзакция
-  // для многих связанных единиц знания (мысли + постоянные/хронологические
-  // комментарии + свойства + связи с их свойствами и комментариями + вложения).
-  // Поглощённые инструменты (`thoughts.create`/`update`/`set_active`/
-  // `upsert_bundle`, `links.create`, `properties.set`, `comments.upsert`)
-  // удалены в 0.8.2 (задача 937480ca).
-  'etn.thoughts.write',
-  'etn.trash.purge',
-  'etn.thoughts.usage_clear',
-  // layers (S10, §4.2)
-  'etn.layers.create',
-  'etn.layers.update',
-  'etn.layers.delete',
   'etn.layers.select',
-  'etn.layers.merge',
-  // object-locks (task a88acf20, операция b6b776ff — паритет с REST /locks)
-  'etn.locks.acquire',
-  'etn.locks.release',
-  'etn.locks.clear',
-  'etn.locks.list',
-  // activity log (task f2eca5a4, операция 70dfe81d — паритет с REST /activity)
-  'etn.activity.list',
-  // activity log maintenance (задача 6bcccd2b — паритет с REST /activity/rollup, /activity/truncate)
-  'etn.activity.rollup',
-  'etn.activity.truncate',
-  // ontology batch ops (задача cc9ca65e / 0.7.2) — батч-запись онтологии сети
-  // (типы мыслей/связей, свойства, привязки свойств к типам) и её удаление.
+  // ontology batch ops (задача cc9ca65e / 0.7.2)
   'etn.ontology.write',
   'etn.ontology.delete',
-  // P3 (задача e488f4c1 / 0.7.2): copy_subtree, mentions_scan, импорт/экспорт .etnx
-  'etn.thoughts.copy_subtree',
-  'etn.thoughts.mentions_scan',
-  'etn.import.dry_run',
-  'etn.import.subgraph',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -152,8 +104,13 @@ export interface McpToolAnnotations {
  * absent hint is the documented default).
  */
 export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnotations } = {
+  // ---- прогрессивное раскрытие (задача 86ef2ff4, 0.8.3) -----------
+  // `etn.guide` — read-only витрина редких операций.
+  'etn.guide': { readOnlyHint: true },
+  // `etn.ops` — диспетчер: набор действий и их `readOnly`/`destructive`
+  // заданы в реестре (`tools/ops-catalog.ts`), а не тул-уровневой аннотацией.
+
   // ---- read tools (§4.1) — readOnlyHint ---------------------------
-  'etn.networks.list': { readOnlyHint: true },
   'etn.networks.structure': { readOnlyHint: true },
   // `etn.instructions` (задача ba024a45 / 0.7.2, ADR 717f04df) — read-only
   // витрина инструкций сети; возвращает превью + список, без изменений.
@@ -164,64 +121,31 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.resolve': { readOnlyHint: true },
   'etn.thoughts.neighbors': { readOnlyHint: true },
   'etn.thoughts.subgraph': { readOnlyHint: true },
-  'etn.thoughts.path': { readOnlyHint: true },
-  'etn.thoughts.mentions': { readOnlyHint: true },
-  'etn.thoughts.backlinks': { readOnlyHint: true },
   'etn.thoughts.usage': { readOnlyHint: true },
-  'etn.thoughts.deletion_check': { readOnlyHint: true },
-  'etn.trash.list': { readOnlyHint: true },
   'etn.comments.get': { readOnlyHint: true },
-  'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
   // `etn.views.run` (задача c1fa71d4, 0.7.3) — read-only исполнение отбора;
   // не пишет событий и audit_log, всегда идемпотентно для одного набора аргументов.
   'etn.views.run': { readOnlyHint: true },
-  'etn.changes.list': { readOnlyHint: true },
   'etn.chronicle.query': { readOnlyHint: true },
-  'etn.metrics.reads': { readOnlyHint: true },
-  'etn.metrics.tools': { readOnlyHint: true },
-  'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
   'etn.layers.list': { readOnlyHint: true },
-  'etn.layers.diff': { readOnlyHint: true },
-  'etn.layers.diff_doc': { readOnlyHint: true },
-  'etn.locks.list': { readOnlyHint: true },
   'etn.activity.list': { readOnlyHint: true },
-  'etn.members.list': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
-  'etn.thoughts.delete': { destructiveHint: true },
   'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },
-  'etn.comments.delete': { destructiveHint: true },
-  'etn.attachments.delete': { destructiveHint: true },
-  'etn.trash.purge': { destructiveHint: true },
-  'etn.layers.delete': { destructiveHint: true },
-  'etn.layers.merge': { destructiveHint: true },
-  'etn.locks.release': { destructiveHint: true },
-  'etn.locks.clear': { destructiveHint: true },
-  'etn.activity.rollup': { destructiveHint: true },
-  'etn.activity.truncate': { destructiveHint: true },
-  // `etn.networks.delete` (задача ba024a45 / 0.7.2) — деструктивный;
-  // дополнительно требует `confirm: true` в аргументах.
-  'etn.networks.delete': { destructiveHint: true },
-  // `etn.networks.write` — upsert (create или patch); повторный вызов с теми
-  // же аргументами даёт тот же результат.
-  'etn.networks.write': { destructiveHint: false, idempotentHint: true },
+  // `etn.ontology.delete` — удаление сущности онтологии; требует `force` для
+  // используемых элементов.
+  'etn.ontology.delete': { destructiveHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.trash': { idempotentHint: true },
   'etn.links.restore': { idempotentHint: true },
   'etn.properties.add': { idempotentHint: true },
-  'etn.properties.remove': { idempotentHint: true },
   // Кросс-сетевая ссылка (задача 7849008a): повторный вызов с теми же
   // аргументами даёт тот же результат (снапшот уже отрезолвлен).
   'etn.properties.resolve': { idempotentHint: true },
-  'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
-  // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
-  'etn.locks.acquire': { idempotentHint: true },
-  // `attachments.update` — last-write-wins по метаданным, повторный вызов с теми же аргументами даёт тот же результат.
-  'etn.attachments.update': { idempotentHint: true },
   // `etn.comments.edit` (задача d28abe04) — секционная правка ops-ами;
   // повторный вызов с теми же ops поверх нового состояния меняет результат.
   'etn.comments.edit': { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -233,28 +157,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // аргументами даёт тот же результат.
   'etn.thoughts.write': { destructiveHint: false, idempotentHint: true },
 
-  // ---- `etn.ontology.write` / `etn.ontology.delete` (задача cc9ca65e / 0.7.2) -
-  // Управление онтологией сети (типы мыслей/связей, реестр свойств, привязки
-  // свойств к типам) одной транзакцией. Upsert по `id` XOR имени внутри
-  // батча; локальные `ref`/`parent_ref`/`type_ref`/`property_ref`. Повторный
-  // вызов с теми же аргументами не меняет состояние. Удаление деструктивно,
-  // требует `force` для используемых сущностей.
+  // ---- `etn.ontology.write` (задача cc9ca65e / 0.7.2) ---------------------
+  // Upsert онтологии сети одной транзакцией; повторный вызов с теми же
+  // аргументами не меняет состояние.
   'etn.ontology.write': { destructiveHint: false, idempotentHint: true },
-  'etn.ontology.delete': { destructiveHint: true },
-
-  // ---- P3 (задача e488f4c1 / 0.7.2) -------------------------------------
-  // `etn.thoughts.copy_subtree` — копирование подграфа между сетями. Семантика
-  // зависит от `duplicate_policy`; в общем случае не идемпотентно (новые
-  // id при повторе).
-  'etn.thoughts.copy_subtree': { destructiveHint: false, idempotentHint: false },
-  // `etn.thoughts.mentions_scan` — без `create_links` чисто read-only.
-  // С `create_links: true` создаёт связи — мутация.
-  'etn.thoughts.mentions_scan': { readOnlyHint: true },
-  // `etn.import.dry_run` — read-only превью без побочных эффектов.
-  'etn.import.dry_run': { readOnlyHint: true },
-  // `etn.import.subgraph` — destructive: одна транзакция вносит мысли, связи,
-  // комментарии и вложения в целевую сеть. `confirm: true` обязателен.
-  'etn.import.subgraph': { destructiveHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).

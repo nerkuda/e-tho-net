@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -49,13 +50,10 @@ describe('etn.networks.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const result = await callOp(handle.client, 'networks.write', {
             display_name: 'Fresh net',
             description: 'desc',
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<NetworkCard>(result);
         assert.equal(data.display_name, 'Fresh net');
@@ -95,14 +93,11 @@ describe('etn.networks.write (0.7.2)', { skip: !nativeAvailable() }, () => {
 
       const handleOwner = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handleOwner.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const result = await callOp(handleOwner.client, 'networks.write', {
             network_id: ctx.networkId,
             display_name: 'Renamed',
             conventions: 'New conventions.',
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<NetworkCard>(result);
         assert.equal(data.display_name, 'Renamed');
@@ -114,13 +109,10 @@ describe('etn.networks.write (0.7.2)', { skip: !nativeAvailable() }, () => {
 
       const handleMember = await connectMcpClient(ctx, memberGen.key);
       try {
-        const err = await handleMember.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const err = await callOp(handleMember.client, 'networks.write', {
             network_id: ctx.networkId,
             display_name: 'Hijacked',
-          },
-        });
+          });
         assert.equal(err.isError, true);
         assert.match(toolText(err), /FORBIDDEN/);
       } finally {
@@ -136,13 +128,10 @@ describe('etn.networks.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const err = await handle.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const err = await callOp(handle.client, 'networks.write', {
             network_id: ctx.networkId,
             type_roles: { mystery_role: null },
-          },
-        });
+          });
         assert.equal(err.isError, true);
         assert.match(toolText(err), /VALIDATION_ERROR/);
         assert.match(toolText(err), /mystery_role/);
@@ -182,26 +171,20 @@ describe('etn.networks.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           .run(typeId, ctx.adminId, ctx.adminId);
 
         // Real id → accepted; has_structure flips true.
-        const ok = await handle.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const ok = await callOp(handle.client, 'networks.write', {
             network_id: ctx.networkId,
             type_roles: { table_of_contents: typeId },
-          },
-        });
+          });
         assert.equal(ok.isError, undefined, toolText(ok));
         const okData = toolJson<NetworkCard>(ok);
         assert.equal(okData.type_roles.table_of_contents, typeId);
         assert.equal(okData.has_structure, true);
 
         // Stale id → VALIDATION_ERROR (the service validates type existence).
-        const bad = await handle.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const bad = await callOp(handle.client, 'networks.write', {
             network_id: ctx.networkId,
             type_roles: { table_of_contents: '00000000-0000-4000-8000-0000000000aa' },
-          },
-        });
+          });
         assert.equal(bad.isError, true);
         assert.match(toolText(bad), /VALIDATION_ERROR/);
       } finally {
@@ -234,22 +217,16 @@ describe('etn.networks.write (0.7.2)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // First write: set both roles.
-        const r1 = await handle.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const r1 = await callOp(handle.client, 'networks.write', {
             network_id: ctx.networkId,
             type_roles: { table_of_contents: typeIdA, instructions: typeIdB },
-          },
-        });
+          });
         assert.equal(r1.isError, undefined, toolText(r1));
         // Second write: only set table_of_contents — instructions must stay.
-        const r2 = await handle.client.callTool({
-          name: 'etn.networks.write',
-          arguments: {
+        const r2 = await callOp(handle.client, 'networks.write', {
             network_id: ctx.networkId,
             type_roles: { table_of_contents: typeIdB },
-          },
-        });
+          });
         assert.equal(r2.isError, undefined, toolText(r2));
         const data = toolJson<NetworkCard>(r2);
         assert.equal(data.type_roles.table_of_contents, typeIdB);
@@ -288,10 +265,7 @@ describe('etn.networks.delete (0.7.2)', { skip: !nativeAvailable() }, () => {
       });
       const handle = await connectMcpClient(ctx, gen.key);
       try {
-        const err = await handle.client.callTool({
-          name: 'etn.networks.delete',
-          arguments: { network_id: ctx.networkId, confirm: true },
-        });
+        const err = await callOp(handle.client, 'networks.delete', { network_id: ctx.networkId}, true);
         assert.equal(err.isError, true);
         assert.match(toolText(err), /FORBIDDEN/);
       } finally {
@@ -307,10 +281,7 @@ describe('etn.networks.delete (0.7.2)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const err = await handle.client.callTool({
-          name: 'etn.networks.delete',
-          arguments: { network_id: ctx.networkId, confirm: false },
-        });
+        const err = await callOp(handle.client, 'networks.delete', { network_id: ctx.networkId, confirm: false }, true);
         assert.equal(err.isError, true);
         assert.match(toolText(err), /VALIDATION_ERROR|Invalid/);
       } finally {
@@ -329,10 +300,7 @@ describe('etn.networks.delete (0.7.2)', { skip: !nativeAvailable() }, () => {
         const dir = networkDir(ctx.dataDir, ctx.networkId);
         assert.ok(existsSync(dir), 'network dir must exist before delete');
 
-        const result = await handle.client.callTool({
-          name: 'etn.networks.delete',
-          arguments: { network_id: ctx.networkId, confirm: true },
-        });
+        const result = await callOp(handle.client, 'networks.delete', { network_id: ctx.networkId}, true);
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<{
           deleted: boolean;

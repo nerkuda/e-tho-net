@@ -53,10 +53,19 @@ function instrumentToolCalls(mcp: McpServer, rt: McpRuntime): void {
   const fileLog = rt.deps.fileLog;
   const recordMetric = (name: string, args: unknown, isError: boolean): void => {
     try {
+      // `network_id` берём с верхнего уровня аргументов, а для диспетчера
+      // `etn.ops` (0.8.3, задача 86ef2ff4) — из вложенного `params`, чтобы
+      // телеметрия редких операций сохраняла привязку к сети.
+      const a = (typeof args === 'object' && args !== null ? args : {}) as {
+        network_id?: unknown;
+        params?: { network_id?: unknown };
+      };
       const networkId =
-        typeof args === 'object' && args !== null && typeof (args as { network_id?: unknown }).network_id === 'string'
-          ? (args as { network_id: string }).network_id
-          : null;
+        typeof a.network_id === 'string'
+          ? a.network_id
+          : typeof a.params?.network_id === 'string'
+            ? a.params.network_id
+            : null;
       rt.deps.systemDb.recordToolCallMetric({
         toolName: name,
         networkId,

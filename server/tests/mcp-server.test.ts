@@ -19,6 +19,7 @@ import {
 } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import {
+  callOp,
   closeMcpContext,
   buildMcpContext,
   connectMcpClient,
@@ -182,7 +183,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const result = await callOp(handle.client, 'networks.list', {});
         assert.equal(result.isError, undefined);
         const networks = toolJson<Array<{ id: string }>>(result);
         assert.equal(networks.length, 1);
@@ -270,10 +271,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         );
 
         // Метрика чтения: чтение ресурса увеличило счётчик мысли.
-        const metrics = await handle.client.callTool({
-          name: 'etn.metrics.reads',
-          arguments: { network_id: ctx.networkId, kind: 'top', limit: 200 },
-        });
+        const metrics = await callOp(handle.client, 'metrics.reads', { network_id: ctx.networkId, kind: 'top', limit: 200 });
         const items = toolJson<{ items: Array<{ thought_id: string; reads_count: number }> }>(metrics).items;
         const row = items.find((i) => i.thought_id === thoughtId);
         assert.ok(row !== undefined, 'мысль должна попасть в метрику чтения');
@@ -432,7 +430,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         assert.equal(get.annotations?.destructiveHint, undefined);
         assert.equal(get.annotations?.idempotentHint, undefined);
 
-        const del = byName.get('etn.thoughts.delete')!;
+        const del = byName.get('etn.ontology.delete')!;
         assert.equal(del.annotations?.readOnlyHint, undefined);
         assert.equal(del.annotations?.destructiveHint, true);
 
@@ -493,10 +491,14 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // (без изменения readOnly/destructive). 0.8.3 (задача 7849008a):
         // +1 инструмент `etn.properties.resolve` с `idempotentHint: true`
         // → 61/33/13/12.
-        assert.equal(annotated, 61);
-        assert.equal(hintReadOnly, 33);
-        assert.equal(hintDestructive, 13);
-        assert.equal(hintIdempotent, 12);
+        // 0.8.3 (задача 86ef2ff4): редкие операции сняты в `etn.guide`/`etn.ops`,
+        // поэтому витрина сокращена. Аннотированы 27 из 29 инструментов
+        // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
+        // исторически без аннотации): 17 readOnly, 1 destructive, 7 idempotent.
+        assert.equal(annotated, 27);
+        assert.equal(hintReadOnly, 17);
+        assert.equal(hintDestructive, 1);
+        assert.equal(hintIdempotent, 7);
       } finally {
         await handle.close();
       }

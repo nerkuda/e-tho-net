@@ -17,12 +17,11 @@ import {
   BULK_UPDATE_OP_VALUES,
   LinksRestore,
   ThoughtsBulkUpdate,
-  ThoughtsDelete,
   ThoughtsTrash,
 } from '../../contracts.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
-import { deleteThought, getThoughtOrThrow, updateThought } from '../../domain/thought-service.js';
+import { updateThought } from '../../domain/thought-service.js';
 import { updateLink } from '../../domain/link-service.js';
 import { applyBulkThoughtOp } from '../../domain/thought-bulk-service.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
@@ -140,50 +139,8 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         return { affected: result.affected, failures: result.failures };
       }),
   );
-  mcp.registerTool(
-    'etn.thoughts.delete',
-    {
-      title: 'Удалить мысль',
-      description:
-        'Delete a thought (cascades to links, comments, attachments, property values). The same blocking ' +
-        'check as `etn.thoughts.deletion_check` runs first: a `blocking` error means the thought is the ' +
-        'target of blocking link-property edges or held by a layer — it is not deleted. Protected thoughts (HOME) are ' +
-        'rejected. Returns { id, version: 0 }. See prompt etn.how_to_purge.',
-      inputSchema: ThoughtsDelete.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        runWrite(ndb, fx, () => {
-          // Снимок мысли до удаления — он уйдёт в журнал (как `getThought`
-          // в REST DELETE /thoughts/:id); getThoughtOrThrow даёт тот же
-          // NOT_FOUND, что и сам deleteThought.
-          const existing = getThoughtOrThrow(ndb, args.thought_id);
-          // actorUserId — для object-lock enforcement (задача 2031df5e).
-          deleteThought(ndb, args.thought_id, args.expected_version, rt.deps.auth.userId);
-          return {
-            result: undefined,
-            events: [{ type: 'thought.deleted', data: { id: args.thought_id } }],
-            activity: [{ kind: 'thought', action: 'deleted', thought: existing }],
-            audit: {
-              action: 'etn.thoughts.delete',
-              targetType: 'thought',
-              targetId: args.thought_id,
-              details: { expected_version: args.expected_version },
-            },
-          };
-        });
-        return {
-          id: args.thought_id,
-          version: 0,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
+  // `etn.thoughts.delete` (0.8.3, задача 86ef2ff4) снят из постоянного набора
+  // — упакован в `etn.ops { action: "thoughts.delete" }` (tools/ops.ts).
   mcp.registerTool(
     'etn.thoughts.trash',
     {

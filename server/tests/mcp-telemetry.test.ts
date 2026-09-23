@@ -30,6 +30,7 @@ import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -78,7 +79,7 @@ describe('MCP tool-call telemetry (940a499d)', { skip: !nativeAvailable() }, () 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // Success outside any network → (tool, NULL, key) row.
-        const ok = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const ok = await callOp(handle.client, 'networks.list', {});
         assert.equal(ok.isError, undefined);
 
         // Error inside a network → same-table row keyed by the network.
@@ -89,8 +90,10 @@ describe('MCP tool-call telemetry (940a499d)', { skip: !nativeAvailable() }, () 
         assert.equal(bad.isError, true);
 
         const rows = metricRows(ctx).filter((r) => r.api_key_id === adminKeyId);
-        const listRow = rows.find((r) => r.tool_name === 'etn.networks.list');
-        assert.ok(listRow !== undefined, 'etn.networks.list must be counted');
+        // `networks.list` снят в `etn.ops` (0.8.3, задача 86ef2ff4) — считаем
+        // строку диспетчера; сеть не задана → network_id = null.
+        const listRow = rows.find((r) => r.tool_name === 'etn.ops');
+        assert.ok(listRow !== undefined, 'etn.ops must be counted');
         assert.equal(listRow.network_id, null);
         assert.equal(listRow.calls_count, 1);
         assert.equal(listRow.errors_count, 0);
@@ -164,18 +167,14 @@ describe('MCP tool-call telemetry (940a499d)', { skip: !nativeAvailable() }, () 
         // `etn.locks.list` is network-scoped with no entity ids, so the same
         // call works verbatim against both networks.
         for (const networkId of [ctx.networkId, net2.id]) {
-          const r = await handle.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: networkId },
-          });
+          const r = await callOp(handle.client, 'locks.list', { network_id: networkId });
           assert.equal(r.isError, undefined);
         }
-        await roHandle.client.callTool({
-          name: 'etn.locks.list',
-          arguments: { network_id: ctx.networkId },
-        });
+        await callOp(roHandle.client, 'locks.list', { network_id: ctx.networkId });
 
-        const rows = metricRows(ctx).filter((r) => r.tool_name === 'etn.locks.list');
+        // `etn.locks.list` снят в `etn.ops` — привязка к сети берётся из
+        // вложенного `params.network_id` (0.8.3, задача 86ef2ff4).
+        const rows = metricRows(ctx).filter((r) => r.tool_name === 'etn.ops');
         const combos = rows.map((r) => `${r.network_id}|${r.api_key_id}`);
         assert.ok(combos.includes(`${ctx.networkId}|${adminKeyId}`));
         assert.ok(combos.includes(`${net2.id}|${adminKeyId}`));
@@ -197,10 +196,7 @@ describe('MCP tool-call telemetry (940a499d)', { skip: !nativeAvailable() }, () 
       ctx.rawDb.exec('DROP TABLE mcp_tool_call_metrics');
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.networks.list',
-          arguments: {},
-        });
+        const result = await callOp(handle.client, 'networks.list', {});
         assert.equal(result.isError, undefined);
       } finally {
         await handle.close();
@@ -269,10 +265,7 @@ describe('etn.metrics.tools (940a499d)', { skip: !nativeAvailable() }, () => {
       // Admin sees everything: two tool groups, summed across keys/networks.
       const adminHandle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await adminHandle.client.callTool({
-          name: 'etn.metrics.tools',
-          arguments: {},
-        });
+        const result = await callOp(adminHandle.client, 'metrics.tools', {});
         assert.equal(result.isError, undefined);
         const data = toolJson<{ group_by: string; items: Array<{ tool_name: string; network_id: string | null; calls_count: number; errors_count: number }> }>(result);
         assert.equal(data.group_by, 'tool');
@@ -291,10 +284,7 @@ describe('etn.metrics.tools (940a499d)', { skip: !nativeAvailable() }, () => {
       // Bob: own network rows + own network-less rows only.
       const bobHandle = await connectMcpClient(ctx, bobGen.key);
       try {
-        const result = await bobHandle.client.callTool({
-          name: 'etn.metrics.tools',
-          arguments: { group_by: 'tool+network' },
-        });
+        const result = await callOp(bobHandle.client, 'metrics.tools', { group_by: 'tool+network' });
         assert.equal(result.isError, undefined);
         const data = toolJson<{
           items: Array<{ tool_name: string; network_id: string | null; api_key_id?: string; calls_count: number }>;
@@ -333,14 +323,11 @@ describe('etn.metrics.tools (940a499d)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.metrics.tools',
-          arguments: {
+        const result = await callOp(handle.client, 'metrics.tools', {
             group_by: 'tool+key',
             // Window ends between the two rows: only the fresh one survives.
             to_ms: Date.parse('2026-08-15T00:00:00.000Z'),
-          },
-        });
+          });
         assert.equal(result.isError, undefined);
         const data = toolJson<{
           items: Array<{ tool_name: string; api_key_id?: string; calls_count: number; errors_count: number }>;
@@ -398,10 +385,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // there, then select ONLY the link for a partial merge — its layer-only
         // endpoint is not closed → missing_closure + the how_to hint.
         const layer = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'L-telemetry' },
-          }),
+          await callOp(handle.client, 'layers.create', { network_id: ctx.networkId, title: 'L-telemetry' }),
         );
         await handle.client.callTool({
           name: 'etn.layers.select',
@@ -421,10 +405,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         const linkId = neighbors.neighbors[0]?.link_id;
         assert.ok(typeof linkId === 'string', 'parent link must exist');
 
-        const merge = await handle.client.callTool({
-          name: 'etn.layers.merge',
-          arguments: { network_id: ctx.networkId, layer_id: layer.id, tables: { links: [linkId] } },
-        });
+        const merge = await callOp(handle.client, 'layers.merge', { network_id: ctx.networkId, layer_id: layer.id, tables: { links: [linkId] } }, true);
         assert.equal(merge.isError, true);
         const text = toolText(merge);
         assert.match(text, /missing_closure/);
@@ -458,10 +439,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
           related: target.id,
         });
 
-        const del = await handle.client.callTool({
-          name: 'etn.thoughts.delete',
-          arguments: { network_id: ctx.networkId, thought_id: target.id },
-        });
+        const del = await callOp(handle.client, 'thoughts.delete', { network_id: ctx.networkId, thought_id: target.id }, true);
         assert.equal(del.isError, true);
         const text = toolText(del);
         assert.match(text, /blocking/);
@@ -504,9 +482,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `etn.ontology.write` дополнено стороной привязки и единым
         // жизненным циклом свойства-связи ↔ link_type.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
+        // 0.8.3 (задача 86ef2ff4): редкие операции упакованы в `etn.guide` +
+        // `etn.ops`; замер до/после — в хронике задачи. Было 66 инструментов /
+        // 80 535 Б (commit cf1b54f), стало 29 / 48 978 Б. Бюджет фиксирует
+        // достигнутое сокращение и не даёт описаниям расползтись обратно.
         assert.ok(
-          bytes <= 85_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.8.1 budget of 85000`,
+          bytes <= 52_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 52000`,
         );
       } finally {
         await handle.close();

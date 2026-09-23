@@ -33,6 +33,7 @@ import { describe, it } from 'node:test';
 import { openNetworkDb } from '../src/db/network-db.js';
 
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -384,10 +385,7 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         // Создаём и выбираем дочерний слой — сессия этого ключа теперь
         // читает через него, отбор физически лежит в слое-родителе (базе).
         const layer = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'Слой версии' },
-          }),
+          await callOp(handle.client, 'layers.create', { network_id: ctx.networkId, title: 'Слой версии' }),
         );
         await handle.client.callTool({
           name: 'etn.layers.select',

@@ -24,6 +24,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -120,10 +121,7 @@ describe(
           const tId = await createThought(handle, ctx.networkId, 'Идея');
 
           // Acquire.
-          const acq = await handle.client.callTool({
-            name: 'etn.locks.acquire',
-            arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-          });
+          const acq = await callOp(handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId });
           assert.equal(acq.isError, undefined, toolText(acq));
           const lock = toolJson(acq) as LockRow;
           assert.equal(lock.entity_type, 'thought');
@@ -136,20 +134,14 @@ describe(
           assert.equal(upd.isError, undefined, toolText(upd as never));
 
           // Release — аналог REST 204.
-          const rel = await handle.client.callTool({
-            name: 'etn.locks.release',
-            arguments: { network_id: ctx.networkId, lock_id: lock.id },
-          });
+          const rel = await callOp(handle.client, 'locks.release', { network_id: ctx.networkId, lock_id: lock.id });
           assert.equal(rel.isError, undefined, toolText(rel));
           const releaseResult = toolJson(rel) as { released: boolean; lock_id: string };
           assert.equal(releaseResult.released, true);
           assert.equal(releaseResult.lock_id, lock.id);
 
           // Список пуст.
-          const list = await handle.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId },
-          });
+          const list = await callOp(handle.client, 'locks.list', { network_id: ctx.networkId });
           assert.equal(list.isError, undefined);
           const listResult = toolJson(list) as { data: LockRow[]; meta: { total: number } };
           assert.equal(listResult.meta.total, 0);
@@ -169,16 +161,10 @@ describe(
         try {
           const tId = await createThought(handle, ctx.networkId, 'X');
           const first = toolJson(
-            await handle.client.callTool({
-              name: 'etn.locks.acquire',
-              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-            }),
+            await callOp(handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
           ) as LockRow;
           const second = toolJson(
-            await handle.client.callTool({
-              name: 'etn.locks.acquire',
-              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-            }),
+            await callOp(handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
           ) as LockRow;
           assert.equal(second.id, first.id, 'lock id стабилен для своего');
           assert.ok(
@@ -219,18 +205,12 @@ describe(
 
           // 1. Захват на базовом слое.
           const first = toolJson(
-            await handle.client.callTool({
-              name: 'etn.locks.acquire',
-              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-            }),
+            await callOp(handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
           ) as LockRow;
 
           // 2. Создаём новый слой и переключаем сессию на него.
           const layer = toolJson(
-            await handle.client.callTool({
-              name: 'etn.layers.create',
-              arguments: { network_id: ctx.networkId, title: 'Branch' },
-            }),
+            await callOp(handle.client, 'layers.create', { network_id: ctx.networkId, title: 'Branch' }),
           ) as { id: string };
           const select = await handle.client.callTool({
             name: 'etn.layers.select',
@@ -241,10 +221,7 @@ describe(
           // 3. Повторный acquire на той же сущности — должен продлить A,
           //    а не стереть A и вставить B.
           const second = toolJson(
-            await handle.client.callTool({
-              name: 'etn.locks.acquire',
-              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-            }),
+            await callOp(handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
           ) as LockRow;
           assert.equal(
             second.id,
@@ -255,10 +232,7 @@ describe(
 
           // release первого id теперь освобождает тот же ряд — а до фикса
           // отдавал LOCK_NOT_FOUND.
-          const rel = await handle.client.callTool({
-            name: 'etn.locks.release',
-            arguments: { network_id: ctx.networkId, lock_id: first.id },
-          });
+          const rel = await callOp(handle.client, 'locks.release', { network_id: ctx.networkId, lock_id: first.id });
           assert.equal(rel.isError, undefined, toolText(rel));
         } finally {
           await handle.close();
@@ -276,19 +250,13 @@ describe(
         // Alice создаёт мысль и захватывает её.
         const tId = await createThought(alice, ctx.networkId, 'Alice-idea');
         const aliceAcq = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.acquire',
-            arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-          }),
+          await callOp(alice.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
         ) as LockRow;
         assert.equal(aliceAcq.user_id, ctx.adminId);
 
         // Bob (второй участник) пытается захватить — LOCKED.
         bob = await addSecondMember(ctx);
-        const bobAcq = await bob.handle.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-        });
+        const bobAcq = await callOp(bob.handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId });
         assert.equal(bobAcq.isError, true);
         assert.match(toolText(bobAcq), /ETN error \[LOCKED\]/);
         // details.holder — это user_id держателя.
@@ -300,10 +268,7 @@ describe(
         assert.match(toolText(bobUpdate as never), /ETN error \[LOCKED\]/);
 
         // Alice отпускает — Bob теперь может править.
-        const aliceRel = await alice.client.callTool({
-          name: 'etn.locks.release',
-          arguments: { network_id: ctx.networkId, lock_id: aliceAcq.id },
-        });
+        const aliceRel = await callOp(alice.client, 'locks.release', { network_id: ctx.networkId, lock_id: aliceAcq.id });
         assert.equal(aliceRel.isError, undefined, toolText(aliceRel));
 
         const bobUpdateAfter = await patchThought(bob.handle, ctx.networkId, 'Alice-idea');
@@ -322,25 +287,16 @@ describe(
       try {
         const tId = await createThought(alice, ctx.networkId, 'X');
         const aliceAcq = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.acquire',
-            arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-          }),
+          await callOp(alice.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
         ) as LockRow;
         bob = await addSecondMember(ctx);
-        const bobRel = await bob.handle.client.callTool({
-          name: 'etn.locks.release',
-          arguments: { network_id: ctx.networkId, lock_id: aliceAcq.id },
-        });
+        const bobRel = await callOp(bob.handle.client, 'locks.release', { network_id: ctx.networkId, lock_id: aliceAcq.id });
         assert.equal(bobRel.isError, true);
         assert.match(toolText(bobRel), /ETN error \[FORBIDDEN\]/);
 
         // Захват остался на месте.
         const list = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId },
-          }),
+          await callOp(alice.client, 'locks.list', { network_id: ctx.networkId }),
         ) as { data: LockRow[] };
         assert.equal(list.data.length, 1);
       } finally {
@@ -355,13 +311,10 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const res = await handle.client.callTool({
-            name: 'etn.locks.release',
-            arguments: {
+          const res = await callOp(handle.client, 'locks.release', {
               network_id: ctx.networkId,
               lock_id: '00000000-0000-4000-8000-000000000000',
-            },
-          });
+            });
           assert.equal(res.isError, true);
           assert.match(toolText(res), /ETN error \[LOCK_NOT_FOUND\]/);
         } finally {
@@ -379,23 +332,14 @@ describe(
       try {
         const aId = await createThought(alice, ctx.networkId, 'A');
         const bId = await createThought(alice, ctx.networkId, 'B');
-        await alice.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: aId },
-        });
+        await callOp(alice.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: aId });
 
         bob = await addSecondMember(ctx);
-        await bob.handle.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: bId },
-        });
+        await callOp(bob.handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: bId });
 
         // Полный список.
         const all = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId },
-          }),
+          await callOp(alice.client, 'locks.list', { network_id: ctx.networkId }),
         ) as { data: LockRow[]; meta: { total: number; offset: number; limit: number } };
         assert.equal(all.data.length, 2);
         assert.equal(all.meta.total, 2);
@@ -404,30 +348,21 @@ describe(
 
         // Только Alice.
         const onlyAlice = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId, user_id: ctx.adminId },
-          }),
+          await callOp(alice.client, 'locks.list', { network_id: ctx.networkId, user_id: ctx.adminId }),
         ) as { data: LockRow[] };
         assert.equal(onlyAlice.data.length, 1);
         assert.equal(onlyAlice.data[0]?.user_id, ctx.adminId);
 
         // Только Bob.
         const onlyBob = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId, user_id: bob.userId },
-          }),
+          await callOp(alice.client, 'locks.list', { network_id: ctx.networkId, user_id: bob.userId }),
         ) as { data: LockRow[] };
         assert.equal(onlyBob.data.length, 1);
         assert.equal(onlyBob.data[0]?.user_id, bob.userId);
 
         // Фильтр по client_id несуществующему — пусто.
         const byMissingClient = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId, client_id: 'no-such-client' },
-          }),
+          await callOp(alice.client, 'locks.list', { network_id: ctx.networkId, client_id: 'no-such-client' }),
         ) as { data: LockRow[] };
         assert.equal(byMissingClient.data.length, 0);
       } finally {
@@ -445,28 +380,16 @@ describe(
         const aId = await createThought(alice, ctx.networkId, 'A');
         const bId = await createThought(alice, ctx.networkId, 'B');
         const cId = await createThought(alice, ctx.networkId, 'C');
-        await alice.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: aId },
-        });
-        await alice.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: bId },
-        });
+        await callOp(alice.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: aId });
+        await callOp(alice.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: bId });
         bob = await addSecondMember(ctx);
-        await bob.handle.client.callTool({
-          name: 'etn.locks.acquire',
-          arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: cId },
-        });
+        await callOp(bob.handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: cId });
 
         const events: AnyRealtimeEvent[] = [];
         const unsubscribe = subscribeAll(ctx, events);
 
         // Bob «Снять все блокировки» для Alice — паритет REST `POST /locks/clear`.
-        const clear = await bob.handle.client.callTool({
-          name: 'etn.locks.clear',
-          arguments: { network_id: ctx.networkId, user_id: ctx.adminId },
-        });
+        const clear = await callOp(bob.handle.client, 'locks.clear', { network_id: ctx.networkId, user_id: ctx.adminId });
         assert.equal(clear.isError, undefined, toolText(clear));
         const clearResult = toolJson(clear) as { cleared: number };
         assert.equal(clearResult.cleared, 2);
@@ -482,10 +405,7 @@ describe(
 
         // Захват Bob остался.
         const list = toolJson(
-          await alice.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId },
-          }),
+          await callOp(alice.client, 'locks.list', { network_id: ctx.networkId }),
         ) as { data: LockRow[] };
         assert.equal(list.data.length, 1);
         assert.equal(list.data[0]?.user_id, bob.userId);
@@ -510,15 +430,9 @@ describe(
           const tId = await createThought(handle, ctx.networkId, 'Evt');
 
           const acq = toolJson(
-            await handle.client.callTool({
-              name: 'etn.locks.acquire',
-              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
-            }),
+            await callOp(handle.client, 'locks.acquire', { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId }),
           ) as LockRow;
-          const rel = await handle.client.callTool({
-            name: 'etn.locks.release',
-            arguments: { network_id: ctx.networkId, lock_id: acq.id },
-          });
+          const rel = await callOp(handle.client, 'locks.release', { network_id: ctx.networkId, lock_id: acq.id });
           assert.equal(rel.isError, undefined);
         } finally {
           unsubscribe();
@@ -550,10 +464,7 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.readOnlyKey);
         try {
-          const list = await handle.client.callTool({
-            name: 'etn.locks.list',
-            arguments: { network_id: ctx.networkId },
-          });
+          const list = await callOp(handle.client, 'locks.list', { network_id: ctx.networkId });
           assert.equal(list.isError, undefined);
 
           // Без конкретной мысли захватить нечего — проверим, что даже валидный
@@ -564,14 +475,11 @@ describe(
             | { id: string }
             | undefined;
           assert.ok(home !== undefined);
-          const acq = await handle.client.callTool({
-            name: 'etn.locks.acquire',
-            arguments: {
+          const acq = await callOp(handle.client, 'locks.acquire', {
               network_id: ctx.networkId,
               entity_type: 'thought',
               entity_id: home.id,
-            },
-          });
+            });
           assert.equal(acq.isError, true);
           assert.match(toolText(acq), /read-only/);
         } finally {

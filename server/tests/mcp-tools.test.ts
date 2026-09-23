@@ -22,6 +22,7 @@ import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/d
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
+  callOp,
   addChronicleViaWrite,
   buildMcpContext,
   callWrite,
@@ -250,7 +251,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.readOnlyKey);
       try {
-        const list = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const list = await callOp(handle.client, 'networks.list', {});
         assert.equal(list.isError, undefined);
         assert.equal(toolJson<unknown[]>(list).length, 1);
 
@@ -337,10 +338,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         const thoughtId = created.id;
 
-        const deleted = await handle.client.callTool({
-          name: 'etn.thoughts.delete',
-          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
-        });
+        const deleted = await callOp(handle.client, 'thoughts.delete', { network_id: ctx.networkId, thought_id: thoughtId }, true);
         assert.equal(deleted.isError, undefined);
       } finally {
         await handle.close();
@@ -367,7 +365,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, strangerKey.key);
       try {
         // Networks list is empty — nothing to see.
-        const list = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const list = await callOp(handle.client, 'networks.list', {});
         assert.deepEqual(toolJson<unknown[]>(list), []);
 
         // Direct access to the admin network is forbidden.
@@ -409,17 +407,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(sub.edges.length, 1);
         assert.equal(sub.truncated, false);
 
-        const path = await handle.client.callTool({
-          name: 'etn.thoughts.path',
-          arguments: { network_id: ctx.networkId, from_id: ctx.homeId, to_id: childId },
-        });
+        const path = await callOp(handle.client, 'thoughts.path', { network_id: ctx.networkId, from_id: ctx.homeId, to_id: childId });
         const pathResult = toolJson<{ path: string[] | null }>(path);
         assert.deepEqual(pathResult.path, [ctx.homeId, childId]);
 
-        const exported = await handle.client.callTool({
-          name: 'etn.export.subgraph',
-          arguments: { network_id: ctx.networkId, seed_ids: [ctx.homeId], radius: 1 },
-        });
+        const exported = await callOp(handle.client, 'export.subgraph', { network_id: ctx.networkId, seed_ids: [ctx.homeId], radius: 1 });
         const doc = toolJson<{ format: string; content: string }>(exported);
         assert.equal(doc.format, 'markdown');
         assert.match(doc.content, /Вторая мысль/);
@@ -888,10 +880,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(qr.total, 1);
         assert.equal(qr.thought_types[thoughtTypeId]?.name, 'ошибка');
 
-        const p = await handle.client.callTool({
-          name: 'etn.thoughts.path',
-          arguments: { network_id: ctx.networkId, from_id: ctx.homeId, to_id: id },
-        });
+        const p = await callOp(handle.client, 'thoughts.path', { network_id: ctx.networkId, from_id: ctx.homeId, to_id: id });
         const pr = toolJson<{ path: string[] | null; thought_types: Record<string, unknown> }>(p);
         assert.ok(pr.thought_types[thoughtTypeId]);
 
@@ -1112,10 +1101,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.match(toolText(missing), /NOT_FOUND/);
 
           // Delete, then the comment is gone.
-          const deleted = await handle.client.callTool({
-            name: 'etn.comments.delete',
-            arguments: { network_id: ctx.networkId, comment_id: commentId, expected_version: 2 },
-          });
+          const deleted = await callOp(handle.client, 'comments.delete', { network_id: ctx.networkId, comment_id: commentId, expected_version: 2 }, true);
           assert.equal(deleted.isError, undefined, toolText(deleted));
           assert.equal(toolJson<{ version: number }>(deleted).version, 0);
 
@@ -1126,10 +1112,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal(gone.isError, true);
           assert.match(toolText(gone), /NOT_FOUND/);
 
-          const missingDelete = await handle.client.callTool({
-            name: 'etn.comments.delete',
-            arguments: { network_id: ctx.networkId, comment_id: commentId },
-          });
+          const missingDelete = await callOp(handle.client, 'comments.delete', { network_id: ctx.networkId, comment_id: commentId }, true);
           assert.equal(missingDelete.isError, true);
           assert.match(toolText(missingDelete), /NOT_FOUND/);
         } finally {
@@ -1303,10 +1286,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const listed = await handle.client.callTool({
-          name: 'etn.networks.list',
-          arguments: {},
-        });
+        const listed = await callOp(handle.client, 'networks.list', {});
         assert.equal(listed.isError, undefined, toolText(listed));
         const data = toolJson<Array<{
           id: string;
@@ -2763,10 +2743,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.deepEqual(body.events, []);
@@ -2793,10 +2770,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(typeof created.id, 'string');
 
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.equal(body.cursor.min_seq, 1);
@@ -2840,40 +2814,28 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           await createThoughtViaWrite(handle.client, ctx.networkId, { title });
         }
         const cursor = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
         );
         const maxSeq = cursor.cursor.max_seq;
         assert.ok(maxSeq !== null && maxSeq > 1);
 
         // since_seq = maxSeq → no further events.
         const tail = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: maxSeq },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: maxSeq }),
         );
         assert.equal(tail.events.length, 0);
         assert.equal(tail.cursor.max_seq, maxSeq);
 
         // since_seq = maxSeq - 1 → exactly one event (the last).
         const one = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: maxSeq - 1 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: maxSeq - 1 }),
         );
         assert.equal(one.events.length, 1);
         assert.equal(one.events[0]?.seq, maxSeq);
 
         // limit caps the response.
         const limited = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0, limit: 2 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0, limit: 2 }),
         );
         assert.equal(limited.events.length, 2);
         assert.equal(limited.limit, 2);
@@ -2896,10 +2858,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         }
 
         const before = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
         );
         const minSeq = before.cursor.min_seq;
         const maxSeq = before.cursor.max_seq;
@@ -2918,20 +2877,14 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // earliest such value that still passes zod's `min(0)`.
         const stale = Math.max(0, newMin - 2);
 
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: stale },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: stale });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.equal(body.truncated, true, 'stale since_seq must trigger truncated');
 
         // First call (since_seq = 0) is never truncated, even if min_seq > 1.
         const fresh = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
         );
         assert.equal(fresh.truncated, false);
       } finally {
@@ -2971,10 +2924,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         const typesAndAudiences = body.events.map(
@@ -3027,10 +2977,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, gen.key);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, true);
         assert.match(toolText(result), /not a member|FORBIDDEN/);
       } finally {
@@ -3046,10 +2993,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.readOnlyKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.equal(body.cursor.min_seq, null);
@@ -3852,10 +3796,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           });
 
           const res = toolJson<{ thoughts: Array<Record<string, unknown>> }>(
-            await handle.client.callTool({
-              name: 'etn.trash.list',
-              arguments: { network_id: ctx.networkId },
-            }),
+            await callOp(handle.client, 'trash.list', { network_id: ctx.networkId }),
           );
           const entry = res.thoughts.find((t) => t.id === created.id);
           assert.ok(entry, 'trashed thought must appear in the trash list');
@@ -4111,10 +4052,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           const pathResp = toolJson<{
             thoughts: Array<{ id: string; icon: string | null }>;
           }>(
-            await handle.client.callTool({
-              name: 'etn.thoughts.path',
-              arguments: { network_id: ctx.networkId, from_id: parentId, to_id: childId },
-            }),
+            await callOp(handle.client, 'thoughts.path', { network_id: ctx.networkId, from_id: parentId, to_id: childId }),
           );
           const pathParent = pathResp.thoughts.find((t) => t.id === parentId);
           assert.ok(pathParent, 'etn.thoughts.path must include the seeded parent');

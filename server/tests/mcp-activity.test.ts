@@ -29,6 +29,7 @@ import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import {
+  callOp,
   buildMcpContext,
   callWrite,
   closeMcpContext,
@@ -120,13 +121,10 @@ describe(
           });
           assert.equal(restored.isError, undefined, toolText(restored));
 
-          const deleted = await handle.client.callTool({
-            name: 'etn.thoughts.delete',
-            arguments: {
+          const deleted = await callOp(handle.client, 'thoughts.delete', {
               network_id: ctx.networkId,
               thought_id: thoughtId,
-            },
-          });
+            }, true);
           assert.equal(deleted.isError, undefined, toolText(deleted));
 
           const rows = rowsOf(ctx, 'thought', thoughtId);
@@ -257,10 +255,7 @@ describe(
           assert.equal(updated.isError, undefined, toolText(updated));
 
           // comments.delete — снимок тела сохраняется.
-          const deleted = await handle.client.callTool({
-            name: 'etn.comments.delete',
-            arguments: { network_id: ctx.networkId, comment_id: commentId },
-          });
+          const deleted = await callOp(handle.client, 'comments.delete', { network_id: ctx.networkId, comment_id: commentId }, true);
           assert.equal(deleted.isError, undefined, toolText(deleted));
 
           const rows = rowsOf(ctx, 'comment', commentId);
@@ -304,16 +299,13 @@ describe(
           assert.equal(linkRes.isError, undefined, toolText(linkRes));
           const linkId = toolJson<{ link_id: string }>(linkRes).link_id;
 
-          const removed = await handle.client.callTool({
-            name: 'etn.properties.remove',
-            arguments: {
+          const removed = await callOp(handle.client, 'properties.remove', {
               network_id: ctx.networkId,
               owner_type: 'thought',
               owner_id: sourceId,
               key: 'Потомки',
               value: targetId,
-            },
-          });
+            });
           assert.equal(removed.isError, undefined, toolText(removed));
           const restored = await handle.client.callTool({
             name: 'etn.links.restore',
@@ -321,29 +313,23 @@ describe(
           });
           assert.equal(restored.isError, undefined, toolText(restored));
 
-          const attRes = await handle.client.callTool({
-            name: 'etn.attachments.add',
-            arguments: {
+          const attRes = await callOp(handle.client, 'attachments.add', {
               network_id: ctx.networkId,
               owner_type: 'thought',
               owner_id: sourceId,
               kind: 'url',
               url: 'https://example.com/doc',
               title: 'Документация',
-            },
-          });
+            });
           assert.equal(attRes.isError, undefined, toolText(attRes));
           const attachmentId = toolJson<{ id: string }>(attRes).id;
 
-          const copyRes = await handle.client.callTool({
-            name: 'etn.attachments.copy',
-            arguments: {
+          const copyRes = await callOp(handle.client, 'attachments.copy', {
               network_id: ctx.networkId,
               attachment_id: attachmentId,
               target_owner_type: 'thought',
               target_owner_ids: [copyTargetId],
-            },
-          });
+            });
           assert.equal(copyRes.isError, undefined, toolText(copyRes));
           const copiedId = toolJson<Array<{ id: string }>>(copyRes)[0]?.id;
           assert.ok(copiedId !== undefined);
@@ -419,10 +405,7 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const create = await handle.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'Рабочий слой', comment: 'для теста' },
-          });
+          const create = await callOp(handle.client, 'layers.create', { network_id: ctx.networkId, title: 'Рабочий слой', comment: 'для теста' });
           assert.equal(create.isError, undefined, toolText(create));
           const layerId = toolJson<{ id: string }>(create).id;
 
@@ -433,14 +416,11 @@ describe(
           assert.match(layerRows[0]?.entity_title ?? '', /Рабочий слой/);
           assert.equal(layerRows[0]?.layer_id, BASE_LAYER_ID);
 
-          const update = await handle.client.callTool({
-            name: 'etn.layers.update',
-            arguments: {
+          const update = await callOp(handle.client, 'layers.update', {
               network_id: ctx.networkId,
               layer_id: layerId,
               comment: 'обновлённый комментарий',
-            },
-          });
+            });
           assert.equal(update.isError, undefined, toolText(update));
           layerRows = rowsOf(ctx, 'layer', layerId);
           assert.deepEqual(layerRows.map((r) => r.action), ['created', 'updated']);
@@ -465,10 +445,7 @@ describe(
 
           // Merge: собственной строки про слой нет, детальные строки слоя
           // сворачиваются в базу (autoRollupLayerActivity внутри mergeLayer).
-          const merge = await handle.client.callTool({
-            name: 'etn.layers.merge',
-            arguments: { network_id: ctx.networkId, layer_id: layerId },
-          });
+          const merge = await callOp(handle.client, 'layers.merge', { network_id: ctx.networkId, layer_id: layerId }, true);
           assert.equal(merge.isError, undefined, toolText(merge));
           const mergedThoughtRows = rowsOf(ctx, 'thought', inLayerThoughtId);
           assert.equal(mergedThoughtRows.length, 1, 'свёртка оставляет одну строку');
@@ -483,16 +460,10 @@ describe(
             arguments: { network_id: ctx.networkId, layer_id: BASE_LAYER_ID },
           });
           assert.equal(back.isError, undefined, toolText(back));
-          const doomed = await handle.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'Обречённый слой' },
-          });
+          const doomed = await callOp(handle.client, 'layers.create', { network_id: ctx.networkId, title: 'Обречённый слой' });
           assert.equal(doomed.isError, undefined, toolText(doomed));
           const doomedId = toolJson<{ id: string }>(doomed).id;
-          const remove = await handle.client.callTool({
-            name: 'etn.layers.delete',
-            arguments: { network_id: ctx.networkId, layer_id: doomedId },
-          });
+          const remove = await callOp(handle.client, 'layers.delete', { network_id: ctx.networkId, layer_id: doomedId }, true);
           assert.equal(remove.isError, undefined, toolText(remove));
           const doomedRows = rowsOf(ctx, 'layer', doomedId);
           assert.deepEqual(doomedRows.map((r) => r.action), ['created', 'deleted']);
@@ -523,10 +494,7 @@ describe(
           });
           assert.equal(trashed.isError, undefined, toolText(trashed));
 
-          const purge = await handle.client.callTool({
-            name: 'etn.trash.purge',
-            arguments: { network_id: ctx.networkId },
-          });
+          const purge = await callOp(handle.client, 'trash.purge', { network_id: ctx.networkId }, true);
           assert.equal(purge.isError, undefined, toolText(purge));
           const purged = toolJson<{ purged: number; skipped: number }>(purge);
           assert.ok(purged.purged >= 1);
@@ -552,21 +520,15 @@ describe(
       try {
         const handle = await connectMcpClient(ctx, ctx.adminKey);
         try {
-          const acquire = await handle.client.callTool({
-            name: 'etn.locks.acquire',
-            arguments: {
+          const acquire = await callOp(handle.client, 'locks.acquire', {
               network_id: ctx.networkId,
               entity_type: 'thought',
               entity_id: randomUUID(),
-            },
-          });
+            });
           assert.equal(acquire.isError, undefined, toolText(acquire));
           const lockId = toolJson<{ id: string }>(acquire).id;
 
-          const release = await handle.client.callTool({
-            name: 'etn.locks.release',
-            arguments: { network_id: ctx.networkId, lock_id: lockId },
-          });
+          const release = await callOp(handle.client, 'locks.release', { network_id: ctx.networkId, lock_id: lockId });
           assert.equal(release.isError, undefined, toolText(release));
         } finally {
           await handle.close();

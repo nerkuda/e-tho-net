@@ -49,6 +49,7 @@ import {
 } from '../src/domain/response-projection.js';
 import {
   buildMcpContext,
+  callOp,
   closeMcpContext,
   connectMcpClient,
   createThoughtViaWrite,
@@ -405,14 +406,14 @@ describe('guard: форма записей списочных ответов MCP
         })) as unknown;
         assertRowsShape(duplicates, 'find_duplicates[]');
 
-        const path = (await call(client, 'etn.thoughts.path', {
+        const path = toolJson(await callOp(client, 'thoughts.path', {
           network_id: ctx.networkId,
           from_id: ctx.homeId,
           to_id: fixture.richId,
         })) as Record<string, unknown>;
         assertRowsShape(path.thoughts, 'path.thoughts');
 
-        const trash = (await call(client, 'etn.trash.list', {
+        const trash = toolJson(await callOp(client, 'trash.list', {
           network_id: ctx.networkId,
         })) as Record<string, unknown>;
         assertRowsShape(trash.thoughts, 'trash.thoughts');
