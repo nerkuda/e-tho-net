@@ -56,6 +56,7 @@ import { svgIcon } from '../lib/icons.js';
 import {
   isNotFoundError,
   isSearchSettingsOpenStored,
+  parseThoughtIdLookupQuery,
   parseThoughtIdQuery,
   searchHighlightTerms,
   searchPanelClosesOnTap,
@@ -557,7 +558,7 @@ async function run(): Promise<void> {
   if (resultsBox !== null) {
     resultsBox.replaceChildren(el('span', 'muted', 'Поиск…'));
   }
-  const idQuery = parseThoughtIdQuery(q);
+  const idQuery = parseThoughtIdLookupQuery(q);
   if (idQuery !== null) {
     await runById(networkId, idQuery);
     return;
@@ -1121,6 +1122,7 @@ export const searchInternals = {
   DEFAULT_OPTIONS,
   isSearchableQuery,
   parseThoughtIdQuery,
+  parseThoughtIdLookupQuery,
   MIN_QUERY_LENGTH,
   nextNavIndex,
 };

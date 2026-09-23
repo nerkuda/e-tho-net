@@ -50,6 +50,7 @@ import {
   parseCollapsedGroups,
   parseLinkTypeId,
   parseListHeights,
+  parseThoughtIdLookupQuery,
   parseTitleWithSynonyms,
   parseWindowLayout,
   pickMostRecentTab,
@@ -710,6 +711,25 @@ describe('search scope resolution (H13)', () => {
     assert.equal(parseThoughtIdQuery('099776db-2156-40b4-bcbb'), null);
     assert.equal(parseThoughtIdQuery('099776db-2156-40b4-bcbb-1b9075dbcd8z'), null);
     assert.equal(parseThoughtIdQuery('id 099776db-2156-40b4-bcbb-1b9075dbcd83'), null);
+  });
+
+  it('id lookup query accepts a short hex prefix alongside the full uuid', () => {
+    // Полный uuid — как и строгий парсер.
+    assert.equal(
+      parseThoughtIdLookupQuery('099776DB-2156-40B4-BCBB-1B9075DBCD83'),
+      '099776db-2156-40b4-bcbb-1b9075dbcd83',
+    );
+    // Короткий префикс (ошибка d8893a1f) нормализуется в lowercase.
+    assert.equal(parseThoughtIdLookupQuery('  EC5BA58C '), 'ec5ba58c');
+    assert.equal(parseThoughtIdLookupQuery('ec5ba58c787645b4'), 'ec5ba58c787645b4');
+  });
+
+  it('id lookup query rejects non-id and too-short hex strings', () => {
+    assert.equal(parseThoughtIdLookupQuery(''), null);
+    assert.equal(parseThoughtIdLookupQuery('мысль о море'), null);
+    assert.equal(parseThoughtIdLookupQuery('ec5ba58'), null);
+    assert.equal(parseThoughtIdLookupQuery('ec5ba58c-7876'), null);
+    assert.equal(parseThoughtIdLookupQuery('id ec5ba58c'), null);
   });
 
   it('detects not-found errors via code and via the IPC-surviving message', () => {

@@ -562,6 +562,26 @@ export function parseThoughtIdQuery(q: string): string | null {
 }
 
 /**
+ * Short id form: a hex prefix of a full UUID without dashes (ошибка d8893a1f).
+ * Минимум 8 символов — короткий фрагмент слишком легко совпадает с обычным
+ * словом, а агент/пользователь пишет именно 8-символьный префикс.
+ */
+const UUID_PREFIX_RE = /^[0-9a-f]{8,32}$/i;
+
+/**
+ * Id для прямого lookup, когда запрос целиком — полный UUID **или** его
+ * короткий hex-префикс (ошибка d8893a1f): сервер резолвит префикс в
+ * единственную мысль, поэтому и строка поиска, и диалог подбора находят ту же
+ * мысль по 8-символьному id, что и по полному. Неоднозначный/отсутствующий
+ * префикс диагностирует сервер. Не-id запрос → `null` (поиск по названию).
+ */
+export function parseThoughtIdLookupQuery(q: string): string | null {
+  const trimmed = q.trim();
+  if (UUID_RE.test(trimmed)) return trimmed.toLowerCase();
+  return UUID_PREFIX_RE.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+/**
  * Whether `err` means "no entity with this id". IPC (`ipcRenderer.invoke`)
  * drops custom error fields of `EtnError`, so the server's `… not found`
  * message is checked as a fallback for the lost `code`.

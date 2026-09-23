@@ -39,13 +39,14 @@
  */
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
+import type { LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { button, div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { svgIcon, type IconName } from './icons.js';
+import { parseThoughtIdLookupQuery } from './pure.js';
 import {
   wireSuggest,
   type SuggestEntry,
@@ -138,6 +139,41 @@ export function thoughtEntityOption(hit: DuplicateHit): EntityOption {
     selectable: true,
     cloud: { ...hit },
   };
+}
+
+/** Полная мысль → кандидат дубль-поиска (для id-lookup, ошибка d8893a1f). */
+function thoughtToDuplicateHit(thought: Thought): DuplicateHit {
+  return {
+    ...thought,
+    synonyms: thought.synonyms,
+    matched_on: 'title',
+    parent_title: null,
+  };
+}
+
+/**
+ * Кандидаты-мысли для строки живого поиска (ошибка d8893a1f): если запрос
+ * целиком — полный UUID или его короткий hex-префикс, идёт прямой lookup по
+ * id (`thoughts.get`), а не поиск по названию; иначе — штатный `findDuplicates`.
+ * Так 8-символьный id находит ту же мысль, что и полный, и в пикере, и в
+ * строке поиска. Неудачный/неоднозначный id-lookup даёт пусто (как и в строке
+ * поиска, диагностику показывает сервер).
+ */
+async function loadThoughtHits(
+  networkId: string,
+  query: string,
+  typeIds: string[],
+): Promise<DuplicateHit[]> {
+  const trimmed = query.trim();
+  const id = parseThoughtIdLookupQuery(trimmed);
+  if (id !== null) {
+    try {
+      return [thoughtToDuplicateHit(await etn.thoughts.get(networkId, id))];
+    } catch {
+      return [];
+    }
+  }
+  return etn.thoughts.findDuplicates(networkId, trimmed, [], typeIds).catch(() => []);
 }
 
 // ---------------------------------------------------------------------------
@@ -453,16 +489,12 @@ export async function pickEntitiesModal(
       const searchSource: SuggestSource = {
         when: 'typed',
         load: (query) => {
-          const trimmed = query.trim();
           const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
-          return etn.thoughts
-            .findDuplicates(opts.networkId, trimmed, [], typeIds)
-            .catch(() => [] as DuplicateHit[])
-            .then((hits) =>
-              // Строка-мысль — облачком: DTO кандидата структурно совместим с
-              // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
-              hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
-            );
+          return loadThoughtHits(opts.networkId, query, typeIds).then((hits) =>
+            // Строка-мысль — облачком: DTO кандидата структурно совместим с
+            // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
+            hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
+          );
         },
       };
       const handle = wireSuggest(searchInput, {
@@ -1285,7 +1317,6 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       when: 'typed',
       load: (query) => {
         if (opts.disabled === true) return [];
-        const trimmed = query.trim();
         const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
         const apply = (hits: DuplicateHit[]): SuggestEntry[] =>
           hits.map((hit) => {
@@ -1297,10 +1328,8 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         // цели внутрисетевых связей ищутся штатным findDuplicates, переключателя
         // охвата нет. Кросс-выбор живёт исключительно в редакторе
         // `cross_network_ref` (принудительный режим pickThoughtsDialog).
-        return etn.thoughts
-          .findDuplicates(opts.networkId, trimmed, [], typeIds)
-          .catch(() => [] as DuplicateHit[])
-          .then(apply);
+        // Id-запрос (полный/короткий) идёт прямым lookup — ошибка d8893a1f.
+        return loadThoughtHits(opts.networkId, query, typeIds).then(apply);
       },
     });
   }

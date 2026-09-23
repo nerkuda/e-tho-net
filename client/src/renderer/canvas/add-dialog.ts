@@ -41,7 +41,7 @@ import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
-import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
+import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo, loadCrossNetworkCandidates } from '../lib/entity-picker.js';
 import {
   buildPropertyListRows,
@@ -596,7 +596,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           // В кросс-сетевом режиме id-адресация бессмысленна: она ответила бы
           // только о текущей сети (запрет своей сети, 884d14e1), поэтому
           // запрос идёт общим веерным поиском по имени.
-          const idQuery = crossNetwork === undefined ? parseThoughtIdQuery(raw) : null;
+          const idQuery = crossNetwork === undefined ? parseThoughtIdLookupQuery(raw) : null;
           if (idQuery !== null) {
             try {
               const thought = await etn.thoughts.get(networkId, idQuery);
