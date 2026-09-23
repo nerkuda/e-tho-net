@@ -69,7 +69,11 @@ import {
   type SuggestSource,
 } from '../lib/suggest-dropdown.js';
 import { loadRecentValues, recordRecentValue } from './recent-values.js';
-import { removeLinkValueEdges } from './link-value-removal.js';
+import {
+  removeLinkValueEdges,
+  removalModeForClick,
+  type LinkValueRemovalMode,
+} from './link-value-removal.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
 import { openWikiIdTarget } from './wiki-link.js';
@@ -1347,7 +1351,7 @@ async function openReadonlyChipMenu(opts: {
   fullTitle: string;
   ref: ThoughtRef | undefined;
   chip: Element;
-  /** Команды контекста редактора (748b80fd) — например «Убрать из значения». */
+  /** Команды контекста редактора (748b80fd) — операции над ребром. */
   extraItems?: MenuItem[];
 }): Promise<void> {
   await openThoughtCloudMenu({
@@ -1362,14 +1366,18 @@ async function openReadonlyChipMenu(opts: {
 
 /**
  * Контекстное меню мини-облачка значения свойства-связи. Набор команд — общий
- * с холстом; отличие значения — «Убрать из значения».
+ * с холстом; отличие значения — операции над ребром (задача 0d4f793a):
+ * «Удалить связь с мыслью» (как крестик без Shift: авто-выбор удаление/корзина)
+ * и «Поместить связь в корзину» (как Shift+крестик). Прежней единственной
+ * команды «Убрать из значения» больше нет.
  */
 async function showLinkChipMenu(
   networkId: string,
   id: string,
   title: string,
   trashed: boolean,
-  onRemove: () => void,
+  onDelete: () => void,
+  onTrash: () => void,
   anchor: Element,
 ): Promise<void> {
   await openThoughtCloudMenu({
@@ -1379,10 +1387,8 @@ async function showLinkChipMenu(
     trashed,
     anchor,
     extraItems: [
-      {
-        label: 'Убрать из значения',
-        onClick: onRemove,
-      },
+      { label: 'Удалить связь с мыслью', onClick: onDelete },
+      { label: 'Поместить связь в корзину', onClick: onTrash },
     ],
   });
 }
@@ -1396,8 +1402,9 @@ async function showLinkChipMenu(
  * свойства (property_id пуст) ключа записи в наборе не было — из GUI связь не
  * удалялась. Теперь ключом служит display-имя стороны (`propertyName`), которое
  * сервер понимает (`resolveDefinition` шаг 3), и контекстное меню получает
- * команду «Убрать из значения» — как у чипов основной таблицы
- * (`showLinkChipMenu`). Крестик «×» очистки набора целиком рисует вызывающий
+ * команды «Удалить связь с мыслью» / «Поместить связь в корзину» — как у чипов
+ * основной таблицы (`showLinkChipMenu`), с тем же выбором способа по режиму
+ * (задача 0d4f793a). Крестик «×» очистки набора целиком рисует вызывающий
  * (ячейка «Свойства вне типа»).
  */
 export function buildOutsideReadonlyEdgeChip(
@@ -1405,8 +1412,8 @@ export function buildOutsideReadonlyEdgeChip(
   edge: LinkPropertyValueItem,
   refs: Map<string, ThoughtRef>,
   removal?: {
-    /** Снять это ребро из набора («Убрать из значения»). */
-    removeTarget: (targetId: string) => void;
+    /** Снять это ребро из набора: `auto` — как крестик, `trash` — в корзину. */
+    removeTarget: (targetId: string, mode: LinkValueRemovalMode) => void;
   },
 ): HTMLElement {
   const ref = refs.get(edge.target_id);
@@ -1435,7 +1442,7 @@ export function buildOutsideReadonlyEdgeChip(
       },
     },
   );
-  // Меню чипа: обычное меню облачка + «Убрать из значения», когда известен
+  // Меню чипа: обычное меню облачка + операции над ребром, когда известен
   // ключ внетиповой записи (748b80fd) — им служит display-имя стороны связи.
   const openMenu = (): void => {
     void openReadonlyChipMenu({
@@ -1448,8 +1455,12 @@ export function buildOutsideReadonlyEdgeChip(
         ? {
             extraItems: [
               {
-                label: 'Убрать из значения',
-                onClick: () => removal.removeTarget(edge.target_id),
+                label: 'Удалить связь с мыслью',
+                onClick: () => removal.removeTarget(edge.target_id, 'auto'),
+              },
+              {
+                label: 'Поместить связь в корзину',
+                onClick: () => removal.removeTarget(edge.target_id, 'trash'),
               },
             ],
           }
@@ -1459,7 +1470,7 @@ export function buildOutsideReadonlyEdgeChip(
   setTooltip(
     chip,
     removal !== undefined
-      ? `${fullTitle} — ребро внетиповой связи; свойство «убрать из значения» доступно в контекстном меню.`
+      ? `${fullTitle} — ребро внетиповой связи; удаление связи доступно в контекстном меню.`
       : `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
   );
   markThoughtCommentPreview(chip, edge.target_id, fullTitle);
@@ -1594,12 +1605,13 @@ export function buildLinkValueEditor(opts: {
   };
 
   /**
-   * Снять цели из значения с выбором способа (задача 96d27fc0): диалог
-   * «В корзину» / «Удалить совсем». Живые рёбра есть только у владельца
+   * Снять цели из значения (задача 0d4f793a): без диалога. `auto` — авто-выбор
+   * удаление/корзина с проверкой возможности удаления; `trash` — всегда корзина
+   * (Shift+крестик, команда меню). Живые рёбра есть только у владельца
    * (`ownerType`/`ownerId`) — без него (дефолт свойства в редакторе типа)
-   * набор живёт лишь в `save`, корзины нет: снимаем как раньше, без диалога.
+   * набор живёт лишь в `save`, корзины нет: снимаем как раньше.
    */
-  const removeEdges = (removedIds: string[]): void => {
+  const removeEdges = (removedIds: string[], mode: LinkValueRemovalMode): void => {
     const next = current.filter((id) => !removedIds.includes(id));
     if (ownerType === undefined || ownerId === undefined) {
       setAndPersist(next);
@@ -1613,11 +1625,12 @@ export function buildLinkValueEditor(opts: {
         propertyKey: definition.key ?? '',
         propertyId: definition.property_id,
         removedTargetIds: removedIds,
+        mode,
         commit: () => persist(next),
       });
       if (!applied) return;
-      // UI обновляем только после решения (отмена диалога ничего не меняет):
-      // `commit` уже записал значение и записал историю.
+      // UI обновляем только после успешной записи: `commit` уже записал
+      // значение и записал историю.
       current = next;
       render();
       void resolveLinkRefs(networkId, current, refs).then(() => {
@@ -1665,8 +1678,9 @@ export function buildLinkValueEditor(opts: {
     });
   };
 
-  /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1). */
-  const buildCloud = (id: string, onRemove: () => void): HTMLElement => {
+  /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1).
+   *  `onRemove` получает режим снятия: Shift — корзина, иначе авто-выбор. */
+  const buildCloud = (id: string, onRemove: (mode: LinkValueRemovalMode) => void): HTMLElement => {
     const ref = refs.get(id);
     // Полное имя цели: заголовок из кеша, иначе подпись ребра, иначе сырой
     // id. Видимую длину ограничивает раскладка чипа; полный текст — в
@@ -1681,7 +1695,8 @@ export function buildLinkValueEditor(opts: {
         id,
         fullTitle,
         ref?.marked_for_deletion === true,
-        () => removeEdges([id]),
+        () => onRemove('auto'),
+        () => onRemove('trash'),
         cloud,
       );
     };
@@ -1708,7 +1723,8 @@ export function buildLinkValueEditor(opts: {
           onTrashBadgeClick: () => {
             void openTrashBadgeDialog(networkId, id, fullTitle);
           },
-          onRemove,
+          // Shift+крестик — всегда корзина; без Shift — авто-выбор (задача 0d4f793a).
+          onRemove: (_targetId, event) => onRemove(removalModeForClick(event?.shiftKey === true)),
         },
       },
     );
@@ -1752,7 +1768,7 @@ export function buildLinkValueEditor(opts: {
     );
     for (const id of ordered) {
       field.append(
-        buildCloud(id, () => removeEdges([id])),
+        buildCloud(id, (mode) => removeEdges([id], mode)),
       );
     }
     const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
@@ -1798,7 +1814,7 @@ export function buildLinkValueEditor(opts: {
       button(
         '✕',
         () => {
-          if (current.length > 0) removeEdges([...current]);
+          if (current.length > 0) removeEdges([...current], 'auto');
         },
         'link-value-corner-btn',
         'Очистить значение',

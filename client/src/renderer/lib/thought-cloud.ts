@@ -202,8 +202,10 @@ export interface ThoughtCloudActions {
   onContextMenu?: (event: MouseEvent, id: string) => void;
   /** Клик по метке корзины — диалог удаления/восстановления. */
   onTrashBadgeClick?: (id: string) => void;
-  /** Кнопка удаления чипа — убрать мысль из значения (только профиль `chip`). */
-  onRemove?: (id: string) => void;
+  /** Кнопка удаления чипа — убрать мысль из значения (только профиль `chip`).
+   *  Событие клика передаётся вызывающему: модификатор (Shift) меняет способ
+   *  снятия связи в редакторе значения свойства (задача 0d4f793a). */
+  onRemove?: (id: string, event?: MouseEvent) => void;
 }
 
 /**
@@ -493,7 +495,7 @@ function buildRemoveButton(id: string, actions: ThoughtCloudActions): HTMLButton
   btn.title = 'Убрать из значения';
   btn.addEventListener('click', (event) => {
     event.stopPropagation();
-    actions.onRemove?.(id);
+    actions.onRemove?.(id, event);
   });
   return btn;
 }
