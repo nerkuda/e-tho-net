@@ -43,8 +43,13 @@ import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo, loadCrossNetworkCandidates } from '../lib/entity-picker.js';
+import {
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  type PropertyListRow,
+} from '../lib/property-list.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import { UI_STATE_KEY, type Thought } from '@etn/shared';
+import { UI_STATE_KEY, type LinkPropertySide, type Thought } from '@etn/shared';
 import { store } from '../state.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
@@ -62,6 +67,24 @@ export type ThoughtPickItem =
     }
   | { kind: 'new'; title: string; synonyms: string[]; raw: string };
 
+/**
+ * Выбранное в диалоге СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает
+ * не тип связи, а имя стороны свойства-связи — `key` (display-имя стороны)
+ * адресует серверу и свойство, и направление ребра. Свойство заполняется у
+ * ДОБАВЛЯЕМОЙ мысли значением якоря (мысли, от которой строится связь), так
+ * что ребро попадает в типизированное свойство, а не в «Свойства вне типа».
+ */
+export interface LinkPropertyPick {
+  /** Id реестровой записи свойства — для карточки/диагностики. */
+  propertyId: string;
+  /** Сторона свойства (`source` — имя прямого, `target` — обратного). */
+  side: LinkPropertySide;
+  /** Display-имя выбранной стороны: ключ записи (`properties.set`). Имя
+   *  однозначно задаёт направление ребра (name_forward → исходящее,
+   *  name_reverse → входящее). */
+  key: string;
+}
+
 /** Result of {@link pickThoughtsDialog} (null = cancelled). */
 export interface ThoughtPickResult {
   items: ThoughtPickItem[];
@@ -69,6 +92,9 @@ export interface ThoughtPickResult {
   thoughtTypeId: string | null;
   /** Link type chosen in the dialog (null = none / the field was hidden). */
   linkTypeId: string | null;
+  /** Свойство-связь, выбранное в диалоге (ошибка 1dd08949). `null` — свойство
+   *  не выбрано: применяется прежняя бестиповая связь в направлении диалога. */
+  linkProperty: LinkPropertyPick | null;
   /** Applied via Shift+Ctrl+Enter — focus the first inserted item (L19). */
   focusFirst: boolean;
 }
@@ -82,6 +108,14 @@ export interface ThoughtPickerOptions {
   allowCreate?: boolean;
   /** Show the link-type field (default true — the canvas add flows). */
   allowLinkType?: boolean;
+  /**
+   * Показывать поле «Свойство связи» вместо «Тип связи» (ошибка 1dd08949):
+   * список — отдельные имена сторон свойств-связей сети (`rows`), выбранное
+   * свойство заполняется у добавляемой мысли значением якоря. Строки задаёт
+   * вызывающий (он грузит реестр + каталог типов связей — см. `openAddDialog`
+   * и `ensurePropertyLinkTypes`); без него поле деградирует в «без свойства».
+   */
+  linkProperty?: { rows: readonly PropertyListRow[] };
   /** Restrict the live search to these thought types (link-property configs). */
   searchTypeIds?: string[];
   /**
@@ -176,8 +210,17 @@ function thoughtToCandidate(thought: Thought): DuplicateHit {
   };
 }
 
-let mounted = false;
+/**
+ * Варианты поля «Свойство связи» (ошибка 1dd08949): одна строка на КАЖДОЕ имя
+ * стороны свойства-связи (прямое — источник, обратное — назначение), как в
+ * общем списке свойств (`buildPropertyListRows`). Пустое значение —
+ * «без свойства»: тогда связь создаётся бестиповой в направлении диалога.
+ */
+function propertySideOptions(rows: readonly PropertyListRow[]): Array<{ value: string; label: string }> {
+  return rows.map((row) => ({ value: row.id, label: row.name }));
+}
 
+let mounted = false;
 /** Mounts the dialog opener into the canvas drag gestures (called by the workspace). */
 export function mountAddDialog(): void {
   if (mounted) return;
@@ -203,16 +246,56 @@ export async function openAddDialog(ctx: {
   direction: 'parent' | 'child';
 }): Promise<void> {
   const networkId = requireNetworkId();
+  // Свойства-связи для поля «Свойство связи» (ошибка 1dd08949): реестр + имена
+  // сторон из каталога типов связей (общий загрузчик списка свойств). Ошибка
+  // загрузки — не повод не открыть диалог: поле деградирует в «без свойства».
+  let propertyRows: readonly PropertyListRow[] = [];
+  try {
+    const registry = await etn.propertyRegistry.list(networkId);
+    await ensurePropertyLinkTypes(networkId, registry);
+    propertyRows = buildPropertyListRows(registry, store.state.linkTypes);
+  } catch {
+    propertyRows = [];
+  }
   const result = await pickThoughtsDialog({
     networkId,
     anchor: ctx.anchorId !== null ? { id: ctx.anchorId, direction: ctx.direction } : null,
     anchorTitle: ctx.anchorTitle,
     allowCreate: true,
-    allowLinkType: true,
+    allowLinkType: false,
+    linkProperty: { rows: propertyRows },
     applyLabel: 'Добавить',
   });
   if (result === null) return;
   await insertIntoCanvas(networkId, ctx, result);
+}
+
+/**
+ * Добавляет якорь в набор значения свойства-связи добавляемой мысли (ошибка
+ * 1dd08949). Ключ записи — display-имя выбранной стороны; направление ребра
+ * сервер выводит из имени сам, поэтому связь ложится в типизированное свойство.
+ * Существующие цели набора ЧИТАЮТСЯ и объединяются с якорем: `properties.set`
+ * заменяет набор целиком, а добавление связи не должно молча терять уже
+ * проставленные значения (паритет с прежним аддитивным `ensureLink`).
+ */
+async function addLinkPropertyValue(
+  networkId: string,
+  ownerId: string,
+  pick: LinkPropertyPick,
+  anchorId: string,
+): Promise<void> {
+  let existing: string[] = [];
+  try {
+    const values = await etn.properties.get(networkId, 'thought', ownerId);
+    const entry = values.find((v) => 'values' in v && v.property_id === pick.propertyId);
+    if (entry !== undefined && 'values' in entry) {
+      existing = entry.values.map((it) => it.target_id);
+    }
+  } catch {
+    /* набор не прочитался — пишем только якорь (лучше связь, чем отказ) */
+  }
+  const targets = existing.includes(anchorId) ? existing : [...existing, anchorId];
+  await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
 }
 
 /** Creates/links every picked item (the old insertAll flow, L19 focus). */
@@ -225,17 +308,25 @@ async function insertIntoCanvas(
   let created = 0;
   let failed = 0;
   let firstAddedId: string | null = null;
+  // Выбранное свойство-связь (ошибка 1dd08949) заполняется у ДОБАВЛЯЕМОЙ мысли
+  // значением якоря: сервер сам выводит сторону ребра из display-имени ключа,
+  // поэтому связь ложится в типизированное свойство, а не «вне типа».
+  const prop = result.linkProperty;
   for (const item of result.items) {
     try {
       if (item.kind === 'existing') {
         if (ctx.anchorId !== null) {
-          // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей
-          // мыслью создаётся пакетной операцией; уже связанная пара не
-          // дублируется (прежний DUPLICATE больше не ошибка).
-          const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
-          const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
-          const res = await ensureLink(networkId, source, target, result.linkTypeId);
-          throwOnFailures(res);
+          if (prop !== null) {
+            await addLinkPropertyValue(networkId, item.id, prop, ctx.anchorId);
+          } else {
+            // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей
+            // мыслью создаётся пакетной операцией; уже связанная пара не
+            // дублируется (прежний DUPLICATE больше не ошибка).
+            const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
+            const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
+            const res = await ensureLink(networkId, source, target, result.linkTypeId);
+            throwOnFailures(res);
+          }
         }
         if (firstAddedId === null) firstAddedId = item.id;
       } else {
@@ -243,8 +334,10 @@ async function insertIntoCanvas(
           title: item.title,
           synonyms: item.synonyms,
           type_id: result.thoughtTypeId,
+          // Связь через свойство ставится отдельным вызовом ПОСЛЕ создания
+          // (create_link знает только тип связи, не свойство).
           create_link:
-            ctx.anchorId === null
+            ctx.anchorId === null || prop !== null
               ? undefined
               : {
                   // ctx.direction names the role of the NEW item relative to
@@ -256,6 +349,9 @@ async function insertIntoCanvas(
                   type_id: result.linkTypeId,
                 },
         });
+        if (prop !== null && ctx.anchorId !== null) {
+          await addLinkPropertyValue(networkId, newThought.id, prop, ctx.anchorId);
+        }
         // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к
         // пустому постоянному комментарию сразу после создания мысли.
         if (result.thoughtTypeId !== null) {
@@ -294,6 +390,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
   const crossNetwork = opts.crossNetwork;
   const allowCreate = opts.allowCreate !== false && crossNetwork === undefined;
   const allowLinkType = opts.allowLinkType !== false && crossNetwork === undefined;
+  const allowLinkProperty = opts.linkProperty !== undefined && crossNetwork === undefined;
   const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
 
   return new Promise((resolve) => {
@@ -374,6 +471,37 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       },
     });
 
+    // Поле «Свойство связи» (ошибка 1dd08949): вместо типа связи —
+    // СВОЙСТВО-связь, отдельными пунктами имена его сторон. Выбранное имя
+    // стороны адресует серверу и свойство, и направление ребра; свойство
+    // заполняется у добавляемой мысли значением якоря. Строки (реестр + имена
+    // сторон) готовит вызывающий. Тип связи при этом не выбирается вовсе —
+    // направление «вверх/вниз» остаётся только для бестиповой связи, когда
+    // свойство не выбрано.
+    const propertyRows: readonly PropertyListRow[] = allowLinkProperty
+      ? (opts.linkProperty?.rows ?? []).filter((row) => row.valueType === 'link' && !row.structural)
+      : [];
+    let linkPropertyPick: LinkPropertyPick | null = null;
+    const linkPropertySelect = el('select', 'select-input add-link-property') as HTMLSelectElement;
+    // Пустой пункт — «без свойства»: бестиповая связь в направлении диалога.
+    const noneOption = el('option') as HTMLOptionElement;
+    noneOption.value = '';
+    noneOption.textContent = 'без свойства';
+    linkPropertySelect.append(noneOption);
+    for (const side of propertySideOptions(propertyRows)) {
+      const option = el('option') as HTMLOptionElement;
+      option.value = side.value;
+      option.textContent = side.label;
+      linkPropertySelect.append(option);
+    }
+    linkPropertySelect.addEventListener('change', () => {
+      const row = propertyRows.find((r) => r.id === linkPropertySelect.value);
+      linkPropertyPick =
+        row === undefined || row.side === null
+          ? null
+          : { propertyId: row.propertyId, side: row.side, key: row.name };
+    });
+
     const candidates = div('dup-list');
     const errorLine = span('', 'error-text');
 
@@ -383,8 +511,14 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
     const linkTypeField = div('field add-types-field');
     linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
+    const linkPropertyField = div('field add-types-field');
+    linkPropertyField.append(
+      el('label', 'field-label', 'Свойство связи'),
+      linkPropertySelect,
+    );
     if (allowCreate) typeRow.append(thoughtTypeField);
-    if (allowLinkType) typeRow.append(linkTypeField);
+    if (allowLinkProperty) typeRow.append(linkPropertyField);
+    else if (allowLinkType) typeRow.append(linkTypeField);
     // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers on one
     // row, then the name input with the found-thoughts list directly beneath
     // it and the accumulated list under both.
@@ -855,6 +989,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         ),
         thoughtTypeId: allowCreate ? newThoughtTypeId : null,
         linkTypeId: allowLinkType ? linkTypeId : null,
+        linkProperty: allowLinkProperty ? linkPropertyPick : null,
         focusFirst: shift,
       });
     }

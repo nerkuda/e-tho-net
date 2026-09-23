@@ -618,3 +618,271 @@ describe('pickThoughtsDialog: отмена любым путём закрыти�
     assert.equal(((globalThis as any).document.body as ShimElement).children.length, 0, 'диалог закрыт');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Поле «Свойство связи» в диалоге добавления с карты (ошибка 1dd08949):
+// вместо типа связи пользователь выбирает СВОЙСТВО-связь, отдельными пунктами
+// имена его сторон; выбранное свойство заполняется у добавляемой мысли
+// значением якоря — ребро ложится в типизированное свойство, а не «вне типа».
+// ---------------------------------------------------------------------------
+
+const LT_ID = 'lt1';
+const SIDE_FORWARD = 'запланировано в версию';
+const SIDE_REVERSE = 'включает работы';
+/** Реестр: свойство-связь (две стороны) + скаляр (в список не попадает). */
+const REGISTRY: any[] = [
+  {
+    id: 'p1',
+    name: SIDE_FORWARD,
+    value_type: 'link',
+    config: { link_type_id: LT_ID },
+    description: null,
+    created_at: '',
+    updated_at: '',
+    types_count: 2,
+    values_count: 0,
+    types_source_count: 1,
+    types_target_count: 1,
+  },
+  {
+    id: 'p2',
+    name: 'Скаляр',
+    value_type: 'text',
+    config: null,
+    description: null,
+    created_at: '',
+    updated_at: '',
+    types_count: 0,
+    values_count: 0,
+  },
+];
+
+describe('openAddDialog: поле «Свойство связи» (ошибка 1dd08949)', () => {
+  const writes: any[][] = [];
+  const creates: any[] = [];
+  const batches: any[][] = [];
+
+  /** Подменяет реестр и операции записи в фейковом `window.etn`. */
+  function armEtn(): void {
+    writes.length = 0;
+    creates.length = 0;
+    batches.length = 0;
+    store.update({
+      networkId: 'n1',
+      linkTypes: [
+        {
+          id: LT_ID,
+          name_forward: SIDE_FORWARD,
+          name_reverse: SIDE_REVERSE,
+          parent_id: null,
+          is_root: false,
+          color: null,
+          style: null,
+          width: null,
+          description: null,
+        } as any,
+      ],
+    });
+    const etn = (globalThis as any).window.etn;
+    etn.propertyRegistry = { list: async () => REGISTRY };
+    etn.properties = {
+      set: async (...args: any[]) => {
+        writes.push(args);
+      },
+      remove: async () => undefined,
+      get: async () => [],
+    };
+    etn.thoughts.create = async (_n: string, input: any) => {
+      creates.push(input);
+      return {
+        id: 'new1',
+        title: input.title,
+        synonyms: input.synonyms ?? [],
+        type_id: input.type_id ?? null,
+        version: 1,
+      };
+    };
+    etn.thoughts.batch = async (...args: any[]) => {
+      batches.push(args);
+      return { affected: 1, failures: [] };
+    };
+  }
+
+  /** Открывает холстовый диалог добавления (путь карты) и ждёт его монтирования. */
+  async function openCanvasDialog(): Promise<{
+    done: Promise<unknown>;
+    formStack: ShimElement;
+    backdrop: ShimElement;
+  }> {
+    const mod = await loadDialog();
+    const done = mod.openAddDialog({ anchorId: 'A', anchorTitle: 'Версия', direction: 'child' });
+    await settle();
+    const backdrop = openBackdrop();
+    const box = backdrop.children[0];
+    const formStack = box?.querySelectorAll('.form-stack')[0] ?? new ShimElement('div');
+    return { done, formStack, backdrop };
+  }
+
+  it('поле «Свойство связи» перечисляет имена сторон; поля «Тип связи» нет', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const select = formStack.querySelector('.add-link-property');
+    assert.ok(select !== null, 'поле «Свойство связи» есть');
+    assert.deepEqual(
+      select!.children.map((o) => o.textContent),
+      ['без свойства', SIDE_FORWARD, SIDE_REVERSE],
+      'в списке — пустой пункт и обе стороны свойства-связи, скаляр не попал',
+    );
+    const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
+    assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');
+    assert.equal(labels.includes('Тип связи'), false, 'метки «Тип связи» в диалоге карты нет');
+    pressEscape();
+    await done;
+  });
+
+  it('выбор стороны-источника заполняет свойство новой мысли значением якоря', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const select = formStack.querySelector('.add-link-property')!;
+    select.value = 'p1:source';
+    select.emit('change');
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Задача';
+    input.emit('keydown', key('Enter'));
+    await done;
+    assert.deepEqual(
+      writes,
+      [['n1', 'thought', 'new1', SIDE_FORWARD, ['A']]],
+      'свойство записано добавляемой мысли ключом-именем стороны со значением якоря',
+    );
+    assert.equal(batches.length, 0, 'бестиповая пакетная связь не создаётся — ребро даёт свойство');
+    assert.equal(creates[0]?.create_link, undefined, 'новая мысль создана без create_link');
+  });
+
+  it('выбор стороны-назначения пишет обратное имя (ребро развернётся сервером)', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const select = formStack.querySelector('.add-link-property')!;
+    select.value = 'p1:target';
+    select.emit('change');
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Задача';
+    input.emit('keydown', key('Enter'));
+    await done;
+    assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A']]]);
+  });
+
+  it('без выбора свойства — прежняя бестиповая связь в направлении диалога', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Задача';
+    input.emit('keydown', key('Enter'));
+    await done;
+    assert.equal(writes.length, 0, 'свойство не пишется');
+    assert.deepEqual(
+      creates[0]?.create_link,
+      { direction: 'parent', target_thought_id: 'A', type_id: null },
+      'бестиповая связь в направлении «вниз» (нетипизированное ребро)',
+    );
+  });
+
+  it('выбор свойства для существующей мысли пишет свойство ей', async () => {
+    armEtn();
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      {
+        id: 'E1',
+        title: 'Существующая',
+        synonyms: [],
+        matched_on: 'title',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        parent_title: null,
+      },
+    ];
+    const { done, formStack } = await openCanvasDialog();
+    // Мультирежим + клик по найденному кандидату — существующая мысль в списке.
+    const modeRow = formStack.children.find((c) => c.className === 'add-mode-row')!;
+    const multiRadio = modeRow.children[1]!.children[0]!;
+    multiRadio.checked = true;
+    multiRadio.emit('change');
+    const select = formStack.querySelector('.add-link-property')!;
+    select.value = 'p1:source';
+    select.emit('change');
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Существующая';
+    input.emit('input');
+    await settle();
+    const candidate = formStack.querySelectorAll('.dup-item')[0];
+    assert.ok(candidate !== undefined, 'кандидат-существующая мысль найден');
+    candidate!.emit('click');
+    const primary = openBackdrop()
+      .querySelectorAll('button')
+      .find((b) => b.textContent === 'Добавить');
+    assert.ok(primary !== undefined, 'кнопка «Добавить» есть в футере');
+    primary!.click();
+    await done;
+    assert.deepEqual(
+      writes,
+      [['n1', 'thought', 'E1', SIDE_FORWARD, ['A']]],
+      'свойство записано существующей мысли',
+    );
+    assert.equal(creates.length, 0, 'новая мысль не создаётся');
+  });
+
+  it('существующие значения свойства не теряются (набор объединяется)', async () => {
+    armEtn();
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      {
+        id: 'E1',
+        title: 'Существующая',
+        synonyms: [],
+        matched_on: 'title',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        parent_title: null,
+      },
+    ];
+    // У мысли уже есть значение свойства p1 → цель X.
+    (globalThis as any).window.etn.properties.get = async () => [
+      {
+        property_id: 'p1',
+        property_name: SIDE_FORWARD,
+        value_type: 'link',
+        direction: 'out',
+        values: [{ link_id: 'l1', target_id: 'X', target_title: 'X', target_type_id: null, comment: null }],
+      },
+    ];
+    const { done, formStack } = await openCanvasDialog();
+    const modeRow = formStack.children.find((c) => c.className === 'add-mode-row')!;
+    modeRow.children[1]!.children[0]!.emit('change');
+    const select = formStack.querySelector('.add-link-property')!;
+    select.value = 'p1:source';
+    select.emit('change');
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Существующая';
+    input.emit('input');
+    await settle();
+    formStack.querySelectorAll('.dup-item')[0]!.emit('click');
+    openBackdrop()
+      .querySelectorAll('button')
+      .find((b) => b.textContent === 'Добавить')!
+      .click();
+    await done;
+    assert.deepEqual(writes, [['n1', 'thought', 'E1', SIDE_FORWARD, ['X', 'A']]], 'якорь добавлен к существующему набору');
+  });
+});

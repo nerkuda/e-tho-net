@@ -216,6 +216,13 @@ export class ShimElement {
     return this.children[0] ?? null;
   }
 
+  /** Число дочерних УЗЛОВ-элементов (как у настоящего DOM; текстовые узлы,
+   *  которыми `append` из строки заворачивает строку в `#text`, тоже
+   *  считаются — вызывающие из продукта им не пользуются). */
+  get childElementCount(): number {
+    return this.children.filter((child) => child.tagName !== '#text').length;
+  }
+
   get childNodes(): ShimElement[] {
     return this.children;
   }
