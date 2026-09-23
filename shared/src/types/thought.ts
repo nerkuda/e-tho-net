@@ -648,7 +648,11 @@ export interface ThoughtCard {
    *  для значений вне L21-цепочки; свойства-связи — счётчиком `count`,
    *  0.8.1). */
   properties: (import('./thought-type.js').ResolvedPropertyValue | import('./thought-type.js').ResolvedLinkProperty)[];
-  /** «Сигналы полноты» (см. {@link ThoughtMeta}). */
+  /**
+   * «Сигналы полноты» (см. {@link ThoughtMeta}). В карточке resolve
+   * `meta.permanent` всегда `null` (ошибка 29def270): текст постоянного
+   * комментария едет ровно один раз, в `comment_preview`.
+   */
   meta: ThoughtMeta;
   /** Полнотекстовый постоянный комментарий либо `null`. */
   comment_preview: ResolveCommentPreview;

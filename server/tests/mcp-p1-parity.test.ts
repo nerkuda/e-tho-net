@@ -149,6 +149,41 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  it('текст постоянного комментария в карточке ровно один раз: meta.permanent = null (29def270)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Один экземпляр текста',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+          comment: { body_md: 'короткий постоянный комментарий' },
+        });
+        const result = toolJson<{
+          items: Array<{
+            id: string;
+            meta: { permanent: unknown };
+            comment_preview: { body_md: string } | null;
+          }>;
+        }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.resolve',
+            arguments: { network_id: ctx.networkId, thought_ids: [created.id] },
+          }),
+        );
+        const card = result.items[0]!;
+        // Дубль текста устранён: в карточке resolve `meta.permanent` обнулён,
+        // единственный экземпляр — в `comment_preview`.
+        assert.equal(card.meta.permanent, null);
+        assert.equal(card.comment_preview?.body_md, 'короткий постоянный комментарий');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
 
 // ===========================================================================

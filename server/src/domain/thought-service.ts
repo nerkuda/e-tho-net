@@ -435,10 +435,11 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
  *  * `properties` — значения свойств, помеченные `outside_type`,
  *    в форме `etn.thoughts.get` (используется общий с `etn.thoughts.get`
  *    сервис `getPropertyValuesResolved`);
- *  * `meta` — счётчики + превью постоянного комментария (используется общий
- *    `getThoughtMeta`; `fullPermanent` НЕ выставляется — пакетное чтение
- *    остаётся в preview-форме, чтобы не раздувать выборки; полный текст для
- *    одной мысли — через `etn.thoughts.get`).
+ *  * `meta` — счётчики и профиль связей (используется общий
+ *    `getThoughtMeta`; `fullPermanent` НЕ выставляется, а `permanent`
+ *    обнуляется — текст постоянного комментария едет ровно один раз, в
+ *    `comment_preview`; ошибка 29def270). Полный `meta.permanent` для одной
+ *    мысли — через `etn.thoughts.get`.
  *
  * В отличие от `etn.thoughts.get`, эта функция НЕ применяет проекцию `view`:
  * MCP-фасад сам сериализует мысль через `toCompactThought`/`toCompactThoughtRef`,
@@ -603,7 +604,12 @@ function rowToCard(
     updated_at: thought.updated_at,
     type,
     properties: getPropertyValuesResolved(ndb, 'thought', thought.id),
-    meta: getThoughtMeta(ndb, thought.id),
+    // Ошибка 29def270: текст постоянного комментария отдаётся в карточке resolve
+    // ровно один раз — в `comment_preview` (полный, `getPermanentFull`). Дубль
+    // в `meta.permanent` (preview-форма) не нужен: два экземпляра одного текста
+    // на карточку — двойная плата токенами. Полный `meta.permanent` без обрезки
+    // остаётся прерогативой точечного `etn.thoughts.get`.
+    meta: { ...getThoughtMeta(ndb, thought.id), permanent: null },
     comment_preview: getPermanentFull(ndb, 'thought', thought.id),
   };
 }
