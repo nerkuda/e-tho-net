@@ -4708,45 +4708,8 @@ body.cloud-dragging * {
   height: 26px;
 }
 
-/* Задача eb1a3f43, требование 79755f76; ошибка f098b45e: переключатель «по
- * всем сетям» в диалогах выбора/создания мысли. Единый компонент: иконка
- * сети плюс ВИДИМАЯ подпись «все сети» — иконка 14px без подписи не читалась
- * как переключатель охвата поиска. */
-.cross-network-toggle {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-muted, var(--text));
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.cross-network-toggle:hover {
-  border-color: var(--accent);
-}
-
-.cross-network-toggle-label {
-  pointer-events: none;
-}
-
-/* Включённый режим — заметная подсветка, чтобы пользователь видел, что живой
- * поиск ходит по всем сетям. */
-.cross-network-toggle[aria-pressed='true'] {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  border-color: var(--accent);
-}
-
-/* Строка поиска диалога добавления/выбора мысли: поле ввода + переключатель
- * охвата справа от него (ошибка f098b45e). */
+/* Строка поиска диалога добавления/выбора мысли: поле ввода (охват диктует
+ * назначение выбора — требование 79755f76; переключателя в диалоге нет). */
 .add-search-row {
   display: flex;
   align-items: flex-start;

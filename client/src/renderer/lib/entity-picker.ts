@@ -42,12 +42,6 @@ import type { DuplicateHit } from '../../main/ipc/contract.js';
 import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
-import {
-  isCrossNetworkScopeEnabled,
-  loadCrossNetworkScope,
-  saveCrossNetworkScope,
-  subscribeCrossNetworkScope,
-} from './cross-network-scope.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { button, div, el, span } from './dom.js';
 import { etn } from './etn.js';
@@ -237,46 +231,18 @@ export function filterEntityOptions(
 }
 
 // ---------------------------------------------------------------------------
-// Кросс-сетевой режим диалога выбора мысли (задача eb1a3f43, требование
-// 79755f76 «Переключатель «по всем сетям» в диалоге выбора»).
+// Кросс-сетевой поиск кандидатов (задача ea04a185): используется ТОЛЬКО
+// диалогом в принудительном кросс-режиме (`pickThoughtsDialog { crossNetwork }`,
+// редактор значения `cross_network_ref`). Обычные диалоги выбора мысли охват
+// не переключают — они ищут строго по текущей сети (требование 79755f76,
+// ошибка 81be082f): выбор цели внутрисетевой связи чужой мыслью невалиден.
 // ---------------------------------------------------------------------------
-
-/**
- * Кнопка-переключатель режима «по всем сетям» для строки поиска диалога выбора
- * мысли. ЕДИНЫЙ компонент всех таких диалогов (ошибка f098b45e): иконка сети
- * плюс ВИДИМАЯ подпись «все сети» — иконка 14px без подписи не читалась как
- * переключатель охвата. Состояние отражает `aria-pressed`, клик переключает и
- * сохраняет в `cross-network-scope.ts`; подписка на изменение из других мест
- * обновляет атрибуты. Текущее состояние читается реактивно через
- * {@link isCrossNetworkScopeEnabled} в местах потребления.
- */
-export function makeCrossNetworkScopeToggle(): HTMLButtonElement {
-  const btn = el('button', 'cross-network-toggle') as HTMLButtonElement;
-  btn.type = 'button';
-  const refresh = (enabled: boolean): void => {
-    btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
-    btn.title = enabled
-      ? 'Поиск по всем доступным сетям (нажмите, чтобы переключить на текущую)'
-      : 'Поиск только в текущей сети (нажмите, чтобы включить поиск по всем сетям)';
-    btn.setAttribute(
-      'aria-label',
-      enabled ? 'Поиск по всем сетям: включён' : 'Поиск по всем сетям: выключен',
-    );
-  };
-  refresh(loadCrossNetworkScope());
-  btn.append(svgIcon('network', 14), span('все сети', 'cross-network-toggle-label'));
-  btn.addEventListener('click', () => {
-    saveCrossNetworkScope(!loadCrossNetworkScope());
-  });
-  subscribeCrossNetworkScope(refresh);
-  return btn;
-}
 
 /**
  * Загрузить кандидатов-дублей веером по всем доступным сетям пользователя.
  * `networkId` — текущая открытая сеть (роут автоматически добавит её в веер,
- * если её нет в списке). Используется как `SuggestSource.load` пикера при
- * включённом переключателе «по всем сетям».
+ * если её нет в списке). Источник кандидатов принудительного кросс-режима
+ * диалога выбора мысли (редактор `cross_network_ref`).
  */
 export async function loadCrossNetworkCandidates(
   networkId: string,
@@ -463,12 +429,11 @@ export async function pickEntitiesModal(
       searchInput.type = 'text';
       searchInput.autocomplete = 'off';
       searchInput.placeholder = 'Найти мысль…';
-      // Задача eb1a3f43, требование 79755f76: переключатель «по всем сетям».
-      // Состояние хранится локально (`cross-network-scope.ts`) и переживает
-      // перезапуск; умолчание — ВЫКЛ (поиск по текущей сети).
-      const crossScopeToggle = makeCrossNetworkScopeToggle();
+      // Охват поиска задан назначением выбора (требование 79755f76, ошибка
+      // 81be082f): цели внутрисетевых связей ищутся только по текущей сети,
+      // переключателя охвата здесь нет.
       const searchBar = div('st-f-searchbar');
-      searchBar.append(searchInput, crossScopeToggle);
+      searchBar.append(searchInput);
       const chipsBox = div('entity-pick-chips');
       body.append(searchBar, chipsBox);
 
@@ -477,13 +442,6 @@ export async function pickEntitiesModal(
         load: (query) => {
           const trimmed = query.trim();
           const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
-          // Реактивное чтение: пользователь может переключить режим между
-          // вызовами `load` (см. `subscribeCrossNetworkScope`).
-          if (isCrossNetworkScopeEnabled()) {
-            return loadCrossNetworkCandidates(opts.networkId, trimmed, typeIds).then((hits) =>
-              hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
-            );
-          }
           return etn.thoughts
             .findDuplicates(opts.networkId, trimmed, [], typeIds)
             .catch(() => [] as DuplicateHit[])
@@ -1322,10 +1280,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
             byId.set(hit.id, opt);
             return { value: hit.id, label: hit.title, thought: opt.cloud };
           });
-        // Задача eb1a3f43: при включённом переключателе — кросс-сетевой поиск.
-        if (isCrossNetworkScopeEnabled()) {
-          return loadCrossNetworkCandidates(opts.networkId, trimmed, typeIds).then(apply);
-        }
+        // Охват — только текущая сеть (требование 79755f76, ошибка 81be082f):
+        // цели внутрисетевых связей ищутся штатным findDuplicates, переключателя
+        // охвата нет. Кросс-выбор живёт исключительно в редакторе
+        // `cross_network_ref` (принудительный режим pickThoughtsDialog).
         return etn.thoughts
           .findDuplicates(opts.networkId, trimmed, [], typeIds)
           .catch(() => [] as DuplicateHit[])

@@ -42,8 +42,7 @@ import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
-import { buildEntityCombo, loadCrossNetworkCandidates, makeCrossNetworkScopeToggle } from '../lib/entity-picker.js';
-import { isCrossNetworkScopeEnabled } from '../lib/cross-network-scope.js';
+import { buildEntityCombo, loadCrossNetworkCandidates } from '../lib/entity-picker.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
@@ -114,11 +113,13 @@ export interface ThoughtPickerOptions {
   applyLabel?: string;
   /**
    * Кросс-сетевой режим выбора (задача ea04a185): живой поиск кандидатов идёт
-   * веером по всем сетям пользователя и НЕ подчиняется переключателю охвата
-   * (`cross-network-scope.ts`) — он в этом диалоге не показывается. Мысли
-   * собственной сети (`excludeNetworkId`) из выдачи исключаются (запрет своей
-   * сети, требование 884d14e1 — у каждого item появляется `networkId`),
-   * создание новых мыслей недоступно. Так диалог адресует мысль ДРУГОЙ сети.
+   * веером по всем сетям пользователя — охват задан принудительно назначением
+   * диалога, переключателя нет. Мысли собственной сети (`excludeNetworkId`) из
+   * выдачи исключаются (запрет своей сети, требование 884d14e1 — у каждого
+   * item появляется `networkId`), создание новых мыслей недоступно. Так диалог
+   * адресует мысль ДРУГОЙ сети. Обычные (без `crossNetwork`) вызовы ищут
+   * строго по текущей сети (требование 79755f76, ошибка 81be082f): выбор цели
+   * внутрисетевой связи чужой мыслью невалиден.
    */
   crossNetwork?: { excludeNetworkId: string };
 }
@@ -394,17 +395,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         : 'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.';
     const hintLine = el('p', 'muted', hint);
     hintLine.style.margin = '0';
-    // Ошибка f098b45e, требование 79755f76: переключатель «по всем сетям» —
-    // единый компонент диалогов выбора мысли (`makeCrossNetworkScopeToggle`).
-    // Включённый режим расширяет живой поиск кандидатов и проверку дублей на
-    // все сети пользователя; создание новых мыслей всегда идёт в ТЕКУЩУЮ сеть.
-    // В кросс-сетевом режиме (ea04a185) охват задан принудительно — общий
-    // переключатель не показываем, чтобы не портить его глобальное состояние.
+    // Ошибка 81be082f, требование 79755f76: охват строки поиска задан
+    // назначением выбора. Обычный диалог (выбор цели внутрисетевой связи —
+    // структурные родители/потомки, свойства-связи, добавление с карты) ищет
+    // только по текущей сети, переключателя охвата нет. Кросс-выбор —
+    // исключительно кросс-режим (ea04a185), охват задан принудительно.
     const searchRow = div('add-search-row');
     searchRow.append(input);
-    if (crossNetwork === undefined) {
-      searchRow.append(makeCrossNetworkScopeToggle());
-    }
     body.append(modeRow, searchRow, hintLine, candidates, lineList, errorLine);
     if (crossNetwork !== undefined) {
       const note = el(
@@ -480,21 +477,18 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           }
           const parsed = parseTitleWithSynonyms(raw);
           try {
-            // Кросс-сетевой режим (ea04a185) — принудительный веер; иначе —
-            // переключатель «по всем сетям» (ошибка f098b45e) или текущая сеть.
-            let hits: DuplicateHit[];
-            if (crossNetwork !== undefined) {
-              hits = await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter);
-            } else if (isCrossNetworkScopeEnabled()) {
-              hits = await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter);
-            } else {
-              hits = await etn.thoughts.findDuplicates(
-                networkId,
-                parsed.title,
-                parsed.synonyms,
-                searchFilter,
-              );
-            }
+            // Охват диктует назначение выбора (требование 79755f76, ошибка
+            // 81be082f): кросс-режим (ea04a185) — принудительный веер по всем
+            // сетям; обычный диалог — только текущая сеть (штатный findDuplicates).
+            const hits: DuplicateHit[] =
+              crossNetwork !== undefined
+                ? await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter)
+                : await etn.thoughts.findDuplicates(
+                    networkId,
+                    parsed.title,
+                    parsed.synonyms,
+                    searchFilter,
+                  );
             acceptCandidates(
               hits.filter(
                 (hit) =>

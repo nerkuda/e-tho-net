@@ -52,9 +52,6 @@ const dupQueries: Array<{ title: string; synonyms: string[] }> = [];
 /** Кросс-сетевые поисковые вызовы (`findDuplicatesAcrossNetworks`). */
 const crossQueries: Array<{ title: string; networkIds: string[] }> = [];
 
-/** localStorage-шим: переключатель «по всем сетям» живёт в localStorage. */
-const storageMap = new Map<string, string>();
-
 /** Слушатели `window` — каркас диалога вешает сюда Esc и Ctrl+Enter. */
 const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
 
@@ -64,11 +61,6 @@ function pressEscape(): void {
   for (const { type, listener } of [...windowListeners]) {
     if (type === 'keydown') listener(event);
   }
-}
-
-/** Включить/выключить состояние переключателя охвата (localStorage-шим). */
-function setCrossNetworkScope(enabled: boolean): void {
-  storageMap.set('etn.crossNetworkScope', enabled ? '1' : '0');
 }
 
 /**
@@ -82,15 +74,6 @@ function installShim(): void {
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: new ShimElement('html'),
     body: new ShimElement('body'),
-  };
-  (globalThis as any).localStorage = {
-    getItem: (key: string) => storageMap.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      storageMap.set(key, value);
-    },
-    removeItem: (key: string) => {
-      storageMap.delete(key);
-    },
   };
   (globalThis as any).window = {
     innerWidth: 1200,
@@ -154,7 +137,7 @@ interface DialogHandle {
   titleText: () => string;
   /** Queued list row titles (empty when the list holds only its header). */
   lineTitles: () => string[];
-  /** Тело диалога — для поиска переключателя «по всем сетям». */
+  /** Тело диалога — для проверки строки поиска и охвата кандидатов. */
   formStack: ShimElement;
 }
 
@@ -388,50 +371,32 @@ describe('pickThoughtsDialog prefillText (карточка ETN 34ffbd75, при�
 });
 
 // ---------------------------------------------------------------------------
-// Переключатель «по всем сетям» в диалоге добавления/выбора мысли
-// (ошибка f098b45e, требование 79755f76)
+// Охват поиска в диалоге добавления/выбора мысли
+// (ошибка 81be082f, требование 79755f76): только текущая сеть, без тогла.
 // ---------------------------------------------------------------------------
 
-describe('pickThoughtsDialog: переключатель «по всем сетям» (ошибка f098b45e)', () => {
-  it('переключатель присутствует в диалоге и несёт видимую подпись «все сети»', async () => {
+describe('pickThoughtsDialog: охват поиска — только текущая сеть (ошибка 81be082f)', () => {
+  it('в диалоге выбора цели внутрисетевой связи нет переключателя охвата', async () => {
     const ui = await openDialog();
-    const toggle = ui.formStack.querySelector('.cross-network-toggle');
-    assert.ok(toggle !== null, 'тогл смонтирован в теле диалога');
-    assert.equal(toggle!.flatText(), 'все сети', 'подпись видима, а не только title');
-    assert.equal(toggle!.getAttribute('aria-pressed'), 'false', 'умолчание — выключен');
+    assert.equal(
+      ui.formStack.querySelector('.cross-network-toggle'),
+      null,
+      'переключателя «по всем сетям» в диалоге нет',
+    );
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
   });
 
-  it('включённый тогл направляет живой поиск кандидатов в веер по всем сетям', async () => {
+  it('живой поиск кандидатов идёт только по текущей сети (штатный findDuplicates)', async () => {
     dupQueries.length = 0;
     crossQueries.length = 0;
-    setCrossNetworkScope(true);
-    try {
-      const ui = await openDialog();
-      ui.input.value = 'Кандидат';
-      ui.input.emit('input');
-      await settle();
-      assert.equal(crossQueries.length, 1, 'поиск ушёл в веерный источник');
-      assert.deepEqual(crossQueries[0]?.networkIds, ['n1', 'n2'], 'веер — все сети пользователя');
-      assert.equal(dupQueries.length, 0, 'одиночный поиск не вызывался');
-      ui.cancelBtn.click();
-      assert.equal(await ui.promise, null);
-    } finally {
-      setCrossNetworkScope(false);
-    }
-  });
-
-  it('выключенный тогл ищет только в текущей сети', async () => {
-    dupQueries.length = 0;
-    crossQueries.length = 0;
-    setCrossNetworkScope(false);
     const ui = await openDialog();
     ui.input.value = 'Кандидат';
     ui.input.emit('input');
     await settle();
-    assert.equal(dupQueries.length, 1, 'поиск по текущей сети');
-    assert.equal(crossQueries.length, 0, 'веерный источник не задействован');
+    assert.equal(dupQueries.length, 1, 'поиск ушёл в источник текущей сети');
+    assert.equal(dupQueries[0]?.title, 'Кандидат', 'запрос ушёл в findDuplicates');
+    assert.equal(crossQueries.length, 0, 'веерный кросс-источник не задействован');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
   });
