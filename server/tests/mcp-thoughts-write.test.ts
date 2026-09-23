@@ -115,6 +115,57 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('resolves links[].target_ref regardless of declaration order (target earlier or later)', async () => {
+    // Regression for error 436ab571: `links[].target_ref` must resolve to a
+    // thought created by the SAME batch, whichever way the array is ordered.
+    // Фаза 2 создаёт все мысли батча, фаза 3 резолвит `target_ref` — поэтому и
+    // «target объявлен позже», и «target объявлен раньше» (форма
+    // воспроизведения ошибки: первый элемент — цель, последующие ссылаются на
+    // его ref) обязаны проходить.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const laterTarget = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              // source объявлен ПЕРВЫМ, target — позже по массиву.
+              { ref: 'src-fwd', thought: { title: 'Fwd source' }, links: [{ direction: 'child', target_ref: 'dst-fwd' }] },
+              { ref: 'dst-fwd', thought: { title: 'Fwd target' } },
+            ],
+          },
+        });
+        assert.equal(laterTarget.isError, undefined, toolText(laterTarget));
+        const fwd = toolJson<WriteResult>(laterTarget);
+        assert.equal(fwd.items[0]?.links?.length, 1, 'forward ref must create the link');
+
+        const earlierTarget = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              // target объявлен ПЕРВЫМ, ссылки на него — позже (форма ошибки).
+              { ref: 'dst-back', thought: { title: 'Back target' } },
+              { ref: 'src-a', thought: { title: 'Back source A' }, links: [{ direction: 'child', target_ref: 'dst-back' }] },
+              { ref: 'src-b', thought: { title: 'Back source B' }, links: [{ direction: 'parent', target_ref: 'dst-back' }] },
+            ],
+          },
+        });
+        assert.equal(earlierTarget.isError, undefined, toolText(earlierTarget));
+        const back = toolJson<WriteResult>(earlierTarget);
+        assert.equal(back.items[0]?.links?.length, 0, 'target itself has no outgoing link');
+        assert.equal(back.items[1]?.links?.length, 1, 'backward child ref must create the link');
+        assert.equal(back.items[2]?.links?.length, 1, 'backward parent ref must create the link');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('resolves links[].target_ref against `local_refs` (HOME alias)', async () => {
     // Regression for error 3058c264: `local_refs` lets the caller name an
     // existing thought (e.g. HOME) once and reference it from `links[].target_ref`
