@@ -59,6 +59,7 @@ import {
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
+import { resolveThoughtId } from './thought-id.js';
 
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections, toFocusEdge } from './link-service.js';
@@ -351,12 +352,19 @@ function readSynonyms(ndb: NetworkDb, thoughtId: string): string[] {
  * Return a thought with its synonyms, or `null` when not found.
  */
 export function getThought(ndb: NetworkDb, id: string): Thought | null {
-  const row = ndb.prepare('SELECT * FROM thoughts_v WHERE id = ? LIMIT 1').get(id) as
+  // Короткая форма id (hex-префикс UUID) резолвится в полный id — ошибка
+  // d8893a1f. Неоднозначный префикс даёт VALIDATION_ERROR со списком кандидатов;
+  // неизвестный — тот же `null`, что и раньше.
+  const resolved = resolveThoughtId(ndb, id);
+  if (resolved === null) {
+    return null;
+  }
+  const row = ndb.prepare('SELECT * FROM thoughts_v WHERE id = ? LIMIT 1').get(resolved) as
     ThoughtRow | undefined;
   if (!row) {
     return null;
   }
-  return rowToThought(row, readSynonyms(ndb, id));
+  return rowToThought(row, readSynonyms(ndb, resolved));
 }
 
 /**
@@ -390,7 +398,13 @@ export function getHomeThoughtId(ndb: NetworkDb): string | null {
  * full entity is unnecessary.
  */
 export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
-  const unique = [...new Set(ids)];
+  // Короткие id (ошибка d8893a1f) резолвятся в полные; неизвестные — отсеиваются.
+  const resolved = new Set<string>();
+  for (const id of ids) {
+    const full = resolveThoughtId(ndb, id);
+    if (full !== null) resolved.add(full);
+  }
+  const unique = [...resolved];
   if (unique.length === 0) return [];
   // Cap to THOUGHT_RESOLVE_MAX_IDS per the API contract.
   const capped = unique.slice(0, THOUGHT_RESOLVE_MAX_IDS);
@@ -454,17 +468,27 @@ export function getThoughtsByIdsResolved(
   ndb: NetworkDb,
   ids: string[],
 ): ResolveResult {
-  // Дедуп в порядке первого появления.
+  // Дедуп в порядке первого появления. Короткие id (ошибка d8893a1f)
+  // резолвятся в полные; префикс без совпадений сразу уходит в `missing`.
   const unique: string[] = [];
   const seen = new Set<string>();
+  const unresolved: string[] = [];
   for (const id of ids) {
     if (typeof id !== 'string' || id === '') continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    unique.push(id);
+    const full = resolveThoughtId(ndb, id);
+    if (full === null) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        unresolved.push(id);
+      }
+      continue;
+    }
+    if (seen.has(full)) continue;
+    seen.add(full);
+    unique.push(full);
   }
   if (unique.length === 0) {
-    return { items: [], missing: [] };
+    return { items: [], missing: unresolved };
   }
   const capped = unique.slice(0, THOUGHT_RESOLVE_MAX_IDS);
   const placeholders = capped.map(() => '?').join(',');
@@ -505,8 +529,9 @@ export function getThoughtsByIdsResolved(
     updated_at_ms: number;
   }>;
   const foundIds = new Set(rows.map((r) => r.id));
-  // missing — в порядке первого появления в запросе.
-  const missing = capped.filter((id) => !foundIds.has(id));
+  // missing — в порядке первого появления в запросе (плюс неразрешённые
+  // короткие префиксы, которых нет в сети).
+  const missing = [...capped.filter((id) => !foundIds.has(id)), ...unresolved];
   // items — в порядке первого появления в запросе: идём по `capped`,
   // отбираем строки, которые попали в выборку, и собираем в правильном порядке.
   const rowById = new Map(rows.map((r) => [r.id, r]));

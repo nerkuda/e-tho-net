@@ -17,6 +17,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SERVER_VERSION } from '../version.js';
 import { contractFor, mcpValidationError } from '../contracts.js';
 import { createRuntime, etnErrorText, type McpRuntime } from './context.js';
+import { normalizeThoughtIdArgs } from './id-args.js';
 import { registerPrompts } from './prompts.js';
 import { registerResources } from './resources.js';
 import { registerTools } from './tools.js';
@@ -126,8 +127,13 @@ function isToolErrorResult(result: unknown): boolean {
  * регистрации инструмента: SDK ставит свой `tools/call`-обработчик при
  * первом `registerTool`, и обёртка ложится вокруг него (тот же приём, что
  * `instrumentToolCalls` использует для `registerTool`).
+ *
+ * Там же (ошибка d8893a1f) — единая нормализация коротких id мыслей: после
+ * успешной валидации аргументы прогоняются через {@link normalizeThoughtIdArgs},
+ * и обработчик видит только полные id. SQL за этим не следует — он остаётся
+ * в домене (см. `mcp/id-args.ts`).
  */
-function installCanonicalToolValidation(mcp: McpServer): void {
+function installCanonicalToolValidation(mcp: McpServer, rt: McpRuntime): void {
   const server = mcp.server;
   const original = server.setRequestHandler.bind(server);
   const methodOf = (schema: unknown): string | undefined => {
@@ -148,6 +154,13 @@ function installCanonicalToolValidation(mcp: McpServer): void {
               content: [{ type: 'text', text: etnErrorText(err) }],
               isError: true,
             };
+          }
+        }
+        if (name !== undefined) {
+          try {
+            normalizeThoughtIdArgs(rt, name, params?.arguments);
+          } catch (e) {
+            return { content: [{ type: 'text', text: etnErrorText(e) }], isError: true };
           }
         }
         return inner(request, extra);
@@ -176,7 +189,7 @@ export function buildEtnMcpServer(rt: McpRuntime): McpServer {
     },
   );
   instrumentToolCalls(mcp, rt);
-  installCanonicalToolValidation(mcp);
+  installCanonicalToolValidation(mcp, rt);
   registerResources(mcp, rt);
   registerTools(mcp, rt);
   registerPrompts(mcp, rt);
