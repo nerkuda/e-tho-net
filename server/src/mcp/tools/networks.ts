@@ -17,6 +17,7 @@ import { emitDomainEvent } from '../../realtime/emit.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
+import { projectTypeRow, projectTypeRows } from '../projection.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { assertNetworkAccess, auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { updateNetwork } from '../../domain/network-write-service.js';
@@ -130,28 +131,29 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
           rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
         );
 
-        const sections = rows.map((row) => {
-          const meta = getThoughtMeta(ndb, row.id);
-          const permanent = getPermanentPreview(ndb, 'thought', row.id);
-          const properties = getPropertyValuesResolved(ndb, 'thought', row.id, accessibleNetworkIds);
-          const usage = findThoughtUsage(ndb, row.id);
-          return {
-            id: row.id,
-            title: row.title,
-            type_id: row.type_id,
-            version: row.version,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-            counters: {
-              parents_count: meta.parents_count,
-              children_count: meta.children_count,
-              attachments_count: meta.attachments_count,
-              usage_count: usage.total,
-            },
-            permanent,
-            properties,
-          };
-        });
+        const sections = projectTypeRows(
+          rows.map((row) => {
+            const meta = getThoughtMeta(ndb, row.id);
+            const permanent = getPermanentPreview(ndb, 'thought', row.id);
+            const properties = getPropertyValuesResolved(ndb, 'thought', row.id, accessibleNetworkIds);
+            const usage = findThoughtUsage(ndb, row.id);
+            return {
+              id: row.id,
+              title: row.title,
+              type_id: row.type_id,
+              created_at: row.created_at,
+              updated_at: row.updated_at,
+              counters: {
+                parents_count: meta.parents_count,
+                children_count: meta.children_count,
+                attachments_count: meta.attachments_count,
+                usage_count: usage.total,
+              },
+              permanent,
+              properties,
+            };
+          }),
+        );
 
         // O10: count every section the agent looked at while reading the
         // network's structure. `table_of_contents` rows are typically a
@@ -166,7 +168,10 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         // `thought_types` catalogue below is already sanitized via
         // `thoughtTypeCatalog`, but `node_section_type` is the raw type record.
         const rawSectionType = getThoughtType(ndb, sectionTypeId);
-        const sectionType = rawSectionType === null ? null : withSanitizedIcon(rawSectionType);
+        // Единый сериализатор списочных записей (projection.ts): запись типа
+        // теряет визуальные/сервисные поля, но сохраняет `is_root`/`parent_id`
+        // (иерархия типов L21) и `icon`.
+        const sectionType = rawSectionType === null ? null : projectTypeRow(withSanitizedIcon(rawSectionType));
         const referencedTypeIds = Array.from(
           new Set(
             sections

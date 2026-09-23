@@ -10,6 +10,7 @@ import type { McpRuntime } from '../context.js';
 import { Instructions } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
+import { projectThoughtRows } from '../projection.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
 
 export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
@@ -60,22 +61,31 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
         // что и остальные инструменты — `openMemberNetwork` резолвит слой
         // ключа и проверяет доступ. Без выбранного слоя это основа.
         const ndb = openMemberNetwork(rt, args.network_id);
-        return {
-          network_id: args.network_id,
-          ...getNetworkInstructions(
-            ndb,
-            network.type_roles.instructions ?? null,
-            args.network_id,
-            {
-              ...(args.instruction_id !== undefined
-                ? { instructionId: args.instruction_id }
-                : {}),
-              ...(args.keywords !== undefined ? { keywords: args.keywords } : {}),
-              ...(args.limit !== undefined ? { limit: args.limit } : {}),
-              ...(args.offset !== undefined ? { offset: args.offset } : {}),
-            },
-          ),
-        };
+        const result = getNetworkInstructions(
+          ndb,
+          network.type_roles.instructions ?? null,
+          args.network_id,
+          {
+            ...(args.instruction_id !== undefined
+              ? { instructionId: args.instruction_id }
+              : {}),
+            ...(args.keywords !== undefined ? { keywords: args.keywords } : {}),
+            ...(args.limit !== undefined ? { limit: args.limit } : {}),
+            ...(args.offset !== undefined ? { offset: args.offset } : {}),
+          },
+        );
+        // Списочный режим — записи через единый сериализатор (projection.ts):
+        // визуальные/сервисные поля и пустые `synonyms` не пишутся. Точечный
+        // режим (`instruction_id`) отдаёт полное тело комментария и остаётся
+        // как есть.
+        if ('instructions' in result) {
+          return {
+            network_id: args.network_id,
+            ...result,
+            instructions: projectThoughtRows(result.instructions),
+          };
+        }
+        return { network_id: args.network_id, ...result };
       }),
   );
 

@@ -15,7 +15,8 @@ import type { McpRuntime } from '../context.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { TrashList, TrashPurge } from '../../contracts.js';
-import { dropVisualFields, toCompactLink, withSanitizedIcon } from '../catalogs.js';
+import { withSanitizedIcon } from '../catalogs.js';
+import { projectLinkRow, projectThoughtRows } from '../projection.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -41,12 +42,13 @@ export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const trash = listTrash(ndb);
-        // MCP-проекция списка — compact: визуальные поля мыслей снимаются,
-        // `icon` санитайзится и остаётся; стилевые оверрайды связей — через
-        // `toCompactLink`. `blocked`/`blocking` сохраняются.
+        // MCP-проекция списка — единый сериализатор (projection.ts):
+        // визуальные/сервисные поля мыслей снимаются, `icon` санитайзится и
+        // остаётся; стилевые оверрайды связей — `projectLinkRow`.
+        // `blocked`/`blocking` сохраняются.
         return {
-          thoughts: trash.thoughts.map((t) => dropVisualFields(withSanitizedIcon(t))),
-          links: trash.links.map((l) => toCompactLink(l)),
+          thoughts: projectThoughtRows(trash.thoughts.map((t) => withSanitizedIcon(t))),
+          links: trash.links.map((l) => projectLinkRow(l)),
         };
       }),
   );

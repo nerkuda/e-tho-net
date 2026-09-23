@@ -15,6 +15,7 @@ import { listEffectiveTypeProperties } from '../../domain/property-service.js';
 import { collectSubtreeTypes } from '../../domain/search-service.js';
 import { shrinkTypesListToBudget } from '../types-list-budget.js';
 import { sanitizeIcon } from '../catalogs.js';
+import { projectTypeRows } from '../projection.js';
 import { listThoughtTypes } from '../../domain/thought-type-service.js';
 import { listLinkTypes } from '../../domain/link-type-service.js';
 import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
@@ -139,6 +140,10 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         const paginatedThoughtTypes = paginate(fullThoughtTypes);
         const paginatedLinkTypes = paginate(fullLinkTypes);
 
+        // Единый сериализатор списочных записей (projection.ts): снимает
+        // визуальные/сервисные поля записи и не пишет пустые контейнеры
+        // (например, `views: []` у типа без собственных отборов); `is_root`
+        // и иерархия типов сохраняются.
         const scope = args.scope ?? 'all';
         const payload: {
           thought_types?: typeof paginatedThoughtTypes;
@@ -152,10 +157,10 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
           meta?: McpTypesListMeta;
         } = {
           ...(scope === 'thoughts' || scope === 'all'
-            ? { thought_types: paginatedThoughtTypes }
+            ? { thought_types: projectTypeRows(paginatedThoughtTypes) }
             : {}),
           ...(scope === 'links' || scope === 'all'
-            ? { link_types: paginatedLinkTypes }
+            ? { link_types: projectTypeRows(paginatedLinkTypes) }
             : {}),
           ...(args.in_subtree_of === undefined
             ? {}

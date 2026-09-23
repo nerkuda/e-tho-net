@@ -25,7 +25,8 @@ import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
-import { dropVisualFields, linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
+import { linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, withSanitizedIcon } from '../catalogs.js';
+import { omitEmptyContainers, projectLinkRow, projectThoughtRows } from '../projection.js';
 import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
@@ -139,8 +140,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           }
           return {
             ...result.response,
-            by_names: result.response.by_names.map((h) => dropVisualFields(withSanitizedIcon(h))),
-            by_texts: result.response.by_texts.map((h) => dropVisualFields(withSanitizedIcon(h))),
+            by_names: projectThoughtRows(result.response.by_names.map((h) => withSanitizedIcon(h))),
+            by_texts: projectThoughtRows(result.response.by_texts.map((h) => withSanitizedIcon(h))),
             networks: result.networks,
             ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
           };
@@ -181,14 +182,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
         // Bug fix (§5.1e): `search` is shared with the REST `/search` route
         // (which needs the real icon to render results), so project only at
-        // this MCP-facing call site. The MCP list projection is compact for
-        // every list tool: `by_names`/`by_texts` hits drop the visual style
-        // fields (colours, font flags, icon kind/attachment); the icon itself
-        // stays and `data:` URLs are sanitized inside the projection.
+        // this MCP-facing call site. Every MCP list record goes through the
+        // single `projection.ts` — compact drops visual/service fields and
+        // omits empty containers; the icon itself stays and `data:` URLs are
+        // sanitized inside the projection.
         return {
           ...result,
-          by_names: result.by_names.map((h) => dropVisualFields(withSanitizedIcon(h))),
-          by_texts: result.by_texts.map((h) => dropVisualFields(withSanitizedIcon(h))),
+          by_names: projectThoughtRows(result.by_names.map((h) => withSanitizedIcon(h))),
+          by_texts: projectThoughtRows(result.by_texts.map((h) => withSanitizedIcon(h))),
           ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
         };
       }),
@@ -500,14 +501,15 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Дополнительной обвязки здесь не требуется — `card.meta.views` уже
         // заполнен.
         const itemsWithViews = sanitizedItems;
-        // Compact-проекция карточки: визуальные поля (цвета, флаги шрифта, вид и
-        // вложение иконки) снимаются, `icon` остаётся; `type`, `properties`,
-        // `meta` и `comment_preview` сохраняются в полной форме — тот же
-        // контракт, что и у `etn.thoughts.get`.
+        // Compact-проекция карточки — единый сериализатор (projection.ts):
+        // визуальные поля (цвета, флаги шрифта, вложение иконки) и сервисные
+        // (version, авторство) снимаются, пустые synonyms/views не пишутся;
+        // `icon`, `type`, `properties`, `meta` и `comment_preview` остаются в
+        // полной форме — тот же контракт, что и у `etn.thoughts.get`.
         const items =
           view === 'full'
             ? itemsWithViews
-            : itemsWithViews.map((card) => dropVisualFields(card));
+            : projectThoughtRows(itemsWithViews);
         // Reference table: только типы, реально использованные в items.
         const thoughtTypes = thoughtTypeCatalog(
           ndb,
@@ -583,16 +585,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             const parentsTotal = countNeighbors(ndb, args.thought_id, 'parents', neighborOpts);
             const childrenTotal = countNeighbors(ndb, args.thought_id, 'children', neighborOpts);
             const total = parentsTotal + childrenTotal;
-            return {
+            return omitEmptyContainers({
               thought: { id: thought.id, title: thought.title },
               dir: args.dir,
               depth: 1,
-              neighbors: annotated,
+              neighbors: projectThoughtRows(annotated),
               total,
               truncated: total > annotated.length,
               link_types: linkTypes,
               thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
-            };
+            });
           }
           const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
@@ -625,16 +627,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           // `etn.thoughts.query { in_subtree_of, max_depth: 1 }` to page
           // through the rest when `truncated` is true.
           const total = countNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
-          return {
+          return omitEmptyContainers({
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
-            neighbors: annotated,
+            neighbors: projectThoughtRows(annotated),
             total,
             truncated: total > annotated.length,
             link_types: linkTypes,
             thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
-          };
+          });
         }
         // `traverse` already supports `direction: "both"` (graph-traversal.ts)
         // — same BFS in both directions, used here for both `dir: "both"`
@@ -650,9 +652,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // any inline `data:` icon URL, not just the compact projection.
         const thoughts = resolveThoughts(ndb, walk.ids).map((t) => withSanitizedIcon(t));
         // Depth>1 returns ThoughtRef rows (the lightweight identity slice);
-        // project each entry to its compact shape under `view: 'compact'`.
+        // project each entry through the single list serializer under
+        // `view: 'compact'`.
         const projected =
-          view === 'full' ? thoughts : thoughts.map((t) => toCompactThoughtRef(t));
+          view === 'full' ? thoughts : projectThoughtRows(thoughts);
         return {
           thought_id: args.thought_id,
           dir: args.dir,
@@ -714,7 +717,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           args.include_comments === true
             ? result.nodes.map((id) => ({
                 thought_id: id,
-                ...getCommentsPreview(ndb, 'thought', id),
+                ...omitEmptyContainers(getCommentsPreview(ndb, 'thought', id)),
               }))
             : undefined;
         // O10: one batched UPSERT covers every node returned by the subgraph.
@@ -723,8 +726,6 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // The traversal already returns edges with the minimal shape (no
         // colour/style/width — see graph-traversal/subgraph), so the only O12
         // effects here are the node projection and the link-type catalogue.
-        const projectedNodes =
-          view === 'full' ? nodes : nodes.map((t) => toCompactThought(t));
         const linkTypes =
           view === 'full'
             ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
@@ -739,11 +740,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         );
         const edges = result.edges.map((edge) => {
           const flags = fillingFlags.get(edge.id);
-          return {
+          const annotated = {
             ...edge,
             has_properties: flags?.has_properties ?? false,
             has_comment: flags?.has_comment ?? false,
           };
+          return view === 'full' ? annotated : projectLinkRow(annotated);
         });
         // When the hard `max_nodes` bound fires during traversal, the response is
         // already structurally incomplete — running the budget shrinker on top
@@ -753,7 +755,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // `meta.views` (задача c1fa71d4) — отборы для seed-узлов. Для
         // остальных узлов поле пустое (агент может прочитать их карточку
         // отдельно через `etn.thoughts.get`).
-        const projectedNodesWithViews = projectedNodes.map((n) => {
+        const nodesWithViews = nodes.map((n) => {
           const effectiveViews = seedViews.get(n.id);
           if (effectiveViews === undefined) {
             return { ...n, views: [] };
@@ -771,6 +773,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             })),
           };
         });
+        // Единый сериализатор списочных записей (projection.ts): у узлов
+        // compact-проекции снимаются визуальные/сервисные поля и пустые
+        // `views`. `view: 'full'` сохраняет прежнюю форму.
+        const projectedNodesWithViews =
+          view === 'full' ? nodesWithViews : projectThoughtRows(nodesWithViews);
         const payload: {
           nodes: typeof projectedNodesWithViews;
           edges: typeof edges;
@@ -792,7 +799,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 max_chars: args.max_chars,
               })
             : null;
-        return {
+        return omitEmptyContainers({
           nodes: payload.nodes,
           edges: payload.edges,
           truncated: traversalTruncated || (budget?.truncated ?? false),
@@ -821,7 +828,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   steps: budget.reason,
                 },
               }),
-        };
+        });
       }),
   );
   mcp.registerTool(
@@ -847,9 +854,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         );
         // Bug fix (§5.1e): sanitize before returning — `resolveThoughts` gives
         // raw `data:` icon URLs, but the agent can never resolve an image; the
-        // place must mirror `subgraph`/`get`/`neighbors`.
+        // place must mirror `subgraph`/`get`/`neighbors`. The `thoughts[]` rows
+        // also go through the single list serializer (projection.ts).
         const thoughts =
-          path === null ? undefined : resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t));
+          path === null
+            ? undefined
+            : projectThoughtRows(resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t)));
         return {
           from_id: args.from_id,
           to_id: args.to_id,
@@ -922,15 +932,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             thoughts: g.thoughts.map((t) => withSanitizedIcon(t)),
           })),
         };
-        // `groups[].thoughts[]` is a ThoughtRef[] — project each entry under
-        // the compact view. The `total` and `groups` skeleton are preserved.
+        // `groups[].thoughts[]` is a ThoughtRef[] — project each entry through
+        // the single list serializer under the compact view. The `total` and
+        // `groups` skeleton are preserved.
         const groups =
           view === 'full'
             ? usage.groups
             : usage.groups.map((g) => ({
                 property_id: g.property_id,
                 key: g.key,
-                thoughts: g.thoughts.map((t) => toCompactThoughtRef(t)),
+                thoughts: projectThoughtRows(g.thoughts),
               }));
         return {
           total: usage.total,
@@ -994,7 +1005,7 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
             synonyms: args.synonyms,
           });
           return {
-            hits: result.hits.map((hit) => dropVisualFields(withSanitizedIcon(hit))),
+            hits: projectThoughtRows(result.hits.map((hit) => withSanitizedIcon(hit))),
             networks: result.networks,
             truncated: result.truncated,
             reason: result.reason,
@@ -1003,10 +1014,13 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
         const ndb = openMemberNetwork(rt, args.network_id as string);
         // Bug fix (§5.1e): `findDuplicates` is shared with the REST add-thought
         // dialog (which needs the real icon to render candidates), so project
-        // only at this MCP-facing call site: compact list rows (visual style
-        // fields dropped, `icon` sanitized and kept).
-        return findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
-          dropVisualFields(withSanitizedIcon(hit)),
+        // only at this MCP-facing call site: every list record goes through the
+        // single serializer (`icon` sanitized and kept, visual/service dropped,
+        // empty containers omitted).
+        return projectThoughtRows(
+          findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
+            withSanitizedIcon(hit),
+          ),
         );
       }),
   );

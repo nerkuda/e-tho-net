@@ -10,15 +10,10 @@
  */
 
 import type {
-  CompactLink,
   CompactLinkTypeRef,
   CompactThought,
-  CompactThoughtRef,
-  CompactVisualFieldKeys,
-  Link,
   LinkTypeRef,
   Thought,
-  ThoughtRef,
   ThoughtTypeRef,
 } from '@etn/shared';
 
@@ -142,12 +137,16 @@ export function linkTypeCatalogCompact(
 }
 
 /**
- * Project a {@link Thought} into the compact shape used by MCP read tools
- * under `view: 'compact'` (task O12). Drops the visual/service fields the
- * agent never consumes (colours, font-style flags, icon attachment id,
- * `is_protected`/`is_root`); keeps `icon` (the emoji / image reference
- * itself) because it carries semantic information the agent uses to
- * recognise a node.
+ * Project a {@link Thought} into the compact shape used by the point read
+ * `etn.thoughts.get` under `view: 'compact'` (task O12). Drops the visual/
+ * service fields the agent never consumes (colours, font-style flags, icon
+ * attachment id, `is_protected`/`is_root`); keeps `icon` (the emoji / image
+ * reference itself) because it carries semantic information the agent uses to
+ * recognise a node, and keeps the service fields (`version`, authorship) —
+ * the point read preserves the full projection.
+ *
+ * Списочные ответы идут через `projection.ts` (`projectThoughtRow`), где
+ * сервисные поля снимаются; точечный `get` остаётся полным.
  */
 export function toCompactThought(thought: Thought): CompactThought {
   return {
@@ -166,72 +165,4 @@ export function toCompactThought(thought: Thought): CompactThought {
     ...(thought.created_by !== undefined ? { created_by: thought.created_by } : {}),
     ...(thought.updated_by !== undefined ? { updated_by: thought.updated_by } : {}),
   };
-}
-
-/**
- * Project a {@link ThoughtRef} (used by neighbours, usage) into the compact
- * shape under `view: 'compact'` (task O12). Drops the visual fields the
- * reference carried (colours, font flags, icon attachment id).
- */
-export function toCompactThoughtRef(ref: ThoughtRef): CompactThoughtRef {
-  return {
-    id: ref.id,
-    title: ref.title,
-    type_id: ref.type_id,
-    icon: sanitizeIcon(ref.icon),
-    active: ref.active,
-    marked_for_deletion: ref.marked_for_deletion,
-  };
-}
-
-/**
- * Project a {@link Link} into the compact shape used by
- * `etn.thoughts.subgraph` (and any future edge-returning tool) under
- * `view: 'compact'` (task O12). Drops the per-link style overrides
- * (`color`, `style`, `width`) — agents reason over the topology, they do
- * not re-render the canvas.
- */
-export function toCompactLink(link: Link): CompactLink {
-  return {
-    id: link.id,
-    source_id: link.source_id,
-    target_id: link.target_id,
-    type_id: link.type_id,
-    active: link.active,
-    marked_for_deletion: link.marked_for_deletion,
-    marked_for_deletion_at: link.marked_for_deletion_at,
-    marked_for_deletion_by: link.marked_for_deletion_by,
-    version: link.version,
-    created_at: link.created_at,
-    updated_at: link.updated_at,
-    ...(link.created_by !== undefined ? { created_by: link.created_by } : {}),
-    ...(link.updated_by !== undefined ? { updated_by: link.updated_by } : {}),
-  };
-}
-
-/**
- * Structural compact projection for list rows that carry the visual style
- * block: drops `fg_color`, `bg_color`, `font_*`, `icon_kind` and
- * `icon_attachment_id` — whatever subset the row actually has. `icon` (the
- * emoji / image reference itself) stays because it carries semantic
- * information the agent uses to recognise a node.
- *
- * Single filter behind the MCP list projection: used by `search`,
- * `views.run`, `resolve`, `find_duplicates` (the tools that return domain
- * rows carrying the style block). `etn.thoughts.query` already returns its
- * minimal hit shape.
- */
-export function dropVisualFields<T extends object>(
-  row: T,
-): Omit<T, CompactVisualFieldKeys> {
-  const out = { ...row } as T & Partial<Record<CompactVisualFieldKeys, unknown>>;
-  delete out.fg_color;
-  delete out.bg_color;
-  delete out.font_bold;
-  delete out.font_italic;
-  delete out.font_underline;
-  delete out.font_strike;
-  delete out.icon_kind;
-  delete out.icon_attachment_id;
-  return out as Omit<T, CompactVisualFieldKeys>;
 }

@@ -340,10 +340,11 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         const defaultView = versionType!.views.find((v) => v.name === 'Работы версии');
         assert.equal(defaultView?.is_default, true);
 
-        // Тип «задача» — без отборов.
+        // Тип «задача» — без отборов: пустой `views` единый compact-сериализатор
+        // не пишет вовсе (задача 6ee904ad).
         const taskType = data.thought_types!.find((t) => t.name === 'задача');
         assert.ok(taskType, 'тип «задача» должен быть в каталоге');
-        assert.deepEqual(taskType!.views, []);
+        assert.equal('views' in taskType!, false, 'пустой views не сериализуется');
       } finally {
         await handle.close();
       }
@@ -595,7 +596,8 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         });
         const data = toolJson<TypesListResponse>(listRes);
         const versionType = data.thought_types!.find((t) => t.name === 'версия');
-        assert.equal(versionType!.views.length, 0);
+        // Отбор удалён — пустой `views` не сериализуется (задача 6ee904ad).
+        assert.equal(versionType !== undefined && 'views' in versionType, false);
       } finally {
         await handle.close();
       }
