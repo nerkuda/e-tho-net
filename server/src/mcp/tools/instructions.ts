@@ -8,9 +8,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
 import { Instructions } from '../../contracts.js';
-import { EtnError, INSTRUCTIONS_PREVIEW_CHARS, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
-import { projectThoughtRows } from '../projection.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
 
 export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
@@ -68,12 +67,9 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
           network.type_roles.instructions ?? null,
           args.network_id,
           {
-            // MCP-витрина — модель скиллов: без `keywords` только корневые
-            // инструкции, превью постоянного комментария 300 символов
-            // (требование «Перечень etn.instructions отдаёт только корневые
-            // инструкции»). REST-фасад этих опций не передаёт.
-            rootsOnly: true,
-            previewChars: INSTRUCTIONS_PREVIEW_CHARS,
+            // Нормы перечня (только корневые инструкции, превью 300) — дефолты
+            // доменного сервиса, общие для MCP-витрины и REST-фасада
+            // (задача 65cf6074). Здесь остаются только параметры выбора режима.
             ...(args.instruction_id !== undefined
               ? { instructionId: args.instruction_id }
               : {}),
@@ -82,17 +78,9 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
             ...(args.offset !== undefined ? { offset: args.offset } : {}),
           },
         );
-        // Списочный режим — записи через единый сериализатор (projection.ts):
-        // визуальные/сервисные поля и пустые `synonyms` не пишутся. Точечный
-        // режим (`instruction_id`) отдаёт полное тело комментария и остаётся
-        // как есть.
-        if ('instructions' in result) {
-          return {
-            network_id: args.network_id,
-            ...result,
-            instructions: projectThoughtRows(result.instructions),
-          };
-        }
+        // Списочный режим собирает записи через общий сериализатор домена
+        // (response-projection.ts) — в самом `getNetworkInstructions`. Точечный
+        // режим (`instruction_id`) отдаёт полное тело комментария как есть.
         return { network_id: args.network_id, ...result };
       }),
   );

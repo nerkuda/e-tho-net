@@ -14,6 +14,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import { INSTRUCTIONS_PREVIEW_CHARS } from '@etn/shared';
+
 import {
   authHeaders,
   buildRestContext,
@@ -81,6 +83,18 @@ function setPermanent(ctx: RestTestContext, thoughtId: string, body: string): vo
     { kind: 'permanent', body_md: body },
     ctx.adminId,
   );
+}
+
+/** Нетипизированная структурная связь «родитель → потомок» (как в guard-MCP). */
+function linkParent(ctx: RestTestContext, parentId: string, childId: string): void {
+  const now = new Date().toISOString();
+  ctx.ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion,
+                          color, style, width, version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, NULL, 1, 0, NULL, NULL, NULL, 1, ?, ?, ?, ?)`,
+    )
+    .run(randomUUID(), parentId, childId, now, now, ctx.adminId, ctx.adminId);
 }
 
 describe('GET /networks/:id/instructions (REST-аналог etn.instructions)', { skip: !nativeAvailable() }, () => {
@@ -212,6 +226,64 @@ describe('GET /networks/:id/instructions (REST-аналог etn.instructions)', 
         headers: authHeaders(ctx),
       });
       assert.equal(res.statusCode, 404);
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  // Норма 825800fc для REST (задача 65cf6074): перечень без keywords — только
+  // корневые инструкции (модель скиллов), превью постоянного комментария ≤ 300;
+  // под-инструкция достижима поиском по keywords.
+  it('перечень — только корневые, превью ≤ 300; под-инструкция — через keywords', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const instructionsTypeId = makeThoughtType(ctx, 'Инструкция');
+      const patch = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/networks/${ctx.networkId}`,
+        headers: authHeaders(ctx),
+        payload: { type_roles: { instructions: instructionsTypeId } },
+      });
+      assert.equal(patch.statusCode, 200);
+
+      const root = makeThought(ctx, 'Корневая инструкция', instructionsTypeId);
+      setPermanent(ctx, root, 'К'.repeat(INSTRUCTIONS_PREVIEW_CHARS + 200));
+      const flatRoot = makeThought(ctx, 'Плоская инструкция', instructionsTypeId);
+      setPermanent(ctx, flatRoot, 'Коротко.');
+      const nested = makeThought(ctx, 'Под-инструкция', instructionsTypeId);
+      setPermanent(ctx, nested, 'Вложенная.');
+      linkParent(ctx, root, nested);
+
+      const list = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/networks/${ctx.networkId}/instructions`,
+        headers: authHeaders(ctx),
+      });
+      assert.equal(list.statusCode, 200);
+      const listBody = list.json().data;
+      const titles = listBody.instructions.map((i: { title: string }) => i.title).sort();
+      assert.deepEqual(titles, ['Корневая инструкция', 'Плоская инструкция']);
+      assert.equal(listBody.meta.total, 2);
+      const rootRow = listBody.instructions.find(
+        (i: { title: string }) => i.title === 'Корневая инструкция',
+      );
+      assert.equal(rootRow.preview.chars_returned, INSTRUCTIONS_PREVIEW_CHARS);
+      assert.equal(rootRow.preview.truncated, true);
+      assert.equal(rootRow.preview.body_md.length, INSTRUCTIONS_PREVIEW_CHARS);
+
+      const byKeywords = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/networks/${ctx.networkId}/instructions?keywords=инструкц`,
+        headers: authHeaders(ctx),
+      });
+      assert.equal(byKeywords.statusCode, 200);
+      // keywords ищет по всем, включая подчинённые (модель скиллов).
+      assert.ok(
+        byKeywords
+          .json()
+          .data.instructions.some((i: { id: string }) => i.id === nested),
+        'под-инструкция обязана находиться поиском по keywords',
+      );
     } finally {
       await closeRestContext(ctx);
     }

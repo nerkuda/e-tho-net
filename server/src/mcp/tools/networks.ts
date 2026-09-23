@@ -17,7 +17,7 @@ import { emitDomainEvent } from '../../realtime/emit.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
-import { projectTypeRow, projectTypeRows, stripStructuralLinkProperties } from '../projection.js';
+import { projectTypeRow, projectTypeRows, stripStructuralLinkProperties } from '../../domain/response-projection.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { assertNetworkAccess, auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { updateNetwork } from '../../domain/network-write-service.js';

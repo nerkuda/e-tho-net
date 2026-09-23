@@ -19,7 +19,7 @@ import {
   STRUCTURAL_PROPERTIES_NOTE,
   projectTypeRows,
   stripPropertyBindingServiceFields,
-} from '../projection.js';
+} from '../../domain/response-projection.js';
 import { listThoughtTypes } from '../../domain/thought-type-service.js';
 import { listLinkTypes } from '../../domain/link-type-service.js';
 import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';

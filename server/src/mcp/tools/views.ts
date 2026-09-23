@@ -11,7 +11,7 @@ import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ViewsRun } from '../../contracts.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
-import { projectThoughtRows } from '../projection.js';
+import { projectThoughtRows } from '../../domain/response-projection.js';
 import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
 

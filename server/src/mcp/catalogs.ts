@@ -124,8 +124,8 @@ export function toCardThoughtType(type: ThoughtTypeRef | null): CardThoughtTypeR
  * recognise a node, and keeps the service fields (`version`, authorship) —
  * the point read preserves the full projection.
  *
- * Списочные ответы идут через `projection.ts` (`projectThoughtRow`), где
- * сервисные поля снимаются; точечный `get` остаётся полным.
+ * Списочные ответы идут через `response-projection.ts` (`projectThoughtRow`),
+ * где сервисные поля снимаются; точечный `get` остаётся полным.
  */
 export function toCompactThought(thought: Thought): CompactThought {
   return {

@@ -21,10 +21,11 @@
  * Читается из переданного `ndb` — фасад решает, какой контекст слоя открыть.
  */
 
-import { COMMENT_PREVIEW_CHARS, EtnError, buildLikePattern, parseFilterKeywords } from '@etn/shared';
+import { EtnError, INSTRUCTIONS_PREVIEW_CHARS, buildLikePattern, parseFilterKeywords } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
+import { projectThoughtRows } from './response-projection.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /** Превью постоянного комментария (как в `meta.permanent` выборок). */
@@ -75,16 +76,18 @@ export interface NetworkInstructionsQuery {
   /**
    * Режим без `keywords`: отдавать только корневые инструкции (мысль типа
    * «инструкция», у которой среди родителей нет другой инструкции) — модель
-   * скиллов витрины `etn.instructions` (требование «Перечень etn.instructions
-   * отдаёт только корневые инструкции»). По умолчанию `false` — REST-фасад
-   * `GET /networks/:id/instructions` сохраняет прежнее поведение (все
-   * инструкции); MCP-витрина передаёт `true`.
+   * скиллов витрины (требование «Перечень etn.instructions отдаёт только
+   * корневые инструкции»). По умолчанию `true`: норма действует одинаково для
+   * обоих фасадов — MCP-витрины `etn.instructions` и REST
+   * `GET /networks/:id/instructions` (задача 65cf6074). Режим `keywords`
+   * фильтр не применяет — он ищет по всем инструкциям, включая подчинённые.
    */
   rootsOnly?: boolean;
   /**
    * Предел превью постоянного комментария в перечне (символы). По умолчанию
-   * {@link COMMENT_PREVIEW_CHARS}; MCP-витрина ужимает до
-   * {@link INSTRUCTIONS_PREVIEW_CHARS}.
+   * {@link INSTRUCTIONS_PREVIEW_CHARS} — агенту в перечне хватает блока
+   * «Когда применять», полный текст читается режимом `instruction_id`/
+   * `etn.comments.get`. Общая норма обоих фасадов (задача 65cf6074).
    */
   previewChars?: number;
 }
@@ -208,9 +211,10 @@ function fetchInstructionsList(
     id: row.id,
     title: row.title,
     synonyms: synonymsById.get(row.id) ?? [],
-    // Превью — короткая подстрока постоянного комментария (MCP-витрина —
-    // 300 символов, «Когда применять»); полный текст — по `instruction_id`
-    // либо через `etn.comments.get`.
+    // Превью — короткая подстрока постоянного комментария (по умолчанию
+    // 300 символов, блок «Когда применять»); полный текст — по `instruction_id`
+    // либо через `etn.comments.get`. Предел — общая норма обоих фасадов
+    // (задача 65cf6074).
     preview: getPermanentPreview(ndb, 'thought', row.id, previewChars),
     type_id: row.type_id,
   }));
@@ -295,10 +299,10 @@ export function getNetworkInstructions(
   const keywords = query.keywords;
   // Режим без ключевых слов — только корневые инструкции (модель скиллов,
   // требование «Перечень etn.instructions отдаёт только корневые инструкции»).
-  // `keywords` ищет по всем, включая подчинённые. Включается опцией
-  // `rootsOnly` — REST-фасад её не передаёт и сохраняет прежнее поведение.
-  const rootsOnly = query.rootsOnly === true && keywords === undefined;
-  const previewChars = query.previewChars ?? COMMENT_PREVIEW_CHARS;
+  // Норма общая для обоих фасадов (задача 65cf6074): по умолчанию — корневые.
+  // `keywords` ищет по всем, включая подчинённые.
+  const rootsOnly = (query.rootsOnly ?? true) && keywords === undefined;
+  const previewChars = query.previewChars ?? INSTRUCTIONS_PREVIEW_CHARS;
 
   const keyword = keywordClauseFor(keywords);
   const placeholders = instructionsTypeIds.map(() => '?').join(',');
@@ -324,7 +328,11 @@ export function getNetworkInstructions(
   );
   return {
     has_instructions: true,
-    instructions,
+    // Записи перечня проходят через общий сериализатор домена
+    // (response-projection.ts): пустые контейнеры (например, `synonyms: []`)
+    // не пишутся, визуальные/сервисные поля снимаются. Одна точка и для MCP,
+    // и для REST (задача 65cf6074).
+    instructions: projectThoughtRows(instructions),
     meta: { total: totalRow.c, matched: keywords !== undefined ? totalRow.c : undefined },
   };
 }

@@ -16,7 +16,7 @@ import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { TrashList, TrashPurge } from '../../contracts.js';
 import { withSanitizedIcon } from '../catalogs.js';
-import { projectLinkRow, projectThoughtRows } from '../projection.js';
+import { projectLinkRow, projectThoughtRows } from '../../domain/response-projection.js';
 import {
   mcpWriteFx,
   openMemberNetwork,

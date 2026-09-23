@@ -31,7 +31,7 @@ import {
   projectLinkRow,
   projectThoughtRows,
   stripStructuralLinkProperties,
-} from '../projection.js';
+} from '../../domain/response-projection.js';
 import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';

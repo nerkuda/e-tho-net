@@ -46,7 +46,7 @@ import {
   PROPERTY_BINDING_SERVICE_FIELDS,
   STRUCTURAL_PROPERTIES_NOTE,
   isEmptyContainer,
-} from '../src/mcp/projection.js';
+} from '../src/domain/response-projection.js';
 import {
   buildMcpContext,
   closeMcpContext,
