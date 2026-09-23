@@ -242,14 +242,16 @@ export function filterEntityOptions(
 // ---------------------------------------------------------------------------
 
 /**
- * Кнопка-переключатель режима «по всем сетям» для строки поиска диалога
- * (модального `pickEntitiesModal`). Иконка отражает текущее состояние; клик
- * переключает и сохраняет в `cross-network-scope.ts`. Подписка на изменение
- * из других мест обновляет aria-pressed. Текущее состояние читается
- * реактивно через {@link isCrossNetworkScopeEnabled} в местах потребления.
+ * Кнопка-переключатель режима «по всем сетям» для строки поиска диалога выбора
+ * мысли. ЕДИНЫЙ компонент всех таких диалогов (ошибка f098b45e): иконка сети
+ * плюс ВИДИМАЯ подпись «все сети» — иконка 14px без подписи не читалась как
+ * переключатель охвата. Состояние отражает `aria-pressed`, клик переключает и
+ * сохраняет в `cross-network-scope.ts`; подписка на изменение из других мест
+ * обновляет атрибуты. Текущее состояние читается реактивно через
+ * {@link isCrossNetworkScopeEnabled} в местах потребления.
  */
-function makeCrossNetworkScopeToggle(): HTMLButtonElement {
-  const btn = el('button', 'icon-btn cross-network-toggle') as HTMLButtonElement;
+export function makeCrossNetworkScopeToggle(): HTMLButtonElement {
+  const btn = el('button', 'cross-network-toggle') as HTMLButtonElement;
   btn.type = 'button';
   const refresh = (enabled: boolean): void => {
     btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
@@ -262,7 +264,7 @@ function makeCrossNetworkScopeToggle(): HTMLButtonElement {
     );
   };
   refresh(loadCrossNetworkScope());
-  btn.append(svgIcon('network', 14));
+  btn.append(svgIcon('network', 14), span('все сети', 'cross-network-toggle-label'));
   btn.addEventListener('click', () => {
     saveCrossNetworkScope(!loadCrossNetworkScope());
   });
@@ -276,7 +278,7 @@ function makeCrossNetworkScopeToggle(): HTMLButtonElement {
  * если её нет в списке). Используется как `SuggestSource.load` пикера при
  * включённом переключателе «по всем сетям».
  */
-async function loadCrossNetworkCandidates(
+export async function loadCrossNetworkCandidates(
   networkId: string,
   query: string,
   typeIds: readonly string[],

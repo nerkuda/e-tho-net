@@ -49,6 +49,12 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
 /** Duplicate-search calls received by the fake `window.etn`. */
 const dupQueries: Array<{ title: string; synonyms: string[] }> = [];
 
+/** Кросс-сетевые поисковые вызовы (`findDuplicatesAcrossNetworks`). */
+const crossQueries: Array<{ title: string; networkIds: string[] }> = [];
+
+/** localStorage-шим: переключатель «по всем сетям» живёт в localStorage. */
+const storageMap = new Map<string, string>();
+
 /** Слушатели `window` — каркас диалога вешает сюда Esc и Ctrl+Enter. */
 const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
 
@@ -58,6 +64,11 @@ function pressEscape(): void {
   for (const { type, listener } of [...windowListeners]) {
     if (type === 'keydown') listener(event);
   }
+}
+
+/** Включить/выключить состояние переключателя охвата (localStorage-шим). */
+function setCrossNetworkScope(enabled: boolean): void {
+  storageMap.set('etn.crossNetworkScope', enabled ? '1' : '0');
 }
 
 /**
@@ -71,6 +82,15 @@ function installShim(): void {
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: new ShimElement('html'),
     body: new ShimElement('body'),
+  };
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => storageMap.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storageMap.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storageMap.delete(key);
+    },
   };
   (globalThis as any).window = {
     innerWidth: 1200,
@@ -93,6 +113,17 @@ function installShim(): void {
           dupQueries.push({ title, synonyms });
           return [];
         },
+        findDuplicatesAcrossNetworks: async (
+          _networkId: string,
+          networkIds: string[],
+          title: string,
+        ) => {
+          crossQueries.push({ title, networkIds });
+          return { hits: [], networks: { networks: [] } };
+        },
+      },
+      networks: {
+        list: async () => [{ id: 'n1' }, { id: 'n2' }],
       },
       ui: {
         setState: async () => undefined,
@@ -123,6 +154,8 @@ interface DialogHandle {
   titleText: () => string;
   /** Queued list row titles (empty when the list holds only its header). */
   lineTitles: () => string[];
+  /** Тело диалога — для поиска переключателя «по всем сетям». */
+  formStack: ShimElement;
 }
 
 /** Opens the dialog with the given options and returns accessors to its DOM. */
@@ -139,7 +172,7 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
   const modeRow = formStack.children.find((c) => c.className === 'add-mode-row');
   const singleRadio = modeRow?.children[0]?.children[0] ?? new ShimElement('input');
   const multiRadio = modeRow?.children[1]?.children[0] ?? new ShimElement('input');
-  const input = formStack.children.find((c) => c.tagName === 'textarea') ?? new ShimElement('textarea');
+  const input = formStack.querySelector('textarea') ?? new ShimElement('textarea');
   const lineList =
     formStack.children.find((c) => c.className.split(/\s+/).includes('add-list')) ?? new ShimElement('div');
   const footer = box.children.find((c) => c.className === 'dialog-footer');
@@ -151,7 +184,7 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
       .filter((row) => row.className === 'add-list-item')
       .map((row) => row.children.find((c) => c.className === 'al-title')?.textContent ?? '');
   const titleText = (): string => box.querySelector('.dialog-title')?.textContent ?? '';
-  return { promise, singleRadio, multiRadio, input, lineList, primaryBtn, cancelBtn, titleText, lineTitles };
+  return { promise, singleRadio, multiRadio, input, lineList, primaryBtn, cancelBtn, titleText, lineTitles, formStack };
 }
 
 /** Ticks the microtask queue so the async duplicate search settles. */
@@ -349,6 +382,56 @@ describe('pickThoughtsDialog prefillText (карточка ETN 34ffbd75, при�
     ui.input.value = 'Имя';
     ui.input.emit('keydown', key('Enter'));
     assert.deepEqual(ui.lineTitles(), ['Имя'], 'the prefilled name can be queued in multi mode');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Переключатель «по всем сетям» в диалоге добавления/выбора мысли
+// (ошибка f098b45e, требование 79755f76)
+// ---------------------------------------------------------------------------
+
+describe('pickThoughtsDialog: переключатель «по всем сетям» (ошибка f098b45e)', () => {
+  it('переключатель присутствует в диалоге и несёт видимую подпись «все сети»', async () => {
+    const ui = await openDialog();
+    const toggle = ui.formStack.querySelector('.cross-network-toggle');
+    assert.ok(toggle !== null, 'тогл смонтирован в теле диалога');
+    assert.equal(toggle!.flatText(), 'все сети', 'подпись видима, а не только title');
+    assert.equal(toggle!.getAttribute('aria-pressed'), 'false', 'умолчание — выключен');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+
+  it('включённый тогл направляет живой поиск кандидатов в веер по всем сетям', async () => {
+    dupQueries.length = 0;
+    crossQueries.length = 0;
+    setCrossNetworkScope(true);
+    try {
+      const ui = await openDialog();
+      ui.input.value = 'Кандидат';
+      ui.input.emit('input');
+      await settle();
+      assert.equal(crossQueries.length, 1, 'поиск ушёл в веерный источник');
+      assert.deepEqual(crossQueries[0]?.networkIds, ['n1', 'n2'], 'веер — все сети пользователя');
+      assert.equal(dupQueries.length, 0, 'одиночный поиск не вызывался');
+      ui.cancelBtn.click();
+      assert.equal(await ui.promise, null);
+    } finally {
+      setCrossNetworkScope(false);
+    }
+  });
+
+  it('выключенный тогл ищет только в текущей сети', async () => {
+    dupQueries.length = 0;
+    crossQueries.length = 0;
+    setCrossNetworkScope(false);
+    const ui = await openDialog();
+    ui.input.value = 'Кандидат';
+    ui.input.emit('input');
+    await settle();
+    assert.equal(dupQueries.length, 1, 'поиск по текущей сети');
+    assert.equal(crossQueries.length, 0, 'веерный источник не задействован');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
   });

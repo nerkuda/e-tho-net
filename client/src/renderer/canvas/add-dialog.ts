@@ -42,7 +42,8 @@ import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
-import { buildEntityCombo } from '../lib/entity-picker.js';
+import { buildEntityCombo, loadCrossNetworkCandidates, makeCrossNetworkScopeToggle } from '../lib/entity-picker.js';
+import { isCrossNetworkScopeEnabled } from '../lib/cross-network-scope.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
@@ -369,7 +370,14 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         : 'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.';
     const hintLine = el('p', 'muted', hint);
     hintLine.style.margin = '0';
-    body.append(modeRow, input, hintLine, candidates, lineList, errorLine);
+    // Ошибка f098b45e, требование 79755f76: переключатель «по всем сетям» —
+    // единый компонент диалогов выбора мысли (`makeCrossNetworkScopeToggle`).
+    // Включённый режим расширяет живой поиск кандидатов и проверку дублей на
+    // все сети пользователя; создание новых мыслей всегда идёт в ТЕКУЩУЮ сеть.
+    const crossScopeToggle = makeCrossNetworkScopeToggle();
+    const searchRow = div('add-search-row');
+    searchRow.append(input, crossScopeToggle);
+    body.append(modeRow, searchRow, hintLine, candidates, lineList, errorLine);
 
     let timer: number | null = null;
     let lastCandidates: DuplicateHit[] = [];
@@ -419,12 +427,18 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           }
           const parsed = parseTitleWithSynonyms(raw);
           try {
-            const hits = await etn.thoughts.findDuplicates(
-              networkId,
-              parsed.title,
-              parsed.synonyms,
-              searchFilter,
-            );
+            // Ошибка f098b45e: при включённом переключателе «по всем сетям»
+            // живой поиск кандидатов и проверка дублей идут веером по всем
+            // сетям пользователя (единый источник — `loadCrossNetworkCandidates`
+            // общего пикера). Создание новых мыслей это не затрагивает.
+            const hits = isCrossNetworkScopeEnabled()
+              ? await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter)
+              : await etn.thoughts.findDuplicates(
+                  networkId,
+                  parsed.title,
+                  parsed.synonyms,
+                  searchFilter,
+                );
             lastCandidates = hits.filter((hit) => hit.id !== anchorId);
             renderCandidates(lastCandidates);
           } catch (err) {
