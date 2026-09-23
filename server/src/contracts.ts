@@ -1260,6 +1260,26 @@ export const OntologyWrite = defineContract(
   {},
 );
 
+/**
+ * `etn.ontology.delete` — удаление одной сущности онтологии (задача cc9ca65e,
+ * 0.7.2). В 0.8.3 инструмент снят из постоянного набора (задача d379e091) и
+ * исполняется действием `ontology.delete` через `etn.ops` с обязательным
+ * ВЕРХНЕУРОВНЕВЫМ `confirm: true`; здесь `params`-схема без `confirm`.
+ * Схема перенесена сюда из `tools/ontology.ts`, чтобы реестр `ops-catalog`
+ * валидировал `params` той же схемой (семантика ошибок не меняется).
+ */
+export const OntologyDelete = defineContract(
+  'etn.ontology.delete',
+  z.object({
+    network_id: NetworkId,
+    // `type_view` (задача c1fa71d4, 0.7.3) — отбор типа мысли.
+    kind: z.enum(['thought_type', 'link_type', 'property', 'type_property', 'type_view']),
+    id: z.string().min(1),
+    force: z.boolean().optional(),
+  }),
+  {},
+);
+
 // ===========================================================================
 // Область: перенос и импорт (tools/transfer.ts)
 // ===========================================================================

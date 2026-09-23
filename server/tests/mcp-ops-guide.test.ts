@@ -14,9 +14,15 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import { BASE_LAYER_ID, formatCrossNetworkAddress } from '@etn/shared';
+
 import { OPS_ACTION_NAMES } from '../src/mcp/tools/ops-catalog.js';
+import { NetworkServiceImpl } from '../src/domain/network-service.js';
+import { createLogger } from '../src/logger.js';
+import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import {
   callOp,
   buildMcpContext,
@@ -358,6 +364,157 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         await handle.close();
       }
     } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.ops: допакованные действия d379e091 (trash / links.restore / properties.resolve / ontology.delete)', async () => {
+    const ctx = await buildMcpContext();
+    let net2Id: string | null = null;
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      const c = handle.client;
+      const net = ctx.networkId;
+      try {
+        // ---- thoughts.trash: в корзину и обратно (обратимо, без confirm) ----
+        const thought = await createThoughtViaWrite(c, net, {
+          title: 'Корзина через ops',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+        });
+        assert.equal(
+          (
+            await callOp(c, 'thoughts.trash', {
+              network_id: net,
+              thought_id: thought.id,
+              trashed: true,
+            })
+          ).isError,
+          undefined,
+        );
+        const trash = toolJson<{ thoughts: Array<{ id: string }> }>(
+          await callOp(c, 'trash.list', { network_id: net }),
+        );
+        assert.ok(trash.thoughts.some((t) => t.id === thought.id), 'мысль должна быть в корзине');
+        assert.equal(
+          (
+            await callOp(c, 'thoughts.trash', {
+              network_id: net,
+              thought_id: thought.id,
+              trashed: false,
+            })
+          ).isError,
+          undefined,
+        );
+
+        // ---- links.restore: связь-свойство в корзину и обратно ----
+        const source = await createThoughtViaWrite(c, net, { title: 'Источник связи' });
+        const target = await createThoughtViaWrite(c, net, { title: 'Цель связи' });
+        const linkId = toolJson<{ link_id: string }>(
+          await c.callTool({
+            name: 'etn.properties.add',
+            arguments: {
+              network_id: net,
+              owner_type: 'thought',
+              owner_id: source.id,
+              key: 'Потомки',
+              value: target.id,
+            },
+          }),
+        ).link_id;
+        await callOp(c, 'properties.remove', {
+          network_id: net,
+          owner_type: 'thought',
+          owner_id: source.id,
+          key: 'Потомки',
+          value: target.id,
+        });
+        assert.equal(
+          (await callOp(c, 'links.restore', { network_id: net, link_id: linkId })).isError,
+          undefined,
+        );
+
+        // ---- properties.resolve: служебный резолв cross_network_ref ----
+        // Целевая мысль — во ВТОРОЙ сети. Значение-адрес готовим прямой
+        // записью в БД: путь записи через `etn.thoughts.write` сломан отдельным
+        // дефектом (ошибка 052c84b2 — `storageColumn` даёт несуществующую
+        // колонку `value_cross_network_ref`), а здесь проверяется именно
+        // действие `properties.resolve` над уже сохранённым значением.
+        const net2 = await new NetworkServiceImpl(ctx.sys, ctx.dataDir, createLogger('silent')).createNetwork(
+          ctx.adminId,
+          'Вторая сеть (resolve)',
+        );
+        net2Id = net2.id;
+        const targetIn2 = await createThoughtViaWrite(c, net2.id, { title: 'Цель во второй сети' });
+        const holder = await createThoughtViaWrite(c, net, { title: 'Владелец ссылки' });
+
+        const ndb = openNetworkDb(ctx.dataDir, net);
+        const now = new Date().toISOString();
+        const propId = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO properties (id, layer_id, deleted, base_version, name, name_key, value_type, config, description, created_at, updated_at)
+             VALUES (?, ?, 0, 0, ?, ?, 'cross_network_ref', NULL, NULL, ?, ?)`,
+          )
+          .run(propId, BASE_LAYER_ID, 'кросс-ссылка', 'кросс-ссылка', now, now);
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_text, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+             VALUES (?, ?, 'thought', ?, ?, ?, ?, ?, ?, 0, 0)`,
+          )
+          .run(
+            randomUUID(),
+            BASE_LAYER_ID,
+            holder.id,
+            propId,
+            formatCrossNetworkAddress(net2.id, targetIn2.id),
+            now,
+            ctx.adminId,
+            ctx.adminId,
+          );
+
+        const resolvedRaw = await callOp(c, 'properties.resolve', {
+          network_id: net,
+          owner_type: 'thought',
+          owner_id: holder.id,
+          key: 'кросс-ссылка',
+        });
+        const resolved = toolJson<{ values: Array<{ title_snapshot: string; unresolved: boolean }> }>(
+          resolvedRaw,
+        );
+        assert.equal(resolved.values.length, 1, 'резолв должен вернуть одно значение');
+        assert.equal(resolved.values[0]!.unresolved, false, toolText(resolvedRaw));
+        assert.equal(resolved.values[0]!.title_snapshot, 'Цель во второй сети');
+
+        // ---- ontology.delete: confirm-отказ и успех с confirm ----
+        const typeToDelete = toolJson<{ thought_types: Array<{ id: string }> }>(
+          await c.callTool({
+            name: 'etn.ontology.write',
+            arguments: { network_id: net, thought_types: [{ ref: 'dt', name: 'DeleteMeType' }] },
+          }),
+        ).thought_types[0]!;
+
+        const refused = await callOp(c, 'ontology.delete', {
+          network_id: net,
+          kind: 'thought_type',
+          id: typeToDelete.id,
+        });
+        assert.equal(refused.isError, true, 'деструктив без confirm должен быть отвергнут');
+        assert.match(toolText(refused), /VALIDATION_ERROR/);
+        assert.match(toolText(refused), /confirm/);
+
+        const deleted = await callOp(
+          c,
+          'ontology.delete',
+          { network_id: net, kind: 'thought_type', id: typeToDelete.id },
+          true,
+        );
+        assert.equal(deleted.isError, undefined, toolText(deleted));
+        assert.equal(toolJson<{ deleted: boolean }>(deleted).deleted, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      if (net2Id !== null) closeNetworkDb(net2Id);
       await closeMcpContext(ctx);
     }
   });

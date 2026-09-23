@@ -142,6 +142,27 @@ const MCP_WRITE_VIEW_COVERAGE: readonly McpWriteViewEntry[] = [
         'mcp-view-coverage.test.ts::etn.import.subgraph: каждое значение collision_policy отрабатывает свою ветку',
     },
   },
+  {
+    // 0.8.3 (задача d379e091): схема `etn.ontology.delete` переехала из
+    // `tools/ontology.ts` в `contracts.ts`, поэтому контракт стал виден сторожу
+    // (раньше регистрировался лениво при сборке инструментов). Все пять
+    // значений `kind` покрыты: `thought_type`/`type_view` — прежними тестами,
+    // `link_type`/`property`/`type_property` — добавленными в
+    // `mcp-ontology-write.test.ts`.
+    tool: 'etn.ontology.delete',
+    field: 'kind',
+    tests: {
+      thought_type:
+        'mcp-ontology-write.test.ts::etn.ontology.delete with force removes the type and clears thoughts.type_id (HOME untouched)',
+      link_type:
+        'mcp-ontology-write.test.ts::etn.ontology.delete { kind: link_type, force } каскадит связи типа',
+      property:
+        'mcp-ontology-write.test.ts::etn.ontology.delete { kind: property, force } удаляет свойство и его значения',
+      type_property:
+        'mcp-ontology-write.test.ts::etn.ontology.delete { kind: type_property } снимает привязку свойства',
+      type_view: 'mcp-views.test.ts::etn.ontology.delete { kind: type_view } удаляет отбор',
+    },
+  },
 ];
 
 /**

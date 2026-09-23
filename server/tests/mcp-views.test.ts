@@ -573,14 +573,16 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         assert.ok(viewId);
 
         // Удаляем по id.
-        const delRes = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const delRes = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'type_view',
             id: viewId,
           },
-        });
+          true,
+        );
         assert.equal(delRes.isError, undefined, toolText(delRes));
         const delData = toolJson<{ deleted: true; affected_counts: Record<string, number> }>(
           delRes,
@@ -632,15 +634,17 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
           },
         });
 
-        const delRes = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const delRes = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'thought_type',
             id: versionTypeId,
             force: true,
           },
-        });
+          true,
+        );
         assert.equal(delRes.isError, undefined, toolText(delRes));
         const delData = toolJson<{
           affected_counts: { type_views_count?: number };

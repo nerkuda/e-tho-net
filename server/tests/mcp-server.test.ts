@@ -430,15 +430,17 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         assert.equal(get.annotations?.destructiveHint, undefined);
         assert.equal(get.annotations?.idempotentHint, undefined);
 
-        const del = byName.get('etn.ontology.delete')!;
-        assert.equal(del.annotations?.readOnlyHint, undefined);
-        assert.equal(del.annotations?.destructiveHint, true);
+        const del = byName.get('etn.ontology.delete');
+        assert.equal(del, undefined, 'ontology.delete снят в etn.ops (задача d379e091)');
 
-        const trash = byName.get('etn.thoughts.trash')!;
-        assert.equal(trash.annotations?.idempotentHint, true);
+        const trash = byName.get('etn.thoughts.trash');
+        assert.equal(trash, undefined, 'thoughts.trash снят в etn.ops (задача d379e091)');
 
-        const restore = byName.get('etn.links.restore')!;
-        assert.equal(restore.annotations?.idempotentHint, true);
+        const restore = byName.get('etn.links.restore');
+        assert.equal(restore, undefined, 'links.restore снят в etn.ops (задача d379e091)');
+
+        const propResolve = byName.get('etn.properties.resolve');
+        assert.equal(propResolve, undefined, 'properties.resolve снят в etn.ops (задача d379e091)');
 
         const propAdd = byName.get('etn.properties.add')!;
         assert.equal(propAdd.annotations?.idempotentHint, true);
@@ -495,10 +497,14 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // поэтому витрина сокращена. Аннотированы 27 из 29 инструментов
         // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
         // исторически без аннотации): 17 readOnly, 1 destructive, 7 idempotent.
-        assert.equal(annotated, 27);
+        // 0.8.3 (задача d379e091): ещё 4 инструмента сняты в `etn.ops` —
+        // `ontology.delete` (−1 destructive), `thoughts.trash`/`links.restore`/
+        // `properties.resolve` (−3 idempotent) → 23 из 25: 17 readOnly,
+        // 0 destructive (витрина деструктивных инструментов пуста), 4 idempotent.
+        assert.equal(annotated, 23);
         assert.equal(hintReadOnly, 17);
-        assert.equal(hintDestructive, 1);
-        assert.equal(hintIdempotent, 7);
+        assert.equal(hintDestructive, 0);
+        assert.equal(hintIdempotent, 4);
       } finally {
         await handle.close();
       }

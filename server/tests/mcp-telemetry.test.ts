@@ -366,7 +366,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         });
         const purgeText = purge.messages[0]?.content;
         assert.ok(purgeText !== undefined && purgeText.type === 'text');
-        assert.match(purgeText.text, /etn\.trash\.purge/);
+        assert.match(purgeText.text, /trash\.purge/);
         assert.match(purgeText.text, /blocking/i);
       } finally {
         await handle.close();
@@ -484,11 +484,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         // 0.8.3 (задача 86ef2ff4): редкие операции упакованы в `etn.guide` +
         // `etn.ops`; замер до/после — в хронике задачи. Было 66 инструментов /
-        // 80 535 Б (commit cf1b54f), стало 29 / 48 978 Б. Бюджет фиксирует
-        // достигнутое сокращение и не даёт описаниям расползтись обратно.
+        // 80 535 Б (commit cf1b54f), стало 29 / 48 978 Б.
+        // 0.8.3 (задача d379e091): ещё 4 низкочастотных инструмента
+        // (`thoughts.trash`, `links.restore`, `properties.resolve`,
+        // `ontology.delete`) сняты тем же способом → 25 / 45 004 Б. Бюджет
+        // фиксирует достигнутое сокращение и не даёт описаниям расползтись
+        // обратно.
         assert.ok(
-          bytes <= 52_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 52000`,
+          bytes <= 46_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 46000`,
         );
       } finally {
         await handle.close();

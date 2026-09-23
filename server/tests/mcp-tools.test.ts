@@ -3790,9 +3790,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
                WHERE id = ?`,
             )
             .run('#112233', created.id);
-          await handle.client.callTool({
-            name: 'etn.thoughts.trash',
-            arguments: { network_id: ctx.networkId, thought_id: created.id, trashed: true },
+          await callOp(handle.client, 'thoughts.trash', {
+            network_id: ctx.networkId,
+            thought_id: created.id,
+            trashed: true,
           });
 
           const res = toolJson<{ thoughts: Array<Record<string, unknown>> }>(

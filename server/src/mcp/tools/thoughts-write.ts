@@ -15,14 +15,9 @@ import type { McpRuntime } from '../context.js';
 import type { NetworkDb } from '../../db/network-db.js';
 import {
   BULK_UPDATE_OP_VALUES,
-  LinksRestore,
   ThoughtsBulkUpdate,
-  ThoughtsTrash,
 } from '../../contracts.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import type { McpMutationResult } from '@etn/shared';
-import { updateThought } from '../../domain/thought-service.js';
-import { updateLink } from '../../domain/link-service.js';
 import { applyBulkThoughtOp } from '../../domain/thought-bulk-service.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
@@ -141,112 +136,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
   );
   // `etn.thoughts.delete` (0.8.3, задача 86ef2ff4) снят из постоянного набора
   // — упакован в `etn.ops { action: "thoughts.delete" }` (tools/ops.ts).
-  mcp.registerTool(
-    'etn.thoughts.trash',
-    {
-      title: 'Поместить мысль в корзину / вернуть',
-      description:
-        'Mark a thought for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
-        'Does NOT run the blocking check — that only applies to the physical `etn.thoughts.delete`. ' +
-        'Returns { id, version }. See prompt etn.how_to_purge.',
-      inputSchema: ThoughtsTrash.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.trash'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const thought = runWrite(ndb, fx, () => {
-          const updated = updateThought(
-            ndb,
-            args.thought_id,
-            { marked_for_deletion: args.trashed },
-            undefined,
-            rt.deps.auth.userId,
-          );
-          return {
-            result: updated,
-            events: [
-              {
-                type: 'thought.updated',
-                data: {
-                  id: updated.id,
-                  changes: { marked_for_deletion: args.trashed },
-                  version: updated.version,
-                },
-              },
-            ],
-            activity: [
-              { kind: 'thought', action: args.trashed ? 'trashed' : 'restored', thought: updated },
-            ],
-            audit: {
-              action: 'etn.thoughts.trash',
-              targetType: 'thought',
-              targetId: updated.id,
-              details: { trashed: args.trashed },
-            },
-          };
-        });
-        return {
-          id: thought.id,
-          version: thought.version,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
-  mcp.registerTool(
-    'etn.links.restore',
-    {
-      title: 'Восстановить связь из корзины',
-      description:
-        'Restore a link from the trash (`trashed: false`). The only remaining operation of the former ' +
-        '`etn.links.*` family — creation and deletion moved to property operations. ' +
-        'Returns { id, version }.',
-      inputSchema: LinksRestore.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.links.restore'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        const link = runWrite(ndb, fx, () => {
-          const updated = updateLink(
-            ndb,
-            args.link_id,
-            { marked_for_deletion: false },
-            undefined,
-            rt.deps.auth.userId,
-          );
-          return {
-            result: updated,
-            events: [
-              {
-                type: 'link.updated',
-                data: {
-                  id: updated.id,
-                  changes: { marked_for_deletion: false },
-                  version: updated.version,
-                },
-              },
-            ],
-            activity: [{ kind: 'link', action: 'restored', link: updated }],
-            audit: {
-              action: 'etn.links.restore',
-              targetType: 'link',
-              targetId: updated.id,
-              details: {},
-            },
-          };
-        });
-        return {
-          id: link.id,
-          version: link.version,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
+  // `etn.thoughts.trash` и `etn.links.restore` (0.8.3, задача d379e091) —
+  // тоже действия `etn.ops` (`thoughts.trash`, `links.restore`): обратимые
+  // операции корзины, сняты одним мажором без алиасов.
 }

@@ -101,23 +101,17 @@ describe(
           ]);
           assert.equal(updated.items[0]!.thought_action, 'updated');
 
-          const trashed = await handle.client.callTool({
-            name: 'etn.thoughts.trash',
-            arguments: {
-              network_id: ctx.networkId,
-              thought_id: thoughtId,
-              trashed: true,
-            },
+          const trashed = await callOp(handle.client, 'thoughts.trash', {
+            network_id: ctx.networkId,
+            thought_id: thoughtId,
+            trashed: true,
           });
           assert.equal(trashed.isError, undefined, toolText(trashed));
 
-          const restored = await handle.client.callTool({
-            name: 'etn.thoughts.trash',
-            arguments: {
-              network_id: ctx.networkId,
-              thought_id: thoughtId,
-              trashed: false,
-            },
+          const restored = await callOp(handle.client, 'thoughts.trash', {
+            network_id: ctx.networkId,
+            thought_id: thoughtId,
+            trashed: false,
           });
           assert.equal(restored.isError, undefined, toolText(restored));
 
@@ -307,9 +301,9 @@ describe(
               value: targetId,
             });
           assert.equal(removed.isError, undefined, toolText(removed));
-          const restored = await handle.client.callTool({
-            name: 'etn.links.restore',
-            arguments: { network_id: ctx.networkId, link_id: linkId },
+          const restored = await callOp(handle.client, 'links.restore', {
+            network_id: ctx.networkId,
+            link_id: linkId,
           });
           assert.equal(restored.isError, undefined, toolText(restored));
 
@@ -488,9 +482,10 @@ describe(
             title: 'Будет очищен',
           });
           const thoughtId = created.id;
-          const trashed = await handle.client.callTool({
-            name: 'etn.thoughts.trash',
-            arguments: { network_id: ctx.networkId, thought_id: thoughtId, trashed: true },
+          const trashed = await callOp(handle.client, 'thoughts.trash', {
+            network_id: ctx.networkId,
+            thought_id: thoughtId,
+            trashed: true,
           });
           assert.equal(trashed.isError, undefined, toolText(trashed));
 

@@ -27,8 +27,8 @@ import type { Thought, ThoughtRef, ThoughtUsage } from './thought.js';
 
 /** All tool names exposed by the ETN MCP server (05-mcp-server.md §4).
  *
- *  0.8.3 (задача 86ef2ff4, ADR b2eebf8b/8358eea9): состав сокращён — редкие
- *  операции сняты из постоянного набора и доступны через `etn.guide` +
+ *  0.8.3 (задачи 86ef2ff4, d379e091; ADR b2eebf8b/8358eea9): состав сокращён —
+ *  редкие операции сняты из постоянного набора и доступны через `etn.guide` +
  *  `etn.ops` (реестр действий — в `server/src/mcp/tools/ops-catalog.ts`).
  *  Здесь — только инструменты, реально рекламируемые в `tools/list`. */
 export const MCP_TOOL_NAMES = [
@@ -54,18 +54,12 @@ export const MCP_TOOL_NAMES = [
   'etn.activity.list',
   // mutate (§4.2)
   'etn.thoughts.write',
-  'etn.thoughts.trash',
-  'etn.links.restore',
   'etn.comments.update',
   'etn.comments.edit',
   'etn.properties.add',
-  // Кросс-сетевая ссылка (задача 7849008a, спека 46df7a8d): явный резолв
-  // снапшота имени цели; служебная запись (требование c104a0fc).
-  'etn.properties.resolve',
   'etn.layers.select',
   // ontology batch ops (задача cc9ca65e / 0.7.2)
   'etn.ontology.write',
-  'etn.ontology.delete',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -79,16 +73,19 @@ export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
  * - `readOnlyHint` — `true` for every read-only tool (no DB writes, no
  *   events, no audit row). Lets clients grant automatic read access without
  *   manual permission prompts.
- * - `destructiveHint` — `true` for the three delete tools (`thoughts.delete`,
- *   `links.delete`, `comments.delete`). Combined with `readOnlyHint: false`
- *   it tells the agent host that the call needs explicit user approval.
+ * - `destructiveHint` — `true` for tools whose call needs explicit user
+ *   approval (irreversible writes). After 0.8.3 the storefront itself carries
+ *   no such tool — every destructive operation is a `etn.ops` action gated by
+ *   a top-level `confirm: true` (registry `ops-catalog.ts`), where the
+ *   per-action `destructive` flag plays the same role.
  * - `idempotentHint` — `true` for tools whose repeated call with the same
- *   arguments produces the same final state: `thoughts.trash`,
- *   `properties.add`/`remove`, and `thoughts.write` (upsert semantics, O1).
+ *   arguments produces the same final state: `properties.add`,
+ *   `layers.select`, and `thoughts.write` (upsert semantics, O1).
  *
  * All fields are optional on the wire; tools that carry no hints (the
- * remaining mutating tools — `create`/`update`/`links.create`/comments
- * `upsert`+`update`/`attachments.add`+`copy`) are not listed here at all.
+ * remaining mutating tools — `comments.update`/`edit`) are not listed here at
+ * all. `etn.ops` carries no tool-level hints — per-action `readOnly`/
+ * `destructive` live in the `ops-catalog` registry.
  */
 export interface McpToolAnnotations {
   readOnlyHint?: boolean;
@@ -134,17 +131,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },
-  // `etn.ontology.delete` — удаление сущности онтологии; требует `force` для
-  // используемых элементов.
-  'etn.ontology.delete': { destructiveHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
-  'etn.thoughts.trash': { idempotentHint: true },
-  'etn.links.restore': { idempotentHint: true },
   'etn.properties.add': { idempotentHint: true },
-  // Кросс-сетевая ссылка (задача 7849008a): повторный вызов с теми же
-  // аргументами даёт тот же результат (снапшот уже отрезолвлен).
-  'etn.properties.resolve': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
   // `etn.comments.edit` (задача d28abe04) — секционная правка ops-ами;
   // повторный вызов с теми же ops поверх нового состояния меняет результат.

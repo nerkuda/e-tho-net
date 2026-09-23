@@ -23,7 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, validateTypeRoles } from '@etn/shared';
-import type { ExportFormat, LayerMergeReport, McpChangeEntry, McpMutationResult, Network } from '@etn/shared';
+import type { ExportFormat, LayerMergeReport, McpChangeEntry, McpMutationResult, Network, OntologyDeleteParams, OntologyDeleteResult } from '@etn/shared';
 
 import { closeNetworkDb, openNetworkDb } from '../../db/network-db.js';
 import { BRANCHABLE_TABLES } from '../../db/layer-chain.js';
@@ -49,6 +49,7 @@ import {
   LayersDiffDoc,
   LayersMerge,
   LayersUpdate,
+  LinksRestore,
   LocksAcquire,
   LocksClear,
   LocksList,
@@ -58,7 +59,9 @@ import {
   MetricsTools,
   NetworksDelete,
   NetworksWrite,
+  OntologyDelete,
   PropertiesRemove,
+  PropertiesResolve,
   ThoughtsBacklinks,
   ThoughtsCopySubtree,
   ThoughtsDelete,
@@ -66,6 +69,7 @@ import {
   ThoughtsMentions,
   ThoughtsMentionsScan,
   ThoughtsPath,
+  ThoughtsTrash,
   ThoughtsUsageClear,
   TrashList,
   TrashPurge,
@@ -96,8 +100,8 @@ import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../doma
 import { mergeLayer } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
 import { findPath, subgraph } from '../../domain/graph-traversal.js';
-import { getHomeThoughtId, getThoughtOrThrow, resolveThoughts, checkThoughtDeletion, deleteThought } from '../../domain/thought-service.js';
-import { getLink } from '../../domain/link-service.js';
+import { getHomeThoughtId, getThoughtOrThrow, resolveThoughts, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
+import { getLink, updateLink } from '../../domain/link-service.js';
 import { findMentions } from '../../domain/search-service.js';
 import { findBacklinks } from '../../domain/backlinks-service.js';
 import { deleteComment, getComment } from '../../domain/comment-service.js';
@@ -106,7 +110,12 @@ import { importFromBuffer, planImportFromBuffer, readImportSource } from '../../
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../../domain/export-service.js';
 import { clampReadMetricsParams, getColdReads, getTopReads } from '../../domain/read-metrics-service.js';
-import { clearThoughtRefUsages, removeLinkPropertyValue } from '../../domain/property-service.js';
+import { clearThoughtRefUsages, crossResolvePropertyValue, getNetworkProperty, removeLinkPropertyValue } from '../../domain/property-service.js';
+import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
+import { getThoughtType } from '../../domain/thought-type-service.js';
+import { getLinkType } from '../../domain/link-type-service.js';
+import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
+import type { CrossNetworkAccessContext } from '../../domain/cross-network-ref-service.js';
 import { updateNetwork } from '../../domain/network-write-service.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../../domain/layer-service.js';
 import { isEventVisibleInLayer } from '../../realtime/layer-visibility.js';
@@ -871,6 +880,94 @@ const HANDLERS: Record<string, OpHandler> = {
       return { cleared, request_id: String(extra.requestId) };
     });
   },
+  'thoughts.trash': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof ThoughtsTrash.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      const ndb = openMemberNetwork(rt, a.network_id);
+      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      const thought = runWrite(ndb, fx, () => {
+        const updated = updateThought(
+          ndb,
+          a.thought_id,
+          { marked_for_deletion: a.trashed },
+          undefined,
+          rt.deps.auth.userId,
+        );
+        return {
+          result: updated,
+          events: [
+            {
+              type: 'thought.updated',
+              data: {
+                id: updated.id,
+                changes: { marked_for_deletion: a.trashed },
+                version: updated.version,
+              },
+            },
+          ],
+          activity: [
+            { kind: 'thought', action: a.trashed ? 'trashed' : 'restored', thought: updated },
+          ],
+          audit: {
+            action: 'etn.thoughts.trash',
+            targetType: 'thought',
+            targetId: updated.id,
+            details: { trashed: a.trashed },
+          },
+        };
+      });
+      return {
+        id: thought.id,
+        version: thought.version,
+        request_id: String(extra.requestId),
+      } satisfies McpMutationResult;
+    });
+  },
+  'links.restore': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof LinksRestore.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      const ndb = openMemberNetwork(rt, a.network_id);
+      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      const link = runWrite(ndb, fx, () => {
+        const updated = updateLink(
+          ndb,
+          a.link_id,
+          { marked_for_deletion: false },
+          undefined,
+          rt.deps.auth.userId,
+        );
+        return {
+          result: updated,
+          events: [
+            {
+              type: 'link.updated',
+              data: {
+                id: updated.id,
+                changes: { marked_for_deletion: false },
+                version: updated.version,
+              },
+            },
+          ],
+          activity: [{ kind: 'link', action: 'restored', link: updated }],
+          audit: {
+            action: 'etn.links.restore',
+            targetType: 'link',
+            targetId: updated.id,
+            details: {},
+          },
+        };
+      });
+      return {
+        id: link.id,
+        version: link.version,
+        request_id: String(extra.requestId),
+      } satisfies McpMutationResult;
+    });
+  },
 
   // ---- trash ---------------------------------------------------------------
   'trash.list': (rt, p) => {
@@ -1363,6 +1460,127 @@ const HANDLERS: Record<string, OpHandler> = {
         };
       });
       return { link_id: res.link_id, request_id: String(extra.requestId) };
+    });
+  },
+  'properties.resolve': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof PropertiesResolve.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      const ndb = openMemberNetwork(rt, a.network_id);
+      // Список сетей пользователя — для прав при открытии чужой data.db.
+      // Берём из runtime-экземпляра systemDb (тот же, что у остальных
+      // действий), а не переоткрываем `_system.db` с диска.
+      const accessibleNetworkIds = new Set(
+        rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+      );
+      const ctx: CrossNetworkAccessContext = {
+        dataDir: rt.deps.dataDir,
+        userId: rt.deps.auth.userId,
+        clientId: mcpLayerClientId(rt),
+        logger: rt.deps.logger,
+        accessibleNetworkIds,
+        currentNetworkId: a.network_id,
+      };
+      const values = crossResolvePropertyValue(
+        ndb,
+        a.owner_type,
+        a.owner_id,
+        a.key,
+        ctx,
+      );
+      return { values, request_id: String(extra.requestId) };
+    });
+  },
+  'ontology.delete': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof OntologyDelete.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      const ndb = openMemberNetwork(rt, a.network_id);
+      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      const network = rt.deps.systemDb.getNetworkById(a.network_id);
+      const networkRoles = network?.type_roles ?? {};
+      const deleteInput: OntologyDeleteParams = {
+        network_id: a.network_id,
+        kind: a.kind,
+        id: a.id,
+        ...(a.force !== undefined ? { force: a.force } : {}),
+      };
+      const result: OntologyDeleteResult = runWrite(ndb, fx, () => {
+        // Pre-fetch snapshots BEFORE the mutation, to record accurate
+        // activity rows (mirror REST).
+        let snapshot: unknown = null;
+        try {
+          if (a.kind === 'thought_type') {
+            snapshot = getThoughtType(ndb, a.id);
+          } else if (a.kind === 'link_type') {
+            snapshot = getLinkType(ndb, a.id);
+          } else if (a.kind === 'property') {
+            snapshot = getNetworkProperty(ndb, a.id);
+          }
+        } catch {
+          snapshot = null;
+        }
+        const removed = deleteOntologyEntity(ndb, deleteInput, rt.deps.auth.userId, networkRoles);
+
+        // Real-time (mirror REST); журнал активности прежний MCP-путь не
+        // писал (только события) — сохраняем поведение.
+        const events: AnyWriteEvent[] = [];
+        if (snapshot !== null && snapshot !== undefined) {
+          if (a.kind === 'thought_type') {
+            events.push({ type: 'thought-type.deleted', data: { id: a.id } });
+            // Каскад отборов (задача c1fa71d4): отдельное событие
+            // `thought-type-view.deleted` на каждый каскадно удалённый отбор.
+            const cascadedViews =
+              (removed.affected_counts.type_views_count ?? 0) > 0
+                ? listThoughtTypeViewsByType(ndb, a.id).map((v) => ({ id: v.id }))
+                : [];
+            for (const view of cascadedViews) {
+              events.push({
+                type: 'thought-type-view.deleted',
+                data: { thought_type_id: a.id, view_id: view.id },
+              });
+            }
+          } else if (a.kind === 'link_type') {
+            events.push({ type: 'link-type.deleted', data: { id: a.id } });
+          } else if (a.kind === 'property') {
+            events.push({ type: 'property-registry.deleted', data: { id: a.id } });
+          } else if (a.kind === 'type_view') {
+            // Отбор удаляется без snapshot (rich-DTO для эха нет), событие
+            // шлём всегда.
+            events.push({
+              type: 'thought-type-view.deleted',
+              data: { thought_type_id: '', view_id: a.id },
+            });
+          }
+        } else if (a.kind === 'type_view') {
+          // snapshot null (отбор уже удалили раньше или не было): всё равно
+          // шлём событие, чтобы подписчики узнали об удалении.
+          events.push({
+            type: 'thought-type-view.deleted',
+            data: { thought_type_id: '', view_id: a.id },
+          });
+        }
+
+        return {
+          result: removed,
+          events,
+          // ONE audit row for the whole call.
+          audit: {
+            action: 'etn.ontology.delete',
+            targetType: a.kind,
+            targetId: a.id,
+            details: {
+              force: a.force === true,
+              affected_counts: removed.affected_counts,
+            },
+          },
+        };
+      });
+
+      return {
+        ...result,
+        request_id: String(extra.requestId),
+      } satisfies OntologyDeleteResult & { request_id: string };
     });
   },
 };
