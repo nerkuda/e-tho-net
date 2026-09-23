@@ -50,7 +50,17 @@ import { store } from '../state.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
 export type ThoughtPickItem =
-  | { kind: 'existing'; id: string; raw: string }
+  | {
+      kind: 'existing';
+      id: string;
+      raw: string;
+      /**
+       * Сеть-владелец выбранной мысли — заполняется только в кросс-сетевом
+       * режиме диалога (`crossNetwork`, задача ea04a185). Обычные вызывающие
+       * читают только `id` и поле игнорируют.
+       */
+      networkId?: string;
+    }
   | { kind: 'new'; title: string; synonyms: string[]; raw: string };
 
 /** Result of {@link pickThoughtsDialog} (null = cancelled). */
@@ -102,6 +112,15 @@ export interface ThoughtPickerOptions {
   title?: string;
   /** Primary button label override (defaults «Добавить»/«Выбрать»). */
   applyLabel?: string;
+  /**
+   * Кросс-сетевой режим выбора (задача ea04a185): живой поиск кандидатов идёт
+   * веером по всем сетям пользователя и НЕ подчиняется переключателю охвата
+   * (`cross-network-scope.ts`) — он в этом диалоге не показывается. Мысли
+   * собственной сети (`excludeNetworkId`) из выдачи исключаются (запрет своей
+   * сети, требование 884d14e1 — у каждого item появляется `networkId`),
+   * создание новых мыслей недоступно. Так диалог адресует мысль ДРУГОЙ сети.
+   */
+  crossNetwork?: { excludeNetworkId: string };
 }
 
 /** One list entry with its duplicate-check result (internal shape). */
@@ -113,6 +132,8 @@ interface AddLine {
   existingId: string | null;
   /** Strongest candidate match kind (informational). */
   matchKind: 'title' | 'synonym' | 'partial' | null;
+  /** Сеть-владелец существующей мысли (кросс-сетевой режим, ea04a185). */
+  networkId: string | null;
 }
 
 /** The first existing-thought id of a picker result (single-pick helper). */
@@ -267,8 +288,11 @@ async function insertIntoCanvas(
  */
 export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtPickResult | null> {
   const networkId = opts.networkId;
-  const allowCreate = opts.allowCreate !== false;
-  const allowLinkType = opts.allowLinkType !== false;
+  // Кросс-сетевой режим (задача ea04a185) диктует источник кандидатов и
+  // запрещает создание новых мыслей: адресуется только чужая сеть.
+  const crossNetwork = opts.crossNetwork;
+  const allowCreate = opts.allowCreate !== false && crossNetwork === undefined;
+  const allowLinkType = opts.allowLinkType !== false && crossNetwork === undefined;
   const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
 
   return new Promise((resolve) => {
@@ -374,16 +398,43 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // единый компонент диалогов выбора мысли (`makeCrossNetworkScopeToggle`).
     // Включённый режим расширяет живой поиск кандидатов и проверку дублей на
     // все сети пользователя; создание новых мыслей всегда идёт в ТЕКУЩУЮ сеть.
-    const crossScopeToggle = makeCrossNetworkScopeToggle();
+    // В кросс-сетевом режиме (ea04a185) охват задан принудительно — общий
+    // переключатель не показываем, чтобы не портить его глобальное состояние.
     const searchRow = div('add-search-row');
-    searchRow.append(input, crossScopeToggle);
+    searchRow.append(input);
+    if (crossNetwork === undefined) {
+      searchRow.append(makeCrossNetworkScopeToggle());
+    }
     body.append(modeRow, searchRow, hintLine, candidates, lineList, errorLine);
+    if (crossNetwork !== undefined) {
+      const note = el(
+        'p',
+        'muted',
+        'Поиск идёт по всем вашим сетям; мысли текущей сети недоступны — выберите мысль другой сети.',
+      );
+      note.style.margin = '0';
+      body.insertBefore(note, candidates);
+    }
 
     let timer: number | null = null;
     let lastCandidates: DuplicateHit[] = [];
+    /** Сеть-владелец каждого показанного кандидата (кросс-сетевой режим). */
+    const candidateNetworks = new Map<string, string>();
     // The anchor thought cannot be linked to itself (the server rejects
     // self-links), so it never shows up among the found candidates.
     const anchorId = opts.anchor?.id ?? null;
+
+    /** Обновить карту сетей кандидатов и запомнить выдачу. */
+    function acceptCandidates(hits: DuplicateHit[]): void {
+      candidateNetworks.clear();
+      for (const hit of hits) {
+        if (typeof hit.network_id === 'string' && hit.network_id !== '') {
+          candidateNetworks.set(hit.id, hit.network_id);
+        }
+      }
+      lastCandidates = hits;
+      renderCandidates(hits);
+    }
 
     /** Debounced duplicate search for the current input. */
     function scheduleSearch(): void {
@@ -398,7 +449,10 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           // A whole-query UUID is a direct id lookup (08-ui-spec.md §4.1): the
           // type filter is ignored, inactive thoughts are found too, and the
           // hit behaves as an exact-title match downstream (Enter picks it).
-          const idQuery = parseThoughtIdQuery(raw);
+          // В кросс-сетевом режиме id-адресация бессмысленна: она ответила бы
+          // только о текущей сети (запрет своей сети, 884d14e1), поэтому
+          // запрос идёт общим веерным поиском по имени.
+          const idQuery = crossNetwork === undefined ? parseThoughtIdQuery(raw) : null;
           if (idQuery !== null) {
             try {
               const thought = await etn.thoughts.get(networkId, idQuery);
@@ -411,8 +465,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                 );
                 return;
               }
-              lastCandidates = [thoughtToCandidate(thought)];
-              renderCandidates(lastCandidates);
+              acceptCandidates([thoughtToCandidate(thought)]);
             } catch (err) {
               if (isNotFoundError(err)) {
                 lastCandidates = [];
@@ -427,20 +480,28 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           }
           const parsed = parseTitleWithSynonyms(raw);
           try {
-            // Ошибка f098b45e: при включённом переключателе «по всем сетям»
-            // живой поиск кандидатов и проверка дублей идут веером по всем
-            // сетям пользователя (единый источник — `loadCrossNetworkCandidates`
-            // общего пикера). Создание новых мыслей это не затрагивает.
-            const hits = isCrossNetworkScopeEnabled()
-              ? await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter)
-              : await etn.thoughts.findDuplicates(
-                  networkId,
-                  parsed.title,
-                  parsed.synonyms,
-                  searchFilter,
-                );
-            lastCandidates = hits.filter((hit) => hit.id !== anchorId);
-            renderCandidates(lastCandidates);
+            // Кросс-сетевой режим (ea04a185) — принудительный веер; иначе —
+            // переключатель «по всем сетям» (ошибка f098b45e) или текущая сеть.
+            let hits: DuplicateHit[];
+            if (crossNetwork !== undefined) {
+              hits = await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter);
+            } else if (isCrossNetworkScopeEnabled()) {
+              hits = await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter);
+            } else {
+              hits = await etn.thoughts.findDuplicates(
+                networkId,
+                parsed.title,
+                parsed.synonyms,
+                searchFilter,
+              );
+            }
+            acceptCandidates(
+              hits.filter(
+                (hit) =>
+                  hit.id !== anchorId &&
+                  (crossNetwork === undefined || hit.network_id !== crossNetwork.excludeNetworkId),
+              ),
+            );
           } catch (err) {
             errorLine.textContent = errText(err);
           }
@@ -525,10 +586,18 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           synonyms: parsed.synonyms,
           existingId: exact.id,
           matchKind: exact.matched_on,
+          networkId: candidateNetworks.get(exact.id) ?? null,
         };
       }
       if (allowCreate) {
-        return { raw, title: parsed.title, synonyms: parsed.synonyms, existingId: null, matchKind: null };
+        return {
+          raw,
+          title: parsed.title,
+          synonyms: parsed.synonyms,
+          existingId: null,
+          matchKind: null,
+          networkId: null,
+        };
       }
       const first = lastCandidates[0];
       if (first === undefined) {
@@ -541,6 +610,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms: [],
         existingId: first.id,
         matchKind: 'partial',
+        networkId: candidateNetworks.get(first.id) ?? null,
       };
     }
 
@@ -574,6 +644,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms,
         existingId: resolvedId,
         matchKind: matchKind ?? exact?.matched_on ?? null,
+        networkId: resolvedId !== null ? candidateNetworks.get(resolvedId) ?? null : null,
       });
       errorLine.textContent = '';
       renderLines();
@@ -588,6 +659,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms: [],
         existingId: candidate.id,
         matchKind: 'title',
+        networkId: candidate.network_id ?? null,
       });
       errorLine.textContent = '';
       renderLines();
@@ -726,6 +798,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms: [],
         existingId: candidate.id,
         matchKind: 'title',
+        networkId: candidate.network_id ?? null,
       });
       input.value = '';
       apply(false);
@@ -754,7 +827,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       finish({
         items: lines.map((line) =>
           line.existingId !== null
-            ? { kind: 'existing' as const, id: line.existingId, raw: line.raw }
+            ? {
+                kind: 'existing' as const,
+                id: line.existingId,
+                raw: line.raw,
+                // Только в кросс-сетевом режиме: сеть-владелец выбранной мысли.
+                ...(line.networkId !== null ? { networkId: line.networkId } : {}),
+              }
             : { kind: 'new' as const, title: line.title, synonyms: line.synonyms, raw: line.raw },
         ),
         thoughtTypeId: allowCreate ? newThoughtTypeId : null,
@@ -793,13 +872,21 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
               synonyms: [],
               existingId: id,
               matchKind: 'title',
+              networkId: null,
             });
           }
           renderLines();
         })
         .catch(() => {
           for (const id of prefillIds) {
-            lines.push({ raw: id, title: id, synonyms: [], existingId: id, matchKind: 'title' });
+            lines.push({
+              raw: id,
+              title: id,
+              synonyms: [],
+              existingId: id,
+              matchKind: 'title',
+              networkId: null,
+            });
           }
           renderLines();
         });

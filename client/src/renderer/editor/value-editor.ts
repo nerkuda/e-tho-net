@@ -49,6 +49,7 @@ import type {
   SearchNameHit,
   ThoughtRef,
 } from '@etn/shared';
+import { formatCrossNetworkAddress } from '@etn/shared';
 
 import { store } from '../state.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -245,13 +246,14 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
   hint.textContent = isMultiple
     ? 'Несколько адресов — через запятую. Снапшот имени обновляется кнопкой «Обновить».'
     : 'Снапшот имени обновляется кнопкой «Обновить».';
-  const refreshBtn = el('button', 'Обновить') as HTMLButtonElement;
-  refreshBtn.type = 'button';
-  refreshBtn.className = 'cross-network-ref-resolve';
-  refreshBtn.addEventListener('click', () => {
-    void refreshSnapshot(opts, refreshBtn, hint);
-  });
-  input.addEventListener('blur', () => {
+  // Задача ea04a185: выбор чужой мысли из диалога — единственный способ задать
+  // кросс-сетевую ссылку в GUI, не вводя адрес вручную. Диалог принудительно
+  // ходит по всем сетям и исключает текущую (запрет своей сети — 884d14e1).
+  const pickBtn = el('button', 'cross-network-ref-pick', 'Выбрать…') as HTMLButtonElement;
+  pickBtn.type = 'button';
+  pickBtn.title = 'Выбрать мысль другой сети…';
+  // Собирает значение поля в то, что уйдёт в `save` (общая точка с blur).
+  const commit = (): void => {
     const next = input.value.trim();
     void opts.save(
       isMultiple
@@ -263,8 +265,17 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
           ? null
           : next,
     );
+  };
+  pickBtn.addEventListener('click', () => {
+    void pickCrossNetworkTarget(opts, input, isMultiple, hint, commit);
   });
-  wrapper.append(input, refreshBtn, hint);
+  const refreshBtn = el('button', 'cross-network-ref-resolve', 'Обновить') as HTMLButtonElement;
+  refreshBtn.type = 'button';
+  refreshBtn.addEventListener('click', () => {
+    void refreshSnapshot(opts, refreshBtn, hint);
+  });
+  input.addEventListener('blur', commit);
+  wrapper.append(input, pickBtn, refreshBtn, hint);
   // Чипы снапшота (требование 6d4ad9ac): показываем имя цели и сеть; клик
   // переходит в цель и обновляет снапшот в сети-источнике; контекстное
   // меню «Обновить имя» — точечный crossResolve.
@@ -278,9 +289,62 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
   return wrapper;
 }
 
+/**
+ * Диалог выбора ЧУЖОЙ мысли для значения `cross_network_ref` (задача ea04a185).
+ * Охват — принудительно «по всем сетям» (`pickThoughtsDialog { crossNetwork }`):
+ * текущая сеть исключена, создание новых мыслей не предлагается, глобальное
+ * состояние переключателя охвата не трогается. Выбор кладёт в поле адрес
+ * `n:<network_id>#<thought_id>` — single заменяет значение, multiple добавляет
+ * адреса в набор (без дублей) — и сразу сохраняет через `commit`.
+ */
+async function pickCrossNetworkTarget(
+  opts: ValueEditorOptions,
+  input: HTMLInputElement,
+  isMultiple: boolean,
+  hint: HTMLElement,
+  commit: () => void,
+): Promise<void> {
+  const currentNetworkId = opts.networkId;
+  const result = await pickThoughtsDialog({
+    networkId: currentNetworkId,
+    allowCreate: false,
+    allowLinkType: false,
+    title: 'Выбор мысли из другой сети',
+    applyLabel: isMultiple ? 'Добавить' : 'Выбрать',
+    crossNetwork: { excludeNetworkId: currentNetworkId },
+  });
+  if (result === null) return;
+  const picked: string[] = [];
+  for (const item of result.items) {
+    if (item.kind !== 'existing') continue;
+    const netId = item.networkId;
+    // Запрет своей сети (требование 884d14e1): без сети-владельца адрес
+    // собрать нельзя, а мысль текущей сети — не кросс-сетевая ссылка.
+    if (netId === undefined || netId === '' || netId === currentNetworkId) continue;
+    picked.push(formatCrossNetworkAddress(netId, item.id));
+  }
+  if (picked.length === 0) {
+    notice('Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.', 'info');
+    return;
+  }
+  if (isMultiple) {
+    const existing = input.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
+    for (const address of picked) {
+      if (!existing.includes(address)) existing.push(address);
+    }
+    input.value = existing.join(', ');
+  } else {
+    input.value = picked[picked.length - 1] as string;
+  }
+  commit();
+  hint.textContent = `Выбрано: ${input.value}`;
+}
+
 /** Достать массив снапшотов из `value` (CrossNetworkRefValue[]); пусто — нет. */
-function readSnapshotFromValue(value: unknown): CrossNetworkRefValue[] {
-  if (!Array.isArray(value)) return [];
+function readSnapshotFromValue(value: unknown): CrossNetworkRefValue[] {  if (!Array.isArray(value)) return [];
   const out: CrossNetworkRefValue[] = [];
   for (const item of value) {
     if (

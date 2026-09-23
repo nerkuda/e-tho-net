@@ -8044,6 +8044,51 @@ table.activity-table thead th {
   flex-direction: column;
   gap: 4px;
 }
+/* Редактор кросс-сетевой ссылки `cross_network_ref` (задача 7849008a; кнопка
+ * «Выбрать…» — задача ea04a185): поле адреса + кнопки выбора/обновления, под
+ * ними чипы снапшота и строка-подсказка. */
+.value-editor--cross-network-ref {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.value-editor--cross-network-ref .cross-network-ref-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.value-editor--cross-network-ref .cross-network-ref-pick,
+.value-editor--cross-network-ref .cross-network-ref-resolve {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.value-editor--cross-network-ref .cross-network-ref-pick:hover,
+.value-editor--cross-network-ref .cross-network-ref-resolve:hover {
+  border-color: var(--accent);
+}
+.value-editor--cross-network-ref .cross-network-ref-hint,
+.value-editor--cross-network-ref .cross-network-ref-chips {
+  flex: 1 1 100%;
+}
+.value-editor--cross-network-ref .cross-network-ref-hint {
+  font-size: 12px;
+}
+.value-editor--cross-network-ref .cross-network-ref-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 /* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
  * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу
  * поля, не отъедают ширину у списка значений. */
