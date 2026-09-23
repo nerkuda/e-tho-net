@@ -191,21 +191,13 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Пишет от 1 до ' +
         MCP_MAX_THOUGHTS_PER_WRITE +
-        ' связанных единиц знания одной транзакцией: ' +
-        'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
-        '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
-        '`fail`/`reuse`/`update`. Мысль по `thought_id` правят item-level полями ' +
-        '`title`/`synonyms`/`type`/`type_id`/`active` — без вложенного `thought` (он для новых ' +
-        'мыслей, XOR); `synonyms` ЗАМЕНЯЮТ весь набор. Item-level `title`/`synonyms`/`type`/' +
-        '`type_id` вместе с `thought` отвергаются `VALIDATION_ERROR` — задавайте их в `thought`; ' +
-        'item-level `active` допустим и с `thought` (приоритетнее `thought.active`). ' +
-        'Циклы `ref`/`target_ref` разрешены ' +
-        '(фаза 2 — мысли, фаза 3 — связи). ' +
-        'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
-        '`properties.set`, `comments.upsert` — единственная замена этих операций. Один write-бюджет + одна ' +
-        'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
-        '`etn.how_to_write_batch`. Неизвестные ключи верхнего уровня (например, `links` вне ' +
-        '`thoughts[]`) отвергаются `VALIDATION_ERROR` (`details.fields`), а не игнорируются.',
+        ' связанных единиц знания одной транзакцией: мысли + постоянные/хронологические комментарии ' +
+        '+ свойства + связи + вложения. `thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR ' +
+        '`target_ref`; `on_duplicate`: `fail`/`reuse`/`update`. Правка существующей мысли — item-level ' +
+        '`title`/`synonyms`/`type`/`type_id`/`active` (несовместимы с `thought`, кроме `active`); ' +
+        '`synonyms` ЗАМЕНЯЮТ весь набор. Циклы `ref`/`target_ref` разрешены. Один write-бюджет + одна ' +
+        'строка `audit_log` на вызов; `warnings` агрегированы по батчу. Неизвестные ключи верхнего ' +
+        'уровня отвергаются `VALIDATION_ERROR` (`details.fields`). Пошагово — `etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },

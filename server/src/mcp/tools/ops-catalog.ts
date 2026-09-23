@@ -862,3 +862,111 @@ export const OPS_ACTIONS_BY_TOOL: ReadonlyMap<string, OpEntry> = new Map(
 
 /** Все короткие имена действий (для ошибок и реестра гайда). */
 export const OPS_ACTION_NAMES: readonly string[] = OPS_ACTIONS.map((e) => e.action);
+
+// ---------------------------------------------------------------------------
+// Темы гайда для частых операций (0.8.3, задача 2bf09236; ADR b2eebf8b)
+// ---------------------------------------------------------------------------
+
+/**
+ * Дополнительная тема справочника `etn.guide`. Держит подробности ЧАСТОЙ
+ * операции, снятые из `description` инструмента (таблицы, семантику фильтров,
+ * примеры, исторические экскурсы): витрина `tools/list` остаётся короткой, а
+ * деталь читается по `topic` без бюджета префилла. В реестре гайда каждая тема
+ * — одна строка, поэтому реестр обязан оставаться ≤ 10 КБ.
+ */
+export interface GuideTopic {
+  /** Имя темы (совпадает с именем инструмента, чьи детали она держит). */
+  topic: string;
+  /** Одна строка реестра: какие детали здесь лежат. */
+  when: string;
+  /** Полный текст темы (markdown), отдаётся по `etn.guide { topic }`. */
+  body_md: string;
+}
+
+/** Темы справочника для частых операций. */
+export const GUIDE_TOPICS: readonly GuideTopic[] = [
+  {
+    topic: 'ontology.write',
+    when: 'детали секций батча, конверсия value_type, жизненный цикл свойства-связи ↔ link_type, смена родителя',
+    body_md: [
+      '# ontology.write — батч-запись онтологии',
+      '',
+      'Идемпотентный upsert онтологии сети одной транзакцией. Пять секций:',
+      '`thought_types[]` / `link_types[]` / `properties[]` / `type_properties[]` / `type_views[]`.',
+      'Upsert — по `id` XOR имени; повторный вызов с теми же аргументами не меняет состояние',
+      '(`action: unchanged` для каждого элемента). Локальные `ref` (`parent_ref` для типов,',
+      '`type_ref`/`property_ref` для привязок, `thought_type_ref`/`ref_for_update` для отборов)',
+      'действуют только внутри батча. Цикл `parent_ref` → `VALIDATION_ERROR`.',
+      '',
+      '## Свойства и `value_type`',
+      'Смена `value_type` использует ту же доменную конверсию, что `PATCH /properties/{id}`;',
+      'ответ несёт `converted_values`/`dropped_values`. Свойство-связь ↔ link_type — единый',
+      'жизненный цикл: `properties[]` с `value_type="link"` и парой `name_forward`/`name_reverse`',
+      'создаёт связанный link_type автоматически. `type_properties[].side` — `source`/`target`,',
+      'сторона привязки свойства-связи. `type_properties[].default_value` — дефолт привязки: скаляр,',
+      '`null` (сброс) или массив id мыслей; пишется строкой `type_property_overrides` с учётом стороны.',
+      '',
+      '## Отборы типа (`type_views[]`)',
+      '`action: create|update|delete`, `thought_type` XOR `thought_type_ref`; для update/delete —',
+      '`id` XOR `ref_for_update`. Доменная валидация имени (уникальность в пределах типа),',
+      'токенов и `is_default` — как у `POST /thought-types/{id}/views`.',
+      '',
+      '## Смена родителя типа',
+      'Для типа мысли или связи смена `parent`/`parent_ref` применяется немедленно, интерактива',
+      'нет. Если в ЛЮБОМ живом (не базовом) слое есть мысли (для thought-types) или связи',
+      '(для link-types) с типом из множества {изменяемый + потомки + старый/новый родитель} —',
+      'отказ `422` с `details.kind = "reparent_blocked_by_layer"` и перечнем слоёв. Для типов',
+      'мыслей без живых слоёв записи применяются без интерактивного подтверждения.',
+      '',
+      '## Бюджет и события',
+      'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на',
+      'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`,',
+      '`property-definition.*`). Неизвестные ключи верхнего уровня (секция вне перечисленных)',
+      'отвергаются `VALIDATION_ERROR` (`details.fields`), а не игнорируются.',
+    ].join('\n'),
+  },
+  {
+    topic: 'thoughts.query',
+    when: 'справочник фильтров и операторов, семантика свойств-связей, диапазоны дат, link_filter',
+    body_md: [
+      '# thoughts.query — справочник фильтров',
+      '',
+      'Структурная выборка мыслей без текстового запроса; фильтры комбинируются по AND.',
+      '',
+      '| Фильтр | Что делает |',
+      '|---|---|',
+      '| `in_subtree_of` (+`max_depth`) | направленные потомки; каждый хит несёт `depth` |',
+      '| `type_id[]` / `type[]` | фильтр по типу; имена резолвятся без учёта регистра (`NOT_FOUND`, `VALIDATION_ERROR` с `details.candidates` при неоднозначности) |',
+      '| `active` / `trashed` | `true`/`false`/`any`; `trashed` по умолчанию `false` |',
+      '| `keywords` | мини-синтаксис по названию и синонимам: слова обязательны, `*` — инфиксный шаблон, `-слово` — исключение |',
+      '| `properties[]` | `property_id` (или имя `property`) + оператор + значение |',
+      '| `created_*` / `updated_*` | ISO-8601 диапазоны |',
+      '| `author_id` / `editor_id` | создатель / последний изменивший |',
+      '| `link_filter` | `{ type_ids?, include_structural? }` ограничивает рёбра спуска `in_subtree_of` |',
+      '',
+      '## Операторы свойств',
+      '`eq`/`ne`/`contains`/`gt`/`gte`/`lt`/`lte`/`any_of`/`all_of`/`none_of`. Неизвестный',
+      '`property_id` не матчит ничего. `value_type` выбирает колонку: number → `value_number`,',
+      'bool → `value_bool`, остальные — текстовые.',
+      '',
+      'Свойство-связь (`value_type: "link"`) переводится в запрос по рёбрам, а не по значениям:',
+      '`eq`/`ne` со строкой — связь с конкретной целью (id мысли), с boolean — связь такого типа',
+      'есть/отсутствует независимо от цели; работает в обе стороны по направлению свойства.',
+      '',
+      '`any_of`/`all_of`/`none_of` — для наборов (свойство-связь и `config.multiple` url): `value` —',
+      'непустой массив id/строк; пересечение непусто / набор содержит все перечисленные / пересечения нет.',
+      '',
+      '## Ответ',
+      'Несёт справочник `thought_types` плюс опциональные эхо `resolved_types`/`resolved_properties`',
+      'для входов, заданных по имени.',
+    ].join('\n'),
+  },
+];
+
+/** Индекс тем гайда по имени. */
+export const GUIDE_TOPICS_BY_NAME: ReadonlyMap<string, GuideTopic> = new Map(
+  GUIDE_TOPICS.map((t) => [t.topic, t]),
+);
+
+/** Все имена тем гайда (для ошибок и реестра). */
+export const GUIDE_TOPIC_NAMES: readonly string[] = GUIDE_TOPICS.map((t) => t.topic);

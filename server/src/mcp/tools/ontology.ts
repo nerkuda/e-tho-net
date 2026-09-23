@@ -40,37 +40,13 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Батч-запись онтологии',
       description:
-        'Идемпотентный upsert онтологии сети одной транзакцией: `thought_types[]` / `link_types[]` / ' +
-        '`properties[]` / `type_properties[]` / `type_views[]`. ' +
-        'Upsert по `id` XOR имени — повторный вызов с теми же аргументами не меняет состояние ' +
-        '(`action: unchanged` для каждого элемента). Локальные `ref` ' +
-        '(`parent_ref` для типов, `type_ref`/`property_ref` для привязок, ' +
-        '`thought_type_ref`/`ref_for_update` для отборов) действуют только внутри батча. ' +
-        'Цикл `parent_ref` → VALIDATION_ERROR. Смена `value_type` свойства использует ту же доменную ' +
-        'функцию конверсии, что `PATCH /properties/{id}`; ответ несёт `converted_values`/`dropped_values`. ' +
-        'Свойство-связь ↔ link_type — единый жизненный цикл: ' +
-        '`properties[]` с `value_type="link"` и парой `name_forward`/`name_reverse` создаёт ' +
-        'связанный link_type автоматически. `type_properties[].side` — `source`/`target`, ' +
-        'сторона привязки свойства-связи. `type_properties[].default_value` — дефолт привязки: ' +
-        'скаляр, `null` (сброс) или массив id мыслей; пишется строкой ' +
-        '`type_property_overrides` с учётом стороны привязки. ' +
-        '`type_views[]` — отборы типов мыслей: ' +
-        '`action: create|update|delete`, `thought_type` XOR `thought_type_ref`. ' +
-        'Смена `parent`/`parent_ref` у типа мысли или связи: ' +
-        'интерактива нет, MCP применяет правила немедленно. Если в ЛЮБОМ живом ' +
-        '(не базовом) слое есть мысли (для thought-types) или связи (для link-types) ' +
-        'с типом из множества {изменяемый + потомки + старый/новый родитель} — ' +
-        'отказ `422` с `details.kind = "reparent_blocked_by_layer"` и перечнем ' +
-        'слоёв. Для типов мыслей без живых слоёв — записи применяются без ' +
-        'интерактивного подтверждения (UI-флаг `confirmed` для REST не имеет ' +
-        'MCP-аналога; ответ `details.kind = "reparent_impact"` здесь НЕ возникает). ' +
-        'Доменная валидация имени (уникальность в пределах типа), токенов и `is_default` — как у ' +
-        '`POST /thought-types/{id}/views`. ' +
-        'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
-        'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +
-        '`property-definition.*`). Неизвестные ключи верхнего уровня (например, секция вне ' +
-        '`thought_types[]`/`link_types[]`/... ) отвергаются `VALIDATION_ERROR` (`details.fields`), ' +
-        'а не игнорируются.',
+        'Идемпотентный upsert онтологии сети одной транзакцией в пяти секциях: `thought_types[]` / ' +
+        '`link_types[]` / `properties[]` / `type_properties[]` / `type_views[]`; upsert по `id` XOR ' +
+        'имени, локальные `ref` действуют только внутри батча. Один write-бюджет + одна строка ' +
+        '`audit_log` на вызов; real-time события — по одному на изменённую сущность. Неизвестный ' +
+        'ключ верхнего уровня → `VALIDATION_ERROR` (`details.fields`). Детали секций, конверсия ' +
+        '`value_type`, единый жизненный цикл свойства-связи ↔ link_type и правила смены родителя — ' +
+        '`etn.guide { topic: "ontology.write" }`.',
       inputSchema: OntologyWrite.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],
     },

@@ -487,12 +487,32 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 80 535 Б (commit cf1b54f), стало 29 / 48 978 Б.
         // 0.8.3 (задача d379e091): ещё 4 низкочастотных инструмента
         // (`thoughts.trash`, `links.restore`, `properties.resolve`,
-        // `ontology.delete`) сняты тем же способом → 25 / 45 004 Б. Бюджет
-        // фиксирует достигнутое сокращение и не даёт описаниям расползтись
-        // обратно.
+        // `ontology.delete`) сняты тем же способом → 25 / 45 004 Б.
+        // 0.8.3 (задача 2bf09236, ADR b2eebf8b): descriptions частых
+        // инструментов урезаны до принципа прогрессивного раскрытия (детали
+        // вынесены в темы `etn.guide`) → 25 / 40 203 Б. Бюджеты фиксируют
+        // достигнутое сокращение и не дают описаниям расползтись обратно.
         assert.ok(
-          bytes <= 46_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 46000`,
+          bytes <= 41_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41000`,
+        );
+        // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
+        // `inputSchema`. `inputSchema` не урезается — планка ограничивает
+        // только prose (задача 2bf09236, цель ≤ 36 000 Б).
+        let descriptionsPlusInputSchema = 0;
+        for (const tool of tools) {
+          descriptionsPlusInputSchema += Buffer.byteLength(
+            JSON.stringify(tool.description ?? ''),
+            'utf8',
+          );
+          descriptionsPlusInputSchema += Buffer.byteLength(
+            JSON.stringify(tool.inputSchema ?? {}),
+            'utf8',
+          );
+        }
+        assert.ok(
+          descriptionsPlusInputSchema <= 36_000,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36000`,
         );
       } finally {
         await handle.close();

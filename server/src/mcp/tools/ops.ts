@@ -139,7 +139,7 @@ import {
 } from '../context.js';
 import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
-import { OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, type OpEntry } from './ops-catalog.js';
+import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, type OpEntry } from './ops-catalog.js';
 
 /** Разложить `params` по схеме действия (уже провалидированы контрактом). */
 type Params = Record<string, unknown>;
@@ -1622,6 +1622,13 @@ function renderRegistry(): string {
     }
     lines.push('');
   }
+  if (GUIDE_TOPICS.length > 0) {
+    lines.push('## Частые операции — детали');
+    for (const topic of GUIDE_TOPICS) {
+      lines.push(`- **${topic.topic}** — ${topic.when}`);
+    }
+    lines.push('');
+  }
   return lines.join('\n');
 }
 
@@ -1674,10 +1681,11 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Справочник редких операций',
       description:
-        'Read-only витрина редких операций MCP (прогрессивное раскрытие, ADR b2eebf8b). Без ' +
-        'параметров — реестр «действие → когда нужно» (одна строка на действие). С `topic` — ' +
-        'полная инструкция вызова: состав `params`, обязательность `confirm`, эффекты, коды ' +
-        'ошибок. Исполнитель — `etn.ops`; не вызывай его мимо гайда.',
+        'Справочник MCP (прогрессивное раскрытие, ADR b2eebf8b). Без параметров — реестр ' +
+        '«действие/тема → когда нужно» (одна строка на запись). С `topic` — полная инструкция: ' +
+        'для редких операций — состав `params`, обязательность `confirm`, эффекты, коды ошибок; ' +
+        'для частых — снятые из их `description` детали (секции батча, справочник фильтров). ' +
+        'Исполнитель редких операций — `etn.ops`; не вызывай его мимо гайда.',
       inputSchema: Guide.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.guide'],
     },
@@ -1687,13 +1695,17 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
           return { content: [{ type: 'text', text: renderRegistry() }] };
         }
         const entry = OPS_ACTIONS_BY_NAME.get(args.topic);
-        if (entry === undefined) {
-          throw new EtnError('VALIDATION_ERROR', `Неизвестное действие «${args.topic}».`, {
-            field: 'topic',
-            allowed: OPS_ACTION_NAMES,
-          });
+        if (entry !== undefined) {
+          return { content: [{ type: 'text', text: renderTopic(entry) }] };
         }
-        return { content: [{ type: 'text', text: renderTopic(entry) }] };
+        const topic = GUIDE_TOPICS_BY_NAME.get(args.topic);
+        if (topic !== undefined) {
+          return { content: [{ type: 'text', text: topic.body_md }] };
+        }
+        throw new EtnError('VALIDATION_ERROR', `Неизвестное действие «${args.topic}».`, {
+          field: 'topic',
+          allowed: [...OPS_ACTION_NAMES, ...GUIDE_TOPIC_NAMES],
+        });
       } catch (err) {
         return { content: [{ type: 'text', text: etnErrorText(err) }], isError: true };
       }

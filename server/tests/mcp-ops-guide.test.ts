@@ -19,7 +19,7 @@ import { describe, it } from 'node:test';
 
 import { BASE_LAYER_ID, formatCrossNetworkAddress } from '@etn/shared';
 
-import { OPS_ACTION_NAMES } from '../src/mcp/tools/ops-catalog.js';
+import { GUIDE_TOPIC_NAMES, OPS_ACTION_NAMES } from '../src/mcp/tools/ops-catalog.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { createLogger } from '../src/logger.js';
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
@@ -50,6 +50,9 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         for (const action of OPS_ACTION_NAMES) {
           assert.ok(text.includes(`**${action}**`), `реестр не упоминает действие ${action}`);
         }
+        for (const topic of GUIDE_TOPIC_NAMES) {
+          assert.ok(text.includes(`**${topic}**`), `реестр не упоминает тему ${topic}`);
+        }
       } finally {
         await handle.close();
       }
@@ -72,6 +75,23 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.match(text, /confirm: true/);
         assert.match(text, /tables/);
         assert.match(text, /missing_closure/);
+
+        // 0.8.3 (задача 2bf09236): детали частых операций вынесены в темы
+        // гайда — они отдаются по `topic` без бюджета префилла.
+        const ontologyTopic = await handle.client.callTool({
+          name: 'etn.guide',
+          arguments: { topic: 'ontology.write' },
+        });
+        assert.equal(ontologyTopic.isError, undefined, toolText(ontologyTopic));
+        assert.match(toolText(ontologyTopic), /value_type/);
+        assert.match(toolText(ontologyTopic), /reparent_blocked_by_layer/);
+
+        const queryTopic = await handle.client.callTool({
+          name: 'etn.guide',
+          arguments: { topic: 'thoughts.query' },
+        });
+        assert.equal(queryTopic.isError, undefined, toolText(queryTopic));
+        assert.match(toolText(queryTopic), /any_of/);
 
         const bad = await handle.client.callTool({
           name: 'etn.guide',

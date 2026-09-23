@@ -203,24 +203,13 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Структурная выборка мыслей',
       description:
-        'List thoughts by criteria — no text query required; filters combine with AND. `in_subtree_of` ' +
-        '(+`max_depth`) — directed descendants (hits carry `depth`); `type_id[]` (or its name-form `type[]`, ' +
-        'resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, `VALIDATION_ERROR` ' +
-        'with `details.candidates` on ambiguity); `active` and `trashed` (`true`/`false`/`any`; `trashed` ' +
-        'defaults to `false`); `keywords` — mini-syntax over title and synonyms (words all required, ' +
-        '`*` infix wildcard, `-word` exclusion); `properties` — registry `property_id` (or its name-form ' +
-        '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of + ' +
-        'value (unknown `property_id` matches nothing; the `value_type` picks the column: number → ' +
-        'value_number, bool → value_bool, others on their text columns). `value_type: \'link\'` (свойство-связь) ' +
-        'переводится в запрос по рёбрам, а не по значениям: `eq`/`ne` со строкой — связь с конкретной ' +
-        'целью (id мысли), с boolean — связь такого типа есть/отсутствует независимо от цели; работает в обе ' +
-        'стороны (по направлению свойства). `any_of`/`all_of`/`none_of` — операторы для наборов (свойство-связь ' +
-        'и `config.multiple` url): `value` — непустой массив id/строк; пересечение непусто / набор ' +
-        'содержит все перечисленные / пересечения нет. `created_*`/`updated_*` — ISO-8601 ranges; ' +
-        '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль; ' +
-        '`link_filter` — { type_ids?, include_structural? } ограничивает рёбра спуска `in_subtree_of`. Response carries ' +
-        'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +
-        'for inputs that came in by name.',
+        'Структурная выборка мыслей без текстового запроса; фильтры комбинируются по AND: ' +
+        '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
+        '`keywords` (мини-синтаксис по названию и синонимам), `properties[]` (операторы ' +
+        'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
+        '`author_id`/`editor_id`, `link_filter`. Ответ несёт справочник `thought_types` и эхо ' +
+        '`resolved_types`/`resolved_properties` для входов по имени. Справочник фильтров, семантика ' +
+        'свойств-связей и наборов — `etn.guide { topic: "thoughts.query" }`.',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
@@ -404,20 +393,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Мысль (полная)',
       description:
-        'Fetch one thought with synonyms, nested type (`name` + AI-facing `description`, no visual ' +
-        'fields) and property values (values whose property is not on the owner\'s type chain ' +
-        'are flagged `outside_type: true` — do not treat such a card as empty). Structural link ' +
-        'properties «Родители»/«Потомки» are NOT returned — their counts live in `meta`. ' +
-        '`meta.permanent` — the ' +
-        'full text of the permanent comment of this single-read tool (no truncation; other selections ' +
-        'return a 2000-char preview — use `etn.comments.get` for the full text). `meta.link_stats` — ' +
-        'счётчики активных связей по `(link_type_id, direction)`, у каждой записи — имена типа связи ' +
-        '(`name_forward`/`name_reverse`); ' +
-        'рёбра, помеченные на удаление, НЕ считаются. ' +
-        '`meta.views` — эффективный набор отборов для мысли: ' +
-        'имя, описание и тип-владелец каждого доступного отбора (без `definition`); ' +
-        'исполняется через `etn.views.run { view_name }`. ' +
-        '`view: "compact"` (default) drops visual fields.',
+        'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
+        'значения свойств (`outside_type: true` — свойство не на цепочке типа владельца, карточка не ' +
+        'пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
+        '`meta.permanent` — полный текст постоянного комментария (у других выборок превью 2000 ' +
+        'символов; полностью — `etn.comments.get`). `meta.link_stats` — счётчики активных связей по ' +
+        '`(link_type_id, direction)` с именами типа; помеченные на удаление рёбра не считаются. ' +
+        '`meta.views` — эффективные отборы мысли (имя, описание, тип-владелец), исполняются через ' +
+        '`etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
