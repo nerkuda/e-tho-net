@@ -25,6 +25,14 @@ const SRC = {
   addDialog: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'add-dialog.ts'),
   properties: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
   valueEditor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
+  selectionDialogs: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'selection',
+    'dialogs.ts',
+  ),
 };
 
 function readText(path: string): string {
@@ -130,6 +138,34 @@ describe('место записи уведомляет таблицу, неза�
         .slice(0, persist.indexOf('\n  };'))
         .includes("notifyPropertyValuesRefreshed(definition.key ?? '')"),
       'persist редактора связи уведомляет таблицу ключом записанного свойства',
+    );
+  });
+});
+
+describe('диалог значений свойств выделенных мыслей уведомляет о записи (4ba1fccc)', () => {
+  const src = readText(SRC.selectionDialogs);
+
+  it('берёт канал перечитывания из общего модуля', () => {
+    assert.ok(
+      src.includes("from '../lib/property-values-refresh.js'"),
+      'канал берётся из общего модуля, а не диспатчится литералом',
+    );
+  });
+
+  it('после успешной записи шлёт канал и освежает карту, на неудаче молчит', () => {
+    const applyAll = src.slice(src.indexOf('async function applyAll'));
+    assert.ok(applyAll.length > 0, 'applyAll не найден');
+    const body = applyAll.slice(0, applyAll.indexOf('\n  }\n'));
+    const gate = body.indexOf('if (applied > 0) {');
+    assert.ok(gate > 0, 'уведомление стоит под гейтом «хоть одна запись удалась»');
+    const block = body.slice(gate, body.indexOf('}', gate));
+    assert.ok(
+      block.includes('notifyPropertyValuesRefreshed()'),
+      'массовая правка шлёт канал без ключа — перечитать все значения',
+    );
+    assert.ok(
+      block.includes('scheduleRefresh()'),
+      'уведомляет и карту: окрестность фокуса перечитывается на свежем ответе',
     );
   });
 });
