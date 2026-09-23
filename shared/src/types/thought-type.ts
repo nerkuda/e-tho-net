@@ -398,6 +398,24 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
   allowed_opposite_type_ids?: string[];
 }
 
+/**
+ * Эффективная привязка свойства в каталоге `etn.types.list` (0.8.3, требование
+ * «Каталоги типов в ответах read-инструментов»): {@link EffectiveTypeProperty}
+ * без сервисных полей адресации владельца (`owner_type`/`owner_id`) и
+ * переопределения (`defined_on`/`defined_on_name`/`overridden_here`/
+ * `description_overridden`), которые агенту ничего не добавляют — эффективный
+ * набор описывают `inherited`/`config`/`required`/`default_value`.
+ */
+export type McpEffectiveTypeProperty = Omit<
+  EffectiveTypeProperty,
+  | 'owner_type'
+  | 'owner_id'
+  | 'defined_on'
+  | 'defined_on_name'
+  | 'overridden_here'
+  | 'description_overridden'
+>;
+
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */
 export interface PropertyDefaultOverrideInput {
   /** Default value to override with; `null` clears the override (inherits). */

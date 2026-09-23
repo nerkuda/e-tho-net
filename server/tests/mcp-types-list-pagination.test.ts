@@ -257,13 +257,14 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       // Each type carries a 1500-char description; 3 such entries (+ the
-      // seeded root type) easily exceed a 2000-char budget for the *whole*
-      // JSON envelope — but the shrunk previews (≤200 chars) fit, so the
-      // soft step alone is enough.
+      // seeded root type) exceed a 4000-char budget for the *whole* JSON
+      // envelope — but the shrunk previews (≤200 chars) fit, so the soft step
+      // alone is enough.
       //
-      // 0.8.1: бюджет поднят с 6000 до 8000 — DTO каждого типа мысли
-      // теперь несёт поле `side` привязки свойства-связи и более длинные
-      // описания; soft shrink всё ещё укладывает, drop entries не нужен.
+      // 0.8.3 (задача 8b8f8123): бюджет снижен с 8000 до 4000 — каталог
+      // перестал повторять структурные «Родители»/«Потомки» в каждом типе и
+      // отдавать сервисные поля привязок, поэтому исходный объём стал меньше
+      // и старый порог уже не вызывал soft shrink.
       const long = 'x'.repeat(1500);
       for (const name of ['Альфа', 'Бета', 'Гамма']) {
         createThoughtType(
@@ -281,14 +282,13 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
             arguments: {
               network_id: ctx.networkId,
               scope: 'thoughts',
-              max_chars: 8000,
+              max_chars: 4000,
             },
           }),
         );
         // Soft step landed — no entries dropped, every description clipped
         // to the budget preview floor (200 chars). The total catalogue is
-        // 4 entries (3 seeds + 1 root; корень несёт структурные «Родители»/
-        // «Потомки», поэтому бюджет поднят относительно доклада 0.7.3).
+        // 4 entries (3 seeds + 1 root).
         assert.equal(truncated.thought_types?.length, 4, 'no entries dropped');
         for (const t of truncated.thought_types!) {
           if (t.description !== null) {
@@ -300,13 +300,13 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
         }
         assert.equal(truncated.meta?.truncated, true);
         assert.equal(truncated.meta?.reason, 'max_chars_preview');
-        assert.equal(truncated.meta?.max_chars, 8000);
+        assert.equal(truncated.meta?.max_chars, 4000);
         assert.ok(
-          (truncated.meta?.original_chars ?? 0) > 8000,
+          (truncated.meta?.original_chars ?? 0) > 4000,
           'original_chars must exceed budget',
         );
         assert.ok(
-          (truncated.meta?.final_chars ?? 0) <= 8000,
+          (truncated.meta?.final_chars ?? 0) <= 4000,
           'final_chars must fit under budget',
         );
         assert.equal(truncated.meta?.thought_types_total, 4);

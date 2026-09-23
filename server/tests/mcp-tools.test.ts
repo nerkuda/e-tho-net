@@ -851,19 +851,19 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const sg = toolJson<{
           nodes: Array<{ id: string; type_id: string | null }>;
           edges: Array<{ type_id: string | null }>;
-          thought_types: Record<string, { name: string; description: string | null }>;
-          link_types: Record<
-            string,
-            { name_forward: string; name_reverse: string; description: string | null }
-          >;
+          thought_types: Record<string, { id: string; name: string; icon: string | null }>;
+          link_types: Record<string, { id: string; name_forward: string; name_reverse: string }>;
         }>(sub);
         assert.ok(sg.thought_types[thoughtTypeId], 'thought type of a node must be catalogued');
         assert.equal(sg.thought_types[thoughtTypeId]?.name, 'ошибка');
-        assert.match(sg.thought_types[thoughtTypeId]?.description ?? '', /Дефект/);
+        assert.equal(sg.thought_types[thoughtTypeId]?.id, thoughtTypeId);
+        // 0.8.3: справочник списка худой — AI-описания не дублируются,
+        // полный каталог типов отдаёт `etn.types.list`.
+        assert.equal('description' in (sg.thought_types[thoughtTypeId] ?? {}), false);
         assert.ok(sg.link_types[linkTypeId], 'link type of an edge must be catalogued');
         assert.equal(sg.link_types[linkTypeId]?.name_forward, 'блокирует');
         assert.equal(sg.link_types[linkTypeId]?.name_reverse, 'заблокирован');
-        assert.match(sg.link_types[linkTypeId]?.description ?? '', /Блокировка/);
+        assert.equal('description' in (sg.link_types[linkTypeId] ?? {}), false);
 
         // neighbors: the neighbour's link_type_id resolves through the catalogue.
         const neigh = await handle.client.callTool({
@@ -1205,9 +1205,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             properties: Array<{
               key: string;
               inherited: boolean;
-              defined_on: string;
               description: string | null;
-              description_overridden: boolean;
             }>;
           }>;
           link_types: Array<{ id: string; name_forward: string; name_reverse: string }>;
@@ -1222,17 +1220,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const inherited = childEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(inherited, 'child must see the inherited property');
         assert.equal(inherited.inherited, true);
-        assert.equal(inherited.defined_on, parentType.id);
-        // The effective description of the child is ITS override, flagged as such.
+        // 0.8.3: сервисные поля привязки (defined_on/owner_*/overridden_here/
+        // description_overridden) в ответе не отдаются.
+        assert.equal('defined_on' in inherited, false);
+        assert.equal('owner_id' in inherited, false);
+        assert.equal('description_overridden' in inherited, false);
+        // The effective description of the child is ITS override.
         assert.equal(inherited.description, 'срок передачи подпроекта в тестирование');
-        assert.equal(inherited.description_overridden, true);
-        // The parent's own definition is not marked inherited; its description
-        // is the definition's own text, not an override.
+        // The parent's own definition is not marked inherited.
         const ownDef = parentEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(ownDef);
         assert.equal(ownDef.inherited, false);
         assert.equal(ownDef.description, 'крайний срок реализации, ISO-дата');
-        assert.equal(ownDef.description_overridden, false);
 
         const linkEntry = result.link_types.find((t) => t.id === parentLinkType.id);
         assert.ok(linkEntry, 'link type must be listed');
@@ -2261,7 +2260,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('etn.types.list effective properties expose registry property_id + defined_on_name (f14cd5f1)', async () => {
+  it('etn.types.list effective properties expose registry property_id; service binding fields stay out (f14cd5f1, 0.8.3)', async () => {
     const ctx = await buildMcpContext();
     try {
       // Two types + one registry property attached to both — confirms
@@ -2296,8 +2295,6 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               key: string;
               property_id: string;
               inherited: boolean;
-              defined_on: string;
-              defined_on_name: string;
               value_type: string;
               required: boolean;
               default_value: unknown;
@@ -2306,28 +2303,27 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           }>;
         }>(listed);
 
-        // The parent's own binding: registry id, not "inherited", defined here.
+        // The parent's own binding: registry id, not "inherited".
         const parentEntry = result.thought_types.find((t) => t.id === parentType.id);
         assert.ok(parentEntry, 'parent type must be listed');
         const parentOwn = parentEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(parentOwn, 'parent must expose the deadline property');
         assert.equal(parentOwn.property_id, ownProp.property_id, 'property_id is the registry id');
         assert.equal(parentOwn.inherited, false);
-        assert.equal(parentOwn.defined_on, parentType.id);
-        assert.equal(parentOwn.defined_on_name, 'Проект-prop');
+        // 0.8.3: сервисные поля адресации/переопределения привязки не отдаются.
+        assert.equal('defined_on' in parentOwn, false);
+        assert.equal('defined_on_name' in parentOwn, false);
         assert.equal(parentOwn.value_type, 'date');
         assert.equal(parentOwn.required, true);
 
-        // The child inherits: same registry property_id, but `inherited` and
-        // `defined_on` point at the ancestor.
+        // The child inherits: same registry property_id, `inherited: true`.
         const childEntry = result.thought_types.find((t) => t.id === childType.id);
         assert.ok(childEntry, 'child type must be listed');
         const childInherited = childEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(childInherited, 'child must see the inherited property');
         assert.equal(childInherited.property_id, ownProp.property_id, 'inherited binding carries the same registry id');
         assert.equal(childInherited.inherited, true);
-        assert.equal(childInherited.defined_on, parentType.id);
-        assert.equal(childInherited.defined_on_name, 'Проект-prop');
+        assert.equal('defined_on' in childInherited, false);
       } finally {
         await handle.close();
       }
@@ -3421,9 +3417,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           const fullChild = fullSub.nodes.find((n) => n.id === childId);
           assert.equal(fullChild?.fg_color, '#112233');
           assert.equal(fullChild?.font_bold, true);
+          // 0.8.3: справочник типов связей худой в обеих проекциях —
+          // визуальные поля стиля из него убраны всегда (описания и стили —
+          // в `etn.types.list`).
           const fullLinkType = fullSub.link_types[linkTypeId];
-          assert.equal(fullLinkType?.color, '#ff0000');
-          assert.equal(fullLinkType?.style, 'dashed');
+          assert.equal('color' in (fullLinkType ?? {}), false);
+          assert.equal('style' in (fullLinkType ?? {}), false);
+          assert.equal(fullLinkType?.name_forward, 'связан');
 
           // Sanity: the grand-child is also returned with the compact projection.
           const grand = sub.nodes.find((n) => n.id === grandId);
@@ -3476,7 +3476,8 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal('color' in n1.link_types[linkTypeId]!, false);
           assert.equal('style' in n1.link_types[linkTypeId]!, false);
 
-          // view: 'full' at depth=1 restores the link-type catalogue fields.
+          // 0.8.3: `view: 'full'` тоже отдаёт худой справочник типов связей —
+          // визуальные поля стиля из него убраны всегда.
           const n1Full = toolJson<{
             link_types: Record<string, Record<string, unknown>>;
           }>(
@@ -3490,8 +3491,8 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               },
             }),
           );
-          assert.equal(n1Full.link_types[linkTypeId]?.color, '#ff0000');
-          assert.equal(n1Full.link_types[linkTypeId]?.style, 'dashed');
+          assert.equal('color' in (n1Full.link_types[linkTypeId] ?? {}), false);
+          assert.equal('style' in (n1Full.link_types[linkTypeId] ?? {}), false);
 
           // depth>1 (ThoughtRef[]), compact drops ThoughtRef visual fields.
           const n2 = toolJson<{

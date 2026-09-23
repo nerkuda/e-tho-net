@@ -8,14 +8,18 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
 import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, TYPES_LIST_BUDGET_PREVIEW_CHARS } from '@etn/shared';
-import type { McpTypesListMeta, McpTypesListResult } from '@etn/shared';
+import type { McpTypesListMeta, McpTypesListResult, PropertyConfig } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { TypesList } from '../../contracts.js';
-import { listEffectiveTypeProperties } from '../../domain/property-service.js';
+import { isStructuralLinkProperty, listEffectiveTypeProperties } from '../../domain/property-service.js';
 import { collectSubtreeTypes } from '../../domain/search-service.js';
 import { shrinkTypesListToBudget } from '../types-list-budget.js';
 import { sanitizeIcon } from '../catalogs.js';
-import { projectTypeRows } from '../projection.js';
+import {
+  STRUCTURAL_PROPERTIES_NOTE,
+  projectTypeRows,
+  stripPropertyBindingServiceFields,
+} from '../projection.js';
 import { listThoughtTypes } from '../../domain/thought-type-service.js';
 import { listLinkTypes } from '../../domain/link-type-service.js';
 import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
@@ -30,7 +34,10 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         'Both type catalogues in full — thought and link types with hierarchy (`parent_id`/`is_root`), ' +
         'AI-facing `description` and effective property definitions (own + inherited along the type ' +
         'chain): `key`, `value_type`, `required`, `config` (incl. `options`/`allowed_type_ids`), ' +
-        '`default_value`, `inherited`, `defined_on`, `property_id` (the registry id). Каждый ' +
+        '`default_value`, `inherited`, `property_id` (the registry id). Сервисные поля привязки ' +
+        '(owner_type/owner_id/defined_on/overridden_here/…) не отдаются, а структурные ' +
+        '«Родители»/«Потомки» вынесены одной строкой `structural_properties_note` — их числа ' +
+        'агент видит в `meta.link_stats` карточки. Каждый ' +
         'тип мысли несёт собственные `views[]`: имя, ' +
         'описание и `is_default` отборов этого типа без наследования от предков ' +
         '(эффективный набор для конкретной мысли — через `etn.thoughts.get { meta.views }`). ' +
@@ -70,9 +77,26 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
           linkTypeCounts = subtree.link_type_counts;
         }
 
+        // 0.8.3 (требование «Каталоги типов в ответах read-инструментов»):
+        // свойства записи каталога — без сервисных полей привязки
+        // (owner_type/owner_id/defined_on/…) и без структурных
+        // «Родители»/«Потомки» (они наследуются всеми типами — одна
+        // строка-константа на каталог вместо повтора в каждом типе).
+        const projectTypeProperties = <T extends { properties: unknown[] }>(entry: T): T => ({
+          ...entry,
+          properties: entry.properties
+            .filter(
+              (p) =>
+                !isStructuralLinkProperty(
+                  (p as { config?: PropertyConfig | null }).config ?? null,
+                ),
+            )
+            .map(stripPropertyBindingServiceFields),
+        });
+
         const fullThoughtTypes = listThoughtTypes(ndb)
           .filter((t) => thoughtTypeCounts === null || thoughtTypeCounts.has(t.id))
-          .map((t) => ({
+          .map((t) => projectTypeProperties({
             id: t.id,
             name: t.name,
             parent_id: t.parent_id,
@@ -111,7 +135,7 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
           }));
         const fullLinkTypes = listLinkTypes(ndb)
           .filter((t) => linkTypeCounts === null || linkTypeCounts.has(t.id))
-          .map((t) => ({
+          .map((t) => projectTypeProperties({
             id: t.id,
             name_forward: t.name_forward,
             name_reverse: t.name_reverse,
@@ -148,6 +172,7 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         const payload: {
           thought_types?: typeof paginatedThoughtTypes;
           link_types?: typeof paginatedLinkTypes;
+          structural_properties_note?: string;
           scope?: {
             in_subtree_of: string;
             max_depth: number;
@@ -157,7 +182,12 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
           meta?: McpTypesListMeta;
         } = {
           ...(scope === 'thoughts' || scope === 'all'
-            ? { thought_types: projectTypeRows(paginatedThoughtTypes) }
+            ? {
+                thought_types: projectTypeRows(paginatedThoughtTypes),
+                // Одна строка-константа вместо повтора структурных
+                // «Родители»/«Потомки» в каждом типе (0.8.3).
+                structural_properties_note: STRUCTURAL_PROPERTIES_NOTE,
+              }
             : {}),
           ...(scope === 'links' || scope === 'all'
             ? { link_types: projectTypeRows(paginatedLinkTypes) }

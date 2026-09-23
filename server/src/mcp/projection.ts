@@ -215,3 +215,51 @@ export function stripStructuralLinkProperties<T extends { properties?: unknown }
   if (filtered.length === props.length) return row;
   return { ...row, properties: filtered as T['properties'] };
 }
+
+// ---------------------------------------------------------------------------
+// Каталог `etn.types.list`
+// ---------------------------------------------------------------------------
+
+/**
+ * Строка-константа каталога `etn.types.list` о структурных свойствах-связях
+ * (0.8.3). Структурные «Родители»/«Потомки» объявлены на корневом типе L21 и
+ * наследуются **всеми** типами мыслей: их повтор в `properties[]` каждого типа
+ * — это ~30 КБ одинаковых записей на каталог (замер 23.09). Достаточно одного
+ * пояснения на ответ, числа структурных связей агент видит в `meta.link_stats`
+ * карточки и в `counters` разделов структуры.
+ */
+export const STRUCTURAL_PROPERTIES_NOTE =
+  'Структурные свойства-связи «Родители»/«Потомки» объявлены на корневом типе ' +
+  'и наследуются всеми типами мыслей — в properties[] каждого типа они не ' +
+  'повторяются.';
+
+/**
+ * Сервисные поля привязки свойства в записи `properties[]` каталога
+ * `etn.types.list` (0.8.3): адресация владельца, место объявления и флаги
+ * переопределения. Агенту они не нужны — эффективный набор описывают
+ * `inherited`/`config`/`required`/`default_value`, а место объявления видно по
+ * самой записи каталога. Тот же список импортирует сторож проекции.
+ */
+export const PROPERTY_BINDING_SERVICE_FIELDS: readonly string[] = [
+  'owner_type',
+  'owner_id',
+  'defined_on',
+  'defined_on_name',
+  'overridden_here',
+  'description_overridden',
+];
+
+const PROPERTY_BINDING_SERVICE = new Set<string>(PROPERTY_BINDING_SERVICE_FIELDS);
+
+/**
+ * Снять сервисные поля привязки с одной записи `properties[]`
+ * ({@link PROPERTY_BINDING_SERVICE_FIELDS}); прочие поля (`key`, `value_type`,
+ * `config`, `required`, `inherited`, `default_value`, `description`, …)
+ * сохраняются. Неглубокая — `config` не трогается.
+ */
+export function stripPropertyBindingServiceFields<T>(prop: T): T {
+  if (prop === null || typeof prop !== 'object' || Array.isArray(prop)) return prop;
+  const out = { ...(prop as Record<string, unknown>) };
+  for (const key of PROPERTY_BINDING_SERVICE_FIELDS) delete out[key];
+  return out as T;
+}

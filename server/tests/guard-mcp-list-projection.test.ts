@@ -11,6 +11,13 @@
  *   * пустых контейнеров (`views`, `synonyms`, `link_types`, `chronological`);
  *   * дублей тела постоянного комментария (текст едет один раз).
  *
+ * Сторож 0.8.3 (задача 8b8f8123, блок в конце файла) добавляет проверки
+ * облегчённых карточек и справочников: структурные «Родители»/«Потомки» не
+ * возвращаются в `properties` карточки, `meta.link_stats` несёт имена типов
+ * связей рядом с id (без отдельного справочника), справочники списков — только
+ * `id`+`name`(+`icon`), а каталог `etn.types.list` — без повторов структурных
+ * свойств и без сервисных полей привязок.
+ *
  * Как проверяется. Сторож поднимает реальную MCP-сессию (`buildMcpContext` +
  * `connectMcpClient`), засевает граф с заполненными визуальными/сервисными
  * полями и вызывает каждый списочный инструмент, после чего сканирует именно
@@ -36,6 +43,8 @@ import {
   COMPACT_EMPTY_CONTAINER_KEYS,
   COMPACT_SERVICE_FIELD_KEYS,
   COMPACT_VISUAL_FIELD_KEYS,
+  PROPERTY_BINDING_SERVICE_FIELDS,
+  STRUCTURAL_PROPERTIES_NOTE,
   isEmptyContainer,
 } from '../src/mcp/projection.js';
 import {
@@ -433,10 +442,16 @@ function responseBytes(result: ClientCallToolResult): number {
  * Бюджеты объёма типовых ответов на фикстуре сторожа (байты UTF-8).
  * Фактические значения, измеренные на фикстуре (2026-09-23, ветка 0.8.3):
  *
- *   search=526, views.run=918, resolve=3271, neighbors=1140,
- *   subgraph=5221, instructions=334, networks.structure=1681, types.list=3856
+ *   search=526, views.run=918, resolve=3039, neighbors=1140,
+ *   subgraph=4864, instructions=334, networks.structure=1562, types.list=2308
  *
- * `networks.structure` слегка уменьшился (1704 → 1681): из разделов ушли
+ * Против первой редакции 0.8.3 (resolve=3271, subgraph=5221,
+ * networks.structure=1681, types.list=3856) ответы облегчены задачей 8b8f8123:
+ * справочники типов в списках стали худыми (id+name+icon), из карточек ушли
+ * структурные «Родители»/«Потомки», `link_stats` перешёл на единственный
+ * формат с именами типов, а `types.list` перестал повторять структурные
+ * свойства в каждом типе. Ранее `networks.structure` уменьшился
+ * (1704 → 1681): из разделов ушли
  * структурные свойства-связи «Родители»/«Потомки» (требование «networks.structure
  * отдаёт худой перечень разделов», задача 2ea88bba). Пределы превью
  * (инструкции 300, раздел 600, узел subgraph 600) здесь не видны — фикстура
@@ -765,6 +780,182 @@ describe('guard: худые перечни MCP — инструкции/structur
           longNodeComments!.permanent!.body_md.length,
           SUBGRAPH_PERMANENT_PREVIEW_CHARS,
           `превью permanent узла обязано быть ${SUBGRAPH_PERMANENT_PREVIEW_CHARS} символов`,
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
+// ===========================================================================
+// Сторож 0.8.3 (задача 8b8f8123): карточка без дублей счётчиков, худые
+// справочники, каталог типов без повторов структурных свойств.
+// ===========================================================================
+
+describe('guard: карточки, справочники и каталог типов (задача 8b8f8123)', { skip: !nativeAvailable() }, () => {
+  it('карточка без structural-properties, link_stats с именами, справочники id+name(+icon), types.list без повторов', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const fixture = seedFixture(ctx);
+      // Точечный ndb (та же кэшированная связь, что у MCP-сервера): тип связи
+      // и типизированное ребро без MCP-обвязки.
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const linkTypeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO link_types (id, name_forward, name_reverse, description, color, style,
+                                   version, created_at, updated_at, created_by)
+           VALUES (?, 'сторожит', 'охраняется', 'описание сторожа связи', '#ff0000', 'dashed',
+                   1, '2024', '2024', ?)`,
+        )
+        .run(linkTypeId, ctx.adminId);
+      insertLink(ndb, fixture.richId, fixture.grandId, linkTypeId, { userId: ctx.adminId });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const client = handle.client;
+
+        // --- resolve: карточка (тоже «карточка» — без дублей) ---------------
+        const resolve = (await call(client, 'etn.thoughts.resolve', {
+          network_id: ctx.networkId,
+          thought_ids: [fixture.richId],
+        })) as {
+          items: Array<Record<string, unknown>>;
+          thought_types: Record<string, Record<string, unknown>>;
+        };
+        const card = resolve.items[0]!;
+        // 1. Структурные «Родители»/«Потомки» из `properties` не возвращаются.
+        const cardProps = card.properties as Array<{ structural?: boolean }>;
+        assert.ok(Array.isArray(cardProps), 'resolve: properties — массив');
+        assert.ok(cardProps.length > 0, 'resolve: непустой набор свойств');
+        for (const p of cardProps) {
+          assert.notEqual(
+            p.structural,
+            true,
+            'resolve: структурное свойство-связь не должно возвращаться',
+          );
+        }
+        // 2. `meta.link_stats` — единственный формат, у каждой записи имена.
+        const stats = (
+          card.meta as { link_stats: { stats: Array<Record<string, unknown>> } }
+        ).link_stats.stats;
+        assert.ok(stats.length >= 1, 'resolve: link_stats непуст');
+        for (const entry of stats) {
+          assert.ok('name_forward' in entry, 'link_stats: имя прямого типа связи');
+          assert.ok('name_reverse' in entry, 'link_stats: имя обратного типа связи');
+        }
+        const typedStat = stats.find((s) => s.link_type_id === linkTypeId);
+        assert.ok(typedStat, 'resolve: типизированное ребро присутствует в link_stats');
+        assert.equal(typedStat!.name_forward, 'сторожит');
+        assert.equal(typedStat!.name_reverse, 'охраняется');
+        assert.equal(
+          'link_types' in (card.meta as { link_stats: Record<string, unknown> }).link_stats,
+          false,
+          'link_stats: отдельного справочника link_types больше нет',
+        );
+        // 3. Вложенный тип карточки — без визуальных полей и иерархии.
+        const cardType = card.type as Record<string, unknown>;
+        for (const key of COMPACT_VISUAL_FIELD_KEYS) {
+          assert.equal(key in cardType, false, `resolve: card.type не должен нести «${key}»`);
+        }
+        assert.equal('parent_id' in cardType, false, 'resolve: card.type без parent_id');
+        assert.equal('is_root' in cardType, false, 'resolve: card.type без is_root');
+        assert.equal(typeof cardType.name, 'string', 'resolve: card.type.name');
+        assert.ok('description' in cardType, 'resolve: card.type.description');
+        // 4. Справочник thought_types списка — только id+name+icon.
+        for (const [id, entry] of Object.entries(resolve.thought_types)) {
+          assert.deepEqual(
+            Object.keys(entry).sort(),
+            ['icon', 'id', 'name'],
+            `resolve.thought_types.${id}: только id+name+icon`,
+          );
+        }
+
+        // --- get: та же карточка, полная проекция, но без дублей ------------
+        const got = (await call(client, 'etn.thoughts.get', {
+          network_id: ctx.networkId,
+          thought_id: fixture.richId,
+        })) as Record<string, unknown>;
+        for (const p of got.properties as Array<{ structural?: boolean }>) {
+          assert.notEqual(p.structural, true, 'get: структурное свойство-связь не должно возвращаться');
+        }
+        const gotStats = (got.meta as { link_stats: { stats: Array<Record<string, unknown>> } })
+          .link_stats.stats;
+        assert.ok(
+          gotStats.every((s) => 'name_forward' in s && 'name_reverse' in s),
+          'get: link_stats несёт имена типов связей',
+        );
+        const gotType = got.type as Record<string, unknown>;
+        for (const key of COMPACT_VISUAL_FIELD_KEYS) {
+          assert.equal(key in gotType, false, `get: type не должен нести «${key}»`);
+        }
+
+        // --- subgraph / neighbors: худые справочники ------------------------
+        const sg = (await call(client, 'etn.thoughts.subgraph', {
+          network_id: ctx.networkId,
+          seed_ids: [fixture.richId],
+          radius: 1,
+        })) as { thought_types: Record<string, object>; link_types: Record<string, object> };
+        for (const [id, entry] of Object.entries(sg.thought_types)) {
+          assert.deepEqual(
+            Object.keys(entry).sort(),
+            ['icon', 'id', 'name'],
+            `subgraph.thought_types.${id}: только id+name+icon`,
+          );
+        }
+        for (const [id, entry] of Object.entries(sg.link_types)) {
+          assert.deepEqual(
+            Object.keys(entry).sort(),
+            ['id', 'name_forward', 'name_reverse'],
+            `subgraph.link_types.${id}: только id+имена`,
+          );
+        }
+        const nb = (await call(client, 'etn.thoughts.neighbors', {
+          network_id: ctx.networkId,
+          thought_id: fixture.richId,
+          dir: 'both',
+        })) as { link_types: Record<string, object> };
+        for (const [id, entry] of Object.entries(nb.link_types)) {
+          assert.deepEqual(
+            Object.keys(entry).sort(),
+            ['id', 'name_forward', 'name_reverse'],
+            `neighbors.link_types.${id}: только id+имена`,
+          );
+        }
+
+        // --- types.list: без повторов структурных и сервисных полей ---------
+        const types = (await call(client, 'etn.types.list', {
+          network_id: ctx.networkId,
+        })) as {
+          thought_types: Array<{ id: string; properties: Array<Record<string, unknown>> }>;
+          structural_properties_note?: string;
+        };
+        assert.equal(
+          types.structural_properties_note,
+          STRUCTURAL_PROPERTIES_NOTE,
+          'types.list: строка-константа о структурных свойствах',
+        );
+        let structuralSeen = 0;
+        for (const type of types.thought_types) {
+          for (const prop of type.properties) {
+            const cfg = prop.config as { structural?: boolean } | null | undefined;
+            if (cfg?.structural === true) structuralSeen += 1;
+            for (const field of PROPERTY_BINDING_SERVICE_FIELDS) {
+              assert.equal(
+                field in prop,
+                false,
+                `types.list.${type.id}.properties: сервисное поле «${field}» не должно возвращаться`,
+              );
+            }
+          }
+        }
+        assert.equal(
+          structuralSeen,
+          0,
+          'types.list: структурные «Родители»/«Потомки» не повторяются в каждом типе',
         );
       } finally {
         await handle.close();

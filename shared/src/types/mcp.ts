@@ -14,7 +14,7 @@ import type {
   LinkStyle,
   RealtimeAudience,
 } from '../enums.js';
-import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
+import type { McpEffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
 import type { RealtimeEventType } from './realtime.js';
 import type {
   ThoughtBundleMatchKind,
@@ -331,6 +331,40 @@ export interface LinkTypeRef {
   style: LinkStyle | null;
 }
 
+/**
+ * Запись справочника типов мыслей в списочном ответе (0.8.3, требование
+ * «Каталоги типов в ответах read-инструментов»). Только `id`+`name`+`icon`:
+ * полные `description`/`parent_id`/`is_root` — в каталоге `etn.types.list`.
+ * Так справочник не повторяет один и тот же текст на каждой записи ответа.
+ */
+export interface ListThoughtTypeRef {
+  id: string;
+  name: string;
+  icon: string | null;
+}
+
+/**
+ * Запись справочника типов связей в списочном ответе (0.8.3): только `id` и
+ * оба имени — агент выбирает имя по направлению ребра (`source → target` =
+ * `name_forward`). Описание типа — в `etn.types.list`.
+ */
+export interface ListLinkTypeRef {
+  id: string;
+  name_forward: string;
+  name_reverse: string;
+}
+
+/**
+ * Вложенный тип мысли в карточке (`etn.thoughts.get`/`resolve`, 0.8.3):
+ * `name` + AI-facing `description`, без визуальных полей (`icon`, цвета,
+ * `is_root`). Полное определение типа — в `etn.types.list`.
+ */
+export interface CardThoughtTypeRef {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // `etn.types.list` (task O4, 05-mcp-server.md §4.1) — full type catalogues
 // with effective (L21 chain-resolved) property definitions.
@@ -342,7 +376,7 @@ export interface LinkTypeRef {
  *  (это контракт `etn.types.list` для типов; эффективный набор для конкретной
  *  мысли — через `etn.thoughts.get { meta.views }`). */
 export interface McpThoughtTypeEntry extends ThoughtTypeRef {
-  properties: EffectiveTypeProperty[];
+  properties: McpEffectiveTypeProperty[];
   views: McpThoughtTypeViewEntry[];
 }
 
@@ -363,7 +397,7 @@ export interface McpThoughtTypeViewEntry {
 /** A link type entry of `etn.types.list`: {@link LinkTypeRef} + its effective
  *  property list (own + inherited along the L21 chain). */
 export interface McpLinkTypeEntry extends LinkTypeRef {
-  properties: EffectiveTypeProperty[];
+  properties: McpEffectiveTypeProperty[];
 }
 
 /** Which catalogue(s) `etn.types.list` returns (05-mcp-server.md §5.1b). */
@@ -431,6 +465,14 @@ export interface McpTypesListMeta {
 export interface McpTypesListResult {
   thought_types?: McpThoughtTypeEntry[];
   link_types?: McpLinkTypeEntry[];
+  /**
+   * Пояснение о структурных свойствах-связях каталога (0.8.3). Структурные
+   * «Родители»/«Потомки» объявлены на корневом типе и наследуются всеми
+   * типами мыслей — повторять их в `properties[]` каждого типа бессмысленно,
+   * поэтому они вынесены одной строкой-константой на каталог. Присутствует,
+   * когда в ответе есть `thought_types`.
+   */
+  structural_properties_note?: string;
   meta?: McpTypesListMeta;
 }
 
@@ -734,9 +776,9 @@ export interface McpMetricsReadsResult {
   /** Up to `limit` thoughts ordered per `kind`. */
   items: McpMetricsReadsItem[];
   /** Reference table of thought types referenced by `items[].type_id`
-   *  (task N6). Same `Record<type_id, ThoughtTypeRef>` shape as the other
-   *  read tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
-  thought_types: Record<string, ThoughtTypeRef>;
+   *  (task N6). Same thin {@link ListThoughtTypeRef} shape as the other read
+   *  tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
+  thought_types: Record<string, ListThoughtTypeRef>;
 }
 
 // ---------------------------------------------------------------------------
@@ -829,15 +871,6 @@ export type CompactThoughtRef = Omit<
  * re-render the canvas, only reason over the topology.
  */
 export type CompactLink = Omit<Link, 'color' | 'style' | 'width'>;
-
-/**
- * Drop-in replacement of {@link LinkTypeRef} inside the read-tool reference
- * tables (`etn.thoughts.subgraph`, `neighbors`, `usage`) under
- * `view: 'compact'`. Drops the visual line-style fields — agents consume
- * `name_forward`/`name_reverse`/`description` to reason about the type, not
- * to render it.
- */
-export type CompactLinkTypeRef = Omit<LinkTypeRef, 'color' | 'style'>;
 
 /**
  * `etn.thoughts.usage` result with a {@link CompactThoughtRef} catalogue —

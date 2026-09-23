@@ -411,33 +411,28 @@ export interface LinkStatEntry {
   direction: 'in' | 'out';
   /** Live (active, not trashed) link count for `(link_type_id, direction)`. */
   count: number;
+  /**
+   * Имя типа связи по направлению ребра (0.8.3): `source → target` —
+   * `name_forward`, `target → source` — `name_reverse`. Стоит рядом с
+   * `link_type_id`, чтобы агенту не приходилось лезть в справочник за
+   * расшифровкой голого id. `null` для нетипизированного ребра
+   * (`link_type_id: null`) и для удалённого/неизвестного типа.
+   */
+  name_forward: string | null;
+  /** Обратное имя типа связи по направлению ребра (см. {@link name_forward}). */
+  name_reverse: string | null;
 }
 
 /**
- * The `link_stats` block of `etn.thoughts.get.meta` (0.7.2): the per-direction
- * counters keyed by link type, paired with the catalogue of every link type
- * actually referenced. Lets an agent read the influence profile of a thought
- * in one MCP call without iterating `etn.thoughts.neighbors`.
+ * The `link_stats` block of `etn.thoughts.get.meta` (0.7.2, 0.8.3):
+ * per-direction link counters keyed by link type, each counter carrying the
+ * link type's two names inline (0.8.3). Lets an agent read the influence
+ * profile of a thought in one MCP call without iterating
+ * `etn.thoughts.neighbors` or looking ids up in a separate catalogue.
  */
 export interface LinkStats {
   /** Counters grouped by link type and direction. */
   stats: LinkStatEntry[];
-  /** Reference table of link types referenced by `stats` — name_forward,
-   *  name_reverse and the AI-facing description so the agent knows what each
-   *  counter means. Entries with `link_type_id: null` are absent (untyped). */
-  link_types: Record<string, LinkStatsLinkTypeRef>;
-}
-
-/** Compact reference of a link type, used as the value shape of
- *  {@link LinkStats.link_types}. Re-declared here (instead of importing from
- *  `./mcp.js`) to avoid a runtime circular import — `mcp.ts` already pulls
- *  thought types from `./thought.js`, so a back-reference would touch the
- *  cycle on the runtime side. The shape matches `LinkTypeRef` exactly. */
-export interface LinkStatsLinkTypeRef {
-  id: string;
-  name_forward: string;
-  name_reverse: string;
-  description: string | null;
 }
 
 /** «Сигналы полноты» мысли для MCP-чтения (task N2, docs/05-mcp-server.md
@@ -465,9 +460,10 @@ export interface ThoughtMeta {
    */
   permanent: PermanentCommentPreview | null;
   /**
-   * Профиль влияния мысли (0.7.2): счётчики активных связей по
-   * `(link_type_id, direction)` + справочник `link_types`. Отвечает на
-   * «от чего зависит / на что влияет» одним вызовом, без обхода соседей.
+   * Профиль влияния мысли (0.7.2, 0.8.3): счётчики активных связей по
+   * `(link_type_id, direction)`, каждый с обоими именами типа связи. Отвечает
+   * на «от чего зависит / на что влияет» одним вызовом, без обхода соседей и
+   * без обращения к справочнику типов.
    */
   link_stats: LinkStats;
   /**
@@ -560,10 +556,10 @@ export interface ThoughtMetaFull {
   /** Полный текст постоянного комментария; `null`, когда его нет. */
   permanent: PermanentCommentFull | null;
   /**
-   * Профиль влияния мысли (0.7.2) — то же, что и {@link ThoughtMeta.link_stats}:
-   * счётчики активных связей по `(link_type_id, direction)` + справочник
-   * `link_types`. Поле общее у обеих проекций meta — это семантика, а не
-   * оформление.
+   * Профиль влияния мысли (0.7.2, 0.8.3) — то же, что и
+   * {@link ThoughtMeta.link_stats}: счётчики активных связей по
+   * `(link_type_id, direction)`, каждый с именами типа связи. Формат общий у
+   * обеих проекций meta — это семантика, а не оформление.
    */
   link_stats: LinkStats;
   /**

@@ -25,8 +25,13 @@ import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
-import { linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, withSanitizedIcon } from '../catalogs.js';
-import { omitEmptyContainers, projectLinkRow, projectThoughtRows } from '../projection.js';
+import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
+import {
+  omitEmptyContainers,
+  projectLinkRow,
+  projectThoughtRows,
+  stripStructuralLinkProperties,
+} from '../projection.js';
 import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
@@ -400,12 +405,15 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Мысль (полная)',
       description:
-        'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
-        '(values whose property is not on the owner\'s type chain ' +
-        'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
+        'Fetch one thought with synonyms, nested type (`name` + AI-facing `description`, no visual ' +
+        'fields) and property values (values whose property is not on the owner\'s type chain ' +
+        'are flagged `outside_type: true` — do not treat such a card as empty). Structural link ' +
+        'properties «Родители»/«Потомки» are NOT returned — their counts live in `meta`. ' +
+        '`meta.permanent` — the ' +
         'full text of the permanent comment of this single-read tool (no truncation; other selections ' +
         'return a 2000-char preview — use `etn.comments.get` for the full text). `meta.link_stats` — ' +
-        'счётчики активных связей по `(link_type_id, direction)` + `link_types`; ' +
+        'счётчики активных связей по `(link_type_id, direction)`, у каждой записи — имена типа связи ' +
+        '(`name_forward`/`name_reverse`); ' +
         'рёбра, помеченные на удаление, НЕ считаются. ' +
         '`meta.views` — эффективный набор отборов для мысли: ' +
         'имя, описание и тип-владелец каждого доступного отбора (без `definition`); ' +
@@ -448,12 +456,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // ./catalogs.ts for the rationale. Applied before the O12 branch so
         // both `full` and `compact` get the same treatment.
         const thought = withSanitizedIcon(rawThought);
-        const type = rawType === null ? null : withSanitizedIcon(rawType);
+        // 0.8.3 (требование «Каталоги типов в ответах read-инструментов»):
+        // вложенный тип карточки — `name` + `description`, без визуальных
+        // полей. Полное определение — в `etn.types.list`.
+        const type = toCardThoughtType(rawType);
+        // 0.8.3 (требование «Карточка отдаёт связи счётчиками»): структурные
+        // «Родители»/«Потомки» из `properties` не возвращаются — их числа уже
+        // в `meta.parents_count`/`children_count` и в `meta.link_stats`.
+        const cardProperties = stripStructuralLinkProperties({ properties }).properties;
         // Keep the response envelope identical between views — only the
         // thought-level fields differ. `type`, `properties` and `meta` were
         // never affected by the O12 projection change.
         const projected = view === 'full' ? thought : toCompactThought(thought);
-        return { ...projected, type, properties, meta };
+        return { ...projected, type, properties: cardProperties, meta };
       }),
   );
 
@@ -468,7 +483,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       title: 'Пакетное чтение мыслей',
       description:
         'Батч-чтение по списку id: `items[]` (карточки в порядке первого появления, дубли ' +
-        'схлопываются) + `missing[]`. Карточка несёт мысль, тип, свойства, `meta.link_stats`, ' +
+        'схлопываются) + `missing[]`. Карточка несёт мысль, вложенный тип (`name` + `description`), ' +
+        'свойства (без структурных «Родители»/«Потомки» — их числа в `meta`), `meta.link_stats` ' +
+        '(счётчики с именами типов связей), ' +
         'полнотекстовый `comment_preview` и `meta.views` — ' +
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
         'Лимит — `maxNodesPerSubgraph`.',
@@ -489,13 +506,18 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Bug fix (§5.1e): `getThoughtsByIdsResolved` returns the raw `data:`
         // icon URL — sanitize in both views so the agent never sees an inline
         // image payload. The compact projection below also reads `card.icon`,
-        // so sanitising the source once is enough. `card.type` carries the
-        // type's icon through `withSanitizedIconLite` which leaves it raw;
-        // apply the same fix here.
-        const sanitizedItems = result.items.map((card) => ({
-          ...withSanitizedIcon(card),
-          type: card.type === null ? null : withSanitizedIcon(card.type),
-        }));
+        // so sanitising the source once is enough.
+        // 0.8.3: вложенный тип карточки — `name` + `description` без
+        // визуальных полей (требование «Каталоги типов в ответах
+        // read-инструментов»), поэтому иконку типа больше не санитайзим.
+        // Структурные «Родители»/«Потомки» из `properties` убираем: их числа
+        // уже в `meta` (требование «Карточка отдаёт связи счётчиками»).
+        const sanitizedItems = result.items.map((card) =>
+          stripStructuralLinkProperties({
+            ...withSanitizedIcon(card),
+            type: toCardThoughtType(card.type),
+          }),
+        );
         // `meta.views` (задача c1fa71d4) — собирается внутри `getThoughtMeta`,
         // которую зовёт `getThoughtsByIdsResolved` (домен, требование eaca1253).
         // Дополнительной обвязки здесь не требуется — `card.meta.views` уже
@@ -575,10 +597,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 has_comment: flags?.has_comment ?? false,
               };
             });
-            const linkTypes =
-              view === 'full'
-                ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
-                : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
+            // 0.8.3: справочник типов связей в списках — худой (id + оба
+            // имени), `view` его не меняет. Описания типов — в `etn.types.list`.
+            const linkTypes = linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id));
             // Bug fix (0.6.3): honest counts come from the domain `countNeighbors`
             // (one SQL per direction — same shape, no LIMIT). Sum them and
             // compare to the trimmed page; `truncated` is per the page size.
@@ -615,10 +636,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               has_comment: flags?.has_comment ?? false,
             };
           });
-          const linkTypes =
-            view === 'full'
-              ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
-              : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
+          // 0.8.3: справочник типов связей в списках — худой (`view` его не меняет).
+          const linkTypes = linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id));
           // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
           // of its own and silently applied the domain default page size
           // (50) — a thought with more neighbours than that looked complete,
@@ -733,10 +752,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // The traversal already returns edges with the minimal shape (no
         // colour/style/width — see graph-traversal/subgraph), so the only O12
         // effects here are the node projection and the link-type catalogue.
-        const linkTypes =
-          view === 'full'
-            ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
-            : linkTypeCatalogCompact(ndb, result.edges.map((e) => e.type_id));
+        // 0.8.3: справочник типов связей худой (`view` его не меняет).
+        const linkTypes = linkTypeCatalog(ndb, result.edges.map((e) => e.type_id));
         // 0.7.2 (requirement 8ab42ea8) — annotate every edge with two presence
         // flags (`has_properties`, `has_comment`) so the agent sees, in one
         // read, which links hold knowledge worth following up. Two aggregating

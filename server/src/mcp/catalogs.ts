@@ -3,16 +3,18 @@
  *
  * Read tools return `type_id`/`link_type_id` as bare UUIDs; these helpers build
  * the accompanying reference tables (`thought_types` / `link_types`) containing
- * **only** the types actually present in the response, each with its name,
- * icon/color and — most importantly — the AI-facing `description` («комментарий
- * для AI»), so the agent understands the role of and requirements for every
- * type without extra calls or a full catalogue dump.
+ * **only** the types actually present in the response, each as a thin record —
+ * `id` + `name` (+ `icon` for thought types) in list responses (0.8.3,
+ * требование «Каталоги типов в ответах read-инструментов»). AI-facing
+ * `description`, hierarchy and visual fields are not repeated per record; the
+ * full catalogue lives in `etn.types.list`.
  */
 
 import type {
-  CompactLinkTypeRef,
+  CardThoughtTypeRef,
   CompactThought,
-  LinkTypeRef,
+  ListLinkTypeRef,
+  ListThoughtTypeRef,
   Thought,
   ThoughtTypeRef,
 } from '@etn/shared';
@@ -54,41 +56,39 @@ export function withSanitizedIcon<T extends { icon: string | null }>(obj: T): T 
 }
 
 /**
- * Catalogue of thought types keyed by type id: `{ [type_id]: {id, name,
- * description, icon} }`. Unknown/removed ids are skipped (`thoughts.type_id`
- * has no SQL FK).
+ * Thin catalogue of thought types keyed by type id for the reference tables of
+ * every list response: `{ [type_id]: {id, name, icon} }` (0.8.3, требование
+ * «Каталоги типов в ответах read-инструментов»). Only the fields an agent
+ * needs to recognise a type and follow its id; the full AI-facing
+ * `description`/`parent_id`/`is_root` live in `etn.types.list`. Unknown/removed
+ * ids are skipped (`thoughts.type_id` has no SQL FK).
  */
 export function thoughtTypeCatalog(
   ndb: NetworkDb,
   ids: ReadonlyArray<string | null>,
-): Record<string, ThoughtTypeRef> {
-  const out: Record<string, ThoughtTypeRef> = {};
+): Record<string, ListThoughtTypeRef> {
+  const out: Record<string, ListThoughtTypeRef> = {};
   for (const id of new Set(ids.filter((x): x is string => x !== null))) {
     const type = getThoughtType(ndb, id);
     if (type !== null) {
-      out[id] = {
-        id: type.id,
-        name: type.name,
-        parent_id: type.parent_id,
-        is_root: type.is_root,
-        description: type.description,
-        icon: sanitizeIcon(type.icon),
-      };
+      out[id] = { id: type.id, name: type.name, icon: sanitizeIcon(type.icon) };
     }
   }
   return out;
 }
 
 /**
- * Catalogue of link types keyed by type id: `{ [link_type_id]: {id,
- * name_forward, name_reverse, description, color, style} }`. Unknown/removed
- * ids are skipped (`links.type_id` has no SQL FK).
+ * Thin catalogue of link types keyed by type id for the reference tables of
+ * every list response: `{ [link_type_id]: {id, name_forward, name_reverse} }`
+ * (0.8.3). Both names are kept so the agent picks by edge direction; the
+ * AI-facing `description` lives in `etn.types.list`. Unknown/removed ids are
+ * skipped (`links.type_id` has no SQL FK).
  */
 export function linkTypeCatalog(
   ndb: NetworkDb,
   ids: ReadonlyArray<string | null>,
-): Record<string, LinkTypeRef> {
-  const out: Record<string, LinkTypeRef> = {};
+): Record<string, ListLinkTypeRef> {
+  const out: Record<string, ListLinkTypeRef> = {};
   for (const id of new Set(ids.filter((x): x is string => x !== null))) {
     const type = getLinkType(ndb, id);
     if (type !== null) {
@@ -96,45 +96,24 @@ export function linkTypeCatalog(
         id: type.id,
         name_forward: type.name_forward,
         name_reverse: type.name_reverse,
-        parent_id: type.parent_id,
-        is_root: type.is_root,
-        description: type.description,
-        color: type.color,
-        style: type.style,
       };
     }
   }
   return out;
 }
 
+/**
+ * Thin nested type for a card (`etn.thoughts.get`/`resolve`, 0.8.3): `id`,
+ * `name` and the AI-facing `description` only — no visual fields. `null` in,
+ * `null` out.
+ */
+export function toCardThoughtType(type: ThoughtTypeRef | null): CardThoughtTypeRef | null {
+  return type === null ? null : { id: type.id, name: type.name, description: type.description };
+}
+
 // ---------------------------------------------------------------------------
 // Compact projection (task O12, docs/05-mcp-server.md §4.1)
 // ---------------------------------------------------------------------------
-
-/**
- * Compact link-type catalogue (task O12). Same keying as
- * {@link linkTypeCatalog}, but each entry drops the visual line-style fields
- * (`color`, `style`) — agents consume `name_forward`/`name_reverse`/
- * `description` to reason about a link type, not to render it.
- */
-export function linkTypeCatalogCompact(
-  ndb: NetworkDb,
-  ids: ReadonlyArray<string | null>,
-): Record<string, CompactLinkTypeRef> {
-  const full = linkTypeCatalog(ndb, ids);
-  const out: Record<string, CompactLinkTypeRef> = {};
-  for (const [id, entry] of Object.entries(full)) {
-    out[id] = {
-      id: entry.id,
-      name_forward: entry.name_forward,
-      name_reverse: entry.name_reverse,
-      parent_id: entry.parent_id,
-      is_root: entry.is_root,
-      description: entry.description,
-    };
-  }
-  return out;
-}
 
 /**
  * Project a {@link Thought} into the compact shape used by the point read

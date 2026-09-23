@@ -29,7 +29,7 @@ import type { LinkStatEntry, LinkStats, ThoughtMeta, ThoughtMetaFull } from '@et
 
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
 import type { NetworkDb } from '../db/network-db.js';
-import { linkTypeCatalog } from '../mcp/catalogs.js';
+import { getLinkType } from './link-type-service.js';
 import { getEffectiveViewsForThought } from './thought-type-views-service.js';
 
 /** Options for {@link getThoughtMeta}. */
@@ -178,17 +178,20 @@ export function getThoughtMeta(
 }
 
 /**
- * Профиль влияния мысли (0.7.2) — задача 327be956, требование описано в
- * спеке операции `etn.thoughts.get` (85f18572): активные связи мысли,
- * сгруппированные по `(type_id, direction)`, плюс парный справочник
- * `link_types` (только реально использованные типы). Считается одним SQL
- * (`UNION ALL` двух `GROUP BY` по `links_v`) — без зависимости от `getNeighbors`,
- * который читает соединение с `thoughts_v` и тащит за собой сортировки/ручные
- * позиции. Нулевые группы в выдачу не попадают; типы без пары
- * `(name_forward/reverse/description)` остаются, чтобы агент видел, что за
- * тип.
+ * Профиль влияния мысли (0.7.2, 0.8.3) — задача 327be956, требование описано
+ * в спеке операции `etn.thoughts.get` (85f18572): активные связи мысли,
+ * сгруппированные по `(type_id, direction)`. Считается одним SQL (`UNION ALL`
+ * двух `GROUP BY` по `links_v`) — без зависимости от `getNeighbors`, который
+ * читает соединение с `thoughts_v` и тащит за собой сортировки/ручные позиции.
+ * Нулевые группы в выдачу не попадают.
  *
- * `type_id = null` означает нетипизированное ребро (отдельная группа).
+ * 0.8.3 (требование «Карточка отдаёт связи счётчиками»): каждая запись несёт
+ * оба имени типа связи рядом с `link_type_id` (`name_forward`/`name_reverse`).
+ * Отдельного справочника `link_types` внутри блока больше нет — он дублировал
+ * те же имена и раздувал карточку; описания типов живут в `etn.types.list`.
+ *
+ * `type_id = null` означает нетипизированное ребро (отдельная группа) — у
+ * такой записи оба имени `null`: расшифровывать нечего.
  *
  * Считаются только ЖИВЫЕ рёбра: `active = 1 AND marked_for_deletion = 0`
  * (ошибка 355319d4 — «счётчики активных связей» в описании свойства не
@@ -213,30 +216,17 @@ export function getLinkStats(ndb: NetworkDb, thoughtId: string): LinkStats {
     direction: 'in' | 'out';
     count: number;
   }>;
-  const stats: LinkStatEntry[] = rows.map((row) => ({
-    link_type_id: row.link_type_id,
-    direction: row.direction,
-    count: row.count,
-  }));
-  // Catalogue of every non-null link type referenced — `linkTypeCatalog`
-  // already skips unknown ids, so a stale registry row never breaks the
-  // response. `null` link_type_id (untyped group) is not present here:
-  // there's nothing to look up.
-  const referencedTypeIds = rows
-    .map((row) => row.link_type_id)
-    .filter((id): id is string => id !== null);
-  const full = linkTypeCatalog(ndb, referencedTypeIds);
-  // Trim to the four fields `LinkStats.link_types` documents (the shared
-  // shape is independent of `LinkTypeRef` to avoid a type-level cycle with
-  // `./mcp.ts`).
-  const link_types: LinkStats['link_types'] = {};
-  for (const [id, entry] of Object.entries(full)) {
-    link_types[id] = {
-      id: entry.id,
-      name_forward: entry.name_forward,
-      name_reverse: entry.name_reverse,
-      description: entry.description,
+  // Имена типов — одним проходом по уникальным id (getLinkType сам вернёт
+  // `null` для удалённого типа, тогда имена остаются `null`).
+  const stats: LinkStatEntry[] = rows.map((row) => {
+    const type = row.link_type_id === null ? null : getLinkType(ndb, row.link_type_id);
+    return {
+      link_type_id: row.link_type_id,
+      direction: row.direction,
+      count: row.count,
+      name_forward: type?.name_forward ?? null,
+      name_reverse: type?.name_reverse ?? null,
     };
-  }
-  return { stats, link_types };
+  });
+  return { stats };
 }
