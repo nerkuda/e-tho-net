@@ -6223,6 +6223,19 @@ body.cloud-dragging * {
   color: var(--text-dim);
 }
 
+/* Имя сети в кросс-сетевом режиме (ошибка defcd811): тот же слот, что
+   `.dup-parent`, но цвет другой — акцентный, чтобы сеть не путалась с
+   локальным «родителем», который показывается в обычном режиме. */
+.dup-item .dup-network {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--accent);
+}
+
 /* --- admin panel (H17) ----------------------------------------------------- */
 
 .admin-panel {

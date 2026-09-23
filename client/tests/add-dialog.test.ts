@@ -403,6 +403,119 @@ describe('pickThoughtsDialog: охват поиска — только теку�
 });
 
 // ---------------------------------------------------------------------------
+// Подпись сети у кандидатов кросс-сетевого режима (ошибка defcd811):
+// в облачке чужой мысли место родителя занимает имя сети, цветом акцента —
+// чтобы пользователь сразу видел, в какой сети живёт однофамилец.
+// ---------------------------------------------------------------------------
+
+describe('pickThoughtsDialog: подпись сети у чужих мыслей (ошибка defcd811)', () => {
+  /** Сеть-владелец чужой мысли с display_name. */
+  const FOREIGN_NET = 'n2';
+  const FOREIGN_TITLE = 'Чужая';
+
+  /** Хит с подложкой — выдача кросс-поиска, мысль с заполненным network_id. */
+  function foreignHit(id: string, netId: string, title: string): any {
+    return {
+      id,
+      network_id: netId,
+      title,
+      synonyms: [],
+      matched_on: 'title',
+      type_id: null,
+      icon: null,
+      icon_kind: 'emoji',
+      fg_color: null,
+      bg_color: null,
+      font_bold: null,
+      font_italic: null,
+      font_underline: null,
+      font_strike: null,
+      parent_title: 'какой-то родитель',
+    };
+  }
+
+  it('в кросс-режиме вместо parent_title рисуется имя сети (display_name)', async () => {
+    // Подменяем `etn.networks.list` — каталог сетей с display_name.
+    (globalThis as any).window.etn.networks.list = async () => [
+      { id: 'n1', display_name: 'Текущая' },
+      { id: FOREIGN_NET, display_name: 'Заметки по работе' },
+    ];
+    // И подсовываем хит с network_id = FOREIGN_NET.
+    (globalThis as any).window.etn.thoughts.findDuplicatesAcrossNetworks = async () => ({
+      hits: [foreignHit('T-foreign', FOREIGN_NET, FOREIGN_TITLE)],
+      networks: { networks: [] },
+    });
+
+    const ui = await openDialog({ crossNetwork: { excludeNetworkId: 'n1' } });
+    ui.input.value = 'Чужая';
+    ui.input.emit('input');
+    await settle();
+
+    const rows = ui.formStack.querySelectorAll('.dup-item');
+    assert.equal(rows.length, 1, 'один кандидат в выдаче');
+    const net = rows[0]!.querySelector('.dup-network');
+    assert.ok(net !== null, 'есть подпись сети (`.dup-network`)');
+    assert.equal(net!.textContent, 'Заметки по работе', 'подпись — display_name чужой сети');
+    assert.equal(rows[0]!.querySelector('.dup-parent'), null, 'родитель НЕ показывается в кросс-режиме');
+    ui.cancelBtn.click();
+    await ui.promise;
+  });
+
+  it('если display_name сети нет в каталоге, подпись — короткий id', async () => {
+    (globalThis as any).window.etn.networks.list = async () => [
+      { id: 'n1', display_name: 'Текущая' },
+    ];
+    (globalThis as any).window.etn.thoughts.findDuplicatesAcrossNetworks = async () => ({
+      hits: [foreignHit('T-f2', FOREIGN_NET, FOREIGN_TITLE)],
+      networks: { networks: [] },
+    });
+
+    const ui = await openDialog({ crossNetwork: { excludeNetworkId: 'n1' } });
+    ui.input.value = 'Чужая';
+    ui.input.emit('input');
+    await settle();
+    const net = ui.formStack.querySelectorAll('.dup-item')[0]!.querySelector('.dup-network');
+    assert.ok(net !== null, 'подпись сети есть даже без display_name');
+    assert.equal(net!.textContent, 'n2', 'фолбэк — короткий id сети');
+    ui.cancelBtn.click();
+    await ui.promise;
+  });
+
+  it('в обычном режиме остаётся прежняя подпись parent_title', async () => {
+    // findDuplicates — обычный путь, parent_title заполнен.
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      {
+        id: 'L',
+        network_id: 'n1',
+        title: 'Своя',
+        synonyms: [],
+        matched_on: 'title',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        parent_title: 'Локальный родитель',
+      },
+    ];
+
+    const ui = await openDialog();
+    ui.input.value = 'Своя';
+    ui.input.emit('input');
+    await settle();
+    const row = ui.formStack.querySelectorAll('.dup-item')[0]!;
+    assert.equal(row.querySelector('.dup-parent')?.textContent, 'Локальный родитель');
+    assert.equal(row.querySelector('.dup-network'), null, 'в обычном режиме сеть НЕ подписывается');
+    ui.cancelBtn.click();
+    await ui.promise;
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Отмена диалога добавления/выбора мыслей резолвит промис (ошибка 5069a508)
 // ---------------------------------------------------------------------------
 

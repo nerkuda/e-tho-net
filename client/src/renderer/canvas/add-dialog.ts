@@ -433,6 +433,19 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       renderCandidates(hits);
     }
 
+    /**
+     * Подпись сети в облачке кандидата кросс-режима (ошибка defcd811):
+     * имя из каталога `networkList` в store (имя сети в пользовательском
+     * виде), иначе — короткий префикс id. Каталог подгружается
+     * `etn.networks.list()` в фоне (`screens/tabs/tab-accessibility.ts`),
+     * к моменту открытия диалога он обычно уже есть.
+     */
+    function networkDisplayName(networkId: string): string {
+      const entry = store.state.networkList.find((n) => n.id === networkId);
+      if (entry !== undefined && entry.display_name !== '') return entry.display_name;
+      return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
+    }
+
     /** Debounced duplicate search for the current input. */
     function scheduleSearch(): void {
       if (timer !== null) window.clearTimeout(timer);
@@ -718,10 +731,20 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           width: 'container',
         });
         row.classList.add('dup-item');
-        // The parent's title instead of the «использовать» button — the whole
-        // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
-        // tooltip; the visible length is limited by layout.
-        if (candidate.parent_title !== null) {
+        // В кросс-сетевом режиме (ea04a185) у чужой мысли родитель внутри её
+        // сети мало что говорит пользователю текущей сети; подпись «сеть»
+        // снимает неоднозначность одноимённых мыслей в разных сетях
+        // (ошибка defcd811). Цвет другой — чтобы не путать с локальным
+        // «родителем», который остаётся в обычном режиме.
+        if (crossNetwork !== undefined && typeof candidate.network_id === 'string' && candidate.network_id !== '') {
+          const netName = networkDisplayName(candidate.network_id);
+          const net = span(netName, 'dup-network');
+          net.title = candidate.network_id;
+          row.append(net);
+        } else if (candidate.parent_title !== null) {
+          // The parent's title instead of the «использовать» button — the whole
+          // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
+          // tooltip; the visible length is limited by layout.
           const parent = span(candidate.parent_title, 'dup-parent');
           parent.title = candidate.parent_title;
           row.append(parent);

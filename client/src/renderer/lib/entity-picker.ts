@@ -243,6 +243,10 @@ export function filterEntityOptions(
  * `networkId` — текущая открытая сеть (роут автоматически добавит её в веер,
  * если её нет в списке). Источник кандидатов принудительного кросс-режима
  * диалога выбора мысли (редактор `cross_network_ref`).
+ *
+ * Попутно освежает `store.state.networkList` (`display_name` сети нужен для
+ * подписи чужой мысли в облачке кандидата — ошибка defcd811): каталог сетей
+ * уже получен для веерного запроса, грех не закэшировать.
  */
 export async function loadCrossNetworkCandidates(
   networkId: string,
@@ -251,6 +255,15 @@ export async function loadCrossNetworkCandidates(
 ): Promise<DuplicateHit[]> {
   try {
     const networks = await etn.networks.list();
+    if (networks.length > 0) {
+      const incomingIds = new Set(networks.map((n) => n.id));
+      const sameAsCache =
+        store.state.networkList.length === networks.length &&
+        store.state.networkList.every((n) => incomingIds.has(n.id));
+      if (!sameAsCache) {
+        store.update({ networkList: networks });
+      }
+    }
     const ids = networks.map((n) => n.id);
     if (ids.length === 0) return [];
     const response = await etn.thoughts.findDuplicatesAcrossNetworks(
