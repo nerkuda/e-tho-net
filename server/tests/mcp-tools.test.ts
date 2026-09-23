@@ -3649,6 +3649,211 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       }
     });
 
+    it('etn.thoughts.search — compact drops visual fields from by_names/by_texts hits', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const token = `compact_search_${randomUUID().replace(/-/g, '')}`;
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: `${token} с цветом`,
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
+            comment: { body_md: `${token} в комментарии` },
+          });
+          // Visual style fields are set straight in the row (no MCP tool
+          // writes them); the FTS index is already populated by the write.
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE thoughts SET fg_color = ?, bg_color = ?, font_bold = 1,
+                     font_manual = 3, icon = '🎨', icon_kind = 'emoji'
+               WHERE id = ?`,
+            )
+            .run('#112233', '#445566', created.id);
+
+          const res = toolJson<{
+            by_names: Array<Record<string, unknown>>;
+            by_texts: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.search',
+              arguments: { network_id: ctx.networkId, query: token, scope: 'all' },
+            }),
+          );
+          assert.equal(res.by_names.length, 1);
+          assert.equal(res.by_texts.length, 1);
+          for (const hit of [res.by_names[0]!, res.by_texts[0]!]) {
+            for (const dropped of [
+              'fg_color',
+              'bg_color',
+              'font_bold',
+              'font_italic',
+              'font_underline',
+              'font_strike',
+              'icon_kind',
+              'icon_attachment_id',
+            ]) {
+              assert.equal(dropped in hit, false, `compact search hit must not carry ${dropped}`);
+            }
+            assert.equal(hit.thought_id, created.id);
+            assert.equal(hit.icon, '🎨');
+          }
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.resolve — compact card drops visual fields, view: full keeps them', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const { childId } = seedRichGraph(ctx);
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const compact = toolJson<{
+            items: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.resolve',
+              arguments: { network_id: ctx.networkId, thought_ids: [childId] },
+            }),
+          );
+          const card = compact.items[0]!;
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+          ]) {
+            assert.equal(dropped in card, false, `compact resolve card must not carry ${dropped}`);
+          }
+          assert.equal(card.id, childId);
+          assert.equal(card.icon, '🎨');
+          // Envelope keys stay in full form.
+          assert.ok('type' in card);
+          assert.ok('properties' in card);
+          assert.ok('meta' in card);
+          assert.ok('comment_preview' in card);
+
+          const full = toolJson<{
+            items: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.resolve',
+              arguments: { network_id: ctx.networkId, thought_ids: [childId], view: 'full' },
+            }),
+          );
+          const fullCard = full.items[0]!;
+          assert.equal(fullCard.fg_color, '#112233');
+          assert.equal(fullCard.font_bold, true);
+          assert.equal(fullCard.icon_kind, 'emoji');
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.find_duplicates — compact hits drop visual fields', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const title = `дубликат ${randomUUID().replace(/-/g, '')}`;
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, { title });
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE thoughts SET fg_color = ?, font_bold = 1, font_manual = 1, icon_kind = 'emoji'
+               WHERE id = ?`,
+            )
+            .run('#112233', created.id);
+
+          const res = await handle.client.callTool({
+            name: 'etn.thoughts.find_duplicates',
+            arguments: { network_id: ctx.networkId, title },
+          });
+          assert.equal(res.isError, undefined, toolText(res));
+          const hits = toolJson<Array<Record<string, unknown>>>(res);
+          assert.ok(hits.length >= 1);
+          const hit = hits.find((h) => h.id === created.id) ?? hits[0]!;
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+          ]) {
+            assert.equal(dropped in hit, false, `compact duplicate hit must not carry ${dropped}`);
+          }
+          assert.equal(hit.title, title);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.trash.list — compact entries drop visual fields', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'В корзине с цветом',
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
+          });
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE thoughts SET fg_color = ?, font_bold = 1, font_manual = 1, icon_kind = 'emoji'
+               WHERE id = ?`,
+            )
+            .run('#112233', created.id);
+          await handle.client.callTool({
+            name: 'etn.thoughts.trash',
+            arguments: { network_id: ctx.networkId, thought_id: created.id, trashed: true },
+          });
+
+          const res = toolJson<{ thoughts: Array<Record<string, unknown>> }>(
+            await handle.client.callTool({
+              name: 'etn.trash.list',
+              arguments: { network_id: ctx.networkId },
+            }),
+          );
+          const entry = res.thoughts.find((t) => t.id === created.id);
+          assert.ok(entry, 'trashed thought must appear in the trash list');
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+          ]) {
+            assert.equal(dropped in entry!, false, `compact trash entry must not carry ${dropped}`);
+          }
+          assert.ok('blocked' in entry!);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
     it('unknown view values are rejected by the input schema', async () => {
       const ctx = await buildMcpContext();
       try {

@@ -853,6 +853,22 @@ export interface CompactThoughtUsage
   }>;
 }
 
+/**
+ * Ширина «визуальных» полей стиля, которые compact-проекция выносит из
+ * списочных ответов MCP: цвет текста и фона, ручные флаги шрифта, вид иконки
+ * и вложение-подложка иконки. `icon` (само значение emoji/ссылки) остаётся —
+ * оно семантично. Список — единый источник для всех compact-проекций.
+ */
+export type CompactVisualFieldKeys =
+  | 'fg_color'
+  | 'bg_color'
+  | 'font_bold'
+  | 'font_italic'
+  | 'font_underline'
+  | 'font_strike'
+  | 'icon_kind'
+  | 'icon_attachment_id';
+
 // ---------------------------------------------------------------------------
 // `etn.thoughts.get` / `neighbors` / `subgraph` / `usage` — view=compact
 // ---------------------------------------------------------------------------

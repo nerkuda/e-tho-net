@@ -14,6 +14,7 @@ import type {
   CompactLinkTypeRef,
   CompactThought,
   CompactThoughtRef,
+  CompactVisualFieldKeys,
   Link,
   LinkTypeRef,
   Thought,
@@ -206,4 +207,31 @@ export function toCompactLink(link: Link): CompactLink {
     ...(link.created_by !== undefined ? { created_by: link.created_by } : {}),
     ...(link.updated_by !== undefined ? { updated_by: link.updated_by } : {}),
   };
+}
+
+/**
+ * Structural compact projection for list rows that carry the visual style
+ * block: drops `fg_color`, `bg_color`, `font_*`, `icon_kind` and
+ * `icon_attachment_id` — whatever subset the row actually has. `icon` (the
+ * emoji / image reference itself) stays because it carries semantic
+ * information the agent uses to recognise a node.
+ *
+ * Single filter behind the MCP list projection: used by `search`,
+ * `views.run`, `resolve`, `find_duplicates` (the tools that return domain
+ * rows carrying the style block). `etn.thoughts.query` already returns its
+ * minimal hit shape.
+ */
+export function dropVisualFields<T extends object>(
+  row: T,
+): Omit<T, CompactVisualFieldKeys> {
+  const out = { ...row } as T & Partial<Record<CompactVisualFieldKeys, unknown>>;
+  delete out.fg_color;
+  delete out.bg_color;
+  delete out.font_bold;
+  delete out.font_italic;
+  delete out.font_underline;
+  delete out.font_strike;
+  delete out.icon_kind;
+  delete out.icon_attachment_id;
+  return out as Omit<T, CompactVisualFieldKeys>;
 }

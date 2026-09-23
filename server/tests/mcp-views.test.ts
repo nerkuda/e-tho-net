@@ -462,6 +462,83 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.views.run — compact-проекция снимает визуальные поля у записей data[]', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+      const taskTypeId = makeThoughtType(ndb, 'задача', ctx.adminId, { isRoot: false });
+      const versionId = makeThought(ndb, '0.8.3', { typeId: versionTypeId }, ctx.adminId);
+      const taskId = makeThought(ndb, 'Работа с цветом', { typeId: taskTypeId }, ctx.adminId);
+      // Визуальные поля ставим прямо в строку — MCP-инструмента для них нет.
+      ndb
+        .prepare(
+          `UPDATE thoughts SET fg_color = ?, bg_color = ?, font_bold = 1, font_manual = 1,
+                 icon = '🎨', icon_kind = 'emoji'
+           WHERE id = ?`,
+        )
+        .run('#112233', '#445566', taskId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const writeRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'version_tasks',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Задачи версии',
+                description: null,
+                definition: JSON.stringify({
+                  filters: [{ field: 'type', op: 'eq', value: 'задача' }],
+                  sort: 'alpha',
+                  order: 'asc',
+                }),
+                position: 0,
+                is_default: false,
+              },
+            ],
+          },
+        });
+        assert.equal(writeRes.isError, undefined, toolText(writeRes));
+
+        const res = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_id: versionId,
+            view_name: 'Задачи версии',
+          },
+        });
+        assert.equal(res.isError, undefined, toolText(res));
+        const run = toolJson<{ data: Array<Record<string, unknown>> }>(res);
+        const row = run.data.find((r) => r.id === taskId);
+        assert.ok(row, 'отбор должен вернуть заведённую задачу');
+        for (const dropped of [
+          'fg_color',
+          'bg_color',
+          'font_bold',
+          'font_italic',
+          'font_underline',
+          'font_strike',
+          'icon_kind',
+          'icon_attachment_id',
+        ]) {
+          assert.equal(dropped in row, false, `compact view row must not carry ${dropped}`);
+        }
+        assert.equal(row.id, taskId);
+        assert.equal(row.icon, '🎨');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.ontology.delete { kind: type_view } удаляет отбор', async () => {
     const ctx = await buildMcpContext();
     try {

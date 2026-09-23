@@ -15,6 +15,7 @@ import type { McpRuntime } from '../context.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { TrashList, TrashPurge } from '../../contracts.js';
+import { dropVisualFields, toCompactLink, withSanitizedIcon } from '../catalogs.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -39,7 +40,14 @@ export function registerTrashListTool(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        return listTrash(ndb);
+        const trash = listTrash(ndb);
+        // MCP-проекция списка — compact: визуальные поля мыслей снимаются,
+        // `icon` санитайзится и остаётся; стилевые оверрайды связей — через
+        // `toCompactLink`. `blocked`/`blocking` сохраняются.
+        return {
+          thoughts: trash.thoughts.map((t) => dropVisualFields(withSanitizedIcon(t))),
+          links: trash.links.map((l) => toCompactLink(l)),
+        };
       }),
   );
 }

@@ -25,7 +25,7 @@ import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
-import { linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
+import { dropVisualFields, linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
 import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
@@ -139,8 +139,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           }
           return {
             ...result.response,
-            by_names: result.response.by_names.map((h) => withSanitizedIcon(h)),
-            by_texts: result.response.by_texts.map((h) => withSanitizedIcon(h)),
+            by_names: result.response.by_names.map((h) => dropVisualFields(withSanitizedIcon(h))),
+            by_texts: result.response.by_texts.map((h) => dropVisualFields(withSanitizedIcon(h))),
             networks: result.networks,
             ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
           };
@@ -180,13 +180,15 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         ];
         recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
         // Bug fix (§5.1e): `search` is shared with the REST `/search` route
-        // (which needs the real icon to render results), so sanitize only at
-        // this MCP-facing call site. `by_names`/`by_texts` carry the thought's
-        // `icon`; `by_links`/`by_chrono` do not.
+        // (which needs the real icon to render results), so project only at
+        // this MCP-facing call site. The MCP list projection is compact for
+        // every list tool: `by_names`/`by_texts` hits drop the visual style
+        // fields (colours, font flags, icon kind/attachment); the icon itself
+        // stays and `data:` URLs are sanitized inside the projection.
         return {
           ...result,
-          by_names: result.by_names.map((h) => withSanitizedIcon(h)),
-          by_texts: result.by_texts.map((h) => withSanitizedIcon(h)),
+          by_names: result.by_names.map((h) => dropVisualFields(withSanitizedIcon(h))),
+          by_texts: result.by_texts.map((h) => dropVisualFields(withSanitizedIcon(h))),
           ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
         };
       }),
@@ -498,33 +500,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Дополнительной обвязки здесь не требуется — `card.meta.views` уже
         // заполнен.
         const itemsWithViews = sanitizedItems;
+        // Compact-проекция карточки: визуальные поля (цвета, флаги шрифта, вид и
+        // вложение иконки) снимаются, `icon` остаётся; `type`, `properties`,
+        // `meta` и `comment_preview` сохраняются в полной форме — тот же
+        // контракт, что и у `etn.thoughts.get`.
         const items =
           view === 'full'
             ? itemsWithViews
-            : itemsWithViews.map((card) => ({
-                // Проекция касается только полей самой мысли (id/title/...);
-                // `type`, `properties`, `meta` и `comment_preview` остаются в
-                // полной форме — тот же контракт, что и у `etn.thoughts.get`.
-                ...card,
-                id: card.id,
-                title: card.title,
-                type_id: card.type_id,
-                icon: card.icon,
-                icon_kind: card.icon_kind,
-                icon_attachment_id: card.icon_attachment_id,
-                active: card.active,
-                marked_for_deletion: card.marked_for_deletion,
-                fg_color: null,
-                bg_color: null,
-                font_bold: null,
-                font_italic: null,
-                font_underline: null,
-                font_strike: null,
-                synonyms: card.synonyms,
-                version: card.version,
-                created_at: card.created_at,
-                updated_at: card.updated_at,
-              }));
+            : itemsWithViews.map((card) => dropVisualFields(card));
         // Reference table: только типы, реально использованные в items.
         const thoughtTypes = thoughtTypeCatalog(
           ndb,
@@ -1011,7 +994,7 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
             synonyms: args.synonyms,
           });
           return {
-            hits: result.hits.map((hit) => withSanitizedIcon(hit)),
+            hits: result.hits.map((hit) => dropVisualFields(withSanitizedIcon(hit))),
             networks: result.networks,
             truncated: result.truncated,
             reason: result.reason,
@@ -1019,10 +1002,11 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
         }
         const ndb = openMemberNetwork(rt, args.network_id as string);
         // Bug fix (§5.1e): `findDuplicates` is shared with the REST add-thought
-        // dialog (which needs the real icon to render candidates), so sanitize
-        // only at this MCP-facing call site.
+        // dialog (which needs the real icon to render candidates), so project
+        // only at this MCP-facing call site: compact list rows (visual style
+        // fields dropped, `icon` sanitized and kept).
         return findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
-          withSanitizedIcon(hit),
+          dropVisualFields(withSanitizedIcon(hit)),
         );
       }),
   );
