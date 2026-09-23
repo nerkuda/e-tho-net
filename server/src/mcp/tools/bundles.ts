@@ -22,6 +22,7 @@ import { getComment } from '../../domain/comment-service.js';
 import { getAttachment } from '../../domain/attachment-service.js';
 import { writeThoughts } from '../../domain/thought-write-service.js';
 import {
+  mcpCrossNetworkAccess,
   mcpWriteFx,
   openMemberNetwork,
   requireWritable,
@@ -228,7 +229,15 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
           })),
         };
         const result = runWrite(ndb, fx, () => {
-          const written = writeThoughts(ndb, writeInput, rt.deps.auth.userId);
+          // Кросс-сетевой контекст (задача 7849008a, спека п.6): `properties`
+          // элемента может нести адрес вида `cross_network_ref` — его запись
+          // делает живой резолв цели в чужой сети, как в REST-роуте.
+          const written = writeThoughts(
+            ndb,
+            writeInput,
+            rt.deps.auth.userId,
+            mcpCrossNetworkAccess(rt, args.network_id),
+          );
 
           // Real-time events — one per actually-affected entity (per task
           // spec); журнал — из результата записи. Собираем исход здесь,

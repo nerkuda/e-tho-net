@@ -127,6 +127,7 @@ import {
   auditAgentCall,
   etnErrorText,
   mcpLayerClientId,
+  mcpCrossNetworkAccess,
   mcpWriteFx,
   openMemberNetwork,
   openMemberNetworkBase,
@@ -1466,20 +1467,9 @@ const HANDLERS: Record<string, OpHandler> = {
     const a = p as unknown as z.infer<typeof PropertiesResolve.schema>;
     return runWriteTool(rt, a.network_id, () => {
       const ndb = openMemberNetwork(rt, a.network_id);
-      // Список сетей пользователя — для прав при открытии чужой data.db.
-      // Берём из runtime-экземпляра systemDb (тот же, что у остальных
-      // действий), а не переоткрываем `_system.db` с диска.
-      const accessibleNetworkIds = new Set(
-        rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
-      );
-      const ctx: CrossNetworkAccessContext = {
-        dataDir: rt.deps.dataDir,
-        userId: rt.deps.auth.userId,
-        clientId: mcpLayerClientId(rt),
-        logger: rt.deps.logger,
-        accessibleNetworkIds,
-        currentNetworkId: a.network_id,
-      };
+      // Список сетей пользователя и прочие координаты — общий помощник
+      // рантайма (тот же контекст, что и на записи значения).
+      const ctx: CrossNetworkAccessContext = mcpCrossNetworkAccess(rt, a.network_id);
       const values = crossResolvePropertyValue(
         ndb,
         a.owner_type,

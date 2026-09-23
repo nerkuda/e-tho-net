@@ -3190,7 +3190,15 @@ function parseRefIds(raw: string): string[] {
  * input.
  */
 function storageColumn(valueType: PropertyValueType): string {
-  return valueType === 'url' ? 'value_text' : `value_${valueType}`;
+  // `url` и `cross_network_ref` делят `value_text` с `text` — собственной
+  // колонки у них нет (миграция 006 для url, 044 для cross_network_ref: адрес
+  // `n:<net>#<id>` лежит скаляром/JSON-массивом в `value_text`). Без явного
+  // маппинга `value_${valueType}` дал бы несуществующую колонку
+  // `value_cross_network_ref` и падение INSERT (ошибка 052c84b2). Чтение
+  // согласовано — `readValue` берёт `value_text` для обоих видов.
+  return valueType === 'url' || valueType === 'cross_network_ref'
+    ? 'value_text'
+    : `value_${valueType}`;
 }
 
 /**

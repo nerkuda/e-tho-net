@@ -14,15 +14,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { BASE_LAYER_ID, formatCrossNetworkAddress } from '@etn/shared';
+import { formatCrossNetworkAddress } from '@etn/shared';
 
 import { GUIDE_TOPIC_NAMES, OPS_ACTION_NAMES } from '../src/mcp/tools/ops-catalog.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { createLogger } from '../src/logger.js';
-import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
+import { closeNetworkDb } from '../src/db/network-db.js';
 import {
   callOp,
   buildMcpContext,
@@ -454,43 +453,56 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         );
 
         // ---- properties.resolve: служебный резолв cross_network_ref ----
-        // Целевая мысль — во ВТОРОЙ сети. Значение-адрес готовим прямой
-        // записью в БД: путь записи через `etn.thoughts.write` сломан отдельным
-        // дефектом (ошибка 052c84b2 — `storageColumn` даёт несуществующую
-        // колонку `value_cross_network_ref`), а здесь проверяется именно
-        // действие `properties.resolve` над уже сохранённым значением.
+        // Целевая мысль — во ВТОРОЙ сети. Значение-адрес пишем ЧЕСТНО через
+        // `etn.thoughts.write` (свойство вида `cross_network_ref`, задача
+        // 7849008a): запись делает живой резолв цели и заполняет снапшот имени.
+        // Прямой вставки в БД больше не нужно — разделённый с чтением столбец
+        // `value_text` чинится в `storageColumn` (ошибка 052c84b2). Здесь же
+        // проверяется действие `properties.resolve` над записанным значением.
         const net2 = await new NetworkServiceImpl(ctx.sys, ctx.dataDir, createLogger('silent')).createNetwork(
           ctx.adminId,
           'Вторая сеть (resolve)',
         );
         net2Id = net2.id;
         const targetIn2 = await createThoughtViaWrite(c, net2.id, { title: 'Цель во второй сети' });
-        const holder = await createThoughtViaWrite(c, net, { title: 'Владелец ссылки' });
 
-        const ndb = openNetworkDb(ctx.dataDir, net);
-        const now = new Date().toISOString();
-        const propId = randomUUID();
-        ndb
-          .prepare(
-            `INSERT INTO properties (id, layer_id, deleted, base_version, name, name_key, value_type, config, description, created_at, updated_at)
-             VALUES (?, ?, 0, 0, ?, ?, 'cross_network_ref', NULL, NULL, ?, ?)`,
-          )
-          .run(propId, BASE_LAYER_ID, 'кросс-ссылка', 'кросс-ссылка', now, now);
-        ndb
-          .prepare(
-            `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_text, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
-             VALUES (?, ?, 'thought', ?, ?, ?, ?, ?, ?, 0, 0)`,
-          )
-          .run(
-            randomUUID(),
-            BASE_LAYER_ID,
-            holder.id,
-            propId,
-            formatCrossNetworkAddress(net2.id, targetIn2.id),
-            now,
-            ctx.adminId,
-            ctx.adminId,
-          );
+        // Реестр: свойство `cross_network_ref` и его привязка к типу владельца
+        // (иначе `setPropertyValue` отвергнет значение как внетиповое).
+        const ontol = toolJson<{ properties?: Array<{ id: string }> }>(
+          await c.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: net,
+              thought_types: [{ ref: 'xt', name: 'XRefHolder' }],
+              properties: [{ ref: 'xr', name: 'кросс-ссылка', value_type: 'cross_network_ref' }],
+              type_properties: [{ owner: 'thought_type', type_ref: 'xt', property_ref: 'xr' }],
+            },
+          }),
+        );
+        assert.ok(ontol.properties?.[0]?.id, 'свойство cross_network_ref не создано');
+
+        const address = formatCrossNetworkAddress(net2.id, targetIn2.id);
+        const holder = await createThoughtViaWrite(c, net, {
+          title: 'Владелец ссылки',
+          type: 'XRefHolder',
+          properties: { 'кросс-ссылка': address },
+        });
+
+        // Чтение записанного значения: карточка владельца отдаёт разобранную
+        // кросс-ссылку (адрес + снапшот имени, без вскрытия чужой базы).
+        const holderCard = toolJson<{
+          properties: Array<{
+            property_name?: string;
+            value?: Array<{ network_id?: string; thought_id?: string; unresolved?: boolean }>;
+          }>;
+        }>(
+          await c.callTool({ name: 'etn.thoughts.get', arguments: { network_id: net, thought_id: holder.id } }),
+        );
+        const stored = holderCard.properties.find((p) => p.property_name === 'кросс-ссылка')?.value;
+        assert.equal(stored?.length, 1, 'карточка владельца должна отдать одну кросс-ссылку');
+        assert.equal(stored[0]?.network_id, net2.id);
+        assert.equal(stored[0]?.thought_id, targetIn2.id);
+        assert.equal(stored[0]?.unresolved, false);
 
         const resolvedRaw = await callOp(c, 'properties.resolve', {
           network_id: net,

@@ -41,6 +41,7 @@ import type {
 import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import { upsertThoughtBundle } from './thought-bundle-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
@@ -303,11 +304,19 @@ function validateLinkTargets(input: ThoughtWriteInput, refToId: Map<string, stri
  *
  * Любая ошибка внутри `ndb.transaction` откатывает ВСЁ — вызывающий
  * никогда не видит полузаписанный граф.
+ *
+ * `crossNetworkAccess` (задача 7849008a) — опциональный контекст для значений
+ * вида `cross_network_ref` в `item.properties`: без него такая запись
+ * отвергается (`INTERNAL`), с ним идёт штатный живой резолв цели. MCP-фасад
+ * (`etn.thoughts.write`) строит его из runtime
+ * ({@link import('../mcp/context.js').mcpCrossNetworkAccess}); REST — из
+ * запроса.
  */
 export function writeThoughts(
   ndb: NetworkDb,
   input: ThoughtWriteInput,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): ThoughtWriteResult {
   validateEnvelope(input);
   const resolved = resolveTypes(ndb, input);
@@ -349,7 +358,7 @@ export function writeThoughts(
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
       };
 
-      const result = upsertThoughtBundle(ndb, bundleInput, actorUserId);
+      const result = upsertThoughtBundle(ndb, bundleInput, actorUserId, crossNetworkAccess);
 
       // Fill the ref map AFTER creation so a later batch item can target_ref
       // this one.

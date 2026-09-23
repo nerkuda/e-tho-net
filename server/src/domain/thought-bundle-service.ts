@@ -27,6 +27,7 @@ import { EtnError } from '@etn/shared';
 import type { NetworkDb } from '../db/network-db.js';
 import { createAttachment } from './attachment-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
+import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import { createLink } from './link-service.js';
 import {
   computeThoughtCardWarnings,
@@ -185,6 +186,7 @@ export function upsertThoughtBundle(
   ndb: NetworkDb,
   input: ThoughtBundleInput,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): ThoughtBundleResult {
   return ndb.transaction(() => {
     const { thought, action, matchedOn } = resolveThought(ndb, input, actorUserId);
@@ -224,7 +226,18 @@ export function upsertThoughtBundle(
     if (input.properties !== undefined) {
       properties = {};
       for (const [key, value] of Object.entries(input.properties)) {
-        properties[key] = setPropertyValue(ndb, 'thought', thought.id, key, value, actorUserId);
+        // `crossNetworkAccess` пробрасывается в том числе ради значений вида
+        // `cross_network_ref`: без него запись такого значения отвергается
+        // (задача 7849008a, требование aa89940c).
+        properties[key] = setPropertyValue(
+          ndb,
+          'thought',
+          thought.id,
+          key,
+          value,
+          actorUserId,
+          crossNetworkAccess,
+        );
       }
     }
 

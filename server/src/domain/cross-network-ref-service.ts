@@ -170,25 +170,27 @@ export function resolveCrossNetworkRef(
   if (!ctx.accessibleNetworkIds.has(parsed.networkId)) {
     return { kind: 'unresolved', reason: 'permission_denied' };
   }
-  let ndb: NetworkDb | null = null;
+  let ndb: NetworkDb;
   try {
-    try {
-      const base = openNetworkDb(ctx.dataDir, parsed.networkId, ctx.logger);
-      const layer = resolveSessionLayer(base, ctx.userId, ctx.clientId);
-      ndb = openNetworkDb(ctx.dataDir, parsed.networkId, ctx.logger, layer.id);
-    } catch {
-      return { kind: 'unresolved', reason: 'network_not_found' };
-    }
-    const row = ndb
-      .prepare(`SELECT title FROM thoughts_v WHERE id = ?`)
-      .get(parsed.thoughtId) as { title: string } | undefined;
-    if (row === undefined) {
-      return { kind: 'unresolved', reason: 'thought_not_found' };
-    }
-    return { kind: 'resolved', title: row.title };
-  } finally {
-    ndb?.close();
+    const base = openNetworkDb(ctx.dataDir, parsed.networkId, ctx.logger);
+    const layer = resolveSessionLayer(base, ctx.userId, ctx.clientId);
+    ndb = openNetworkDb(ctx.dataDir, parsed.networkId, ctx.logger, layer.id);
+  } catch {
+    return { kind: 'unresolved', reason: 'network_not_found' };
   }
+  // Соединение целевой сети НЕ закрываем: `openNetworkDb` — общий реестр
+  // соединений, тот же экземпляр (network, layer) переиспользуют и другие
+  // вызовы. Закрытие здесь оставляло в реестре закрытый дескриптор: следующий
+  // резолв/запись в ту же сеть получал мёртвое соединение и отвечал
+  // `unresolved` (вскрыто честной записью `cross_network_ref`, ошибка
+  // 052c84b2). Так же поступает соседний `openNetworkDbForCrossNetwork`.
+  const row = ndb
+    .prepare(`SELECT title FROM thoughts_v WHERE id = ?`)
+    .get(parsed.thoughtId) as { title: string } | undefined;
+  if (row === undefined) {
+    return { kind: 'unresolved', reason: 'thought_not_found' };
+  }
+  return { kind: 'resolved', title: row.title };
 }
 
 /**
