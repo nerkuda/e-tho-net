@@ -47,22 +47,22 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Батч-запись онтологии',
       description:
         'Идемпотентный upsert онтологии сети одной транзакцией: `thought_types[]` / `link_types[]` / ' +
-        '`properties[]` / `type_properties[]` / `type_views[]` (задача c1fa71d4, 0.7.3). ' +
+        '`properties[]` / `type_properties[]` / `type_views[]`. ' +
         'Upsert по `id` XOR имени — повторный вызов с теми же аргументами не меняет состояние ' +
         '(`action: unchanged` для каждого элемента). Локальные `ref` ' +
         '(`parent_ref` для типов, `type_ref`/`property_ref` для привязок, ' +
         '`thought_type_ref`/`ref_for_update` для отборов) действуют только внутри батча. ' +
         'Цикл `parent_ref` → VALIDATION_ERROR. Смена `value_type` свойства использует ту же доменную ' +
         'функцию конверсии, что `PATCH /properties/{id}`; ответ несёт `converted_values`/`dropped_values`. ' +
-        'Свойство-связь ↔ link_type — единый жизненный цикл (0.8.1, требование 09f692ff): ' +
+        'Свойство-связь ↔ link_type — единый жизненный цикл: ' +
         '`properties[]` с `value_type="link"` и парой `name_forward`/`name_reverse` создаёт ' +
         'связанный link_type автоматически. `type_properties[].side` — `source`/`target`, ' +
-        'сторона привязки свойства-связи. `type_properties[].default_value` — дефолт привязки ' +
-        '(0.8.2): скаляр, `null` (сброс) или массив id мыслей; пишется строкой ' +
+        'сторона привязки свойства-связи. `type_properties[].default_value` — дефолт привязки: ' +
+        'скаляр, `null` (сброс) или массив id мыслей; пишется строкой ' +
         '`type_property_overrides` с учётом стороны привязки. ' +
         '`type_views[]` — отборы типов мыслей: ' +
         '`action: create|update|delete`, `thought_type` XOR `thought_type_ref`. ' +
-        'Смена `parent`/`parent_ref` у типа мысли или связи (задача 8ea1ab6a, 0.8.2): ' +
+        'Смена `parent`/`parent_ref` у типа мысли или связи: ' +
         'интерактива нет, MCP применяет правила немедленно. Если в ЛЮБОМ живом ' +
         '(не базовом) слое есть мысли (для thought-types) или связи (для link-types) ' +
         'с типом из множества {изменяемый + потомки + старый/новый родитель} — ' +
@@ -275,7 +275,7 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Удалить элемент онтологии',
       description:
         'Удалить одну сущность онтологии (`thought_type` / `link_type` / `property` / `type_property` ' +
-        '/ `type_view`, задача c1fa71d4 / 0.7.3). ' +
+        '/ `type_view`). ' +
         'Без `force` отвергается на используемых элементах со счётчиками в `details` ' +
         '(`thoughts_count` / `links_count` / `property_values_count` / `type_properties_count`). ' +
         'С `force` — каскад по правилам: `thought_type` обнуляет `type_id` связанных мыслей + ' +

@@ -139,7 +139,7 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Мысль целиком: свойства, синонимы, тип (с описанием для AI), стили и значения свойств. ' +
         'Блок `meta` — счётчики связей/вложений/хроники и **полный** текст постоянного ' +
-        'комментария (как у `etn.thoughts.get`, задача 3ea09a54).',
+        'комментария (как у `etn.thoughts.get`).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>

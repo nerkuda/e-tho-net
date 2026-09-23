@@ -202,7 +202,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         'Циклы `ref`/`target_ref` разрешены ' +
         '(фаза 2 — мысли, фаза 3 — связи). ' +
         'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
-        '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +
+        '`properties.set`, `comments.upsert` — единственная замена этих операций. Один write-бюджет + одна ' +
         'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
         '`etn.how_to_write_batch`. Неизвестные ключи верхнего уровня (например, `links` вне ' +
         '`thoughts[]`) отвергаются `VALIDATION_ERROR` (`details.fields`), а не игнорируются.',

@@ -163,7 +163,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Резолв кросс-сетевой ссылки',
       description:
-        'Resolve a cross-network property value (задача 7849008a, ADR ae8346d0): ' +
+        'Resolve a cross-network property value: ' +
         'for every visible value of the property opens the target network, ' +
         'reads the target title, updates the snapshot; target/network gone → ' +
         'marks value as `unresolved` while keeping the old title. Service record — ' +

@@ -245,7 +245,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
       title: 'Восстановить связь из корзины',
       description:
         'Restore a link from the trash (`trashed: false`). The only remaining operation of the former ' +
-        '`etn.links.*` family — creation and deletion moved to property operations (0.8.1). ' +
+        '`etn.links.*` family — creation and deletion moved to property operations. ' +
         'Returns { id, version }.',
       inputSchema: LinksRestore.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.restore'],

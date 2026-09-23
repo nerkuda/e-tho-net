@@ -30,7 +30,7 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         'AI-facing `description` and effective property definitions (own + inherited along the type ' +
         'chain): `key`, `value_type`, `required`, `config` (incl. `options`/`allowed_type_ids`), ' +
         '`default_value`, `inherited`, `defined_on`, `property_id` (the registry id). Каждый ' +
-        'тип мысли несёт собственные `views[]` (задача c1fa71d4, 0.7.3): имя, ' +
+        'тип мысли несёт собственные `views[]`: имя, ' +
         'описание и `is_default` отборов этого типа без наследования от предков ' +
         '(эффективный набор для конкретной мысли — через `etn.thoughts.get { meta.views }`). ' +
         'Call before creating a typed thought/link; also lets `type_id` be replaced by a type name in ' +

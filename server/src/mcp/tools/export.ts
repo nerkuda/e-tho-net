@@ -21,8 +21,8 @@ export function registerExportTool(mcp: McpServer, rt: McpRuntime): void {
       title: 'Экспорт подграфа',
       description:
         'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default), HTML or ' +
-        '`.etnx` (zip-архив с мыслями, связями, типами, комментариями, вложениями — задача e488f4c1, ' +
-        '0.7.2). Для `etnx` опции `include_types`/`include_attachments`/`include_chronology`/`include_subtree` ' +
+        '`.etnx` (zip-архив с мыслями, связями, типами, комментариями, вложениями). ' +
+        'Для `etnx` опции `include_types`/`include_attachments`/`include_chronology`/`include_subtree` ' +
         'передаются через `etnx_options`. `format: "etnx"` возвращает base64-строку архива в `content_b64`.',
       inputSchema: ExportSubgraph.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.export.subgraph'],
