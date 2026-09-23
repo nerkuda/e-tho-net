@@ -11,7 +11,9 @@
  *     комментарий целиком, без обрезки);
  *   * `{ keywords }` — фильтр по title+synonyms мини-синтаксом
  *     (`whitespace-AND`, `-word` исключение);
- *   * без обоих — все актуальные инструкции (пейджинг `limit`/`offset`).
+ *   * без обоих — корневые актуальные инструкции (пейджинг `limit`/`offset`);
+ *     под-инструкции (у которых родитель — тоже инструкция) в перечень не
+ *     попадают — их находит `keywords` из текста корневой инструкции.
  *
  * Если роль `instructions` не задана — `{ has_instructions: false,
  * instructions: [] }` без ошибки. Только актуальные мысли; помеченные на
@@ -19,7 +21,7 @@
  * Читается из переданного `ndb` — фасад решает, какой контекст слоя открыть.
  */
 
-import { EtnError, buildLikePattern, parseFilterKeywords } from '@etn/shared';
+import { COMMENT_PREVIEW_CHARS, EtnError, buildLikePattern, parseFilterKeywords } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
@@ -70,6 +72,21 @@ export interface NetworkInstructionsQuery {
   keywords?: string;
   limit?: number;
   offset?: number;
+  /**
+   * Режим без `keywords`: отдавать только корневые инструкции (мысль типа
+   * «инструкция», у которой среди родителей нет другой инструкции) — модель
+   * скиллов витрины `etn.instructions` (требование «Перечень etn.instructions
+   * отдаёт только корневые инструкции»). По умолчанию `false` — REST-фасад
+   * `GET /networks/:id/instructions` сохраняет прежнее поведение (все
+   * инструкции); MCP-витрина передаёт `true`.
+   */
+  rootsOnly?: boolean;
+  /**
+   * Предел превью постоянного комментария в перечне (символы). По умолчанию
+   * {@link COMMENT_PREVIEW_CHARS}; MCP-витрина ужимает до
+   * {@link INSTRUCTIONS_PREVIEW_CHARS}.
+   */
+  previewChars?: number;
 }
 
 /** Ключевое слово: название или синоним, регистронезависимо, LIKE-паттерном. */
@@ -104,9 +121,31 @@ function keywordClauseFor(keywords: string | undefined): {
 }
 
 /**
+ * SQL-условие «корневая инструкция»: среди родителей мысли нет другой
+ * инструкции (мысли того же поддерева типов роли `instructions`). Родительские
+ * рёбра — структурные (нетипизированные). Живые родители: активные и не в
+ * корзине. `placeholders` — заполнители под `instructionsTypeIds`; условие
+ * использует их повторно, поэтому при связывании параметров набор типов
+ * передаётся второй раз.
+ */
+function rootInstructionClause(placeholders: string): string {
+  return (
+    ' AND NOT EXISTS (' +
+    'SELECT 1 FROM links_v l JOIN thoughts_v p ON p.id = l.source_id' +
+    ' WHERE l.target_id = t.id AND l.active = 1 AND l.marked_for_deletion = 0' +
+    ` AND p.type_id IN (${placeholders})` +
+    ' AND p.active = 1 AND p.marked_for_deletion = 0)'
+  );
+}
+
+/**
  * Страница инструкций: тип + фильтр по ключевым словам, вторичная
  * сортировка по названию. Синонимы подгружаются одним дополнительным
  * запросом на страницу.
+ *
+ * `rootsOnly` — режим без ключевых слов: отдаются только корневые инструкции
+ * (модель скиллов); в режиме `keywords` фильтр не применяется — ищем по всем
+ * инструкциям, включая подчинённые.
  */
 function fetchInstructionsList(
   ndb: NetworkDb,
@@ -114,10 +153,14 @@ function fetchInstructionsList(
   keywords: string | undefined,
   limit: number,
   offset: number,
+  rootsOnly: boolean,
+  previewChars: number,
 ): InstructionsListItem[] {
   if (instructionsTypeIds.length === 0) return [];
   const placeholders = instructionsTypeIds.map(() => '?').join(',');
   const keyword = keywordClauseFor(keywords);
+  const rootClause = rootsOnly ? rootInstructionClause(placeholders) : '';
+  const rootParams = rootsOnly ? instructionsTypeIds : [];
 
   const rows = ndb
     .prepare(
@@ -125,11 +168,17 @@ function fetchInstructionsList(
          FROM thoughts_v t
         WHERE t.type_id IN (${placeholders})
           AND t.active = 1
-          AND t.marked_for_deletion = 0${keyword.sql}
+          AND t.marked_for_deletion = 0${keyword.sql}${rootClause}
         ORDER BY t.title COLLATE NOCASE ASC, t.created_at ASC
         LIMIT ? OFFSET ?`,
     )
-    .all(...instructionsTypeIds, ...keyword.params, limit, offset) as Array<{
+    .all(
+      ...instructionsTypeIds,
+      ...keyword.params,
+      ...rootParams,
+      limit,
+      offset,
+    ) as Array<{
     id: string;
     title: string;
     type_id: string | null;
@@ -159,9 +208,10 @@ function fetchInstructionsList(
     id: row.id,
     title: row.title,
     synonyms: synonymsById.get(row.id) ?? [],
-    // Превью — короткая подстрока постоянного комментария (200 символов);
-    // полный текст — через `etn.comments.get`.
-    preview: getPermanentPreview(ndb, 'thought', row.id),
+    // Превью — короткая подстрока постоянного комментария (MCP-витрина —
+    // 300 символов, «Когда применять»); полный текст — по `instruction_id`
+    // либо через `etn.comments.get`.
+    preview: getPermanentPreview(ndb, 'thought', row.id, previewChars),
     type_id: row.type_id,
   }));
 }
@@ -243,24 +293,34 @@ export function getNetworkInstructions(
   const limit = Math.min(Math.max(query.limit ?? 50, 1), 200);
   const offset = Math.max(query.offset ?? 0, 0);
   const keywords = query.keywords;
+  // Режим без ключевых слов — только корневые инструкции (модель скиллов,
+  // требование «Перечень etn.instructions отдаёт только корневые инструкции»).
+  // `keywords` ищет по всем, включая подчинённые. Включается опцией
+  // `rootsOnly` — REST-фасад её не передаёт и сохраняет прежнее поведение.
+  const rootsOnly = query.rootsOnly === true && keywords === undefined;
+  const previewChars = query.previewChars ?? COMMENT_PREVIEW_CHARS;
 
   const keyword = keywordClauseFor(keywords);
   const placeholders = instructionsTypeIds.map(() => '?').join(',');
+  const rootClause = rootsOnly ? rootInstructionClause(placeholders) : '';
+  const rootParams = rootsOnly ? instructionsTypeIds : [];
   const totalRow = ndb
     .prepare(
       `SELECT COUNT(*) AS c
          FROM thoughts_v t
         WHERE t.type_id IN (${placeholders})
           AND t.active = 1
-          AND t.marked_for_deletion = 0${keyword.sql}`,
+          AND t.marked_for_deletion = 0${keyword.sql}${rootClause}`,
     )
-    .get(...instructionsTypeIds, ...keyword.params) as { c: number };
+    .get(...instructionsTypeIds, ...keyword.params, ...rootParams) as { c: number };
   const instructions = fetchInstructionsList(
     ndb,
     instructionsTypeIds,
     keywords,
     limit,
     offset,
+    rootsOnly,
+    previewChars,
   );
   return {
     has_instructions: true,

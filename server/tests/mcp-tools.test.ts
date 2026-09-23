@@ -628,9 +628,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        // Build a small graph: 2 children of HOME with long permanent
-        // comments. The topology is tiny, so a moderate `max_chars` forces
-        // the preview-shortening step without dropping any node.
+        // Build a small graph: 2 children of HOME with a long permanent
+        // comment AND a long chronological entry. The topology is tiny, so a
+        // moderate `max_chars` forces the preview-shortening step without
+        // dropping any node. (С 0.8.3 базовое превью permanent — 600 символов,
+        // поэтому объём набирается ещё и хронологией с её базовыми 2000.)
         const ids: string[] = [];
         for (let i = 0; i < 2; i++) {
           const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
@@ -639,6 +641,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             // Permanent preview body of ~3000 chars on every node.
             comment: { body_md: 'z'.repeat(3000) },
           });
+          await addChronicleViaWrite(
+            handle.client,
+            ctx.networkId,
+            created.id,
+            'y'.repeat(2500),
+            '2026-09-23',
+          );
           ids.push(created.id);
         }
 
@@ -667,6 +676,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           comments: Array<{
             thought_id: string;
             permanent: { body_md: string } | null;
+            chronological: { entries: Array<{ body_md: string }> };
           }>;
         }>(sub);
 
@@ -683,6 +693,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             assert.ok(
               c.permanent.body_md.length <= 500,
               `permanent body for ${c.thought_id} must be trimmed to the budget floor (got ${c.permanent.body_md.length})`,
+            );
+          }
+          for (const entry of c.chronological.entries) {
+            assert.ok(
+              entry.body_md.length <= 500,
+              `chronological body for ${c.thought_id} must be trimmed to the budget floor (got ${entry.body_md.length})`,
             );
           }
         }
@@ -1345,14 +1361,23 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // is absent, so `has_structure` is false. The full dictionary is
         // echoed back so an agent sees the current role configuration.
         assert.deepEqual(data.type_roles, {});
-        // Bug fix: `conventions` must always come back (null when unset), even
-        // when the network has no structure at all — the field is unrelated
-        // to the structure role.
-        assert.equal(data.conventions, null);
+        // 0.8.3 (требование «networks.structure отдаёт худой перечень
+        // разделов», задача 2ea88bba): `conventions` вынесены в опциональный
+        // параметр `include_conventions` — по умолчанию не включаются.
+        assert.equal(data.conventions, undefined);
         // `examples` is intentionally omitted unless `include_examples: true`.
         assert.equal(data.examples, undefined);
         assert.deepEqual(data.sections, []);
         assert.deepEqual(data.thought_types, []);
+
+        // Явный запрос возвращает `conventions` (null для сети без него).
+        const withConventions = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId, include_conventions: true },
+        });
+        assert.equal(withConventions.isError, undefined, toolText(withConventions));
+        const dataWithConventions = toolJson<{ conventions: string | null }>(withConventions);
+        assert.equal(dataWithConventions.conventions, null);
       } finally {
         await handle.close();
       }
@@ -1382,17 +1407,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(withoutExamples.isError, undefined, toolText(withoutExamples));
         const dataDefault = toolJson<{
-          conventions: string | null;
+          conventions?: string | null;
           examples?: unknown;
         }>(withoutExamples);
-        assert.equal(dataDefault.conventions, 'Пиши хронологию с датой в ISO-8601.');
+        // 0.8.3: `conventions` по умолчанию не включаются (задача 2ea88bba).
+        assert.equal(dataDefault.conventions, undefined);
         // Default call does not carry `examples` — it can be long and most
         // orientation flows do not need it.
         assert.equal(dataDefault.examples, undefined);
 
         const withExamples = await handle.client.callTool({
           name: 'etn.networks.structure',
-          arguments: { network_id: ctx.networkId, include_examples: true },
+          arguments: { network_id: ctx.networkId, include_examples: true, include_conventions: true },
         });
         assert.equal(withExamples.isError, undefined, toolText(withExamples));
         const dataWithExamples = toolJson<{
@@ -1503,10 +1529,9 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(data.has_structure, true);
         assert.equal(data.type_roles.table_of_contents, sectionType.id);
         assert.equal(data.node_section_type.id, sectionType.id);
-        // Bug fix: `conventions` rides along with the structure response even
-        // when `has_structure: true` (the field it fixes is independent of
-        // the node-section mechanism). `examples` stays out by default.
-        assert.equal(data.conventions, 'Именуй разделы существительными в единственном числе.');
+        // 0.8.3 (задача 2ea88bba): `conventions` по умолчанию не включаются —
+        // запрашиваются явно `include_conventions: true`. `examples` — так же.
+        assert.equal(data.conventions, undefined);
         assert.equal(data.examples, undefined);
 
         // Inactive "Скрытый" is excluded; only the two active section nodes remain.

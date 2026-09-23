@@ -27,6 +27,10 @@
  * не сериализуются вовсе: агент отличает «поля нет» от «поле пусто» по
  * контракту инструмента, а пустой контейнер — только зря жжёт токены.
  *
+ * Отдельно {@link stripStructuralLinkProperties} — перечень разделов
+ * `etn.networks.structure` не несёт структурные свойства-связи
+ * («Родители»/«Потомки»): их числа уже есть в `counters`.
+ *
  * Точечный `etn.thoughts.get` сохраняет полную проекцию: он НЕ использует
  * {@link projectThoughtRow}, у него собственная форма (`toCompactThought` в
  * `catalogs.ts`), где сервисные поля и `synonyms` остаются.
@@ -183,4 +187,31 @@ export function omitEmptyContainers<T>(payload: T): T {
     if (EMPTY_CONTAINERS.has(key) && isEmptyContainer(key, out[key])) delete out[key];
   }
   return out as T;
+}
+
+// ---------------------------------------------------------------------------
+// Перечень разделов `etn.networks.structure`
+// ---------------------------------------------------------------------------
+
+/**
+ * Снять со строки-раздела `etn.networks.structure` структурные свойства-связи
+ * («Родители»/«Потомки») из блока `properties`. Требование «networks.structure
+ * отдаёт худой перечень разделов»: разделу достаточно счётчиков `counters`
+ * (в них те же числа), дубль в `properties` недопустим. Скалярные и
+ * типизированные свойства-связи сохраняются — их агент не может получить
+ * иначе.
+ */
+export function stripStructuralLinkProperties<T extends { properties?: unknown }>(row: T): T {
+  const props = row.properties;
+  if (!Array.isArray(props)) return row;
+  const filtered = props.filter(
+    (p) =>
+      !(
+        p !== null &&
+        typeof p === 'object' &&
+        (p as { structural?: unknown }).structural === true
+      ),
+  );
+  if (filtered.length === props.length) return row;
+  return { ...row, properties: filtered as T['properties'] };
 }

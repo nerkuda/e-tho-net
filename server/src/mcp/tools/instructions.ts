@@ -8,7 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
 import { Instructions } from '../../contracts.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import { EtnError, INSTRUCTIONS_PREVIEW_CHARS, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
 import { projectThoughtRows } from '../projection.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
@@ -21,7 +21,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   //   * `{ network_id, instruction_id }` — полный текст одной инструкции
   //     (постоянный комментарий мысли целиком, без обрезки);
   //   * `{ network_id, keywords }` — фильтр по title+synonyms мини-синтаксом;
-  //   * `{ network_id }` — все актуальные инструкции сети.
+  //   * `{ network_id }` — корневые актуальные инструкции сети (модель скиллов).
   //
   // Если роль `instructions` не задана, ответ — `{ has_instructions: false, instructions: [] }`
   // (без ошибки). Только актуальные мысли; помеченные на удаление исключаются;
@@ -44,7 +44,9 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Read the network\'s instructions. Three modes: `{ network_id, instruction_id }` returns the FULL ' +
         'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
-        'whitespace-AND, `-word` exclusion); `{ network_id }` returns every active instruction. When the network ' +
+        'whitespace-AND, `-word` exclusion) across ALL instructions, sub-instructions included; `{ network_id }` ' +
+        'returns every active ROOT instruction (skill model — an instruction whose parent is not another ' +
+        'instruction), previews capped at 300 chars. When the network ' +
         'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
       inputSchema: Instructions.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
@@ -66,6 +68,12 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
           network.type_roles.instructions ?? null,
           args.network_id,
           {
+            // MCP-витрина — модель скиллов: без `keywords` только корневые
+            // инструкции, превью постоянного комментария 300 символов
+            // (требование «Перечень etn.instructions отдаёт только корневые
+            // инструкции»). REST-фасад этих опций не передаёт.
+            rootsOnly: true,
+            previewChars: INSTRUCTIONS_PREVIEW_CHARS,
             ...(args.instruction_id !== undefined
               ? { instructionId: args.instruction_id }
               : {}),

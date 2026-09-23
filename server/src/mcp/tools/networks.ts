@@ -8,7 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
 import { NetworksDelete, NetworksStructure, NetworksWrite } from '../../contracts.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, validateTypeRoles } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, STRUCTURE_SECTION_PREVIEW_CHARS, validateTypeRoles } from '@etn/shared';
 import type { Network } from '@etn/shared';
 import { getPermanentPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getPropertyValuesResolved } from '../../domain/property-service.js';
@@ -17,7 +17,7 @@ import { emitDomainEvent } from '../../realtime/emit.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
-import { projectTypeRow, projectTypeRows } from '../projection.js';
+import { projectTypeRow, projectTypeRows, stripStructuralLinkProperties } from '../projection.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { assertNetworkAccess, auditAgentCall, openMemberNetwork, requireWritable, requireWriteBudget, runTool, runWriteTool } from '../context.js';
 import { updateNetwork } from '../../domain/network-write-service.js';
@@ -55,12 +55,12 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
   // (there is no `etn.networks.get`, and the ZCode MCP client does not expose
   // resources to the agent at all), so `conventions`/`examples` were
   // write-only from the agent's point of view. `etn.networks.structure` is
-  // already the tool an agent calls first when orienting in a network, so we
-  // piggy-back `conventions` on its response — no extra round trip. `examples`
-  // stays out of the default payload (worked examples tend to be long, and
-  // most orientation flows don't need them): it is returned only when the
-  // caller opts in via `include_examples`, mirroring the "explicit request"
-  // resolution the bug report itself proposed for that field.
+  // already the tool an agent calls first when orienting in a network. Both
+  // `conventions` and `examples` stay OUT of the default payload — they are
+  // long, and most orientation flows don't need them; each is returned only
+  // when the caller opts in (`include_conventions` / `include_examples`).
+  // Требование «networks.structure отдаёт худой перечень разделов» (0.8.3)
+  // перевело `conventions` из always-on в опциональный параметр.
   //
   // The response also carries the full `type_roles` dictionary and a
   // conditional `instructions_ref` hint when the network has set the
@@ -72,9 +72,11 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
       title: 'Структура сети',
       description:
         'Read the structure declared via `type_roles.table_of_contents`: active thoughts of that type ' +
-        'with permanent-comment previews (2000 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
-        'property values, neighbour counters, `thought_types`. Carries `conventions`, `type_roles` and ' +
-        '`instructions_ref` when the `instructions` role is set. `include_examples: true` adds `examples`. ' +
+        'with permanent-comment previews (600 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
+        'property values (structural link properties «Родители»/«Потомки» are summarized by `counters` ' +
+        'and not repeated), neighbour counters, `thought_types`. `include_conventions: true` adds ' +
+        '`conventions` (off by default); `include_examples: true` adds `examples`. Carries `type_roles` and ' +
+        '`instructions_ref` when the `instructions` role is set. ' +
         '`has_structure: false` → empty `sections`, fall back to search/query.',
       inputSchema: NetworksStructure.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
@@ -91,6 +93,11 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         assertNetworkAccess(rt, args.network_id);
         const examplesField =
           args.include_examples === true ? { examples: network.examples } : {};
+        // Требование «networks.structure отдаёт худой перечень разделов»:
+        // `conventions` вынесены в опциональный параметр — по умолчанию не
+        // включаются (полный вход в сеть — явным запросом).
+        const conventionsField =
+          args.include_conventions === true ? { conventions: network.conventions } : {};
         const sectionTypeId =
           typeof network.type_roles.table_of_contents === 'string'
             ? network.type_roles.table_of_contents
@@ -113,7 +120,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
             network_id: args.network_id,
             has_structure: false as const,
             type_roles: network.type_roles,
-            conventions: network.conventions,
+            ...conventionsField,
             ...instructionsField,
             ...examplesField,
             sections: [],
@@ -134,7 +141,12 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         const sections = projectTypeRows(
           rows.map((row) => {
             const meta = getThoughtMeta(ndb, row.id);
-            const permanent = getPermanentPreview(ndb, 'thought', row.id);
+            const permanent = getPermanentPreview(
+              ndb,
+              'thought',
+              row.id,
+              STRUCTURE_SECTION_PREVIEW_CHARS,
+            );
             const properties = getPropertyValuesResolved(ndb, 'thought', row.id, accessibleNetworkIds);
             const usage = findThoughtUsage(ndb, row.id);
             return {
@@ -153,7 +165,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
               properties,
             };
           }),
-        );
+        ).map(stripStructuralLinkProperties);
 
         // O10: count every section the agent looked at while reading the
         // network's structure. `table_of_contents` rows are typically a
@@ -189,7 +201,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
           has_structure: true as const,
           type_roles: network.type_roles,
           node_section_type: sectionType,
-          conventions: network.conventions,
+          ...conventionsField,
           ...instructionsField,
           ...examplesField,
           sections,

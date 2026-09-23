@@ -1129,7 +1129,11 @@ export const AttachmentsDelete = defineContract(
 
 export const NetworksStructure = defineContract(
   'etn.networks.structure',
-  z.object({ network_id: NetworkId, include_examples: z.boolean().optional() }),
+  z.object({
+    network_id: NetworkId,
+    include_examples: z.boolean().optional(),
+    include_conventions: z.boolean().optional(),
+  }),
   {},
 );
 

@@ -276,6 +276,29 @@ export const COMMENT_PREVIEW_CHARS = 2000;
 export const CHRONO_PREVIEW_MAX_ENTRIES = 10;
 
 /**
+ * Пределы превью постоянного комментария для обзорных перечней (задача 2ea88bba,
+ * требование «Перечень etn.instructions отдаёт только корневые инструкции» /
+ * «networks.structure отдаёт худой перечень разделов» / блок «Актуализация
+ * 0.8.3» требования «Бюджет ответа subgraph: max_chars»).
+ *
+ * Общие точечные выборки (`etn.thoughts.search`/`get`/`resolve`, `meta.permanent`)
+ * по-прежнему используют {@link COMMENT_PREVIEW_CHARS} (2000). Перечни, которые
+ * агент читает при ориентировке целиком, ужимают превью сильнее: агенту хватает
+ * блока «Когда применять» (инструкции) или шаблона «Зачем / Что лежит / Как
+ * искать» (разделы), а полный текст он читает через `etn.comments.get`.
+ */
+export const INSTRUCTIONS_PREVIEW_CHARS = 300;
+
+/** См. {@link INSTRUCTIONS_PREVIEW_CHARS}. Превью постоянного комментария раздела
+ *  `etn.networks.structure` — до 600 символов. */
+export const STRUCTURE_SECTION_PREVIEW_CHARS = 600;
+
+/** См. {@link INSTRUCTIONS_PREVIEW_CHARS}. Превью постоянного комментария узла
+ *  `etn.thoughts.subgraph` — до 600 символов (хронология остаётся
+ *  {@link COMMENT_PREVIEW_CHARS}). */
+export const SUBGRAPH_PERMANENT_PREVIEW_CHARS = 600;
+
+/**
  * Floor length (in characters) for comment bodies inside `etn.thoughts.subgraph`
  * responses when the server is squeezing the JSON under a `max_chars` budget
  * (task O13). The first shrink step trims every permanent / chronological

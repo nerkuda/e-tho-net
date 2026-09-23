@@ -25,6 +25,12 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import {
+  INSTRUCTIONS_PREVIEW_CHARS,
+  STRUCTURE_SECTION_PREVIEW_CHARS,
+  SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+} from '@etn/shared';
+
 import { openNetworkDb } from '../src/db/network-db.js';
 import {
   COMPACT_EMPTY_CONTAINER_KEYS,
@@ -40,6 +46,7 @@ import {
   nativeAvailable,
   toolJson,
   toolText,
+  upsertPermanentViaWrite,
   type ClientCallToolResult,
   type McpTestContext,
 } from './mcp-helpers.js';
@@ -91,10 +98,13 @@ interface Fixture {
   grandId: string;
   sectionId: string;
   instructionId: string;
+  nestedInstructionId: string;
   searchId: string;
   trashedId: string;
   versionTypeId: string;
   sectionTypeId: string;
+  /** Маркер `conventions` сети — проверяет включение по `include_conventions`. */
+  conventionsMarker: string;
 }
 
 /** Прямая SQL-вставка типа мысли (MCP-инструмента создания типа нет). */
@@ -222,6 +232,13 @@ function seedFixture(ctx: McpTestContext): Fixture {
     userId,
   });
   insertLink(ndb, ctx.homeId, instructionId, null, { userId });
+  // Под-инструкция: родитель — сама инструкция (модель скиллов). В перечень
+  // без `keywords` попадать не должна; `keywords` её находит.
+  const nestedInstructionId = insertRichThought(ndb, 'Под-инструкция сети', {
+    typeId: instructionTypeId,
+    userId,
+  });
+  insertLink(ndb, instructionId, nestedInstructionId, null, { userId });
 
   const trashedId = insertRichThought(ndb, 'Корзинная мысль', {
     typeId: null,
@@ -233,12 +250,13 @@ function seedFixture(ctx: McpTestContext): Fixture {
   void trashedLinkId;
 
   // Роли сети: структура (оглавление) и витрина инструкций.
+  const conventionsMarker = 'Маркер conventions сторожа проекции.';
   const current = ctx.sys.getNetworkById(ctx.networkId)!;
   ctx.sys.updateNetwork(ctx.networkId, {
     displayName: current.display_name,
     description: current.description,
     when_to_use: current.when_to_use,
-    conventions: current.conventions,
+    conventions: conventionsMarker,
     examples: current.examples,
     type_roles: { table_of_contents: sectionTypeId, instructions: instructionTypeId },
   });
@@ -248,10 +266,12 @@ function seedFixture(ctx: McpTestContext): Fixture {
     grandId,
     sectionId,
     instructionId,
+    nestedInstructionId,
     searchId: '',
     trashedId,
     versionTypeId,
     sectionTypeId,
+    conventionsMarker,
   };
 }
 
@@ -414,7 +434,14 @@ function responseBytes(result: ClientCallToolResult): number {
  * Фактические значения, измеренные на фикстуре (2026-09-23, ветка 0.8.3):
  *
  *   search=526, views.run=918, resolve=3271, neighbors=1140,
- *   subgraph=5221, instructions=334, networks.structure=1704, types.list=3856
+ *   subgraph=5221, instructions=334, networks.structure=1681, types.list=3856
+ *
+ * `networks.structure` слегка уменьшился (1704 → 1681): из разделов ушли
+ * структурные свойства-связи «Родители»/«Потомки» (требование «networks.structure
+ * отдаёт худой перечень разделов», задача 2ea88bba). Пределы превью
+ * (инструкции 300, раздел 600, узел subgraph 600) здесь не видны — фикстура
+ * этого теста держит короткие комментарии; их отдельно проверяет
+ * describe «худые перечни MCP» ниже.
  *
  * Пороги — «факт × ~1,4», чтобы правка с ожидаемым ростом данных не краснила
  * зря, а утечка визуальных/сервисных полей или возврат пустых контейнеров
@@ -428,7 +455,7 @@ const RESPONSE_BUDGET_BYTES = {
   neighbors: 1700,
   subgraph: 7500,
   instructions: 600,
-  structure: 2600,
+  structure: 2400,
   typesList: 5500,
 } as const;
 
@@ -515,19 +542,20 @@ describe('guard: бюджеты объёма типовых ответов MCP (
         ];
 
         const measured: string[] = [];
+        const overBudget: string[] = [];
         for (const testCase of cases) {
           const result = await testCase.call();
           assert.equal(result.isError, undefined, `${testCase.name}: ${toolText(result)}`);
           const bytes = responseBytes(result);
           measured.push(`${testCase.name}=${bytes}`);
-          assert.ok(
-            bytes <= testCase.budget,
-            `${testCase.name}: ответ ${bytes} Б превышает бюджет ${testCase.budget} Б`,
-          );
+          if (bytes > testCase.budget) {
+            overBudget.push(`${testCase.name}: ответ ${bytes} Б превышает бюджет ${testCase.budget} Б`);
+          }
         }
-        // Фактические значения фиксируются в выводе теста — при регрессии
-        // объёма видно, насколько и куда он уехал.
+        // Фактические значения фиксируются в выводе теста ДО проверки порогов:
+        // при регрессии объёма видно все размеры, а не только первый провал.
         console.log(`[budgets] фактические размеры: ${measured.join(', ')}`);
+        assert.deepEqual(overBudget, [], overBudget.join('; '));
       } finally {
         await handle.close();
       }
@@ -590,6 +618,154 @@ describe('guard: бюджеты объёма типовых ответов MCP (
         for (const key of COMPACT_VISUAL_FIELD_KEYS) {
           assert.equal(key in card, false, `get: визуальное поле «${key}» должно быть снято`);
         }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
+describe('guard: худые перечни MCP — инструкции/structure/subgraph (задача 2ea88bba)', { skip: !nativeAvailable() }, () => {
+  /** Размер JSON-ответа в байтах UTF-8 (локально: `responseBytes` живёт в
+   *  блоке другого describe). */
+  const bytesOf = (result: ClientCallToolResult): number =>
+    Buffer.byteLength(toolText(result), 'utf8');
+
+  interface InstructionRow {
+    id: string;
+    preview: { body_md: string; truncated: boolean; chars_returned: number } | null;
+  }
+  interface StructureRow {
+    id: string;
+    permanent: { body_md: string; truncated: boolean } | null;
+    properties: Array<{ structural?: boolean }>;
+  }
+
+  it('instructions — только корневые + превью ≤ 300; structure — ≤ 600, без structural-свойств, conventions по флагу; subgraph — permanent ≤ 600', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const fixture = seedFixture(ctx);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const client = handle.client;
+        const longComment = 'Текст постоянного комментария для проверки предела превью. '.repeat(60);
+
+        // Отдельные мысли с длинными комментариями: не пересекаются с карточками
+        // resolve, поэтому раздувают только целевые перечни.
+        await upsertPermanentViaWrite(client, ctx.networkId, fixture.instructionId, longComment);
+        const longInstruction = await createThoughtViaWrite(client, ctx.networkId, {
+          title: 'Длинная корневая инструкция',
+          type: 'инструкция',
+          comment: { body_md: longComment },
+        });
+        const longSection = await createThoughtViaWrite(client, ctx.networkId, {
+          title: 'Длинный раздел',
+          type: 'раздел',
+          comment: { body_md: longComment },
+        });
+        const longNode = await createThoughtViaWrite(client, ctx.networkId, {
+          title: 'Длинный узел подграфа',
+          comment: { body_md: longComment },
+          link: { direction: 'child', target_thought_id: fixture.richId },
+        });
+
+        const instructionsRaw = await client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId },
+        });
+        const instructions = toolJson<{ instructions: InstructionRow[] }>(instructionsRaw);
+        const structureRaw = await client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId },
+        });
+        const structure = toolJson<{ conventions?: string; sections: StructureRow[] }>(structureRaw);
+        const subgraphRaw = await client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: {
+            network_id: ctx.networkId,
+            seed_ids: [longNode.id],
+            radius: 1,
+            include_comments: true,
+          },
+        });
+        const subgraph = toolJson<{
+          comments?: Array<{ thought_id: string; permanent: { body_md: string } | null }>;
+        }>(subgraphRaw);
+
+        // --- замер (до проверок, чтобы факт печатался и при провале) ---------
+        const longInstructionPreview = instructions.instructions.find(
+          (i) => i.id === longInstruction.id,
+        );
+        const longSectionRow = structure.sections.find((s) => s.id === longSection.id);
+        const longNodeComments = subgraph.comments?.find((c) => c.thought_id === longNode.id);
+        console.log(
+          `[preview] instructions.preview=${
+            longInstructionPreview?.preview?.body_md.length ?? -1
+          } structure.preview=${longSectionRow?.permanent?.body_md.length ?? -1} subgraph.permanent=${
+            longNodeComments?.permanent?.body_md.length ?? -1
+          } | bytes: instructions=${bytesOf(instructionsRaw)} structure=${bytesOf(
+            structureRaw,
+          )} subgraph=${bytesOf(subgraphRaw)}`,
+        );
+
+        // --- instructions: только корневые + превью ≤ 300 -------------------
+        const instructionIds = instructions.instructions.map((i) => i.id);
+        assert.ok(instructionIds.includes(fixture.instructionId), 'корневая инструкция в перечне');
+        assert.ok(
+          !instructionIds.includes(fixture.nestedInstructionId),
+          'под-инструкция НЕ должна попадать в перечень без keywords',
+        );
+        assert.ok(longInstructionPreview !== undefined, 'длинная корневая инструкция в перечне');
+        assert.equal(
+          longInstructionPreview!.preview!.body_md.length,
+          INSTRUCTIONS_PREVIEW_CHARS,
+          `превью инструкции обязано быть ${INSTRUCTIONS_PREVIEW_CHARS} символов`,
+        );
+        assert.equal(longInstructionPreview!.preview!.truncated, true, 'превью инструкции усечено');
+
+        // keywords ищет по всем инструкциям, включая подчинённые.
+        const byKeywords = (await call(client, 'etn.instructions', {
+          network_id: ctx.networkId,
+          keywords: 'Под-инструкция',
+        })) as { instructions: InstructionRow[] };
+        assert.ok(
+          byKeywords.instructions.some((i) => i.id === fixture.nestedInstructionId),
+          'keywords должен находить под-инструкцию',
+        );
+
+        // --- structure: превью ≤ 600, без structural, conventions по флагу --
+        assert.equal('conventions' in structure, false, 'conventions не включается по умолчанию');
+        assert.ok(longSectionRow !== undefined, 'длинный раздел в перечне');
+        assert.equal(
+          longSectionRow!.permanent!.body_md.length,
+          STRUCTURE_SECTION_PREVIEW_CHARS,
+          `превью раздела обязано быть ${STRUCTURE_SECTION_PREVIEW_CHARS} символов`,
+        );
+        for (const row of structure.sections) {
+          for (const prop of row.properties) {
+            assert.equal(prop.structural, undefined, 'structural-свойство не должно возвращаться');
+          }
+        }
+
+        const structureWithConventions = (await call(client, 'etn.networks.structure', {
+          network_id: ctx.networkId,
+          include_conventions: true,
+        })) as { conventions?: string };
+        assert.equal(
+          structureWithConventions.conventions,
+          fixture.conventionsMarker,
+          'include_conventions: true возвращает conventions сети',
+        );
+
+        // --- subgraph: permanent ≤ 600 --------------------------------------
+        assert.ok(longNodeComments !== undefined, 'комментарии узла подграфа присутствуют');
+        assert.equal(
+          longNodeComments!.permanent!.body_md.length,
+          SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+          `превью permanent узла обязано быть ${SUBGRAPH_PERMANENT_PREVIEW_CHARS} символов`,
+        );
       } finally {
         await handle.close();
       }

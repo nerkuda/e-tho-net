@@ -12,7 +12,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { checkThoughtDeletion, countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
 import { ThoughtsBacklinks, ThoughtsDeletionCheck, ThoughtsFindDuplicates, ThoughtsGet, ThoughtsMentions, ThoughtsNeighbors, ThoughtsPath, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
@@ -675,7 +675,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       description:
         'The key RAG tool: the radius-bounded subgraph around seeds — nodes, active edges, `thought_types`/' +
         '`link_types` reference tables, and with `include_comments` per-node comment previews (permanent ' +
-        'truncated to 2000 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
+        'truncated to 600 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
         '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
@@ -717,7 +717,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           args.include_comments === true
             ? result.nodes.map((id) => ({
                 thought_id: id,
-                ...omitEmptyContainers(getCommentsPreview(ndb, 'thought', id)),
+                ...omitEmptyContainers(
+                  getCommentsPreview(ndb, 'thought', id, {
+                    // Требование «Бюджет ответа subgraph: max_chars», блок
+                    // «Актуализация 0.8.3»: постоянный комментарий узла —
+                    // 600 символов; хронология остаётся 2000.
+                    permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+                  }),
+                ),
               }))
             : undefined;
         // O10: one batched UPSERT covers every node returned by the subgraph.
