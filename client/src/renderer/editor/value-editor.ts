@@ -49,14 +49,15 @@ import type {
   SearchNameHit,
   ThoughtRef,
 } from '@etn/shared';
-import { formatCrossNetworkAddress } from '@etn/shared';
+import { formatCrossNetworkAddress, parseCrossNetworkAddress } from '@etn/shared';
 
 import { store } from '../state.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
-import { markThoughtCommentPreview } from '../lib/hover-preview.js';
+import { markCrossNetworkThoughtPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
+import { loadCrossNetworkCandidates } from '../lib/entity-picker.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import {
@@ -214,133 +215,371 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
 }
 
 /**
- * Редактор кросс-сетевой ссылки (задача 7849008a, требования 6d4ad9ac и
- * 95511443). Сервер при чтении обогащает значение снапшотом
- * (`CrossNetworkRefValue[]`); редактор показывает имя цели и сеть рядом с
- * полем адреса. Сохранение идёт по адресу (`n:<network>#<thought>`) — поле
- * ввода остаётся адресным. Кнопка «обновить» дёргает IPC
- * `properties.crossResolve` и обновляет снапшот имени (служебная запись, без
- * write-бюджета и audit-строки — требование c104a0fc).
- *
- * Резолв по действию:
- *   * клик по чипу снапшота → переход в целевую сеть (`openWikiIdTarget`)
- *     + отдельный `crossResolve` в сеть-источник (требование 95511443).
- *   * контекстное меню чипа «Обновить имя» → `crossResolve` без перехода.
+ * Одна цель кросс-сетевой ссылки в редакторе: адрес (ключ значения),
+ * разобранные id и подпись-снапшот имени.
  */
-function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
-  const isMultiple = opts.definition.config?.multiple === true;
-  // Сервер при чтении обогащает значение снапшотом (CrossNetworkRefValue[]);
-  // редактор поля значения (конструктор условий, change-режим) может
-  // передать сырую строку или массив строк. Нормализуем обе формы.
-  const snapshots = readSnapshotFromValue(opts.value);
-  const addresses = readAddressesFromValue(opts.value);
-  const stored = addresses.join(', ');
-  const wrapper = div('value-editor value-editor--cross-network-ref');
-  const input = el('input') as HTMLInputElement;
-  input.type = 'text';
-  input.className = 'cross-network-ref-input';
-  input.placeholder = 'n:<network_uuid>#<thought_uuid>';
-  input.value = stored;
-  input.spellcheck = false;
-  const hint = div('cross-network-ref-hint muted');
-  hint.textContent = isMultiple
-    ? 'Несколько адресов — через запятую. Снапшот имени обновляется кнопкой «Обновить».'
-    : 'Снапшот имени обновляется кнопкой «Обновить».';
-  // Задача ea04a185: выбор чужой мысли из диалога — единственный способ задать
-  // кросс-сетевую ссылку в GUI, не вводя адрес вручную. Диалог принудительно
-  // ходит по всем сетям и исключает текущую (запрет своей сети — 884d14e1).
-  const pickBtn = el('button', 'cross-network-ref-pick', 'Выбрать…') as HTMLButtonElement;
-  pickBtn.type = 'button';
-  pickBtn.title = 'Выбрать мысль другой сети…';
-  // Собирает значение поля в то, что уйдёт в `save` (общая точка с blur).
-  const commit = (): void => {
-    const next = input.value.trim();
-    void opts.save(
-      isMultiple
-        ? next
-            .split(',')
-            .map((s) => s.trim())
-            .filter((s) => s !== '')
-        : next === ''
-          ? null
-          : next,
-    );
-  };
-  pickBtn.addEventListener('click', () => {
-    void pickCrossNetworkTarget(opts, input, isMultiple, hint, commit);
-  });
-  const refreshBtn = el('button', 'cross-network-ref-resolve', 'Обновить') as HTMLButtonElement;
-  refreshBtn.type = 'button';
-  refreshBtn.addEventListener('click', () => {
-    void refreshSnapshot(opts, refreshBtn, hint);
-  });
-  input.addEventListener('blur', commit);
-  wrapper.append(input, pickBtn, refreshBtn, hint);
-  // Чипы снапшота (требование 6d4ad9ac): показываем имя цели и сеть; клик
-  // переходит в цель и обновляет снапшот в сети-источнике; контекстное
-  // меню «Обновить имя» — точечный crossResolve.
-  if (snapshots.length > 0) {
-    const chips = div('cross-network-ref-chips');
-    for (const snap of snapshots) {
-      chips.append(buildCrossNetworkRefChip(opts, snap));
-    }
-    wrapper.append(chips);
-  }
-  return wrapper;
+interface CrossNetworkRefEntry {
+  /** Адрес `n:<network>#<thought>` — то, что уходит в `save`. */
+  address: string;
+  networkId: string;
+  thoughtId: string;
+  /** Снапшот имени цели (или сам адрес, пока снапшота нет). */
+  title: string;
+  /** Последний живой резолв отказал (сеть/цель удалены). */
+  unresolved: boolean;
 }
 
 /**
- * Диалог выбора ЧУЖОЙ мысли для значения `cross_network_ref` (задача ea04a185).
- * Охват — принудительно «по всем сетям» (`pickThoughtsDialog { crossNetwork }`):
- * текущая сеть исключена, создание новых мыслей не предлагается, глобальное
- * состояние переключателя охвата не трогается. Выбор кладёт в поле адрес
- * `n:<network_id>#<thought_id>` — single заменяет значение, multiple добавляет
- * адреса в набор (без дублей) — и сразу сохраняет через `commit`.
+ * Редактор кросс-сетевой ссылки (задача 7849008a; поле ввода переделано под
+ * чипы — ошибка 9be98ae1). Работает как поле свойства-связи: цели — облачка
+ * фабрики (профиль `chip`) с меткой «чужой сети» ({@link networkBadge}),
+ * добавление — живой веерный поиск по вводу (`loadCrossNetworkCandidates`) или
+ * диалог «Выбрать…» (`pickThoughtsDialog { crossNetwork }`, задача ea04a185).
+ * Значение — адреса `n:<network>#<thought>` (single — строка, multiple —
+ * массив; пусто — `null`), формат тот же, что у межсетевых wiki-ссылок.
+ *
+ * Чип кросс-сети: клик — открыть цель (`openWikiIdTarget` с контролем вкладок
+ * и последующим точечным резолвом, требование 95511443), Ctrl+наведение —
+ * предпросмотр комментария чужой мысли с именем сети-источника в заголовке,
+ * контекстное меню — «Открыть» / «Обновить имя» (`crossResolve`) / «Удалить из
+ * значения», кнопка «✕» — то же удаление. Резолв снапшота идёт ТОЛЬКО по
+ * действию (требование 95511443): чтение карточки чужие сети не открывает.
  */
-async function pickCrossNetworkTarget(
-  opts: ValueEditorOptions,
-  input: HTMLInputElement,
-  isMultiple: boolean,
-  hint: HTMLElement,
-  commit: () => void,
-): Promise<void> {
-  const currentNetworkId = opts.networkId;
-  const result = await pickThoughtsDialog({
-    networkId: currentNetworkId,
-    allowCreate: false,
-    allowLinkType: false,
-    title: 'Выбор мысли из другой сети',
-    applyLabel: isMultiple ? 'Добавить' : 'Выбрать',
-    crossNetwork: { excludeNetworkId: currentNetworkId },
-  });
-  if (result === null) return;
-  const picked: string[] = [];
-  for (const item of result.items) {
-    if (item.kind !== 'existing') continue;
-    const netId = item.networkId;
-    // Запрет своей сети (требование 884d14e1): без сети-владельца адрес
-    // собрать нельзя, а мысль текущей сети — не кросс-сетевая ссылка.
-    if (netId === undefined || netId === '' || netId === currentNetworkId) continue;
-    picked.push(formatCrossNetworkAddress(netId, item.id));
-  }
-  if (picked.length === 0) {
-    notice('Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.', 'info');
-    return;
-  }
-  if (isMultiple) {
-    const existing = input.value
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s !== '');
-    for (const address of picked) {
-      if (!existing.includes(address)) existing.push(address);
+function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
+  const isMultiple = opts.definition.config?.multiple === true;
+  // Набор целей: `ordered` — порядок адресов (то, что уходит в save), `entries`
+  // — данные чипа. Снапшоты значения (CrossNetworkRefValue[]) и сырые адреса
+  // (конструкторы условий) нормализуются в одну карту.
+  const entries = new Map<string, CrossNetworkRefEntry>();
+  const ordered: string[] = [];
+  const addEntry = (entry: CrossNetworkRefEntry): void => {
+    if (!entries.has(entry.address)) ordered.push(entry.address);
+    entries.set(entry.address, entry);
+  };
+  for (const snap of readSnapshotFromValue(opts.value)) {
+    if (snap.network_id === '' || snap.thought_id === '') continue;
+    let address: string;
+    try {
+      address = formatCrossNetworkAddress(snap.network_id, snap.thought_id);
+    } catch {
+      continue;
     }
-    input.value = existing.join(', ');
-  } else {
-    input.value = picked[picked.length - 1] as string;
+    addEntry({
+      address,
+      networkId: snap.network_id,
+      thoughtId: snap.thought_id,
+      title: snap.title_snapshot,
+      unresolved: snap.unresolved,
+    });
   }
-  commit();
-  hint.textContent = `Выбрано: ${input.value}`;
+  for (const address of readAddressesFromValue(opts.value)) {
+    const parsed = parseCrossNetworkAddress(address);
+    if (parsed === null) continue;
+    addEntry({
+      address,
+      networkId: parsed.networkId,
+      thoughtId: parsed.thoughtId,
+      title: address,
+      unresolved: false,
+    });
+  }
+
+  const root = div('value-editor value-editor--cross-network-ref');
+  const wrap = div('link-value-wrap');
+  const field = div('st-f-chipfield link-value-field cross-network-ref-field');
+
+  /** Собрать адреса набора и записать их (пусто — `null`). */
+  const commit = (): void => {
+    const addresses = [...ordered];
+    const payload = addresses.length === 0 ? null : isMultiple ? addresses : addresses[0]!;
+    const key = opts.definition.key ?? '';
+    void Promise.resolve()
+      .then(() => opts.save(payload))
+      .then((ok) => {
+        // Успешная запись — сервер уже сделал живой резолв и обновил снапшоты:
+        // просим таблицу свойств перечитать значение (иначе подписи из диалога,
+        // где имя цели неизвестно, остались бы адресами).
+        if (ok === true) notifyPropertyValuesRefreshed(key);
+      });
+  };
+
+  /** Снять цель из набора и сохранить остаток. */
+  const removeEntry = (address: string): void => {
+    const index = ordered.indexOf(address);
+    if (index >= 0) ordered.splice(index, 1);
+    entries.delete(address);
+    render();
+    commit();
+  };
+
+  /**
+   * Открыть цель в её сети (требование 95511443): переход через
+   * {@link openWikiIdTarget} (контроль уже открытых вкладок), после успеха —
+   * точечный резолв снапшота в сети-источнике значения.
+   */
+  const openEntry = async (entry: CrossNetworkRefEntry): Promise<void> => {
+    try {
+      await openWikiIdTarget(entry.networkId, entry.thoughtId);
+    } catch {
+      // openWikiIdTarget сам показывает тост при ошибке сети/мысли.
+      return;
+    }
+    if (opts.ownerType !== 'thought' || opts.ownerId === undefined) return;
+    const key = opts.definition.key ?? '';
+    if (key === '') return;
+    try {
+      await etn.properties.crossResolve(opts.networkId, opts.ownerId, key);
+    } catch {
+      // Тихо: цель всё равно открыта, обновление снапшота — удобство.
+    }
+  };
+
+  /**
+   * «Обновить имя» — точечный `crossResolve` сети-источника (требование
+   * 95511443): снапшоты и пометки нерезолвленности приходят из ответа, чипы
+   * перерисовываются; ошибка — тост.
+   */
+  const refreshNames = async (): Promise<void> => {
+    if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
+      notice('Обновление имени доступно только для свойств мыслей.', 'error');
+      return;
+    }
+    const key = opts.definition.key ?? '';
+    if (key === '') return;
+    try {
+      const result = await etn.properties.crossResolve(opts.networkId, opts.ownerId, key);
+      for (const value of result.values) {
+        if (value.network_id === '' || value.thought_id === '') continue;
+        let address: string;
+        try {
+          address = formatCrossNetworkAddress(value.network_id, value.thought_id);
+        } catch {
+          continue;
+        }
+        addEntry({
+          address,
+          networkId: value.network_id,
+          thoughtId: value.thought_id,
+          title: value.title_snapshot,
+          unresolved: value.unresolved,
+        });
+      }
+      render();
+      const unresolved = result.values.filter((v) => v.unresolved).length;
+      notice(
+        unresolved === 0
+          ? 'Снапшоты обновлены.'
+          : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
+        'info',
+      );
+      notifyPropertyValuesRefreshed(key);
+    } catch (err) {
+      notice(`Не удалось обновить имя: ${errText(err)}`, 'error');
+    }
+  };
+
+  /** Контекстное меню чипа: три команды значения (ошибка 9be98ae1). */
+  const openChipMenu = (entry: CrossNetworkRefEntry, anchor: HTMLElement): void => {
+    const items: MenuItem[] = [
+      { label: 'Открыть', onClick: () => void openEntry(entry) },
+      { label: 'Обновить имя', onClick: () => void refreshNames() },
+      { label: 'Удалить из значения', onClick: () => removeEntry(entry.address) },
+    ];
+    const rect = anchor.getBoundingClientRect();
+    showMenuAt(rect.left, rect.bottom, items);
+  };
+
+  /** Мини-облачко цели: значок, метка «чужой сети», подпись-снапшот, «✕». */
+  const buildChip = (entry: CrossNetworkRefEntry): HTMLElement => {
+    const netLabel = shortCrossNetworkLabel(entry.networkId);
+    const chip = createThoughtCloud(
+      { id: entry.thoughtId, title: entry.title, type_id: null },
+      {
+        profile: 'chip',
+        width: 'container',
+        networkBadge: { label: netLabel },
+        actions: {
+          onClick: () => void openEntry(entry),
+          onContextMenu: (event) => {
+            event?.stopPropagation?.();
+            openChipMenu(entry, chip);
+          },
+          onRemove: () => removeEntry(entry.address),
+        },
+      },
+    );
+    chip.classList.add('cross-network-ref-chip');
+    if (entry.unresolved) chip.classList.add('cross-network-ref-chip--unresolved');
+    // Ctrl+наведение — предпросмотр комментария чужой мысли; имя сети-источника
+    // попадает в заголовок попапа (ошибка 9be98ae1).
+    markCrossNetworkThoughtPreview(chip, entry.networkId, entry.thoughtId, entry.title);
+    setTooltip(
+      chip,
+      entry.unresolved
+        ? `${entry.title} — ${netLabel} (нерезолвлено)`
+        : `${entry.title} — ${netLabel} (${entry.address})`,
+    );
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('aria-label', entry.title);
+    // Клавиатура — доменная часть чипа: Enter открывает цель, Shift+F10/F10 —
+    // меню; пробел отдаём общим жестам фабрики (фокус).
+    chip.addEventListener('keydown', (event) => {
+      if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+        event.preventDefault();
+        openChipMenu(entry, chip);
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void openEntry(entry);
+      }
+    });
+    return chip;
+  };
+
+  // Поле живого веерного поиска по чужим сетям (кнопка выбрасывается при
+  // перерисовке — слушатели окна снимаются по `!isConnected`, как в выпадашке).
+  const addInput = el('input', 'value-combo-add cross-network-ref-add') as HTMLInputElement;
+  addInput.type = 'text';
+  addInput.autocomplete = 'off';
+  addInput.placeholder = 'Название мысли в другой сети…';
+
+  const searchSource: SuggestSource = {
+    when: 'typed',
+    header: 'Мысли других сетей',
+    load: async (query): Promise<SuggestEntry[]> => {
+      const trimmed = query.trim();
+      if (trimmed === '') return [];
+      const hits = await loadCrossNetworkCandidates(opts.networkId, trimmed, []);
+      const out: SuggestEntry[] = [];
+      for (const hit of hits) {
+        const netId = hit.network_id;
+        // Своя сеть в значении кросс-сетевой ссылки запрещена (требование
+        // 884d14e1) — кандидатов текущей сети отсекаем.
+        if (netId === undefined || netId === '' || netId === opts.networkId) continue;
+        let address: string;
+        try {
+          address = formatCrossNetworkAddress(netId, hit.id);
+        } catch {
+          continue;
+        }
+        out.push({ value: address, label: hit.title, thought: { ...hit } });
+      }
+      return out;
+    },
+  };
+  wireSuggest(addInput, {
+    sources: [searchSource],
+    onPick: (entry) => {
+      const address = entry.value;
+      addInput.value = '';
+      const parsed = parseCrossNetworkAddress(address);
+      if (parsed === null) return;
+      if (!isMultiple) {
+        entries.clear();
+        ordered.length = 0;
+      }
+      addEntry({
+        address,
+        networkId: parsed.networkId,
+        thoughtId: parsed.thoughtId,
+        title: entry.label,
+        unresolved: false,
+      });
+      render();
+      commit();
+    },
+  });
+
+  /**
+   * Диалог «Выбрать…»: принудительный кросс-сетевой охват (своё имя цели
+   * диалог не несёт — подписи подтянет перечитывание значения после записи).
+   */
+  const openCrossPicker = (): void => {
+    void pickThoughtsDialog({
+      networkId: opts.networkId,
+      allowCreate: false,
+      allowLinkType: false,
+      title: 'Выбор мысли из другой сети',
+      applyLabel: isMultiple ? 'Добавить' : 'Выбрать',
+      crossNetwork: { excludeNetworkId: opts.networkId },
+    }).then((result) => {
+      if (result === null) return;
+      const picked: string[] = [];
+      for (const item of result.items) {
+        if (item.kind !== 'existing') continue;
+        const netId = item.networkId;
+        if (netId === undefined || netId === '' || netId === opts.networkId) continue;
+        try {
+          picked.push(formatCrossNetworkAddress(netId, item.id));
+        } catch {
+          continue;
+        }
+      }
+      if (picked.length === 0) {
+        notice('Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.', 'info');
+        return;
+      }
+      if (!isMultiple) {
+        entries.clear();
+        ordered.length = 0;
+      }
+      for (const address of picked) {
+        const parsed = parseCrossNetworkAddress(address);
+        if (parsed === null) continue;
+        addEntry({
+          address,
+          networkId: parsed.networkId,
+          thoughtId: parsed.thoughtId,
+          title: address,
+          unresolved: false,
+        });
+      }
+      render();
+      commit();
+    });
+  };
+
+  // Угловые кнопки — как у поля свойства-связи: «…» открывает диалог выбора,
+  // «✕» очищает значение целиком.
+  const corner = div('link-value-corner');
+  const pickBtn = button('…', openCrossPicker, 'link-value-corner-btn cross-network-ref-pick', 'Выбрать мысль другой сети…');
+  const clearBtn = button(
+    '✕',
+    () => {
+      if (ordered.length === 0) return;
+      entries.clear();
+      ordered.length = 0;
+      render();
+      commit();
+    },
+    'link-value-corner-btn',
+    'Очистить значение',
+  );
+  corner.append(pickBtn, clearBtn);
+
+  const render = (): void => {
+    field.replaceChildren();
+    for (const address of ordered) {
+      const entry = entries.get(address);
+      if (entry === undefined) continue;
+      field.append(buildChip(entry));
+    }
+    addInput.placeholder = ordered.length === 0 ? 'Название мысли в другой сети…' : '+ ещё одну мысль';
+    field.append(addInput);
+    clearBtn.hidden = ordered.length === 0;
+  };
+  // Клик по свободному месту поля — фокус в живой поиск.
+  field.addEventListener('click', (event) => {
+    if (event.target === field) addInput.focus();
+  });
+  wrap.append(field, corner);
+  const row = div('form-row');
+  row.style.marginBottom = '0';
+  row.append(wrap);
+  root.append(row);
+  render();
+  return root;
 }
 
 /** Достать массив снапшотов из `value` (CrossNetworkRefValue[]); пусто — нет. */
@@ -373,47 +612,6 @@ function readAddressesFromValue(value: unknown): string[] {
 }
 
 /**
- * Чип снапшота кросс-сетевой ссылки: имя цели + короткое имя сети; клик
- * открывает цель, контекстное меню даёт «Обновить имя» без перехода. Клик
- * по нерезолвленному — переход всё равно работает (цель могла быть
- * восстановлена).
- */
-function buildCrossNetworkRefChip(
-  opts: ValueEditorOptions,
-  snap: CrossNetworkRefValue,
-): HTMLElement {
-  const chip = el(
-    'button',
-    `cross-network-ref-chip${snap.unresolved ? ' cross-network-ref-chip--unresolved' : ''}`,
-    '🔗',
-  ) as HTMLButtonElement;
-  chip.type = 'button';
-  const net = snap.network_id === '' ? '—' : shortCrossNetworkLabel(snap.network_id);
-  chip.append(
-    span(snap.title_snapshot, 'cross-network-ref-chip-title'),
-    span(` · ${net}`, 'muted cross-network-ref-chip-net'),
-  );
-  if (snap.unresolved) {
-    chip.append(span(' (нерезолвлено)', 'muted cross-network-ref-chip-flag'));
-    setTooltip(
-      chip,
-      'Последний живой резолв отказал — сеть или цель удалены. Кликните «Обновить имя» в контекстном меню.',
-    );
-  } else {
-    setTooltip(chip, `${snap.title_snapshot} — ${snap.network_id}#${snap.thought_id}`);
-  }
-  chip.addEventListener('click', () => {
-    if (snap.network_id === '' || snap.thought_id === '') return;
-    void navigateCrossNetworkRef(opts, snap);
-  });
-  chip.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    void openCrossNetworkRefChipMenu(chip, opts, snap);
-  });
-  return chip;
-}
-
-/**
  * Короткое имя сети: из каталога сетей, иначе — префикс id. Локальный
  * клон хелпера из editor/properties.ts — здесь нужен только в основной
  * таблице, чтобы избежать циклического импорта.
@@ -424,125 +622,6 @@ function shortCrossNetworkLabel(networkId: string): string {
     return fromCatalog.display_name;
   }
   return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
-}
-
-/**
- * Переход по чипу: открыть цель через {@link openWikiIdTarget}, после
- * успешного открытия — отдельный `crossResolve` в сеть-источник
- * (требование 95511443).
- */
-async function navigateCrossNetworkRef(
-  opts: ValueEditorOptions,
-  snap: CrossNetworkRefValue,
-): Promise<void> {
-  try {
-    await openWikiIdTarget(snap.network_id, snap.thought_id);
-  } catch {
-    // openWikiIdTarget сам показывает тост при ошибке сети/мысли.
-    return;
-  }
-  // После успешного открытия — снапшот в сети-источнике мог протухнуть
-  // (цель переименовали). Точечный crossResolve обновит запись; ошибка не
-  // критична — откроется окно с устаревшим именем, пользователь увидит
-  // реальное.
-  if (opts.ownerType !== 'thought' || opts.ownerId === undefined) return;
-  const key = opts.definition.key ?? '';
-  if (key === '') return;
-  try {
-    await etn.properties.crossResolve(opts.networkId, opts.ownerId, key);
-  } catch {
-    // Тихо: пользователь всё равно попадёт в цель, обновление снапшота —
-    // дополнительное удобство.
-  }
-}
-
-/**
- * Контекстное меню чипа снапшота (требование 95511443): «Обновить имя» —
- * точечный `crossResolve` без перехода. Ошибка уходит в общий тост.
- */
-async function openCrossNetworkRefChipMenu(
-  anchor: HTMLElement,
-  opts: ValueEditorOptions,
-  snap: CrossNetworkRefValue,
-): Promise<void> {
-  if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
-    notice('Обновление имени доступно только для свойств мыслей.', 'error');
-    return;
-  }
-  const key = opts.definition.key ?? '';
-  if (key === '') return;
-  const items: MenuItem[] = [
-    {
-      label: 'Обновить имя',
-      onClick: () => {
-        void (async () => {
-          try {
-            const result = await etn.properties.crossResolve(
-              opts.networkId,
-              opts.ownerId!,
-              key,
-            );
-            const unresolved = result.values.filter((v) => v.unresolved).length;
-            notice(
-              unresolved === 0
-                ? 'Снапшоты обновлены.'
-                : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
-              'info',
-            );
-            notifyPropertyValuesRefreshed(key);
-          } catch (err) {
-            notice(`Не удалось обновить имя: ${errText(err)}`, 'error');
-          }
-        })();
-      },
-    },
-    ...(snap.network_id !== '' && snap.thought_id !== ''
-      ? [
-          {
-            label: 'Открыть цель',
-            onClick: () => {
-              void navigateCrossNetworkRef(opts, snap);
-            },
-          },
-        ]
-      : []),
-  ];
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.bottom, items);
-}
-
-async function refreshSnapshot(
-  opts: ValueEditorOptions,
-  btn: HTMLButtonElement,
-  hint: HTMLElement,
-): Promise<void> {
-  if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
-    hint.textContent = 'Обновление снапшота поддерживается только для мыслей.';
-    return;
-  }
-  const key = opts.definition.key ?? '';
-  if (key === '') return;
-  btn.disabled = true;
-  hint.textContent = 'Обновление…';
-  try {
-    const result = await etn.properties.crossResolve(
-      opts.networkId,
-      opts.ownerId,
-      key,
-    );
-    const unresolved = result.values.filter((v) => v.unresolved).length;
-    hint.textContent =
-      unresolved === 0
-        ? `Снапшоты обновлены (${result.values.length} шт.).`
-        : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`;
-    // Уведомляем вызывающий код через общий канал, чтобы таблица свойств
-    // обновила отображение значений без полного рефреша карточки.
-    notifyPropertyValuesRefreshed(key);
-  } catch (err) {
-    hint.textContent = `Ошибка обновления: ${String(err)}`;
-  } finally {
-    btn.disabled = false;
-  }
 }
 
 /** Человекочитаемая метка вида значения (заголовки таблиц свойств). */

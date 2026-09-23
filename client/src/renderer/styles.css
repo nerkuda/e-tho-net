@@ -2156,6 +2156,32 @@ body.cloud-dragging * {
   color: #e53935;
 }
 
+/* Метка «мысль чужой сети» облачка (кросс-сетевая ссылка, ошибка 9be98ae1):
+   зеркало метки корзины по назначению, но у правого верхнего угла — метки
+   корзины (слева) и сети (справа) на одном облачке не конфликтуют. */
+.cloud-network-badge {
+  position: absolute;
+  right: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+/* Глиф «сеть» (lucide «network», lib/icons.ts) — акцентный голубой на чёрном
+   круге, читаемый на обеих темах и отличимый от красной корзины. */
+.cloud-network-badge svg {
+  color: #4a9eff;
+}
+
 /* Object-lock badge (task 4f141756, UI element 8e3703ee): small 🔒 chip
    anchored at the cloud's top-right corner so it never overlaps the
    indicator row (📝/📅/📎) along the right edge. «own» variant keeps the
@@ -5720,6 +5746,16 @@ body.cloud-dragging * {
   color: #e53935;
 }
 
+/* Компактная метка «мысль чужой сети» в списочных строках/чипах — зеркало
+   метки корзины: акцентный голубой глиф «сеть» вместо красной корзины
+   (кросс-сетевая ссылка значения, ошибка 9be98ae1). */
+.list-network-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #4a9eff;
+}
+
 .group-delete-warning {
   margin: 0;
   color: var(--text-dim);
@@ -8020,50 +8056,25 @@ table.activity-table thead th {
   flex-direction: column;
   gap: 4px;
 }
-/* Редактор кросс-сетевой ссылки `cross_network_ref` (задача 7849008a; кнопка
- * «Выбрать…» — задача ea04a185): поле адреса + кнопки выбора/обновления, под
- * ними чипы снапшота и строка-подсказка. */
+/* Редактор кросс-сетевой ссылки `cross_network_ref` (задача 7849008a; поле-чип
+ * — ошибка 9be98ae1): чипы-облачка фабрики с меткой «чужой сети» + поле живого
+ * веерного поиска, угловые кнопки «…» (диалог) и «✕» (очистить). Разметку
+ * чип-поля даёт общая `.link-value-wrap/field/corner`, здесь — только
+ * специфика кросс-сети. */
 .value-editor--cross-network-ref {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.value-editor--cross-network-ref .cross-network-ref-input {
-  flex: 1 1 220px;
-  min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-.value-editor--cross-network-ref .cross-network-ref-pick,
-.value-editor--cross-network-ref .cross-network-ref-resolve {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.value-editor--cross-network-ref .cross-network-ref-pick:hover,
-.value-editor--cross-network-ref .cross-network-ref-resolve:hover {
-  border-color: var(--accent);
-}
-.value-editor--cross-network-ref .cross-network-ref-hint,
-.value-editor--cross-network-ref .cross-network-ref-chips {
-  flex: 1 1 100%;
-}
-.value-editor--cross-network-ref .cross-network-ref-hint {
-  font-size: 12px;
-}
-.value-editor--cross-network-ref .cross-network-ref-chips {
-  display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 4px;
+}
+.value-editor--cross-network-ref .cross-network-ref-add {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+/* Нерезолвленный чип: последний живой резолв отказал — бледность и рамка-
+ * предупреждение (причина видна в метке-подсказке чипа). */
+.cross-network-ref-chip--unresolved {
+  opacity: 0.6;
+  border-color: #e53935;
 }
 /* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
  * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу

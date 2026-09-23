@@ -174,6 +174,23 @@ export function markThoughtCommentPreview(trigger: HTMLElement, thoughtId: strin
 }
 
 /**
+ * Ctrl-hover триггер для мысли ДРУГОЙ сети (чип кросс-сетевой ссылки значения,
+ * ошибка 9be98ae1): обычный `thought`-резолвер читает комментарий в ТЕКУЩЕЙ
+ * сети (`store.state.networkId`), а здесь цель лежит в чужой — её id приходит
+ * отдельным `data-hp-network`. В заголовке предпросмотра обязательно стоит имя
+ * сети-источника; недоступность сети/мысли даёт сообщение вместо комментария.
+ */
+export function markCrossNetworkThoughtPreview(
+  trigger: HTMLElement,
+  networkId: string,
+  thoughtId: string,
+  title: string,
+): void {
+  markTrigger(trigger, 'thought-cross-network', 'thought', thoughtId, title);
+  trigger.dataset['hpNetwork'] = networkId;
+}
+
+/**
  * Marks a canvas cloud's top/bottom ellipse as a Ctrl-hover trigger for its
  * incoming (`dir: 'parents'`, top ellipse) / outgoing (`dir: 'children'`,
  * bottom ellipse) neighbour list (task «Распространить предпросмотр с
@@ -488,7 +505,7 @@ async function resolveWikiCrossNetworkContent(trigger: HTMLElement): Promise<Hov
 }
 
 /** Content-types treated as text for a file preview, on top of the byte sniff
- *  in {@link looksLikeText} below (case-insensitive substring match against
+ * in {@link looksLikeText} below (case-insensitive substring match against
  *  the response's `Content-Type`). */
 const TEXT_CONTENT_TYPE_RE = /^text\/|json|xml|javascript|csv|yaml/i;
 
@@ -607,9 +624,83 @@ async function resolveLinkContent(trigger: HTMLElement): Promise<HoverPreviewCon
   return { title: label !== undefined && label !== '' ? label : href, body };
 }
 
+/** Имя сети-источника и признак доступности (сеть есть в каталоге сетей
+ *  пользователя). Каталог освежается один раз, как в кросс-сетевом
+ *  wiki-резолвере выше. */
+async function crossNetworkName(netId: string): Promise<{ name: string; accessible: boolean }> {
+  const cached = store.state.networkList.find((n) => n.id === netId)?.display_name;
+  if (cached !== undefined && cached !== '') return { name: cached, accessible: true };
+  try {
+    const list = await etn.networks.list();
+    if (list.length > 0) store.update({ networkList: list });
+    const found = list.find((n) => n.id === netId)?.display_name;
+    if (found !== undefined && found !== '') return { name: found, accessible: true };
+  } catch {
+    // Каталог недоступен — сеть считаем недоступной (сообщение, не комментарий).
+  }
+  return { name: netId, accessible: false };
+}
+
+/** Тело предпросмотра-сообщения о недоступности (сеть или мысль в ней). */
+function crossNetworkUnavailableBody(name: string, message: string): HTMLElement {
+  const body = div('hp-network-badge');
+  body.append(el('div', 'hp-network-name', `🌐 ${name}`));
+  body.append(el('div', 'muted', message));
+  return body;
+}
+
+/**
+ * Чип кросс-сетевой ссылки значения (`data-hp-kind="thought-cross-network"`,
+ * ошибка 9be98ae1): показывает постоянный комментарий цели из ЧУЖОЙ сети
+ * (id сети — в `data-hp-network`) либо — при недоступности сети или мысли —
+ * сообщение об этом. В заголовке всегда имя сети-источника. Нет постоянного
+ * комментария — попап не открывается (общее правило предпросмотра).
+ */
+async function resolveCrossNetworkThoughtContent(
+  trigger: HTMLElement,
+): Promise<HoverPreviewContent | null> {
+  const netId = trigger.dataset['hpNetwork'];
+  const thoughtId = trigger.dataset['hpOwnerId'] ?? '';
+  if (netId === undefined || netId === '' || thoughtId === '') return null;
+  const net = await crossNetworkName(netId);
+  const title = trigger.dataset['hpTitle'] ?? '—';
+  const head = `${net.name} · ${title}`;
+  if (!net.accessible) {
+    return {
+      title: head,
+      body: crossNetworkUnavailableBody(net.name, 'Сеть недоступна — комментарий не прочитать.'),
+    };
+  }
+  try {
+    await etn.thoughts.get(netId, thoughtId);
+  } catch {
+    return {
+      title: head,
+      body: crossNetworkUnavailableBody(net.name, 'Мысль недоступна в этой сети.'),
+    };
+  }
+  let comments: Comment[];
+  try {
+    comments = await etn.comments.list(netId, 'thought', thoughtId);
+  } catch {
+    return {
+      title: head,
+      body: crossNetworkUnavailableBody(net.name, 'Не удалось прочитать комментарии этой сети.'),
+    };
+  }
+  const permanent = comments.find((c) => c.kind === 'permanent');
+  if (permanent === undefined || permanent.body_html.trim() === '') return null;
+  const body = div('comment-view hp-comment-body');
+  renderHtml(body, permanent.body_html);
+  wireCommentLinksInDom(body);
+  void resolveWikiLinksInDom(body, netId);
+  return { title: head, body };
+}
+
 registerHoverPreviewResolver('wiki-thought', resolveWikiThoughtContent);
 registerHoverPreviewResolver('wiki-legacy-name', resolveWikiLegacyNameContent);
 registerHoverPreviewResolver('wiki-cross-network', resolveWikiCrossNetworkContent);
+registerHoverPreviewResolver('thought-cross-network', resolveCrossNetworkThoughtContent);
 registerHoverPreviewResolver('link', resolveLinkContent);
 
 // ---------------------------------------------------------------------------
@@ -939,4 +1030,5 @@ export const hoverPreviewInternals = {
   CLOSE_DELAY_MS,
   fileNameFromUrl,
   looksLikeText,
+  resolveCrossNetworkThoughtContent,
 };
