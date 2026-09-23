@@ -1427,6 +1427,14 @@ export function buildLinkValueEditor(opts: {
     if (ok && opts.historyPropertyId !== undefined) {
       recordTextItemsHistory(networkId, opts.historyPropertyId, next);
     }
+    // Своя запись ребра не поднимает версию мысли, а собственному клиенту не
+    // приходит realtime-эхо (G8) — сверка окрестности на карте закрывает лишь
+    // случай, когда новое ребро меняет её подпись. Второе ребро ДРУГОГО типа к
+    // уже видимому соседу за границей первой порции сектора подпись не меняет,
+    // и таблица значений свойств фокуса осталась бы со старым снимком (ошибка
+    // da032ee3, остаточная дыра ec5ba58c). Уведомляем у самой записи —
+    // независимо от карты; перечитывание идемпотентно.
+    if (ok) notifyPropertyValuesRefreshed(definition.key ?? '');
     return ok;
   };
 

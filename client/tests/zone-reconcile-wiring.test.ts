@@ -22,6 +22,7 @@ import { PROPERTY_VALUES_REFRESHED_EVENT } from '../src/renderer/lib/property-va
 
 const SRC = {
   canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
+  addDialog: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'add-dialog.ts'),
   properties: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
   valueEditor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
 };
@@ -103,6 +104,32 @@ describe('таблица свойств: слушает общий канал (e
     assert.ok(
       !src.includes('new CustomEvent('),
       'имя события и диспатч живут в lib/property-values-refresh.ts',
+    );
+  });
+});
+
+describe('место записи уведомляет таблицу, независимо от сверки карты (da032ee3)', () => {
+  it('диалог добавления связи с карты шлёт канал после записи рёбер', () => {
+    const src = readText(SRC.addDialog);
+    assert.ok(
+      src.includes("from '../lib/property-values-refresh.js'"),
+      'канал берётся из общего модуля',
+    );
+    const insert = src.slice(src.indexOf('async function insertIntoCanvas'));
+    assert.ok(
+      insert.slice(0, insert.indexOf('\n}\n')).includes('notifyPropertyValuesRefreshed()'),
+      'после создания/связывания мыслей карта уведомляет таблицу значений свойств',
+    );
+  });
+
+  it('сохранение значения свойства-связи уведомляет ключом своего свойства', () => {
+    const src = readText(SRC.valueEditor);
+    const persist = src.slice(src.indexOf('const persist = async'));
+    assert.ok(
+      persist
+        .slice(0, persist.indexOf('\n  };'))
+        .includes("notifyPropertyValuesRefreshed(definition.key ?? '')"),
+      'persist редактора связи уведомляет таблицу ключом записанного свойства',
     );
   });
 });

@@ -51,8 +51,25 @@ function ensureWindowShims(win: Record<string, unknown>): void {
  */
 const documentListeners = new Map<string, Array<(event: unknown) => void>>();
 
+/**
+ * События, которые производители отправили документу. Канал
+ * `etn:property-values-refreshed` шлёт `CustomEvent` (в Node-раннере его нет),
+ * поэтому шим заводит и класс события, и запись отправленного — иначе
+ * поведение производителя (сохранение значения связи) не проверить.
+ */
+const dispatchedEvents: Array<{ type: string; detail: unknown }> = [];
+
 function shimDocument(): void {
   documentListeners.clear();
+  dispatchedEvents.length = 0;
+  (globalThis as any).CustomEvent = class {
+    type: string;
+    detail: unknown;
+    constructor(type: string, init?: { detail?: unknown }) {
+      this.type = type;
+      this.detail = init?.detail;
+    }
+  };
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     documentElement: { style: {} },
@@ -68,7 +85,8 @@ function shimDocument(): void {
         (documentListeners.get(type) ?? []).filter((handler) => handler !== fn),
       );
     },
-    dispatchEvent: (event: { type: string }) => {
+    dispatchEvent: (event: { type: string; detail?: unknown }) => {
+      dispatchedEvents.push({ type: event.type, detail: event.detail });
       for (const handler of documentListeners.get(event.type) ?? []) handler(event);
       return true;
     },
@@ -1015,6 +1033,82 @@ describe('value-editor: кнопка «✕» очистки значения (о
     text.btn.dispatch('click', { stopPropagation: () => undefined });
     assert.equal(text.input.value, '');
     assert.deepEqual(text.saved, [null]);
+  });
+
+  it('сохранение значения свойства-связи шлёт канал перечитывания значений (ошибка da032ee3)', async () => {
+    // Остаточная дыра ec5ba58c: сверка окрестности на карте уведомляет таблицу
+    // свойств только когда меняется подпись окрестности. Второе ребро ДРУГОГО
+    // типа к уже видимому соседу за границей первой порции сектора её не меняет
+    // — производитель у самой записи значения-связи обязан уведомить таблицу
+    // независимо от карты.
+    const { buildLinkValueEditor } = await loadValueEditor();
+    dispatchedEvents.length = 0;
+    const saved: unknown[] = [];
+    const root = buildLinkValueEditor({
+      networkId: 'n',
+      definition: { value_type: 'link', key: 'Связь', config: null, required: false },
+      values: [
+        {
+          link_id: 'l1',
+          target_id: 't2',
+          target_title: 'Цель',
+          target_type_id: null,
+          comment: null,
+        },
+      ],
+      save: (next: unknown) => {
+        saved.push(next);
+        return Promise.resolve(true);
+      },
+    }) as ShimElement;
+
+    // Без владельца (дефолт свойства) очистка набора идёт тем же `persist`,
+    // что и обычная запись: клик по угловому «✕» пишет `null` и должен
+    // уведомить таблицу значений свойств ключом этого свойства.
+    const clear = root.findAll(
+      (e) => e.className.includes('link-value-corner-btn') && e.textContent === '✕',
+    )[0];
+    assert.ok(clear !== undefined, 'у чип-редактора связи есть угловой «✕»');
+    clear!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(saved, [null], 'очистка записана');
+    const refreshed = dispatchedEvents.filter((e) => e.type === 'etn:property-values-refreshed');
+    assert.equal(refreshed.length, 1, 'уведомление ушло ровно один раз');
+    assert.deepEqual(
+      refreshed[0]?.detail,
+      { key: 'Связь' },
+      'уведомление несёт ключ записанного свойства',
+    );
+  });
+
+  it('неудачная запись значения связи таблицу не уведомляет', async () => {
+    const { buildLinkValueEditor } = await loadValueEditor();
+    dispatchedEvents.length = 0;
+    const root = buildLinkValueEditor({
+      networkId: 'n',
+      definition: { value_type: 'link', key: 'Связь', config: null, required: false },
+      values: [
+        {
+          link_id: 'l1',
+          target_id: 't2',
+          target_title: 'Цель',
+          target_type_id: null,
+          comment: null,
+        },
+      ],
+      save: () => Promise.resolve(false),
+    }) as ShimElement;
+    const clear = root.findAll(
+      (e) => e.className.includes('link-value-corner-btn') && e.textContent === '✕',
+    )[0];
+    clear!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(
+      dispatchedEvents.filter((e) => e.type === 'etn:property-values-refreshed').length,
+      0,
+      'на неудаче перечитывать нечего',
+    );
   });
 });
 

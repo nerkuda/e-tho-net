@@ -40,6 +40,7 @@ import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
+import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
@@ -246,6 +247,13 @@ async function insertIntoCanvas(
   }
   if (failed > 0) notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
   else notice(`Готово: ${created}.`);
+  // Диалог добавления связи с карты пишет РЕБРО (в т.ч. типизированное, которое
+  // видно значением свойства-связи фокуса). Своего realtime-эха у клиента нет,
+  // а сверка окрестности замечает не всякую правку: второе ребро другого типа к
+  // уже видимому соседу за границей первой порции сектора подпись окрестности
+  // не меняет (ошибка da032ee3). Уведомляем таблицу значений свойств прямо у
+  // записи; перечитывание идемпотентно.
+  if (ctx.anchorId !== null && created > 0) notifyPropertyValuesRefreshed();
   scheduleRefresh();
   if (result.focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
 }
