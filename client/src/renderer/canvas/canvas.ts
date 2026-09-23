@@ -65,11 +65,13 @@ import {
 } from '../lib/pure.js';
 import {
   createZonePaging,
+  planZoneReconcile,
   shouldLoadMore,
   zoneCountLabel,
   ZONE_PAGE_SIZE,
   type ZonePagingCounters,
 } from '../lib/zone-paging.js';
+import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
@@ -311,6 +313,11 @@ export function mountCanvas(canvasHost: HTMLElement): void {
     // The label follows layer/theme changes even when the canvas data itself
     // is unchanged (the fast path below skips the full rebuild).
     updateLayerLabel();
+    // Свежий ответ фокуса мог не изменить ничего рисуемого: мысль, добавленная
+    // за уже загруженной порцией сектора, в ответе не видна, а индикатор-число
+    // и порция обязаны обновиться сразу (ошибка ec5ba58c). Поэтому сверка
+    // секторов идёт ДО fast-path, который на таком ответе пропускает `render()`.
+    syncZoneTotalsWithFreshFocus();
     const key = canvasRenderKey();
     if (key === lastRenderKey) {
       // The canvas data is unchanged — only the selection may differ
@@ -575,8 +582,12 @@ async function render(): Promise<void> {
     setZoneAsViewResult(true, result);
   }
   lastFocusId = focus.focused.id;
-  // Totals for the count indicators (async); a no-op unless the focus just
-  // changed — paged sectors keep their counters between same-focus renders.
+  // The response is now on screen: a further store notification with the SAME
+  // object is a layout/selection re-render, not fresh neighbourhood data.
+  lastFocusResponse = focus;
+  // Totals for the count indicators (async) — a fresh focus seeds every
+  // sector's counters; a fresh response for the SAME focus is reconciled by
+  // `syncZoneTotalsWithFreshFocus` from the store subscriber.
   if (focusChanged) void ensureZoneTotals(focus);
   paintZoneIndicators();
   scheduleIndicatorLoads();
@@ -660,6 +671,13 @@ function viewResultToZoneEntries(
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
 let lastFocusId: string | null = null;
+
+/**
+ * Ответ фокуса, по которому рисовался холст. Свежий ответ (пусть и тот же
+ * фокус) — сигнал сверить количества секторов: своя запись связи не поднимает
+ * версию мысли, других признаков изменений у ответа нет (ошибка ec5ba58c).
+ */
+let lastFocusResponse: FocusResponse | null = null;
 
 /** Last canvas content signature handled by the store subscriber — gates the
  *  selection-only fast path (2e418bc3). */
@@ -988,6 +1006,9 @@ function isChildrenViewResult(): boolean {
 function resetZonePaging(focus: FocusResponse): void {
   zoneAppended.clear();
   zonePaging.clear();
+  // The next reconcile has nothing to compare a freshly focused neighbourhood
+  // against (see `reconcileZoneTotals`).
+  zoneNeighbourhoodSignature = null;
   zonePagingToken++;
   setSupplementalEdges(null);
   zoneVisibleIds = new Set<string>([
@@ -1021,6 +1042,31 @@ async function loadZoneTotal(
   dir: 'parents' | 'siblings' | 'children',
   token: number,
 ): Promise<void> {
+  const total = await readZoneTotal(networkId, focus, dir, token);
+  if (total === null) return;
+  const counters = createZonePaging();
+  const plan = planZoneReconcile(counters, total);
+  counters.total = plan.counters.total;
+  counters.loaded = plan.counters.loaded;
+  zonePaging.set(dir, counters);
+  paintZoneIndicators();
+  // A tall window / tiny zone may already sit at the bottom — try once.
+  void maybeLoadMoreZone(dir);
+}
+
+/**
+ * Общее количество мыслей сектора по серверу; `null` — запрос не удался или
+ * окрестность успела смениться (в полёте ответ уже не нужен).
+ *
+ * `limit: 1` держит ответ крошечным: ответ фокуса уже принёс первую порцию,
+ * здесь читается только `meta.total`.
+ */
+async function readZoneTotal(
+  networkId: string,
+  focus: FocusResponse,
+  dir: 'parents' | 'siblings' | 'children',
+  token: number,
+): Promise<number | null> {
   try {
     const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
     const { sort, order } = focus.sorts[dir];
@@ -1034,25 +1080,100 @@ async function loadZoneTotal(
       order,
       linkFilter,
     );
-    if (token !== zonePagingToken || store.state.focus?.focused.id !== focus.focused.id) return;
-    const counters = createZonePaging();
-    counters.total = page.total;
-    counters.loaded = Math.min(ZONE_PAGE_SIZE, page.total);
-    zonePaging.set(dir, counters);
-    paintZoneIndicators();
-    // A tall window / tiny zone may already sit at the bottom — try once.
-    void maybeLoadMoreZone(dir);
+    if (token !== zonePagingToken || store.state.focus?.focused.id !== focus.focused.id) return null;
+    return page.total;
   } catch {
-    // Best effort: the indicator stays hidden and scrolling retries later.
+    // Best effort: the indicator keeps its previous number and scrolling retries.
+    return null;
   }
 }
 
 /**
+ * Сверка секторов по свежему ответу фокуса на ТОМ ЖЕ фокусе — зовётся из
+ * подписчика до fast-path: смена количества или состава окрестности может не
+ * менять ничего рисуемого (новая мысль за загруженной порцией), и обычная
+ * ветка перерисовки её бы пропустила (ошибка ec5ba58c). Смену фокуса
+ * отрабатывает `render()` (сброс порций + чтение количеств).
+ */
+function syncZoneTotalsWithFreshFocus(): void {
+  const focus = store.state.focus;
+  if (focus === null || focus === lastFocusResponse) return;
+  if (focus.focused.id !== lastFocusId) return;
+  lastFocusResponse = focus;
+  void reconcileZoneTotals(focus);
+}
+
+/**
+ * Сверяет сектора со свежим ответом фокуса, когда фокус НЕ менялся (ошибка
+ * ec5ba58c). Своя запись ребра не поднимает версию мысли, а собственному
+ * клиенту не приходит realtime-эхо (04-realtime.md §5) — без этой сверки
+ * индикатор-число показывал старое количество, а мысль, добавленная за уже
+ * загруженный префикс, не появлялась в секторе до смены фокуса.
+ *
+ * Что делает:
+ *  - перечитывает `meta.total` каждого сектора и переносит его в счётчики, не
+ *    теряя показанные облачка ({@link planZoneReconcile});
+ *  - если количество выросло — дотягивает ОДНУ порцию: при порядке `created`
+ *    (по умолчанию) и `manual` новая мысль встаёт в хвост списка, то есть за
+ *    первой порцией. Сектор на тысячи мыслей сознательно остаётся за скроллом —
+ *    дотягивать его целиком из-за одной новой мысли нельзя (ради этого и
+ *    вводилась пагинация, задача c8fa74ba);
+ *  - если окрестность (наборы первой порции, рёбра, количества) изменилась —
+ *    уведомляет открытую карточку, что значения свойств надо перечитать:
+ *    таблица свойств читает снимок значений при построении и о правке ребра
+ *    иначе не узнает (её полная пересборка гейтится версией мысли, а версия от
+ *    ребра не меняется).
+ */
+async function reconcileZoneTotals(focus: FocusResponse): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const token = zonePagingToken;
+  const signature = zoneNeighbourhoodSignatureOf(focus);
+  // Первая сверка после смены фокуса сравнивать не с чем: карточка к этому
+  // моменту уже перестроена сменой фокуса.
+  let neighbourhoodChanged = zoneNeighbourhoodSignature !== null
+    && zoneNeighbourhoodSignature !== signature;
+  zoneNeighbourhoodSignature = signature;
+  // Количества читаются параллельно: сверка едет на каждом свежем ответе
+  // фокуса, три последовательных запроса вместо одного круга — лишняя задержка.
+  const totals = await Promise.all(
+    ZONE_DIRS.map((dir) => readZoneTotal(networkId, focus, dir, token)),
+  );
+  const toTopUp: Array<'parents' | 'siblings' | 'children'> = [];
+  ZONE_DIRS.forEach((dir, index) => {
+    const total = totals[index];
+    if (total === null || total === undefined) return;
+    const counters = zonePaging.get(dir);
+    const plan = planZoneReconcile(counters ?? createZonePaging(), total);
+    if (counters !== undefined && plan.counters.total !== counters.total) {
+      neighbourhoodChanged = true;
+    }
+    const next = counters ?? createZonePaging();
+    next.loaded = plan.counters.loaded;
+    next.total = plan.counters.total;
+    zonePaging.set(dir, next);
+    if (plan.grew) toTopUp.push(dir);
+  });
+  paintZoneIndicators();
+  for (const dir of toTopUp) await appendNextZonePage(dir);
+  if (neighbourhoodChanged) notifyPropertyValuesRefreshed();
+}
+
+/**
+ * Подпись окрестности фокуса: составы первых порций секторов и рёбра видимых
+ * мыслей. Первых порций достаточно вместе с количествами: мысль за префиксом
+ * подписи не меняет, но её видно по росту `meta.total` (см.
+ * {@link reconcileZoneTotals}). Рёбра сверяются без учёта порядка — он не
+ * определён контрактом ответа фокуса.
+ */
+function zoneNeighbourhoodSignatureOf(focus: FocusResponse): string {
+  const zones = ZONE_DIRS.map((dir) => `${dir}:${focus[dir].map((n) => n.id).join(',')}`);
+  const edges = focus.edges.map((e) => e.id).sort().join(',');
+  return [...zones, `edges:${edges}`].join('|');
+}
+
+/**
  * Appends the next page of a zone when the sector is scrolled near its bottom.
- * Duplicates are filtered against {@link zoneVisibleIds} so the zone
- * exclusivity of the focus response is preserved across pages. Accepted rows
- * are grouped into the zone DOM incrementally — the map is not rebuilt and the
- * focus cloud does not move.
  */
 async function maybeLoadMoreZone(
   dir: 'parents' | 'siblings' | 'children',
@@ -1060,7 +1181,6 @@ async function maybeLoadMoreZone(
   const zone = zones?.[dir];
   const counters = zonePaging.get(dir);
   if (zone === null || zone === undefined || counters === undefined) return;
-  if (dir === 'children' && isChildrenViewResult()) return;
   if (
     !shouldLoadMore(counters, {
       scrollTop: zone.scrollTop,
@@ -1070,6 +1190,22 @@ async function maybeLoadMoreZone(
   ) {
     return;
   }
+  await appendNextZonePage(dir);
+}
+
+/**
+ * Дотягивает ОДНУ следующую порцию сектора и перерисовывает его. Дубликаты
+ * фильтруются по {@link zoneVisibleIds}, поэтому исключительность секторов
+ * ответа фокуса сохраняется и между порциями; принятые строки добавляются к
+ * сектору инкрементально — карта целиком не пересобирается, облачко фокуса не
+ * двигается.
+ */
+async function appendNextZonePage(
+  dir: 'parents' | 'siblings' | 'children',
+): Promise<void> {
+  const counters = zonePaging.get(dir);
+  if (counters === undefined) return;
+  if (dir === 'children' && isChildrenViewResult()) return;
   const focus = store.state.focus;
   const networkId = store.state.networkId;
   if (focus === null || networkId === null) return;
@@ -1417,6 +1553,13 @@ const ZONE_DIRS: readonly ('parents' | 'siblings' | 'children')[] = [
 const zoneAppended = new Map<'parents' | 'siblings' | 'children', FocusNeighbor[]>();
 /** Счётчики порции каждого сектора (offset, total, идёт ли запрос). */
 const zonePaging = new Map<'parents' | 'siblings' | 'children', ZonePagingCounters>();
+/**
+ * Подпись окрестности последнего сверенного ответа фокуса (ошибка ec5ba58c).
+ * Смена подписи или количества при том же фокусе означает, что состав
+ * окрестности изменился, — открытой карточке надо перечитать значения свойств.
+ * `null` — сверки ещё не было (фокус только что сменился).
+ */
+let zoneNeighbourhoodSignature: string | null = null;
 /** Идентификаторы мыслей, уже показанных в каком-либо секторе (исключительность). */
 let zoneVisibleIds = new Set<string>();
 /** Версия окрестности: смена фокуса инвалидирует ответы подгрузки в полёте. */

@@ -54,6 +54,7 @@ import { store } from '../state.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
@@ -424,9 +425,7 @@ async function openCrossNetworkRefChipMenu(
                 : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
               'info',
             );
-            document.dispatchEvent(
-              new CustomEvent('etn:property-values-refreshed', { detail: { key } }),
-            );
+            notifyPropertyValuesRefreshed(key);
           } catch (err) {
             notice(`Не удалось обновить имя: ${errText(err)}`, 'error');
           }
@@ -472,12 +471,9 @@ async function refreshSnapshot(
       unresolved === 0
         ? `Снапшоты обновлены (${result.values.length} шт.).`
         : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`;
-    // Уведомляем вызывающий код через custom-event, чтобы таблица свойств
+    // Уведомляем вызывающий код через общий канал, чтобы таблица свойств
     // обновила отображение значений без полного рефреша карточки.
-    opts.ownerId;
-    document.dispatchEvent(
-      new CustomEvent('etn:property-values-refreshed', { detail: { key } }),
-    );
+    notifyPropertyValuesRefreshed(key);
   } catch (err) {
     hint.textContent = `Ошибка обновления: ${String(err)}`;
   } finally {

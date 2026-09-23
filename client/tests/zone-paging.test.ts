@@ -11,6 +11,7 @@ import {
   createZonePaging,
   hasMore,
   isNearBottom,
+  planZoneReconcile,
   shouldLoadMore,
   totalKnown,
   zoneCountLabel,
@@ -99,5 +100,51 @@ describe('zone-paging: подпись индикатора-числа', () => {
   it('пустой или неизвестный сектор — индикатор скрыт', () => {
     assert.equal(zoneCountLabel(0), null);
     assert.equal(zoneCountLabel(-1), null);
+  });
+});
+
+describe('zone-paging: сверка со свежим количеством (ошибка ec5ba58c)', () => {
+  it('счётчики ещё неизвестны — префикс равен первой порции ответа фокуса', () => {
+    const plan = planZoneReconcile(createZonePaging(), 66);
+    assert.deepEqual(plan.counters, { loaded: 50, total: 66 });
+    assert.equal(plan.grew, false, 'сравнивать не с чем — роста нет');
+  });
+
+  it('сектор короче порции — префикс равен количеству, догружать нечего', () => {
+    const plan = planZoneReconcile(createZonePaging(), 7);
+    assert.deepEqual(plan.counters, { loaded: 7, total: 7 });
+    assert.equal(plan.grew, false);
+  });
+
+  it('своя запись добавила мысль за префиксом — количество выросло, нужна порция', () => {
+    // Фокус с 66 подчинёнными показывал первые 50; новая мысль встала в хвост.
+    const plan = planZoneReconcile({ loaded: 50, total: 66, loading: false }, 67);
+    assert.deepEqual(plan.counters, { loaded: 50, total: 67 });
+    assert.equal(plan.grew, true, 'новая мысль за загруженным префиксом');
+  });
+
+  it('показанный префикс не теряется при сверке без роста', () => {
+    // Пользователь долистал до 120 мыслей; следующая сверка под тем же фокусом
+    // не должна «забыть» порции и вернуть сектор к первым 50.
+    const plan = planZoneReconcile({ loaded: 120, total: 200, loading: false }, 200);
+    assert.deepEqual(plan.counters, { loaded: 120, total: 200 });
+    assert.equal(plan.grew, false);
+  });
+
+  it('сектор уменьшился — префикс сжимается вместе с ним, индикатор не врёт', () => {
+    const plan = planZoneReconcile({ loaded: 100, total: 100, loading: false }, 42);
+    assert.deepEqual(plan.counters, { loaded: 42, total: 42 });
+    assert.equal(plan.grew, false);
+    assert.equal(hasMore({ ...plan.counters, loading: false }), false);
+  });
+
+  it('рост с непоказанным префиксом — hasMore подсказывает догрузку', () => {
+    const plan = planZoneReconcile({ loaded: 50, total: 66, loading: false }, 67);
+    assert.equal(hasMore({ ...plan.counters, loading: false }), true);
+    assert.equal(shouldLoadMore({ ...plan.counters, loading: false }, {
+      scrollTop: 800,
+      clientHeight: 200,
+      scrollHeight: 1000,
+    }), true);
   });
 });

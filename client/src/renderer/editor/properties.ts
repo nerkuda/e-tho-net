@@ -41,6 +41,7 @@ import {
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { PROPERTY_VALUES_REFRESHED_EVENT } from '../lib/property-values-refresh.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
@@ -268,6 +269,14 @@ function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
       if (box.isConnected) void reload();
     }
   });
+  // Тот же локальный канал правок, что у основной таблицы (ошибка ec5ba58c):
+  // новое ребро могло лечь внетиповым свойством-связью (реестрового свойства
+  // типа связи нет), и без этого списка его бы не увидели.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener(PROPERTY_VALUES_REFRESHED_EVENT, () => {
+      if (box.isConnected) void reload();
+    });
+  }
   return box;
 }
 
@@ -622,14 +631,16 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
 
   let everMounted = false;
   currentReload = () => void reload();
-  // Слушаем локальное уведомление value-editor после успешного
-  // `crossResolve` (задача 7849008a, требование 95511443) — снапшот имени
-  // обновлён в `property_value_cross_refs`, но карточка в памяти держит
-  // старое значение; триггерим reload по тому же каналу, что и realtime.
-  // `document.addEventListener` доступен только в DOM-окружении: в юнит-тестах
-  // DOM-шим пропускает `document` — гард через typeof.
+  // Слушаем локальное уведомление о правке значений (общий канал
+  // `PROPERTY_VALUES_REFRESHED_EVENT`, задача 7849008a / ошибка ec5ba58c):
+  // снапшот имени после `crossResolve`, а также правка ребра с КАРТЫ (диалог
+  // добавления, перетаскивание облачка, связь эллипсом) и значения-связи из
+  // другого места холста меняют значения фокусной мысли, а карточка в памяти
+  // держит старый снимок. `document.addEventListener` доступен только в
+  // DOM-окружении: в юнит-тестах DOM-шим пропускает `document` — гард через
+  // typeof.
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
-    document.addEventListener('etn:property-values-refreshed', () => {
+    document.addEventListener(PROPERTY_VALUES_REFRESHED_EVENT, () => {
       if (box.isConnected) void reload();
     });
   }

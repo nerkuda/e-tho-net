@@ -79,3 +79,51 @@ export function zoneCountLabel(total: number): string | null {
   if (total <= 0) return null;
   return String(total);
 }
+
+/** Числа счётчиков сектора без флага «идёт запрос» (см. {@link planZoneReconcile}). */
+export interface ZoneCounterTotals {
+  /** Сколько сырых строк сервера считается показанным (offset следующей порции). */
+  loaded: number;
+  /** Свежее общее количество мыслей сектора по серверу. */
+  total: number;
+}
+
+/** План сверки сектора со свежим общим количеством. */
+export interface ZoneReconcilePlan {
+  /** Числа счётчиков после сверки (поле `loading` не трогается). */
+  counters: ZoneCounterTotals;
+  /**
+   * Общее количество выросло — за уже показанным префиксом появилась мысль
+   * (например, свою запись добавила соседа фокусу). По этому признаку холст
+   * дотягивает одну порцию, чтобы новая мысль попала в сектор без смены фокуса.
+   */
+  grew: boolean;
+}
+
+/**
+ * Сверка счётчиков сектора со свежим `meta.total` (ошибка ec5ba58c).
+ *
+ * Раньше количества секторов читались только при смене фокуса, поэтому
+ * индикатор-число замирал на старом значении до перехода к другой мысли и
+ * обратно. Сверка идёт по каждому ответу фокуса.
+ *
+ * Уже израсходованный префикс (`loaded`) сохраняется — показанные облачка не
+ * пропадают; он сжимается только вместе с сектором (`loaded` не больше `total`).
+ * У ещё неизвестных счётчиков (сектор только что открылся) префикс — первая
+ * порция, которую принёс ответ фокуса.
+ *
+ * `grew` — единственный доступный признак «в секторе появилась мысль за
+ * префиксом»: при `created`/`manual`-порядке новая мысль встаёт в хвост списка и
+ * в первые {@link ZONE_PAGE_SIZE} строк сервера не попадает.
+ */
+export function planZoneReconcile(
+  counters: ZonePagingCounters,
+  freshTotal: number,
+  firstPageSize: number = ZONE_PAGE_SIZE,
+): ZoneReconcilePlan {
+  const total = Math.max(0, freshTotal);
+  const loaded = totalKnown(counters)
+    ? Math.min(counters.loaded, total)
+    : Math.min(firstPageSize, total);
+  return { counters: { loaded, total }, grew: totalKnown(counters) && total > counters.total };
+}
