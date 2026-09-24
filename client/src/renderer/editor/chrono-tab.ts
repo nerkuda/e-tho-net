@@ -30,6 +30,7 @@ import { notice } from '../lib/notice.js';
 import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext } from './editor.js';
 import { createMarkdownField, editMarkdownField } from './markdown-field.js';
 import { rowSplitter } from './splitter.js';
+import { commentShell } from '../lib/ui/comment.js';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
 
@@ -234,11 +235,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   /** Shows an empty editor area — nothing is selected yet (§6.6). */
   function showEmptyEditor(): void {
     selectedId = null;
-    const hint = el('p', 'muted', 'Выберите комментарий из списка или нажмите «Добавить».');
-    hint.style.margin = '0';
-    const body = div('chrono-editor-body');
-    body.append(hint);
-    bottom.replaceChildren(body);
+    const shell = commentShell({
+      variant: 'fill',
+      state: { kind: 'empty', text: t('comment.emptySelection') },
+    });
+    bottom.replaceChildren(shell.root);
   }
 
   /**
@@ -297,6 +298,10 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     fromInput.addEventListener('blur', commitMeta);
     toInput.addEventListener('blur', commitMeta);
 
+    // Оболочка комментария: панель действий — метаданные и удаление, тело —
+    // встроенное поле markdown, режим зеркалится в `data-mode` (задача 9cb87c42).
+    const shell = commentShell({ variant: 'fill', tools: [metaRow] });
+
     const widget = createMarkdownField({
       md: existing?.body_md ?? '',
       html: existing?.body_html ?? '',
@@ -335,11 +340,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         await reload();
         return html;
       },
+      onEditChange: (editing) => shell.setMode(editing ? 'edit' : 'view'),
     });
 
-    const body = div('chrono-editor-body');
-    body.append(metaRow, widget);
-    bottom.replaceChildren(body);
+    shell.setField(widget);
+    shell.setState({ kind: 'ready' });
+    bottom.replaceChildren(shell.root);
     if (startEdit) editMarkdownField(widget);
   }
 

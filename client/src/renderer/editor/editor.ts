@@ -1524,7 +1524,8 @@ function focusEditorComment(): void {
   }
   const deadline = Date.now() + 5000;
   const tick = (): void => {
-    const field = scrollBox?.querySelector<HTMLElement>('.comment-permanent .md-field') ?? null;
+    // Каркас комментария — оболочка `lib/ui/comment.ts` (задача 9cb87c42).
+    const field = scrollBox?.querySelector<HTMLElement>('.ui-comment .md-field') ?? null;
     if (field === null || field.isConnected === false) {
       // Still loading (or a rebuild raced us) — keep waiting a bit.
       if (Date.now() < deadline) window.setTimeout(tick, 50);

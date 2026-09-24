@@ -69,6 +69,7 @@ import {
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { etn } from './etn.js';
+import { commentShell } from './ui/comment.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
 import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
 import { store } from '../state.js';
@@ -241,6 +242,17 @@ function etnimgUrl(filePath: string): string {
   return `etnimg://${encoded.join('/')}`;
 }
 
+/**
+ * Оборачивает содержимое комментария в общую оболочку `lib/ui/comment.ts`
+ * (задача 9cb87c42): карточка Ctrl+hover показывает комментарий тем же
+ * каркасом, что и редактор/хроника. Режим — только просмотр.
+ */
+function commentPreviewBody(view: HTMLElement): HTMLElement {
+  const shell = commentShell({ mode: 'view' });
+  shell.setField(view);
+  return shell.root;
+}
+
 /** Permanent comment (📝): rendered exactly like the comment view mode. */
 async function resolveCommentContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
   const owner = ownerParams(trigger);
@@ -254,10 +266,10 @@ async function resolveCommentContent(trigger: HTMLElement): Promise<HoverPreview
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  void resolveWikiLinksInDom(body, networkId);
-  return { title: trigger.dataset['hpTitle'] ?? '—', body };
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  void resolveWikiLinksInDom(view, networkId);
+  return { title: trigger.dataset['hpTitle'] ?? '—', body: commentPreviewBody(view) };
 }
 
 /** One-line preview of a comment body — duplicated from `chrono-tab.ts`'s
@@ -432,12 +444,12 @@ async function resolveWikiThoughtContent(trigger: HTMLElement): Promise<HoverPre
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  wireCommentLinksInDom(body);
-  void resolveWikiLinksInDom(body, networkId);
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  wireCommentLinksInDom(view);
+  void resolveWikiLinksInDom(view, networkId);
   const label = trigger.textContent?.trim();
-  return { title: label !== undefined && label !== '' ? label : '—', body };
+  return { title: label !== undefined && label !== '' ? label : '—', body: commentPreviewBody(view) };
 }
 
 /** Legacy name-only wiki-link (`[[Имя мысли|текст]]`, rendered as
@@ -475,12 +487,12 @@ async function resolveWikiLegacyNameContent(trigger: HTMLElement): Promise<Hover
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  wireCommentLinksInDom(body);
-  void resolveWikiLinksInDom(body, networkId);
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  wireCommentLinksInDom(view);
+  void resolveWikiLinksInDom(view, networkId);
   const label = trigger.textContent?.trim();
-  return { title: foundTitle !== '' ? foundTitle : (label ?? '—'), body };
+  return { title: foundTitle !== '' ? foundTitle : (label ?? '—'), body: commentPreviewBody(view) };
 }
 
 /** Wiki-link to a thought in ANOTHER network (`[[n:<net>#<id>]]`): shows only
@@ -695,11 +707,11 @@ async function resolveCrossNetworkThoughtContent(
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  wireCommentLinksInDom(body);
-  void resolveWikiLinksInDom(body, netId);
-  return { title: head, body };
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  wireCommentLinksInDom(view);
+  void resolveWikiLinksInDom(view, netId);
+  return { title: head, body: commentPreviewBody(view) };
 }
 
 registerHoverPreviewResolver('wiki-thought', resolveWikiThoughtContent);

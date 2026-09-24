@@ -37,6 +37,7 @@ import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js
 import { applyGroupClamp } from '../../editor/list-heights.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
 import { rowSplitter } from '../../editor/splitter.js';
+import { commentShell } from '../../lib/ui/comment.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
@@ -645,11 +646,11 @@ function showEmptyEditor(): void {
   if (editorArea === null) return;
   selectedRowId = null;
   newTargets = null;
-  const hint = el('p', 'muted', 'Выберите запись из таблицы или добавьте новую.');
-  hint.style.margin = '0';
-  const body = div('chron-editor-body');
-  body.append(hint);
-  editorArea.replaceChildren(body);
+  const shell = commentShell({
+    variant: 'fill',
+    state: { kind: 'empty', text: 'Выберите запись из таблицы или добавьте новую.' },
+  });
+  editorArea.replaceChildren(shell.root);
 }
 
 /** Local today in YYYY-MM-DD (input[type=date] format). */
@@ -735,6 +736,13 @@ function buildEditor(existing: Comment | null, startEdit = false): void {
   editorTargetsBox = div('chron-target-chips');
   repaintEditorTargets();
 
+  // Оболочка комментария: панель действий — метаданные и чипы целей, тело —
+  // встроенное поле markdown, режим зеркалится в `data-mode` (задача 9cb87c42).
+  const shell = commentShell({
+    variant: 'fill',
+    tools: [metaRow, editorTargetsBox],
+  });
+
   const widget = createMarkdownField({
     md: existing?.body_md ?? '',
     html: existing?.body_html ?? '',
@@ -783,11 +791,12 @@ function buildEditor(existing: Comment | null, startEdit = false): void {
       scheduleChronicleRefresh();
       return html;
     },
+    onEditChange: (editing) => shell.setMode(editing ? 'edit' : 'view'),
   });
 
-  const body = div('chron-editor-body');
-  body.append(metaRow, editorTargetsBox, widget);
-  editorArea.replaceChildren(body);
+  shell.setField(widget);
+  shell.setState({ kind: 'ready' });
+  editorArea.replaceChildren(shell.root);
   if (startEdit) editMarkdownField(widget);
 }
 

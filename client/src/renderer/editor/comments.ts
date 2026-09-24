@@ -22,8 +22,7 @@ import {
   saveDraft,
   type DraftKind,
 } from '../drafts.js';
-import { div, el } from '../lib/dom.js';
-import { operationError } from '../lib/ui/messages.js';
+import { commentShell } from '../lib/ui/comment.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
@@ -130,8 +129,8 @@ export function registerCommentSections(): void {
 function buildPermanentBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const startedAt = Date.now();
-  const box = div('comment-permanent');
-  box.append(el('span', 'muted', 'Загрузка…'));
+  const shell = commentShell({ variant: 'fill', scroll: true, state: { kind: 'loading' } });
+  const box = shell.root;
 
   let permanent: Comment | null = null;
   let field: HTMLElement | null = null;
@@ -227,7 +226,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
-      box.replaceChildren(operationError(err, 'Не удалось загрузить'));
+      shell.setState({ kind: 'error', error: err });
       return;
     }
     permanent = comments.find((c) => c.kind === 'permanent') ?? null;
@@ -262,8 +261,12 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       // tell when a `comment.*` event should NOT clobber the in-progress
       // text (bug 206e33a1). Initial state is view mode, so the first
       // transition fires `onEditChange(true)`; subsequent saves/cancels
-      // toggle back to `false`.
-      onEditChange: (editing) => setEditing(editing),
+      // toggle back to `false`. The shell mirrors the mode in `data-mode` so
+      // «просмотр / правка» единообразны во всех местах (задача 9cb87c42).
+      onEditChange: (editing) => {
+        setEditing(editing);
+        shell.setMode(editing ? 'edit' : 'view');
+      },
       onInput: (md) => scheduleDraft(md),
       onSave: async (md) => {
         // The blur save settles the edit — the pending debounce must not
@@ -311,7 +314,8 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         }
       },
     });
-    box.replaceChildren(field);
+    shell.setField(field);
+    shell.setState({ kind: 'ready' });
     // Publish the field handle for the realtime hook (bug 206e33a1). Done
     // AFTER the field is in the DOM so the real one is what the hook sees;
     // any earlier call would have updated a field that is no longer mounted.

@@ -2648,13 +2648,6 @@ body.cloud-dragging * {
   flex-direction: column;
 }
 
-.chrono-editor-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
 .chrono-meta-row {
   display: flex;
   gap: 6px;
@@ -2671,10 +2664,7 @@ body.cloud-dragging * {
   max-width: 170px;
 }
 
-/* The markdown field fills the bottom area: the empty space under a short
-   comment still belongs to the field (double-click to edit works across the
-   whole area). */
-.chrono-editor-body .md-field,
+/* The markdown field fills the attachment view area (description editor). */
 .attachment-view-frame .md-field {
   flex: 1 1 auto;
   min-height: 0;
@@ -2682,7 +2672,6 @@ body.cloud-dragging * {
   flex-direction: column;
 }
 
-.chrono-editor-body .md-field-view,
 .attachment-view-frame .md-field-view {
   flex: 1 1 auto;
 }
@@ -3444,9 +3433,16 @@ body.cloud-dragging * {
 
 /* The permanent-comment preview reuses `.comment-view` (editor markdown
    rendering, incl. its own 420px max-height/scroll) — cap it a bit lower
-   here so it never doubles up with `.ui-popover-body`'s own scroll area. */
-.ui-popover-body > .hp-comment-body {
+   here so it never doubles up with `.ui-popover-body`'s own scroll area.
+   The body is wrapped in the comment shell (`lib/ui/comment.ts`, задача
+   9cb87c42), so the cap sits on the shell root and the inner view scrolls
+   with it (single scrollbar). */
+.ui-popover-body > .ui-comment {
   max-height: min(400px, 55vh);
+  overflow-y: auto;
+}
+.ui-popover-body > .ui-comment .comment-view {
+  max-height: none;
 }
 
 .hp-chrono-list {
@@ -6908,27 +6904,6 @@ table.chron-table thead th {
   flex-direction: column;
 }
 
-.chron-editor-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* The markdown field fills the bottom area (the empty space under a short
- * comment still belongs to the field — double-click edits anywhere). */
-.chron-editor-body .md-field {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.chron-editor-body .md-field-view {
-  flex: 1 1 auto;
-}
-
 .chron-target-chips {
   display: flex;
   flex-wrap: wrap;
@@ -7685,19 +7660,13 @@ table.activity-table thead th {
   flex: 0 0 auto;
 }
 
-/* Вкладка «Комментарий» — единая зона комментария на всю высоту */
+/* Вкладка «Комментарий» — единая зона комментария на всю высоту
+   (каркас — `.ui-comment--fill`/`--scroll`, `lib/ui/comment.css`). */
 .main-full {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-}
-.main-full > .comment-permanent {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
 }
 
 /* Плейсхолдер пустого комментария */

@@ -147,3 +147,25 @@ export type {
   PopoverOptions,
   PopoverHandle,
 } from './popover.js';
+
+// Оболочка комментария — единый каркас просмотра/правки (задача 9cb87c42,
+// требование 24ca6770): рамка, панель действий, тело-поле markdown, состояния
+// загрузки/пустоты/ошибки и режим «просмотр / правка» в `data-mode`.
+export {
+  COMMENT_CLASS,
+  COMMENT_HEAD_CLASS,
+  COMMENT_TOOLS_CLASS,
+  COMMENT_BODY_CLASS,
+  COMMENT_FOOT_CLASS,
+  COMMENT_STATE_CLASS,
+  COMMENT_FILL_CLASS,
+  COMMENT_SCROLL_CLASS,
+  commentShell,
+} from './comment.js';
+export type {
+  CommentMode,
+  CommentVariant,
+  CommentState,
+  CommentShellOptions,
+  CommentShell,
+} from './comment.js';
