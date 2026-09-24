@@ -447,8 +447,9 @@ for each conn in byNetwork[network_id]:
 ### 5.1. Где возникает
 
 Все серверные операции обхода графа:
-- `etn.thoughts.subgraph` (MCP), `etn.thoughts.path`, `etn.thoughts.search` с
-  `in_subtree_of`.
+- `etn.thoughts.subgraph`, `etn.thoughts.search` с `in_subtree_of`; в MCP
+  `etn.thoughts.path` с 0.8.3 — действие `thoughts.path` исполнителя
+  `etn.ops` (read-only), не отдельный инструмент.
 - REST `GET /search?in=subtree&from_thought_id=...`.
 - REST `GET /thoughts/{id}/neighbors?depth>1`.
 - Сценарии «добавить всех потомков в выделение».
