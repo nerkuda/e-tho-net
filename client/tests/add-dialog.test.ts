@@ -25,6 +25,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { store } from '../src/renderer/state.js';
+import { LINK_PROPERTY_DROPDOWN_MIN_WIDTH } from '../src/renderer/lib/link-property-field.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -792,6 +793,36 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       formStack.querySelector('.link-property-pick') !== null,
       'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка 5817b009)',
     );
+    pressEscape();
+    await done;
+  });
+
+  it('ширина выпадашек диалога — 560px, однообразно у типа мысли и свойства связи (ошибка 5c7f8376)', async () => {
+    armEtn();
+    assert.equal(LINK_PROPERTY_DROPDOWN_MIN_WIDTH, 560, 'ширина выпадашек диалога — 560px');
+    const { done, formStack } = await openCanvasDialog();
+
+    const typeInput = formStack.querySelector('.entity-combo-input') as ShimElement | null;
+    assert.ok(typeInput !== null, 'поле «Тип мысли» есть в диалоге');
+    typeInput!.focus();
+    await settle();
+    assert.equal(
+      propertySuggestList().style.minWidth,
+      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      'список типа мысли — 560px',
+    );
+    typeInput!.blur();
+
+    const propertyInput = formStack.querySelector('.link-property-input') as ShimElement | null;
+    assert.ok(propertyInput !== null, 'поле «Свойство связи» есть в диалоге');
+    propertyInput!.focus();
+    await settle();
+    assert.equal(
+      propertySuggestList().style.minWidth,
+      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      'список свойства связи — та же ширина 560px',
+    );
+
     pressEscape();
     await done;
   });

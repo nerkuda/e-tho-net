@@ -1013,6 +1013,13 @@ export interface EntityComboOptions {
   /** Типы мыслей, сужающие живой поиск (только для `thoughts`). */
   searchTypeIds?: readonly string[];
   /**
+   * Минимальная (она же — потолок) ширина выпадашки живого поиска, px.
+   * Передаётся вызывающим, когда список не помещается под узким полем и должен
+   * быть шире него, — диалог добавления просит 560px однообразно у полей типа
+   * и свойства связи (ошибка 5c7f8376). Без значения — прежние 320px.
+   */
+  dropdownMinWidth?: number;
+  /**
    * Заголовок диалога «…» (выбор единственного значения). По умолчанию —
    * «Выбрать тип мысли / тип связи / мысль».
    */
@@ -1368,6 +1375,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
 
   handle = wireSuggest(input, {
     sources,
+    minWidth: opts.dropdownMinWidth ?? 0,
     onPick: (entry) => {
       if (entry.value === CREATE_ROW_ID) {
         void runCreate(lastQuery);

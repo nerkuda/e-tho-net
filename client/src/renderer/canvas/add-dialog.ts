@@ -48,7 +48,11 @@ import {
   ensurePropertyLinkTypes,
   type PropertyListRow,
 } from '../lib/property-list.js';
-import { buildLinkPropertyField, type LinkPropertyPick } from '../lib/link-property-field.js';
+import {
+  buildLinkPropertyField,
+  LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
+  type LinkPropertyPick,
+} from '../lib/link-property-field.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
@@ -436,6 +440,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       value: opts.defaultNewThoughtTypeId ?? null,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
+      // Однообразная ширина выпадашек диалога (ошибка 5c7f8376): список типов
+      // шире узкого поля и не уступает по ширине списку свойства связи.
+      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         newThoughtTypeId = typeId;
       },
@@ -450,6 +457,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       value: linkTypeId,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
+      // Та же ширина, что у списка типа мысли (ошибка 5c7f8376).
+      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         linkTypeId = typeId;
         store.update({ lastUsedLinkTypeId: typeId });

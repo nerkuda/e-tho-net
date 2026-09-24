@@ -59,12 +59,16 @@ export const LINK_PROPERTY_PICKER_TITLE = 'Выбрать свойство св�
  * списке не помещались. Список позиционируется абсолютно (слой в `document.body`),
  * поэтому может быть заметно шире поля. Потолок выпадашки поднят тем же
  * значением — иначе `positionBodyDropdown` обрезал бы ширину до прежних 320px.
+ * 560px — по фидбэку приёмки (ошибка 5c7f8376): прежние 640 были избыточны;
+ * той же ширины просили выпадашку типа мысли в том же диалоге (передаётся как
+ * `dropdownMinWidth` встроенного комбо, `lib/entity-picker.ts`).
  */
-export const LINK_PROPERTY_DROPDOWN_MIN_WIDTH = 640;
+export const LINK_PROPERTY_DROPDOWN_MIN_WIDTH = 560;
 
 /** Ширина диалога выбора свойства-связи, px — чтобы обе подписи (имя стороны и
- *  пара связи) помещались без обрезки. */
-const PICKER_DIALOG_WIDTH = 640;
+ *  пара связи) помещались без обрезки (560 — как у выпадашек диалога, ошибка
+ *  5c7f8376). */
+export const LINK_PROPERTY_PICKER_WIDTH = 560;
 
 /**
  * Выбранное СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает не тип
@@ -330,7 +334,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
     closeSelf = showDialog({
       title: LINK_PROPERTY_PICKER_TITLE,
       body,
-      width: PICKER_DIALOG_WIDTH,
+      width: LINK_PROPERTY_PICKER_WIDTH,
       buttons: [{ label: 'Отмена' }],
       onMount: () => {
         render();
