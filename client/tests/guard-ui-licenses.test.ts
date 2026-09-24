@@ -10,9 +10,14 @@
  *
  * Правило защищено двумя проверками: (1) в `client/package.json` нет
  * запрещённых зависимостей; (2) исходники рендерера их не импортируют.
+ * Отдельной проверкой закреплена сама allow-логика: точечные пакеты
+ * `@vaadin/*` разрешены (в том числе `@vaadin/grid` и его транзитивные
+ * core-пакеты вида `@vaadin/component-base`), а `@vaadin/bundles` и
+ * Pro-пакеты Web Awesome запрещены.
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
 
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -75,5 +80,17 @@ describe('guard: лицензии сторонних UI-библиотек', () 
         filePattern: FORBIDDEN_IMPORT,
       },
     ]);
+  });
+
+  it('точечные @vaadin/* разрешены, @vaadin/bundles и Pro — нет', () => {
+    // Разрешение на отдельные пакеты Vaadin (Apache-2.0) не должно случайно
+    // «пережать»: core-пакеты grid и его транзитивные зависимости допустимы.
+    assert.equal(isForbiddenPackage('@vaadin/grid'), false);
+    assert.equal(isForbiddenPackage('@vaadin/component-base'), false);
+    assert.equal(isForbiddenPackage('@vaadin/vaadin-lumo-styles'), false);
+    // Запрещённые семейства по-прежнему запрещены.
+    assert.equal(isForbiddenPackage('@vaadin/bundles'), true);
+    assert.equal(isForbiddenPackage('@awesome.me/webawesome-pro'), true);
+    assert.equal(isForbiddenPackage('@awesome.me/webawesome-pro-grid'), true);
   });
 });

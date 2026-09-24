@@ -44,6 +44,7 @@
     "@etn/shared": "*",
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.7.2",
+    "@vaadin/grid": "^25.3.0",
     "better-sqlite3": "11.10.0",
     "d3-drag": "^3.0.0",
     "d3-force": "^3.0.0",

@@ -14,6 +14,11 @@
  * запрещены ADR «Основа lib/ui: готовые Web Components за фасадами»
  * (сторож `guard-ui-licenses.test.ts`). Отдельные пакеты `@vaadin/*`
  * подключаются задачами этапа 2 по потребности.
+ *
+ * Vaadin (Apache-2.0) подключается отдельными пакетами `@vaadin/*`, не через
+ * `@vaadin/bundles` (её и Pro Web Awesome запрещает ADR). Ниже — базовый Grid
+ * и его колонки (задача cf4f8f70); фасад таблицы поверх него появится
+ * отдельной задачей этапа 2.
  */
 
 // Базовые стили и тема по умолчанию: `webawesome.css` подтягивает
@@ -86,3 +91,16 @@ import '@awesome.me/webawesome/dist/components/tree-item/tree-item.js';
 import '@awesome.me/webawesome/dist/components/accordion/accordion.js';
 import '@awesome.me/webawesome/dist/components/accordion-item/accordion-item.js';
 import '@awesome.me/webawesome/dist/components/split-panel/split-panel.js';
+
+// --- Vaadin (Apache-2.0) — отдельные пакеты `@vaadin/*` ---
+// Базовый Grid и колонки (задача cf4f8f70). Пакет `@vaadin/bundles` не
+// используется: только точечные компоненты. Компоненты Vaadin регистрируют
+// свои custom elements сами; повторный импорт безопасен (ESM-кеш).
+import '@vaadin/grid/vaadin-grid.js';
+import '@vaadin/grid/vaadin-grid-column.js';
+import '@vaadin/grid/vaadin-grid-sort-column.js';
+
+// Карта маппинга токенов ETN → `--vaadin-*` (светлая и тёмная темы).
+// В Vaadin 25 `--lumo-*` заменены токенами `--vaadin-*` — см. шапку файла.
+import './vaadin-tokens.css';
+

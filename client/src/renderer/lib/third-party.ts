@@ -39,6 +39,13 @@ export const THIRD_PARTY_COMPONENTS: readonly ThirdPartyComponent[] = [
     packages: ['@awesome.me/webawesome'],
   },
   {
+    title: 'Vaadin Web Components',
+    license: 'Apache-2.0',
+    copyright: 'Vaadin Ltd.',
+    url: 'https://vaadin.com/components',
+    packages: ['@vaadin/grid'],
+  },
+  {
     title: 'CodeMirror 6',
     license: 'MIT',
     copyright: 'Marijn Haverbeke',

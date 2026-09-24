@@ -6,8 +6,9 @@
  * `lib/ui/index.ts` и оставляет каркас диалога `lib/dialog.ts` единственным
  * источником диалогов. Три правила:
  *
- * 1. **Вендор — только внутри `lib/ui/`.** `@awesome.me/webawesome` и его
- *    элементы (`wa-*`) импортируются/создаются только в модулях-фасадах
+ * 1. **Вендор — только внутри `lib/ui/`.** Вендорские пакеты
+ *    (`@awesome.me/webawesome`, отдельные `@vaadin/*`) и их элементы
+ *    (`wa-*`, `vaadin-*`) импортируются/создаются только в модулях-фасадах
  *    `lib/ui/`; экраны обязаны ходить через фасад.
  * 2. **Barrel-дисциплина.** Каждый модуль `lib/ui/*.ts` реэкспортируется из
  *    `lib/ui/index.ts` — иначе фасад существует, но недоступен потребителям
@@ -43,36 +44,37 @@ function isCommentLine(line: string): boolean {
   );
 }
 
-/** Импорт вендорского пакета Web Awesome. */
+/** Импорт вендорского пакета: Web Awesome Core или отдельный `@vaadin/*`. */
 const VENDOR_IMPORT =
-  /(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)['"]@awesome\.me\/webawesome(?:['"/])/;
+  /(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)['"]@(?:awesome\.me\/webawesome|vaadin\/[\w-]+)(?:['"/])/;
 
-/** Литерал имени вендорского custom element (`wa-button`, `el('wa-input')`). */
-const VENDOR_ELEMENT = /['"`]wa-[a-z][\w-]*['"`]/;
+/** Литерал имени вендорского custom element (`wa-button`, `vaadin-grid`). */
+const VENDOR_ELEMENT = /['"`](?:wa|vaadin)-[a-z][\w-]*['"`]/;
 
 describe('guard: фасады lib/ui (35b9cc05, ADR 03eb2c61)', () => {
-  it('вендорский пакет Web Awesome импортируется только внутри lib/ui', () => {
+  it('вендорский пакет импортируется только внутри lib/ui', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
         name: 'vendor-import-only-in-lib-ui',
         description:
-          '`@awesome.me/webawesome` импортируется только модулями-фасадами ' +
-          'lib/ui (ADR 03eb2c61): экраны и прочие модули ходят через фасад.',
+          'Вендорские пакеты (`@awesome.me/webawesome`, `@vaadin/*`) ' +
+          'импортируются только модулями-фасадами lib/ui (ADR 03eb2c61): ' +
+          'экраны и прочие модули ходят через фасад.',
         filePattern: VENDOR_IMPORT,
         allow: (rel) => rel.startsWith('lib/ui/'),
       },
     ]);
   });
 
-  it('голые вендорские элементы (wa-*) не создаются вне lib/ui', () => {
+  it('голые вендорские элементы (wa-*, vaadin-*) не создаются вне lib/ui', () => {
     assertGuardClean(
       RENDERER_ROOT,
       [
         {
           name: 'no-bare-vendor-elements',
           description:
-            'Голые Web Components (`wa-*`) в экранах и модулях запрещены ' +
-            '(ADR 03eb2c61): только через фасады lib/ui.',
+            'Голые Web Components (`wa-*`, `vaadin-*`) в экранах и модулях ' +
+            'запрещены (ADR 03eb2c61): только через фасады lib/ui.',
           pattern: VENDOR_ELEMENT,
           allow: (rel, line) => rel.startsWith('lib/ui/') || isCommentLine(line),
         },
