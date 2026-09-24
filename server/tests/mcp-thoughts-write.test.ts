@@ -115,6 +115,57 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('resolves links[].target_ref regardless of declaration order (target earlier or later)', async () => {
+    // Regression for error 436ab571: `links[].target_ref` must resolve to a
+    // thought created by the SAME batch, whichever way the array is ordered.
+    // Фаза 2 создаёт все мысли батча, фаза 3 резолвит `target_ref` — поэтому и
+    // «target объявлен позже», и «target объявлен раньше» (форма
+    // воспроизведения ошибки: первый элемент — цель, последующие ссылаются на
+    // его ref) обязаны проходить.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const laterTarget = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              // source объявлен ПЕРВЫМ, target — позже по массиву.
+              { ref: 'src-fwd', thought: { title: 'Fwd source' }, links: [{ direction: 'child', target_ref: 'dst-fwd' }] },
+              { ref: 'dst-fwd', thought: { title: 'Fwd target' } },
+            ],
+          },
+        });
+        assert.equal(laterTarget.isError, undefined, toolText(laterTarget));
+        const fwd = toolJson<WriteResult>(laterTarget);
+        assert.equal(fwd.items[0]?.links?.length, 1, 'forward ref must create the link');
+
+        const earlierTarget = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              // target объявлен ПЕРВЫМ, ссылки на него — позже (форма ошибки).
+              { ref: 'dst-back', thought: { title: 'Back target' } },
+              { ref: 'src-a', thought: { title: 'Back source A' }, links: [{ direction: 'child', target_ref: 'dst-back' }] },
+              { ref: 'src-b', thought: { title: 'Back source B' }, links: [{ direction: 'parent', target_ref: 'dst-back' }] },
+            ],
+          },
+        });
+        assert.equal(earlierTarget.isError, undefined, toolText(earlierTarget));
+        const back = toolJson<WriteResult>(earlierTarget);
+        assert.equal(back.items[0]?.links?.length, 0, 'target itself has no outgoing link');
+        assert.equal(back.items[1]?.links?.length, 1, 'backward child ref must create the link');
+        assert.equal(back.items[2]?.links?.length, 1, 'backward parent ref must create the link');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('resolves links[].target_ref against `local_refs` (HOME alias)', async () => {
     // Regression for error 3058c264: `local_refs` lets the caller name an
     // existing thought (e.g. HOME) once and reference it from `links[].target_ref`
@@ -392,6 +443,17 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.equal(result.isError, true);
         const text = toolText(result);
         assert.ok(text.includes('DUPLICATE') || text.includes('duplicate'), text);
+        // Кандидаты — в той же compact-форме, что и `find_duplicates`: без
+        // визуальных полей (мелкий дефект 0.8.3).
+        const details = JSON.parse(text.slice(text.indexOf('Details: ') + 'Details: '.length)) as {
+          candidates: Array<Record<string, unknown>>;
+        };
+        const candidate = details.candidates[0];
+        assert.ok(candidate, 'в details.candidates есть кандидат');
+        assert.equal(candidate.title, 'Уникальная мысль');
+        for (const visual of ['fg_color', 'bg_color', 'font_bold', 'font_italic', 'font_underline', 'font_strike']) {
+          assert.ok(!(visual in candidate), `кандидат не несёт визуальное поле ${visual}`);
+        }
       } finally {
         await handle.close();
       }
@@ -634,14 +696,267 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           name: 'etn.thoughts.write',
           arguments: {
             network_id: ctx.networkId,
-            thoughts: [
-              { thought_id: ctx.homeId, thought: { title: 'HOME', active: false } },
-            ],
+            thoughts: [{ thought_id: ctx.homeId, active: false }],
           },
         });
         assert.equal(result.isError, true);
         const text = toolText(result);
-        assert.ok(text.includes('VALIDATION_ERROR') || text.includes('PROTECTED'), text);
+        assert.ok(text.includes('PROTECTED'), text);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка 2a679270-75cb-41c6-9c2c-d079f85ca831: MCP-схема допускала
+  // `thought_id` и `thought` вместе (refine «хотя бы одно»), а домен
+  // (`validateEnvelope`) требует ровно одно. Теперь схема отвергает
+  // комбинацию ДО домена — с внятным сообщением, а не неожиданным отказом.
+  it('rejects thought_id + thought in one item at the schema level', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 't1', thought: { title: 'XOR-цель' } }],
+          },
+        });
+        assert.notEqual(created.isError, true, toolText(created));
+        const thoughtId = (JSON.parse(toolText(created)) as { items: Array<{ id: string }> })
+          .items[0]!.id;
+
+        const both = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, thought: { title: 'патч' } }],
+          },
+        });
+        assert.equal(both.isError, true, 'thought_id + thought must be rejected');
+        const text = toolText(both);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('exactly one of thought_id or thought'), text);
+
+        // Ни один из двух должен быть тоже отвергнут — «ровно одно».
+        const neither = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'empty' }],
+          },
+        });
+        assert.equal(neither.isError, true, 'neither thought_id nor thought must be rejected');
+        assert.ok(
+          toolText(neither).includes('exactly one of thought_id or thought'),
+          toolText(neither),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Bug faf56a02-e884-488b-9b7b-39dfd5d5b275:
+  // item-level `active` (absorbed from `etn.thoughts.set_active`) must
+  // toggle the existing thought's `active` flag even without a nested
+  // `thought` patch.
+  it('item-level `active` toggles the addressed thought without a nested `thought`', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // 1. create a thought
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 't1', thought: { title: 'Активная-через-MCP' } }],
+          },
+        });
+        assert.notEqual(created.isError, true, toolText(created));
+        const createdJson = JSON.parse(toolText(created)) as { items: Array<{ id: string }> };
+        const thoughtId = createdJson.items[0]!.id;
+
+        // 2. toggle off with item-level active: false (no nested thought)
+        const off = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, active: false }],
+          },
+        });
+        assert.notEqual(off.isError, true, toolText(off));
+        const offJson = JSON.parse(toolText(off)) as {
+          items: Array<{ thought_action: string }>;
+        };
+        assert.equal(offJson.items[0]!.thought_action, 'updated');
+
+        // 3. verify via get
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        const gotJson = JSON.parse(toolText(got)) as { active: boolean };
+        assert.equal(gotJson.active, false);
+
+        // 4. toggle on with item-level active: true
+        await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, active: true }],
+          },
+        });
+        const got2 = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        const gotJson2 = JSON.parse(toolText(got2)) as { active: boolean };
+        assert.equal(gotJson2.active, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('item-level `title`/`synonyms` rename the addressed thought without a nested `thought`', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 't1', thought: { title: 'Имя-до-MCP', synonyms: ['старый'] } },
+            ],
+          },
+        });
+        assert.notEqual(created.isError, true, toolText(created));
+        const createdJson = JSON.parse(toolText(created)) as { items: Array<{ id: string }> };
+        const thoughtId = createdJson.items[0]!.id;
+
+        // Bug 870c0c0d: item-level title/synonyms must reach the addressed
+        // thought even without a nested `thought` block.
+        const renamed = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, title: 'Имя-после-MCP', synonyms: ['новый'] }],
+          },
+        });
+        assert.notEqual(renamed.isError, true, toolText(renamed));
+        const renamedJson = JSON.parse(toolText(renamed)) as {
+          items: Array<{ thought_action: string }>;
+        };
+        assert.equal(renamedJson.items[0]!.thought_action, 'updated');
+
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        const gotJson = JSON.parse(toolText(got)) as { title: string; synonyms: string[] };
+        assert.equal(gotJson.title, 'Имя-после-MCP');
+        assert.deepEqual(gotJson.synonyms, ['новый']);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Bug 21cbafb8-254b-42e3-a884-3832a3cf6ab5: item-level
+  // title/synonyms/type_id/type are read only for a `thought_id` item. With a
+  // `thought` block they must be rejected, not silently dropped.
+  it('rejects item-level title/synonyms/type together with a `thought` block', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        for (const offender of [
+          { title: 'B' },
+          { synonyms: ['s'] },
+          { type: 'ADR' },
+          { type_id: null },
+        ]) {
+          const res = await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'n1', thought: { title: 'A' }, ...offender }],
+            },
+          });
+          assert.equal(res.isError, true, `must reject ${JSON.stringify(offender)}`);
+          const text = toolText(res);
+          assert.ok(text.includes('VALIDATION_ERROR'), text);
+          assert.ok(text.includes('thought_id'), text);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Bug 21cbafb8: item-level `active` stays valid together with `thought` —
+  // applied to the created thought, with priority over `thought.active`.
+  it('item-level `active` applies to a new thought and wins over `thought.active`', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // inactive via item-level active: false
+        const off = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'n1', thought: { title: 'Неактуальная-при-создании' }, active: false },
+            ],
+          },
+        });
+        assert.notEqual(off.isError, true, toolText(off));
+        const offId = (JSON.parse(toolText(off)) as { items: Array<{ id: string }> }).items[0]!.id;
+        const gotOff = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: offId },
+        });
+        assert.equal((JSON.parse(toolText(gotOff)) as { active: boolean }).active, false);
+
+        // item-level priority: thought.active=true, item-level active=false
+        const priority = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'n2', thought: { title: 'Приоритет-item-level', active: true }, active: false },
+            ],
+          },
+        });
+        assert.notEqual(priority.isError, true, toolText(priority));
+        const pid = (JSON.parse(toolText(priority)) as { items: Array<{ id: string }> }).items[0]!
+          .id;
+        const gotPriority = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: pid },
+        });
+        assert.equal(
+          (JSON.parse(toolText(gotPriority)) as { active: boolean }).active,
+          false,
+          'item-level active must win over thought.active',
+        );
       } finally {
         await handle.close();
       }

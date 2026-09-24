@@ -18,7 +18,10 @@ import { describe, it } from 'node:test';
 
 import type { Layer, LayerMergeReport } from '@etn/shared';
 
-import { buildMcpContext, callWrite, closeMcpContext, connectMcpClient, nativeAvailable, toolJson } from './mcp-helpers.js';
+import {
+  callOp,
+  buildMcpContext, callWrite, closeMcpContext, connectMcpClient, nativeAvailable, toolJson,
+} from './mcp-helpers.js';
 
 describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
   it('create → select → write → isolation → merge → auto-repoint on delete', async () => {
@@ -42,10 +45,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
 
         // --- Create a layer (does not switch the session on its own). ----
         const created = toolJson<Layer & { layer: { id: string; title: string } }>(
-          await agent.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'Песочница', comment: 'MCP test' },
-          }),
+          await callOp(agent.client, 'layers.create', { network_id: ctx.networkId, title: 'Песочница', comment: 'MCP test' }),
         );
         assert.equal(created.title, 'Песочница');
         // Defaults to the calling key's current layer — still the base.
@@ -63,10 +63,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         // key's session layer, not the edited layer (same contract as
         // create; etn.layers.update used to echo current: true).
         const renamedOnBase = toolJson<Layer & { request_id: string }>(
-          await agent.client.callTool({
-            name: 'etn.layers.update',
-            arguments: { network_id: ctx.networkId, layer_id: sandboxId, title: 'Песочница!' },
-          }),
+          await callOp(agent.client, 'layers.update', { network_id: ctx.networkId, layer_id: sandboxId, title: 'Песочница!' }),
         );
         assert.equal(renamedOnBase.title, 'Песочница!');
         assert.equal(renamedOnBase.current, false);
@@ -94,10 +91,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         // Editing while sitting ON the layer: `current` is true (the session
         // really is there; the version was bumped by the rename above).
         const renamedInLayer = toolJson<Layer>(
-          await agent.client.callTool({
-            name: 'etn.layers.update',
-            arguments: { network_id: ctx.networkId, layer_id: sandboxId, comment: 'sandbox' },
-          }),
+          await callOp(agent.client, 'layers.update', { network_id: ctx.networkId, layer_id: sandboxId, comment: 'sandbox' }),
         );
         assert.equal(renamedInLayer.current, true);
 
@@ -135,10 +129,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
 
         // --- Merge the layer fully into the base. -------------------------
         const report = toolJson<LayerMergeReport>(
-          await agent.client.callTool({
-            name: 'etn.layers.merge',
-            arguments: { network_id: ctx.networkId, layer_id: sandboxId },
-          }),
+          await callOp(agent.client, 'layers.merge', { network_id: ctx.networkId, layer_id: sandboxId }, true),
         );
         assert.equal(report.applied.thoughts, 1);
         assert.deepEqual(report.skipped, []);
@@ -154,10 +145,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         // to its parent (mirrors the REST cascade, 13-layers.md §2.4) — no
         // explicit `etn.layers.select` back to the base is needed.
         const del = toolJson<{ deleted: number; purged: number; skipped: number }>(
-          await agent.client.callTool({
-            name: 'etn.layers.delete',
-            arguments: { network_id: ctx.networkId, layer_id: sandboxId },
-          }),
+          await callOp(agent.client, 'layers.delete', { network_id: ctx.networkId, layer_id: sandboxId }, true),
         );
         assert.equal(del.deleted, 1);
 
@@ -185,10 +173,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
       const agent = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const created = toolJson<Layer>(
-          await agent.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'L1' },
-          }),
+          await callOp(agent.client, 'layers.create', { network_id: ctx.networkId, title: 'L1' }),
         );
         await agent.client.callTool({
           name: 'etn.layers.select',
@@ -218,14 +203,11 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         // Only the link is selected — its endpoints are not, and neither
         // exists in the base yet: the closure check (§8.1) must reject
         // before touching anything.
-        const rejected = await agent.client.callTool({
-          name: 'etn.layers.merge',
-          arguments: {
+        const rejected = await callOp(agent.client, 'layers.merge', {
             network_id: ctx.networkId,
             layer_id: created.id,
             tables: { links: [link.link_id] },
-          },
-        });
+          }, true);
         assert.equal(rejected.isError, true);
       } finally {
         await agent.close();

@@ -27,6 +27,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { openNetworkDb } from '../db/network-db.js';
 export { openNetworkDb };
+import { SystemDb } from '../db/system-db.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
 import { parseLinkTypeFilterValue } from '@etn/shared';
 import type { Logger } from '../logger.js';
@@ -247,4 +248,33 @@ export function parseLinkTypeFilterQuery(
   if (typeIds.length > 0) out.type_ids = typeIds;
   if (includeStructural === true) out.include_structural = true;
   return out;
+}
+
+/**
+ * Перечень сетей, к которым пользователь имеет доступ (member/admin).
+ * Используется для cross-network ссылок (задача 7849008a): живой резолв
+ * открывает только те сети, которые видны пользователю, иначе значение
+ * молча помечается `unresolved` с причиной `permission_denied`
+ * (требование 6d4ad9ac «Чтение кросс-сетевого значения не открывает
+ * чужих баз»). Возвращаемый набор включает все сети пользователя —
+ * в т.ч. текущую (для удобства вызывающего, проверка «своя сеть» идёт
+ * отдельно в {@link resolveAndBuildSnapshotsForWrite}).
+ *
+ * Открывает системную БД на каждый вызов — это допустимо, потому что
+ * `_system.db` — маленький WAL-файл, читается из кэша ОС, и вызов
+ * идёт только на живой резолв/запись кросс-сетевого значения (не на
+ * каждый запрос).
+ */
+export async function getAccessibleNetworkIdsForUser(
+  dataDir: string,
+  userId: string,
+  log?: Logger,
+): Promise<ReadonlySet<string>> {
+  const sysDb = SystemDb.open(dataDir, log);
+  try {
+    const networks = sysDb.listNetworksForUser(userId);
+    return new Set(networks.map((n) => n.id));
+  } finally {
+    sysDb.close();
+  }
 }

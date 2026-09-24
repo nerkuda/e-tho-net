@@ -1480,6 +1480,28 @@ body.resizing-h {
   pointer-events: none;
 }
 
+/* Floating per-zone count (задача c8fa74ba): overlay on the canvas host,
+ * pinned to the zone's top-right corner by inline `top`/`left` (canvas-space)
+ * + `translateX(-100%)`. Text colour is set inline to stay contrast against
+ * the theme backdrop; the faint pill keeps it legible over clouds. */
+.zone-count {
+  position: absolute;
+  transform: translateX(-100%);
+  z-index: 4;
+  pointer-events: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+.zone-count.hidden {
+  display: none;
+}
+
 .zone-spacer {
   position: relative;
 }
@@ -2132,6 +2154,32 @@ body.cloud-dragging * {
    black circle — well readable on both light and dark themes. */
 .cloud-trash-badge svg {
   color: #e53935;
+}
+
+/* Метка «мысль чужой сети» облачка (кросс-сетевая ссылка, ошибка 9be98ae1):
+   зеркало метки корзины по назначению, но у правого верхнего угла — метки
+   корзины (слева) и сети (справа) на одном облачке не конфликтуют. */
+.cloud-network-badge {
+  position: absolute;
+  right: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+/* Глиф «сеть» (lucide «network», lib/icons.ts) — акцентный голубой на чёрном
+   круге, читаемый на обеих темах и отличимый от красной корзины. */
+.cloud-network-badge svg {
+  color: #4a9eff;
 }
 
 /* Object-lock badge (task 4f141756, UI element 8e3703ee): small 🔒 chip
@@ -4686,6 +4734,19 @@ body.cloud-dragging * {
   height: 26px;
 }
 
+/* Строка поиска диалога добавления/выбора мысли: поле ввода (охват диктует
+ * назначение выбора — требование 79755f76; переключателя в диалоге нет). */
+.add-search-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.add-search-row .textarea-input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into
  * a wide orange grip while hovering or dragging. */
 .st-splitter {
@@ -5685,6 +5746,16 @@ body.cloud-dragging * {
   color: #e53935;
 }
 
+/* Компактная метка «мысль чужой сети» в списочных строках/чипах — зеркало
+   метки корзины: акцентный голубой глиф «сеть» вместо красной корзины
+   (кросс-сетевая ссылка значения, ошибка 9be98ae1). */
+.list-network-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #4a9eff;
+}
+
 .group-delete-warning {
   margin: 0;
   color: var(--text-dim);
@@ -6188,6 +6259,19 @@ body.cloud-dragging * {
   color: var(--text-dim);
 }
 
+/* Имя сети в кросс-сетевом режиме (ошибка defcd811): тот же слот, что
+   `.dup-parent`, но цвет другой — акцентный, чтобы сеть не путалась с
+   локальным «родителем», который показывается в обычном режиме. */
+.dup-item .dup-network {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--accent);
+}
+
 /* --- admin panel (H17) ----------------------------------------------------- */
 
 .admin-panel {
@@ -6470,7 +6554,95 @@ body.cloud-dragging * {
   text-overflow: ellipsis;
 }
 
+/* Уточнение строки выпадашки (пара имён типа связи в скобках «(прямое -> обратное)»)
+   — серым справа от имени, обрезается многоточием (lib/link-property-field.ts,
+   ошибки dc175a5b / 5817b009). */
+.type-combo-note {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted, #8a93a5);
+  font-size: 0.85em;
+}
+
 .type-combo-empty {
+  margin: 4px 8px;
+}
+
+/* Поле выбора свойства-связи (ошибка 5817b009): та же рамка, что у поля значения,
+ * кнопка «…» — как у поля типа мысли (`.entity-combo-pick`): живой поиск в поле
+ * плюс диалог выбора с полным списком. */
+.link-property-field {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+}
+
+.link-property-field-box {
+  position: relative;
+  flex-wrap: nowrap;
+  padding-right: 28px;
+}
+
+.link-property-field-box .link-property-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.link-property-field-box .link-property-input:focus {
+  outline: none;
+}
+
+/* Диалог выбора свойства-связи (кнопка «…»): поиск внутри и полный список. */
+.link-property-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.link-property-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.link-property-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.link-property-option:hover {
+  background: var(--accent-soft);
+}
+
+.link-property-option-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.link-property-option-note {
+  flex: none;
+  color: var(--muted, #8a93a5);
+  font-size: 0.85em;
+}
+
+.link-property-option-none .link-property-option-label {
+  color: var(--muted, #8a93a5);
+}
+
+.link-property-empty {
   margin: 4px 8px;
 }
 
@@ -6713,10 +6885,11 @@ body.cloud-dragging * {
   color: var(--muted, #8a93a5);
 }
 
-/* Единый значок конца связи: короткая линия с приделанной к её концу стрелкой.
-   Цвет/стиль/толщина — эффективные настройки свойства-связи (наследование от
-   родительского типа связи); направление задаётся зеркалированием (scaleX(-1))
-   в `lib/property-list.ts`, поэтому значок один на источник и назначение. */
+/* Единый значок конца связи: короткая вертикальная линия с приделанной к её
+   концу стрелкой. Цвет/стиль/толщина — эффективные настройки свойства-связи
+   (наследование от родительского типа связи); направление задаётся координатами
+   в `lib/property-list.ts` (исходящая — вниз, входящая — вверх, задача 88def930),
+   поэтому значок один на источник и назначение. */
 .property-list-link-icon {
   display: inline-block;
   margin-right: 6px;
@@ -7971,6 +8144,26 @@ table.activity-table thead th {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* Редактор кросс-сетевой ссылки `cross_network_ref` (задача 7849008a; поле-чип
+ * — ошибка 9be98ae1): чипы-облачка фабрики с меткой «чужой сети» + поле живого
+ * веерного поиска, угловые кнопки «…» (диалог) и «✕» (очистить). Разметку
+ * чип-поля даёт общая `.link-value-wrap/field/corner`, здесь — только
+ * специфика кросс-сети. */
+.value-editor--cross-network-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.value-editor--cross-network-ref .cross-network-ref-add {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+/* Нерезолвленный чип: последний живой резолв отказал — бледность и рамка-
+ * предупреждение (причина видна в метке-подсказке чипа). */
+.cross-network-ref-chip--unresolved {
+  opacity: 0.6;
+  border-color: #e53935;
 }
 /* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
  * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу

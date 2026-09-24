@@ -40,16 +40,44 @@ import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
-import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
-import { buildEntityCombo } from '../lib/entity-picker.js';
+import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
+import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
+import { buildEntityCombo, loadCrossNetworkCandidates } from '../lib/entity-picker.js';
+import {
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  type PropertyListRow,
+} from '../lib/property-list.js';
+import {
+  buildLinkPropertyField,
+  LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
+  type LinkPropertyPick,
+} from '../lib/link-property-field.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
 export type ThoughtPickItem =
-  | { kind: 'existing'; id: string; raw: string }
+  | {
+      kind: 'existing';
+      id: string;
+      raw: string;
+      /**
+       * Сеть-владелец выбранной мысли — заполняется только в кросс-сетевом
+       * режиме диалога (`crossNetwork`, задача ea04a185). Обычные вызывающие
+       * читают только `id` и поле игнорируют.
+       */
+      networkId?: string;
+    }
   | { kind: 'new'; title: string; synonyms: string[]; raw: string };
+
+/**
+ * Выбранное в диалоге СВОЙСТВО-связь — тип и поведение компонента поля
+ * (`lib/link-property-field.ts`, ошибка dc175a5b). Реэкспорт: карточка диалога
+ * и его потребители адресуют значение одним именем.
+ */
+export type { LinkPropertyPick } from '../lib/link-property-field.js';
 
 /** Result of {@link pickThoughtsDialog} (null = cancelled). */
 export interface ThoughtPickResult {
@@ -58,6 +86,9 @@ export interface ThoughtPickResult {
   thoughtTypeId: string | null;
   /** Link type chosen in the dialog (null = none / the field was hidden). */
   linkTypeId: string | null;
+  /** Свойство-связь, выбранное в диалоге (ошибка 1dd08949). `null` — свойство
+   *  не выбрано: применяется прежняя бестиповая связь в направлении диалога. */
+  linkProperty: LinkPropertyPick | null;
   /** Applied via Shift+Ctrl+Enter — focus the first inserted item (L19). */
   focusFirst: boolean;
 }
@@ -71,6 +102,14 @@ export interface ThoughtPickerOptions {
   allowCreate?: boolean;
   /** Show the link-type field (default true — the canvas add flows). */
   allowLinkType?: boolean;
+  /**
+   * Показывать поле «Свойство связи» вместо «Тип связи» (ошибка 1dd08949):
+   * список — отдельные имена сторон свойств-связей сети (`rows`), выбранное
+   * свойство заполняется у добавляемой мысли значением якоря. Строки задаёт
+   * вызывающий (он грузит реестр + каталог типов связей — см. `openAddDialog`
+   * и `ensurePropertyLinkTypes`); без него поле деградирует в «без свойства».
+   */
+  linkProperty?: { rows: readonly PropertyListRow[] };
   /** Restrict the live search to these thought types (link-property configs). */
   searchTypeIds?: string[];
   /**
@@ -100,6 +139,17 @@ export interface ThoughtPickerOptions {
   title?: string;
   /** Primary button label override (defaults «Добавить»/«Выбрать»). */
   applyLabel?: string;
+  /**
+   * Кросс-сетевой режим выбора (задача ea04a185): живой поиск кандидатов идёт
+   * веером по всем сетям пользователя — охват задан принудительно назначением
+   * диалога, переключателя нет. Мысли собственной сети (`excludeNetworkId`) из
+   * выдачи исключаются (запрет своей сети, требование 884d14e1 — у каждого
+   * item появляется `networkId`), создание новых мыслей недоступно. Так диалог
+   * адресует мысль ДРУГОЙ сети. Обычные (без `crossNetwork`) вызовы ищут
+   * строго по текущей сети (требование 79755f76, ошибка 81be082f): выбор цели
+   * внутрисетевой связи чужой мыслью невалиден.
+   */
+  crossNetwork?: { excludeNetworkId: string };
 }
 
 /** One list entry with its duplicate-check result (internal shape). */
@@ -111,6 +161,8 @@ interface AddLine {
   existingId: string | null;
   /** Strongest candidate match kind (informational). */
   matchKind: 'title' | 'synonym' | 'partial' | null;
+  /** Сеть-владелец существующей мысли (кросс-сетевой режим, ea04a185). */
+  networkId: string | null;
 }
 
 /** The first existing-thought id of a picker result (single-pick helper). */
@@ -152,8 +204,15 @@ function thoughtToCandidate(thought: Thought): DuplicateHit {
   };
 }
 
-let mounted = false;
+/**
+ * Варианты поля «Свойство связи» строит переиспользуемый компонент
+ * (`lib/link-property-field.ts`, ошибка dc175a5b): одна строка на КАЖДОЕ имя
+ * стороны свойства-связи (прямое — источник, обратное — назначение) со
+ * значком направления, как в общем списке свойств. Пункт «без свойства» —
+ * связь создаётся бестиповой в направлении диалога.
+ */
 
+let mounted = false;
 /** Mounts the dialog opener into the canvas drag gestures (called by the workspace). */
 export function mountAddDialog(): void {
   if (mounted) return;
@@ -179,16 +238,56 @@ export async function openAddDialog(ctx: {
   direction: 'parent' | 'child';
 }): Promise<void> {
   const networkId = requireNetworkId();
+  // Свойства-связи для поля «Свойство связи» (ошибка 1dd08949): реестр + имена
+  // сторон из каталога типов связей (общий загрузчик списка свойств). Ошибка
+  // загрузки — не повод не открыть диалог: поле деградирует в «без свойства».
+  let propertyRows: readonly PropertyListRow[] = [];
+  try {
+    const registry = await etn.propertyRegistry.list(networkId);
+    await ensurePropertyLinkTypes(networkId, registry);
+    propertyRows = buildPropertyListRows(registry, store.state.linkTypes);
+  } catch {
+    propertyRows = [];
+  }
   const result = await pickThoughtsDialog({
     networkId,
     anchor: ctx.anchorId !== null ? { id: ctx.anchorId, direction: ctx.direction } : null,
     anchorTitle: ctx.anchorTitle,
     allowCreate: true,
-    allowLinkType: true,
+    allowLinkType: false,
+    linkProperty: { rows: propertyRows },
     applyLabel: 'Добавить',
   });
   if (result === null) return;
   await insertIntoCanvas(networkId, ctx, result);
+}
+
+/**
+ * Добавляет якорь в набор значения свойства-связи добавляемой мысли (ошибка
+ * 1dd08949). Ключ записи — display-имя выбранной стороны; направление ребра
+ * сервер выводит из имени сам, поэтому связь ложится в типизированное свойство.
+ * Существующие цели набора ЧИТАЮТСЯ и объединяются с якорем: `properties.set`
+ * заменяет набор целиком, а добавление связи не должно молча терять уже
+ * проставленные значения (паритет с прежним аддитивным `ensureLink`).
+ */
+async function addLinkPropertyValue(
+  networkId: string,
+  ownerId: string,
+  pick: LinkPropertyPick,
+  anchorId: string,
+): Promise<void> {
+  let existing: string[] = [];
+  try {
+    const values = await etn.properties.get(networkId, 'thought', ownerId);
+    const entry = values.find((v) => 'values' in v && v.property_id === pick.propertyId);
+    if (entry !== undefined && 'values' in entry) {
+      existing = entry.values.map((it) => it.target_id);
+    }
+  } catch {
+    /* набор не прочитался — пишем только якорь (лучше связь, чем отказ) */
+  }
+  const targets = existing.includes(anchorId) ? existing : [...existing, anchorId];
+  await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
 }
 
 /** Creates/links every picked item (the old insertAll flow, L19 focus). */
@@ -201,17 +300,25 @@ async function insertIntoCanvas(
   let created = 0;
   let failed = 0;
   let firstAddedId: string | null = null;
+  // Выбранное свойство-связь (ошибка 1dd08949) заполняется у ДОБАВЛЯЕМОЙ мысли
+  // значением якоря: сервер сам выводит сторону ребра из display-имени ключа,
+  // поэтому связь ложится в типизированное свойство, а не «вне типа».
+  const prop = result.linkProperty;
   for (const item of result.items) {
     try {
       if (item.kind === 'existing') {
         if (ctx.anchorId !== null) {
-          // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей
-          // мыслью создаётся пакетной операцией; уже связанная пара не
-          // дублируется (прежний DUPLICATE больше не ошибка).
-          const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
-          const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
-          const res = await ensureLink(networkId, source, target, result.linkTypeId);
-          throwOnFailures(res);
+          if (prop !== null) {
+            await addLinkPropertyValue(networkId, item.id, prop, ctx.anchorId);
+          } else {
+            // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей
+            // мыслью создаётся пакетной операцией; уже связанная пара не
+            // дублируется (прежний DUPLICATE больше не ошибка).
+            const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
+            const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
+            const res = await ensureLink(networkId, source, target, result.linkTypeId);
+            throwOnFailures(res);
+          }
         }
         if (firstAddedId === null) firstAddedId = item.id;
       } else {
@@ -219,8 +326,10 @@ async function insertIntoCanvas(
           title: item.title,
           synonyms: item.synonyms,
           type_id: result.thoughtTypeId,
+          // Связь через свойство ставится отдельным вызовом ПОСЛЕ создания
+          // (create_link знает только тип связи, не свойство).
           create_link:
-            ctx.anchorId === null
+            ctx.anchorId === null || prop !== null
               ? undefined
               : {
                   // ctx.direction names the role of the NEW item relative to
@@ -232,6 +341,9 @@ async function insertIntoCanvas(
                   type_id: result.linkTypeId,
                 },
         });
+        if (prop !== null && ctx.anchorId !== null) {
+          await addLinkPropertyValue(networkId, newThought.id, prop, ctx.anchorId);
+        }
         // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к
         // пустому постоянному комментарию сразу после создания мысли.
         if (result.thoughtTypeId !== null) {
@@ -246,6 +358,13 @@ async function insertIntoCanvas(
   }
   if (failed > 0) notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
   else notice(`Готово: ${created}.`);
+  // Диалог добавления связи с карты пишет РЕБРО (в т.ч. типизированное, которое
+  // видно значением свойства-связи фокуса). Своего realtime-эха у клиента нет,
+  // а сверка окрестности замечает не всякую правку: второе ребро другого типа к
+  // уже видимому соседу за границей первой порции сектора подпись окрестности
+  // не меняет (ошибка da032ee3). Уведомляем таблицу значений свойств прямо у
+  // записи; перечитывание идемпотентно.
+  if (ctx.anchorId !== null && created > 0) notifyPropertyValuesRefreshed();
   scheduleRefresh();
   if (result.focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
 }
@@ -258,8 +377,12 @@ async function insertIntoCanvas(
  */
 export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtPickResult | null> {
   const networkId = opts.networkId;
-  const allowCreate = opts.allowCreate !== false;
-  const allowLinkType = opts.allowLinkType !== false;
+  // Кросс-сетевой режим (задача ea04a185) диктует источник кандидатов и
+  // запрещает создание новых мыслей: адресуется только чужая сеть.
+  const crossNetwork = opts.crossNetwork;
+  const allowCreate = opts.allowCreate !== false && crossNetwork === undefined;
+  const allowLinkType = opts.allowLinkType !== false && crossNetwork === undefined;
+  const allowLinkProperty = opts.linkProperty !== undefined && crossNetwork === undefined;
   const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
 
   return new Promise((resolve) => {
@@ -317,6 +440,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       value: opts.defaultNewThoughtTypeId ?? null,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
+      // Однообразная ширина выпадашек диалога (ошибка 5c7f8376): список типов
+      // шире узкого поля и не уступает по ширине списку свойства связи.
+      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         newThoughtTypeId = typeId;
       },
@@ -331,12 +457,32 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       value: linkTypeId,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
+      // Та же ширина, что у списка типа мысли (ошибка 5c7f8376).
+      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         linkTypeId = typeId;
         store.update({ lastUsedLinkTypeId: typeId });
         void etn.ui
           .setState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID, typeId ?? '')
           .catch(() => undefined);
+      },
+    });
+
+    // Поле «Свойство связи» (ошибка 1dd08949; компонент — ошибка dc175a5b):
+    // вместо типа связи — СВОЙСТВО-связь отдельными пунктами по именам сторон.
+    // Выбранное имя стороны адресует серверу и свойство, и направление ребра;
+    // свойство заполняется у добавляемой мысли значением якоря. Строки (реестр +
+    // имена сторон) готовит вызывающий. Тип связи при этом не выбирается вовсе —
+    // направление «вверх/вниз» остаётся только для бестиповой связи, когда
+    // свойство не выбрано.
+    const propertyRows: readonly PropertyListRow[] = allowLinkProperty
+      ? opts.linkProperty?.rows ?? []
+      : [];
+    let linkPropertyPick: LinkPropertyPick | null = null;
+    const linkPropertyField = buildLinkPropertyField({
+      rows: propertyRows,
+      onChange: (pick) => {
+        linkPropertyPick = pick;
       },
     });
 
@@ -349,8 +495,14 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
     const linkTypeField = div('field add-types-field');
     linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
+    const linkPropertyFieldWrap = div('field add-types-field');
+    linkPropertyFieldWrap.append(
+      el('label', 'field-label', 'Свойство связи'),
+      linkPropertyField.root,
+    );
     if (allowCreate) typeRow.append(thoughtTypeField);
-    if (allowLinkType) typeRow.append(linkTypeField);
+    if (allowLinkProperty) typeRow.append(linkPropertyFieldWrap);
+    else if (allowLinkType) typeRow.append(linkTypeField);
     // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers on one
     // row, then the name input with the found-thoughts list directly beneath
     // it and the accumulated list under both.
@@ -361,13 +513,56 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         : 'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.';
     const hintLine = el('p', 'muted', hint);
     hintLine.style.margin = '0';
-    body.append(modeRow, input, hintLine, candidates, lineList, errorLine);
+    // Ошибка 81be082f, требование 79755f76: охват строки поиска задан
+    // назначением выбора. Обычный диалог (выбор цели внутрисетевой связи —
+    // структурные родители/потомки, свойства-связи, добавление с карты) ищет
+    // только по текущей сети, переключателя охвата нет. Кросс-выбор —
+    // исключительно кросс-режим (ea04a185), охват задан принудительно.
+    const searchRow = div('add-search-row');
+    searchRow.append(input);
+    body.append(modeRow, searchRow, hintLine, candidates, lineList, errorLine);
+    if (crossNetwork !== undefined) {
+      const note = el(
+        'p',
+        'muted',
+        'Поиск идёт по всем вашим сетям; мысли текущей сети недоступны — выберите мысль другой сети.',
+      );
+      note.style.margin = '0';
+      body.insertBefore(note, candidates);
+    }
 
     let timer: number | null = null;
     let lastCandidates: DuplicateHit[] = [];
+    /** Сеть-владелец каждого показанного кандидата (кросс-сетевой режим). */
+    const candidateNetworks = new Map<string, string>();
     // The anchor thought cannot be linked to itself (the server rejects
     // self-links), so it never shows up among the found candidates.
     const anchorId = opts.anchor?.id ?? null;
+
+    /** Обновить карту сетей кандидатов и запомнить выдачу. */
+    function acceptCandidates(hits: DuplicateHit[]): void {
+      candidateNetworks.clear();
+      for (const hit of hits) {
+        if (typeof hit.network_id === 'string' && hit.network_id !== '') {
+          candidateNetworks.set(hit.id, hit.network_id);
+        }
+      }
+      lastCandidates = hits;
+      renderCandidates(hits);
+    }
+
+    /**
+     * Подпись сети в облачке кандидата кросс-режима (ошибка defcd811):
+     * имя из каталога `networkList` в store (имя сети в пользовательском
+     * виде), иначе — короткий префикс id. Каталог подгружается
+     * `etn.networks.list()` в фоне (`screens/tabs/tab-accessibility.ts`),
+     * к моменту открытия диалога он обычно уже есть.
+     */
+    function networkDisplayName(networkId: string): string {
+      const entry = store.state.networkList.find((n) => n.id === networkId);
+      if (entry !== undefined && entry.display_name !== '') return entry.display_name;
+      return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
+    }
 
     /** Debounced duplicate search for the current input. */
     function scheduleSearch(): void {
@@ -382,7 +577,10 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           // A whole-query UUID is a direct id lookup (08-ui-spec.md §4.1): the
           // type filter is ignored, inactive thoughts are found too, and the
           // hit behaves as an exact-title match downstream (Enter picks it).
-          const idQuery = parseThoughtIdQuery(raw);
+          // В кросс-сетевом режиме id-адресация бессмысленна: она ответила бы
+          // только о текущей сети (запрет своей сети, 884d14e1), поэтому
+          // запрос идёт общим веерным поиском по имени.
+          const idQuery = crossNetwork === undefined ? parseThoughtIdLookupQuery(raw) : null;
           if (idQuery !== null) {
             try {
               const thought = await etn.thoughts.get(networkId, idQuery);
@@ -395,8 +593,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                 );
                 return;
               }
-              lastCandidates = [thoughtToCandidate(thought)];
-              renderCandidates(lastCandidates);
+              acceptCandidates([thoughtToCandidate(thought)]);
             } catch (err) {
               if (isNotFoundError(err)) {
                 lastCandidates = [];
@@ -411,14 +608,25 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           }
           const parsed = parseTitleWithSynonyms(raw);
           try {
-            const hits = await etn.thoughts.findDuplicates(
-              networkId,
-              parsed.title,
-              parsed.synonyms,
-              searchFilter,
+            // Охват диктует назначение выбора (требование 79755f76, ошибка
+            // 81be082f): кросс-режим (ea04a185) — принудительный веер по всем
+            // сетям; обычный диалог — только текущая сеть (штатный findDuplicates).
+            const hits: DuplicateHit[] =
+              crossNetwork !== undefined
+                ? await loadCrossNetworkCandidates(networkId, parsed.title, searchFilter)
+                : await etn.thoughts.findDuplicates(
+                    networkId,
+                    parsed.title,
+                    parsed.synonyms,
+                    searchFilter,
+                  );
+            acceptCandidates(
+              hits.filter(
+                (hit) =>
+                  hit.id !== anchorId &&
+                  (crossNetwork === undefined || hit.network_id !== crossNetwork.excludeNetworkId),
+              ),
             );
-            lastCandidates = hits.filter((hit) => hit.id !== anchorId);
-            renderCandidates(lastCandidates);
           } catch (err) {
             errorLine.textContent = errText(err);
           }
@@ -503,10 +711,18 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           synonyms: parsed.synonyms,
           existingId: exact.id,
           matchKind: exact.matched_on,
+          networkId: candidateNetworks.get(exact.id) ?? null,
         };
       }
       if (allowCreate) {
-        return { raw, title: parsed.title, synonyms: parsed.synonyms, existingId: null, matchKind: null };
+        return {
+          raw,
+          title: parsed.title,
+          synonyms: parsed.synonyms,
+          existingId: null,
+          matchKind: null,
+          networkId: null,
+        };
       }
       const first = lastCandidates[0];
       if (first === undefined) {
@@ -519,6 +735,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms: [],
         existingId: first.id,
         matchKind: 'partial',
+        networkId: candidateNetworks.get(first.id) ?? null,
       };
     }
 
@@ -552,6 +769,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms,
         existingId: resolvedId,
         matchKind: matchKind ?? exact?.matched_on ?? null,
+        networkId: resolvedId !== null ? candidateNetworks.get(resolvedId) ?? null : null,
       });
       errorLine.textContent = '';
       renderLines();
@@ -566,6 +784,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms: [],
         existingId: candidate.id,
         matchKind: 'title',
+        networkId: candidate.network_id ?? null,
       });
       errorLine.textContent = '';
       renderLines();
@@ -630,10 +849,20 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           width: 'container',
         });
         row.classList.add('dup-item');
-        // The parent's title instead of the «использовать» button — the whole
-        // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
-        // tooltip; the visible length is limited by layout.
-        if (candidate.parent_title !== null) {
+        // В кросс-сетевом режиме (ea04a185) у чужой мысли родитель внутри её
+        // сети мало что говорит пользователю текущей сети; подпись «сеть»
+        // снимает неоднозначность одноимённых мыслей в разных сетях
+        // (ошибка defcd811). Цвет другой — чтобы не путать с локальным
+        // «родителем», который остаётся в обычном режиме.
+        if (crossNetwork !== undefined && typeof candidate.network_id === 'string' && candidate.network_id !== '') {
+          const netName = networkDisplayName(candidate.network_id);
+          const net = span(netName, 'dup-network');
+          net.title = candidate.network_id;
+          row.append(net);
+        } else if (candidate.parent_title !== null) {
+          // The parent's title instead of the «использовать» button — the whole
+          // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
+          // tooltip; the visible length is limited by layout.
           const parent = span(candidate.parent_title, 'dup-parent');
           parent.title = candidate.parent_title;
           row.append(parent);
@@ -704,6 +933,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         synonyms: [],
         existingId: candidate.id,
         matchKind: 'title',
+        networkId: candidate.network_id ?? null,
       });
       input.value = '';
       apply(false);
@@ -732,11 +962,18 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       finish({
         items: lines.map((line) =>
           line.existingId !== null
-            ? { kind: 'existing' as const, id: line.existingId, raw: line.raw }
+            ? {
+                kind: 'existing' as const,
+                id: line.existingId,
+                raw: line.raw,
+                // Только в кросс-сетевом режиме: сеть-владелец выбранной мысли.
+                ...(line.networkId !== null ? { networkId: line.networkId } : {}),
+              }
             : { kind: 'new' as const, title: line.title, synonyms: line.synonyms, raw: line.raw },
         ),
         thoughtTypeId: allowCreate ? newThoughtTypeId : null,
         linkTypeId: allowLinkType ? linkTypeId : null,
+        linkProperty: allowLinkProperty ? linkPropertyPick : null,
         focusFirst: shift,
       });
     }
@@ -771,13 +1008,21 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
               synonyms: [],
               existingId: id,
               matchKind: 'title',
+              networkId: null,
             });
           }
           renderLines();
         })
         .catch(() => {
           for (const id of prefillIds) {
-            lines.push({ raw: id, title: id, synonyms: [], existingId: id, matchKind: 'title' });
+            lines.push({
+              raw: id,
+              title: id,
+              synonyms: [],
+              existingId: id,
+              matchKind: 'title',
+              networkId: null,
+            });
           }
           renderLines();
         });

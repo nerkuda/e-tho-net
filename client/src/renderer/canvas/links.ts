@@ -120,6 +120,26 @@ let hoveredKey: string | null = null;
 let ellipseHover: { thoughtId: string; direction: 'parent' | 'child' } | null = null;
 
 /**
+ * Дополнительный набор рёбер (задача c8fa74ba): когда сектор карты подгружает
+ * порции соседей сверх первых 50, окрестность из ответа фокуса перестаёт
+ * покрывать все видимые связи. Канва запрашивает рёбра среди ВСЕХ видимых
+ * мыслей (`POST /thoughts/edges`) и передаёт их сюда; пока набор задан, он
+ * ЗАМЕНЯЕТ `focus.edges` при отрисовке. `null` — снова рисуем по фокусу
+ * (устанавливается при смене фокуса и при отсутствии подгрузки).
+ */
+let supplementalEdges: FocusEdge[] | null = null;
+
+/** Задать/сбросить дополнительный набор рёбер (см. {@link supplementalEdges}). */
+export function setSupplementalEdges(edges: FocusEdge[] | null): void {
+  supplementalEdges = edges;
+}
+
+/** Источник рёбер для отрисовки: подгруженный набор, иначе — ответ фокуса. */
+function edgeSource(focus: FocusResponse): FocusEdge[] {
+  return supplementalEdges ?? focus.edges ?? edgesFromNeighbours(focus);
+}
+
+/**
  * Highlights every visible link of one ellipse direction (wired by the canvas
  * hover handlers): `parent` → links arriving at the thought, `child` → links
  * leaving it. Redraws only the top overlay, so hover changes never rebuild the
@@ -266,7 +286,7 @@ function draw(): void {
   // `edges` is populated by a current server; fall back to deriving the
   // focus↔neighbour edges from parents/children so the overlay still draws
   // (and never crashes) if a stale server process omits the field.
-  const edges = focus.edges ?? edgesFromNeighbours(focus);
+  const edges = edgeSource(focus);
   const bundles = groupBundles(edges);
   for (const bundle of bundles) {
     const src = findCloudAnywhere(bundle.sourceId);
@@ -292,7 +312,7 @@ function draw(): void {
 function currentBundles(): Bundle[] {
   const focus = store.state.focus;
   if (focus === null) return [];
-  return groupBundles(focus.edges ?? edgesFromNeighbours(focus));
+  return groupBundles(edgeSource(focus));
 }
 
 /**

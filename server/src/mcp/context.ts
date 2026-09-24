@@ -17,6 +17,7 @@ import { BASE_LAYER_ID, EtnError, type LayerEcho } from '@etn/shared';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
+import type { CrossNetworkAccessContext } from '../domain/cross-network-ref-service.js';
 import { emitDomainEvent, type DomainEventActor } from '../realtime/emit.js';
 import type { ResolvedMcpLimits } from './limits.js';
 import { resolveMcpLimits, WriteRateLimiter } from './limits.js';
@@ -87,6 +88,28 @@ export function mcpLayerClientId(rt: McpRuntime): string {
 export function resolveRuntimeLayer(rt: McpRuntime, networkId: string): LayerEcho {
   const base = openNetworkDb(rt.deps.dataDir, networkId, rt.deps.logger, BASE_LAYER_ID);
   return resolveSessionLayer(base, rt.deps.auth.userId, mcpLayerClientId(rt));
+}
+
+/**
+ * Кросс-сетевой контекст для операций со значениями вида `cross_network_ref`
+ * (задача 7849008a, требование aa89940c): запись значения делает один живой
+ * резолв цели в чужой сети, а `etn.properties.resolve` — явный резолв. Те же
+ * данные, что REST-роут собирает в `routes/properties.ts`: `dataDir` для
+ * открытия целевой сети, список доступных пользователю сетей для фильтра прав
+ * и `currentNetworkId` для запрета адреса собственной сети. `clientId` — синтетический
+ * MCP-идентификатор сессии, target-сеть открывается в слое вызывающего.
+ */
+export function mcpCrossNetworkAccess(rt: McpRuntime, networkId: string): CrossNetworkAccessContext {
+  return {
+    dataDir: rt.deps.dataDir,
+    userId: rt.deps.auth.userId,
+    clientId: mcpLayerClientId(rt),
+    logger: rt.deps.logger,
+    accessibleNetworkIds: new Set(
+      rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+    ),
+    currentNetworkId: networkId,
+  };
 }
 
 /**

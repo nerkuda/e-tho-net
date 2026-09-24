@@ -139,7 +139,7 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Мысль целиком: свойства, синонимы, тип (с описанием для AI), стили и значения свойств. ' +
         'Блок `meta` — счётчики связей/вложений/хроники и **полный** текст постоянного ' +
-        'комментария (как у `etn.thoughts.get`, задача 3ea09a54).',
+        'комментария (как у `etn.thoughts.get`).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -149,7 +149,12 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, networkId);
         const rawThought = getThoughtOrThrow(ndb, thoughtId);
         const rawType = rawThought.type_id === null ? null : getThoughtType(ndb, rawThought.type_id);
-        const properties = getPropertyValuesResolved(ndb, 'thought', thoughtId);
+        // Задача 7849008a, требование 6d4ad9ac: фильтр прав для
+        // `cross_network_ref` — пользователь видит только значения в доступных сетях.
+        const accessibleNetworkIds = new Set(
+          rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+        );
+        const properties = getPropertyValuesResolved(ndb, 'thought', thoughtId, accessibleNetworkIds);
         // O10: метрика чтения — как у инструмента `etn.thoughts.get`.
         recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
         // Bug fix (docs/05-mcp-server.md §5.1e): drop an inline `data:` icon

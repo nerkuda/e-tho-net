@@ -1,34 +1,55 @@
 /**
- * Удаление значения свойства-связи с выбором способа (задача 96d27fc0, 0.8.2).
+ * Снятие значения свойства-связи без диалога (задача 0d4f793a, 0.8.3).
  *
  * До этой задачи любое снятие рёбер значения свойства-связи (крестик «✕»
- * чипа, его команда «Убрать из значения», очистка набора крестиком ячейки,
- * очистка внетиповых) всегда клало рёбра в корзину — сервер помечал их
- * (`markLinkForDeletion` в property-service), и пользователь не получал выбора,
- * как при обычном удалении мысли (08-ui-spec.md §5a.1). Теперь у снятия
- * значения-связи тот же выбор: «В корзину» (по умолчанию) / «Удалить совсем».
+ * чипа, её команды меню, очистка набора крестиком ячейки, очистка внетиповых)
+ * открывало модальный диалог «В корзину / Удалить совсем»
+ * (задача 96d27fc0, 0.8.2). При массовых удалениях диалог раздражал и
+ * замедлял работу, поэтому выбор заменён автоматическим:
+ *
+ * - крестик без Shift (`mode: 'auto'`) — проверяем возможность физического
+ *   удаления рёбер; возможно — удаляем совсем (всплывашка «связь удалена»),
+ *   невозможно — помещаем в корзину (всплывашка «связь помещена в корзину»);
+ * - Shift+крестик и команда меню «Поместить связь в корзину»
+ *   (`mode: 'trash'`) — всегда корзина;
+ * - команда меню «Удалить связь с мыслью» — то же, что крестик без Shift.
+ *
+ * Возможность удаления даёт `POST /links/deletion-check-batch`
+ * (`etn.links.deletionCheck`, 03-server-api.md §6.5a): ребро блокирует лишь
+ * удерживающий слой (у связей нет использования в свойствах и потомков), тогда
+ * «удалить совсем» недоступно и остаётся корзина. Проверка идёт ДО записи.
  *
  * «Удалить совсем» — физическое удаление рёбер. Отдельного `DELETE /links/{id}`
  * в проекте НЕТ и не будет: требование 3ea5c6af (0.8.1) сняло операции
  * создания/удаления связей в пользу операций над свойствами-связями, а
  * физическая чистка ребра идёт через корзину — точечный
- * `POST /trash/purge { ids }` (ошибка 8b4b7a7e, см. `purgeLinkCompletely` в
- * `trash.ts`). Тот же путь использует и это меню: сначала обычная запись
- * значения (сервер помечает отозванные рёбра), затем точечный purge по id.
+ * `POST /trash/purge { ids }` (ошибка 8b4b7a7e). Последовательность такая:
+ * свежие значения дают id рёбер, запись значения отзывает рёбра (сервер
+ * помечает их корзиной), затем точечный purge по id.
  *
- * Скаляры (в т.ч. внетиповые) меню не касается — они не восстанавливаемы и
+ * Скаляры (в т.ч. внетиповые) сюда не попадают — они не восстанавливаемы и
  * никого не блокируют, их удаление остаётся как было (без корзины).
  */
 
 import type { LinkPropertyValues } from '@etn/shared';
 
-import { div, el, errText } from '../lib/dom.js';
+import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
 
-/** Выбор пользователя у диалога снятия значения-связи. */
-export type LinkValueRemovalChoice = 'trash' | 'purge';
+/**
+ * Способ снятия рёбер: `auto` — проверить и удалить совсем либо в корзину,
+ * `trash` — всегда в корзину (осознанное действие).
+ */
+export type LinkValueRemovalMode = 'auto' | 'trash';
+
+/**
+ * Режим снятия по модификатору клика: Shift — осознанная корзина, иначе
+ * автоматический выбор. Чистая — юнит-тест.
+ */
+export function removalModeForClick(shiftKey: boolean): LinkValueRemovalMode {
+  return shiftKey ? 'trash' : 'auto';
+}
 
 /** Параметры {@link removeLinkValueEdges}. */
 export interface LinkValueRemovalOptions {
@@ -41,10 +62,12 @@ export interface LinkValueRemovalOptions {
   propertyId?: string | undefined;
   /** Снимаемые цели: по их рёбрам ищется физическое удаление. */
   removedTargetIds: readonly string[];
+  /** Способ снятия: авто-выбор или принудительная корзина. */
+  mode: LinkValueRemovalMode;
   /**
    * Обычная запись значения без снятых целей. Сервер сам помечает отозванные
-   * рёбра (корзина) — это и есть «В корзину». Возвращает `false`, когда запись
-   * не удалась (тогда purge не запускается).
+   * рёбра (корзина). Возвращает `false`, когда запись не удалась (тогда purge
+   * не запускается и всплывашки об успехе нет).
    */
   commit: () => Promise<boolean>;
 }
@@ -94,89 +117,72 @@ export function pickRemovedLinkIds(
   return ids;
 }
 
-/**
- * Диалог способа снятия значения-связи: «В корзину» (по умолчанию, primary),
- * «Удалить совсем» (danger) и «Отмена». Резолвится выбранным способом либо
- * `null` при любом пути закрытия (Esc/×/«Отмена»).
- */
-export function askLinkValueRemoval(count: number): Promise<LinkValueRemovalChoice | null> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: LinkValueRemovalChoice | null): void => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    const body = div('form-stack');
-    const what =
-      count === 1 ? 'Убрать связь из значения?' : `Убрать связи из значения (${count})?`;
-    body.append(el('p', 'dialog-text', what));
-    body.append(
-      el(
-        'p',
-        'dialog-text muted',
-        '«В корзину» — связь останется восстановимой; «Удалить совсем» — физически удалит её.',
-      ),
+/** Свежие id рёбер снимаемых целей; `null` — значения прочитать не удалось. */
+async function readRemovedLinkIds(opts: LinkValueRemovalOptions): Promise<string[] | null> {
+  try {
+    const values = await etn.properties.get(opts.networkId, opts.ownerType, opts.ownerId);
+    return pickRemovedLinkIds(
+      values,
+      { propertyKey: opts.propertyKey, propertyId: opts.propertyId },
+      opts.removedTargetIds,
     );
-    showDialog({
-      title: 'Удалить значение свойства-связи',
-      body,
-      buttons: [
-        { label: 'В корзину', primary: true, onClick: () => finish('trash') },
-        { label: 'Удалить совсем', danger: true, onClick: () => finish('purge') },
-        { label: 'Отмена', onClick: () => finish(null) },
-      ],
-      // Esc и × — отмена (контракт «`null` on cancel», как у confirmDialog).
-      onClose: () => finish(null),
-    });
-  });
+  } catch {
+    return null;
+  }
+}
+
+/** Ни одно ребро из набора не заблокировано удерживающим слоем. */
+async function allPurgeable(networkId: string, linkIds: readonly string[]): Promise<boolean> {
+  try {
+    const checks = await etn.links.deletionCheck(networkId, [...linkIds]);
+    return linkIds.every((id) => checks[id]?.blocked !== true);
+  } catch {
+    // Проверка не удалась — безопасный выбор: корзина.
+    return false;
+  }
+}
+
+/** Всплывашка об успехе: единственная связь или набор. */
+function noticeTrashed(count: number): void {
+  notice(count > 1 ? `Связи помещены в корзину (${count}).` : 'Связь помещена в корзину.');
 }
 
 /**
- * Снять рёбра значения-связи с выбором способа. Возвращает `true`, когда
- * запись применена (выбор сделан и commit прошёл), `false` — при отмене или
- * неудаче записи: вызывающий по этому признаку решает, обновлять ли UI.
+ * Снять рёбра значения-связи без диалога. Возвращает `true`, когда запись
+ * применена, `false` — при неудаче записи (вызывающий по этому признаку решает,
+ * обновлять ли UI).
  *
- * При «Удалить совсем» id рёбер добываются ДО записи (свежий `properties.get`);
- * если id не нашлись (владелец/свойство без рёбер), рёбра всё равно помечены —
- * сообщаем, что полное удаление не удалось, а состояние осталось «в корзине».
- * Заблокированные удерживающим слоем рёбра purge пропускает — о них сообщаем.
+ * `mode: 'trash'` — сразу корзина. `mode: 'auto'` — свежие id рёбер и проверка
+ * блокировки до записи: все свободны — после записи точечный purge (удалено
+ * совсем); id не нашлись, проверка недоступна или есть блокировка — корзина.
+ * Заблокированные/не найденные рёбра purge пропускает — о них сообщаем.
  */
-export async function removeLinkValueEdges(
-  opts: LinkValueRemovalOptions,
-): Promise<boolean> {
-  const choice = await askLinkValueRemoval(opts.removedTargetIds.length);
-  if (choice === null) return false;
+export async function removeLinkValueEdges(opts: LinkValueRemovalOptions): Promise<boolean> {
+  const count = opts.removedTargetIds.length;
 
-  let linkIds: string[] = [];
-  if (choice === 'purge') {
-    try {
-      const values = await etn.properties.get(opts.networkId, opts.ownerType, opts.ownerId);
-      linkIds = pickRemovedLinkIds(
-        values,
-        { propertyKey: opts.propertyKey, propertyId: opts.propertyId },
-        opts.removedTargetIds,
-      );
-    } catch {
-      linkIds = [];
+  if (opts.mode === 'auto') {
+    const linkIds = await readRemovedLinkIds(opts);
+    if (linkIds !== null && linkIds.length > 0 && (await allPurgeable(opts.networkId, linkIds))) {
+      const committed = await opts.commit();
+      if (!committed) return false;
+      try {
+        const { purged } = await etn.trash.purge(opts.networkId, linkIds);
+        if (purged < linkIds.length) {
+          notice('Часть связей заблокирована и осталась в корзине.', 'error');
+          return true;
+        }
+      } catch (err) {
+        notice(`Не удалось удалить связь совсем: ${errText(err)}`, 'error');
+        return true;
+      }
+      notice(count > 1 ? `Связи удалены (${count}).` : 'Связь удалена.');
+      return true;
     }
   }
 
+  // Корзина: принудительно (Shift/меню) либо авто-fallback.
   const committed = await opts.commit();
   if (!committed) return false;
-  if (choice === 'trash') return true;
-
-  if (linkIds.length === 0) {
-    notice('Связи помещены в корзину: рёбра для полного удаления не найдены.', 'error');
-    return true;
-  }
-  try {
-    const { purged } = await etn.trash.purge(opts.networkId, linkIds);
-    if (purged < linkIds.length) {
-      notice('Часть связей заблокирована и осталась в корзине.', 'error');
-    }
-  } catch (err) {
-    notice(`Не удалось удалить связи совсем: ${errText(err)}`, 'error');
-  }
+  noticeTrashed(count);
   return true;
 }

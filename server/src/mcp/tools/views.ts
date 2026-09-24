@@ -11,6 +11,7 @@ import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ViewsRun } from '../../contracts.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
+import { projectThoughtRows } from '../../domain/response-projection.js';
 import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
 
@@ -97,7 +98,12 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         );
         // Страница уже отсортирована и спагинирована SQL-движком — никакой
         // JS-пересортировки по названию (задача c5265deb).
-        const pageItems = base.items;
+        //
+        // MCP-проекция списка — единый сериализатор (projection.ts): у записей
+        // снимаются визуальные и сервисные поля, пустые контейнеры не пишутся,
+        // `icon` остаётся. `etn.views.run` параметра `view` не имеет — как и
+        // `etn.thoughts.query`, списочный ответ всегда компактный.
+        const pageItems = projectThoughtRows(base.items);
         const limit = args.limit ?? 100;
         const offset = args.offset ?? 0;
         // Reference table: типы мыслей, реально использованные в items.

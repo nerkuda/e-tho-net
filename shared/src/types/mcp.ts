@@ -14,7 +14,7 @@ import type {
   LinkStyle,
   RealtimeAudience,
 } from '../enums.js';
-import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
+import type { McpEffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
 import type { RealtimeEventType } from './realtime.js';
 import type {
   ThoughtBundleMatchKind,
@@ -25,10 +25,17 @@ import type { ThoughtCardWarning } from './thought-card-warning.js';
 import type { Link } from './link.js';
 import type { Thought, ThoughtRef, ThoughtUsage } from './thought.js';
 
-/** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
+/** All tool names exposed by the ETN MCP server (05-mcp-server.md §4).
+ *
+ *  0.8.3 (задачи 86ef2ff4, d379e091; ADR b2eebf8b/8358eea9): состав сокращён —
+ *  редкие операции сняты из постоянного набора и доступны через `etn.guide` +
+ *  `etn.ops` (реестр действий — в `server/src/mcp/tools/ops-catalog.ts`).
+ *  Здесь — только инструменты, реально рекламируемые в `tools/list`. */
 export const MCP_TOOL_NAMES = [
+  // прогрессивное раскрытие (задача 86ef2ff4)
+  'etn.guide',
+  'etn.ops',
   // read (§4.1)
-  'etn.networks.list',
   'etn.networks.structure',
   'etn.instructions',
   'etn.thoughts.search',
@@ -38,77 +45,21 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.bulk_update',
   'etn.thoughts.neighbors',
   'etn.thoughts.subgraph',
-  'etn.thoughts.path',
-  'etn.thoughts.mentions',
-  'etn.thoughts.backlinks',
   'etn.thoughts.usage',
-  'etn.thoughts.deletion_check',
-  'etn.trash.list',
   'etn.comments.get',
-  'etn.export.subgraph',
   'etn.types.list',
-  // `etn.views.run` (задача c1fa71d4, 0.7.3, операция cb8d8e43) — исполнение
-  // именованного отбора типа относительно конкретной мысли. Read-only:
-  // бюджет записи не тратит, `audit_log` не пишет.
   'etn.views.run',
-  'etn.changes.list',
   'etn.chronicle.query',
-  'etn.members.list',
-  'etn.metrics.reads',
-  'etn.metrics.tools',
   'etn.layers.list',
-  'etn.layers.diff',
-  'etn.layers.diff_doc',
+  'etn.activity.list',
   // mutate (§4.2)
-  'etn.networks.write',
-  'etn.networks.delete',
-  'etn.thoughts.delete',
-  'etn.thoughts.trash',
-  'etn.links.restore',
+  'etn.thoughts.write',
   'etn.comments.update',
   'etn.comments.edit',
-  'etn.comments.delete',
-  'etn.attachments.add',
-  'etn.attachments.copy',
-  'etn.attachments.search',
-  'etn.attachments.update',
-  'etn.attachments.delete',
   'etn.properties.add',
-  'etn.properties.remove',
-  // `etn.thoughts.write` (task 053751b5, 0.7.2) — батч-запись: одна транзакция
-  // для многих связанных единиц знания (мысли + постоянные/хронологические
-  // комментарии + свойства + связи с их свойствами и комментариями + вложения).
-  // Поглощённые инструменты (`thoughts.create`/`update`/`set_active`/
-  // `upsert_bundle`, `links.create`, `properties.set`, `comments.upsert`)
-  // удалены в 0.8.2 (задача 937480ca).
-  'etn.thoughts.write',
-  'etn.trash.purge',
-  'etn.thoughts.usage_clear',
-  // layers (S10, §4.2)
-  'etn.layers.create',
-  'etn.layers.update',
-  'etn.layers.delete',
   'etn.layers.select',
-  'etn.layers.merge',
-  // object-locks (task a88acf20, операция b6b776ff — паритет с REST /locks)
-  'etn.locks.acquire',
-  'etn.locks.release',
-  'etn.locks.clear',
-  'etn.locks.list',
-  // activity log (task f2eca5a4, операция 70dfe81d — паритет с REST /activity)
-  'etn.activity.list',
-  // activity log maintenance (задача 6bcccd2b — паритет с REST /activity/rollup, /activity/truncate)
-  'etn.activity.rollup',
-  'etn.activity.truncate',
-  // ontology batch ops (задача cc9ca65e / 0.7.2) — батч-запись онтологии сети
-  // (типы мыслей/связей, свойства, привязки свойств к типам) и её удаление.
+  // ontology batch ops (задача cc9ca65e / 0.7.2)
   'etn.ontology.write',
-  'etn.ontology.delete',
-  // P3 (задача e488f4c1 / 0.7.2): copy_subtree, mentions_scan, импорт/экспорт .etnx
-  'etn.thoughts.copy_subtree',
-  'etn.thoughts.mentions_scan',
-  'etn.import.dry_run',
-  'etn.import.subgraph',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -122,16 +73,19 @@ export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
  * - `readOnlyHint` — `true` for every read-only tool (no DB writes, no
  *   events, no audit row). Lets clients grant automatic read access without
  *   manual permission prompts.
- * - `destructiveHint` — `true` for the three delete tools (`thoughts.delete`,
- *   `links.delete`, `comments.delete`). Combined with `readOnlyHint: false`
- *   it tells the agent host that the call needs explicit user approval.
+ * - `destructiveHint` — `true` for tools whose call needs explicit user
+ *   approval (irreversible writes). After 0.8.3 the storefront itself carries
+ *   no such tool — every destructive operation is a `etn.ops` action gated by
+ *   a top-level `confirm: true` (registry `ops-catalog.ts`), where the
+ *   per-action `destructive` flag plays the same role.
  * - `idempotentHint` — `true` for tools whose repeated call with the same
- *   arguments produces the same final state: `thoughts.trash`,
- *   `properties.add`/`remove`, and `thoughts.write` (upsert semantics, O1).
+ *   arguments produces the same final state: `properties.add`,
+ *   `layers.select`, and `thoughts.write` (upsert semantics, O1).
  *
  * All fields are optional on the wire; tools that carry no hints (the
- * remaining mutating tools — `create`/`update`/`links.create`/comments
- * `upsert`+`update`/`attachments.add`+`copy`) are not listed here at all.
+ * remaining mutating tools — `comments.update`/`edit`) are not listed here at
+ * all. `etn.ops` carries no tool-level hints — per-action `readOnly`/
+ * `destructive` live in the `ops-catalog` registry.
  */
 export interface McpToolAnnotations {
   readOnlyHint?: boolean;
@@ -147,8 +101,13 @@ export interface McpToolAnnotations {
  * absent hint is the documented default).
  */
 export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnotations } = {
+  // ---- прогрессивное раскрытие (задача 86ef2ff4, 0.8.3) -----------
+  // `etn.guide` — read-only витрина редких операций.
+  'etn.guide': { readOnlyHint: true },
+  // `etn.ops` — диспетчер: набор действий и их `readOnly`/`destructive`
+  // заданы в реестре (`tools/ops-catalog.ts`), а не тул-уровневой аннотацией.
+
   // ---- read tools (§4.1) — readOnlyHint ---------------------------
-  'etn.networks.list': { readOnlyHint: true },
   'etn.networks.structure': { readOnlyHint: true },
   // `etn.instructions` (задача ba024a45 / 0.7.2, ADR 717f04df) — read-only
   // витрина инструкций сети; возвращает превью + список, без изменений.
@@ -159,61 +118,23 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.resolve': { readOnlyHint: true },
   'etn.thoughts.neighbors': { readOnlyHint: true },
   'etn.thoughts.subgraph': { readOnlyHint: true },
-  'etn.thoughts.path': { readOnlyHint: true },
-  'etn.thoughts.mentions': { readOnlyHint: true },
-  'etn.thoughts.backlinks': { readOnlyHint: true },
   'etn.thoughts.usage': { readOnlyHint: true },
-  'etn.thoughts.deletion_check': { readOnlyHint: true },
-  'etn.trash.list': { readOnlyHint: true },
   'etn.comments.get': { readOnlyHint: true },
-  'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
   // `etn.views.run` (задача c1fa71d4, 0.7.3) — read-only исполнение отбора;
   // не пишет событий и audit_log, всегда идемпотентно для одного набора аргументов.
   'etn.views.run': { readOnlyHint: true },
-  'etn.changes.list': { readOnlyHint: true },
   'etn.chronicle.query': { readOnlyHint: true },
-  'etn.metrics.reads': { readOnlyHint: true },
-  'etn.metrics.tools': { readOnlyHint: true },
-  'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
   'etn.layers.list': { readOnlyHint: true },
-  'etn.layers.diff': { readOnlyHint: true },
-  'etn.layers.diff_doc': { readOnlyHint: true },
-  'etn.locks.list': { readOnlyHint: true },
   'etn.activity.list': { readOnlyHint: true },
-  'etn.members.list': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
-  'etn.thoughts.delete': { destructiveHint: true },
   'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },
-  'etn.comments.delete': { destructiveHint: true },
-  'etn.attachments.delete': { destructiveHint: true },
-  'etn.trash.purge': { destructiveHint: true },
-  'etn.layers.delete': { destructiveHint: true },
-  'etn.layers.merge': { destructiveHint: true },
-  'etn.locks.release': { destructiveHint: true },
-  'etn.locks.clear': { destructiveHint: true },
-  'etn.activity.rollup': { destructiveHint: true },
-  'etn.activity.truncate': { destructiveHint: true },
-  // `etn.networks.delete` (задача ba024a45 / 0.7.2) — деструктивный;
-  // дополнительно требует `confirm: true` в аргументах.
-  'etn.networks.delete': { destructiveHint: true },
-  // `etn.networks.write` — upsert (create или patch); повторный вызов с теми
-  // же аргументами даёт тот же результат.
-  'etn.networks.write': { destructiveHint: false, idempotentHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
-  'etn.thoughts.trash': { idempotentHint: true },
-  'etn.links.restore': { idempotentHint: true },
   'etn.properties.add': { idempotentHint: true },
-  'etn.properties.remove': { idempotentHint: true },
-  'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
-  // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
-  'etn.locks.acquire': { idempotentHint: true },
-  // `attachments.update` — last-write-wins по метаданным, повторный вызов с теми же аргументами даёт тот же результат.
-  'etn.attachments.update': { idempotentHint: true },
   // `etn.comments.edit` (задача d28abe04) — секционная правка ops-ами;
   // повторный вызов с теми же ops поверх нового состояния меняет результат.
   'etn.comments.edit': { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -225,28 +146,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // аргументами даёт тот же результат.
   'etn.thoughts.write': { destructiveHint: false, idempotentHint: true },
 
-  // ---- `etn.ontology.write` / `etn.ontology.delete` (задача cc9ca65e / 0.7.2) -
-  // Управление онтологией сети (типы мыслей/связей, реестр свойств, привязки
-  // свойств к типам) одной транзакцией. Upsert по `id` XOR имени внутри
-  // батча; локальные `ref`/`parent_ref`/`type_ref`/`property_ref`. Повторный
-  // вызов с теми же аргументами не меняет состояние. Удаление деструктивно,
-  // требует `force` для используемых сущностей.
+  // ---- `etn.ontology.write` (задача cc9ca65e / 0.7.2) ---------------------
+  // Upsert онтологии сети одной транзакцией; повторный вызов с теми же
+  // аргументами не меняет состояние.
   'etn.ontology.write': { destructiveHint: false, idempotentHint: true },
-  'etn.ontology.delete': { destructiveHint: true },
-
-  // ---- P3 (задача e488f4c1 / 0.7.2) -------------------------------------
-  // `etn.thoughts.copy_subtree` — копирование подграфа между сетями. Семантика
-  // зависит от `duplicate_policy`; в общем случае не идемпотентно (новые
-  // id при повторе).
-  'etn.thoughts.copy_subtree': { destructiveHint: false, idempotentHint: false },
-  // `etn.thoughts.mentions_scan` — без `create_links` чисто read-only.
-  // С `create_links: true` создаёт связи — мутация.
-  'etn.thoughts.mentions_scan': { readOnlyHint: true },
-  // `etn.import.dry_run` — read-only превью без побочных эффектов.
-  'etn.import.dry_run': { readOnlyHint: true },
-  // `etn.import.subgraph` — destructive: одна транзакция вносит мысли, связи,
-  // комментарии и вложения в целевую сеть. `confirm: true` обязателен.
-  'etn.import.subgraph': { destructiveHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).
@@ -323,6 +226,40 @@ export interface LinkTypeRef {
   style: LinkStyle | null;
 }
 
+/**
+ * Запись справочника типов мыслей в списочном ответе (0.8.3, требование
+ * «Каталоги типов в ответах read-инструментов»). Только `id`+`name`+`icon`:
+ * полные `description`/`parent_id`/`is_root` — в каталоге `etn.types.list`.
+ * Так справочник не повторяет один и тот же текст на каждой записи ответа.
+ */
+export interface ListThoughtTypeRef {
+  id: string;
+  name: string;
+  icon: string | null;
+}
+
+/**
+ * Запись справочника типов связей в списочном ответе (0.8.3): только `id` и
+ * оба имени — агент выбирает имя по направлению ребра (`source → target` =
+ * `name_forward`). Описание типа — в `etn.types.list`.
+ */
+export interface ListLinkTypeRef {
+  id: string;
+  name_forward: string;
+  name_reverse: string;
+}
+
+/**
+ * Вложенный тип мысли в карточке (`etn.thoughts.get`/`resolve`, 0.8.3):
+ * `name` + AI-facing `description`, без визуальных полей (`icon`, цвета,
+ * `is_root`). Полное определение типа — в `etn.types.list`.
+ */
+export interface CardThoughtTypeRef {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // `etn.types.list` (task O4, 05-mcp-server.md §4.1) — full type catalogues
 // with effective (L21 chain-resolved) property definitions.
@@ -334,7 +271,7 @@ export interface LinkTypeRef {
  *  (это контракт `etn.types.list` для типов; эффективный набор для конкретной
  *  мысли — через `etn.thoughts.get { meta.views }`). */
 export interface McpThoughtTypeEntry extends ThoughtTypeRef {
-  properties: EffectiveTypeProperty[];
+  properties: McpEffectiveTypeProperty[];
   views: McpThoughtTypeViewEntry[];
 }
 
@@ -355,7 +292,7 @@ export interface McpThoughtTypeViewEntry {
 /** A link type entry of `etn.types.list`: {@link LinkTypeRef} + its effective
  *  property list (own + inherited along the L21 chain). */
 export interface McpLinkTypeEntry extends LinkTypeRef {
-  properties: EffectiveTypeProperty[];
+  properties: McpEffectiveTypeProperty[];
 }
 
 /** Which catalogue(s) `etn.types.list` returns (05-mcp-server.md §5.1b). */
@@ -423,6 +360,14 @@ export interface McpTypesListMeta {
 export interface McpTypesListResult {
   thought_types?: McpThoughtTypeEntry[];
   link_types?: McpLinkTypeEntry[];
+  /**
+   * Пояснение о структурных свойствах-связях каталога (0.8.3). Структурные
+   * «Родители»/«Потомки» объявлены на корневом типе и наследуются всеми
+   * типами мыслей — повторять их в `properties[]` каждого типа бессмысленно,
+   * поэтому они вынесены одной строкой-константой на каталог. Присутствует,
+   * когда в ответе есть `thought_types`.
+   */
+  structural_properties_note?: string;
   meta?: McpTypesListMeta;
 }
 
@@ -507,6 +452,37 @@ export interface McpThoughtWriteItem {
     type?: string;
     active?: boolean;
   };
+  /**
+   * Apply `active` to the item's thought. With `thought_id` — toggles the
+   * existing thought without a nested `thought` block. With `thought` — sets
+   * the created thought's flag and wins over `thought.active` (bug
+   * 21cbafb8-254b-42e3-a884-3832a3cf6ab5). Absorbs `etn.thoughts.set_active`
+   * (bug faf56a02-e884-488b-9b7b-39dfd5d5b275): before that fix the field was
+   * silently dropped by Zod (item-level `active` was unknown).
+   */
+  active?: boolean;
+  /** Item-level `title` — renames the existing thought addressed by
+   *  `thought_id`, without a nested `thought` block. NOT allowed together
+   *  with `thought` (rejected with `VALIDATION_ERROR`): for a new thought set
+   *  `thought.title` instead, otherwise the value would be silently ignored
+   *  (bug 21cbafb8-254b-42e3-a884-3832a3cf6ab5). Absorbs the rename half of
+   *  the removed `etn.thoughts.update` (bug
+   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a): the field was absent entirely, so
+   *  a batch item addressing an existing thought could not rename it. */
+  title?: string;
+  /** Item-level `synonyms` — replaces the whole synonym set of the existing
+   *  thought addressed by `thought_id` (bug
+   *  870c0c0d-dd2d-46b1-a498-780edcf8e18a). Not allowed together with
+   *  `thought` (see item-level `title`). */
+  synonyms?: string[];
+  /** Item-level `type_id` — changes the type of the existing thought
+   *  addressed by `thought_id` (bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a,
+   *  sibling of the rename gap). Not allowed together with `thought` (see
+   *  item-level `title`). */
+  type_id?: string | null;
+  /** Type resolution by name (XOR with item-level `type_id`). Not allowed
+   *  together with `thought` (see item-level `title`). */
+  type?: string;
   /** How to handle a `find_duplicates` match against `thought.title`/`synonyms`
    *  when `thought_id` is absent. Mirrors `etn.thoughts.upsert_bundle`. */
   on_duplicate?: ThoughtBundleOnDuplicate;
@@ -695,9 +671,9 @@ export interface McpMetricsReadsResult {
   /** Up to `limit` thoughts ordered per `kind`. */
   items: McpMetricsReadsItem[];
   /** Reference table of thought types referenced by `items[].type_id`
-   *  (task N6). Same `Record<type_id, ThoughtTypeRef>` shape as the other
-   *  read tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
-  thought_types: Record<string, ThoughtTypeRef>;
+   *  (task N6). Same thin {@link ListThoughtTypeRef} shape as the other read
+   *  tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
+  thought_types: Record<string, ListThoughtTypeRef>;
 }
 
 // ---------------------------------------------------------------------------
@@ -792,15 +768,6 @@ export type CompactThoughtRef = Omit<
 export type CompactLink = Omit<Link, 'color' | 'style' | 'width'>;
 
 /**
- * Drop-in replacement of {@link LinkTypeRef} inside the read-tool reference
- * tables (`etn.thoughts.subgraph`, `neighbors`, `usage`) under
- * `view: 'compact'`. Drops the visual line-style fields — agents consume
- * `name_forward`/`name_reverse`/`description` to reason about the type, not
- * to render it.
- */
-export type CompactLinkTypeRef = Omit<LinkTypeRef, 'color' | 'style'>;
-
-/**
  * `etn.thoughts.usage` result with a {@link CompactThoughtRef} catalogue —
  * the wrapper preserves `total`/`groups`; the only change is the
  * `groups[].thoughts[]` element shape under `view: 'compact'`.
@@ -813,6 +780,22 @@ export interface CompactThoughtUsage
     thoughts: CompactThoughtRef[];
   }>;
 }
+
+/**
+ * Ширина «визуальных» полей стиля, которые compact-проекция выносит из
+ * списочных ответов MCP: цвет текста и фона, ручные флаги шрифта, вид иконки
+ * и вложение-подложка иконки. `icon` (само значение emoji/ссылки) остаётся —
+ * оно семантично. Список — единый источник для всех compact-проекций.
+ */
+export type CompactVisualFieldKeys =
+  | 'fg_color'
+  | 'bg_color'
+  | 'font_bold'
+  | 'font_italic'
+  | 'font_underline'
+  | 'font_strike'
+  | 'icon_kind'
+  | 'icon_attachment_id';
 
 // ---------------------------------------------------------------------------
 // `etn.thoughts.get` / `neighbors` / `subgraph` / `usage` — view=compact

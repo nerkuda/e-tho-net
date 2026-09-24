@@ -34,6 +34,10 @@ import type {
   CommentInput,
   CommentTarget,
   CurrentUser,
+  CrossNetworkDuplicateResponse,
+  CrossNetworkRefValue,
+  CrossNetworkStructureQueryResponse,
+  PropertyCrossResolveResult,
   DuplicateHit,
   DuplicateMatchKind,
   ExportJob,
@@ -60,6 +64,7 @@ import type {
   MentionsScanResponse,
   Network,
   NetworkListItem,
+  NetworksCatalog,
   NetworkMember,
   NetworkProperty,
   NetworkPropertyInput,
@@ -333,6 +338,22 @@ export interface EtnApi {
       offset?: number,
       linkFilter?: LinkTypeFilterInput,
     ): Promise<FocusNeighbor[]>;
+    /**
+     * `GET /thoughts/{id}/neighbors` с метаданными пагинации — источник
+     * порционной подгрузки секторов карты мыслей (задача c8fa74ba). В
+     * отличие от {@link neighbors} возвращает ещё и `total`, по которому
+     * строится плавающий индикатор количества мыслей сектора.
+     */
+    neighborsPage(
+      networkId: string,
+      id: string,
+      dir: FocusDir,
+      limit: number,
+      offset: number,
+      sort?: import('@etn/shared').SortKind,
+      order?: import('@etn/shared').SortOrder,
+      linkFilter?: LinkTypeFilterInput,
+    ): Promise<import('@etn/shared').NeighborPage>;
     batch(networkId: string, input: ThoughtBatchInput): Promise<ThoughtBatchResult>;
     /**
      * `POST /thoughts/copy-batch` — paste a clipboard snapshot under
@@ -367,6 +388,42 @@ export interface EtnApi {
       /** Optional thought-type filter (link-property pickers). */
       typeIds?: string[],
     ): Promise<DuplicateHit[]>;
+    /**
+     * Кросс-сетевой поиск дублей (задача eb1a3f43): веером по списку сетей
+     * с простановкой `network_id` на каждом кандидате + справочник сетей.
+     * Используется диалогом выбора сущностей при включённом переключателе
+     * «по всем сетям». `networkId` — текущая открытая сеть; роут добавляет
+     * её в веер, если её нет в `networkIds`.
+     */
+    findDuplicatesAcrossNetworks(
+      networkId: string,
+      networkIds: string[],
+      title: string,
+      synonyms?: string[],
+      typeIds?: string[],
+    ): Promise<CrossNetworkDuplicateResponse>;
+    /**
+     * Кросс-сетевой поиск (задача eb1a3f43, требование c98d5d19). Возвращает
+     * обычный `SearchResponse` с дополнительным `networks` (справочник сетей)
+     * и `network_id` на каждом хите. `networkId` — текущая открытая сеть;
+     * роут добавляет её в веер, если её нет в `networkIds`.
+     */
+    searchAcrossNetworks(
+      networkId: string,
+      networkIds: string[],
+      request: SearchRequest,
+    ): Promise<SearchResponse>;
+    /**
+     * Кросс-сетевая структурная выборка (задача eb1a3f43). Возвращает
+     * `StructureQueryResponse`, где каждый item несёт `network_id`, а
+     * `networks` — справочник сетей в дополнительном поле meta. `networkId`
+     * — текущая открытая сеть.
+     */
+    queryStructureAcrossNetworks(
+      networkId: string,
+      networkIds: string[],
+      request: StructureQueryRequest,
+    ): Promise<CrossNetworkStructureQueryResponse>;
     setFocusPreferences(
       networkId: string,
       focusId: string,
@@ -679,6 +736,18 @@ export interface EtnApi {
       ownerId: string,
       key: string,
     ): Promise<void>;
+    /**
+     * Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a).
+     * REST `POST …/thoughts|links/{id}/properties/{key}/cross-resolve`.
+     * Возвращает обновлённые снапшоты имён целей и пометки нерезолвленности.
+     * Сейчас реализован для `owner_type === 'thought'` — link-вариант
+     * добавляется отдельной задачей.
+     */
+    crossResolve(
+      networkId: string,
+      ownerId: string,
+      key: string,
+    ): Promise<PropertyCrossResolveResult>;
   };
   /**
    * Property registry (0.6.5). The registry is the single source of a

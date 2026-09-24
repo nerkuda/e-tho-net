@@ -65,6 +65,7 @@ const EXPECTED_FILES = [
   '041_type_property_side.sql',
   '042_unified_property_link_registry.sql',
   '043_type_properties_canonical_unique.sql',
+  '044_cross_network_ref.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -610,6 +611,7 @@ describe(
           '041_type_property_side.sql',
           '042_unified_property_link_registry.sql',
           '043_type_properties_canonical_unique.sql',
+          '044_cross_network_ref.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -903,6 +905,7 @@ describe(
           '041_type_property_side.sql',
           '042_unified_property_link_registry.sql',
           '043_type_properties_canonical_unique.sql',
+          '044_cross_network_ref.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);
@@ -969,7 +972,7 @@ describe(
       registerMigrationHelpers(db);
       try {
         const res = runMigrations(db, networkMigrationsDir());
-        assert.equal(res.applied[res.applied.length - 1], '043_type_properties_canonical_unique.sql');
+        assert.equal(res.applied[res.applied.length - 1], '044_cross_network_ref.sql');
         // 040 уже применён в прогоне — откатываем запись, сеем данные
         // thought_ref-эпохи и применяем повторно (как апгрейд живой сети).
         // 041 (DDL — добавление колонки `side`) и 042 (DML — снятие direction,
@@ -1414,6 +1417,7 @@ describe(
         assert.deepEqual(res.applied, [
           '042_unified_property_link_registry.sql',
           '043_type_properties_canonical_unique.sql',
+          '044_cross_network_ref.sql',
         ]);
 
         // Сценарий 1: p-backward удалён, его привязки перенесены на

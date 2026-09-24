@@ -663,7 +663,8 @@ export const LayersMerge = defineContract(
 
 const SearchFields = z
   .object({
-    network_id: NetworkId,
+    network_id: NetworkId.optional(),
+    network_ids: z.array(NetworkId).optional(),
     query: z.string().min(1),
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
@@ -671,13 +672,30 @@ const SearchFields = z
     type: z.string().min(1).optional(),
     author_id: z.string().optional(),
     editor_id: z.string().optional(),
+    show_inactive: z.boolean().optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): неизвестный ключ верхнего
   // уровня → VALIDATION_ERROR. До `.refine()` — порядок обязателен в zod 4.
   .strict()
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
+  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача eb1a3f43, требование c98d5d19: веерный режим — `network_ids`
+  // рядом с `network_id`, но XOR: либо одна сеть, либо список. Парсер
+  // repeatable создаёт `network_ids: []` при отсутствии параметра в query —
+  // пустой массив трактуется как «не указан».
+  .refine(
+    (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
+    {
+      message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+    },
+  )
+  .refine(
+    (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
+    {
+      message: 'Нужно указать network_id или network_ids.',
+    },
+  );
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
 
 const QueryPropertyFields = z
@@ -703,7 +721,8 @@ const QueryPropertyFields = z
   });
 const QueryFields = z
   .object({
-    network_id: NetworkId,
+    network_id: NetworkId.optional(),
+    network_ids: z.array(NetworkId).optional(),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
@@ -726,7 +745,22 @@ const QueryFields = z
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
+  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
+  // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
+  // query — пустой массив трактуется как «не указан».
+  .refine(
+    (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
+    {
+      message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+    },
+  )
+  .refine(
+    (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
+    {
+      message: 'Нужно указать network_id или network_ids.',
+    },
+  );
 export const ThoughtsQuery = defineContract('etn.thoughts.query', QueryFields, {});
 
 export const ThoughtsGet = defineContract(
@@ -751,6 +785,7 @@ const NeighborsFields = z.object({
   dir: z.enum(FOCUS_DIRS),
   depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
   link_filter: LinkFilter,
+  show_inactive: z.boolean().optional(),
   view: View,
 });
 export const ThoughtsNeighbors = defineContract('etn.thoughts.neighbors', NeighborsFields, {});
@@ -808,11 +843,29 @@ export const ThoughtsDeletionCheck = defineContract(
 
 export const ThoughtsFindDuplicates = defineContract(
   'etn.thoughts.find_duplicates',
-  z.object({
-    network_id: NetworkId,
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId.optional(),
+      network_ids: z.array(NetworkId).optional(),
+      title: z.string().min(1),
+      synonyms: z.array(z.string().min(1)).optional(),
+    })
+    .strict()
+    // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
+    // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
+    // query — пустой массив трактуется как «не указан».
+    .refine(
+      (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
+      {
+        message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+      },
+    )
+    .refine(
+      (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
+      {
+        message: 'Нужно указать network_id или network_ids.',
+      },
+    ),
   {},
 );
 
@@ -915,6 +968,26 @@ export const PropertiesRemove = defineContract(
     owner_id: z.string().min(1),
     key: z.string().min(1),
     value: z.string().min(1),
+  }),
+  {},
+);
+
+/**
+ * Явный резолв значений свойства вида `cross_network_ref` (задача 7849008a,
+ * спека 46df7a8d). Для каждого видимого значения открывает целевую сеть и
+ * обновляет снапшот имени. Возвращает массив DTO
+ * {@link CrossNetworkRefValue} со статусами. Служебная операция — без
+ * write-бюджета и audit-записи как содержательной правки (требование
+ * c104a0fc). Применим ТОЛЬКО к свойствам вида `cross_network_ref`; иначе
+ * `VALIDATION_ERROR`.
+ */
+export const PropertiesResolve = defineContract(
+  'etn.properties.resolve',
+  z.object({
+    network_id: NetworkId,
+    owner_type: z.enum(PROPERTY_OWNER_TYPES),
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
   }),
   {},
 );
@@ -1057,7 +1130,11 @@ export const AttachmentsDelete = defineContract(
 
 export const NetworksStructure = defineContract(
   'etn.networks.structure',
-  z.object({ network_id: NetworkId, include_examples: z.boolean().optional() }),
+  z.object({
+    network_id: NetworkId,
+    include_examples: z.boolean().optional(),
+    include_conventions: z.boolean().optional(),
+  }),
   {},
 );
 
@@ -1181,6 +1258,26 @@ export const OntologyWrite = defineContract(
     // `.strict()` (ошибка ea4581c5): лишний ключ верхнего уровня — `VALIDATION_ERROR`
     // с полем, а не тихий успех с потерянной секцией батча.
     .strict(),
+  {},
+);
+
+/**
+ * `etn.ontology.delete` — удаление одной сущности онтологии (задача cc9ca65e,
+ * 0.7.2). В 0.8.3 инструмент снят из постоянного набора (задача d379e091) и
+ * исполняется действием `ontology.delete` через `etn.ops` с обязательным
+ * ВЕРХНЕУРОВНЕВЫМ `confirm: true`; здесь `params`-схема без `confirm`.
+ * Схема перенесена сюда из `tools/ontology.ts`, чтобы реестр `ops-catalog`
+ * валидировал `params` той же схемой (семантика ошибок не меняется).
+ */
+export const OntologyDelete = defineContract(
+  'etn.ontology.delete',
+  z.object({
+    network_id: NetworkId,
+    // `type_view` (задача c1fa71d4, 0.7.3) — отбор типа мысли.
+    kind: z.enum(['thought_type', 'link_type', 'property', 'type_property', 'type_view']),
+    id: z.string().min(1),
+    force: z.boolean().optional(),
+  }),
   {},
 );
 
@@ -1472,6 +1569,42 @@ export const TrashPurge = defineContract('etn.trash.purge', z.object({ network_i
 export const MembersList = defineContract('etn.members.list', z.object({ network_id: NetworkId }), {});
 
 // ===========================================================================
+// Область: прогрессивное раскрытие — etn.guide + etn.ops (задача 86ef2ff4,
+// версия 0.8.3). Редкие операции, снятые из постоянного набора инструментов
+// (ADR «Погрессивное раскрытие MCP…» b2eebf8b; ADR «Поглощённые инструменты
+// снимаются одним мажором…» 8358eea9). Контракты плоские объекты без union —
+// грабля 5498e16c (MCP-SDK публикует пустую схему для union inputSchema).
+//
+// Поглощённые операции сохраняют СВОИ контракты выше в этом реестре: они
+// служат схемами `params` для диспетчера `etn.ops` и схемами REST-парсинга
+// (у слоёв/захватов REST-маршруты живы). Прежняя инварианта «все `etn.*`
+// контракты = ровно витрина `tools/list`» больше не действует: часть из них
+// исполняется только через `etn.ops` (см. `mcp/tools/ops-catalog.ts`).
+// ===========================================================================
+
+/** `etn.guide` — read-only витрина редких операций: без params — реестр
+ *  «действие → когда нужно», с `topic` — полная инструкция вызова. */
+export const Guide = defineContract(
+  'etn.guide',
+  z.object({ topic: z.string().min(1).optional() }),
+  {},
+);
+
+/** `etn.ops` — исполнитель редких операций: `action` + плоский `params` +
+ *  `confirm: true` для деструктивных. Валидация `params` — внутри, по
+ *  схеме действия из реестра `etn.guide` (та же, что у поглощённого
+ *  инструмента). */
+export const Ops = defineContract(
+  'etn.ops',
+  z.object({
+    action: z.string().min(1),
+    params: z.record(z.string(), z.unknown()).optional(),
+    confirm: z.boolean().optional(),
+  }),
+  {},
+);
+
+// ===========================================================================
 // REST-контракты (маршруты без общей с MCP формы входа; имя «rest:…» —
 // в реестр MCP они не попадают, используются только parseRest)
 // ===========================================================================
@@ -1605,6 +1738,24 @@ export const RestPropertyPut = defineContract(
 /** DELETE …/properties/:key — удаление значения. */
 export const RestPropertyDelete = defineContract(
   'rest:properties.delete',
+  z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    owner_id: { from: { kind: 'param', name: 'id' } },
+    key: { from: { kind: 'param' } },
+  },
+);
+
+/**
+ * POST …/properties/:key/cross-resolve — явный резолв значений вида
+ * «кросс-сетевая ссылка» (задача 7849008a, требование 95511443,
+ * спека операции 737ed900). Тело пустое; ответ — массив обновлённых
+ * снапшотов с признаком `resolved`/`unresolved`. Служебная запись,
+ * без write-бюджета и audit-записи как содержательной правки
+ * (требование c104a0fc).
+ */
+export const RestPropertyCrossResolve = defineContract(
+  'rest:properties.cross-resolve',
   z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -2222,23 +2373,34 @@ export const RestImportCommit = defineContract(
 
 export const RestSearchQuery = defineContract(
   'rest:search.query',
-  z.object({
-    network_id: NetworkId,
-    q: z.string().min(1),
-    scope: z.string().optional(),
-    in: z.string().optional(),
-    from_thought_id: z.string().min(1).optional(),
-    type_id: z.array(z.string().min(1)).optional(),
-    link_type_id: z.array(z.string().min(1)).optional(),
-    show_inactive: z.boolean().optional(),
-    trashed: z.boolean().optional(),
-    author_id: z.string().optional(),
-    editor_id: z.string().optional(),
-    limit: z.number().int().min(1).optional(),
-    offset: z.number().int().min(0).optional(),
-  }),
+  z
+    .object({
+      // Задача eb1a3f43, требование c98d5d19: `network_id` из URL-path
+      // (`/networks/:networkId/search`) не валидируется zod-схемой, чтобы
+      // XOR-refine не отвергал кросс-сетевой запрос с `network_ids`. Роут
+      // берёт сеть из `req.params.networkId` и при наличии `network_ids`
+      // дополняет ею веер.
+      // Задача eb1a3f43: веерный режим — `network_ids` опционален.
+      network_ids: z.array(NetworkId).optional(),
+      q: z.string().min(1),
+      scope: z.string().optional(),
+      in: z.string().optional(),
+      from_thought_id: z.string().min(1).optional(),
+      type_id: z.array(z.string().min(1)).optional(),
+      link_type_id: z.array(z.string().min(1)).optional(),
+      show_inactive: z.boolean().optional(),
+      trashed: z.boolean().optional(),
+      author_id: z.string().optional(),
+      editor_id: z.string().optional(),
+      limit: z.number().int().min(1).optional(),
+      offset: z.number().int().min(0).optional(),
+    }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    // `repeatable: true` парсера: при отсутствии параметра в строке запроса
+    // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
+    // проверяет роут (`input.network_ids.length > 0`).
+    network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
     q: {
       from: { kind: 'query' },
       parse: (raw: unknown) => {
@@ -2297,6 +2459,38 @@ export const RestMentionsScan = defineContract(
     },
     show_inactive: { from: { kind: 'body' }, t: z.boolean().optional() },
     exclude_thought_id: { from: { kind: 'body' }, t: z.string().optional() },
+  },
+);
+
+/**
+ * `GET /networks/:networkId/thoughts/duplicates` — контракт для веерного режима
+ * (задача eb1a3f43, требование c98d5d19). `network_ids` задаёт дополнительные
+ * сети для fan-out; `:networkId` интерпретируется как одна из сетей веера.
+ * XOR проверяется в роуте (см. `routes/thoughts.ts`).
+ */
+export const RestThoughtDuplicates = defineContract(
+  'rest:thoughts.duplicates',
+  z
+    .object({
+      // `network_id` из URL-path (`/networks/:networkId/thoughts/duplicates`)
+      // не валидируется zod-схемой: кросс-сетевой запрос всегда несёт и path,
+      // и `network_ids`. Роут читает networkId из path и дополняет веер.
+      network_ids: z.array(NetworkId).optional(),
+      title: z.string().min(1),
+      // Repeatable: ?synonyms=a&synonyms=b или ?synonyms=a,b — оба варианта
+      // принимаются (роут склеивает).
+      synonyms: z.array(z.string().min(1)).optional(),
+      type_ids: z.array(z.string().min(1)).optional(),
+    }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    // `repeatable: true` парсера: при отсутствии параметра в строке запроса
+    // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
+    // проверяет роут (`input.network_ids.length > 0`).
+    network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
+    title: { from: { kind: 'query' }, req: true, msg: 'title обязателен.' },
+    synonyms: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
+    type_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
   },
 );
 
@@ -3126,6 +3320,11 @@ export const RestStructureQueryBody = defineContract(
       ids_only: z.boolean().optional(),
       limit: z.number().int().optional(),
       offset: z.number().int().optional(),
+      // Задача eb1a3f43, требование c98d5d19: веерный режим — массив
+      // дополнительных сетей для fan-out. Опциональный — если передан,
+      // `:networkId` в пути интерпретируется как одна из сетей, а не как
+      // единственная. Взаимоисключающе с `:networkId` (валидируется в роуте).
+      network_ids: z.array(NetworkId).optional(),
     })
     .strict(),
   {
@@ -3138,6 +3337,7 @@ export const RestStructureQueryBody = defineContract(
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
+    network_ids: { from: { kind: 'body' }, t: z.array(NetworkId).min(1).optional() },
   },
 );
 

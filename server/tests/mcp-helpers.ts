@@ -223,6 +223,23 @@ export async function connectMcpClient(ctx: McpTestContext, key: string): Promis
 /** The (non-task) tool-result shape returned by `Client.callTool`. */
 export type ClientCallToolResult = Awaited<ReturnType<Client['callTool']>>;
 
+/**
+ * Вызвать редкую операцию через `etn.ops` (0.8.3, задача 86ef2ff4): `params` —
+ * плоский объект, `confirm` — для деструктивных. Фикстуры тестов снятых
+ * инструментов переведены на этот путь.
+ */
+export async function callOp(
+  client: Client,
+  action: string,
+  params: Record<string, unknown> = {},
+  confirm = false,
+): Promise<ClientCallToolResult> {
+  return client.callTool({
+    name: 'etn.ops',
+    arguments: { action, params, ...(confirm ? { confirm: true } : {}) },
+  });
+}
+
 /** Extract the text of a tool result's first content block. */
 export function toolText(result: ClientCallToolResult): string {
   if (!('content' in result)) {

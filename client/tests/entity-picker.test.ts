@@ -24,6 +24,7 @@ import type { LinkType, ThoughtType } from '@etn/shared';
 import {
   buildEntityChipField,
   buildEntityCombo,
+  filterEntityOptions,
   linkTypeEntityOptions,
   normalizeParentTypeId,
   pickEntitiesModal,
@@ -167,6 +168,57 @@ describe('entity-picker: пустой поиск показывает весь �
     assert.equal(typeRowIndentSteps(1), 0);
     assert.equal(typeRowIndentSteps(2), 1);
     assert.equal(typeRowIndentSteps(undefined), 0);
+  });
+});
+
+describe('entity-picker: filterEntityOptions сужает каталог по вводу (ошибка 698800be)', () => {
+  const options = thoughtTypeEntityOptions(THOUGHT_TYPES);
+
+  it('пустой и пробельный запросы возвращают весь каталог', () => {
+    assert.deepEqual(
+      filterEntityOptions(options, '').map((o) => o.id).sort(),
+      ['a', 'b', 'c'],
+    );
+    assert.deepEqual(
+      filterEntityOptions(options, '   ').map((o) => o.id).sort(),
+      ['a', 'b', 'c'],
+    );
+  });
+
+  it('совпадение по подстроке title, регистр не важен', () => {
+    assert.deepEqual(
+      filterEntityOptions(options, 'зад').map((o) => o.id),
+      ['b'],
+    );
+    assert.deepEqual(
+      filterEntityOptions(options, 'ПРОЕКТ').map((o) => o.id),
+      ['a'],
+    );
+    // Пробелы по краям срезаются.
+    assert.deepEqual(
+      filterEntityOptions(options, '  проект  ').map((o) => o.id),
+      ['a'],
+    );
+  });
+
+  it('совпадение по searchText (обратное имя типа связи)', () => {
+    const links = linkTypeEntityOptions(LINK_TYPES);
+    assert.deepEqual(
+      filterEntityOptions(links, 'rlb').map((o) => o.id),
+      ['lb'],
+    );
+    // Прямое имя тоже находится.
+    assert.deepEqual(
+      filterEntityOptions(links, 'fla').map((o) => o.id),
+      ['la'],
+    );
+  });
+
+  it('нет совпадений — пустой список, исходный массив не мутируется', () => {
+    assert.deepEqual(filterEntityOptions(options, 'неттакого'), []);
+    const before = [...options];
+    filterEntityOptions(options, 'зад');
+    assert.deepEqual(options, before);
   });
 });
 

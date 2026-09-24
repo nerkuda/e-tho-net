@@ -22,6 +22,7 @@ import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/d
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
+  callOp,
   addChronicleViaWrite,
   buildMcpContext,
   callWrite,
@@ -250,7 +251,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.readOnlyKey);
       try {
-        const list = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const list = await callOp(handle.client, 'networks.list', {});
         assert.equal(list.isError, undefined);
         assert.equal(toolJson<unknown[]>(list).length, 1);
 
@@ -337,10 +338,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         const thoughtId = created.id;
 
-        const deleted = await handle.client.callTool({
-          name: 'etn.thoughts.delete',
-          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
-        });
+        const deleted = await callOp(handle.client, 'thoughts.delete', { network_id: ctx.networkId, thought_id: thoughtId }, true);
         assert.equal(deleted.isError, undefined);
       } finally {
         await handle.close();
@@ -367,7 +365,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const handle = await connectMcpClient(ctx, strangerKey.key);
       try {
         // Networks list is empty — nothing to see.
-        const list = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const list = await callOp(handle.client, 'networks.list', {});
         assert.deepEqual(toolJson<unknown[]>(list), []);
 
         // Direct access to the admin network is forbidden.
@@ -409,17 +407,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(sub.edges.length, 1);
         assert.equal(sub.truncated, false);
 
-        const path = await handle.client.callTool({
-          name: 'etn.thoughts.path',
-          arguments: { network_id: ctx.networkId, from_id: ctx.homeId, to_id: childId },
-        });
+        const path = await callOp(handle.client, 'thoughts.path', { network_id: ctx.networkId, from_id: ctx.homeId, to_id: childId });
         const pathResult = toolJson<{ path: string[] | null }>(path);
         assert.deepEqual(pathResult.path, [ctx.homeId, childId]);
 
-        const exported = await handle.client.callTool({
-          name: 'etn.export.subgraph',
-          arguments: { network_id: ctx.networkId, seed_ids: [ctx.homeId], radius: 1 },
-        });
+        const exported = await callOp(handle.client, 'export.subgraph', { network_id: ctx.networkId, seed_ids: [ctx.homeId], radius: 1 });
         const doc = toolJson<{ format: string; content: string }>(exported);
         assert.equal(doc.format, 'markdown');
         assert.match(doc.content, /Вторая мысль/);
@@ -628,9 +620,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        // Build a small graph: 2 children of HOME with long permanent
-        // comments. The topology is tiny, so a moderate `max_chars` forces
-        // the preview-shortening step without dropping any node.
+        // Build a small graph: 2 children of HOME with a long permanent
+        // comment AND a long chronological entry. The topology is tiny, so a
+        // moderate `max_chars` forces the preview-shortening step without
+        // dropping any node. (С 0.8.3 базовое превью permanent — 600 символов,
+        // поэтому объём набирается ещё и хронологией с её базовыми 2000.)
         const ids: string[] = [];
         for (let i = 0; i < 2; i++) {
           const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
@@ -639,6 +633,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             // Permanent preview body of ~3000 chars on every node.
             comment: { body_md: 'z'.repeat(3000) },
           });
+          await addChronicleViaWrite(
+            handle.client,
+            ctx.networkId,
+            created.id,
+            'y'.repeat(2500),
+            '2026-09-23',
+          );
           ids.push(created.id);
         }
 
@@ -667,6 +668,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           comments: Array<{
             thought_id: string;
             permanent: { body_md: string } | null;
+            chronological: { entries: Array<{ body_md: string }> };
           }>;
         }>(sub);
 
@@ -683,6 +685,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             assert.ok(
               c.permanent.body_md.length <= 500,
               `permanent body for ${c.thought_id} must be trimmed to the budget floor (got ${c.permanent.body_md.length})`,
+            );
+          }
+          for (const entry of c.chronological.entries) {
+            assert.ok(
+              entry.body_md.length <= 500,
+              `chronological body for ${c.thought_id} must be trimmed to the budget floor (got ${entry.body_md.length})`,
             );
           }
         }
@@ -835,19 +843,19 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const sg = toolJson<{
           nodes: Array<{ id: string; type_id: string | null }>;
           edges: Array<{ type_id: string | null }>;
-          thought_types: Record<string, { name: string; description: string | null }>;
-          link_types: Record<
-            string,
-            { name_forward: string; name_reverse: string; description: string | null }
-          >;
+          thought_types: Record<string, { id: string; name: string; icon: string | null }>;
+          link_types: Record<string, { id: string; name_forward: string; name_reverse: string }>;
         }>(sub);
         assert.ok(sg.thought_types[thoughtTypeId], 'thought type of a node must be catalogued');
         assert.equal(sg.thought_types[thoughtTypeId]?.name, 'ошибка');
-        assert.match(sg.thought_types[thoughtTypeId]?.description ?? '', /Дефект/);
+        assert.equal(sg.thought_types[thoughtTypeId]?.id, thoughtTypeId);
+        // 0.8.3: справочник списка худой — AI-описания не дублируются,
+        // полный каталог типов отдаёт `etn.types.list`.
+        assert.equal('description' in (sg.thought_types[thoughtTypeId] ?? {}), false);
         assert.ok(sg.link_types[linkTypeId], 'link type of an edge must be catalogued');
         assert.equal(sg.link_types[linkTypeId]?.name_forward, 'блокирует');
         assert.equal(sg.link_types[linkTypeId]?.name_reverse, 'заблокирован');
-        assert.match(sg.link_types[linkTypeId]?.description ?? '', /Блокировка/);
+        assert.equal('description' in (sg.link_types[linkTypeId] ?? {}), false);
 
         // neighbors: the neighbour's link_type_id resolves through the catalogue.
         const neigh = await handle.client.callTool({
@@ -872,10 +880,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(qr.total, 1);
         assert.equal(qr.thought_types[thoughtTypeId]?.name, 'ошибка');
 
-        const p = await handle.client.callTool({
-          name: 'etn.thoughts.path',
-          arguments: { network_id: ctx.networkId, from_id: ctx.homeId, to_id: id },
-        });
+        const p = await callOp(handle.client, 'thoughts.path', { network_id: ctx.networkId, from_id: ctx.homeId, to_id: id });
         const pr = toolJson<{ path: string[] | null; thought_types: Record<string, unknown> }>(p);
         assert.ok(pr.thought_types[thoughtTypeId]);
 
@@ -1096,10 +1101,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.match(toolText(missing), /NOT_FOUND/);
 
           // Delete, then the comment is gone.
-          const deleted = await handle.client.callTool({
-            name: 'etn.comments.delete',
-            arguments: { network_id: ctx.networkId, comment_id: commentId, expected_version: 2 },
-          });
+          const deleted = await callOp(handle.client, 'comments.delete', { network_id: ctx.networkId, comment_id: commentId, expected_version: 2 }, true);
           assert.equal(deleted.isError, undefined, toolText(deleted));
           assert.equal(toolJson<{ version: number }>(deleted).version, 0);
 
@@ -1110,10 +1112,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal(gone.isError, true);
           assert.match(toolText(gone), /NOT_FOUND/);
 
-          const missingDelete = await handle.client.callTool({
-            name: 'etn.comments.delete',
-            arguments: { network_id: ctx.networkId, comment_id: commentId },
-          });
+          const missingDelete = await callOp(handle.client, 'comments.delete', { network_id: ctx.networkId, comment_id: commentId }, true);
           assert.equal(missingDelete.isError, true);
           assert.match(toolText(missingDelete), /NOT_FOUND/);
         } finally {
@@ -1189,9 +1188,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             properties: Array<{
               key: string;
               inherited: boolean;
-              defined_on: string;
               description: string | null;
-              description_overridden: boolean;
             }>;
           }>;
           link_types: Array<{ id: string; name_forward: string; name_reverse: string }>;
@@ -1206,17 +1203,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const inherited = childEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(inherited, 'child must see the inherited property');
         assert.equal(inherited.inherited, true);
-        assert.equal(inherited.defined_on, parentType.id);
-        // The effective description of the child is ITS override, flagged as such.
+        // 0.8.3: сервисные поля привязки (defined_on/owner_*/overridden_here/
+        // description_overridden) в ответе не отдаются.
+        assert.equal('defined_on' in inherited, false);
+        assert.equal('owner_id' in inherited, false);
+        assert.equal('description_overridden' in inherited, false);
+        // The effective description of the child is ITS override.
         assert.equal(inherited.description, 'срок передачи подпроекта в тестирование');
-        assert.equal(inherited.description_overridden, true);
-        // The parent's own definition is not marked inherited; its description
-        // is the definition's own text, not an override.
+        // The parent's own definition is not marked inherited.
         const ownDef = parentEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(ownDef);
         assert.equal(ownDef.inherited, false);
         assert.equal(ownDef.description, 'крайний срок реализации, ISO-дата');
-        assert.equal(ownDef.description_overridden, false);
 
         const linkEntry = result.link_types.find((t) => t.id === parentLinkType.id);
         assert.ok(linkEntry, 'link type must be listed');
@@ -1288,10 +1286,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const listed = await handle.client.callTool({
-          name: 'etn.networks.list',
-          arguments: {},
-        });
+        const listed = await callOp(handle.client, 'networks.list', {});
         assert.equal(listed.isError, undefined, toolText(listed));
         const data = toolJson<Array<{
           id: string;
@@ -1345,14 +1340,23 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // is absent, so `has_structure` is false. The full dictionary is
         // echoed back so an agent sees the current role configuration.
         assert.deepEqual(data.type_roles, {});
-        // Bug fix: `conventions` must always come back (null when unset), even
-        // when the network has no structure at all — the field is unrelated
-        // to the structure role.
-        assert.equal(data.conventions, null);
+        // 0.8.3 (требование «networks.structure отдаёт худой перечень
+        // разделов», задача 2ea88bba): `conventions` вынесены в опциональный
+        // параметр `include_conventions` — по умолчанию не включаются.
+        assert.equal(data.conventions, undefined);
         // `examples` is intentionally omitted unless `include_examples: true`.
         assert.equal(data.examples, undefined);
         assert.deepEqual(data.sections, []);
         assert.deepEqual(data.thought_types, []);
+
+        // Явный запрос возвращает `conventions` (null для сети без него).
+        const withConventions = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId, include_conventions: true },
+        });
+        assert.equal(withConventions.isError, undefined, toolText(withConventions));
+        const dataWithConventions = toolJson<{ conventions: string | null }>(withConventions);
+        assert.equal(dataWithConventions.conventions, null);
       } finally {
         await handle.close();
       }
@@ -1382,17 +1386,18 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(withoutExamples.isError, undefined, toolText(withoutExamples));
         const dataDefault = toolJson<{
-          conventions: string | null;
+          conventions?: string | null;
           examples?: unknown;
         }>(withoutExamples);
-        assert.equal(dataDefault.conventions, 'Пиши хронологию с датой в ISO-8601.');
+        // 0.8.3: `conventions` по умолчанию не включаются (задача 2ea88bba).
+        assert.equal(dataDefault.conventions, undefined);
         // Default call does not carry `examples` — it can be long and most
         // orientation flows do not need it.
         assert.equal(dataDefault.examples, undefined);
 
         const withExamples = await handle.client.callTool({
           name: 'etn.networks.structure',
-          arguments: { network_id: ctx.networkId, include_examples: true },
+          arguments: { network_id: ctx.networkId, include_examples: true, include_conventions: true },
         });
         assert.equal(withExamples.isError, undefined, toolText(withExamples));
         const dataWithExamples = toolJson<{
@@ -1503,10 +1508,9 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(data.has_structure, true);
         assert.equal(data.type_roles.table_of_contents, sectionType.id);
         assert.equal(data.node_section_type.id, sectionType.id);
-        // Bug fix: `conventions` rides along with the structure response even
-        // when `has_structure: true` (the field it fixes is independent of
-        // the node-section mechanism). `examples` stays out by default.
-        assert.equal(data.conventions, 'Именуй разделы существительными в единственном числе.');
+        // 0.8.3 (задача 2ea88bba): `conventions` по умолчанию не включаются —
+        // запрашиваются явно `include_conventions: true`. `examples` — так же.
+        assert.equal(data.conventions, undefined);
         assert.equal(data.examples, undefined);
 
         // Inactive "Скрытый" is excluded; only the two active section nodes remain.
@@ -2236,7 +2240,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('etn.types.list effective properties expose registry property_id + defined_on_name (f14cd5f1)', async () => {
+  it('etn.types.list effective properties expose registry property_id; service binding fields stay out (f14cd5f1, 0.8.3)', async () => {
     const ctx = await buildMcpContext();
     try {
       // Two types + one registry property attached to both — confirms
@@ -2271,8 +2275,6 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               key: string;
               property_id: string;
               inherited: boolean;
-              defined_on: string;
-              defined_on_name: string;
               value_type: string;
               required: boolean;
               default_value: unknown;
@@ -2281,28 +2283,27 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           }>;
         }>(listed);
 
-        // The parent's own binding: registry id, not "inherited", defined here.
+        // The parent's own binding: registry id, not "inherited".
         const parentEntry = result.thought_types.find((t) => t.id === parentType.id);
         assert.ok(parentEntry, 'parent type must be listed');
         const parentOwn = parentEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(parentOwn, 'parent must expose the deadline property');
         assert.equal(parentOwn.property_id, ownProp.property_id, 'property_id is the registry id');
         assert.equal(parentOwn.inherited, false);
-        assert.equal(parentOwn.defined_on, parentType.id);
-        assert.equal(parentOwn.defined_on_name, 'Проект-prop');
+        // 0.8.3: сервисные поля адресации/переопределения привязки не отдаются.
+        assert.equal('defined_on' in parentOwn, false);
+        assert.equal('defined_on_name' in parentOwn, false);
         assert.equal(parentOwn.value_type, 'date');
         assert.equal(parentOwn.required, true);
 
-        // The child inherits: same registry property_id, but `inherited` and
-        // `defined_on` point at the ancestor.
+        // The child inherits: same registry property_id, `inherited: true`.
         const childEntry = result.thought_types.find((t) => t.id === childType.id);
         assert.ok(childEntry, 'child type must be listed');
         const childInherited = childEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(childInherited, 'child must see the inherited property');
         assert.equal(childInherited.property_id, ownProp.property_id, 'inherited binding carries the same registry id');
         assert.equal(childInherited.inherited, true);
-        assert.equal(childInherited.defined_on, parentType.id);
-        assert.equal(childInherited.defined_on_name, 'Проект-prop');
+        assert.equal('defined_on' in childInherited, false);
       } finally {
         await handle.close();
       }
@@ -2742,10 +2743,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.deepEqual(body.events, []);
@@ -2772,10 +2770,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(typeof created.id, 'string');
 
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.equal(body.cursor.min_seq, 1);
@@ -2819,40 +2814,28 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           await createThoughtViaWrite(handle.client, ctx.networkId, { title });
         }
         const cursor = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
         );
         const maxSeq = cursor.cursor.max_seq;
         assert.ok(maxSeq !== null && maxSeq > 1);
 
         // since_seq = maxSeq → no further events.
         const tail = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: maxSeq },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: maxSeq }),
         );
         assert.equal(tail.events.length, 0);
         assert.equal(tail.cursor.max_seq, maxSeq);
 
         // since_seq = maxSeq - 1 → exactly one event (the last).
         const one = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: maxSeq - 1 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: maxSeq - 1 }),
         );
         assert.equal(one.events.length, 1);
         assert.equal(one.events[0]?.seq, maxSeq);
 
         // limit caps the response.
         const limited = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0, limit: 2 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0, limit: 2 }),
         );
         assert.equal(limited.events.length, 2);
         assert.equal(limited.limit, 2);
@@ -2875,10 +2858,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         }
 
         const before = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
         );
         const minSeq = before.cursor.min_seq;
         const maxSeq = before.cursor.max_seq;
@@ -2897,20 +2877,14 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // earliest such value that still passes zod's `min(0)`.
         const stale = Math.max(0, newMin - 2);
 
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: stale },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: stale });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.equal(body.truncated, true, 'stale since_seq must trigger truncated');
 
         // First call (since_seq = 0) is never truncated, even if min_seq > 1.
         const fresh = toolJson<McpChangesListResult>(
-          await handle.client.callTool({
-            name: 'etn.changes.list',
-            arguments: { network_id: ctx.networkId, since_seq: 0 },
-          }),
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
         );
         assert.equal(fresh.truncated, false);
       } finally {
@@ -2950,10 +2924,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         const typesAndAudiences = body.events.map(
@@ -3006,10 +2977,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
       const handle = await connectMcpClient(ctx, gen.key);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, true);
         assert.match(toolText(result), /not a member|FORBIDDEN/);
       } finally {
@@ -3025,10 +2993,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.readOnlyKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.changes.list',
-          arguments: { network_id: ctx.networkId, since_seq: 0 },
-        });
+        const result = await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 });
         assert.equal(result.isError, undefined);
         const body = toolJson<McpChangesListResult>(result);
         assert.equal(body.cursor.min_seq, null);
@@ -3396,9 +3361,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           const fullChild = fullSub.nodes.find((n) => n.id === childId);
           assert.equal(fullChild?.fg_color, '#112233');
           assert.equal(fullChild?.font_bold, true);
+          // 0.8.3: справочник типов связей худой в обеих проекциях —
+          // визуальные поля стиля из него убраны всегда (описания и стили —
+          // в `etn.types.list`).
           const fullLinkType = fullSub.link_types[linkTypeId];
-          assert.equal(fullLinkType?.color, '#ff0000');
-          assert.equal(fullLinkType?.style, 'dashed');
+          assert.equal('color' in (fullLinkType ?? {}), false);
+          assert.equal('style' in (fullLinkType ?? {}), false);
+          assert.equal(fullLinkType?.name_forward, 'связан');
 
           // Sanity: the grand-child is also returned with the compact projection.
           const grand = sub.nodes.find((n) => n.id === grandId);
@@ -3451,7 +3420,8 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal('color' in n1.link_types[linkTypeId]!, false);
           assert.equal('style' in n1.link_types[linkTypeId]!, false);
 
-          // view: 'full' at depth=1 restores the link-type catalogue fields.
+          // 0.8.3: `view: 'full'` тоже отдаёт худой справочник типов связей —
+          // визуальные поля стиля из него убраны всегда.
           const n1Full = toolJson<{
             link_types: Record<string, Record<string, unknown>>;
           }>(
@@ -3465,8 +3435,8 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               },
             }),
           );
-          assert.equal(n1Full.link_types[linkTypeId]?.color, '#ff0000');
-          assert.equal(n1Full.link_types[linkTypeId]?.style, 'dashed');
+          assert.equal('color' in (n1Full.link_types[linkTypeId] ?? {}), false);
+          assert.equal('style' in (n1Full.link_types[linkTypeId] ?? {}), false);
 
           // depth>1 (ThoughtRef[]), compact drops ThoughtRef visual fields.
           const n2 = toolJson<{
@@ -3641,6 +3611,209 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal(refFull?.fg_color, '#112233');
           assert.equal(refFull?.font_bold, true);
           assert.equal(refFull?.icon_kind, 'emoji');
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.search — compact drops visual fields from by_names/by_texts hits', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const token = `compact_search_${randomUUID().replace(/-/g, '')}`;
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: `${token} с цветом`,
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
+            comment: { body_md: `${token} в комментарии` },
+          });
+          // Visual style fields are set straight in the row (no MCP tool
+          // writes them); the FTS index is already populated by the write.
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE thoughts SET fg_color = ?, bg_color = ?, font_bold = 1,
+                     font_manual = 3, icon = '🎨', icon_kind = 'emoji'
+               WHERE id = ?`,
+            )
+            .run('#112233', '#445566', created.id);
+
+          const res = toolJson<{
+            by_names: Array<Record<string, unknown>>;
+            by_texts: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.search',
+              arguments: { network_id: ctx.networkId, query: token, scope: 'all' },
+            }),
+          );
+          assert.equal(res.by_names.length, 1);
+          assert.equal(res.by_texts.length, 1);
+          for (const hit of [res.by_names[0]!, res.by_texts[0]!]) {
+            for (const dropped of [
+              'fg_color',
+              'bg_color',
+              'font_bold',
+              'font_italic',
+              'font_underline',
+              'font_strike',
+              'icon_kind',
+              'icon_attachment_id',
+            ]) {
+              assert.equal(dropped in hit, false, `compact search hit must not carry ${dropped}`);
+            }
+            assert.equal(hit.thought_id, created.id);
+            assert.equal(hit.icon, '🎨');
+          }
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.resolve — compact card drops visual fields, view: full keeps them', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const { childId } = seedRichGraph(ctx);
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const compact = toolJson<{
+            items: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.resolve',
+              arguments: { network_id: ctx.networkId, thought_ids: [childId] },
+            }),
+          );
+          const card = compact.items[0]!;
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+          ]) {
+            assert.equal(dropped in card, false, `compact resolve card must not carry ${dropped}`);
+          }
+          assert.equal(card.id, childId);
+          assert.equal(card.icon, '🎨');
+          // Envelope keys stay in full form.
+          assert.ok('type' in card);
+          assert.ok('properties' in card);
+          assert.ok('meta' in card);
+          assert.ok('comment_preview' in card);
+
+          const full = toolJson<{
+            items: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.resolve',
+              arguments: { network_id: ctx.networkId, thought_ids: [childId], view: 'full' },
+            }),
+          );
+          const fullCard = full.items[0]!;
+          assert.equal(fullCard.fg_color, '#112233');
+          assert.equal(fullCard.font_bold, true);
+          assert.equal(fullCard.icon_kind, 'emoji');
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.find_duplicates — compact hits drop visual fields', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const title = `дубликат ${randomUUID().replace(/-/g, '')}`;
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, { title });
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE thoughts SET fg_color = ?, font_bold = 1, font_manual = 1, icon_kind = 'emoji'
+               WHERE id = ?`,
+            )
+            .run('#112233', created.id);
+
+          const res = await handle.client.callTool({
+            name: 'etn.thoughts.find_duplicates',
+            arguments: { network_id: ctx.networkId, title },
+          });
+          assert.equal(res.isError, undefined, toolText(res));
+          const hits = toolJson<Array<Record<string, unknown>>>(res);
+          assert.ok(hits.length >= 1);
+          const hit = hits.find((h) => h.id === created.id) ?? hits[0]!;
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+          ]) {
+            assert.equal(dropped in hit, false, `compact duplicate hit must not carry ${dropped}`);
+          }
+          assert.equal(hit.title, title);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.trash.list — compact entries drop visual fields', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'В корзине с цветом',
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
+          });
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE thoughts SET fg_color = ?, font_bold = 1, font_manual = 1, icon_kind = 'emoji'
+               WHERE id = ?`,
+            )
+            .run('#112233', created.id);
+          await callOp(handle.client, 'thoughts.trash', {
+            network_id: ctx.networkId,
+            thought_id: created.id,
+            trashed: true,
+          });
+
+          const res = toolJson<{ thoughts: Array<Record<string, unknown>> }>(
+            await callOp(handle.client, 'trash.list', { network_id: ctx.networkId }),
+          );
+          const entry = res.thoughts.find((t) => t.id === created.id);
+          assert.ok(entry, 'trashed thought must appear in the trash list');
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+          ]) {
+            assert.equal(dropped in entry!, false, `compact trash entry must not carry ${dropped}`);
+          }
+          assert.ok('blocked' in entry!);
         } finally {
           await handle.close();
         }
@@ -3880,10 +4053,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           const pathResp = toolJson<{
             thoughts: Array<{ id: string; icon: string | null }>;
           }>(
-            await handle.client.callTool({
-              name: 'etn.thoughts.path',
-              arguments: { network_id: ctx.networkId, from_id: parentId, to_id: childId },
-            }),
+            await callOp(handle.client, 'thoughts.path', { network_id: ctx.networkId, from_id: parentId, to_id: childId }),
           );
           const pathParent = pathResp.thoughts.find((t) => t.id === parentId);
           assert.ok(pathParent, 'etn.thoughts.path must include the seeded parent');

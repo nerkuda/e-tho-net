@@ -21,6 +21,7 @@ import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.
 import { div, el, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
+  filterEntityOptions,
   linkTypeEntityOptions,
   pickEntitiesModal,
   thoughtEntityOption,
@@ -360,7 +361,8 @@ function renderPanel(): void {
       setValues: (values) => {
         filter.typeIds = values;
       },
-      loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+      loadOptions: (query) =>
+        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
       optionsHeader: 'Типы мыслей',
       placeholder: 'Название типа…',
       picker: {
@@ -380,7 +382,8 @@ function renderPanel(): void {
       setValues: (values) => {
         filter.linkTypeIds = values;
       },
-      loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+      loadOptions: (query) =>
+        filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
       optionsHeader: 'Типы связей',
       placeholder: 'Название типа…',
       picker: {

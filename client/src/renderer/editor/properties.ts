@@ -21,6 +21,7 @@
  */
 
 import type {
+  CrossNetworkRefValue,
   EffectiveTypeProperty,
   LinkPropertyValues,
   PropertyValue,
@@ -40,13 +41,14 @@ import {
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { PROPERTY_VALUES_REFRESHED_EVENT } from '../lib/property-values-refresh.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
-import { removeLinkValueEdges } from './link-value-removal.js';
+import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import {
@@ -267,6 +269,14 @@ function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
       if (box.isConnected) void reload();
     }
   });
+  // Тот же локальный канал правок, что у основной таблицы (ошибка ec5ba58c):
+  // новое ребро могло лечь внетиповым свойством-связью (реестрового свойства
+  // типа связи нет), и без этого списка его бы не увидели.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener(PROPERTY_VALUES_REFRESHED_EVENT, () => {
+      if (box.isConnected) void reload();
+    });
+  }
   return box;
 }
 
@@ -289,8 +299,9 @@ async function confirmOutsideRemove(name: string): Promise<boolean> {
  * реестровое свойство (не подключённое к типу владельца) редактируется как в
  * основной таблице — запись значений внетипового свойства-связи разрешена;
  * рёбра типа связи без свойства в реестре показываются read-only чипами, но
- * удаляются по display-имени стороны (748b80fd) — «Убрать из значения» в меню
- * чипа и крестик очистки набора у ячейки.
+ * удаляются по display-имени стороны (748b80fd) — команды «Удалить связь с
+ * мыслью» / «Поместить связь в корзину» в меню чипа и крестик очистки набора у
+ * ячейки (задача 0d4f793a, без диалога).
  *
  * Used by the standalone «Свойства вне типа» group in the «Свойства» tab
  * (task 8ab775d9); no longer rendered below the main table in the
@@ -348,7 +359,8 @@ function buildOutsideTypeTable(
  * `buildValueEditor`, тот же, что в основной таблице: запись значения
  * внетипового свойства-связи разрешена (dfaacb05). Рёбра типа связи без
  * реестрового свойства — read-only чипи с удалением по display-имени стороны
- * (748b80fd): «Убрать из значения» в меню чипа и «×» очистки набора у ячейки.
+ * (748b80fd): команды «Удалить связь с мыслью» / «Поместить связь в корзину» в
+ * меню чипа и «×» очистки набора у ячейки (задача 0d4f793a, без диалога).
  */
 function buildOutsideLinkCell(
   value: LinkPropertyValues,
@@ -435,8 +447,8 @@ function buildOutsideLinkCell(
       // Крестик «×» очищает значение внетипового свойства-связи целиком
       // (cab38479): без него у пользователя нет способа снять значение из
       // группы «Свойства вне типа»; сервер при `set(key, null)` отзовёт
-      // рёбра. Способ снятия спрашивается диалогом — «В корзину» /
-      // «Удалить совсем» (задача 96d27fc0), как у крестика чипа.
+      // рёбра. Способ снятия выбирается автоматически без диалога
+      // (задача 0d4f793a): возможно удалить — удаляем, иначе в корзину.
       const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
       clearBtn.type = 'button';
       clearBtn.title = 'Удалить значение';
@@ -450,6 +462,7 @@ function buildOutsideLinkCell(
           propertyKey: value.property_name,
           propertyId: value.property_id,
           removedTargetIds: value.values.map((edge) => edge.target_id),
+          mode: 'auto',
           commit: () => clearOutsideLinkValue(value.property_name),
         });
       });
@@ -462,16 +475,16 @@ function buildOutsideLinkCell(
     //
     // 0.8.2, ошибка 748b80fd: ключом записи служит display-имя стороны связи
     // (`value.property_name`), которое сервер понимает (`resolveDefinition`
-    // шаг 3). Поэтому у чипов появляется «Убрать из значения» (одно ребро), а
-    // у ячейки — крестик «×» очистки набора целиком с подтверждением (как у
-    // реестровых внетиповых, cab38479). Направление сервер берёт из имени
-    // стороны, так что удаляется именно это ребро, а не типовое входящее.
+    // шаг 3). Поэтому у чипов появляются команды «Удалить связь с мыслью» /
+    // «Поместить связь в корзину» (задача 0d4f793a), а у ячейки — крестик «×»
+    // очистки набора целиком без диалога (как у реестровых внетиповых,
+    // cab38479). Направление сервер берёт из имени стороны, так что удаляется
+    // именно это ребро, а не типовое входящее.
     const propertyKey = value.property_name;
     const currentIds = value.values.map((edge) => edge.target_id);
-    // «Убрать из значения» и крестик очистки набора спрашивают способ снятия —
-    // «В корзину» / «Удалить совсем» (задача 96d27fc0) — как у чипа основной
-    // таблицы. Запись значения сервер понимает по display-имени стороны.
-    const removeTarget = (targetId: string): void => {
+    // Команды меню чипа снимают одно ребро тем же авто-выбором (задача
+    // 0d4f793a). Запись значения сервер понимает по display-имени стороны.
+    const removeTarget = (targetId: string, mode: LinkValueRemovalMode): void => {
       void removeLinkValueEdges({
         networkId,
         ownerType,
@@ -479,6 +492,7 @@ function buildOutsideLinkCell(
         propertyKey,
         propertyId: value.property_id,
         removedTargetIds: [targetId],
+        mode,
         commit: () => writeOutsideEdgeSet(propertyKey, currentIds.filter((id) => id !== targetId)),
       });
     };
@@ -492,7 +506,8 @@ function buildOutsideLinkCell(
     }
     cell.append(wrap);
     // Крестик очищает внетиповой набор целиком: запись без целей отзывает все
-    // рёбра выведенной из имени стороны; способ спрашивается диалогом.
+    // рёбра выведенной из имени стороны; способ выбирается автоматически без
+    // диалога (задача 0d4f793a).
     const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
     clearBtn.type = 'button';
     clearBtn.title = 'Удалить значение';
@@ -506,6 +521,7 @@ function buildOutsideLinkCell(
         propertyKey,
         propertyId: value.property_id,
         removedTargetIds: currentIds,
+        mode: 'auto',
         commit: () => writeOutsideEdgeSet(propertyKey, []),
       });
     });
@@ -561,13 +577,18 @@ function buildOutsideValueCell(
     // не строит ПОЛЕ ВВОДА — это подпись, строит её value-editor-ветка
     // только для редактируемых значений).
     const stored = value.value;
-    if (value.value_type === 'url' && Array.isArray(stored)) {
-      cell.append(buildMultiUrlReadonly({ urls: stored, onOpen: openOneUrl }));
+    if (value.value_type === 'url' && Array.isArray(stored) && typeof stored[0] === 'string') {
+      cell.append(buildMultiUrlReadonly({ urls: stored as string[], onOpen: openOneUrl }));
     } else if (value.value_type === 'url' && typeof stored === 'string') {
       const row = div('form-row');
       row.style.marginBottom = '0';
       row.append(span(stored, 'prop-outside-text'), buildUrlOpenBtn(stored));
       cell.append(row);
+    } else if (value.value_type === 'cross_network_ref' && Array.isArray(stored)) {
+      // cross_network_ref внетипового значения (задача 7849008a) — снапшот
+      // адреса отдельным узлом. Здесь только подпись; переход/обновление —
+      // через основную таблицу и value-editor.
+      cell.append(buildCrossNetworkRefReadonly(stored as CrossNetworkRefValue[]));
     } else if (typeof stored === 'string' || typeof stored === 'number') {
       cell.append(span(String(stored), 'prop-outside-text'));
     } else if (typeof stored === 'boolean') {
@@ -616,6 +637,19 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
 
   let everMounted = false;
   currentReload = () => void reload();
+  // Слушаем локальное уведомление о правке значений (общий канал
+  // `PROPERTY_VALUES_REFRESHED_EVENT`, задача 7849008a / ошибка ec5ba58c):
+  // снапшот имени после `crossResolve`, а также правка ребра с КАРТЫ (диалог
+  // добавления, перетаскивание облачка, связь эллипсом) и значения-связи из
+  // другого места холста меняют значения фокусной мысли, а карточка в памяти
+  // держит старый снимок. `document.addEventListener` доступен только в
+  // DOM-окружении: в юнит-тестах DOM-шим пропускает `document` — гард через
+  // typeof.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener(PROPERTY_VALUES_REFRESHED_EVENT, () => {
+      if (box.isConnected) void reload();
+    });
+  }
   void reload();
 
   async function reload(): Promise<void> {
@@ -887,4 +921,50 @@ export function isLinkPropertyValues(
 export function propertyHint(definition: EffectiveTypeProperty): string | null {
   const text = definition.description?.trim();
   return text === undefined || text === '' ? null : text;
+}
+
+// ---------------------------------------------------------------------------
+// Read-only рендер значения `cross_network_ref` (задача 7849008a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Короткая пометка сети по `network_id`: либо имя из каталога сетей (если
+ * загружен), либо сокращённый id. Каталог сетей общий (`etn.networks.list`),
+ * здесь хелпер — переиспользуется и в основной таблице, и во внетиповой.
+ */
+function shortNetworkLabel(networkId: string): string {
+  const fromCatalog = store.state.networkList.find((n) => n.id === networkId);
+  if (fromCatalog !== undefined && fromCatalog.display_name !== '') {
+    return fromCatalog.display_name;
+  }
+  return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
+}
+
+/**
+ * Read-only отображение значения `cross_network_ref` для внетипового блока:
+ * каждая запись снапшота — отдельная строка «название (сеть)» с пометкой
+ * `нерезолвлено`. Полное взаимодействие (переход/обновление) — через основную
+ * таблицу и `value-editor`; здесь — только информация для истории значения.
+ */
+export function buildCrossNetworkRefReadonly(values: CrossNetworkRefValue[]): HTMLElement {
+  const root = div('prop-outside-cross-network-ref');
+  if (values.length === 0) {
+    root.append(span('—', 'muted'));
+    return root;
+  }
+  for (const v of values) {
+    const row = div('prop-outside-cross-network-ref-row');
+    const net = v.network_id === '' ? '(нет сети)' : shortNetworkLabel(v.network_id);
+    row.append(
+      span(v.title_snapshot, 'prop-outside-text'),
+      span(` — ${net}`, 'muted prop-outside-text'),
+    );
+    if (v.unresolved) {
+      const flag = span(' (нерезолвлено)', 'muted prop-outside-text');
+      setTooltip(flag, 'Последний живой резолв отказал — сеть или цель удалены. Нажмите «Обновить имя» в основной таблице.');
+      row.append(flag);
+    }
+    root.append(row);
+  }
+  return root;
 }

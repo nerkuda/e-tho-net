@@ -202,8 +202,10 @@ export interface ThoughtCloudActions {
   onContextMenu?: (event: MouseEvent, id: string) => void;
   /** Клик по метке корзины — диалог удаления/восстановления. */
   onTrashBadgeClick?: (id: string) => void;
-  /** Кнопка удаления чипа — убрать мысль из значения (только профиль `chip`). */
-  onRemove?: (id: string) => void;
+  /** Кнопка удаления чипа — убрать мысль из значения (только профиль `chip`).
+   *  Событие клика передаётся вызывающему: модификатор (Shift) меняет способ
+   *  снятия связи в редакторе значения свойства (задача 0d4f793a). */
+  onRemove?: (id: string, event?: MouseEvent) => void;
 }
 
 /**
@@ -344,6 +346,13 @@ export interface ThoughtCloudOptions {
   /** Признак захвата — индикация блокировки; `null`/не задано — индикации нет. */
   lock?: ThoughtCloudLock | null;
   /**
+   * Метка «мысль чужой сети» (кросс-сетевая ссылка значения, ошибка 9be98ae1):
+   * компактная метка-«сеть» по аналогии с меткой корзины ({@link buildTrashMark}).
+   * `label` — отображаемое имя сети-источника (в подсказке метки). `null`/не
+   * задано — метки нет (внутрисетевое представление мысли).
+   */
+  networkBadge?: { label: string } | null;
+  /**
    * Термы подсветки совпадений в названии (задача a1766c7d): каждое вхождение
    * терма без учёта регистра оборачивается в `<mark>` — тем же видом, что
    * серверные сниппеты. Термы даёт {@link searchHighlightTerms}
@@ -433,6 +442,31 @@ function buildTrashMark(
 }
 
 /**
+ * Метка «мысль чужой сети» — зеркало метки корзины для кросс-сетевой ссылки
+ * (ошибка 9be98ae1): наглядный признак, что облачко адресует мысль ДРУГОЙ
+ * сети. В профиле `chip` — компактная иконка внутри пилюли; в остальных —
+ * бейдж в углу. Кликов не перехватывает: метка только читаемая.
+ */
+function buildNetworkMark(profile: CloudProfile, label: string): HTMLElement {
+  const tooltip = `Мысль другой сети: ${label}`;
+  if (profile === 'chip') {
+    const mark = span('', 'list-network-mark');
+    mark.append(svgIcon('network', 10));
+    setTooltip(mark, tooltip);
+    return mark;
+  }
+  const badge = span('', 'cloud-network-badge');
+  badge.append(svgIcon('network', 17));
+  setTooltip(badge, tooltip);
+  for (const evt of ['click', 'dblclick', 'contextmenu'] as const) {
+    badge.addEventListener(evt, (e) => {
+      e.stopPropagation();
+    });
+  }
+  return badge;
+}
+
+/**
  * Индикация захвата: класс рамки на облачке (`locked-by-other` /
  * `locked-by-self`) и бейдж 🔒 с подсказкой «Редактирует <имя>» /
  * «Вы редактируете эту мысль.». Бейдж только читаемый: клики подавляются,
@@ -461,7 +495,7 @@ function buildRemoveButton(id: string, actions: ThoughtCloudActions): HTMLButton
   btn.title = 'Убрать из значения';
   btn.addEventListener('click', (event) => {
     event.stopPropagation();
-    actions.onRemove?.(id);
+    actions.onRemove?.(id, event);
   });
   return btn;
 }
@@ -530,6 +564,9 @@ export function createThoughtCloud(
   }
   if (marked) {
     root.append(buildTrashMark(profile, input.id, options.actions));
+  }
+  if (options.networkBadge !== undefined && options.networkBadge !== null) {
+    root.append(buildNetworkMark(profile, options.networkBadge.label));
   }
   if (options.lock !== undefined && options.lock !== null) {
     applyLockIndicator(root, options.lock);

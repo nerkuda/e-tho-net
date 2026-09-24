@@ -27,8 +27,10 @@ import { describe, it } from 'node:test';
 
 import {
   buildMcpContext,
+  callOp,
   closeMcpContext,
   connectMcpClient,
+  createThoughtViaWrite,
   nativeAvailable,
   toolJson,
   toolText,
@@ -684,14 +686,16 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const result = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'thought_type',
             id: t.id,
           },
-        });
+          true,
+        );
         assert.equal(result.isError, true);
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
@@ -714,15 +718,17 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const result = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'thought_type',
             id: t.id,
             force: true,
           },
-        });
+          true,
+        );
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<OntologyDeleteResult>(result);
         assert.equal(data.deleted, true);
@@ -770,15 +776,17 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const result = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'thought_type',
             id: t.id,
             force: true,
           },
-        });
+          true,
+        );
         assert.equal(result.isError, true);
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
@@ -835,14 +843,16 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
             )
             .get('etn.ontology.delete', ctx.networkId) as { c: number }
         ).c;
-        await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'thought_type',
             id: t2.id,
           },
-        });
+          true,
+        );
         const afterDel = (
           ctx.rawDb
             .prepare(
@@ -851,6 +861,135 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
             .get('etn.ontology.delete', ctx.networkId) as { c: number }
         ).c;
         assert.equal(afterDel - beforeDel, 1, 'etn.ontology.delete must add exactly 1 audit row');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // 0.8.3 (задача d379e091): `etn.ontology.delete` снят в `etn.ops`. Ветки
+  // `link_type` / `property` / `type_property` покрыты здесь — сторож
+  // `guard-mcp-view-coverage` требует тест на каждое значение `kind`.
+  it('etn.ontology.delete { kind: link_type, force } каскадит связи типа', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const written = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ ref: 't', name: 'LinkOwner' }],
+              link_types: [{ ref: 'lt', name_forward: 'бьёт', name_reverse: 'бит' }],
+            },
+          }),
+        );
+        const linkTypeId = written.link_types[0]!.id;
+        const a = await createThoughtViaWrite(handle.client, ctx.networkId, { title: 'A-link' });
+        await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'B-link',
+          link: { direction: 'parent', target_thought_id: a.id, type: 'бьёт' },
+        });
+
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'link_type', id: linkTypeId, force: true },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        const data = toolJson<OntologyDeleteResult>(del);
+        assert.equal(data.deleted, true);
+        assert.ok((data.affected_counts.links_count ?? 0) >= 1, 'связь типа должна уйти каскадом');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.ontology.delete { kind: property, force } удаляет свойство и его значения', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const written = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ ref: 't', name: 'PropOwner' }],
+              properties: [{ ref: 'p', name: 'приоритет', value_type: 'text' }],
+              type_properties: [
+                { owner: 'thought_type', type_ref: 't', property_ref: 'p' },
+              ],
+            },
+          }),
+        );
+        const propertyId = written.properties[0]!.id;
+        await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'x', thought: { title: 'X-prop', type: 'PropOwner' }, properties: { приоритет: 'v' } },
+            ],
+          },
+        });
+
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'property', id: propertyId, force: true },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        const data = toolJson<OntologyDeleteResult>(del);
+        assert.equal(data.deleted, true);
+        assert.ok(
+          (data.affected_counts.property_values_count ?? 0) >= 1,
+          'значение свойства должно уйти каскадом',
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.ontology.delete { kind: type_property } снимает привязку свойства', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const written = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ ref: 't', name: 'BindOwner' }],
+              properties: [{ ref: 'p', name: 'тег', value_type: 'text' }],
+              type_properties: [
+                { owner: 'thought_type', type_ref: 't', property_ref: 'p' },
+              ],
+            },
+          }),
+        );
+        const bindingId = written.type_properties[0]!.id;
+
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'type_property', id: bindingId },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        assert.equal(toolJson<OntologyDeleteResult>(del).deleted, true);
       } finally {
         await handle.close();
       }

@@ -3,6 +3,10 @@
  * дополняет серверный `server/tests/guard-rest-contracts.test.ts` из
  * коммита 217e5db, который следит за ВХОДОМ).
  *
+ * Нормативное правило — стандарт мыслесети ETN `01268f2d` «Клиент: тип ответа
+ * RestClient — именованный общий контракт @etn/shared» (0.8.3, задача 0284c89e):
+ * формулировка стандарта и две проверки ниже обязаны совпадать.
+ *
  * Прецедент — ошибка c83f0215 (коммит d548888): клиент объявлял ответ
  * `PATCH /properties/{id}` как конверт `{ property, converted, dropped }`,
  * а сервер отдавал ПЛОСКИЙ `{ ...property, converted, dropped }`. Обе стороны
@@ -56,6 +60,10 @@ const CLIENT_COMPOSED_RESULTS = new Set([
   'AuditListResult',
   'ThoughtTypeViewsResult',
   'RunThoughtTypeViewResult',
+  // Форма порции соседей (задача c8fa74ba): сервер отдаёт страницу через
+  // `sendList` (`data` + `meta{total,limit,offset}`), клиент сводит их в одну
+  // форму `NeighborPage`; единого серверного объекта с таким именем нет.
+  'NeighborPage',
 ]);
 
 /** Собрать все `.ts` под каталогом (рекурсивно). */

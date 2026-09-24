@@ -76,6 +76,31 @@ export interface ThoughtBundleChronicleItem {
 export interface ThoughtBundleInput {
   thought_id?: string;
   thought?: ThoughtBundleThoughtInput;
+  /**
+   * Apply to the item's thought. With `thought_id` — toggles the existing
+   * thought without a nested `thought` block. With `thought` — sets the
+   * created thought's flag and wins over `thought.active` (bug
+   * 21cbafb8-254b-42e3-a884-3832a3cf6ab5). Absorbs `etn.thoughts.set_active`
+   * (bug faf56a02-e884-488b-9b7b-39dfd5d5b275): when `thought_id` is given,
+   * the item-level `active` field toggles the thought's `active` flag even if
+   * no `thought` patch is supplied.
+   */
+  active?: boolean;
+  /**
+   * Item-level thought fields applied to the existing thought addressed by
+   * `thought_id` without a nested `thought` block (bug
+   * 870c0c0d-dd2d-46b1-a498-780edcf8e18a). Absorbs the rename half of the
+   * removed `etn.thoughts.update`: `title` renames the thought (with the
+   * same duplicate semantics as any other thought update), `synonyms`
+   * replaces the whole set, `type_id` changes the type. Each item-level
+   * field wins over its `thought.*` counterpart when both are set. Together
+   * with a new `thought` block they are rejected with `VALIDATION_ERROR`
+   * (bug 21cbafb8-254b-42e3-a884-3832a3cf6ab5) — the domain reads them only
+   * for a `thought_id` item.
+   */
+  title?: string;
+  synonyms?: string[];
+  type_id?: string | null;
   on_duplicate?: ThoughtBundleOnDuplicate;
   comment?: ThoughtBundleCommentInput;
   /** Chronicle entries appended to the owner's comment log (task 053751b5). */

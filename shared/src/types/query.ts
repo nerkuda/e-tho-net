@@ -6,6 +6,8 @@
  */
 
 import type { LinkTypeFilterInput } from './link.js';
+import type { NetworksCatalog } from './network.js';
+import type { CrossNetworkTruncationReason } from './search.js';
 
 /** Актуальность мысли в выборке: `'true'` — только активные, `'false'` —
  * только неактивные, `'any'` — без фильтра. */
@@ -138,6 +140,9 @@ export interface ThoughtQueryRequest {
 /** Одна мысль в результате выборки. */
 export interface ThoughtQueryHit {
   id: string;
+  /** Id сети-владельца мысли. Присутствует только в кросс-сетевом ответе
+   *  (задача eb1a3f43); для одиночной сети сеть известна из контекста. */
+  network_id?: string;
   title: string;
   type_id: string | null;
   active: boolean;
@@ -151,6 +156,14 @@ export interface ThoughtQueryResponse {
   hits: ThoughtQueryHit[];
   /** True, когда обход поддерева остановился по лимиту узлов. */
   truncated: boolean;
-  /** Причина обрезки: только превышение лимита узлов (`max_nodes`). */
-  reason: 'max_nodes' | null;
+  /**
+   * Причина обрезки: превышение лимита узлов (`max_nodes`) или потолок
+   * суммарной веерной выдачи (`cross_network_max_hits`, задача 29bc5673).
+   */
+  reason: 'max_nodes' | CrossNetworkTruncationReason | null;
+  /**
+   * Справочник сетей кросс-сетевой выдачи (см. {@link SearchResponse.networks}).
+   * Присутствует только в веерном режиме; для одиночной сети — `undefined`.
+   */
+  networks?: NetworksCatalog;
 }

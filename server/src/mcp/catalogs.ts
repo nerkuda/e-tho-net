@@ -3,21 +3,19 @@
  *
  * Read tools return `type_id`/`link_type_id` as bare UUIDs; these helpers build
  * the accompanying reference tables (`thought_types` / `link_types`) containing
- * **only** the types actually present in the response, each with its name,
- * icon/color and — most importantly — the AI-facing `description` («комментарий
- * для AI»), so the agent understands the role of and requirements for every
- * type without extra calls or a full catalogue dump.
+ * **only** the types actually present in the response, each as a thin record —
+ * `id` + `name` (+ `icon` for thought types) in list responses (0.8.3,
+ * требование «Каталоги типов в ответах read-инструментов»). AI-facing
+ * `description`, hierarchy and visual fields are not repeated per record; the
+ * full catalogue lives in `etn.types.list`.
  */
 
 import type {
-  CompactLink,
-  CompactLinkTypeRef,
+  CardThoughtTypeRef,
   CompactThought,
-  CompactThoughtRef,
-  Link,
-  LinkTypeRef,
+  ListLinkTypeRef,
+  ListThoughtTypeRef,
   Thought,
-  ThoughtRef,
   ThoughtTypeRef,
 } from '@etn/shared';
 
@@ -58,41 +56,39 @@ export function withSanitizedIcon<T extends { icon: string | null }>(obj: T): T 
 }
 
 /**
- * Catalogue of thought types keyed by type id: `{ [type_id]: {id, name,
- * description, icon} }`. Unknown/removed ids are skipped (`thoughts.type_id`
- * has no SQL FK).
+ * Thin catalogue of thought types keyed by type id for the reference tables of
+ * every list response: `{ [type_id]: {id, name, icon} }` (0.8.3, требование
+ * «Каталоги типов в ответах read-инструментов»). Only the fields an agent
+ * needs to recognise a type and follow its id; the full AI-facing
+ * `description`/`parent_id`/`is_root` live in `etn.types.list`. Unknown/removed
+ * ids are skipped (`thoughts.type_id` has no SQL FK).
  */
 export function thoughtTypeCatalog(
   ndb: NetworkDb,
   ids: ReadonlyArray<string | null>,
-): Record<string, ThoughtTypeRef> {
-  const out: Record<string, ThoughtTypeRef> = {};
+): Record<string, ListThoughtTypeRef> {
+  const out: Record<string, ListThoughtTypeRef> = {};
   for (const id of new Set(ids.filter((x): x is string => x !== null))) {
     const type = getThoughtType(ndb, id);
     if (type !== null) {
-      out[id] = {
-        id: type.id,
-        name: type.name,
-        parent_id: type.parent_id,
-        is_root: type.is_root,
-        description: type.description,
-        icon: sanitizeIcon(type.icon),
-      };
+      out[id] = { id: type.id, name: type.name, icon: sanitizeIcon(type.icon) };
     }
   }
   return out;
 }
 
 /**
- * Catalogue of link types keyed by type id: `{ [link_type_id]: {id,
- * name_forward, name_reverse, description, color, style} }`. Unknown/removed
- * ids are skipped (`links.type_id` has no SQL FK).
+ * Thin catalogue of link types keyed by type id for the reference tables of
+ * every list response: `{ [link_type_id]: {id, name_forward, name_reverse} }`
+ * (0.8.3). Both names are kept so the agent picks by edge direction; the
+ * AI-facing `description` lives in `etn.types.list`. Unknown/removed ids are
+ * skipped (`links.type_id` has no SQL FK).
  */
 export function linkTypeCatalog(
   ndb: NetworkDb,
   ids: ReadonlyArray<string | null>,
-): Record<string, LinkTypeRef> {
-  const out: Record<string, LinkTypeRef> = {};
+): Record<string, ListLinkTypeRef> {
+  const out: Record<string, ListLinkTypeRef> = {};
   for (const id of new Set(ids.filter((x): x is string => x !== null))) {
     const type = getLinkType(ndb, id);
     if (type !== null) {
@@ -100,15 +96,19 @@ export function linkTypeCatalog(
         id: type.id,
         name_forward: type.name_forward,
         name_reverse: type.name_reverse,
-        parent_id: type.parent_id,
-        is_root: type.is_root,
-        description: type.description,
-        color: type.color,
-        style: type.style,
       };
     }
   }
   return out;
+}
+
+/**
+ * Thin nested type for a card (`etn.thoughts.get`/`resolve`, 0.8.3): `id`,
+ * `name` and the AI-facing `description` only — no visual fields. `null` in,
+ * `null` out.
+ */
+export function toCardThoughtType(type: ThoughtTypeRef | null): CardThoughtTypeRef | null {
+  return type === null ? null : { id: type.id, name: type.name, description: type.description };
 }
 
 // ---------------------------------------------------------------------------
@@ -116,37 +116,16 @@ export function linkTypeCatalog(
 // ---------------------------------------------------------------------------
 
 /**
- * Compact link-type catalogue (task O12). Same keying as
- * {@link linkTypeCatalog}, but each entry drops the visual line-style fields
- * (`color`, `style`) — agents consume `name_forward`/`name_reverse`/
- * `description` to reason about a link type, not to render it.
- */
-export function linkTypeCatalogCompact(
-  ndb: NetworkDb,
-  ids: ReadonlyArray<string | null>,
-): Record<string, CompactLinkTypeRef> {
-  const full = linkTypeCatalog(ndb, ids);
-  const out: Record<string, CompactLinkTypeRef> = {};
-  for (const [id, entry] of Object.entries(full)) {
-    out[id] = {
-      id: entry.id,
-      name_forward: entry.name_forward,
-      name_reverse: entry.name_reverse,
-      parent_id: entry.parent_id,
-      is_root: entry.is_root,
-      description: entry.description,
-    };
-  }
-  return out;
-}
-
-/**
- * Project a {@link Thought} into the compact shape used by MCP read tools
- * under `view: 'compact'` (task O12). Drops the visual/service fields the
- * agent never consumes (colours, font-style flags, icon attachment id,
- * `is_protected`/`is_root`); keeps `icon` (the emoji / image reference
- * itself) because it carries semantic information the agent uses to
- * recognise a node.
+ * Project a {@link Thought} into the compact shape used by the point read
+ * `etn.thoughts.get` under `view: 'compact'` (task O12). Drops the visual/
+ * service fields the agent never consumes (colours, font-style flags, icon
+ * attachment id, `is_protected`/`is_root`); keeps `icon` (the emoji / image
+ * reference itself) because it carries semantic information the agent uses to
+ * recognise a node, and keeps the service fields (`version`, authorship) —
+ * the point read preserves the full projection.
+ *
+ * Списочные ответы идут через `response-projection.ts` (`projectThoughtRow`),
+ * где сервисные поля снимаются; точечный `get` остаётся полным.
  */
 export function toCompactThought(thought: Thought): CompactThought {
   return {
@@ -164,46 +143,5 @@ export function toCompactThought(thought: Thought): CompactThought {
     updated_at: thought.updated_at,
     ...(thought.created_by !== undefined ? { created_by: thought.created_by } : {}),
     ...(thought.updated_by !== undefined ? { updated_by: thought.updated_by } : {}),
-  };
-}
-
-/**
- * Project a {@link ThoughtRef} (used by neighbours, usage) into the compact
- * shape under `view: 'compact'` (task O12). Drops the visual fields the
- * reference carried (colours, font flags, icon attachment id).
- */
-export function toCompactThoughtRef(ref: ThoughtRef): CompactThoughtRef {
-  return {
-    id: ref.id,
-    title: ref.title,
-    type_id: ref.type_id,
-    icon: sanitizeIcon(ref.icon),
-    active: ref.active,
-    marked_for_deletion: ref.marked_for_deletion,
-  };
-}
-
-/**
- * Project a {@link Link} into the compact shape used by
- * `etn.thoughts.subgraph` (and any future edge-returning tool) under
- * `view: 'compact'` (task O12). Drops the per-link style overrides
- * (`color`, `style`, `width`) — agents reason over the topology, they do
- * not re-render the canvas.
- */
-export function toCompactLink(link: Link): CompactLink {
-  return {
-    id: link.id,
-    source_id: link.source_id,
-    target_id: link.target_id,
-    type_id: link.type_id,
-    active: link.active,
-    marked_for_deletion: link.marked_for_deletion,
-    marked_for_deletion_at: link.marked_for_deletion_at,
-    marked_for_deletion_by: link.marked_for_deletion_by,
-    version: link.version,
-    created_at: link.created_at,
-    updated_at: link.updated_at,
-    ...(link.created_by !== undefined ? { created_by: link.created_by } : {}),
-    ...(link.updated_by !== undefined ? { updated_by: link.updated_by } : {}),
   };
 }

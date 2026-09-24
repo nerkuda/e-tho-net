@@ -58,6 +58,18 @@ function buildApi(): EtnApi {
         invoke('thoughts.remove', networkId, id, expectedVersion),
       neighbors: (networkId, id, dir, limit, offset, linkFilter) =>
         invoke('thoughts.neighbors', networkId, id, dir, limit, offset, linkFilter),
+      neighborsPage: (networkId, id, dir, limit, offset, sort, order, linkFilter) =>
+        invoke(
+          'thoughts.neighborsPage',
+          networkId,
+          id,
+          dir,
+          limit,
+          offset,
+          sort,
+          order,
+          linkFilter,
+        ),
       batch: (networkId, input) => invoke('thoughts.batch', networkId, input),
       copyBatch: (networkId, input) => invoke('thoughts.copyBatch', networkId, input),
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),
@@ -70,6 +82,20 @@ function buildApi(): EtnApi {
       usageClear: (networkId, id) => invoke('thoughts.usageClear', networkId, id),
       findDuplicates: (networkId, title, synonyms, typeIds) =>
         invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
+      // Задача eb1a3f43: кросс-сетевой охват диалога выбора мысли.
+      findDuplicatesAcrossNetworks: (networkId, networkIds, title, synonyms, typeIds) =>
+        invoke(
+          'thoughts.findDuplicatesAcrossNetworks',
+          networkId,
+          networkIds,
+          title,
+          synonyms,
+          typeIds,
+        ),
+      searchAcrossNetworks: (networkId, networkIds, request) =>
+        invoke('thoughts.searchAcrossNetworks', networkId, networkIds, request),
+      queryStructureAcrossNetworks: (networkId, networkIds, request) =>
+        invoke('thoughts.queryStructureAcrossNetworks', networkId, networkIds, request),
       setFocusPreferences: (networkId, focusId, input) =>
         invoke('thoughts.setFocusPreferences', networkId, focusId, input),
       setFocusOrder: (networkId, focusId, input) =>
@@ -172,6 +198,9 @@ function buildApi(): EtnApi {
         invoke('properties.set', networkId, ownerType, ownerId, key, value),
       remove: (networkId, ownerType, ownerId, key) =>
         invoke('properties.remove', networkId, ownerType, ownerId, key),
+      // Кросс-сетевой резолв (задача 7849008a): см. EtnApi.properties.crossResolve.
+      crossResolve: (networkId, ownerId, key) =>
+        invoke('properties.crossResolve', networkId, ownerId, key),
     },
     propertyRegistry: {
       list: (networkId) => invoke('propertyRegistry.list', networkId),

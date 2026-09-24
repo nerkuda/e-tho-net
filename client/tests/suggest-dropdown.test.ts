@@ -846,3 +846,85 @@ describe('слой выпадашки подсказок виден панеля
     );
   });
 });
+
+describe('suggest-dropdown: порционная подгрузка (loadMore, задача c8fa74ba)', () => {
+  /** Проставляет скроллеру метрики шима (в нём scrollHeight/clientHeight нет). */
+  function setScroll(
+    list: ShimElement,
+    metrics: { scrollTop: number; clientHeight: number; scrollHeight: number },
+  ): void {
+    const el = list as unknown as {
+      scrollTop: number;
+      clientHeight: number;
+      scrollHeight: number;
+    };
+    el.scrollTop = metrics.scrollTop;
+    el.clientHeight = metrics.clientHeight;
+    el.scrollHeight = metrics.scrollHeight;
+  }
+
+  /** Источник из 100 строк, порция 50. */
+  function pagedSource(): { source: SuggestSource; calls: number[] } {
+    const calls: number[] = [];
+    const all = Array.from({ length: 100 }, (_, i) => ({
+      value: `v${i}`,
+      label: `Мысль ${i}`,
+    }));
+    const source: SuggestSource = {
+      when: 'typed',
+      pageSize: 50,
+      load: () => all.slice(0, 50),
+      loadMore: (query, offset) => {
+        calls.push(offset);
+        assert.equal(query, 'мы', 'порция запрашивается с текущим текстом');
+        return Promise.resolve(all.slice(offset, offset + 50));
+      },
+    };
+    return { source, calls };
+  }
+
+  it('скролл к нижней границе догружает следующую порцию', async () => {
+    const { source, calls } = pagedSource();
+    const w = wire(source);
+    w.input.emit('focus');
+    w.input.value = 'мы';
+    await openBy(() => w.input.emit('input'));
+    assert.equal(itemRows(w.body).length, 50, 'первая порция — 50 строк');
+
+    const list = openList(w.body);
+    assert.ok(list !== undefined);
+    setScroll(list, { scrollTop: 400, clientHeight: 200, scrollHeight: 600 });
+    list.emit('scroll');
+    await flush();
+
+    assert.deepEqual(calls, [50], 'догрузка запрошена с offset=50');
+    assert.equal(itemRows(w.body).length, 100, 'вторая порция добавлена к списку');
+  });
+
+  it('скролл вдали от нижней границы порцию не запрашивает', async () => {
+    const { source, calls } = pagedSource();
+    const w = wire(source);
+    w.input.emit('focus');
+    w.input.value = 'мы';
+    await openBy(() => w.input.emit('input'));
+    const list = openList(w.body);
+    assert.ok(list !== undefined);
+    setScroll(list, { scrollTop: 0, clientHeight: 200, scrollHeight: 6000 });
+    list.emit('scroll');
+    await flush();
+    assert.deepEqual(calls, [], 'далеко от низа — без запроса');
+  });
+
+  it('источник без loadMore порции не запрашивает и не падает на скролле', async () => {
+    const w = wire({ when: 'typed', load: () => [{ value: 'a', label: 'А' }] });
+    w.input.emit('focus');
+    w.input.value = 'а';
+    await openBy(() => w.input.emit('input'));
+    const list = openList(w.body);
+    assert.ok(list !== undefined);
+    setScroll(list, { scrollTop: 0, clientHeight: 20, scrollHeight: 20 });
+    list.emit('scroll');
+    await flush();
+    assert.equal(itemRows(w.body).length, 1);
+  });
+});

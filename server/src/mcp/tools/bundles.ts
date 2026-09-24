@@ -22,6 +22,7 @@ import { getComment } from '../../domain/comment-service.js';
 import { getAttachment } from '../../domain/attachment-service.js';
 import { writeThoughts } from '../../domain/thought-write-service.js';
 import {
+  mcpCrossNetworkAccess,
   mcpWriteFx,
   openMemberNetwork,
   requireWritable,
@@ -98,6 +99,20 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       ref: z.string().min(1).optional(),
       thought_id: z.string().min(1).optional(),
       thought: BundleThoughtSchema.optional(),
+      // Item-level `active` — absorbed from `etn.thoughts.set_active`
+      // (bug faf56a02-e884-488b-9b7b-39dfd5d5b275). Applied to the
+      // existing thought addressed by `thought_id` (item-level `active`
+      // is the only way to toggle it — the item cannot also carry a
+      // nested `thought`, XOR).
+      active: z.boolean().optional(),
+      // Item-level `title` / `synonyms` / `type_id` / `type` — the rename
+      // half of the removed `etn.thoughts.update` (bug
+      // 870c0c0d-dd2d-46b1-a498-780edcf8e18a). Patch the existing thought
+      // addressed by `thought_id`, without a nested `thought` (XOR).
+      title: z.string().min(1).optional(),
+      synonyms: z.array(z.string().min(1)).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
       on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
       comment: BundleCommentSchema.optional(),
       chronicle: z.array(WriteChronicleItemSchema).optional(),
@@ -105,17 +120,58 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       links: z.array(WriteLinkSpecSchema).optional(),
       attachments: z.array(WriteAttachmentSpecSchema).optional(),
     })
-    // Каждый элемент должен иметь ХОТЯ БЫ ОДНО из `thought_id` (адресация
-    // существующей мысли) или `thought` (новая/совпадающая мысль). Оба
-    // вместе — норм: `thought_id` адресует мысль, `thought` патчит её поля.
-    .refine((v) => v.thought_id !== undefined || v.thought !== undefined, {
-      message: 'each batch item must set thought_id or thought (at least one)',
+    // Ровно ОДНО из `thought_id` (адресация существующей мысли) или `thought`
+    // (новая/совпадающая мысль) — единый источник истины здесь домен
+    // (`validateEnvelope` в `thought-write-service.ts`, ошибка
+    // 2a679270-75cb-41c6-9c2c-d079f85ca831). Существующую мысль правят
+    // item-level полями `title`/`synonyms`/`type`/`type_id`/`active`, а не
+    // вложенным `thought`; комбинация обоих отвергается схемой явно, а не
+    // неожиданным VALIDATION_ERROR из домена.
+    .superRefine((v, ctx) => {
+      const hasThoughtId = v.thought_id !== undefined;
+      const hasThought = v.thought !== undefined;
+      if (hasThoughtId === hasThought) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['thought_id'],
+          message: hasThoughtId
+            ? 'each batch item must set exactly one of thought_id or thought: ' +
+              'both were given — address an existing thought by thought_id (patch it with ' +
+              'item-level title/synonyms/type/type_id/active) OR supply a new thought block'
+            : 'each batch item must set exactly one of thought_id or thought: neither was given',
+        });
+      }
+      // Item-level `title`/`synonyms`/`type_id`/`type` patch an EXISTING
+      // thought addressed by `thought_id` (bug 870c0c0d) and are not read
+      // by the domain when the item carries a `thought` block — reject them
+      // explicitly instead of silently dropping (bug 21cbafb8). Item-level
+      // `active` stays allowed for a new thought: the domain applies it to
+      // the created thought, with priority over `thought.active`.
+      if (hasThought) {
+        const offenders = (['title', 'synonyms', 'type_id', 'type'] as const).filter(
+          (f) => v[f] !== undefined,
+        );
+        if (offenders.length > 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [offenders[0]!],
+            message:
+              `item-level ${offenders.join('/')} apply only to an existing thought addressed by ` +
+              `thought_id; for a new thought set them inside the \`thought\` block ` +
+              `(thought.${offenders[0]}) — item-level fields would be ignored otherwise`,
+          });
+        }
+      }
     })
-    // Если задано `thought` И это новая мысль (нет `thought_id`), нужен
-    // `ref` для возможных `target_ref` в других элементах батча. Случай
-    // `thought + thought_id` (патч существующей) ref не требует.
-    .refine((v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined, {
+    // Если задано `thought` (новая мысль, XOR гарантирован выше), нужен
+    // `ref` для возможных `target_ref` в других элементах батча.
+    .refine((v) => v.thought === undefined || v.ref !== undefined, {
       message: 'a batch item with `thought` (new thought) must also declare a local `ref`',
+    })
+    // Item-level `type_id`/`type` (bug 870c0c0d): тип задаётся по id ИЛИ по
+    // имени, не одновременно — как у `thought`.
+    .refine((v) => v.type_id === undefined || v.type === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
     });
   const LocalRefsSchema = z.record(z.string().min(1), z.string().uuid()).optional();
   // `.strict()` (ошибка ea4581c5): ключ верхнего уровня вне контракта обязан
@@ -136,15 +192,13 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Пишет от 1 до ' +
         MCP_MAX_THOUGHTS_PER_WRITE +
-        ' связанных единиц знания одной транзакцией: ' +
-        'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
-        '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
-        '`fail`/`reuse`/`update`. Циклы `ref`/`target_ref` разрешены (фаза 2 — мысли, фаза 3 — связи). ' +
-        'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
-        '`properties.set`, `comments.upsert` — удалены в 0.8.2 (задача 937480ca). Один write-бюджет + одна ' +
-        'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
-        '`etn.how_to_write_batch`. Неизвестные ключи верхнего уровня (например, `links` вне ' +
-        '`thoughts[]`) отвергаются `VALIDATION_ERROR` (`details.fields`), а не игнорируются.',
+        ' связанных единиц знания одной транзакцией: мысли + постоянные/хронологические комментарии ' +
+        '+ свойства + связи + вложения. `thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR ' +
+        '`target_ref`; `on_duplicate`: `fail`/`reuse`/`update`. Правка существующей мысли — item-level ' +
+        '`title`/`synonyms`/`type`/`type_id`/`active` (несовместимы с `thought`, кроме `active`); ' +
+        '`synonyms` ЗАМЕНЯЮТ весь набор. Циклы `ref`/`target_ref` разрешены. Один write-бюджет + одна ' +
+        'строка `audit_log` на вызов; `warnings` агрегированы по батчу. Неизвестные ключи верхнего ' +
+        'уровня отвергаются `VALIDATION_ERROR` (`details.fields`). Пошагово — `etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },
@@ -161,6 +215,11 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
             ...(item.ref === undefined ? {} : { ref: item.ref }),
             ...(item.thought_id === undefined ? {} : { thought_id: item.thought_id }),
             ...(item.thought === undefined ? {} : { thought: item.thought }),
+            ...(item.active === undefined ? {} : { active: item.active }),
+            ...(item.title === undefined ? {} : { title: item.title }),
+            ...(item.synonyms === undefined ? {} : { synonyms: item.synonyms }),
+            ...(item.type_id === undefined ? {} : { type_id: item.type_id }),
+            ...(item.type === undefined ? {} : { type: item.type }),
             ...(item.on_duplicate === undefined ? {} : { on_duplicate: item.on_duplicate }),
             ...(item.comment === undefined ? {} : { comment: item.comment }),
             ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),
@@ -170,7 +229,15 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
           })),
         };
         const result = runWrite(ndb, fx, () => {
-          const written = writeThoughts(ndb, writeInput, rt.deps.auth.userId);
+          // Кросс-сетевой контекст (задача 7849008a, спека п.6): `properties`
+          // элемента может нести адрес вида `cross_network_ref` — его запись
+          // делает живой резолв цели в чужой сети, как в REST-роуте.
+          const written = writeThoughts(
+            ndb,
+            writeInput,
+            rt.deps.auth.userId,
+            mcpCrossNetworkAccess(rt, args.network_id),
+          );
 
           // Real-time events — one per actually-affected entity (per task
           // spec); журнал — из результата записи. Собираем исход здесь,

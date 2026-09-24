@@ -398,6 +398,24 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
   allowed_opposite_type_ids?: string[];
 }
 
+/**
+ * Эффективная привязка свойства в каталоге `etn.types.list` (0.8.3, требование
+ * «Каталоги типов в ответах read-инструментов»): {@link EffectiveTypeProperty}
+ * без сервисных полей адресации владельца (`owner_type`/`owner_id`) и
+ * переопределения (`defined_on`/`defined_on_name`/`overridden_here`/
+ * `description_overridden`), которые агенту ничего не добавляют — эффективный
+ * набор описывают `inherited`/`config`/`required`/`default_value`.
+ */
+export type McpEffectiveTypeProperty = Omit<
+  EffectiveTypeProperty,
+  | 'owner_type'
+  | 'owner_id'
+  | 'defined_on'
+  | 'defined_on_name'
+  | 'overridden_here'
+  | 'description_overridden'
+>;
+
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */
 export interface PropertyDefaultOverrideInput {
   /** Default value to override with; `null` clears the override (inherits). */
@@ -418,7 +436,7 @@ export interface PropertyDefaultOverrideInput {
  * (task 0.6.2). A JSON-array payload is used (not comma-join as for `text`)
  * because URLs may contain commas.
  */
-export type PropertyValueValue = string | number | boolean | string[] | null;
+export type PropertyValueValue = string | number | boolean | string[] | null | CrossNetworkRefValue[];
 
 /**
  * Резолвнутая форма legacy `thought_ref` для MCP-чтения (задача N4, миграция
@@ -430,6 +448,8 @@ export type PropertyValueValue = string | number | boolean | string[] | null;
 export type ResolvedThoughtRefValue =
   | { id: string; title: string | null }
   | Array<{ id: string; title: string | null }>;
+
+import type { CrossNetworkRefValue } from './cross-network.js';
 
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {

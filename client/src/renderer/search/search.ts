@@ -56,6 +56,7 @@ import { svgIcon } from '../lib/icons.js';
 import {
   isNotFoundError,
   isSearchSettingsOpenStored,
+  parseThoughtIdLookupQuery,
   parseThoughtIdQuery,
   searchHighlightTerms,
   searchPanelClosesOnTap,
@@ -64,6 +65,7 @@ import {
 import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import {
   buildEntityChipField,
+  filterEntityOptions,
   linkTypeEntityOptions,
   thoughtEntityOption,
   thoughtTypeEntityOptions,
@@ -556,7 +558,7 @@ async function run(): Promise<void> {
   if (resultsBox !== null) {
     resultsBox.replaceChildren(el('span', 'muted', 'Поиск…'));
   }
-  const idQuery = parseThoughtIdQuery(q);
+  const idQuery = parseThoughtIdLookupQuery(q);
   if (idQuery !== null) {
     await runById(networkId, idQuery);
     return;
@@ -1053,7 +1055,8 @@ function buildSettingsZone(zone: HTMLElement): void {
       persistState();
       refreshSearchIfVisible();
     },
-    loadOptions: () => thoughtTypeEntityOptions(store.state.thoughtTypes),
+    loadOptions: (query) =>
+      filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
     optionsHeader: 'Типы мыслей',
     placeholder: 'Тип мысли…',
   });
@@ -1065,7 +1068,8 @@ function buildSettingsZone(zone: HTMLElement): void {
       persistState();
       refreshSearchIfVisible();
     },
-    loadOptions: () => linkTypeEntityOptions(store.state.linkTypes),
+    loadOptions: (query) =>
+      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
     optionsHeader: 'Типы связей',
     placeholder: 'Тип связи…',
   });
@@ -1118,6 +1122,7 @@ export const searchInternals = {
   DEFAULT_OPTIONS,
   isSearchableQuery,
   parseThoughtIdQuery,
+  parseThoughtIdLookupQuery,
   MIN_QUERY_LENGTH,
   nextNavIndex,
 };

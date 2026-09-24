@@ -227,6 +227,7 @@ export function getPermanentPreview(
   ndb: NetworkDb,
   ownerType: CommentOwnerType,
   ownerId: string,
+  previewChars: number = COMMENT_PREVIEW_CHARS,
 ): PermanentCommentPreview | null {
   validateOwnerType(ownerType);
   const row = ndb
@@ -248,7 +249,7 @@ export function getPermanentPreview(
     return null;
   }
   const chars_total = row.body_md.length;
-  const chars_returned = Math.min(chars_total, COMMENT_PREVIEW_CHARS);
+  const chars_returned = Math.min(chars_total, previewChars);
   return {
     id: row.id,
     body_md: row.body_md.slice(0, chars_returned),
@@ -310,14 +311,21 @@ export function getPermanentFull(
  * {@link COMMENT_PREVIEW_CHARS} и метаданными обрезки. Уровень списка несёт
  * `total`/`returned`/`truncated` — агент видит, что записей больше и полные
  * доступны отдельным запросом.
+ *
+ * Пределы превью настраиваются `previewChars` — обзорные перечни (subgraph)
+ * ужимают постоянный комментарий сильнее (600 символов), сохраняя хронологию
+ * в {@link COMMENT_PREVIEW_CHARS}.
  */
 export function getCommentsPreview(
   ndb: NetworkDb,
   ownerType: CommentOwnerType,
   ownerId: string,
+  previewChars: { permanent?: number; chronological?: number } = {},
 ): CommentsPreview {
   validateOwnerType(ownerType);
-  const permanent = getPermanentPreview(ndb, ownerType, ownerId);
+  const permanentChars = previewChars.permanent ?? COMMENT_PREVIEW_CHARS;
+  const chronoChars = previewChars.chronological ?? COMMENT_PREVIEW_CHARS;
+  const permanent = getPermanentPreview(ndb, ownerType, ownerId, permanentChars);
   const total = (
     ndb
       .prepare(
@@ -355,7 +363,7 @@ export function getCommentsPreview(
   }>;
   const entries = rows.map((row) => {
     const chars_total = row.body_md.length;
-    const chars_returned = Math.min(chars_total, COMMENT_PREVIEW_CHARS);
+    const chars_returned = Math.min(chars_total, chronoChars);
     return {
       id: row.id,
       title: row.title,

@@ -59,6 +59,7 @@ import {
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
+import { resolveThoughtId } from './thought-id.js';
 
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections, toFocusEdge } from './link-service.js';
@@ -351,12 +352,19 @@ function readSynonyms(ndb: NetworkDb, thoughtId: string): string[] {
  * Return a thought with its synonyms, or `null` when not found.
  */
 export function getThought(ndb: NetworkDb, id: string): Thought | null {
-  const row = ndb.prepare('SELECT * FROM thoughts_v WHERE id = ? LIMIT 1').get(id) as
+  // Короткая форма id (hex-префикс UUID) резолвится в полный id — ошибка
+  // d8893a1f. Неоднозначный префикс даёт VALIDATION_ERROR со списком кандидатов;
+  // неизвестный — тот же `null`, что и раньше.
+  const resolved = resolveThoughtId(ndb, id);
+  if (resolved === null) {
+    return null;
+  }
+  const row = ndb.prepare('SELECT * FROM thoughts_v WHERE id = ? LIMIT 1').get(resolved) as
     ThoughtRow | undefined;
   if (!row) {
     return null;
   }
-  return rowToThought(row, readSynonyms(ndb, id));
+  return rowToThought(row, readSynonyms(ndb, resolved));
 }
 
 /**
@@ -390,7 +398,13 @@ export function getHomeThoughtId(ndb: NetworkDb): string | null {
  * full entity is unnecessary.
  */
 export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
-  const unique = [...new Set(ids)];
+  // Короткие id (ошибка d8893a1f) резолвятся в полные; неизвестные — отсеиваются.
+  const resolved = new Set<string>();
+  for (const id of ids) {
+    const full = resolveThoughtId(ndb, id);
+    if (full !== null) resolved.add(full);
+  }
+  const unique = [...resolved];
   if (unique.length === 0) return [];
   // Cap to THOUGHT_RESOLVE_MAX_IDS per the API contract.
   const capped = unique.slice(0, THOUGHT_RESOLVE_MAX_IDS);
@@ -435,10 +449,11 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
  *  * `properties` — значения свойств, помеченные `outside_type`,
  *    в форме `etn.thoughts.get` (используется общий с `etn.thoughts.get`
  *    сервис `getPropertyValuesResolved`);
- *  * `meta` — счётчики + превью постоянного комментария (используется общий
- *    `getThoughtMeta`; `fullPermanent` НЕ выставляется — пакетное чтение
- *    остаётся в preview-форме, чтобы не раздувать выборки; полный текст для
- *    одной мысли — через `etn.thoughts.get`).
+ *  * `meta` — счётчики и профиль связей (используется общий
+ *    `getThoughtMeta`; `fullPermanent` НЕ выставляется, а `permanent`
+ *    обнуляется — текст постоянного комментария едет ровно один раз, в
+ *    `comment_preview`; ошибка 29def270). Полный `meta.permanent` для одной
+ *    мысли — через `etn.thoughts.get`.
  *
  * В отличие от `etn.thoughts.get`, эта функция НЕ применяет проекцию `view`:
  * MCP-фасад сам сериализует мысль через `toCompactThought`/`toCompactThoughtRef`,
@@ -453,17 +468,39 @@ export function getThoughtsByIdsResolved(
   ndb: NetworkDb,
   ids: string[],
 ): ResolveResult {
-  // Дедуп в порядке первого появления.
+  // Дедуп в порядке первого появления. Короткие id (ошибка d8893a1f)
+  // резолвятся в полные; неразрешимый префикс (нет совпадений ИЛИ
+  // неоднозначный) уходит в `missing` — пакетное чтение не должно падать
+  // целиком из-за одного id (ошибка 8f42dbf3).
   const unique: string[] = [];
   const seen = new Set<string>();
+  const unresolved: string[] = [];
   for (const id of ids) {
     if (typeof id !== 'string' || id === '') continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    unique.push(id);
+    let full: string | null;
+    try {
+      full = resolveThoughtId(ndb, id);
+    } catch (err) {
+      if (!(err instanceof EtnError)) throw err;
+      if (!seen.has(id)) {
+        seen.add(id);
+        unresolved.push(id);
+      }
+      continue;
+    }
+    if (full === null) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        unresolved.push(id);
+      }
+      continue;
+    }
+    if (seen.has(full)) continue;
+    seen.add(full);
+    unique.push(full);
   }
   if (unique.length === 0) {
-    return { items: [], missing: [] };
+    return { items: [], missing: unresolved };
   }
   const capped = unique.slice(0, THOUGHT_RESOLVE_MAX_IDS);
   const placeholders = capped.map(() => '?').join(',');
@@ -504,8 +541,9 @@ export function getThoughtsByIdsResolved(
     updated_at_ms: number;
   }>;
   const foundIds = new Set(rows.map((r) => r.id));
-  // missing — в порядке первого появления в запросе.
-  const missing = capped.filter((id) => !foundIds.has(id));
+  // missing — в порядке первого появления в запросе (плюс неразрешённые
+  // короткие префиксы, которых нет в сети).
+  const missing = [...capped.filter((id) => !foundIds.has(id)), ...unresolved];
   // items — в порядке первого появления в запросе: идём по `capped`,
   // отбираем строки, которые попали в выборку, и собираем в правильном порядке.
   const rowById = new Map(rows.map((r) => [r.id, r]));
@@ -603,7 +641,12 @@ function rowToCard(
     updated_at: thought.updated_at,
     type,
     properties: getPropertyValuesResolved(ndb, 'thought', thought.id),
-    meta: getThoughtMeta(ndb, thought.id),
+    // Ошибка 29def270: текст постоянного комментария отдаётся в карточке resolve
+    // ровно один раз — в `comment_preview` (полный, `getPermanentFull`). Дубль
+    // в `meta.permanent` (preview-форма) не нужен: два экземпляра одного текста
+    // на карточку — двойная плата токенами. Полный `meta.permanent` без обрезки
+    // остаётся прерогативой точечного `etn.thoughts.get`.
+    meta: { ...getThoughtMeta(ndb, thought.id), permanent: null },
     comment_preview: getPermanentFull(ndb, 'thought', thought.id),
   };
 }
@@ -809,7 +852,15 @@ export function createThought(
         // сменили тип), молча пропускаются — создание мысли не должно падать
         // из-за протухшего дефолта.
         if (def.value_type === 'link') {
-          const values = Array.isArray(def.default_value) ? def.default_value : [];
+          // Узкая нормализация: default_value для `link` — массив id строк,
+          // расширение `PropertyValueValue` вариантом `CrossNetworkRefValue[]`
+          // (задача 7849008a) делает тип шире, но эта ветка срабатывает
+          // только для link-дефолтов — снапшот тут не появляется.
+          const values: string[] = Array.isArray(def.default_value)
+            ? (def.default_value as unknown[]).filter(
+                (v): v is string => typeof v === 'string' && v !== '',
+              )
+            : [];
           const side = def.side ?? linkPropertySideFromConfig('link', def.config ?? null);
           if (side === 'target') {
             const sources = filterApplicableLinkDefaultSources(ndb, values);

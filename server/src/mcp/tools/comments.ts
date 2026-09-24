@@ -10,13 +10,11 @@ import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import type { McpMutationResult } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
-  CommentsDelete,
   CommentsEdit,
   CommentsGet,
   CommentsUpdate,
 } from '../../contracts.js';
 import {
-  deleteComment,
   editComment,
   getComment,
   listComments,
@@ -205,54 +203,6 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         };
       }),
   );
-  mcp.registerTool(
-    'etn.comments.delete',
-    {
-      title: 'Удалить комментарий',
-      description:
-        'Delete a comment (chronological or permanent) by `comment_id` together with all its ' +
-        'attachments to owners. Returns { id, version: 0 }.',
-      inputSchema: CommentsDelete.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.comments.delete'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
-        runWrite(ndb, fx, () => {
-          const existing = getComment(ndb, args.comment_id);
-          if (existing === null) {
-            throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
-          }
-          deleteComment(ndb, args.comment_id, args.expected_version);
-          return {
-            result: undefined,
-            events: [
-              {
-                type: 'comment.deleted',
-                data: {
-                  owner_type: existing.owner_type,
-                  owner_id: existing.owner_id,
-                  id: args.comment_id,
-                },
-              },
-            ],
-            activity: [{ kind: 'comment', action: 'deleted', comment: existing }],
-            audit: {
-              action: 'etn.comments.delete',
-              targetType: 'comment',
-              targetId: args.comment_id,
-              details: { expected_version: args.expected_version },
-            },
-          };
-        });
-        return {
-          id: args.comment_id,
-          version: 0,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
+  // `etn.comments.delete` (0.8.3, задача 86ef2ff4) снят из постоянного
+  // набора — упакован в `etn.ops { action: "comments.delete" }` (tools/ops.ts).
 }

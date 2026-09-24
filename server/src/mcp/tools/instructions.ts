@@ -20,7 +20,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   //   * `{ network_id, instruction_id }` — полный текст одной инструкции
   //     (постоянный комментарий мысли целиком, без обрезки);
   //   * `{ network_id, keywords }` — фильтр по title+synonyms мини-синтаксом;
-  //   * `{ network_id }` — все актуальные инструкции сети.
+  //   * `{ network_id }` — корневые актуальные инструкции сети (модель скиллов).
   //
   // Если роль `instructions` не задана, ответ — `{ has_instructions: false, instructions: [] }`
   // (без ошибки). Только актуальные мысли; помеченные на удаление исключаются;
@@ -43,7 +43,9 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Read the network\'s instructions. Three modes: `{ network_id, instruction_id }` returns the FULL ' +
         'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
-        'whitespace-AND, `-word` exclusion); `{ network_id }` returns every active instruction. When the network ' +
+        'whitespace-AND, `-word` exclusion) across ALL instructions, sub-instructions included; `{ network_id }` ' +
+        'returns every active ROOT instruction (skill model — an instruction whose parent is not another ' +
+        'instruction), previews capped at 300 chars. When the network ' +
         'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
       inputSchema: Instructions.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
@@ -60,22 +62,26 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
         // что и остальные инструменты — `openMemberNetwork` резолвит слой
         // ключа и проверяет доступ. Без выбранного слоя это основа.
         const ndb = openMemberNetwork(rt, args.network_id);
-        return {
-          network_id: args.network_id,
-          ...getNetworkInstructions(
-            ndb,
-            network.type_roles.instructions ?? null,
-            args.network_id,
-            {
-              ...(args.instruction_id !== undefined
-                ? { instructionId: args.instruction_id }
-                : {}),
-              ...(args.keywords !== undefined ? { keywords: args.keywords } : {}),
-              ...(args.limit !== undefined ? { limit: args.limit } : {}),
-              ...(args.offset !== undefined ? { offset: args.offset } : {}),
-            },
-          ),
-        };
+        const result = getNetworkInstructions(
+          ndb,
+          network.type_roles.instructions ?? null,
+          args.network_id,
+          {
+            // Нормы перечня (только корневые инструкции, превью 300) — дефолты
+            // доменного сервиса, общие для MCP-витрины и REST-фасада
+            // (задача 65cf6074). Здесь остаются только параметры выбора режима.
+            ...(args.instruction_id !== undefined
+              ? { instructionId: args.instruction_id }
+              : {}),
+            ...(args.keywords !== undefined ? { keywords: args.keywords } : {}),
+            ...(args.limit !== undefined ? { limit: args.limit } : {}),
+            ...(args.offset !== undefined ? { offset: args.offset } : {}),
+          },
+        );
+        // Списочный режим собирает записи через общий сериализатор домена
+        // (response-projection.ts) — в самом `getNetworkInstructions`. Точечный
+        // режим (`instruction_id`) отдаёт полное тело комментария как есть.
+        return { network_id: args.network_id, ...result };
       }),
   );
 

@@ -353,6 +353,29 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'thoughts.neighborsPage',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        dir: FocusDir,
+        limit: number,
+        offset: number,
+        sort?: import('@etn/shared').SortKind,
+        order?: import('@etn/shared').SortOrder,
+        linkFilter?: LinkTypeFilterInput,
+      ) =>
+        requireRest(deps).getNeighborsPage(networkId, id, {
+          dir,
+          limit,
+          offset,
+          sort,
+          order,
+          linkFilter,
+        }),
+    ),
+  );
+  handlers.set(
     'thoughts.batch',
     bind((networkId: string, input: Parameters<RestClient['batchThoughts']>[1]) => {
       // Idempotency: a fresh Client-Request-Id per user action; the server
@@ -415,6 +438,44 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'thoughts.findDuplicates',
     bind((networkId: string, title: string, synonyms?: string[], typeIds?: string[]) =>
       requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
+    ),
+  );
+  // Задача eb1a3f43: кросс-сетевая проверка дублей — для диалога выбора мысли
+  // при включённом переключателе «по всем сетям» (требование 79755f76).
+  handlers.set(
+    'thoughts.findDuplicatesAcrossNetworks',
+    bind(
+      (
+        networkId: string,
+        networkIds: string[],
+        title: string,
+        synonyms?: string[],
+        typeIds?: string[],
+      ) =>
+        requireRest(deps).findDuplicatesAcrossNetworks(
+          networkId,
+          networkIds,
+          title,
+          synonyms ?? [],
+          typeIds ?? [],
+        ),
+    ),
+  );
+  handlers.set(
+    'thoughts.searchAcrossNetworks',
+    bind((networkId: string, networkIds: string[], request: Parameters<RestClient['searchThoughtsAcrossNetworks']>[2]) =>
+      requireRest(deps).searchThoughtsAcrossNetworks(networkId, networkIds, request),
+    ),
+  );
+  handlers.set(
+    'thoughts.queryStructureAcrossNetworks',
+    bind(
+      (
+        networkId: string,
+        networkIds: string[],
+        request: Parameters<RestClient['queryStructureThoughtsAcrossNetworks']>[2],
+      ) =>
+        requireRest(deps).queryStructureThoughtsAcrossNetworks(networkId, networkIds, request),
     ),
   );
   handlers.set(
@@ -956,6 +1017,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ? rest.deleteThoughtProperty(networkId, ownerId, key)
         : rest.deleteLinkProperty(networkId, ownerId, key);
     }),
+  );
+  // Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a,
+  // REST `POST …/properties/{key}/cross-resolve`). Пока реализован для
+  // `thought` (спека операции 737ed900) — клиентский UX и link-вариант
+  // добавляются отдельной задачей.
+  handlers.set(
+    'properties.crossResolve',
+    bind((networkId: string, ownerId: string, key: string) =>
+      requireRest(deps).crossResolveThoughtProperty(networkId, ownerId, key),
+    ),
   );
 
   // --- property registry (0.6.5) --------------------------------------------

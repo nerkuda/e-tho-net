@@ -26,6 +26,7 @@ import {
   PREF_KEY,
   computeDefaultCanvasLinkFilter,
   parseStoredCanvasLinkFilter,
+  type CrossNetworkDuplicateResponse,
   type FocusDir,
   type FocusOrderInput,
   type FocusOrderResult,
@@ -65,6 +66,7 @@ import {
   RestIfMatch,
   RestNeighborsQuery,
   RestResolveIdsBody,
+  RestThoughtDuplicates,
 } from '../contracts.js';
 import {
   AnchorIdsSchema,
@@ -84,6 +86,10 @@ import {
 } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
+import {
+  fanOutFindDuplicates,
+  type CrossNetworkAccess,
+} from '../domain/cross-network-search-service.js';
 import {
   checkThoughtDeletion,
   countNeighbors,
@@ -869,22 +875,67 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/thoughts/duplicates',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as NetworkIdParams;
-        const query = req.query as Record<string, unknown>;
-        const title = queryStrings(query.title)[0];
-        if (title === undefined || title.trim() === '') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Параметр title обязателен и не может быть пустым.',
-            { field: 'title' },
-            req.id,
-          );
-        }
+        const input = parseRest(RestThoughtDuplicates, req);
+        const networkId = input.network_id as string;
+        const title = input.title as string;
         // Synonyms: repeatable ?synonyms=a&synonyms=b or a comma-separated value.
-        const synonyms = queryStrings(query.synonyms).flatMap((value) => value.split(','));
+        const synonyms = ((input.synonyms as string[] | undefined) ?? []).flatMap((value) =>
+          value.split(','),
+        );
         // Optional thought-type filter (link-property pickers): repeatable
         // ?type_ids=… or a comma-separated value.
-        const typeIds = queryStrings(query.type_ids).flatMap((value) => value.split(','));
+        const typeIds = ((input.type_ids as string[] | undefined) ?? []).flatMap((value) =>
+          value.split(','),
+        );
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        // Парсер repeatable кладёт `[]` при отсутствии параметра — поэтому
+        // проверяем по длине, а не по наличию ключа.
+        if ((input.network_ids as string[] | undefined)?.length ?? 0 > 0) {
+          const ids = (input.network_ids as string[]).includes(networkId)
+            ? (input.network_ids as string[])
+            : [networkId, ...(input.network_ids as string[])];
+          const requested = [...new Set(ids)];
+          // Доступ: владелец ключа или admin — иначе сеть молча исключается.
+          const accessibleIds: string[] = [];
+          for (const id of requested) {
+            if (app.systemDb.getMemberRole(req.auth!.user.id, id) !== null) accessibleIds.push(id);
+          }
+          const networks = accessibleIds.map((id) => ({
+            id,
+            display_name: app.systemDb.getNetworkById(id)?.display_name ?? id,
+          }));
+          if (networks.length === 0) {
+            sendSuccess(reply, { hits: [], networks } satisfies CrossNetworkDuplicateResponse);
+            return;
+          }
+          const access: CrossNetworkAccess = {
+            networks,
+            accessibleIds,
+            dataDir: deps.dataDir,
+            userId: req.auth!.user.id,
+            clientId:
+              req.auth?.clientId ??
+              (req.headers['x-etn-client-id'] as string | undefined) ??
+              `rest:${req.auth!.user.id}`,
+            logger: app.appLogger,
+          };
+          const result = fanOutFindDuplicates(access, {
+            networkIds: accessibleIds,
+            title,
+            synonyms,
+            typeIds,
+          });
+          sendSuccess(
+            reply,
+            {
+              hits: result.hits,
+              networks: result.networks,
+              truncated: result.truncated,
+              reason: result.reason,
+            } satisfies CrossNetworkDuplicateResponse,
+          );
+          return;
+        }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const hits = findDuplicates(ndb, title, synonyms, typeIds);
         sendList(reply, hits, hits.length, 0, hits.length);

@@ -49,9 +49,22 @@ describe('OPS_BY_TYPE (общий конструктор условий отбо
     for (const valueType of Object.keys(OPS_BY_TYPE) as Array<keyof typeof OPS_BY_TYPE>) {
       for (const entry of OPS_BY_TYPE[valueType]) {
         assert.ok(
-          ['eq', 'contains', 'gt', 'lt', 'in', 'not_in', 'is_empty', 'not_empty'].includes(
-            entry.op,
-          ),
+          [
+            'eq',
+            'ne',
+            'contains',
+            'gt',
+            'lt',
+            'in',
+            'not_in',
+            'is_empty',
+            'not_empty',
+            // Кросс-сетевая ссылка (задача 7849008a) добавила три оператора
+            // для наборов значений (multiple url/cross_network_ref).
+            'any_of',
+            'all_of',
+            'none_of',
+          ].includes(entry.op),
           `unknown op ${entry.op} for ${valueType}`,
         );
         assert.ok(entry.label.length > 0, `${valueType}.${entry.op} must have a label`);

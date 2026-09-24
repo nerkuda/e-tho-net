@@ -33,6 +33,7 @@ import { describe, it } from 'node:test';
 import { openNetworkDb } from '../src/db/network-db.js';
 
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -340,10 +341,11 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         const defaultView = versionType!.views.find((v) => v.name === 'Работы версии');
         assert.equal(defaultView?.is_default, true);
 
-        // Тип «задача» — без отборов.
+        // Тип «задача» — без отборов: пустой `views` единый compact-сериализатор
+        // не пишет вовсе (задача 6ee904ad).
         const taskType = data.thought_types!.find((t) => t.name === 'задача');
         assert.ok(taskType, 'тип «задача» должен быть в каталоге');
-        assert.deepEqual(taskType!.views, []);
+        assert.equal('views' in taskType!, false, 'пустой views не сериализуется');
       } finally {
         await handle.close();
       }
@@ -383,10 +385,7 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         // Создаём и выбираем дочерний слой — сессия этого ключа теперь
         // читает через него, отбор физически лежит в слое-родителе (базе).
         const layer = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.layers.create',
-            arguments: { network_id: ctx.networkId, title: 'Слой версии' },
-          }),
+          await callOp(handle.client, 'layers.create', { network_id: ctx.networkId, title: 'Слой версии' }),
         );
         await handle.client.callTool({
           name: 'etn.layers.select',
@@ -462,6 +461,83 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.views.run — compact-проекция снимает визуальные поля у записей data[]', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+      const taskTypeId = makeThoughtType(ndb, 'задача', ctx.adminId, { isRoot: false });
+      const versionId = makeThought(ndb, '0.8.3', { typeId: versionTypeId }, ctx.adminId);
+      const taskId = makeThought(ndb, 'Работа с цветом', { typeId: taskTypeId }, ctx.adminId);
+      // Визуальные поля ставим прямо в строку — MCP-инструмента для них нет.
+      ndb
+        .prepare(
+          `UPDATE thoughts SET fg_color = ?, bg_color = ?, font_bold = 1, font_manual = 1,
+                 icon = '🎨', icon_kind = 'emoji'
+           WHERE id = ?`,
+        )
+        .run('#112233', '#445566', taskId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const writeRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'version_tasks',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Задачи версии',
+                description: null,
+                definition: JSON.stringify({
+                  filters: [{ field: 'type', op: 'eq', value: 'задача' }],
+                  sort: 'alpha',
+                  order: 'asc',
+                }),
+                position: 0,
+                is_default: false,
+              },
+            ],
+          },
+        });
+        assert.equal(writeRes.isError, undefined, toolText(writeRes));
+
+        const res = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_id: versionId,
+            view_name: 'Задачи версии',
+          },
+        });
+        assert.equal(res.isError, undefined, toolText(res));
+        const run = toolJson<{ data: Array<Record<string, unknown>> }>(res);
+        const row = run.data.find((r) => r.id === taskId);
+        assert.ok(row, 'отбор должен вернуть заведённую задачу');
+        for (const dropped of [
+          'fg_color',
+          'bg_color',
+          'font_bold',
+          'font_italic',
+          'font_underline',
+          'font_strike',
+          'icon_kind',
+          'icon_attachment_id',
+        ]) {
+          assert.equal(dropped in row, false, `compact view row must not carry ${dropped}`);
+        }
+        assert.equal(row.id, taskId);
+        assert.equal(row.icon, '🎨');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.ontology.delete { kind: type_view } удаляет отбор', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -497,14 +573,16 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         assert.ok(viewId);
 
         // Удаляем по id.
-        const delRes = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const delRes = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'type_view',
             id: viewId,
           },
-        });
+          true,
+        );
         assert.equal(delRes.isError, undefined, toolText(delRes));
         const delData = toolJson<{ deleted: true; affected_counts: Record<string, number> }>(
           delRes,
@@ -518,7 +596,8 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         });
         const data = toolJson<TypesListResponse>(listRes);
         const versionType = data.thought_types!.find((t) => t.name === 'версия');
-        assert.equal(versionType!.views.length, 0);
+        // Отбор удалён — пустой `views` не сериализуется (задача 6ee904ad).
+        assert.equal(versionType !== undefined && 'views' in versionType, false);
       } finally {
         await handle.close();
       }
@@ -555,15 +634,17 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
           },
         });
 
-        const delRes = await handle.client.callTool({
-          name: 'etn.ontology.delete',
-          arguments: {
+        const delRes = await callOp(
+          handle.client,
+          'ontology.delete',
+          {
             network_id: ctx.networkId,
             kind: 'thought_type',
             id: versionTypeId,
             force: true,
           },
-        });
+          true,
+        );
         assert.equal(delRes.isError, undefined, toolText(delRes));
         const delData = toolJson<{
           affected_counts: { type_views_count?: number };

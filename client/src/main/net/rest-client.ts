@@ -739,6 +739,38 @@ export class RestClient {
     );
   }
 
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/neighbors` с метаданными пагинации
+   * (`meta.total`) — источник порционной подгрузки секторов карты мыслей
+   * (задача c8fa74ba). Отличие от {@link getNeighbors} только в возврате:
+   * тот отдаёт массив и теряет `meta`, здесь `total`/`limit`/`offset`
+   * читаются из `lastMeta` сразу после запроса.
+   */
+  public async getNeighborsPage(
+    networkId: string,
+    id: string,
+    query?: {
+      dir?: import('@etn/shared').FocusDir;
+      sort?: import('@etn/shared').SortKind;
+      order?: import('@etn/shared').SortOrder;
+      limit?: number;
+      offset?: number;
+      type_id?: string[];
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
+    },
+  ): Promise<import('@etn/shared').NeighborPage> {
+    const items = await this.getNeighbors(networkId, id, query);
+    // `getNeighbors` → `request()` кладёт `meta` списка в `lastMeta`; для
+    // одиночных запросов там `undefined` — безопасные фолбэки.
+    const meta = this.lastMeta as { total?: number; limit?: number; offset?: number } | undefined;
+    return {
+      items,
+      total: meta?.total ?? items.length,
+      limit: meta?.limit ?? items.length,
+      offset: meta?.offset ?? 0,
+    };
+  }
+
   /** `POST /networks/{nid}/thoughts/batch`. */
   public async batchThoughts(
     networkId: string,
@@ -1362,6 +1394,24 @@ export class RestClient {
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}`,
       { requestOptions: opts },
     );
+  }
+
+  /**
+   * `POST /networks/{nid}/thoughts/{id}/properties/{key}/cross-resolve`
+   * (задача 7849008a): явный резолв значений `cross_network_ref`.
+   * Возвращает свежие снапшоты имён целей и пометки нерезолвленности.
+   */
+  public async crossResolveThoughtProperty(
+    networkId: string,
+    thoughtId: string,
+    key: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').PropertyCrossResolveResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}/cross-resolve`,
+      { requestOptions: opts },
+    ) as Promise<import('@etn/shared').PropertyCrossResolveResult>;
   }
 
   /** `GET /networks/{nid}/links/{id}/properties`. */
@@ -2037,6 +2087,97 @@ export class RestClient {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
       query: q,
     });
+  }
+
+  /**
+   * `GET /networks/{nid}/thoughts/duplicates?network_ids=…` — кросс-сетевая
+   * проверка дублей (задача eb1a3f43, требование c98d5d19). `networkIds`
+   * содержит одну или несколько сетей; `:networkId` из URL — одна из них
+   * (роут при отсутствии добавляет её в список веера автоматически).
+   * Возвращает `{ hits, networks }` с проставленным `network_id` на каждом
+   * кандидате и справочником сетей (`id` + `display_name`).
+   */
+  public async findDuplicatesAcrossNetworks(
+    networkId: string,
+    networkIds: string[],
+    title: string,
+    synonyms: string[] = [],
+    typeIds: string[] = [],
+  ): Promise<import('@etn/shared').CrossNetworkDuplicateResponse> {
+    const q: QueryRecord = { title };
+    if (networkIds.length > 0) q['network_ids'] = networkIds;
+    if (synonyms.length > 0) q['synonyms'] = synonyms;
+    if (typeIds.length > 0) q['type_ids'] = typeIds;
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`,
+      { query: q },
+    );
+  }
+
+  /**
+   * `GET /networks/{nid}/search?network_ids=…` — кросс-сетевой поиск
+   * (задача eb1a3f43, требование c98d5d19). Один вызов веером по сетям с
+   * простановкой `network_id` на каждом хите и справочником сетей в
+   * `networks`.
+   */
+  public async searchThoughtsAcrossNetworks(
+    networkId: string,
+    networkIds: string[],
+    request: import('@etn/shared').SearchRequest,
+  ): Promise<import('@etn/shared').SearchResponse> {
+    const q: QueryRecord = { q: request.q };
+    if (networkIds.length > 0) q['network_ids'] = networkIds;
+    if (request.in !== undefined) q['in'] = request.in;
+    if (request.from_thought_id !== undefined) q['from_thought_id'] = request.from_thought_id;
+    if (request.scope !== undefined) q['scope'] = request.scope;
+    if (request.type_id !== undefined) q['type_id'] = request.type_id;
+    if (request.link_type_id !== undefined) q['link_type_id'] = request.link_type_id;
+    if (request.show_inactive !== undefined) q['show_inactive'] = request.show_inactive;
+    if (request.trashed !== undefined) q['trashed'] = request.trashed;
+    if (request.author_id !== undefined && request.author_id !== '') {
+      q['author_id'] = request.author_id;
+    }
+    if (request.editor_id !== undefined && request.editor_id !== '') {
+      q['editor_id'] = request.editor_id;
+    }
+    if (request.limit !== undefined) q['limit'] = request.limit;
+    if (request.offset !== undefined) q['offset'] = request.offset;
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/search`, { query: q });
+  }
+
+  /**
+   * `POST /networks/{nid}/thoughts/query` с `network_ids` в теле —
+   * кросс-сетевая структурная выборка (задача eb1a3f43, требование
+   * c98d5d19). `networkIds` — массив дополнительных сетей веера;
+   * `:networkId` интерпретируется роутом как одна из сетей. Возвращает
+   * обычный `StructureQueryResponse` с дополнительным `networks` —
+   * справочником сетей (`id` + `display_name`).
+   */
+  public async queryStructureThoughtsAcrossNetworks(
+    networkId: string,
+    networkIds: string[],
+    request: import('@etn/shared').StructureQueryRequest,
+  ): Promise<import('@etn/shared').CrossNetworkStructureQueryResponse> {
+    const items = await this.request<import('@etn/shared').ThoughtRef[]>(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
+      { body: { ...request, network_ids: networkIds } },
+    );
+    const meta = this.lastMeta as
+      | {
+          total?: number;
+          directions?: import('@etn/shared').StructureDirectionFlags;
+          networks?: import('@etn/shared').NetworksCatalog;
+        }
+      | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : items.length;
+    return {
+      items,
+      total,
+      directions: meta?.directions ?? {},
+      networks: meta?.networks ?? [],
+    };
   }
 
   // -------------------------------------------------------------------------

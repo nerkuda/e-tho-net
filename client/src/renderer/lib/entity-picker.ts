@@ -39,13 +39,14 @@
  */
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
+import type { LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { button, div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { svgIcon, type IconName } from './icons.js';
+import { parseThoughtIdLookupQuery } from './pure.js';
 import {
   wireSuggest,
   type SuggestEntry,
@@ -140,6 +141,41 @@ export function thoughtEntityOption(hit: DuplicateHit): EntityOption {
   };
 }
 
+/** Полная мысль → кандидат дубль-поиска (для id-lookup, ошибка d8893a1f). */
+function thoughtToDuplicateHit(thought: Thought): DuplicateHit {
+  return {
+    ...thought,
+    synonyms: thought.synonyms,
+    matched_on: 'title',
+    parent_title: null,
+  };
+}
+
+/**
+ * Кандидаты-мысли для строки живого поиска (ошибка d8893a1f): если запрос
+ * целиком — полный UUID или его короткий hex-префикс, идёт прямой lookup по
+ * id (`thoughts.get`), а не поиск по названию; иначе — штатный `findDuplicates`.
+ * Так 8-символьный id находит ту же мысль, что и полный, и в пикере, и в
+ * строке поиска. Неудачный/неоднозначный id-lookup даёт пусто (как и в строке
+ * поиска, диагностику показывает сервер).
+ */
+async function loadThoughtHits(
+  networkId: string,
+  query: string,
+  typeIds: string[],
+): Promise<DuplicateHit[]> {
+  const trimmed = query.trim();
+  const id = parseThoughtIdLookupQuery(trimmed);
+  if (id !== null) {
+    try {
+      return [thoughtToDuplicateHit(await etn.thoughts.get(networkId, id))];
+    } catch {
+      return [];
+    }
+  }
+  return etn.thoughts.findDuplicates(networkId, trimmed, [], typeIds).catch(() => []);
+}
+
 // ---------------------------------------------------------------------------
 // Чистые помощники списка (проверяются юнит-тестами)
 // ---------------------------------------------------------------------------
@@ -204,6 +240,79 @@ export function visibleEntityIds(
     }
   }
   return ids;
+}
+
+/**
+ * Варианты каталога, отфильтрованные по подстроке запроса (совпадение в
+ * `title` или `searchText`, регистр не важен); пустой/пробельный запрос —
+ * весь каталог. Единый источник живого поиска чип-полей каталогов (типы
+ * мыслей, типы связей, пользователи): контракт `SuggestSource.load(query)`
+ * требует, чтобы источник сам сужал список по вводу (ошибка 698800be), а
+ * `loadOptions: () => <полный каталог>` показывал каталог целиком при любом
+ * вводе. Поля живого серверного поиска (мысли, `findDuplicates`) этим
+ * фильтром не оборачивать: сервер уже отфильтровал по запросу, включая
+ * совпадения по синонимам. Чистая — под юнит-тестами.
+ */
+export function filterEntityOptions(
+  options: readonly EntityOption[],
+  query: string,
+): EntityOption[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...options];
+  return options.filter(
+    (o) =>
+      o.title.toLowerCase().includes(needle) ||
+      (o.searchText ?? '').toLowerCase().includes(needle),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Кросс-сетевой поиск кандидатов (задача ea04a185): используется ТОЛЬКО
+// диалогом в принудительном кросс-режиме (`pickThoughtsDialog { crossNetwork }`,
+// редактор значения `cross_network_ref`). Обычные диалоги выбора мысли охват
+// не переключают — они ищут строго по текущей сети (требование 79755f76,
+// ошибка 81be082f): выбор цели внутрисетевой связи чужой мыслью невалиден.
+// ---------------------------------------------------------------------------
+
+/**
+ * Загрузить кандидатов-дублей веером по всем доступным сетям пользователя.
+ * `networkId` — текущая открытая сеть (роут автоматически добавит её в веер,
+ * если её нет в списке). Источник кандидатов принудительного кросс-режима
+ * диалога выбора мысли (редактор `cross_network_ref`).
+ *
+ * Попутно освежает `store.state.networkList` (`display_name` сети нужен для
+ * подписи чужой мысли в облачке кандидата — ошибка defcd811): каталог сетей
+ * уже получен для веерного запроса, грех не закэшировать.
+ */
+export async function loadCrossNetworkCandidates(
+  networkId: string,
+  query: string,
+  typeIds: readonly string[],
+): Promise<DuplicateHit[]> {
+  try {
+    const networks = await etn.networks.list();
+    if (networks.length > 0) {
+      const incomingIds = new Set(networks.map((n) => n.id));
+      const sameAsCache =
+        store.state.networkList.length === networks.length &&
+        store.state.networkList.every((n) => incomingIds.has(n.id));
+      if (!sameAsCache) {
+        store.update({ networkList: networks });
+      }
+    }
+    const ids = networks.map((n) => n.id);
+    if (ids.length === 0) return [];
+    const response = await etn.thoughts.findDuplicatesAcrossNetworks(
+      networkId,
+      ids,
+      query,
+      [],
+      [...typeIds],
+    );
+    return response.hits;
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -369,20 +478,24 @@ export async function pickEntitiesModal(
       searchInput.type = 'text';
       searchInput.autocomplete = 'off';
       searchInput.placeholder = 'Найти мысль…';
+      // Охват поиска задан назначением выбора (требование 79755f76, ошибка
+      // 81be082f): цели внутрисетевых связей ищутся только по текущей сети,
+      // переключателя охвата здесь нет.
+      const searchBar = div('st-f-searchbar');
+      searchBar.append(searchInput);
       const chipsBox = div('entity-pick-chips');
-      body.append(searchInput, chipsBox);
+      body.append(searchBar, chipsBox);
 
       const searchSource: SuggestSource = {
         when: 'typed',
-        load: (query) =>
-          etn.thoughts
-            .findDuplicates(opts.networkId, query.trim(), [], (opts.searchTypeIds ?? []).filter((id) => id !== ''))
-            .catch(() => [] as DuplicateHit[])
-            .then((hits) =>
-              // Строка-мысль — облачком: DTO кандидата структурно совместим с
-              // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
-              hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
-            ),
+        load: (query) => {
+          const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
+          return loadThoughtHits(opts.networkId, query, typeIds).then((hits) =>
+            // Строка-мысль — облачком: DTO кандидата структурно совместим с
+            // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
+            hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
+          );
+        },
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
@@ -900,6 +1013,13 @@ export interface EntityComboOptions {
   /** Типы мыслей, сужающие живой поиск (только для `thoughts`). */
   searchTypeIds?: readonly string[];
   /**
+   * Минимальная (она же — потолок) ширина выпадашки живого поиска, px.
+   * Передаётся вызывающим, когда список не помещается под узким полем и должен
+   * быть шире него, — диалог добавления просит 560px однообразно у полей типа
+   * и свойства связи (ошибка 5c7f8376). Без значения — прежние 320px.
+   */
+  dropdownMinWidth?: number;
+  /**
    * Заголовок диалога «…» (выбор единственного значения). По умолчанию —
    * «Выбрать тип мысли / тип связи / мысль».
    */
@@ -1204,16 +1324,19 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       when: 'typed',
       load: (query) => {
         if (opts.disabled === true) return [];
-        return etn.thoughts
-          .findDuplicates(opts.networkId, query.trim(), [], (opts.searchTypeIds ?? []).filter((id) => id !== ''))
-          .catch(() => [] as DuplicateHit[])
-          .then((hits) =>
-            hits.map((hit) => {
-              const opt = thoughtEntityOption(hit);
-              byId.set(hit.id, opt);
-              return { value: hit.id, label: hit.title, thought: opt.cloud };
-            }),
-          );
+        const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
+        const apply = (hits: DuplicateHit[]): SuggestEntry[] =>
+          hits.map((hit) => {
+            const opt = thoughtEntityOption(hit);
+            byId.set(hit.id, opt);
+            return { value: hit.id, label: hit.title, thought: opt.cloud };
+          });
+        // Охват — только текущая сеть (требование 79755f76, ошибка 81be082f):
+        // цели внутрисетевых связей ищутся штатным findDuplicates, переключателя
+        // охвата нет. Кросс-выбор живёт исключительно в редакторе
+        // `cross_network_ref` (принудительный режим pickThoughtsDialog).
+        // Id-запрос (полный/короткий) идёт прямым lookup — ошибка d8893a1f.
+        return loadThoughtHits(opts.networkId, query, typeIds).then(apply);
       },
     });
   }
@@ -1252,6 +1375,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
 
   handle = wireSuggest(input, {
     sources,
+    minWidth: opts.dropdownMinWidth ?? 0,
     onPick: (entry) => {
       if (entry.value === CREATE_ROW_ID) {
         void runCreate(lastQuery);

@@ -379,6 +379,10 @@ const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryProperty
   // `value_thought_ref`; eq/in/not_in ищут обе формы, is_empty/not_empty —
   // наличие хоть какого-то id, наборы — по элементам массива.
   thought_ref: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of', 'none_of'],
+  // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81): отбор по
+  // адресу. eq/ne — точное совпадение; any_of/all_of/none_of — для набора.
+  // is_empty/not_empty не нужны (адрес либо точно совпал, либо нет).
+  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -392,6 +396,8 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   // ребра»); условие транслируется в `links_v`.
   link: 'value_text',
   thought_ref: 'value_thought_ref',
+  // Кросс-сетевая ссылка: адрес в value_text (single или JSON-массив).
+  cross_network_ref: 'value_text',
 };
 
 /** Default keyword scope: title + synonyms only (the original behaviour). */

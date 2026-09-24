@@ -287,6 +287,7 @@ describe(
           '041_type_property_side.sql',
           '042_unified_property_link_registry.sql',
           '043_type_properties_canonical_unique.sql',
+          '044_cross_network_ref.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
@@ -307,6 +308,9 @@ describe(
           object_locks: 0,
           activity_log: 0,
           thought_type_views: 0,
+          // Миграция 044 (задача 7849008a) — служебная таблица снапшотов
+          // кросс-сетевых ссылок. На свежеобновлённой сети строк нет.
+          property_value_cross_refs: 0,
         });
 
         // 2. The base layer row.

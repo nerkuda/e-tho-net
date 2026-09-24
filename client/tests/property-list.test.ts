@@ -4,9 +4,9 @@
  * Список — один компонент в двух режимах: «менеджер» (диалог «Свойства») и
  * «пикер» («Добавить свойство…» редактора типа). Здесь закреплены:
  *  - форматирование (чистые функции): колонки, единый значок концов связи
- *    (зеркалирование и эффективное оформление линии), обрезка
- *    имён по 30-й символ, подпись «связь (имя - имя)», иконки видов значения,
- *    ⓘ-подсказка, эффективное оформление линии;
+ *    (вертикальное направление вниз/вверх и эффективное оформление линии),
+ *    обрезка имён по 30-й символ, подпись «связь (имя - имя)», иконки видов
+ *    значения, ⓘ-подсказка, эффективное оформление линии;
  *  - привязка слоёв по якорям исходника (клиентские тесты идут без DOM):
  *    одна функция активации на клик и Enter, ↑/↓, контекстное меню (удаление —
  *    только в менеджере), отсутствие крестика удаления, использование обоими
@@ -128,21 +128,21 @@ describe('обрезка имён и подпись типа значения к
   });
 });
 
-describe('единый значок конца связи (требование 4)', () => {
-  it('направление: вправо у источника, влево у назначения (зеркалится)', () => {
-    assert.equal(linkEndDirection('source'), 'right');
-    assert.equal(linkEndDirection('target'), 'left');
-    assert.equal(linkEndDirection(null), 'right');
-    assert.equal(linkEndIconSpec('source', null).mirrored, false);
-    assert.equal(linkEndIconSpec('target', null).mirrored, true);
+describe('единый значок конца связи (требование 4, задача 88def930)', () => {
+  it('направление: вниз у источника (исходящая), вверх у назначения (входящая)', () => {
+    assert.equal(linkEndDirection('source'), 'down');
+    assert.equal(linkEndDirection('target'), 'up');
+    assert.equal(linkEndDirection(null), 'down', 'бестиповый конец ведёт себя как исходящий');
+    assert.equal(linkEndIconSpec('source', null).direction, 'down');
+    assert.equal(linkEndIconSpec('target', null).direction, 'up');
   });
 
-  it('значок один: и источник, и назначение дают одну спецификацию с зеркалом', () => {
+  it('значок один: у концов одной связи совпадает всё, кроме направления', () => {
     const row = linkRow();
     const source = linkEndIconSpec('source', row.visual);
     const target = linkEndIconSpec('target', row.visual);
-    // Всё, кроме зеркалирования, у концов одной связи совпадает — значок общий.
-    assert.deepEqual({ ...source, mirrored: null }, { ...target, mirrored: null });
+    // Всё, кроме направления, у концов одной связи совпадает — значок общий.
+    assert.deepEqual({ ...source, direction: null }, { ...target, direction: null });
   });
 
   it('оформление линии — эффективные настройки связи с клампом толщины', () => {
@@ -157,7 +157,7 @@ describe('единый значок конца связи (требование 
 
   it('цвет/стиль/толщина переносятся в спецификацию значка', () => {
     const spec = linkEndIconSpec('source', { color: '#e08a3c', style: 'dashed', width: 4 });
-    assert.deepEqual(spec, { mirrored: false, width: 4, style: 'dashed', color: '#e08a3c' });
+    assert.deepEqual(spec, { direction: 'down', width: 4, style: 'dashed', color: '#e08a3c' });
     // Без оформления — цвет по умолчанию из CSS.
     assert.equal(linkEndIconSpec('source', null).color, null);
   });
@@ -179,6 +179,8 @@ describe('иконки видов значения (требование 4)', ()
       url: 'value-url',
       thought_ref: 'value-ref',
       link: null,
+      // Кросс-сетевая ссылка (задача 7849008a): своя иконка для UX.
+      cross_network_ref: 'value-cross-network-ref',
     };
     for (const [vt, icon] of Object.entries(expected)) {
       assert.equal(valueTypeIconName(vt as PropertyValueType), icon, `иконка вида ${vt}`);
@@ -239,11 +241,13 @@ describe('якоря рендера и режимов (требования 3–
     assert.ok(src.includes('showMenuAt('), 'меню открывается общим показом меню');
   });
 
-  it('значок конца связи — единый SVG в эффективном оформлении связи', () => {
+  it('значок конца связи — единый вертикальный SVG в эффективном оформлении связи', () => {
     assert.match(src, /buildLinkEndIcon\(linkEndIconSpec\(row\.side, row\.visual\)\)/, 'один значок из спецификации');
-    assert.match(src, /linkEndDirection\(side\) === 'left'/, 'направление: влево — назначение');
-    // Зеркалирование вместо второго значка/глифа.
-    assert.match(src, /svg\.style\.transform = 'scaleX\(-1\)'/, 'назначение зеркалится');
+    assert.match(src, /side === 'target' \? 'up' : 'down'/, 'направление: вниз — источник, вверх — цель');
+    // Направление — координатами вертикальной линии и шеврона, без зеркалирования.
+    assert.match(src, /'data-direction': spec\.direction/, 'направление видно в разметке значка');
+    assert.ok(!src.includes("svg.style.transform = 'scaleX(-1)'"), 'зеркалирования значка больше нет');
+    assert.match(src, /const y2 = down \? end : start;/, 'линия рисуется сверху вниз у источника и снизу вверх у цели');
     assert.match(src, /'stroke-width': spec\.width/, 'толщина из эффективного оформления');
     assert.match(src, /linkEndDashArray\(spec\.style\)/, 'штрих из эффективного оформления');
     assert.match(src, /svg\.style\.color = spec\.color/, 'цвет из эффективного оформления');

@@ -13,13 +13,14 @@
 
 import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
 
-import { requireNetworkId } from '../app.js';
+import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
+import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { store } from '../state.js';
 
 /** A value editor state row kept until «Применить». */
@@ -189,6 +190,16 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     }
     if (applied > 0) notice(`Значения применены (${applied}).`);
     if (failed > 0) notice(`Не удалось применить: ${failed}.`, 'error');
+    // Своя запись значения (в т.ч. свойства-связи) не поднимает версию мысли, а
+    // собственному клиенту не приходит realtime-эхо (G8), поэтому ни таблица
+    // значений свойств открытой карточки, ни карта о новом ребре не узнают до
+    // смены фокуса (ошибка 4ba1fccc). Правка массовая — ключ не един, значит
+    // перечитываем всё; уведомляем и освежаем окрестность фокуса ТОЛЬКО когда
+    // хоть одна запись удалась, на полной неудаче молчим.
+    if (applied > 0) {
+      notifyPropertyValuesRefreshed();
+      scheduleRefresh();
+    }
     closeDialog();
   }
 

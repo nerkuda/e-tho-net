@@ -26,7 +26,12 @@ export type NetworkRole = (typeof NETWORK_ROLES)[number];
  *  резолв `value_thought_ref` (на изолированных тестовых БД), продолжали
  *  компилироваться и зеленели без каскадной переделки. Удаление маркера —
  *  задача a469f1b9 «Пересмотр правил сети и описаний типов после запуска
- *  модели связей». */
+ *  модели связей».
+ *  `cross_network_ref` (0.8.3, задача 7849008a, ADR ae8346d0) — кросс-сетевая
+ *  ссылка: значение адресует мысль ДРУГОЙ сети по `n:<network_id>#<thought_id>`,
+ *  хранится в `property_values.value_text` как скаляр; снапшот имени — в
+ *  служебной неветвимой таблице `property_value_cross_refs`. Ссылка на
+ *  собственную сеть запрещена, голый id без сети адресом не является. */
 export const PROPERTY_VALUE_TYPES = [
   'text',
   'date',
@@ -35,6 +40,7 @@ export const PROPERTY_VALUE_TYPES = [
   'url',
   'link',
   'thought_ref',
+  'cross_network_ref',
 ] as const;
 export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
 
@@ -140,9 +146,17 @@ export type StructureSort = (typeof STRUCTURE_SORTS)[number];
  * the inverse. Available for every value type EXCEPT `bool`, because for
  * `bool` the same intent is covered by `eq true` / `eq false`. The
  * `value` payload is ignored for these operators.
+ *
+ * `any_of` / `all_of` / `none_of` (задача 7849008a, требование 586ebe81) —
+ * операторы для наборов значений (multiple-свойства и кросс-сетевые ссылки):
+ * `any_of` — значение содержит хотя бы один из перечисленных элементов;
+ * `all_of` — значение содержит все перечисленные; `none_of` — значение не
+ * содержит ни одного. Семантика пересечения множеств, без учёта порядка и
+ * дубликатов.
  */
 export const STRUCTURE_PROPERTY_OPS = [
   'eq',
+  'ne',
   'contains',
   'gt',
   'lt',
@@ -150,6 +164,9 @@ export const STRUCTURE_PROPERTY_OPS = [
   'not_in',
   'is_empty',
   'not_empty',
+  'any_of',
+  'all_of',
+  'none_of',
 ] as const;
 export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
 

@@ -2,28 +2,74 @@
  * thoughts-read.ts — MCP-инструменты области «registerThoughtsReadTools, registerFindDuplicatesTool».
  * Вынесено из `tools.ts` (ADR 8c93f03a, веха 7 версии 0.8.2) без изменения
  * поведения: фасады разбиты на модули по областям, логика — в домене.
+ *
+ * Cross-network (fan-out) режим (задача eb1a3f43, требование c98d5d19):
+ * `etn.thoughts.search`, `etn.thoughts.query` и `etn.thoughts.find_duplicates`
+ * принимают опциональный `network_ids`. При его наличии вызов делегирует
+ * `cross-network-search-service` (fan-out + merge), фильтруя сети по
+ * `hasNetworkAccess`. Сети без доступа молча исключаются.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, TRAVERSAL_DEFAULTS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
-import { checkThoughtDeletion, countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
-import { ThoughtsBacklinks, ThoughtsDeletionCheck, ThoughtsFindDuplicates, ThoughtsGet, ThoughtsMentions, ThoughtsNeighbors, ThoughtsPath, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
+import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
+import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
-import { findBacklinks } from '../../domain/backlinks-service.js';
-import { findDuplicates, findMentions, resolveThoughts, search } from '../../domain/search-service.js';
+import { findDuplicates, resolveThoughts, search } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
-import { linkTypeCatalog, linkTypeCatalogCompact, thoughtTypeCatalog, toCompactThought, toCompactThoughtRef, withSanitizedIcon } from '../catalogs.js';
-import { findPath, subgraph, traverse } from '../../domain/graph-traversal.js';
+import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
+import {
+  omitEmptyContainers,
+  projectLinkRow,
+  projectThoughtRows,
+  stripStructuralLinkProperties,
+} from '../../domain/response-projection.js';
+import { subgraph, traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
-import { openMemberNetwork, runTool } from '../context.js';
+import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
+import {
+  fanOutFindDuplicates,
+  fanOutQuery,
+  fanOutSearch,
+  type CrossNetworkAccess,
+} from '../../domain/cross-network-search-service.js';
+
+/** Собрать кросс-сетевой «доступ»: отфильтровать сети по правам, подтянуть
+ *  `display_name` из `systemDb` для справочника. Используется только когда
+ *  в MCP-вызове передан `network_ids` (задача eb1a3f43). */
+function buildCrossNetworkAccess(
+  rt: McpRuntime,
+  requested: string[],
+): CrossNetworkAccess & { accessibleIds: string[] } {
+  const seen = new Set<string>();
+  const accessibleIds: string[] = [];
+  for (const id of requested) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (hasNetworkAccess(rt, id)) accessibleIds.push(id);
+  }
+  const networks = accessibleIds
+    .map((id) => {
+      const row = rt.deps.systemDb.getNetworkById(id);
+      return { id, display_name: row?.display_name ?? id };
+    });
+  return {
+    networks,
+    accessibleIds,
+    dataDir: rt.deps.dataDir,
+    userId: rt.deps.auth.userId,
+    clientId: mcpLayerClientId(rt),
+    logger: rt.deps.logger,
+  };
+}
 
 export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
@@ -42,7 +88,69 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     },
     (args) =>
       runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        if (args.network_ids !== undefined) {
+          const access = buildCrossNetworkAccess(rt, args.network_ids);
+          if (access.networks.length === 0) {
+            // Ни одна сеть не доступна — пустой ответ со справочником.
+            return {
+              by_names: [],
+              by_texts: [],
+              by_links: [],
+              by_chrono: [],
+              meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
+              networks: [],
+            };
+          }
+          // Резолв имени типа — только если задано. В веерном режиме одна и та
+          // же строка `type` может означать разные id в разных сетях; используем
+          // первую сеть как «контекст» для резолва и фильтруем остальные по тому
+          // же имени на уровне `expandTypeIdsToSubtree` (внутри `search`).
+          let resolvedType: { input: string; id: string; name: string } | undefined;
+          if (args.type !== undefined) {
+            const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
+            const id = resolveThoughtTypeIdByName(firstNdb, args.type);
+            const name = getThoughtType(firstNdb, id)?.name;
+            resolvedType = { input: args.type, id, name: name ?? args.type };
+          }
+          const result = fanOutSearch(access, {
+            networkIds: access.accessibleIds,
+            q: args.query,
+            scope: args.scope,
+            in: args.in_subtree_of === undefined ? undefined : 'subtree',
+            from_thought_id: args.in_subtree_of,
+            type_id: resolvedType !== undefined ? [resolvedType.id] : (args.type_id !== undefined && args.type_id !== null ? [args.type_id] : undefined),
+            type: args.type,
+            author_id: args.author_id,
+            editor_id: args.editor_id,
+            show_inactive: args.show_inactive,
+            limit: args.limit ?? 50,
+            offset: args.offset ?? 0,
+            showInactiveDefault: false,
+          });
+          // O10: count reads for the «head» network — the per-network reads
+          // counter is per-network, so we count hits from each network in its
+          // own session.
+          for (const net of access.networks) {
+            const ndb = openMemberNetwork(rt, net.id);
+            const thoughtIds = [
+              ...result.response.by_names.filter((h) => h.network_id === net.id).map((h) => h.thought_id),
+              ...result.response.by_texts.filter((h) => h.network_id === net.id).map((h) => h.thought_id),
+              ...result.response.by_chrono
+                .filter((h) => h.network_id === net.id && h.owner === 'thought')
+                .map((h) => h.owner_id),
+            ];
+            if (thoughtIds.length > 0) recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
+          }
+          return {
+            ...result.response,
+            by_names: projectThoughtRows(result.response.by_names.map((h) => withSanitizedIcon(h))),
+            by_texts: projectThoughtRows(result.response.by_texts.map((h) => withSanitizedIcon(h))),
+            networks: result.networks,
+            ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
+          };
+        }
+        const ndb = openMemberNetwork(rt, args.network_id as string);
         // Резолв имени типа в id (задача d5ab1630). Сбор эха для ответа —
         // `resolved_type` приходит, только если агент передал `type`.
         let resolvedType: { input: string; id: string; name: string } | undefined;
@@ -77,13 +185,15 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         ];
         recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
         // Bug fix (§5.1e): `search` is shared with the REST `/search` route
-        // (which needs the real icon to render results), so sanitize only at
-        // this MCP-facing call site. `by_names`/`by_texts` carry the thought's
-        // `icon`; `by_links`/`by_chrono` do not.
+        // (which needs the real icon to render results), so project only at
+        // this MCP-facing call site. Every MCP list record goes through the
+        // single `projection.ts` — compact drops visual/service fields and
+        // omits empty containers; the icon itself stays and `data:` URLs are
+        // sanitized inside the projection.
         return {
           ...result,
-          by_names: result.by_names.map((h) => withSanitizedIcon(h)),
-          by_texts: result.by_texts.map((h) => withSanitizedIcon(h)),
+          by_names: projectThoughtRows(result.by_names.map((h) => withSanitizedIcon(h))),
+          by_texts: projectThoughtRows(result.by_texts.map((h) => withSanitizedIcon(h))),
           ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
         };
       }),
@@ -93,30 +203,106 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Структурная выборка мыслей',
       description:
-        'List thoughts by criteria — no text query required; filters combine with AND. `in_subtree_of` ' +
-        '(+`max_depth`) — directed descendants (hits carry `depth`); `type_id[]` (or its name-form `type[]`, ' +
-        'resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, `VALIDATION_ERROR` ' +
-        'with `details.candidates` on ambiguity); `active` and `trashed` (`true`/`false`/`any`; `trashed` ' +
-        'defaults to `false`); `keywords` — mini-syntax over title and synonyms (words all required, ' +
-        '`*` infix wildcard, `-word` exclusion); `properties` — registry `property_id` (or its name-form ' +
-        '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of + ' +
-        'value (unknown `property_id` matches nothing; the `value_type` picks the column: number → ' +
-        'value_number, bool → value_bool, others on their text columns). `value_type: \'link\'` (свойство-связь, ' +
-        '0.8.1) переводится в запрос по рёбрам, а не по значениям: `eq`/`ne` со строкой — связь с конкретной ' +
-        'целью (id мысли), с boolean — связь такого типа есть/отсутствует независимо от цели; работает в обе ' +
-        'стороны (по направлению свойства). `any_of`/`all_of`/`none_of` — операторы для наборов (свойство-связь ' +
-        'и `config.multiple` url): `value` — непустой массив id/строк; пересечение непусто / набор ' +
-        'содержит все перечисленные / пересечения нет. `created_*`/`updated_*` — ISO-8601 ranges; ' +
-        '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль; ' +
-        '`link_filter` — { type_ids?, include_structural? } ограничивает рёбра спуска `in_subtree_of`. Response carries ' +
-        'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +
-        'for inputs that came in by name.',
+        'Структурная выборка мыслей без текстового запроса; фильтры комбинируются по AND: ' +
+        '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
+        '`keywords` (мини-синтаксис по названию и синонимам), `properties[]` (операторы ' +
+        'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
+        '`author_id`/`editor_id`, `link_filter`. Ответ несёт справочник `thought_types` и эхо ' +
+        '`resolved_types`/`resolved_properties` для входов по имени. Справочник фильтров, семантика ' +
+        'свойств-связей и наборов — `etn.guide { topic: "thoughts.query" }`.',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
     (args) =>
       runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        if (args.network_ids !== undefined) {
+          const access = buildCrossNetworkAccess(rt, args.network_ids);
+          if (access.networks.length === 0) {
+            return {
+              total: 0,
+              hits: [],
+              truncated: false,
+              reason: null,
+              networks: [],
+            };
+          }
+          // Резолв имён типов — берём первую сеть как контекст, как и в search.
+          let resolvedTypes: Array<{ input: string; id: string; name: string }> | undefined;
+          let resolvedTypeIds: string[] | undefined;
+          if (args.type !== undefined) {
+            const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
+            resolvedTypes = [];
+            resolvedTypeIds = [];
+            for (const name of args.type) {
+              const id = resolveThoughtTypeIdByName(firstNdb, name);
+              const rowName = getThoughtType(firstNdb, id)?.name;
+              resolvedTypes.push({ input: name, id, name: rowName ?? name });
+              resolvedTypeIds.push(id);
+            }
+          }
+          // Резолв имён свойств в первой сети (при наличии имён). Другие сети
+          // сети будут фильтроваться по тому же `property_id` — если свойства
+          // нет, фильтр вернёт пусто, что корректно.
+          let resolvedProperties: Array<{ input: string; id: string; name: string }> | undefined;
+          let domainProperties = args.properties;
+          if (args.properties !== undefined) {
+            const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
+            const out: NonNullable<typeof args.properties> = [];
+            let resolved: Array<{ input: string; id: string; name: string }> | null = null;
+            for (const cond of args.properties) {
+              if (cond.property !== undefined) {
+                const ref = resolveConditionPropertyRef(firstNdb, cond.property);
+                if (ref === null) {
+                  throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                    field: 'property',
+                    name: cond.property,
+                  });
+                }
+                const propName = getNetworkProperty(firstNdb, ref.propertyId)?.name;
+                out.push({ ...cond, property_id: cond.property });
+                if (resolved === null) resolved = [];
+                resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
+                continue;
+              }
+              out.push(cond);
+            }
+            domainProperties = out;
+            if (resolved !== null) resolvedProperties = resolved;
+          }
+          const result = fanOutQuery(access, {
+            networkIds: access.accessibleIds,
+            // Используем `mcpRequestToQuery` — единый канонический конвертер,
+            // тот же, что и в обычном (односетевом) пути ниже.
+            query: mcpRequestToQuery(
+              {
+                ...args,
+                type_id: args.type_id ?? resolvedTypeIds,
+                type: undefined,
+                properties: domainProperties,
+              },
+              { maxNodes: rt.limits.maxNodesPerSubgraph },
+            ),
+            limit: args.limit ?? 50,
+            offset: args.offset ?? 0,
+          });
+          // O10: count reads per network.
+          for (const net of access.networks) {
+            const ndb = openMemberNetwork(rt, net.id);
+            const ids = result.response.hits.filter((h) => h.network_id === net.id).map((h) => h.id);
+            if (ids.length > 0) recordReads(ndb, ids, { now: new Date().toISOString() });
+          }
+          return {
+            total: result.response.total,
+            hits: result.response.hits,
+            truncated: result.response.truncated,
+            reason: result.response.reason,
+            networks: result.networks,
+            ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
+            ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
+          };
+        }
+        const ndb = openMemberNetwork(rt, args.network_id as string);
         // Резолв имён типов в id (задача d5ab1630). Сбор эха для ответа —
         // `resolved_types` приходит, только если агент передал `type`.
         let resolvedTypes: Array<{ input: string; id: string; name: string }> | undefined;
@@ -207,17 +393,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Мысль (полная)',
       description:
-        'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
-        '(values whose property is not on the owner\'s type chain ' +
-        'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
-        'full text of the permanent comment (задача 3ea09a54: в `etn.thoughts.get` обрезка отключена; в ' +
-        'остальных выборках — preview 2000 chars, `etn.comments.get` для полного). `meta.link_stats` ' +
-        '(0.7.2) — счётчики активных связей по `(link_type_id, direction)` + `link_types`; ' +
-        'рёбра, помеченные на удаление, НЕ считаются (0.8.2, ошибка 355319d4). ' +
-        '`meta.views` (0.7.3, задача c1fa71d4) — эффективный набор отборов для мысли: ' +
-        'имя, описание и тип-владелец каждого доступного отбора (без `definition`); ' +
-        'исполняется через `etn.views.run { view_name }`. ' +
-        '`view: "compact"` (default) drops visual fields.',
+        'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
+        'значения свойств (`outside_type: true` — свойство не на цепочке типа владельца, карточка не ' +
+        'пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
+        '`meta.permanent` — полный текст постоянного комментария (у других выборок превью 2000 ' +
+        'символов; полностью — `etn.comments.get`). `meta.link_stats` — счётчики активных связей по ' +
+        '`(link_type_id, direction)` с именами типа; помеченные на удаление рёбра не считаются. ' +
+        '`meta.views` — эффективные отборы мысли (имя, описание, тип-владелец), исполняются через ' +
+        '`etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -226,7 +409,18 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const ndb = openMemberNetwork(rt, args.network_id);
         const rawThought = getThoughtOrThrow(ndb, args.thought_id);
         const rawType = rawThought.type_id === null ? null : getThoughtType(ndb, rawThought.type_id);
-        const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
+        // Задача 7849008a, требование 6d4ad9ac: значения `cross_network_ref`
+        // фильтруются по правам доступа к целевой сети. Список сетей
+        // пользователя запрашивается в системной БД.
+        const accessibleNetworkIds = new Set(
+          rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId).map((n) => n.id),
+        );
+        const properties = getPropertyValuesResolved(
+          ndb,
+          'thought',
+          args.thought_id,
+          accessibleNetworkIds,
+        );
         // O10: count this single read for `etn.metrics.reads` analytics.
         recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
         // Задача 3ea09a54: для `etn.thoughts.get` `meta.permanent` отдаётся
@@ -244,12 +438,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // ./catalogs.ts for the rationale. Applied before the O12 branch so
         // both `full` and `compact` get the same treatment.
         const thought = withSanitizedIcon(rawThought);
-        const type = rawType === null ? null : withSanitizedIcon(rawType);
+        // 0.8.3 (требование «Каталоги типов в ответах read-инструментов»):
+        // вложенный тип карточки — `name` + `description`, без визуальных
+        // полей. Полное определение — в `etn.types.list`.
+        const type = toCardThoughtType(rawType);
+        // 0.8.3 (требование «Карточка отдаёт связи счётчиками»): структурные
+        // «Родители»/«Потомки» из `properties` не возвращаются — их числа уже
+        // в `meta.parents_count`/`children_count` и в `meta.link_stats`.
+        const cardProperties = stripStructuralLinkProperties({ properties }).properties;
         // Keep the response envelope identical between views — only the
         // thought-level fields differ. `type`, `properties` and `meta` were
         // never affected by the O12 projection change.
         const projected = view === 'full' ? thought : toCompactThought(thought);
-        return { ...projected, type, properties, meta };
+        return { ...projected, type, properties: cardProperties, meta };
       }),
   );
 
@@ -264,8 +465,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       title: 'Пакетное чтение мыслей',
       description:
         'Батч-чтение по списку id: `items[]` (карточки в порядке первого появления, дубли ' +
-        'схлопываются) + `missing[]`. Карточка несёт мысль, тип, свойства, `meta.link_stats`, ' +
-        'полнотекстовый `comment_preview` и `meta.views` (0.7.3, задача c1fa71d4) — ' +
+        'схлопываются) + `missing[]`. Неразрешимый id (в т.ч. короткий префикс — ' +
+        'ненайденный или неоднозначный) попадает в `missing[]`, а не отвергает весь батч. ' +
+        'Карточка несёт мысль, вложенный тип (`name` + `description`), ' +
+        'свойства (без структурных «Родители»/«Потомки» — их числа в `meta`), `meta.link_stats` ' +
+        '(счётчики с именами типов связей), ' +
+        'полнотекстовый `comment_preview` и `meta.views` — ' +
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
         'Лимит — `maxNodesPerSubgraph`.',
       inputSchema: ThoughtsResolve.schema,
@@ -285,45 +490,32 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Bug fix (§5.1e): `getThoughtsByIdsResolved` returns the raw `data:`
         // icon URL — sanitize in both views so the agent never sees an inline
         // image payload. The compact projection below also reads `card.icon`,
-        // so sanitising the source once is enough. `card.type` carries the
-        // type's icon through `withSanitizedIconLite` which leaves it raw;
-        // apply the same fix here.
-        const sanitizedItems = result.items.map((card) => ({
-          ...withSanitizedIcon(card),
-          type: card.type === null ? null : withSanitizedIcon(card.type),
-        }));
+        // so sanitising the source once is enough.
+        // 0.8.3: вложенный тип карточки — `name` + `description` без
+        // визуальных полей (требование «Каталоги типов в ответах
+        // read-инструментов»), поэтому иконку типа больше не санитайзим.
+        // Структурные «Родители»/«Потомки» из `properties` убираем: их числа
+        // уже в `meta` (требование «Карточка отдаёт связи счётчиками»).
+        const sanitizedItems = result.items.map((card) =>
+          stripStructuralLinkProperties({
+            ...withSanitizedIcon(card),
+            type: toCardThoughtType(card.type),
+          }),
+        );
         // `meta.views` (задача c1fa71d4) — собирается внутри `getThoughtMeta`,
         // которую зовёт `getThoughtsByIdsResolved` (домен, требование eaca1253).
         // Дополнительной обвязки здесь не требуется — `card.meta.views` уже
         // заполнен.
         const itemsWithViews = sanitizedItems;
+        // Compact-проекция карточки — единый сериализатор (projection.ts):
+        // визуальные поля (цвета, флаги шрифта, вложение иконки) и сервисные
+        // (version, авторство) снимаются, пустые synonyms/views не пишутся;
+        // `icon`, `type`, `properties`, `meta` и `comment_preview` остаются в
+        // полной форме — тот же контракт, что и у `etn.thoughts.get`.
         const items =
           view === 'full'
             ? itemsWithViews
-            : itemsWithViews.map((card) => ({
-                // Проекция касается только полей самой мысли (id/title/...);
-                // `type`, `properties`, `meta` и `comment_preview` остаются в
-                // полной форме — тот же контракт, что и у `etn.thoughts.get`.
-                ...card,
-                id: card.id,
-                title: card.title,
-                type_id: card.type_id,
-                icon: card.icon,
-                icon_kind: card.icon_kind,
-                icon_attachment_id: card.icon_attachment_id,
-                active: card.active,
-                marked_for_deletion: card.marked_for_deletion,
-                fg_color: null,
-                bg_color: null,
-                font_bold: null,
-                font_italic: null,
-                font_underline: null,
-                font_strike: null,
-                synonyms: card.synonyms,
-                version: card.version,
-                created_at: card.created_at,
-                updated_at: card.updated_at,
-              }));
+            : projectThoughtRows(itemsWithViews);
         // Reference table: только типы, реально использованные в items.
         const thoughtTypes = thoughtTypeCatalog(
           ndb,
@@ -337,12 +529,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Соседи мысли',
       description:
-        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`) or `both` (0.7.2); ' +
-        '`depth > 1` does a bounded BFS walk. `dir: "both"` (0.7.2) — оба направления одним вызовом, ' +
-        'записи несут `direction: "in"|"out"`. Рёбра (0.7.2) несут `has_properties`/`has_comment` — ' +
+        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`) or `both`; ' +
+        '`depth > 1` does a bounded BFS walk. `dir: "both"` — оба направления одним вызовом, ' +
+        'записи несут `direction: "in"|"out"`. Рёбра несут `has_properties`/`has_comment` — ' +
         'два агрегирующих запроса на весь набор рёбер, не на ребро; `link_marked_for_deletion` ' +
-        '(0.8.2, ошибка 355319d4) говорит, что ребро помечено на удаление (корзина) — оно остаётся ' +
-        'видимым, но помеченным. На `depth: 1` страница 50 — ' +
+        'говорит, что ребро помечено на удаление (корзина) — оно остаётся ' +
+        'видимым, но помеченным. НЕАКТИВНЫЕ соседи (мысль или ребро с `active: false`) ' +
+        'скрываются по умолчанию и не входят в `total`; `show_inactive: true` их показывает ' +
+        '(как в `search`/`query`) — и на `depth: 1`, и в BFS-обходе. На `depth: 1` страница 50 — ' +
         '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
         '`link_filter` — { type_ids?, include_structural? } ограничивает связи, по которым считается соседство. ' +
         'Справочники `link_types`/`thought_types`.',
@@ -356,7 +550,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
-          const neighborOpts = { userId: rt.deps.auth.userId, linkFilter: args.link_filter };
+          const neighborOpts = {
+            userId: rt.deps.auth.userId,
+            linkFilter: args.link_filter,
+            showInactive: args.show_inactive,
+          };
           // `dir: "both"` (0.7.2) — both directions in one call. The domain
           // `getNeighbors` is built for parents/children/siblings (REST trio)
           // and would map `both` to siblings; we call it twice and glue the
@@ -389,26 +587,25 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 has_comment: flags?.has_comment ?? false,
               };
             });
-            const linkTypes =
-              view === 'full'
-                ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
-                : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
+            // 0.8.3: справочник типов связей в списках — худой (id + оба
+            // имени), `view` его не меняет. Описания типов — в `etn.types.list`.
+            const linkTypes = linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id));
             // Bug fix (0.6.3): honest counts come from the domain `countNeighbors`
             // (one SQL per direction — same shape, no LIMIT). Sum them and
             // compare to the trimmed page; `truncated` is per the page size.
             const parentsTotal = countNeighbors(ndb, args.thought_id, 'parents', neighborOpts);
             const childrenTotal = countNeighbors(ndb, args.thought_id, 'children', neighborOpts);
             const total = parentsTotal + childrenTotal;
-            return {
+            return omitEmptyContainers({
               thought: { id: thought.id, title: thought.title },
               dir: args.dir,
               depth: 1,
-              neighbors: annotated,
+              neighbors: projectThoughtRows(annotated),
               total,
               truncated: total > annotated.length,
               link_types: linkTypes,
               thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
-            };
+            });
           }
           const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
@@ -429,10 +626,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               has_comment: flags?.has_comment ?? false,
             };
           });
-          const linkTypes =
-            view === 'full'
-              ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
-              : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
+          // 0.8.3: справочник типов связей в списках — худой (`view` его не меняет).
+          const linkTypes = linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id));
           // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
           // of its own and silently applied the domain default page size
           // (50) — a thought with more neighbours than that looked complete,
@@ -441,16 +636,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           // `etn.thoughts.query { in_subtree_of, max_depth: 1 }` to page
           // through the rest when `truncated` is true.
           const total = countNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
-          return {
+          return omitEmptyContainers({
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
-            neighbors: annotated,
+            neighbors: projectThoughtRows(annotated),
             total,
             truncated: total > annotated.length,
             link_types: linkTypes,
             thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
-          };
+          });
         }
         // `traverse` already supports `direction: "both"` (graph-traversal.ts)
         // — same BFS in both directions, used here for both `dir: "both"`
@@ -461,14 +656,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
           linkFilter: args.link_filter,
+          showInactive: args.show_inactive,
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
         // any inline `data:` icon URL, not just the compact projection.
         const thoughts = resolveThoughts(ndb, walk.ids).map((t) => withSanitizedIcon(t));
         // Depth>1 returns ThoughtRef rows (the lightweight identity slice);
-        // project each entry to its compact shape under `view: 'compact'`.
+        // project each entry through the single list serializer under
+        // `view: 'compact'`.
         const projected =
-          view === 'full' ? thoughts : thoughts.map((t) => toCompactThoughtRef(t));
+          view === 'full' ? thoughts : projectThoughtRows(thoughts);
         return {
           thought_id: args.thought_id,
           dir: args.dir,
@@ -488,12 +685,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       description:
         'The key RAG tool: the radius-bounded subgraph around seeds — nodes, active edges, `thought_types`/' +
         '`link_types` reference tables, and with `include_comments` per-node comment previews (permanent ' +
-        'truncated to 2000 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
+        'truncated to 600 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
         '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
-        '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`; ' +
-        '`link_marked_for_deletion` (0.8.2, ошибка 355319d4) — ребро помечено на удаление (корзина). ' +
-        '`meta.views` (0.7.3) для seed-узлов — эффективный набор отборов, ' +
+        '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
+        '`link_marked_for_deletion` — ребро помечено на удаление (корзина). ' +
+        '`meta.views` для seed-узлов — эффективный набор отборов, ' +
         'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',
@@ -530,7 +727,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           args.include_comments === true
             ? result.nodes.map((id) => ({
                 thought_id: id,
-                ...getCommentsPreview(ndb, 'thought', id),
+                ...omitEmptyContainers(
+                  getCommentsPreview(ndb, 'thought', id, {
+                    // Требование «Бюджет ответа subgraph: max_chars», блок
+                    // «Актуализация 0.8.3»: постоянный комментарий узла —
+                    // 600 символов; хронология остаётся 2000.
+                    permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+                  }),
+                ),
               }))
             : undefined;
         // O10: one batched UPSERT covers every node returned by the subgraph.
@@ -539,12 +743,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // The traversal already returns edges with the minimal shape (no
         // colour/style/width — see graph-traversal/subgraph), so the only O12
         // effects here are the node projection and the link-type catalogue.
-        const projectedNodes =
-          view === 'full' ? nodes : nodes.map((t) => toCompactThought(t));
-        const linkTypes =
-          view === 'full'
-            ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
-            : linkTypeCatalogCompact(ndb, result.edges.map((e) => e.type_id));
+        // 0.8.3: справочник типов связей худой (`view` его не меняет).
+        const linkTypes = linkTypeCatalog(ndb, result.edges.map((e) => e.type_id));
         // 0.7.2 (requirement 8ab42ea8) — annotate every edge with two presence
         // flags (`has_properties`, `has_comment`) so the agent sees, in one
         // read, which links hold knowledge worth following up. Two aggregating
@@ -555,11 +755,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         );
         const edges = result.edges.map((edge) => {
           const flags = fillingFlags.get(edge.id);
-          return {
+          const annotated = {
             ...edge,
             has_properties: flags?.has_properties ?? false,
             has_comment: flags?.has_comment ?? false,
           };
+          return view === 'full' ? annotated : projectLinkRow(annotated);
         });
         // When the hard `max_nodes` bound fires during traversal, the response is
         // already structurally incomplete — running the budget shrinker on top
@@ -569,7 +770,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // `meta.views` (задача c1fa71d4) — отборы для seed-узлов. Для
         // остальных узлов поле пустое (агент может прочитать их карточку
         // отдельно через `etn.thoughts.get`).
-        const projectedNodesWithViews = projectedNodes.map((n) => {
+        const nodesWithViews = nodes.map((n) => {
           const effectiveViews = seedViews.get(n.id);
           if (effectiveViews === undefined) {
             return { ...n, views: [] };
@@ -587,6 +788,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             })),
           };
         });
+        // Единый сериализатор списочных записей (projection.ts): у узлов
+        // compact-проекции снимаются визуальные/сервисные поля и пустые
+        // `views`. `view: 'full'` сохраняет прежнюю форму.
+        const projectedNodesWithViews =
+          view === 'full' ? nodesWithViews : projectThoughtRows(nodesWithViews);
         const payload: {
           nodes: typeof projectedNodesWithViews;
           edges: typeof edges;
@@ -608,7 +814,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 max_chars: args.max_chars,
               })
             : null;
-        return {
+        return omitEmptyContainers({
           nodes: payload.nodes,
           edges: payload.edges,
           truncated: traversalTruncated || (budget?.truncated ?? false),
@@ -637,81 +843,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   steps: budget.reason,
                 },
               }),
-        };
+        });
       }),
   );
-  mcp.registerTool(
-    'etn.thoughts.path',
-    {
-      title: 'Путь между мыслями',
-      description:
-        'Shortest path between two thoughts through undirected parent/child edges, bounded by ' +
-        '`max_depth`. `link_filter` — { type_ids?, include_structural? } ограничивает рёбра, по ' +
-        'которым ищется путь. Returns the id sequence or `path: null` when unreachable.',
-      inputSchema: ThoughtsPath.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.path'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const path = findPath(
-          ndb,
-          args.from_id,
-          args.to_id,
-          args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
-          args.link_filter,
-        );
-        // Bug fix (§5.1e): sanitize before returning — `resolveThoughts` gives
-        // raw `data:` icon URLs, but the agent can never resolve an image; the
-        // place must mirror `subgraph`/`get`/`neighbors`.
-        const thoughts =
-          path === null ? undefined : resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t));
-        return {
-          from_id: args.from_id,
-          to_id: args.to_id,
-          path,
-          ...(thoughts === undefined
-            ? {}
-            : {
-                thoughts,
-                thought_types: thoughtTypeCatalog(ndb, thoughts.map((t) => t.type_id)),
-              }),
-        };
-      }),
-  );
-  mcp.registerTool(
-    'etn.thoughts.mentions',
-    {
-      title: 'Где упоминается мысль',
-      description:
-        'Comments (on thoughts and links) whose text mentions the thought by title or synonym.',
-      inputSchema: ThoughtsMentions.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.mentions'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        return findMentions(ndb, args.thought_id);
-      }),
-  );
-  mcp.registerTool(
-    'etn.thoughts.backlinks',
-    {
-      title: 'Ссылки на мысль',
-      description:
-        'Comments whose `body_md` carries an explicit ID-based wiki reference `[[#<id>]]` or ' +
-        '`[[n:<net>#<id>]]` to this thought. Distinct from `etn.thoughts.mentions` — that one finds implicit ' +
-        'text matches by title/synonym via FTS5, this one explicit UUID references. Returns the same ' +
-        '`MentionHit[]` shape; the thought\'s own comments are excluded.',
-      inputSchema: ThoughtsBacklinks.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.backlinks'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        return findBacklinks(ndb, args.thought_id);
-      }),
-  );
+  // `etn.thoughts.path` / `etn.thoughts.mentions` / `etn.thoughts.backlinks` /
+  // `etn.thoughts.deletion_check` (0.8.3, задача 86ef2ff4) сняты из постоянного
+  // набора — упакованы в `etn.ops` (tools/ops.ts).
   mcp.registerTool(
     'etn.thoughts.usage',
     {
@@ -738,15 +875,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             thoughts: g.thoughts.map((t) => withSanitizedIcon(t)),
           })),
         };
-        // `groups[].thoughts[]` is a ThoughtRef[] — project each entry under
-        // the compact view. The `total` and `groups` skeleton are preserved.
+        // `groups[].thoughts[]` is a ThoughtRef[] — project each entry through
+        // the single list serializer under the compact view. The `total` and
+        // `groups` skeleton are preserved.
         const groups =
           view === 'full'
             ? usage.groups
             : usage.groups.map((g) => ({
                 property_id: g.property_id,
                 key: g.key,
-                thoughts: g.thoughts.map((t) => toCompactThoughtRef(t)),
+                thoughts: projectThoughtRows(g.thoughts),
               }));
         return {
           total: usage.total,
@@ -759,27 +897,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         };
       }),
   );
-  mcp.registerTool(
-    'etn.thoughts.deletion_check',
-    {
-      title: 'Проверка блокировки удаления мысли',
-      description:
-        'Check what blocks a thought from being physically deleted: use in blocking link properties, holding ' +
-        'layers, and future orphans among its children. Accepts an array; returns a map id → ' +
-        '{ blocked, blocking, orphaned_children }. See prompt etn.how_to_purge for the two-phase deletion flow.',
-      inputSchema: ThoughtsDeletionCheck.schema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.deletion_check'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const result: Record<string, unknown> = {};
-        for (const id of [...new Set(args.thought_ids)]) {
-          result[id] = checkThoughtDeletion(ndb, id);
-        }
-        return result;
-      }),
-  );
+  // `etn.thoughts.deletion_check` (0.8.3, задача 86ef2ff4) снят — в `etn.ops`.
 
 }
 
@@ -798,12 +916,34 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
     },
     (args) =>
       runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
+        // Задача eb1a3f43, требование c98d5d19: веерный режим.
+        if (args.network_ids !== undefined) {
+          const access = buildCrossNetworkAccess(rt, args.network_ids);
+          if (access.networks.length === 0) {
+            return { hits: [], networks: [] };
+          }
+          const result = fanOutFindDuplicates(access, {
+            networkIds: access.accessibleIds,
+            title: args.title,
+            synonyms: args.synonyms,
+          });
+          return {
+            hits: projectThoughtRows(result.hits.map((hit) => withSanitizedIcon(hit))),
+            networks: result.networks,
+            truncated: result.truncated,
+            reason: result.reason,
+          };
+        }
+        const ndb = openMemberNetwork(rt, args.network_id as string);
         // Bug fix (§5.1e): `findDuplicates` is shared with the REST add-thought
-        // dialog (which needs the real icon to render candidates), so sanitize
-        // only at this MCP-facing call site.
-        return findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
-          withSanitizedIcon(hit),
+        // dialog (which needs the real icon to render candidates), so project
+        // only at this MCP-facing call site: every list record goes through the
+        // single serializer (`icon` sanitized and kept, visual/service dropped,
+        // empty containers omitted).
+        return projectThoughtRows(
+          findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
+            withSanitizedIcon(hit),
+          ),
         );
       }),
   );

@@ -43,32 +43,41 @@
  */
 
 import type {
+  CrossNetworkRefValue,
   EffectiveTypeProperty,
   LinkPropertyValueItem,
+  SearchNameHit,
   ThoughtRef,
 } from '@etn/shared';
+import { formatCrossNetworkAddress, parseCrossNetworkAddress } from '@etn/shared';
 
 import { store } from '../state.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { markThoughtCommentPreview } from '../lib/hover-preview.js';
+import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
+import { markCrossNetworkThoughtPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
+import { loadCrossNetworkCandidates } from '../lib/entity-picker.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import {
   historySuggestSource,
   optionsSuggestSource,
-  searchSuggestSource,
   wireSuggest,
   type SuggestEntry,
   type SuggestHandle,
   type SuggestSource,
 } from '../lib/suggest-dropdown.js';
 import { loadRecentValues, recordRecentValue } from './recent-values.js';
-import { removeLinkValueEdges } from './link-value-removal.js';
+import {
+  removeLinkValueEdges,
+  removalModeForClick,
+  type LinkValueRemovalMode,
+} from './link-value-removal.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
-import type { MenuItem } from '../lib/menu.js';
+import { openWikiIdTarget } from './wiki-link.js';
+import { showMenuAt, type MenuItem } from '../lib/menu.js';
 
 // ---------------------------------------------------------------------------
 // Публичный API
@@ -154,20 +163,37 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
         ownerType: opts.ownerType,
         ownerId: opts.ownerId,
         definition: opts.definition,
+        // Для `link` ветки значения — массив `LinkPropertyValueItem[]` или
+        // строк-id (multiple — массив строк-id). Расширение типа
+        // `PropertyValueValue` вариантом `CrossNetworkRefValue[]` (задача
+        // 7849008a) делает сигнатуру шире, но эта ветка срабатывает только
+        // для `value_type: 'link'` — снапшот тут не появляется; строки и
+        // объекты с `link_id` валидны.
         values: Array.isArray(opts.value)
-          ? (opts.value as unknown[]).map((item) =>
-              typeof item === 'string'
-                ? {
+          ? ((opts.value as unknown[]).flatMap((item): LinkPropertyValueItem[] => {
+              if (typeof item === 'string' && item !== '') {
+                return [
+                  {
                     link_id: '',
                     target_id: item,
                     target_title: null,
                     target_type_id: null,
                     comment: null,
-                  }
-                : (item as LinkPropertyValueItem),
-            )
+                  },
+                ];
+              }
+              if (
+                typeof item === 'object' &&
+                item !== null &&
+                'link_id' in item &&
+                'target_id' in item
+              ) {
+                return [item as LinkPropertyValueItem];
+              }
+              return [];
+            }) as LinkPropertyValueItem[])
           : (opts.value === undefined && Array.isArray(opts.definition.default_value)
-              ? opts.definition.default_value.map((id) => ({
+              ? (opts.definition.default_value as string[]).map((id) => ({
                   link_id: '',
                   target_id: id,
                   target_title: null,
@@ -184,7 +210,422 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
     default:
       // Legacy (миграция 040): значений этого вида в живых базах нет.
       return span('упразднено', 'muted');
+    case 'cross_network_ref':
+      // Кросс-сетевая ссылка (задача 7849008a): адрес `n:<network>#<thought>`
+      // в текстовом поле + кнопка «обновить снапшот» через IPC
+      // `properties.crossResolve` (REST POST …/properties/{key}/cross-resolve).
+      return buildCrossNetworkRefEditor(opts);
   }
+}
+
+/**
+ * Одна цель кросс-сетевой ссылки в редакторе: адрес (ключ значения),
+ * разобранные id и подпись-снапшот имени.
+ */
+interface CrossNetworkRefEntry {
+  /** Адрес `n:<network>#<thought>` — то, что уходит в `save`. */
+  address: string;
+  networkId: string;
+  thoughtId: string;
+  /** Снапшот имени цели (или сам адрес, пока снапшота нет). */
+  title: string;
+  /** Последний живой резолв отказал (сеть/цель удалены). */
+  unresolved: boolean;
+}
+
+/**
+ * Редактор кросс-сетевой ссылки (задача 7849008a; поле ввода переделано под
+ * чипы — ошибка 9be98ae1). Работает как поле свойства-связи: цели — облачка
+ * фабрики (профиль `chip`) с меткой «чужой сети» ({@link networkBadge}),
+ * добавление — живой веерный поиск по вводу (`loadCrossNetworkCandidates`) или
+ * диалог «Выбрать…» (`pickThoughtsDialog { crossNetwork }`, задача ea04a185).
+ * Значение — адреса `n:<network>#<thought>` (single — строка, multiple —
+ * массив; пусто — `null`), формат тот же, что у межсетевых wiki-ссылок.
+ *
+ * Чип кросс-сети: клик — открыть цель (`openWikiIdTarget` с контролем вкладок
+ * и последующим точечным резолвом, требование 95511443), Ctrl+наведение —
+ * предпросмотр комментария чужой мысли с именем сети-источника в заголовке,
+ * контекстное меню — «Открыть» / «Обновить имя» (`crossResolve`) / «Удалить из
+ * значения», кнопка «✕» — то же удаление. Резолв снапшота идёт ТОЛЬКО по
+ * действию (требование 95511443): чтение карточки чужие сети не открывает.
+ */
+function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
+  const isMultiple = opts.definition.config?.multiple === true;
+  // Набор целей: `ordered` — порядок адресов (то, что уходит в save), `entries`
+  // — данные чипа. Снапшоты значения (CrossNetworkRefValue[]) и сырые адреса
+  // (конструкторы условий) нормализуются в одну карту.
+  const entries = new Map<string, CrossNetworkRefEntry>();
+  const ordered: string[] = [];
+  const addEntry = (entry: CrossNetworkRefEntry): void => {
+    if (!entries.has(entry.address)) ordered.push(entry.address);
+    entries.set(entry.address, entry);
+  };
+  for (const snap of readSnapshotFromValue(opts.value)) {
+    if (snap.network_id === '' || snap.thought_id === '') continue;
+    let address: string;
+    try {
+      address = formatCrossNetworkAddress(snap.network_id, snap.thought_id);
+    } catch {
+      continue;
+    }
+    addEntry({
+      address,
+      networkId: snap.network_id,
+      thoughtId: snap.thought_id,
+      title: snap.title_snapshot,
+      unresolved: snap.unresolved,
+    });
+  }
+  for (const address of readAddressesFromValue(opts.value)) {
+    const parsed = parseCrossNetworkAddress(address);
+    if (parsed === null) continue;
+    addEntry({
+      address,
+      networkId: parsed.networkId,
+      thoughtId: parsed.thoughtId,
+      title: address,
+      unresolved: false,
+    });
+  }
+
+  const root = div('value-editor value-editor--cross-network-ref');
+  const wrap = div('link-value-wrap');
+  const field = div('st-f-chipfield link-value-field cross-network-ref-field');
+
+  /** Собрать адреса набора и записать их (пусто — `null`). */
+  const commit = (): void => {
+    const addresses = [...ordered];
+    const payload = addresses.length === 0 ? null : isMultiple ? addresses : addresses[0]!;
+    const key = opts.definition.key ?? '';
+    void Promise.resolve()
+      .then(() => opts.save(payload))
+      .then((ok) => {
+        // Успешная запись — сервер уже сделал живой резолв и обновил снапшоты:
+        // просим таблицу свойств перечитать значение (иначе подписи из диалога,
+        // где имя цели неизвестно, остались бы адресами).
+        if (ok === true) notifyPropertyValuesRefreshed(key);
+      });
+  };
+
+  /** Снять цель из набора и сохранить остаток. */
+  const removeEntry = (address: string): void => {
+    const index = ordered.indexOf(address);
+    if (index >= 0) ordered.splice(index, 1);
+    entries.delete(address);
+    render();
+    commit();
+  };
+
+  /**
+   * Открыть цель в её сети (требование 95511443): переход через
+   * {@link openWikiIdTarget} (контроль уже открытых вкладок), после успеха —
+   * точечный резолв снапшота в сети-источнике значения.
+   */
+  const openEntry = async (entry: CrossNetworkRefEntry): Promise<void> => {
+    try {
+      await openWikiIdTarget(entry.networkId, entry.thoughtId);
+    } catch {
+      // openWikiIdTarget сам показывает тост при ошибке сети/мысли.
+      return;
+    }
+    if (opts.ownerType !== 'thought' || opts.ownerId === undefined) return;
+    const key = opts.definition.key ?? '';
+    if (key === '') return;
+    try {
+      await etn.properties.crossResolve(opts.networkId, opts.ownerId, key);
+    } catch {
+      // Тихо: цель всё равно открыта, обновление снапшота — удобство.
+    }
+  };
+
+  /**
+   * «Обновить имя» — точечный `crossResolve` сети-источника (требование
+   * 95511443): снапшоты и пометки нерезолвленности приходят из ответа, чипы
+   * перерисовываются; ошибка — тост.
+   */
+  const refreshNames = async (): Promise<void> => {
+    if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
+      notice('Обновление имени доступно только для свойств мыслей.', 'error');
+      return;
+    }
+    const key = opts.definition.key ?? '';
+    if (key === '') return;
+    try {
+      const result = await etn.properties.crossResolve(opts.networkId, opts.ownerId, key);
+      for (const value of result.values) {
+        if (value.network_id === '' || value.thought_id === '') continue;
+        let address: string;
+        try {
+          address = formatCrossNetworkAddress(value.network_id, value.thought_id);
+        } catch {
+          continue;
+        }
+        addEntry({
+          address,
+          networkId: value.network_id,
+          thoughtId: value.thought_id,
+          title: value.title_snapshot,
+          unresolved: value.unresolved,
+        });
+      }
+      render();
+      const unresolved = result.values.filter((v) => v.unresolved).length;
+      notice(
+        unresolved === 0
+          ? 'Снапшоты обновлены.'
+          : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
+        'info',
+      );
+      notifyPropertyValuesRefreshed(key);
+    } catch (err) {
+      notice(`Не удалось обновить имя: ${errText(err)}`, 'error');
+    }
+  };
+
+  /** Контекстное меню чипа: три команды значения (ошибка 9be98ae1). */
+  const openChipMenu = (entry: CrossNetworkRefEntry, anchor: HTMLElement): void => {
+    const items: MenuItem[] = [
+      { label: 'Открыть', onClick: () => void openEntry(entry) },
+      { label: 'Обновить имя', onClick: () => void refreshNames() },
+      { label: 'Удалить из значения', onClick: () => removeEntry(entry.address) },
+    ];
+    const rect = anchor.getBoundingClientRect();
+    showMenuAt(rect.left, rect.bottom, items);
+  };
+
+  /** Мини-облачко цели: значок, метка «чужой сети», подпись-снапшот, «✕». */
+  const buildChip = (entry: CrossNetworkRefEntry): HTMLElement => {
+    const netLabel = shortCrossNetworkLabel(entry.networkId);
+    const chip = createThoughtCloud(
+      { id: entry.thoughtId, title: entry.title, type_id: null },
+      {
+        profile: 'chip',
+        width: 'container',
+        networkBadge: { label: netLabel },
+        actions: {
+          onClick: () => void openEntry(entry),
+          onContextMenu: (event) => {
+            event?.stopPropagation?.();
+            openChipMenu(entry, chip);
+          },
+          onRemove: () => removeEntry(entry.address),
+        },
+      },
+    );
+    chip.classList.add('cross-network-ref-chip');
+    if (entry.unresolved) chip.classList.add('cross-network-ref-chip--unresolved');
+    // Ctrl+наведение — предпросмотр комментария чужой мысли; имя сети-источника
+    // попадает в заголовок попапа (ошибка 9be98ae1).
+    markCrossNetworkThoughtPreview(chip, entry.networkId, entry.thoughtId, entry.title);
+    setTooltip(
+      chip,
+      entry.unresolved
+        ? `${entry.title} — ${netLabel} (нерезолвлено)`
+        : `${entry.title} — ${netLabel} (${entry.address})`,
+    );
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('aria-label', entry.title);
+    // Клавиатура — доменная часть чипа: Enter открывает цель, Shift+F10/F10 —
+    // меню; пробел отдаём общим жестам фабрики (фокус).
+    chip.addEventListener('keydown', (event) => {
+      if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+        event.preventDefault();
+        openChipMenu(entry, chip);
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void openEntry(entry);
+      }
+    });
+    return chip;
+  };
+
+  // Поле живого веерного поиска по чужим сетям (кнопка выбрасывается при
+  // перерисовке — слушатели окна снимаются по `!isConnected`, как в выпадашке).
+  const addInput = el('input', 'value-combo-add cross-network-ref-add') as HTMLInputElement;
+  addInput.type = 'text';
+  addInput.autocomplete = 'off';
+  addInput.placeholder = 'Название мысли в другой сети…';
+
+  const searchSource: SuggestSource = {
+    when: 'typed',
+    header: 'Мысли других сетей',
+    load: async (query): Promise<SuggestEntry[]> => {
+      const trimmed = query.trim();
+      if (trimmed === '') return [];
+      const hits = await loadCrossNetworkCandidates(opts.networkId, trimmed, []);
+      const out: SuggestEntry[] = [];
+      for (const hit of hits) {
+        const netId = hit.network_id;
+        // Своя сеть в значении кросс-сетевой ссылки запрещена (требование
+        // 884d14e1) — кандидатов текущей сети отсекаем.
+        if (netId === undefined || netId === '' || netId === opts.networkId) continue;
+        let address: string;
+        try {
+          address = formatCrossNetworkAddress(netId, hit.id);
+        } catch {
+          continue;
+        }
+        out.push({ value: address, label: hit.title, thought: { ...hit } });
+      }
+      return out;
+    },
+  };
+  wireSuggest(addInput, {
+    sources: [searchSource],
+    onPick: (entry) => {
+      const address = entry.value;
+      addInput.value = '';
+      const parsed = parseCrossNetworkAddress(address);
+      if (parsed === null) return;
+      if (!isMultiple) {
+        entries.clear();
+        ordered.length = 0;
+      }
+      addEntry({
+        address,
+        networkId: parsed.networkId,
+        thoughtId: parsed.thoughtId,
+        title: entry.label,
+        unresolved: false,
+      });
+      render();
+      commit();
+    },
+  });
+
+  /**
+   * Диалог «Выбрать…»: принудительный кросс-сетевой охват (своё имя цели
+   * диалог не несёт — подписи подтянет перечитывание значения после записи).
+   */
+  const openCrossPicker = (): void => {
+    void pickThoughtsDialog({
+      networkId: opts.networkId,
+      allowCreate: false,
+      allowLinkType: false,
+      title: 'Выбор мысли из другой сети',
+      applyLabel: isMultiple ? 'Добавить' : 'Выбрать',
+      crossNetwork: { excludeNetworkId: opts.networkId },
+    }).then((result) => {
+      if (result === null) return;
+      const picked: string[] = [];
+      for (const item of result.items) {
+        if (item.kind !== 'existing') continue;
+        const netId = item.networkId;
+        if (netId === undefined || netId === '' || netId === opts.networkId) continue;
+        try {
+          picked.push(formatCrossNetworkAddress(netId, item.id));
+        } catch {
+          continue;
+        }
+      }
+      if (picked.length === 0) {
+        notice('Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.', 'info');
+        return;
+      }
+      if (!isMultiple) {
+        entries.clear();
+        ordered.length = 0;
+      }
+      for (const address of picked) {
+        const parsed = parseCrossNetworkAddress(address);
+        if (parsed === null) continue;
+        addEntry({
+          address,
+          networkId: parsed.networkId,
+          thoughtId: parsed.thoughtId,
+          title: address,
+          unresolved: false,
+        });
+      }
+      render();
+      commit();
+    });
+  };
+
+  // Угловые кнопки — как у поля свойства-связи: «…» открывает диалог выбора,
+  // «✕» очищает значение целиком.
+  const corner = div('link-value-corner');
+  const pickBtn = button('…', openCrossPicker, 'link-value-corner-btn cross-network-ref-pick', 'Выбрать мысль другой сети…');
+  const clearBtn = button(
+    '✕',
+    () => {
+      if (ordered.length === 0) return;
+      entries.clear();
+      ordered.length = 0;
+      render();
+      commit();
+    },
+    'link-value-corner-btn',
+    'Очистить значение',
+  );
+  corner.append(pickBtn, clearBtn);
+
+  const render = (): void => {
+    field.replaceChildren();
+    for (const address of ordered) {
+      const entry = entries.get(address);
+      if (entry === undefined) continue;
+      field.append(buildChip(entry));
+    }
+    addInput.placeholder = ordered.length === 0 ? 'Название мысли в другой сети…' : '+ ещё одну мысль';
+    field.append(addInput);
+    clearBtn.hidden = ordered.length === 0;
+  };
+  // Клик по свободному месту поля — фокус в живой поиск.
+  field.addEventListener('click', (event) => {
+    if (event.target === field) addInput.focus();
+  });
+  wrap.append(field, corner);
+  const row = div('form-row');
+  row.style.marginBottom = '0';
+  row.append(wrap);
+  root.append(row);
+  render();
+  return root;
+}
+
+/** Достать массив снапшотов из `value` (CrossNetworkRefValue[]); пусто — нет. */
+function readSnapshotFromValue(value: unknown): CrossNetworkRefValue[] {  if (!Array.isArray(value)) return [];
+  const out: CrossNetworkRefValue[] = [];
+  for (const item of value) {
+    if (
+      item !== null &&
+      typeof item === 'object' &&
+      'network_id' in item &&
+      'thought_id' in item &&
+      'title_snapshot' in item &&
+      'unresolved' in item
+    ) {
+      out.push(item as CrossNetworkRefValue);
+    }
+  }
+  return out;
+}
+
+/** Достать сырые адреса (строки) из `value` — для отображения в поле ввода. */
+function readAddressesFromValue(value: unknown): string[] {
+  if (typeof value === 'string') return value === '' ? [] : [value];
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === 'string' && item !== '') out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Короткое имя сети: из каталога сетей, иначе — префикс id. Локальный
+ * клон хелпера из editor/properties.ts — здесь нужен только в основной
+ * таблице, чтобы избежать циклического импорта.
+ */
+function shortCrossNetworkLabel(networkId: string): string {
+  const fromCatalog = store.state.networkList.find((n) => n.id === networkId);
+  if (fromCatalog !== undefined && fromCatalog.display_name !== '') {
+    return fromCatalog.display_name;
+  }
+  return networkId.length >= 8 ? networkId.slice(0, 8) : networkId;
 }
 
 /** Человекочитаемая метка вида значения (заголовки таблиц свойств). */
@@ -316,20 +757,51 @@ function linkHistorySource(networkId: string, propertyId: string): SuggestSource
   });
 }
 
-/** Источник живого поиска целей свойства-связи (отбор по типам — input aid).
- *  Строка-мысль — облачком: DTO кандидата структурно совместим с `ThoughtCloudInput`. */
+/**
+ * Источник живого поиска целей свойства-связи (отбор по типам — input aid).
+ * Строка-мысль — облачком. Поиск порционный (задача c8fa74ba): при большом
+ * числе кандидатов список целей догружается по мере скролла выпадашки, а не
+ * обрезается одной серверной порцией. `scope: 'names'` — кандидаты ищутся по
+ * названию/синониму (совпадает с прежним поведением `findDuplicates`).
+ */
+const LINK_TARGETS_PAGE_SIZE = 50;
+
+/** Хит поиска по именам (`by_names`) → строка-облачко выпадашки. Поля
+ *  визуала переносятся как есть (спред DTO) — представление мысли строит
+ *  общая фабрика облачка, а не этот маппер (стандарт S1, сторож
+ *  `guard-thought-cloud`). */
+function nameHitToSuggestEntry(hit: SearchNameHit): SuggestEntry {
+  return {
+    value: hit.thought_id,
+    label: hit.title,
+    thought: { ...hit, id: hit.thought_id },
+  };
+}
+
 function linkSearchSource(networkId: string, typeIds: string[]): SuggestSource {
   const filter = typeIds.filter((id) => id !== '');
-  return searchSuggestSource({
-    load: (query) => {
-      const trimmed = query.trim();
-      if (trimmed === '') return [];
-      return etn.thoughts
-        .findDuplicates(networkId, trimmed, [], filter)
-        .catch(() => [] as Awaited<ReturnType<typeof etn.thoughts.findDuplicates>>)
-        .then((hits) => hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })));
-    },
-  });
+  const loadPage = async (query: string, offset: number): Promise<SuggestEntry[]> => {
+    const trimmed = query.trim();
+    if (trimmed === '') return [];
+    try {
+      const response = await etn.thoughts.search(networkId, {
+        q: trimmed,
+        scope: 'names',
+        ...(filter.length > 0 ? { type_id: filter } : {}),
+        limit: LINK_TARGETS_PAGE_SIZE,
+        offset,
+      });
+      return response.by_names.map(nameHitToSuggestEntry);
+    } catch {
+      return [];
+    }
+  };
+  return {
+    when: 'typed',
+    load: (query) => loadPage(query, 0),
+    loadMore: (query, offset) => loadPage(query, offset),
+    pageSize: LINK_TARGETS_PAGE_SIZE,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -879,7 +1351,7 @@ async function openReadonlyChipMenu(opts: {
   fullTitle: string;
   ref: ThoughtRef | undefined;
   chip: Element;
-  /** Команды контекста редактора (748b80fd) — например «Убрать из значения». */
+  /** Команды контекста редактора (748b80fd) — операции над ребром. */
   extraItems?: MenuItem[];
 }): Promise<void> {
   await openThoughtCloudMenu({
@@ -894,14 +1366,18 @@ async function openReadonlyChipMenu(opts: {
 
 /**
  * Контекстное меню мини-облачка значения свойства-связи. Набор команд — общий
- * с холстом; отличие значения — «Убрать из значения».
+ * с холстом; отличие значения — операции над ребром (задача 0d4f793a):
+ * «Удалить связь с мыслью» (как крестик без Shift: авто-выбор удаление/корзина)
+ * и «Поместить связь в корзину» (как Shift+крестик). Прежней единственной
+ * команды «Убрать из значения» больше нет.
  */
 async function showLinkChipMenu(
   networkId: string,
   id: string,
   title: string,
   trashed: boolean,
-  onRemove: () => void,
+  onDelete: () => void,
+  onTrash: () => void,
   anchor: Element,
 ): Promise<void> {
   await openThoughtCloudMenu({
@@ -911,10 +1387,8 @@ async function showLinkChipMenu(
     trashed,
     anchor,
     extraItems: [
-      {
-        label: 'Убрать из значения',
-        onClick: onRemove,
-      },
+      { label: 'Удалить связь с мыслью', onClick: onDelete },
+      { label: 'Поместить связь в корзину', onClick: onTrash },
     ],
   });
 }
@@ -928,8 +1402,9 @@ async function showLinkChipMenu(
  * свойства (property_id пуст) ключа записи в наборе не было — из GUI связь не
  * удалялась. Теперь ключом служит display-имя стороны (`propertyName`), которое
  * сервер понимает (`resolveDefinition` шаг 3), и контекстное меню получает
- * команду «Убрать из значения» — как у чипов основной таблицы
- * (`showLinkChipMenu`). Крестик «×» очистки набора целиком рисует вызывающий
+ * команды «Удалить связь с мыслью» / «Поместить связь в корзину» — как у чипов
+ * основной таблицы (`showLinkChipMenu`), с тем же выбором способа по режиму
+ * (задача 0d4f793a). Крестик «×» очистки набора целиком рисует вызывающий
  * (ячейка «Свойства вне типа»).
  */
 export function buildOutsideReadonlyEdgeChip(
@@ -937,8 +1412,8 @@ export function buildOutsideReadonlyEdgeChip(
   edge: LinkPropertyValueItem,
   refs: Map<string, ThoughtRef>,
   removal?: {
-    /** Снять это ребро из набора («Убрать из значения»). */
-    removeTarget: (targetId: string) => void;
+    /** Снять это ребро из набора: `auto` — как крестик, `trash` — в корзину. */
+    removeTarget: (targetId: string, mode: LinkValueRemovalMode) => void;
   },
 ): HTMLElement {
   const ref = refs.get(edge.target_id);
@@ -967,7 +1442,7 @@ export function buildOutsideReadonlyEdgeChip(
       },
     },
   );
-  // Меню чипа: обычное меню облачка + «Убрать из значения», когда известен
+  // Меню чипа: обычное меню облачка + операции над ребром, когда известен
   // ключ внетиповой записи (748b80fd) — им служит display-имя стороны связи.
   const openMenu = (): void => {
     void openReadonlyChipMenu({
@@ -980,8 +1455,12 @@ export function buildOutsideReadonlyEdgeChip(
         ? {
             extraItems: [
               {
-                label: 'Убрать из значения',
-                onClick: () => removal.removeTarget(edge.target_id),
+                label: 'Удалить связь с мыслью',
+                onClick: () => removal.removeTarget(edge.target_id, 'auto'),
+              },
+              {
+                label: 'Поместить связь в корзину',
+                onClick: () => removal.removeTarget(edge.target_id, 'trash'),
               },
             ],
           }
@@ -991,7 +1470,7 @@ export function buildOutsideReadonlyEdgeChip(
   setTooltip(
     chip,
     removal !== undefined
-      ? `${fullTitle} — ребро внетиповой связи; свойство «убрать из значения» доступно в контекстном меню.`
+      ? `${fullTitle} — ребро внетиповой связи; удаление связи доступно в контекстном меню.`
       : `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
   );
   markThoughtCommentPreview(chip, edge.target_id, fullTitle);
@@ -1102,6 +1581,14 @@ export function buildLinkValueEditor(opts: {
     if (ok && opts.historyPropertyId !== undefined) {
       recordTextItemsHistory(networkId, opts.historyPropertyId, next);
     }
+    // Своя запись ребра не поднимает версию мысли, а собственному клиенту не
+    // приходит realtime-эхо (G8) — сверка окрестности на карте закрывает лишь
+    // случай, когда новое ребро меняет её подпись. Второе ребро ДРУГОГО типа к
+    // уже видимому соседу за границей первой порции сектора подпись не меняет,
+    // и таблица значений свойств фокуса осталась бы со старым снимком (ошибка
+    // da032ee3, остаточная дыра ec5ba58c). Уведомляем у самой записи —
+    // независимо от карты; перечитывание идемпотентно.
+    if (ok) notifyPropertyValuesRefreshed(definition.key ?? '');
     return ok;
   };
 
@@ -1118,12 +1605,13 @@ export function buildLinkValueEditor(opts: {
   };
 
   /**
-   * Снять цели из значения с выбором способа (задача 96d27fc0): диалог
-   * «В корзину» / «Удалить совсем». Живые рёбра есть только у владельца
+   * Снять цели из значения (задача 0d4f793a): без диалога. `auto` — авто-выбор
+   * удаление/корзина с проверкой возможности удаления; `trash` — всегда корзина
+   * (Shift+крестик, команда меню). Живые рёбра есть только у владельца
    * (`ownerType`/`ownerId`) — без него (дефолт свойства в редакторе типа)
-   * набор живёт лишь в `save`, корзины нет: снимаем как раньше, без диалога.
+   * набор живёт лишь в `save`, корзины нет: снимаем как раньше.
    */
-  const removeEdges = (removedIds: string[]): void => {
+  const removeEdges = (removedIds: string[], mode: LinkValueRemovalMode): void => {
     const next = current.filter((id) => !removedIds.includes(id));
     if (ownerType === undefined || ownerId === undefined) {
       setAndPersist(next);
@@ -1137,11 +1625,12 @@ export function buildLinkValueEditor(opts: {
         propertyKey: definition.key ?? '',
         propertyId: definition.property_id,
         removedTargetIds: removedIds,
+        mode,
         commit: () => persist(next),
       });
       if (!applied) return;
-      // UI обновляем только после решения (отмена диалога ничего не меняет):
-      // `commit` уже записал значение и записал историю.
+      // UI обновляем только после успешной записи: `commit` уже записал
+      // значение и записал историю.
       current = next;
       render();
       void resolveLinkRefs(networkId, current, refs).then(() => {
@@ -1189,8 +1678,9 @@ export function buildLinkValueEditor(opts: {
     });
   };
 
-  /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1). */
-  const buildCloud = (id: string, onRemove: () => void): HTMLElement => {
+  /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1).
+   *  `onRemove` получает режим снятия: Shift — корзина, иначе авто-выбор. */
+  const buildCloud = (id: string, onRemove: (mode: LinkValueRemovalMode) => void): HTMLElement => {
     const ref = refs.get(id);
     // Полное имя цели: заголовок из кеша, иначе подпись ребра, иначе сырой
     // id. Видимую длину ограничивает раскладка чипа; полный текст — в
@@ -1205,7 +1695,8 @@ export function buildLinkValueEditor(opts: {
         id,
         fullTitle,
         ref?.marked_for_deletion === true,
-        () => removeEdges([id]),
+        () => onRemove('auto'),
+        () => onRemove('trash'),
         cloud,
       );
     };
@@ -1232,7 +1723,8 @@ export function buildLinkValueEditor(opts: {
           onTrashBadgeClick: () => {
             void openTrashBadgeDialog(networkId, id, fullTitle);
           },
-          onRemove,
+          // Shift+крестик — всегда корзина; без Shift — авто-выбор (задача 0d4f793a).
+          onRemove: (_targetId, event) => onRemove(removalModeForClick(event?.shiftKey === true)),
         },
       },
     );
@@ -1276,7 +1768,7 @@ export function buildLinkValueEditor(opts: {
     );
     for (const id of ordered) {
       field.append(
-        buildCloud(id, () => removeEdges([id])),
+        buildCloud(id, (mode) => removeEdges([id], mode)),
       );
     }
     const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
@@ -1322,7 +1814,7 @@ export function buildLinkValueEditor(opts: {
       button(
         '✕',
         () => {
-          if (current.length > 0) removeEdges([...current]);
+          if (current.length > 0) removeEdges([...current], 'auto');
         },
         'link-value-corner-btn',
         'Очистить значение',

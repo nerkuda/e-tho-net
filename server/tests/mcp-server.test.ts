@@ -19,6 +19,7 @@ import {
 } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import {
+  callOp,
   closeMcpContext,
   buildMcpContext,
   connectMcpClient,
@@ -182,7 +183,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({ name: 'etn.networks.list', arguments: {} });
+        const result = await callOp(handle.client, 'networks.list', {});
         assert.equal(result.isError, undefined);
         const networks = toolJson<Array<{ id: string }>>(result);
         assert.equal(networks.length, 1);
@@ -270,10 +271,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         );
 
         // Метрика чтения: чтение ресурса увеличило счётчик мысли.
-        const metrics = await handle.client.callTool({
-          name: 'etn.metrics.reads',
-          arguments: { network_id: ctx.networkId, kind: 'top', limit: 200 },
-        });
+        const metrics = await callOp(handle.client, 'metrics.reads', { network_id: ctx.networkId, kind: 'top', limit: 200 });
         const items = toolJson<{ items: Array<{ thought_id: string; reads_count: number }> }>(metrics).items;
         const row = items.find((i) => i.thought_id === thoughtId);
         assert.ok(row !== undefined, 'мысль должна попасть в метрику чтения');
@@ -432,15 +430,17 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         assert.equal(get.annotations?.destructiveHint, undefined);
         assert.equal(get.annotations?.idempotentHint, undefined);
 
-        const del = byName.get('etn.thoughts.delete')!;
-        assert.equal(del.annotations?.readOnlyHint, undefined);
-        assert.equal(del.annotations?.destructiveHint, true);
+        const del = byName.get('etn.ontology.delete');
+        assert.equal(del, undefined, 'ontology.delete снят в etn.ops (задача d379e091)');
 
-        const trash = byName.get('etn.thoughts.trash')!;
-        assert.equal(trash.annotations?.idempotentHint, true);
+        const trash = byName.get('etn.thoughts.trash');
+        assert.equal(trash, undefined, 'thoughts.trash снят в etn.ops (задача d379e091)');
 
-        const restore = byName.get('etn.links.restore')!;
-        assert.equal(restore.annotations?.idempotentHint, true);
+        const restore = byName.get('etn.links.restore');
+        assert.equal(restore, undefined, 'links.restore снят в etn.ops (задача d379e091)');
+
+        const propResolve = byName.get('etn.properties.resolve');
+        assert.equal(propResolve, undefined, 'properties.resolve снят в etn.ops (задача d379e091)');
 
         const propAdd = byName.get('etn.properties.add')!;
         assert.equal(propAdd.annotations?.idempotentHint, true);
@@ -490,11 +490,21 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // (`etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`,
         // `etn.properties.set`, `etn.comments.upsert`): −3 idempotent
         // (set_active, properties.set, upsert_bundle), −6 annotated
-        // (без изменения readOnly/destructive) → 60/33/13/11.
-        assert.equal(annotated, 60);
-        assert.equal(hintReadOnly, 33);
-        assert.equal(hintDestructive, 13);
-        assert.equal(hintIdempotent, 11);
+        // (без изменения readOnly/destructive). 0.8.3 (задача 7849008a):
+        // +1 инструмент `etn.properties.resolve` с `idempotentHint: true`
+        // → 61/33/13/12.
+        // 0.8.3 (задача 86ef2ff4): редкие операции сняты в `etn.guide`/`etn.ops`,
+        // поэтому витрина сокращена. Аннотированы 27 из 29 инструментов
+        // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
+        // исторически без аннотации): 17 readOnly, 1 destructive, 7 idempotent.
+        // 0.8.3 (задача d379e091): ещё 4 инструмента сняты в `etn.ops` —
+        // `ontology.delete` (−1 destructive), `thoughts.trash`/`links.restore`/
+        // `properties.resolve` (−3 idempotent) → 23 из 25: 17 readOnly,
+        // 0 destructive (витрина деструктивных инструментов пуста), 4 idempotent.
+        assert.equal(annotated, 23);
+        assert.equal(hintReadOnly, 17);
+        assert.equal(hintDestructive, 0);
+        assert.equal(hintIdempotent, 4);
       } finally {
         await handle.close();
       }

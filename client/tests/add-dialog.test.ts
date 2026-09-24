@@ -25,6 +25,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { store } from '../src/renderer/state.js';
+import { LINK_PROPERTY_DROPDOWN_MIN_WIDTH } from '../src/renderer/lib/link-property-field.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -43,11 +44,17 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
       this.defaultPrevented = true;
     },
     stopPropagation(): void {},
+    // Общая выпадашка подсказок гасит Esc через `stopImmediatePropagation`;
+    // шим считает это no-op — диалог всё равно получает Esc и закрывается.
+    stopImmediatePropagation(): void {},
   };
 }
 
 /** Duplicate-search calls received by the fake `window.etn`. */
 const dupQueries: Array<{ title: string; synonyms: string[] }> = [];
+
+/** Кросс-сетевые поисковые вызовы (`findDuplicatesAcrossNetworks`). */
+const crossQueries: Array<{ title: string; networkIds: string[] }> = [];
 
 /** Слушатели `window` — каркас диалога вешает сюда Esc и Ctrl+Enter. */
 const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
@@ -93,6 +100,17 @@ function installShim(): void {
           dupQueries.push({ title, synonyms });
           return [];
         },
+        findDuplicatesAcrossNetworks: async (
+          _networkId: string,
+          networkIds: string[],
+          title: string,
+        ) => {
+          crossQueries.push({ title, networkIds });
+          return { hits: [], networks: { networks: [] } };
+        },
+      },
+      networks: {
+        list: async () => [{ id: 'n1' }, { id: 'n2' }],
       },
       ui: {
         setState: async () => undefined,
@@ -123,6 +141,8 @@ interface DialogHandle {
   titleText: () => string;
   /** Queued list row titles (empty when the list holds only its header). */
   lineTitles: () => string[];
+  /** Тело диалога — для проверки строки поиска и охвата кандидатов. */
+  formStack: ShimElement;
 }
 
 /** Opens the dialog with the given options and returns accessors to its DOM. */
@@ -139,7 +159,7 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
   const modeRow = formStack.children.find((c) => c.className === 'add-mode-row');
   const singleRadio = modeRow?.children[0]?.children[0] ?? new ShimElement('input');
   const multiRadio = modeRow?.children[1]?.children[0] ?? new ShimElement('input');
-  const input = formStack.children.find((c) => c.tagName === 'textarea') ?? new ShimElement('textarea');
+  const input = formStack.querySelector('textarea') ?? new ShimElement('textarea');
   const lineList =
     formStack.children.find((c) => c.className.split(/\s+/).includes('add-list')) ?? new ShimElement('div');
   const footer = box.children.find((c) => c.className === 'dialog-footer');
@@ -151,7 +171,7 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
       .filter((row) => row.className === 'add-list-item')
       .map((row) => row.children.find((c) => c.className === 'al-title')?.textContent ?? '');
   const titleText = (): string => box.querySelector('.dialog-title')?.textContent ?? '';
-  return { promise, singleRadio, multiRadio, input, lineList, primaryBtn, cancelBtn, titleText, lineTitles };
+  return { promise, singleRadio, multiRadio, input, lineList, primaryBtn, cancelBtn, titleText, lineTitles, formStack };
 }
 
 /** Ticks the microtask queue so the async duplicate search settles. */
@@ -355,6 +375,151 @@ describe('pickThoughtsDialog prefillText (карточка ETN 34ffbd75, при�
 });
 
 // ---------------------------------------------------------------------------
+// Охват поиска в диалоге добавления/выбора мысли
+// (ошибка 81be082f, требование 79755f76): только текущая сеть, без тогла.
+// ---------------------------------------------------------------------------
+
+describe('pickThoughtsDialog: охват поиска — только текущая сеть (ошибка 81be082f)', () => {
+  it('в диалоге выбора цели внутрисетевой связи нет переключателя охвата', async () => {
+    const ui = await openDialog();
+    assert.equal(
+      ui.formStack.querySelector('.cross-network-toggle'),
+      null,
+      'переключателя «по всем сетям» в диалоге нет',
+    );
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+
+  it('живой поиск кандидатов идёт только по текущей сети (штатный findDuplicates)', async () => {
+    dupQueries.length = 0;
+    crossQueries.length = 0;
+    const ui = await openDialog();
+    ui.input.value = 'Кандидат';
+    ui.input.emit('input');
+    await settle();
+    assert.equal(dupQueries.length, 1, 'поиск ушёл в источник текущей сети');
+    assert.equal(dupQueries[0]?.title, 'Кандидат', 'запрос ушёл в findDuplicates');
+    assert.equal(crossQueries.length, 0, 'веерный кросс-источник не задействован');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Подпись сети у кандидатов кросс-сетевого режима (ошибка defcd811):
+// в облачке чужой мысли место родителя занимает имя сети, цветом акцента —
+// чтобы пользователь сразу видел, в какой сети живёт однофамилец.
+// ---------------------------------------------------------------------------
+
+describe('pickThoughtsDialog: подпись сети у чужих мыслей (ошибка defcd811)', () => {
+  /** Сеть-владелец чужой мысли с display_name. */
+  const FOREIGN_NET = 'n2';
+  const FOREIGN_TITLE = 'Чужая';
+
+  /** Хит с подложкой — выдача кросс-поиска, мысль с заполненным network_id. */
+  function foreignHit(id: string, netId: string, title: string): any {
+    return {
+      id,
+      network_id: netId,
+      title,
+      synonyms: [],
+      matched_on: 'title',
+      type_id: null,
+      icon: null,
+      icon_kind: 'emoji',
+      fg_color: null,
+      bg_color: null,
+      font_bold: null,
+      font_italic: null,
+      font_underline: null,
+      font_strike: null,
+      parent_title: 'какой-то родитель',
+    };
+  }
+
+  it('в кросс-режиме вместо parent_title рисуется имя сети (display_name)', async () => {
+    // Подменяем `etn.networks.list` — каталог сетей с display_name.
+    (globalThis as any).window.etn.networks.list = async () => [
+      { id: 'n1', display_name: 'Текущая' },
+      { id: FOREIGN_NET, display_name: 'Заметки по работе' },
+    ];
+    // И подсовываем хит с network_id = FOREIGN_NET.
+    (globalThis as any).window.etn.thoughts.findDuplicatesAcrossNetworks = async () => ({
+      hits: [foreignHit('T-foreign', FOREIGN_NET, FOREIGN_TITLE)],
+      networks: { networks: [] },
+    });
+
+    const ui = await openDialog({ crossNetwork: { excludeNetworkId: 'n1' } });
+    ui.input.value = 'Чужая';
+    ui.input.emit('input');
+    await settle();
+
+    const rows = ui.formStack.querySelectorAll('.dup-item');
+    assert.equal(rows.length, 1, 'один кандидат в выдаче');
+    const net = rows[0]!.querySelector('.dup-network');
+    assert.ok(net !== null, 'есть подпись сети (`.dup-network`)');
+    assert.equal(net!.textContent, 'Заметки по работе', 'подпись — display_name чужой сети');
+    assert.equal(rows[0]!.querySelector('.dup-parent'), null, 'родитель НЕ показывается в кросс-режиме');
+    ui.cancelBtn.click();
+    await ui.promise;
+  });
+
+  it('если display_name сети нет в каталоге, подпись — короткий id', async () => {
+    (globalThis as any).window.etn.networks.list = async () => [
+      { id: 'n1', display_name: 'Текущая' },
+    ];
+    (globalThis as any).window.etn.thoughts.findDuplicatesAcrossNetworks = async () => ({
+      hits: [foreignHit('T-f2', FOREIGN_NET, FOREIGN_TITLE)],
+      networks: { networks: [] },
+    });
+
+    const ui = await openDialog({ crossNetwork: { excludeNetworkId: 'n1' } });
+    ui.input.value = 'Чужая';
+    ui.input.emit('input');
+    await settle();
+    const net = ui.formStack.querySelectorAll('.dup-item')[0]!.querySelector('.dup-network');
+    assert.ok(net !== null, 'подпись сети есть даже без display_name');
+    assert.equal(net!.textContent, 'n2', 'фолбэк — короткий id сети');
+    ui.cancelBtn.click();
+    await ui.promise;
+  });
+
+  it('в обычном режиме остаётся прежняя подпись parent_title', async () => {
+    // findDuplicates — обычный путь, parent_title заполнен.
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      {
+        id: 'L',
+        network_id: 'n1',
+        title: 'Своя',
+        synonyms: [],
+        matched_on: 'title',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        parent_title: 'Локальный родитель',
+      },
+    ];
+
+    const ui = await openDialog();
+    ui.input.value = 'Своя';
+    ui.input.emit('input');
+    await settle();
+    const row = ui.formStack.querySelectorAll('.dup-item')[0]!;
+    assert.equal(row.querySelector('.dup-parent')?.textContent, 'Локальный родитель');
+    assert.equal(row.querySelector('.dup-network'), null, 'в обычном режиме сеть НЕ подписывается');
+    ui.cancelBtn.click();
+    await ui.promise;
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Отмена диалога добавления/выбора мыслей резолвит промис (ошибка 5069a508)
 // ---------------------------------------------------------------------------
 
@@ -455,5 +620,387 @@ describe('pickThoughtsDialog: отмена любым путём закрыти�
       'основной путь отдал применённый список',
     );
     assert.equal(((globalThis as any).document.body as ShimElement).children.length, 0, 'диалог закрыт');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Поле «Свойство связи» в диалоге добавления с карты (ошибка 1dd08949):
+// вместо типа связи пользователь выбирает СВОЙСТВО-связь, отдельными пунктами
+// имена его сторон; выбранное свойство заполняется у добавляемой мысли
+// значением якоря — ребро ложится в типизированное свойство, а не «вне типа».
+// ---------------------------------------------------------------------------
+
+const LT_ID = 'lt1';
+const SIDE_FORWARD = 'запланировано в версию';
+const SIDE_REVERSE = 'включает работы';
+/** Реестр: свойство-связь (две стороны) + скаляр (в список не попадает). */
+const REGISTRY: any[] = [
+  {
+    id: 'p1',
+    name: SIDE_FORWARD,
+    value_type: 'link',
+    config: { link_type_id: LT_ID },
+    description: null,
+    created_at: '',
+    updated_at: '',
+    types_count: 2,
+    values_count: 0,
+    types_source_count: 1,
+    types_target_count: 1,
+  },
+  {
+    id: 'p2',
+    name: 'Скаляр',
+    value_type: 'text',
+    config: null,
+    description: null,
+    created_at: '',
+    updated_at: '',
+    types_count: 0,
+    values_count: 0,
+  },
+];
+
+/** Открытый список-подсказчик поля «Свойство связи» (общая выпадашка, живой поиск). */
+function propertySuggestList(): ShimElement {
+  const body = (globalThis as any).document.body as ShimElement;
+  const list = body.children.find((c) => c.className.split(/\s+/).includes('type-combo-list'));
+  assert.ok(list !== undefined, 'список поля «Свойство связи» открыт');
+  return list!;
+}
+
+/** Подписи-имена пунктов открытого списка поля (без значков и уточнений). */
+function propertySuggestNames(list: ShimElement): string[] {
+  return list
+    .querySelectorAll('.type-combo-item')
+    .map((row) => row.querySelectorAll('.type-combo-label')[0]?.textContent ?? '');
+}
+
+/** Выбирает пункт поля «Свойство связи» по имени стороны (через живой поиск). */
+async function choosePropertySide(formStack: ShimElement, label: string): Promise<void> {
+  const input = formStack.querySelector('.link-property-input');
+  assert.ok(input !== null, 'поле «Свойство связи» — поле ввода с живым поиском');
+  input!.focus();
+  await settle();
+  const row = propertySuggestList()
+    .querySelectorAll('.type-combo-item')
+    .find((r) => r.querySelectorAll('.type-combo-label')[0]?.textContent === label);
+  assert.ok(row !== undefined, `в списке есть пункт «${label}»`);
+  row!.click();
+}
+
+describe('openAddDialog: поле «Свойство связи» (ошибка 1dd08949, доработка dc175a5b)', () => {
+  const writes: any[][] = [];
+  const creates: any[] = [];
+  const batches: any[][] = [];
+
+  /** Подменяет реестр и операции записи в фейковом `window.etn`. */
+  function armEtn(): void {
+    writes.length = 0;
+    creates.length = 0;
+    batches.length = 0;
+    store.update({
+      networkId: 'n1',
+      linkTypes: [
+        {
+          id: LT_ID,
+          name_forward: SIDE_FORWARD,
+          name_reverse: SIDE_REVERSE,
+          parent_id: null,
+          is_root: false,
+          color: null,
+          style: null,
+          width: null,
+          description: null,
+        } as any,
+      ],
+    });
+    const etn = (globalThis as any).window.etn;
+    etn.propertyRegistry = { list: async () => REGISTRY };
+    etn.properties = {
+      set: async (...args: any[]) => {
+        writes.push(args);
+      },
+      remove: async () => undefined,
+      get: async () => [],
+    };
+    etn.thoughts.create = async (_n: string, input: any) => {
+      creates.push(input);
+      return {
+        id: 'new1',
+        title: input.title,
+        synonyms: input.synonyms ?? [],
+        type_id: input.type_id ?? null,
+        version: 1,
+      };
+    };
+    etn.thoughts.batch = async (...args: any[]) => {
+      batches.push(args);
+      return { affected: 1, failures: [] };
+    };
+  }
+
+  /** Открывает холстовый диалог добавления (путь карты) и ждёт его монтирования. */
+  async function openCanvasDialog(): Promise<{
+    done: Promise<unknown>;
+    formStack: ShimElement;
+    backdrop: ShimElement;
+  }> {
+    const mod = await loadDialog();
+    const done = mod.openAddDialog({ anchorId: 'A', anchorTitle: 'Версия', direction: 'child' });
+    await settle();
+    const backdrop = openBackdrop();
+    const box = backdrop.children[0];
+    const formStack = box?.querySelectorAll('.form-stack')[0] ?? new ShimElement('div');
+    return { done, formStack, backdrop };
+  }
+
+  it('поле — ввод с живым поиском; в списке имена сторон со значком и подписью', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const input = formStack.querySelector('.link-property-input');
+    assert.ok(input !== null, 'поле «Свойство связи» — поле ввода');
+    assert.equal(input!.tagName, 'input', 'никакой «открывашки»-select нет');
+    assert.equal(formStack.querySelector('.add-link-property'), null, 'прежнего select-поля нет');
+    input!.focus();
+    await settle();
+    const list = propertySuggestList();
+    assert.deepEqual(
+      propertySuggestNames(list),
+      ['без свойства', SIDE_REVERSE, SIDE_FORWARD],
+      'в списке — «без свойства» и обе стороны свойства-связи (единый алфавит имён), скаляр не попал',
+    );
+    // Проверяемая структура пункта: значок направления + подпись стороны/пары.
+    const rows = list.querySelectorAll('.type-combo-item');
+    const sideRows = rows.filter((r) => r.querySelectorAll('.property-list-link-icon').length === 1);
+    assert.equal(sideRows.length, 2, 'у каждого пункта-стороны — единый значок конца связи');
+    const targetRow = rows[1]!;
+    const sourceRow = rows[2]!;
+    // Подписи пунктов — пара имён типа связи в скобках через « -> »; прежних
+    // «источник/назначение · связь …» больше нет (ошибка 5817b009).
+    assert.equal(sourceRow.querySelectorAll('.type-combo-note')[0]?.textContent, `(${SIDE_FORWARD} -> ${SIDE_REVERSE})`);
+    assert.equal(targetRow.querySelectorAll('.type-combo-note')[0]?.textContent, `(${SIDE_FORWARD} -> ${SIDE_REVERSE})`);
+    const sourceIcon = sourceRow.querySelectorAll('.property-list-link-icon')[0]!;
+    const targetIcon = targetRow.querySelectorAll('.property-list-link-icon')[0]!;
+    // Направление — вертикальное (задача 88def930): исходящая сторона вниз,
+    // входящая вверх; проверяемо структурно (атрибут и точки шеврона), карта
+    // и структуры кладут предков сверху, потомков снизу.
+    assert.equal(sourceIcon.getAttribute('data-direction'), 'down', 'источник — стрелка вниз');
+    assert.equal(targetIcon.getAttribute('data-direction'), 'up', 'назначение — стрелка вверх');
+    assert.equal(sourceIcon.style.transform, undefined, 'зеркалирования значка больше нет');
+    assert.equal(
+      sourceIcon.children[1]?.getAttribute('points'),
+      '4,9 9,14 14,9',
+      'шеврон исходящей стороны смотрит вниз',
+    );
+    assert.equal(
+      targetIcon.children[1]?.getAttribute('points'),
+      '4,8 9,3 14,8',
+      'шеврон входящей стороны смотрит вверх',
+    );
+    const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
+    assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');
+    assert.equal(labels.includes('Тип связи'), false, 'метки «Тип связи» в диалоге карты нет');
+    assert.ok(
+      formStack.querySelector('.link-property-pick') !== null,
+      'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка 5817b009)',
+    );
+    pressEscape();
+    await done;
+  });
+
+  it('ширина выпадашек диалога — 560px, однообразно у типа мысли и свойства связи (ошибка 5c7f8376)', async () => {
+    armEtn();
+    assert.equal(LINK_PROPERTY_DROPDOWN_MIN_WIDTH, 560, 'ширина выпадашек диалога — 560px');
+    const { done, formStack } = await openCanvasDialog();
+
+    const typeInput = formStack.querySelector('.entity-combo-input') as ShimElement | null;
+    assert.ok(typeInput !== null, 'поле «Тип мысли» есть в диалоге');
+    typeInput!.focus();
+    await settle();
+    assert.equal(
+      propertySuggestList().style.minWidth,
+      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      'список типа мысли — 560px',
+    );
+    typeInput!.blur();
+
+    const propertyInput = formStack.querySelector('.link-property-input') as ShimElement | null;
+    assert.ok(propertyInput !== null, 'поле «Свойство связи» есть в диалоге');
+    propertyInput!.focus();
+    await settle();
+    assert.equal(
+      propertySuggestList().style.minWidth,
+      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      'список свойства связи — та же ширина 560px',
+    );
+
+    pressEscape();
+    await done;
+  });
+
+  it('живой поиск сужает список до свойства (обе его стороны), скаляры не предлагаются', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const input = formStack.querySelector('.link-property-input')!;
+    input.focus();
+    await settle();
+    input.value = 'включает';
+    input.emit('input');
+    await settle();
+    assert.deepEqual(
+      propertySuggestNames(propertySuggestList()),
+      [SIDE_REVERSE, SIDE_FORWARD],
+      'по обратному имени нашлось свойство — обе его стороны (как поиск общего списка свойств)',
+    );
+    input.value = 'Скаляр';
+    input.emit('input');
+    await settle();
+    const body = (globalThis as any).document.body as ShimElement;
+    assert.equal(
+      body.children.some((c) => c.className.split(/\s+/).includes('type-combo-list')),
+      false,
+      'скалярное свойство в поле не предлагается — вариантов нет, список закрыт',
+    );
+    pressEscape();
+    await done;
+  });
+
+  it('выбор стороны-источника заполняет свойство новой мысли значением якоря', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    await choosePropertySide(formStack, SIDE_FORWARD);
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Задача';
+    input.emit('keydown', key('Enter'));
+    await done;
+    assert.deepEqual(
+      writes,
+      [['n1', 'thought', 'new1', SIDE_FORWARD, ['A']]],
+      'свойство записано добавляемой мысли ключом-именем стороны со значением якоря',
+    );
+    assert.equal(batches.length, 0, 'бестиповая пакетная связь не создаётся — ребро даёт свойство');
+    assert.equal(creates[0]?.create_link, undefined, 'новая мысль создана без create_link');
+  });
+
+  it('выбор стороны-назначения пишет обратное имя (ребро развернётся сервером)', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    await choosePropertySide(formStack, SIDE_REVERSE);
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Задача';
+    input.emit('keydown', key('Enter'));
+    await done;
+    assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A']]]);
+  });
+
+  it('без выбора свойства — прежняя бестиповая связь в направлении диалога', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Задача';
+    input.emit('keydown', key('Enter'));
+    await done;
+    assert.equal(writes.length, 0, 'свойство не пишется');
+    assert.deepEqual(
+      creates[0]?.create_link,
+      { direction: 'parent', target_thought_id: 'A', type_id: null },
+      'бестиповая связь в направлении «вниз» (нетипизированное ребро)',
+    );
+  });
+
+  it('выбор свойства для существующей мысли пишет свойство ей', async () => {
+    armEtn();
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      {
+        id: 'E1',
+        title: 'Существующая',
+        synonyms: [],
+        matched_on: 'title',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        parent_title: null,
+      },
+    ];
+    const { done, formStack } = await openCanvasDialog();
+    // Мультирежим + клик по найденному кандидату — существующая мысль в списке.
+    const modeRow = formStack.children.find((c) => c.className === 'add-mode-row')!;
+    const multiRadio = modeRow.children[1]!.children[0]!;
+    multiRadio.checked = true;
+    multiRadio.emit('change');
+    await choosePropertySide(formStack, SIDE_FORWARD);
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Существующая';
+    input.emit('input');
+    await settle();
+    const candidate = formStack.querySelectorAll('.dup-item')[0];
+    assert.ok(candidate !== undefined, 'кандидат-существующая мысль найден');
+    candidate!.emit('click');
+    const primary = openBackdrop()
+      .querySelectorAll('button')
+      .find((b) => b.textContent === 'Добавить');
+    assert.ok(primary !== undefined, 'кнопка «Добавить» есть в футере');
+    primary!.click();
+    await done;
+    assert.deepEqual(
+      writes,
+      [['n1', 'thought', 'E1', SIDE_FORWARD, ['A']]],
+      'свойство записано существующей мысли',
+    );
+    assert.equal(creates.length, 0, 'новая мысль не создаётся');
+  });
+
+  it('существующие значения свойства не теряются (набор объединяется)', async () => {
+    armEtn();
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      {
+        id: 'E1',
+        title: 'Существующая',
+        synonyms: [],
+        matched_on: 'title',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        parent_title: null,
+      },
+    ];
+    // У мысли уже есть значение свойства p1 → цель X.
+    (globalThis as any).window.etn.properties.get = async () => [
+      {
+        property_id: 'p1',
+        property_name: SIDE_FORWARD,
+        value_type: 'link',
+        direction: 'out',
+        values: [{ link_id: 'l1', target_id: 'X', target_title: 'X', target_type_id: null, comment: null }],
+      },
+    ];
+    const { done, formStack } = await openCanvasDialog();
+    const modeRow = formStack.children.find((c) => c.className === 'add-mode-row')!;
+    modeRow.children[1]!.children[0]!.emit('change');
+    await choosePropertySide(formStack, SIDE_FORWARD);
+    const input = formStack.querySelector('textarea')!;
+    input.value = 'Существующая';
+    input.emit('input');
+    await settle();
+    formStack.querySelectorAll('.dup-item')[0]!.emit('click');
+    openBackdrop()
+      .querySelectorAll('button')
+      .find((b) => b.textContent === 'Добавить')!
+      .click();
+    await done;
+    assert.deepEqual(writes, [['n1', 'thought', 'E1', SIDE_FORWARD, ['X', 'A']]], 'якорь добавлен к существующему набору');
   });
 });

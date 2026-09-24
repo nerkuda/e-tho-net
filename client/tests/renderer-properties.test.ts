@@ -43,13 +43,59 @@ function ensureWindowShims(win: Record<string, unknown>): void {
  * Minimal `document` shim. `documentElement.style` covers CodeMirror 6's
  * import-time browser probing (the markdown editor is imported through the
  * editor chain).
+ *
+ * Слушатели документа собираются здесь же: таблица свойств перечитывает
+ * значения по каналу `etn:property-values-refreshed` (ошибка ec5ba58c), и без
+ * `addEventListener`/`dispatchEvent` этот путь не проверить. Список чистится на
+ * каждую установку шима — тест шлёт событие тому построению, которое строит сам.
  */
+const documentListeners = new Map<string, Array<(event: unknown) => void>>();
+
+/**
+ * События, которые производители отправили документу. Канал
+ * `etn:property-values-refreshed` шлёт `CustomEvent` (в Node-раннере его нет),
+ * поэтому шим заводит и класс события, и запись отправленного — иначе
+ * поведение производителя (сохранение значения связи) не проверить.
+ */
+const dispatchedEvents: Array<{ type: string; detail: unknown }> = [];
+
 function shimDocument(): void {
+  documentListeners.clear();
+  dispatchedEvents.length = 0;
+  (globalThis as any).CustomEvent = class {
+    type: string;
+    detail: unknown;
+    constructor(type: string, init?: { detail?: unknown }) {
+      this.type = type;
+      this.detail = init?.detail;
+    }
+  };
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     documentElement: { style: {} },
     body: new ShimElement('body'),
+    addEventListener: (type: string, fn: (event: unknown) => void) => {
+      const list = documentListeners.get(type) ?? [];
+      list.push(fn);
+      documentListeners.set(type, list);
+    },
+    removeEventListener: (type: string, fn: (event: unknown) => void) => {
+      documentListeners.set(
+        type,
+        (documentListeners.get(type) ?? []).filter((handler) => handler !== fn),
+      );
+    },
+    dispatchEvent: (event: { type: string; detail?: unknown }) => {
+      dispatchedEvents.push({ type: event.type, detail: event.detail });
+      for (const handler of documentListeners.get(event.type) ?? []) handler(event);
+      return true;
+    },
   };
+}
+
+/** Шлёт событие документа так, как это делает производитель правки значений. */
+function dispatchDocumentEvent(type: string, detail: unknown): void {
+  (globalThis as any).document.dispatchEvent({ type, detail });
 }
 
 /** Holds a reference to the first window installed by buildWithFixtures. */
@@ -559,6 +605,69 @@ describe('editor properties group body (DOM-shimmed)', () => {
       'multi link has the corner «…» and «✕» buttons',
     );
   });
+
+  it('перечитывает значения по каналу правок — список обновляется (ошибка ec5ba58c)', async () => {
+    // Своя правка с карты (диалог добавления, перетаскивание облачка, связь
+    // эллипсом) и `crossResolve` снапшота шлют локальный канал: своего
+    // realtime-эха у клиента нет, версию мысли правка ребра не поднимает — гейт
+    // полной пересборки редактора не срабатывает, и таблица свойств осталась бы
+    // со снимком значений, прочитанным при построении. Тест держит именно
+    // конец-слушатель: событие канала обязано привести к перечитыванию значений.
+    const definitions = [
+      {
+        id: 'p3',
+        property_id: 'rp3',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Сайт',
+        value_type: 'url',
+        config: null,
+        required: false,
+        position: 0,
+      },
+    ];
+    const values: Array<Record<string, unknown>> = [
+      {
+        id: 'v3',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'rp3',
+        value: 'https://old.test',
+        updated_at: '2026',
+      },
+    ];
+    const box = await buildWithUrlFixture(definitions, values);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(
+      singleUrlInput(box)?.value,
+      'https://old.test',
+      'таблица построена по первому снимку значений',
+    );
+
+    // Правка ребра на сервере: следующий ответ `properties.get` уже новый.
+    values[0] = { ...values[0], value: 'https://new.test', id: 'v3b' };
+    dispatchDocumentEvent('etn:property-values-refreshed', { key: 'Сайт' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(
+      singleUrlInput(box)?.value,
+      'https://new.test',
+      'значение перечитано по каналу без пересборки карточки',
+    );
+  });
+
+  /** Значение одиночного url-свойства в отрисованной таблице (первая строка). */
+  function singleUrlInput(box: ShimElement): ShimElement | undefined {
+    const typeBody = box.children[0];
+    const tableWrap = typeBody?.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    const cell = tbody?.children[0]?.children[1];
+    const row = cell?.children[0];
+    return row?.children[0]?.children.find(
+      (c) => c.tagName === 'input' && c.type === 'text',
+    ) as ShimElement | undefined;
+  }
 });
 
 /**
@@ -924,6 +1033,82 @@ describe('value-editor: кнопка «✕» очистки значения (о
     text.btn.dispatch('click', { stopPropagation: () => undefined });
     assert.equal(text.input.value, '');
     assert.deepEqual(text.saved, [null]);
+  });
+
+  it('сохранение значения свойства-связи шлёт канал перечитывания значений (ошибка da032ee3)', async () => {
+    // Остаточная дыра ec5ba58c: сверка окрестности на карте уведомляет таблицу
+    // свойств только когда меняется подпись окрестности. Второе ребро ДРУГОГО
+    // типа к уже видимому соседу за границей первой порции сектора её не меняет
+    // — производитель у самой записи значения-связи обязан уведомить таблицу
+    // независимо от карты.
+    const { buildLinkValueEditor } = await loadValueEditor();
+    dispatchedEvents.length = 0;
+    const saved: unknown[] = [];
+    const root = buildLinkValueEditor({
+      networkId: 'n',
+      definition: { value_type: 'link', key: 'Связь', config: null, required: false },
+      values: [
+        {
+          link_id: 'l1',
+          target_id: 't2',
+          target_title: 'Цель',
+          target_type_id: null,
+          comment: null,
+        },
+      ],
+      save: (next: unknown) => {
+        saved.push(next);
+        return Promise.resolve(true);
+      },
+    }) as ShimElement;
+
+    // Без владельца (дефолт свойства) очистка набора идёт тем же `persist`,
+    // что и обычная запись: клик по угловому «✕» пишет `null` и должен
+    // уведомить таблицу значений свойств ключом этого свойства.
+    const clear = root.findAll(
+      (e) => e.className.includes('link-value-corner-btn') && e.textContent === '✕',
+    )[0];
+    assert.ok(clear !== undefined, 'у чип-редактора связи есть угловой «✕»');
+    clear!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(saved, [null], 'очистка записана');
+    const refreshed = dispatchedEvents.filter((e) => e.type === 'etn:property-values-refreshed');
+    assert.equal(refreshed.length, 1, 'уведомление ушло ровно один раз');
+    assert.deepEqual(
+      refreshed[0]?.detail,
+      { key: 'Связь' },
+      'уведомление несёт ключ записанного свойства',
+    );
+  });
+
+  it('неудачная запись значения связи таблицу не уведомляет', async () => {
+    const { buildLinkValueEditor } = await loadValueEditor();
+    dispatchedEvents.length = 0;
+    const root = buildLinkValueEditor({
+      networkId: 'n',
+      definition: { value_type: 'link', key: 'Связь', config: null, required: false },
+      values: [
+        {
+          link_id: 'l1',
+          target_id: 't2',
+          target_title: 'Цель',
+          target_type_id: null,
+          comment: null,
+        },
+      ],
+      save: () => Promise.resolve(false),
+    }) as ShimElement;
+    const clear = root.findAll(
+      (e) => e.className.includes('link-value-corner-btn') && e.textContent === '✕',
+    )[0];
+    clear!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(
+      dispatchedEvents.filter((e) => e.type === 'etn:property-values-refreshed').length,
+      0,
+      'на неудаче перечитывать нечего',
+    );
   });
 });
 

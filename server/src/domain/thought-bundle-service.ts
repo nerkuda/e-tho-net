@@ -27,6 +27,7 @@ import { EtnError } from '@etn/shared';
 import type { NetworkDb } from '../db/network-db.js';
 import { createAttachment } from './attachment-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
+import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import { createLink } from './link-service.js';
 import {
   computeThoughtCardWarnings,
@@ -34,6 +35,7 @@ import {
   setPropertyValue,
 } from './property-service.js';
 import { findDuplicates } from './search-service.js';
+import { projectThoughtRows } from './response-projection.js';
 import { createThought, getThoughtOrThrow, updateThought } from './thought-service.js';
 
 /** Resolve the bundle's thought: explicit `thought_id`, or find-or-create-or-match. */
@@ -49,15 +51,35 @@ function resolveThought(
   if (input.thought_id !== undefined) {
     let thought = getThoughtOrThrow(ndb, input.thought_id);
     let action: ThoughtBundleThoughtAction = 'reused';
-    if (input.thought !== undefined) {
+    // Item-level thought fields (`active`, absorbed from
+    // `etn.thoughts.set_active`, bug faf56a02-e884-488b-9b7b-39dfd5d5b275;
+    // `title`/`synonyms`/`type_id`, the rename half of `etn.thoughts.update`,
+    // bug 870c0c0d-dd2d-46b1-a498-780edcf8e18a) are applied even when
+    // `thought` is absent: the contract claims those tools are absorbed by
+    // `etn.thoughts.write`, so the item-level fields must take effect on
+    // existing thoughts. When both the item-level field and its `thought.*`
+    // counterpart are present, the item-level one wins — it's the more
+    // specific intent ("just patch this field for this existing thought").
+    const mergedActive = input.active !== undefined ? input.active : input.thought?.active;
+    const mergedTitle = input.title !== undefined ? input.title : input.thought?.title;
+    const mergedSynonyms =
+      input.synonyms !== undefined ? input.synonyms : input.thought?.synonyms;
+    const mergedTypeId = input.type_id !== undefined ? input.type_id : input.thought?.type_id;
+    if (
+      input.thought !== undefined ||
+      mergedActive !== undefined ||
+      mergedSynonyms !== undefined ||
+      mergedTypeId !== undefined ||
+      input.title !== undefined
+    ) {
       thought = updateThought(
         ndb,
         thought.id,
         {
-          title: input.thought.title,
-          ...(input.thought.synonyms === undefined ? {} : { synonyms: input.thought.synonyms }),
-          ...(input.thought.type_id === undefined ? {} : { type_id: input.thought.type_id }),
-          ...(input.thought.active === undefined ? {} : { active: input.thought.active }),
+          ...(mergedTitle === undefined ? {} : { title: mergedTitle }),
+          ...(mergedSynonyms === undefined ? {} : { synonyms: mergedSynonyms }),
+          ...(mergedTypeId === undefined ? {} : { type_id: mergedTypeId }),
+          ...(mergedActive === undefined ? {} : { active: mergedActive }),
         },
         undefined,
         actorUserId,
@@ -71,6 +93,11 @@ function resolveThought(
   if (spec === undefined) {
     throw new EtnError('VALIDATION_ERROR', 'either thought_id or thought must be provided');
   }
+  // Item-level `active` applies to a NEW thought too and wins over
+  // `thought.active` (bug 21cbafb8), mirroring the existing-thought branch
+  // above. The other item-level fields (`title`/`synonyms`/`type_id`) are
+  // rejected up front for a `thought` item (see `validateEnvelope`).
+  const mergedActive = input.active !== undefined ? input.active : spec.active;
   const policy = input.on_duplicate ?? 'fail';
   const hits = findDuplicates(ndb, spec.title, spec.synonyms ?? []);
   if (hits.length === 0) {
@@ -80,7 +107,7 @@ function resolveThought(
         title: spec.title,
         ...(spec.synonyms === undefined ? {} : { synonyms: spec.synonyms }),
         ...(spec.type_id === undefined ? {} : { type_id: spec.type_id }),
-        ...(spec.active === undefined ? {} : { active: spec.active }),
+        ...(mergedActive === undefined ? {} : { active: mergedActive }),
       },
       actorUserId,
     );
@@ -93,7 +120,12 @@ function resolveThought(
     throw new EtnError('INTERNAL', 'find_duplicates returned an empty hit unexpectedly');
   }
   if (policy === 'fail') {
-    throw new EtnError('DUPLICATE', 'a matching thought already exists', { candidates: hits });
+    // Кандидаты в ответе той же формы, что и у `etn.thoughts.find_duplicates`:
+    // снимаем визуальные/сервисные поля (fg_color, font_*, …) единым
+    // compact-сериализатором (мелкий дефект превью, 0.8.3).
+    throw new EtnError('DUPLICATE', 'a matching thought already exists', {
+      candidates: projectThoughtRows(hits),
+    });
   }
   const matched = getThoughtOrThrow(ndb, topHit.id);
   if (policy === 'update') {
@@ -104,7 +136,7 @@ function resolveThought(
         title: spec.title,
         ...(spec.synonyms === undefined ? {} : { synonyms: spec.synonyms }),
         ...(spec.type_id === undefined ? {} : { type_id: spec.type_id }),
-        ...(spec.active === undefined ? {} : { active: spec.active }),
+        ...(mergedActive === undefined ? {} : { active: mergedActive }),
       },
       undefined,
       actorUserId,
@@ -160,6 +192,7 @@ export function upsertThoughtBundle(
   ndb: NetworkDb,
   input: ThoughtBundleInput,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): ThoughtBundleResult {
   return ndb.transaction(() => {
     const { thought, action, matchedOn } = resolveThought(ndb, input, actorUserId);
@@ -199,7 +232,18 @@ export function upsertThoughtBundle(
     if (input.properties !== undefined) {
       properties = {};
       for (const [key, value] of Object.entries(input.properties)) {
-        properties[key] = setPropertyValue(ndb, 'thought', thought.id, key, value, actorUserId);
+        // `crossNetworkAccess` пробрасывается в том числе ради значений вида
+        // `cross_network_ref`: без него запись такого значения отвергается
+        // (задача 7849008a, требование aa89940c).
+        properties[key] = setPropertyValue(
+          ndb,
+          'thought',
+          thought.id,
+          key,
+          value,
+          actorUserId,
+          crossNetworkAccess,
+        );
       }
     }
 

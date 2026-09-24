@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import {
+  callOp,
   buildMcpContext,
   callWrite,
   closeMcpContext,
@@ -142,6 +143,41 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
         );
         assert.ok(result.items[0]?.comment_preview);
         assert.equal(result.items[0]!.comment_preview!.body_md.length, 3000);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('текст постоянного комментария в карточке ровно один раз: meta.permanent = null (29def270)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Один экземпляр текста',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+          comment: { body_md: 'короткий постоянный комментарий' },
+        });
+        const result = toolJson<{
+          items: Array<{
+            id: string;
+            meta: { permanent: unknown };
+            comment_preview: { body_md: string } | null;
+          }>;
+        }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.resolve',
+            arguments: { network_id: ctx.networkId, thought_ids: [created.id] },
+          }),
+        );
+        const card = result.items[0]!;
+        // Дубль текста устранён: в карточке resolve `meta.permanent` обнулён,
+        // единственный экземпляр — в `comment_preview`.
+        assert.equal(card.meta.permanent, null);
+        assert.equal(card.comment_preview?.body_md, 'короткий постоянный комментарий');
       } finally {
         await handle.close();
       }
@@ -443,10 +479,7 @@ describe('etn.members.list (0.7.2)', { skip: !nativeAvailable() }, () => {
         const result = toolJson<{
           members: Array<{ user_id: string; display_name: string | null; role: string; joined_at: string }>;
         }>(
-          await handle.client.callTool({
-            name: 'etn.members.list',
-            arguments: { network_id: ctx.networkId },
-          }),
+          await callOp(handle.client, 'members.list', { network_id: ctx.networkId }),
         );
         assert.ok(result.members.length >= 1, 'минимум один участник — admin');
         const admin = result.members.find((m) => m.user_id === ctx.adminId);
@@ -475,9 +508,7 @@ describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }
         // Сначала создаём вложение через MCP с уникальной меткой для поиска.
         const unique = `unique-${randomUUID()}`;
         const created = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.attachments.add',
-            arguments: {
+          await callOp(handle.client, 'attachments.add', {
               network_id: ctx.networkId,
               owner_type: 'thought',
               owner_id: ctx.homeId,
@@ -485,28 +516,21 @@ describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }
               url: `https://example.test/${unique}`,
               title: `Старое ${unique}`,
               description: `Старое описание ${unique}`,
-            },
-          }),
+            }),
         );
         const updated = toolJson<{ id: string; version: number }>(
-          await handle.client.callTool({
-            name: 'etn.attachments.update',
-            arguments: {
+          await callOp(handle.client, 'attachments.update', {
               network_id: ctx.networkId,
               attachment_id: created.id,
               title: `Новое ${unique}`,
               description: `Новое описание ${unique}`,
-            },
-          }),
+            }),
         );
         assert.equal(updated.id, created.id);
 
         // Поиск по уникальной метке — должны найти обновлённое вложение.
         const searched = toolJson<Array<{ id: string; title: string | null; description: string | null }>>(
-          await handle.client.callTool({
-            name: 'etn.attachments.search',
-            arguments: { network_id: ctx.networkId, q: unique },
-          }),
+          await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: unique }),
         );
         const hit = searched.find((a) => a.id === created.id);
         assert.ok(hit, 'обновлённое вложение находится поиском');
@@ -526,44 +550,32 @@ describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const created = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.attachments.add',
-            arguments: {
+          await callOp(handle.client, 'attachments.add', {
               network_id: ctx.networkId,
               owner_type: 'thought',
               owner_id: ctx.homeId,
               kind: 'url',
               url: 'https://example.test/to-delete',
               title: 'На удаление',
-            },
-          }),
+            }),
         );
 
         // До удаления — находится поиском.
         const before = toolJson<Array<{ id: string }>>(
-          await handle.client.callTool({
-            name: 'etn.attachments.search',
-            arguments: { network_id: ctx.networkId, q: 'to-delete' },
-          }),
+          await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: 'to-delete' }),
         );
         assert.ok(before.find((a) => a.id === created.id), 'находится ДО');
 
         const deleted = toolJson<{ deleted: boolean; request_id?: string }>(
-          await handle.client.callTool({
-            name: 'etn.attachments.delete',
-            arguments: {
+          await callOp(handle.client, 'attachments.delete', {
               network_id: ctx.networkId,
               attachment_id: created.id,
-            },
-          }),
+            }, true),
         );
         assert.equal(deleted.deleted, true);
 
         const after = toolJson<Array<{ id: string }>>(
-          await handle.client.callTool({
-            name: 'etn.attachments.search',
-            arguments: { network_id: ctx.networkId, q: 'to-delete' },
-          }),
+          await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: 'to-delete' }),
         );
         assert.equal(
           after.find((a) => a.id === created.id),

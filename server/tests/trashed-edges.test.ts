@@ -175,8 +175,10 @@ describe(
       const total = meta.link_stats.stats.reduce((sum, entry) => sum + entry.count, 0);
       // Одно живое ребро (входящее) — помеченное исходящее не считается.
       assert.equal(total, 1);
+      // 0.8.3: у каждой записи — имена типа связи; для нетипизированного
+      // ребра их нет (`null`).
       assert.deepEqual(meta.link_stats.stats, [
-        { link_type_id: null, direction: 'in', count: 1 },
+        { link_type_id: null, direction: 'in', count: 1, name_forward: null, name_reverse: null },
       ]);
       ndb.close();
     });

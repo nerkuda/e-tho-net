@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { after, describe, it } from 'node:test';
 
 import {
+  callOp,
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
@@ -116,16 +117,13 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
     try {
       const tree = makeTree(w.src, ['A — корень', 'A.1 — потомок 1', 'A.2 — потомок 2']);
 
-      const result = await w.handle.client.callTool({
-        name: 'etn.thoughts.copy_subtree',
-        arguments: {
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
           source_network_id: w.src.networkId,
           target_network_id: w.dst.networkId,
           root_thought_ids: [tree.root],
           max_depth: 5,
           duplicate_policy: 'create_always',
-        },
-      });
+        });
       assert.equal(result.isError, undefined, toolText(result));
 
       const data = toolJson<{
@@ -183,16 +181,13 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
       const ndb = openNetworkDb(w.src.dataDir, w.src.networkId);
       createLink(ndb, { source_id: srcRoot.id, target_id: childId }, w.src.adminId);
 
-      const result = await w.handle.client.callTool({
-        name: 'etn.thoughts.copy_subtree',
-        arguments: {
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
           source_network_id: w.src.networkId,
           target_network_id: w.dst.networkId,
           root_thought_ids: [srcRoot.id],
           max_depth: 3,
           duplicate_policy: 'reuse',
-        },
-      });
+        });
       assert.equal(result.isError, undefined, toolText(result));
       const data = toolJson<{
         thoughts_created: number;
@@ -221,15 +216,12 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
         w.src.adminId,
       );
 
-      const result = await w.handle.client.callTool({
-        name: 'etn.thoughts.copy_subtree',
-        arguments: {
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
           source_network_id: w.src.networkId,
           target_network_id: w.dst.networkId,
           root_thought_ids: [thought.id],
           duplicate_policy: 'create_always',
-        },
-      });
+        });
       assert.ok(result.isError, 'должна быть ошибка');
       // Контент ошибки приходит в `content[0].text` JSON-RPC ответа.
       const blocks = (result as { content?: Array<{ type?: string; text?: string }> }).content;
@@ -246,15 +238,12 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
   it('HOME-мысль как корень → VALIDATION_ERROR', async () => {
     const w = await buildPair();
     try {
-      const result = await w.handle.client.callTool({
-        name: 'etn.thoughts.copy_subtree',
-        arguments: {
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
           source_network_id: w.src.networkId,
           target_network_id: w.dst.networkId,
           root_thought_ids: [w.src.homeId],
           duplicate_policy: 'create_always',
-        },
-      });
+        });
       assert.ok(result.isError, 'должна быть ошибка');
       assert.ok(toolText(result).includes('HOME'));
     } finally {
@@ -273,14 +262,11 @@ describe('etn.thoughts.mentions_scan (0.7.2 P3)', { skip: !nativeAvailable() }, 
         createThought(ndb, { title: 'Электромобиль' }, ctx.adminId);
         createThought(ndb, { title: 'Велосипед' }, ctx.adminId);
 
-        const result = await handle.client.callTool({
-          name: 'etn.thoughts.mentions_scan',
-          arguments: {
+        const result = await callOp(handle.client, 'thoughts.mentions_scan', {
             network_id: ctx.networkId,
             text: 'Сегодня видел новый Электромобиль на улице.',
             min_confidence: 0.6,
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<{
           matches: Array<{ thought_id: string; title: string; confidence: number }>;
@@ -309,14 +295,11 @@ describe('etn.thoughts.mentions_scan (0.7.2 P3)', { skip: !nativeAvailable() }, 
           ctx.adminId,
         );
 
-        const result = await handle.client.callTool({
-          name: 'etn.thoughts.mentions_scan',
-          arguments: {
+        const result = await callOp(handle.client, 'thoughts.mentions_scan', {
             network_id: ctx.networkId,
             text: 'Расскажи мне про квантовая машина.',
             min_confidence: 0.5,
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<{
           matches: Array<{ thought_id: string; title: string; confidence: number }>;
@@ -346,16 +329,13 @@ describe('etn.thoughts.mentions_scan (0.7.2 P3)', { skip: !nativeAvailable() }, 
         createThought(ndb, { title: 'TargetOne' }, ctx.adminId);
         createThought(ndb, { title: 'TargetTwo' }, ctx.adminId);
 
-        const result = await handle.client.callTool({
-          name: 'etn.thoughts.mentions_scan',
-          arguments: {
+        const result = await callOp(handle.client, 'thoughts.mentions_scan', {
             network_id: ctx.networkId,
             text: 'Видел TargetOne и TargetTwo сегодня.',
             min_confidence: 0.6,
             create_links: true,
             source_thought_id: source.id,
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<{
           matches: Array<{ thought_id: string; confidence: number }>;
@@ -393,14 +373,11 @@ describe('etn.thoughts.mentions_scan (0.7.2 P3)', { skip: !nativeAvailable() }, 
           ctx.adminId,
         );
 
-        const result = await handle.client.callTool({
-          name: 'etn.thoughts.mentions_scan',
-          arguments: {
+        const result = await callOp(handle.client, 'thoughts.mentions_scan', {
             network_id: ctx.networkId,
             text: 'Просто выходной день.',
             min_confidence: 0.9,
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<{ matches: Array<{ confidence: number }> }>(result);
         // Все совпадения либо отсутствуют, либо ≥ 0.9.
@@ -437,16 +414,13 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
       const beforeLinks = countLinks(w.src);
 
       // Экспорт из src.
-      const exportRes = await w.srcHandle.client.callTool({
-        name: 'etn.export.subgraph',
-        arguments: {
+      const exportRes = await callOp(w.srcHandle.client, 'export.subgraph', {
           network_id: w.src.networkId,
           seed_ids: [tree.root],
           radius: 2,
           format: 'etnx',
           etnx_options: { include_attachments: false },
-        },
-      });
+        });
       assert.equal(exportRes.isError, undefined, toolText(exportRes));
       const exportData = toolJson<{ format: string; content_b64: string; size: number }>(exportRes);
       assert.equal(exportData.format, 'etnx');
@@ -454,14 +428,10 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
       assert.ok(exportData.size > 0);
 
       // Импорт в dst.
-      const importRes = await w.handle.client.callTool({
-        name: 'etn.import.subgraph',
-        arguments: {
+      const importRes = await callOp(w.handle.client, 'import.subgraph', {
           network_id: w.dst.networkId,
           source: { kind: 'etnx_base64', content_base64: exportData.content_b64 },
-          confirm: true,
-        },
-      });
+        }, true);
       assert.equal(importRes.isError, undefined, toolText(importRes));
       const importData = toolJson<{
         imported: {
@@ -489,28 +459,22 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
         w.src.adminId,
       );
 
-      const exportRes = await w.srcHandle.client.callTool({
-        name: 'etn.export.subgraph',
-        arguments: {
+      const exportRes = await callOp(w.srcHandle.client, 'export.subgraph', {
           network_id: w.src.networkId,
           seed_ids: [tree.root],
           radius: 2,
           format: 'etnx',
-        },
-      });
+        });
       assert.equal(exportRes.isError, undefined, toolText(exportRes));
       const { content_b64 } = toolJson<{ content_b64: string }>(exportRes);
 
       const beforeDstThoughts = countThoughts(w.dst);
       const beforeDstLinks = countLinks(w.dst);
 
-      const dryRes = await w.handle.client.callTool({
-        name: 'etn.import.dry_run',
-        arguments: {
+      const dryRes = await callOp(w.handle.client, 'import.dry_run', {
           network_id: w.dst.networkId,
           source: { kind: 'etnx_base64', content_base64: content_b64 },
-        },
-      });
+        });
       assert.equal(dryRes.isError, undefined, toolText(dryRes));
       const dryData = toolJson<{
         ok: boolean;
@@ -536,14 +500,11 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const result = await handle.client.callTool({
-          name: 'etn.import.subgraph',
-          arguments: {
+        const result = await callOp(handle.client, 'import.subgraph', {
             network_id: ctx.networkId,
             source: { kind: 'etnx_base64', content_base64: Buffer.from('not-a-zip').toString('base64') },
             // confirm не задан → zod-refine отвергнет на стадии парсинга.
-          },
-        });
+          }, true);
         assert.ok(result.isError, 'должна быть ошибка без confirm');
       } finally {
         await handle.close();
@@ -561,15 +522,12 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
         const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
         const id = createThought(ndb, { title: 'Документ-источник' }, ctx.adminId).id;
 
-        const result = await handle.client.callTool({
-          name: 'etn.export.subgraph',
-          arguments: {
+        const result = await callOp(handle.client, 'export.subgraph', {
             network_id: ctx.networkId,
             seed_ids: [id],
             radius: 0,
             format: 'markdown',
-          },
-        });
+          });
         assert.equal(result.isError, undefined, toolText(result));
         const data = toolJson<{ format: string; content: string }>(result);
         assert.equal(data.format, 'markdown');

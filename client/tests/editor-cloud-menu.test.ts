@@ -73,12 +73,18 @@ describe('меню облачка в редакторе — единый кон�
     );
   });
 
-  it('чип значения свойства зовёт общий конструктор и добавляет «Убрать из значения»', () => {
+  it('чип значения свойства зовёт общий конструктор и даёт операции над связью (0d4f793a)', () => {
     const src = readText(SRC.valueEditor);
     const chip = functionBody(src, 'async function showLinkChipMenu(');
     assert.ok(
-      chip.includes('await openThoughtCloudMenu(') && chip.includes("label: 'Убрать из значения'"),
-      'the value chip menu = shared thought menu + «Убрать из значения»',
+      chip.includes('await openThoughtCloudMenu(') &&
+        chip.includes("label: 'Удалить связь с мыслью'") &&
+        chip.includes("label: 'Поместить связь в корзину'"),
+      'the value chip menu = shared thought menu + «Удалить связь с мыслью» / «Поместить связь в корзину»',
+    );
+    assert.ok(
+      !chip.includes("'Убрать из значения'"),
+      'the old single command «Убрать из значения» must be gone',
     );
 
     const helper = functionBody(src, 'async function openThoughtCloudMenu(');
@@ -109,20 +115,23 @@ describe('меню облачка в редакторе — единый кон�
     );
   });
 
-  it('внетиповое ребро («Свойства вне типа») зовёт тот же конструктор и умеет «Убрать из значения»', () => {
+  it('внетиповое ребро («Свойства вне типа») зовёт тот же конструктор и умеет удалять связь', () => {
     const src = readText(SRC.valueEditor);
     const helper = functionBody(src, 'async function openReadonlyChipMenu(');
     assert.ok(helper.includes('openThoughtCloudMenu('), 'delegates to the shared menu');
     // Ошибка 748b80fd: у внетипового ребра появился ключ записи (display-имя
-    // стороны связи), поэтому меню принимает extraItems с «Убрать из значения».
+    // стороны связи), поэтому меню принимает extraItems; задача 0d4f793a
+    // заменила «Убрать из значения» на две команды удаления связи.
     assert.ok(
       helper.includes('extraItems'),
-      'the outside edge may carry «Убрать из значения» when it has a write key',
+      'the outside edge may carry the link-removal commands when it has a write key',
     );
     const chip = functionBody(src, 'export function buildOutsideReadonlyEdgeChip(');
     assert.ok(
-      chip.includes("label: 'Убрать из значения'"),
-      '748b80fd: the outside edge is removable by its display name',
+      chip.includes("label: 'Удалить связь с мыслью'") &&
+        chip.includes("label: 'Поместить связь в корзину'") &&
+        !chip.includes("label: 'Убрать из значения'"),
+      '0d4f793a: the outside edge offers «Удалить связь с мыслью» / «Поместить связь в корзину»',
     );
   });
 

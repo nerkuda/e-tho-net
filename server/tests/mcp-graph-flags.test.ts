@@ -129,11 +129,9 @@ describe('etn.thoughts.get.meta.link_stats (0.7.2)', { skip: !nativeAvailable() 
                 link_type_id: string | null;
                 direction: 'in' | 'out';
                 count: number;
+                name_forward: string | null;
+                name_reverse: string | null;
               }>;
-              link_types: Record<
-                string,
-                { id: string; name_forward: string; name_reverse: string; description: string | null }
-              >;
             };
           };
         }>(
@@ -160,29 +158,13 @@ describe('etn.thoughts.get.meta.link_stats (0.7.2)', { skip: !nativeAvailable() 
         assert.ok(appEntry, 'нет группы «применяется к / out»');
         assert.equal(appEntry!.count, 2);
 
-        // Справочник — оба типа, с name_forward/reverse и AI-описанием.
-        assert.equal(
-          Object.keys(compact.meta.link_stats.link_types).length,
-          2,
-        );
-        assert.deepEqual(
-          compact.meta.link_stats.link_types[depends.id],
-          {
-            id: depends.id,
-            name_forward: 'зависит от',
-            name_reverse: 'используется в',
-            description: 'жёсткая зависимость',
-          },
-        );
-        assert.deepEqual(
-          compact.meta.link_stats.link_types[applies.id],
-          {
-            id: applies.id,
-            name_forward: 'применяется к',
-            name_reverse: 'применяется от',
-            description: 'применимость',
-          },
-        );
+        // 0.8.3: имена типов связи — прямо в записи счётчика (отдельного
+        // справочника `link_types` внутри `link_stats` больше нет).
+        assert.equal(depEntry!.name_forward, 'зависит от');
+        assert.equal(depEntry!.name_reverse, 'используется в');
+        assert.equal(appEntry!.name_forward, 'применяется к');
+        assert.equal(appEntry!.name_reverse, 'применяется от');
+        assert.equal('link_types' in compact.meta.link_stats, false);
 
         // `view: "full"` — поле тоже присутствует.
         const full = toolJson<{ meta: { link_stats: unknown } }>(
@@ -220,8 +202,13 @@ describe('etn.thoughts.get.meta.link_stats (0.7.2)', { skip: !nativeAvailable() 
         const got = toolJson<{
           meta: {
             link_stats: {
-              stats: Array<{ link_type_id: string | null; direction: string; count: number }>;
-              link_types: Record<string, unknown>;
+              stats: Array<{
+                link_type_id: string | null;
+                direction: string;
+                count: number;
+                name_forward: string | null;
+                name_reverse: string | null;
+              }>;
             };
           };
         }>(
@@ -241,8 +228,11 @@ describe('etn.thoughts.get.meta.link_stats (0.7.2)', { skip: !nativeAvailable() 
         assert.equal(inNull!.count, 1);
         assert.ok(outNull, 'нет группы null/out');
         assert.equal(outNull!.count, 1);
-        // Справочник пуст — типов нет.
-        assert.deepEqual(got.meta.link_stats.link_types, {});
+        // Нетипизированное ребро: расшифровывать нечего — оба имени `null`.
+        assert.equal(inNull!.name_forward, null);
+        assert.equal(inNull!.name_reverse, null);
+        assert.equal(outNull!.name_forward, null);
+        assert.equal(outNull!.name_reverse, null);
       } finally {
         await handle.close();
       }
@@ -537,6 +527,53 @@ describe('etn.thoughts.neighbors dir=both (0.7.2)', { skip: !nativeAvailable() }
         // У нетипизированной нет ключа — справочник компактный.
         assert.equal(Object.keys(got.link_types).length, 1);
         assert.ok(got.thought_types === undefined || Object.keys(got.thought_types).length === 0);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// show_inactive (ошибка 6b2e79af, 0.8.3)
+// ---------------------------------------------------------------------------
+
+describe('etn.thoughts.neighbors show_inactive (0.8.3)', { skip: !nativeAvailable() }, () => {
+  it('по умолчанию скрывает неактивного соседа, с show_inactive: true — показывает', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const focus = insertThought(ndb, 'Фокус', null, ctx.adminId);
+      const child = insertThought(ndb, 'Неактивный ребёнок', null, ctx.adminId);
+      insertLink(ndb, focus, child, null, ctx.adminId);
+      ndb.prepare('UPDATE thoughts SET active = 0 WHERE id = ?').run(child);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const hidden = toolJson<{ total: number; neighbors: unknown[] }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.neighbors',
+            arguments: { network_id: ctx.networkId, thought_id: focus, dir: 'both' },
+          }),
+        );
+        assert.equal(hidden.total, 0, 'без show_inactive неактивный сосед скрыт');
+        assert.equal(hidden.neighbors.length, 0);
+
+        const shown = toolJson<{ total: number; neighbors: Array<{ id: string }> }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.neighbors',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_id: focus,
+              dir: 'both',
+              show_inactive: true,
+            },
+          }),
+        );
+        assert.equal(shown.total, 1, 'с show_inactive сосед виден');
+        assert.equal(shown.neighbors[0]!.id, child);
       } finally {
         await handle.close();
       }

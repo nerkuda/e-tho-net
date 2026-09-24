@@ -41,6 +41,7 @@ import type {
 import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import { upsertThoughtBundle } from './thought-bundle-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
@@ -127,6 +128,24 @@ function validateEnvelope(input: ThoughtWriteInput): void {
         { field: `thoughts[${index}]` },
       );
     }
+    // Item-level `title`/`synonyms`/`type_id`/`type` patch an EXISTING thought
+    // (addressed by `thought_id`) and are not read for a new `thought` — the
+    // domain would silently ignore them (bug 21cbafb8). Reject them here too,
+    // so the guard holds regardless of the caller layer. Item-level `active`
+    // stays valid for a new thought: it is applied to it.
+    if (hasThought) {
+      for (const field of ['title', 'synonyms', 'type_id', 'type'] as const) {
+        if (item[field] !== undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `item-level \`${field}\` applies only to an existing thought addressed by ` +
+              `thought_id; for a new thought set it inside the \`thought\` block ` +
+              `(thought.${field})`,
+            { field: `thoughts[${index}].${field}` },
+          );
+        }
+      }
+    }
     if (item.ref !== undefined) {
       if (item.ref === '') {
         throw new EtnError('VALIDATION_ERROR', 'ref must be a non-empty string', {
@@ -163,6 +182,12 @@ function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInp
                 ? { type_id: resolveThoughtTypeIdByName(ndb, item.thought.type) }
                 : {}),
             };
+      // Item-level `type` (XOR `type_id`, bug 870c0c0d): тип существующей
+      // мысли, адресованной `thought_id`, тоже задаётся по имени.
+      const itemTypeId =
+        item.type_id === undefined && item.type !== undefined
+          ? resolveThoughtTypeIdByName(ndb, item.type)
+          : undefined;
       const links =
         item.links === undefined
           ? undefined
@@ -179,6 +204,7 @@ function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInp
       return {
         ...item,
         ...(thought === undefined ? {} : { thought }),
+        ...(itemTypeId === undefined ? {} : { type_id: itemTypeId }),
         ...(links === undefined ? {} : { links }),
       };
     }),
@@ -278,11 +304,19 @@ function validateLinkTargets(input: ThoughtWriteInput, refToId: Map<string, stri
  *
  * Любая ошибка внутри `ndb.transaction` откатывает ВСЁ — вызывающий
  * никогда не видит полузаписанный граф.
+ *
+ * `crossNetworkAccess` (задача 7849008a) — опциональный контекст для значений
+ * вида `cross_network_ref` в `item.properties`: без него такая запись
+ * отвергается (`INTERNAL`), с ним идёт штатный живой резолв цели. MCP-фасад
+ * (`etn.thoughts.write`) строит его из runtime
+ * ({@link import('../mcp/context.js').mcpCrossNetworkAccess}); REST — из
+ * запроса.
  */
 export function writeThoughts(
   ndb: NetworkDb,
   input: ThoughtWriteInput,
   actorUserId: string,
+  crossNetworkAccess?: CrossNetworkAccessContext,
 ): ThoughtWriteResult {
   validateEnvelope(input);
   const resolved = resolveTypes(ndb, input);
@@ -313,6 +347,10 @@ export function writeThoughts(
       const bundleInput: ThoughtBundleInput = {
         ...(item.thought_id !== undefined ? { thought_id: item.thought_id } : {}),
         ...(item.thought !== undefined ? { thought: item.thought } : {}),
+        ...(item.active !== undefined ? { active: item.active } : {}),
+        ...(item.title !== undefined ? { title: item.title } : {}),
+        ...(item.synonyms !== undefined ? { synonyms: item.synonyms } : {}),
+        ...(item.type_id !== undefined ? { type_id: item.type_id } : {}),
         ...(item.on_duplicate !== undefined ? { on_duplicate: item.on_duplicate } : {}),
         ...(item.comment === undefined ? {} : { comment: item.comment }),
         ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),
@@ -320,7 +358,7 @@ export function writeThoughts(
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
       };
 
-      const result = upsertThoughtBundle(ndb, bundleInput, actorUserId);
+      const result = upsertThoughtBundle(ndb, bundleInput, actorUserId, crossNetworkAccess);
 
       // Fill the ref map AFTER creation so a later batch item can target_ref
       // this one.
