@@ -231,4 +231,36 @@ export type {
 export { vaadinGridAdapter } from './table-grid.js';
 export type { GridColumnSpec, GridTableAdapter, GridPoint } from './table-grid.js';
 
+// Единое дерево списков — общий рендер строк над типом-деревом данных
+// (задача d1c15a2d, требование 0086037c, компонент 24a05c95). Единственный
+// разрешённый способ сборки деревьев типов в рендерере (сторож guard-ui-tree).
+export {
+  TREE_CLASS,
+  TREE_ROW_CLASS,
+  TREE_ROW_CURRENT_CLASS,
+  TREE_CARET_CLASS,
+  TREE_CHECK_CLASS,
+  TREE_CONTENT_CLASS,
+  TREE_CELL_CLASS,
+  TREE_HEAD_CLASS,
+  TREE_EMPTY_CLASS,
+  TREE_COUNT_CLASS,
+  TREE_CARET_OPEN,
+  TREE_CARET_CLOSED,
+  treeChildIds,
+  treeChildCounts,
+  treeDepthOf,
+  treeFilterKeepIds,
+  treeVisibleIds,
+  createTree,
+} from './tree.js';
+export type {
+  TreeItem,
+  TreeRowContext,
+  TreeColumn,
+  TreeOptions,
+  TreeHandle,
+} from './tree.js';
+
+
 

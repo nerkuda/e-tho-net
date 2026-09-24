@@ -279,7 +279,7 @@ async function addRowToOtherSide(root: ShimEl, tableIndex: number): Promise<void
   await tick(60);
   const dialogs = root.children;
   const picker = dialogs[dialogs.length - 1] as ShimEl;
-  const rows = picker.findAll((r) => r.className.includes('entity-pick-row'));
+  const rows = picker.findAll((r) => r.className.includes('ui-tree-row'));
   // Тип, уже стоящий в этой таблице, приходит отмеченным — нам нужен первый
   // НЕотмеченный: только его переносим на эту сторону.
   const target = rows.find(
@@ -360,7 +360,7 @@ describe('редактор свойства: перенос между стор�
     buttons(root, 'Добавить тип')[0]!.fire('click', {});
     await tick(60);
     const picker = root.children[root.children.length - 1]!;
-    for (const row of picker.findAll((r) => r.className.includes('entity-pick-row'))) {
+    for (const row of picker.findAll((r) => r.className.includes('ui-tree-row'))) {
       const checkbox = row.findAll(
         (n) => n.tagName === 'input' && (n as any).type === 'checkbox',
       )[0];

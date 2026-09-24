@@ -89,8 +89,6 @@ import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHand
 import {
   MAX_TYPE_DEPTH,
   aggregateTypeCounts,
-  flattenTypeTree,
-  buildTypeTree,
   findRootType,
   orderedTypeRows,
   resolveLinkTypeVisual,
@@ -99,9 +97,8 @@ import {
   typeChainOf,
   typeDepth,
   subtreeHeight,
-  typeSearchVisibleIds,
-  type FlatTypeRow,
 } from '../lib/type-tree.js';
+import { createTree, type TreeItem } from '../lib/ui/tree.js';
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 // Локальные уведомления открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
@@ -347,37 +344,25 @@ export function typeRowRevealIds(
 }
 
 // ---------------------------------------------------------------------------
-// Tree rows for the catalogue dialogs (L21): expand/collapse per dialog.
+// Type tree rows for the catalogue dialog (L21) — единый компонент
+// `lib/ui/tree.ts` над данными `lib/type-tree.ts` (задача d1c15a2d,
+// требование 0086037c): своего рендера строк/каретки/отступа в экране нет.
 // ---------------------------------------------------------------------------
 
-/** Rows of a type tree restricted to the expanded nodes. */
-function visibleRows<T extends { id: string; parent_id: string | null; is_root: boolean }>(
-  types: readonly T[],
-  expanded: ReadonlySet<string>,
-): FlatTypeRow<T>[] {
-  return flattenTypeTree(buildTypeTree(types), expanded);
+/** Узел дерева типов для общего компонента `lib/ui/tree`. */
+interface TypeTreeItem extends TreeItem {
+  type: ThoughtType;
 }
 
-/** The ▸/▾ expander button of a tree row (hidden for leaves). */
-function treeToggle(
-  row: FlatTypeRow<{ id: string; parent_id: string | null; is_root: boolean }>,
-  expanded: ReadonlySet<string>,
-  onToggle: () => void,
-  /** While a name search is filtering the list, branches are shown by the
-   *  search itself (matches + ancestor chain) — the toggle renders expanded
-   *  and inert so it does not fight the search's own expansion. */
-  forceOpen = false,
-): HTMLElement {
-  const btn = uiButton({
-    label: '',
-    size: 's',
-    class: 'type-tree-toggle',
-    title: row.hasChildren ? 'Развернуть/свернуть' : '',
-    onClick: onToggle,
-  });
-  btn.textContent = row.hasChildren ? (forceOpen || expanded.has(row.type.id) ? '▾' : '▸') : '';
-  btn.disabled = !row.hasChildren || forceOpen;
-  return btn;
+/** Строки дерева типов мыслей из каталога (данные `orderedTypeRows`). */
+function typeTreeItems(types: readonly ThoughtType[]): TypeTreeItem[] {
+  return orderedTypeRows(types).map((row) => ({
+    id: row.type.id,
+    parentId: row.type.parent_id,
+    hasChildren: row.hasChildren,
+    filterText: row.type.name,
+    type: row.type,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -400,38 +385,43 @@ export function showThoughtTypesDialog(): void {
   searchInput.placeholder = t('actions.search');
   toolbar.append(
     uiButton({
-      label: 'Добавить',
+      label: t('thoughtTypes.add'),
       role: 'secondary',
       size: 's',
-      title: 'Создать тип',
+      title: t('thoughtTypes.addHint'),
       onClick: () => showThoughtTypeEditor(null, onChanged),
     }),
     uiButton({
-      label: 'Свернуть все',
+      label: t('thoughtTypes.collapseAll'),
       role: 'secondary',
       size: 's',
-      title: 'Свернуть всю иерархию',
+      title: t('thoughtTypes.collapseAll'),
       onClick: () => collapseAll(),
     }),
     uiButton({
-      label: 'Развернуть все',
+      label: t('thoughtTypes.expandAll'),
       role: 'secondary',
       size: 's',
-      title: 'Развернуть всю иерархию',
+      title: t('thoughtTypes.expandAll'),
       onClick: () => expandAll(),
     }),
     searchInput,
   );
-  body.append(toolbar, tableWrap);
 
-  // L21: the root type is always expanded; everything else starts collapsed.
-  let expanded = new Set<string>();
+  // Состояние загрузки/ошибки живёт рядом с деревом: сам список рисует общий
+  // компонент `lib/ui/tree.ts`, а статус его скрывает на время запроса.
+  const status = div('muted hidden');
   let searchQuery = '';
   // Last loaded catalogue — tree toggles/search re-render from this cache,
   // without a network round-trip and without the «Загрузка…» placeholder, so
   // expanding/collapsing/typing does not flicker or jump the scroll position.
   let cachedTypes: ThoughtType[] | null = null;
   let cachedCounts: Record<string, number> | null = null;
+  // Текущий каталог и агрегированные счётчики — читаются рендером строк.
+  let currentTypes: readonly ThoughtType[] = [];
+  let currentAggregated: Record<string, number> = {};
+  // Первичное раскрытие (root expanded, остальное свёрнуто) — один раз за диалог.
+  let expansionInitialized = false;
   // «Текущая строка» списка: тип, который пользователь только что
   // отредактировал (или создал) в открытом отсюда редакторе. Строка
   // подсвечивается, её цепочка родителей разворачивается, и список
@@ -446,88 +436,57 @@ export function showThoughtTypesDialog(): void {
     void reload();
   };
 
-  async function reload(useCache = false): Promise<void> {
-    const scrollTop = tableWrap.scrollTop;
-    let types: ThoughtType[];
-    let counts: Record<string, number>;
-    if (useCache && cachedTypes !== null && cachedCounts !== null) {
-      types = cachedTypes;
-      counts = cachedCounts;
-    } else {
-      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-      try {
-        [types, counts] = await Promise.all([
-          etn.types.listThoughtTypes(networkId),
-          etn.types.getThoughtTypeCounts(networkId),
-        ]);
-      } catch (err) {
-        tableWrap.replaceChildren(operationError(err));
-        return;
-      }
-      cachedTypes = types;
-      cachedCounts = counts;
-    }
-    if (expanded.size === 0) {
-      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
-    }
-    const aggregated = aggregateTypeCounts(types, counts);
-    const searching = searchQuery.trim() !== '';
-    const keepIds = typeSearchVisibleIds(types, searchQuery);
-    // Searching shows every matched branch fully expanded (task's «ветви до
-    // совпадений разворачиваются автоматически»); otherwise the manual
-    // expand/collapse state applies as before.
-    let rows = (
-      searching ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id))) : visibleRows(types, expanded)
-    ).filter((row) => keepIds.has(row.type.id));
-    // Текущая строка обязана быть видна: если её цепочка родителей свёрнута,
-    // разворачиваем её (при поиске ветви и так раскрыты). Иначе после создания
-    // типа с нестандартным родителем строку пришлось бы искать вручную.
-    if (currentRowId !== null && !searching && !rows.some((row) => row.type.id === currentRowId)) {
-      const reveal = typeRowRevealIds(types, currentRowId);
-      if (reveal.some((id) => !expanded.has(id))) {
-        expanded = new Set([...expanded, ...reveal]);
-        rows = visibleRows(types, expanded).filter((row) => keepIds.has(row.type.id));
-      }
-    }
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Тип'),
-      el('th', undefined, 'Комментарий'),
-      el('th', undefined, 'Количество'),
-      el('th'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    if (rows.length === 0) {
-      const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет типов.');
-      emptyCell.colSpan = 4;
-      emptyRow.append(emptyCell);
-      tbody.append(emptyRow);
-    }
-    let currentTr: HTMLElement | null = null;
-    for (const row of rows) {
-      const type = row.type;
-      const tr = el('tr');
-      if (type.is_root) tr.classList.add('type-tree-root');
-      if (type.id === currentRowId) {
-        tr.classList.add('selected');
-        currentTr = tr;
-      }
-      const nameCell = el('td');
-      nameCell.style.whiteSpace = 'nowrap';
-      const nameWrap = span('', 'type-tree-name');
-      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
-      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id), searching));
+  // Единое дерево списков (задача d1c15a2d, требование 0086037c): каретка,
+  // отступ, флажок-колонки и клавиатура — его; экран задаёт данные, визуал
+  // типа и действия строки. Строки — из словаря локализации.
+  let currentItems: TypeTreeItem[] = [];
+  const tree = createTree<TypeTreeItem>({
+    items: () => currentItems,
+    ariaLabel: t('thoughtTypes.title'),
+    treeColumnHeader: t('thoughtTypes.col.name'),
+    emptyText: t('thoughtTypes.empty'),
+    rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
+    onActivate: (item) => showThoughtTypeEditor(item.type, onChanged),
+    columns: [
+      {
+        key: 'comment',
+        header: t('thoughtTypes.col.comment'),
+        width: '280px',
+        render: (item) => (item.type.description ?? '').slice(0, 120),
+      },
+      {
+        key: 'count',
+        header: t('thoughtTypes.col.count'),
+        width: '6rem',
+        align: 'end',
+        render: (item) => String(currentAggregated[item.id] ?? 0),
+      },
+      {
+        key: 'actions',
+        render: (item) => {
+          const box = span('', 'type-row-actions');
+          if (!item.type.is_root) {
+            box.append(
+              uiButton({
+                label: '✕',
+                role: 'secondary',
+                size: 's',
+                title: t('thoughtTypes.delete'),
+                onClick: () => void removeRow(item.type),
+              }),
+            );
+          }
+          return box;
+        },
+      },
+    ],
+    renderContent: (item) => {
       // L21: the row shows the EFFECTIVE look — a subordinate type renders
       // with the icon/colours/font inherited from its ancestors.
-      const visual = resolveThoughtTypeVisual(types, type.id);
+      const visual = resolveThoughtTypeVisual(currentTypes, item.type.id);
       const icon = span('', 'mini-icon');
       applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: null });
-      const name = span(type.name, 'type-list-name');
+      const name = span(item.type.name, 'type-list-name');
       applyTypeStyle(name, {
         fg_color: visual.fg_color,
         bg_color: visual.bg_color,
@@ -536,74 +495,80 @@ export function showThoughtTypesDialog(): void {
         font_underline: visual.font_underline ?? false,
         font_strike: visual.font_strike ?? false,
       });
-      nameWrap.append(icon, name);
-      nameCell.append(nameWrap);
-      const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
-      descCell.style.maxWidth = '280px';
-      descCell.style.overflow = 'hidden';
-      descCell.style.textOverflow = 'ellipsis';
-      descCell.style.whiteSpace = 'nowrap';
-      const countCell = el('td', 'muted', String(aggregated[type.id] ?? 0));
-      countCell.style.textAlign = 'right';
-      const actions = el('td');
-      actions.style.whiteSpace = 'nowrap';
-      if (!type.is_root) {
-        actions.append(uiButton({
-          label: '✕',
-          role: 'secondary',
-          size: 's',
-          title: 'Удалить тип',
-          onClick: () => void removeRow(type),
-        }));
-      }
-      tr.append(nameCell, descCell, countCell, actions);
-      // Clicks on the ▸/▾ toggle or the ✕ button must not open the editor.
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        showThoughtTypeEditor(type, onChanged);
-      });
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    tableWrap.scrollTop = scrollTop;
-    // Список прокручивается к текущей строке — она может быть ниже видимой
-    // части (высота обёртки ограничена).
-    currentTr?.scrollIntoView({ block: 'nearest' });
-  }
+      return [icon, name];
+    },
+  });
+  tableWrap.append(status, tree.root);
+  body.append(toolbar, tableWrap);
 
-  /** Expands/collapses a node and re-renders from the cache (no round-trip). */
-  function toggle(typeId: string): void {
-    if (expanded.has(typeId)) expanded.delete(typeId);
-    else expanded.add(typeId);
-    void reload(true);
+  async function reload(useCache = false): Promise<void> {
+    const scrollTop = tableWrap.scrollTop;
+    let types: ThoughtType[];
+    let counts: Record<string, number>;
+    if (useCache && cachedTypes !== null && cachedCounts !== null) {
+      types = cachedTypes;
+      counts = cachedCounts;
+    } else {
+      status.replaceChildren(el('span', 'muted', t('common.loading')));
+      status.classList.remove('hidden');
+      tree.root.classList.add('hidden');
+      try {
+        [types, counts] = await Promise.all([
+          etn.types.listThoughtTypes(networkId),
+          etn.types.getThoughtTypeCounts(networkId),
+        ]);
+      } catch (err) {
+        status.replaceChildren(operationError(err));
+        return;
+      }
+      cachedTypes = types;
+      cachedCounts = counts;
+    }
+    currentTypes = types;
+    currentAggregated = aggregateTypeCounts(types, counts);
+    // L21: the root type is always expanded; everything else starts collapsed.
+    if (!expansionInitialized) {
+      tree.collapseAll(types.filter((t) => t.is_root).map((t) => t.id));
+      expansionInitialized = true;
+    }
+    currentItems = typeTreeItems(types);
+    status.classList.add('hidden');
+    tree.root.classList.remove('hidden');
+    // Поиск и данные списка — состояние общего компонента (задача d1c15a2d):
+    // совпадения с цепочкой предков, автораскрытие ветвей.
+    tree.setFilter(searchQuery);
+    tree.setItems(currentItems);
+    // Текущая строка обязана быть видна: если её цепочка родителей свёрнута,
+    // разворачиваем её (при поиске ветви и так раскрыты). Иначе после создания
+    // типа с нестандартным родителем строку пришлось бы искать вручную.
+    // Прокрутку к текущей строке делает компонент (setCurrentId).
+    if (currentRowId !== null && !tree.getVisibleIds().includes(currentRowId)) {
+      tree.expand(typeRowRevealIds(types, currentRowId));
+    }
+    if (currentRowId !== null) tree.setCurrentId(currentRowId);
+    tableWrap.scrollTop = scrollTop;
   }
 
   /** «Развернуть все»: opens every branch of the hierarchy. */
   function expandAll(): void {
-    if (cachedTypes !== null) expanded = new Set(cachedTypes.map((t) => t.id));
-    void reload(true);
+    tree.expandAll();
   }
 
   /** «Свернуть все»: back to just the root expanded (the initial state). */
   function collapseAll(): void {
-    if (cachedTypes !== null) expanded = new Set(cachedTypes.filter((t) => t.is_root).map((t) => t.id));
-    void reload(true);
+    const roots = cachedTypes?.filter((t) => t.is_root).map((t) => t.id) ?? [];
+    tree.collapseAll(roots);
   }
 
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value;
-    void reload(true);
+    // Фильтр и автораскрытие ветвей — состояние общего компонента.
+    tree.setFilter(searchQuery);
   });
 
   /** Deletes a thought type (forced: thoughts detached, values dropped). */
   async function removeRow(type: ThoughtType): Promise<void> {
-    const ok = await confirmDialog(
-      'Удалить тип',
-      `Удалить тип «${type.name}»? Мысли этого типа останутся и станут без типа; ` +
-        'значения свойств этого типа будут удалены.',
-      true,
-    );
+    const ok = await confirmDialog(t('thoughtTypes.delete'), t('thoughtTypes.deleteConfirm', type.name), true);
     if (!ok) return;
     try {
       await etn.types.removeThoughtType(networkId, type.id, type.version, true);
@@ -620,12 +585,12 @@ export function showThoughtTypesDialog(): void {
       if (currentRowId === type.id) currentRowId = null;
       onChanged();
     } catch (err) {
-      errorDialog('Удалить тип', err);
+      errorDialog(t('thoughtTypes.delete'), err);
     }
   }
 
   showDialog({
-    title: 'Типы мыслей',
+    title: t('thoughtTypes.title'),
     body,
     size: 'm',
     // Ошибки списка/записи — в панели кнопок (требование 397c5a56).

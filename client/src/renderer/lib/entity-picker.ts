@@ -27,7 +27,8 @@
  * ссылки и свотчем линии; мысль — её собственный визуал. Живой поиск —
  * общей выпадашкой `wireSuggest` (источник кандидатов — её параметр, ADR
  * «одна выпадашка-подсказчик»). Иерархия типов строится функциями
- * `lib/type-tree.ts` (`orderedTypeRows`), а не в экране.
+ * `lib/type-tree.ts` (`orderedTypeRows`), а не в экране; строки модального
+ * чек-листа типов рисует единое дерево `lib/ui/tree.ts` (требование 0086037c).
  *
  * Два режима показа одного пикера:
  *   - {@link pickEntitiesModal} — модальный чек-лист: одиночный или
@@ -74,6 +75,7 @@ import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
+import { createTree } from './ui/tree.js';
 
 // ---------------------------------------------------------------------------
 // Опции пикера
@@ -275,8 +277,9 @@ export function createRowName(query: string, matchCount: number, enabled: boolea
 /**
  * Шагов отступа строки каталога типов по её глубине. `depth` вариантов
  * начинается с 1 у верхнего уровня списка (корень иерархии из `options`
- * исключён, поэтому первыми идут его дети). Единая формула для модального
- * чек-листа и встроенного комбо — строки каталога выглядят одинаково.
+ * исключён, поэтому первыми идут его дети). Формула встроенного комбо (строки
+ * выпадашки `wireSuggest`); строки модального чек-листа отступ считает сам
+ * `lib/ui/tree.ts` по `parentId`.
  */
 export function typeRowIndentSteps(depth: number | undefined): number {
   return Math.max(0, (depth ?? 1) - 1);
@@ -288,8 +291,9 @@ export function typeRowIndentSteps(depth: number | undefined): number {
  * вариантов (корень иерархии исключён из списка — сервер проставляет его
  * `parent_id` типов верхнего уровня, но сам корень в `options` не попадает)
  * или родитель раскрыт. Непустой — совпадения вместе с цепочкой предков.
- * Чистая — единственный источник правила «пустой поиск показывает всё»
- * и для модального чек-листа, и для встроенного комбо.
+ * Чистая — правило «пустой поиск показывает всё» встроенного комбо (строки
+ * выпадашки `wireSuggest`); видимость строк модального чек-листа считает
+ * `lib/ui/tree.ts` (`treeVisibleIds`).
  */
 export function visibleEntityIds(
   options: readonly EntityOption[],
@@ -519,7 +523,6 @@ export async function pickEntitiesModal(
     const checked = new Set<string>(opts.currentIds ?? []);
     /** Собранные данные облачков выбранных мыслей (для kind === 'thoughts'). */
     const pickedThoughts = new Map<string, ThoughtCloudInput>();
-    let needle = '';
     let settled = false;
     /**
      * Закрывает сам диалог. Футер закрывает его неявно (клик по кнопке), а
@@ -694,64 +697,47 @@ export async function pickEntitiesModal(
       return;
     }
 
-    // --- Режим типов: поиск + дерево-чек-лист ------------------------------
+    // --- Режим типов: поиск + единое дерево-чек-лист ----------------------
     const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
     searchInput.type = 'text';
     searchInput.autocomplete = 'off';
     searchInput.placeholder = t('actions.search');
     const list = div('st-f-checks st-f-picker-list');
 
-    /** Id, видимые при поиске (пустой запрос — весь каталог). */
-    const visibleIds = (): Set<string> => visibleEntityIds(options, needle, expanded);
-
-    const renderList = (): void => {
-      list.replaceChildren();
-      const ids = visibleIds();
-      const shown = options.filter((opt) => ids.has(opt.id));
-      if (shown.length === 0) {
-        list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-        return;
-      }
-      for (const opt of shown) {
-        const line = el('label', 'st-f-check entity-pick-row');
-        line.style.paddingLeft = `${8 + typeRowIndentSteps(opt.depth) * 16}px`;
-        if (opt.hasChildren === true) {
-          const toggle = span(expanded.has(opt.id) ? '▾' : '▸', 'type-combo-toggle');
-          toggle.addEventListener('mousedown', (event) => event.preventDefault());
-          toggle.addEventListener('click', (event) => {
-            event.stopPropagation();
-            if (expanded.has(opt.id)) expanded.delete(opt.id);
-            else expanded.add(opt.id);
-            renderList();
-          });
-          line.append(toggle);
-        } else if (opt.depth !== undefined) {
-          // Лист дерева типов: пустая колонка тоггла, чтобы подписи соседних
-          // уровней не разъезжались. У плоского каталога (свойства-связи) её нет.
-          line.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
-        }
-        if (!single) {
-          const check = el('input') as HTMLInputElement;
-          check.type = 'checkbox';
-          check.checked = checked.has(opt.id);
-          check.addEventListener('change', () => {
-            if (check.checked) checked.add(opt.id);
-            else checked.delete(opt.id);
-            updateButtons();
-          });
-          line.append(check);
-        }
+    // Дерево рисует общий компонент `lib/ui/tree.ts` (требование 0086037c,
+    // ошибка 6925ffa0): каретка/флажок/облачко-подпись выровнены по токенам,
+    // клавиатура и ARIA — его. Пикер задаёт только источник данных, раскрытие
+    // по умолчанию и содержимое строки.
+    const tree = createTree<EntityOption>({
+      items: () => options,
+      ariaLabel: opts.title,
+      checkbox: !single,
+      // Раскрытие иерархии: по умолчанию всё раскрыто (прежний чек-лист
+      // показывал всё дерево), тоггл сворачивает ветку.
+      expandedIds: expanded,
+      emptyText: t('tree.empty'),
+      showChildCount: true,
+      filterText: (opt) => `${opt.title} ${opt.searchText ?? ''}`,
+      isChecked: (opt) => checked.has(opt.id),
+      onCheck: (opt, on) => {
+        if (on) checked.add(opt.id);
+        else checked.delete(opt.id);
+        updateButtons();
+      },
+      onActivate: single ? (opt) => finish([opt.id]) : undefined,
+      renderContent: (opt) => {
+        const nodes: Node[] = [];
         if (opt.line != null) {
           const swatch = span('', 'type-combo-swatch');
           const dash = opt.line.style === 'dashed' ? 'dashed' : opt.line.style === 'dotted' ? 'dotted' : 'solid';
           swatch.style.borderTop = `${Math.max(1, Math.min(6, opt.line.width ?? 1))}px ${dash} ${opt.line.color ?? '#9aa3b2'}`;
-          line.append(swatch);
+          nodes.push(swatch);
         }
         // Вариант-свойство-связь: знак — значок конца связи, вместо облачка
         // подпись именем стороны (у варианта нет данных мысли).
-        if (opt.linkEnd != null) line.append(buildLinkEndIcon(opt.linkEnd));
+        if (opt.linkEnd != null) nodes.push(buildLinkEndIcon(opt.linkEnd));
         if (opt.cloud !== undefined) {
-          line.append(
+          nodes.push(
             createThoughtCloud(opt.cloud, {
               profile: 'chip',
               // Ширина — по строке списка выбора.
@@ -761,19 +747,21 @@ export async function pickEntitiesModal(
         } else {
           const label = span(opt.title, 'entity-pick-label');
           label.title = opt.title;
-          line.append(label);
+          nodes.push(label);
         }
-        if (opt.note !== undefined) line.append(span(opt.note, 'entity-pick-note'));
-        if (single) {
-          line.addEventListener('click', () => finish([opt.id]));
-        }
-        list.append(line);
-      }
+        if (opt.note !== undefined) nodes.push(span(opt.note, 'entity-pick-note'));
+        return nodes;
+      },
+    });
+    list.append(tree.root);
+
+    /** Перерисовать список (команды «Очистить»/«Пометить все» и смена набора). */
+    const renderList = (): void => {
+      tree.render();
     };
 
     searchInput.addEventListener('input', () => {
-      needle = searchInput.value.trim().toLowerCase();
-      renderList();
+      tree.setFilter(searchInput.value.trim().toLowerCase());
     });
 
     let clearBtn: HTMLButtonElement | null = null;

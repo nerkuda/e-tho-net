@@ -215,14 +215,14 @@ describe('type-manager — кнопка записи без закрытия (б
     const src = source();
     assert.ok(src.includes('currentRowId'), 'нет понятия текущей строки');
     assert.ok(
-      src.includes("tr.classList.add('selected')"),
-      'текущая строка не подсвечивается классом selected',
+      src.includes('tree.setCurrentId(currentRowId)'),
+      'текущая строка не подсвечивается общим деревом (lib/ui/tree)',
     );
     assert.ok(
       src.includes('typeRowRevealIds(types, currentRowId)'),
       'цепочка предков текущей строки не разворачивается',
     );
-    assert.ok(src.includes('scrollIntoView'), 'список не прокручивается к текущей строке');
+    assert.ok(src.includes('tree.expand('), 'цепочка предков не передаётся дереву для раскрытия');
   });
 });
 

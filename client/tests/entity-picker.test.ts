@@ -570,7 +570,7 @@ describe('entity-picker: поле одиночного выбора — запо
     pick.click();
     await flush();
     await flush();
-    const rows = findAllByClass(body, 'entity-pick-row');
+    const rows = findAllByClass(body, 'ui-tree-row');
     assert.ok(rows.length > 0, 'диалог «…» показал каталог типов');
     const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
     assert.ok(target !== undefined, 'в диалоге есть строка типа c');
@@ -702,7 +702,7 @@ describe('entity-picker: выбор из списка не роняет клав
     pick.click();
     await flush();
     await flush();
-    const rows = findAllByClass(body, 'entity-pick-row');
+    const rows = findAllByClass(body, 'ui-tree-row');
     const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
     assert.ok(target !== undefined, 'в диалоге есть строка типа c');
 
@@ -889,7 +889,7 @@ describe('entity-picker: завершение модального чек-лис
       result = ids;
     });
     assert.equal(body.children.length, 1, 'диалог открыт');
-    const rows = findAllByClass(body.children[0]!, 'entity-pick-row');
+    const rows = findAllByClass(body.children[0]!, 'ui-tree-row');
     assert.equal(rows.length, 2, 'каталог показан целиком');
     rows[0]!.click();
     await done;
@@ -929,16 +929,17 @@ describe('entity-picker: завершение модального чек-лис
     });
     const backdrop = body.children[0];
     assert.ok(backdrop, 'диалог смонтирован');
-    // Клик по строке в множественном режиме отмечает вариант, но диалог не
+    // Клик по строке в множественном режиме отмечает вариант (флажок
+    // переключает сам компонент дерева — `lib/ui/tree.ts`), но диалог не
     // закрывает и ничего не возвращает (в отличие от одиночного).
-    findAllByClass(backdrop, 'entity-pick-row')[0]!.click();
+    findAllByClass(backdrop, 'ui-tree-row')[0]!.click();
     assert.equal(body.children.length, 1, 'клик по строке не закрыл диалог');
     assert.equal(result, undefined, 'до применения результат не отдан');
     const apply = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Применить');
     assert.ok(apply, 'в футере есть кнопка применения');
     apply!.click();
     await done;
-    assert.deepEqual(result, ['tb'], 'применение отдало текущий набор');
+    assert.deepEqual(result, ['tb', 'ta'], 'применение отдало текущий набор (tb был отмечен, ta — кликом)');
     assert.equal(body.children.length, 0, 'применение закрыло диалог');
   });
 });
@@ -1102,7 +1103,7 @@ describe('entity-picker: отмена модального чек-листа (12
     await flush();
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог «…» открыт');
-    const row = findAllByClass(backdrop, 'entity-pick-row')[0];
+    const row = findAllByClass(backdrop, 'ui-tree-row')[0];
     assert.ok(row !== undefined, 'каталог показан');
     row!.click();
     await flush();
@@ -1294,7 +1295,7 @@ describe('entity-picker: комбо свойства-связи как поле 
     parts(combo).pick.click();
     await flush();
     await flush();
-    const rows = findAllByClass(body, 'entity-pick-row');
+    const rows = findAllByClass(body, 'ui-tree-row');
     assert.equal(rows.length, 2, 'в диалоге — обе стороны свойства-связи (скаляр и структурное отсеяны)');
     const target = rows.find((r) => findByClass(r, 'entity-pick-label')?.textContent === LP_REVERSE);
     assert.ok(target !== undefined, 'в диалоге есть строка обратной стороны');

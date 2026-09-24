@@ -76,6 +76,12 @@
   --statusbar-h: 32px;
   --editor-w: 340px;
   --editor-h: 300px;
+  /* Единый размер интерактивной цели строки списка/дерева: высота строки,
+     флажок и значок типа равны ему — деталь не «выпадает» из строки
+     (требование 0086037c, ошибка 6925ffa0 — дисбаланс размеров чекбокса и
+     иконки в списках типов). Шаг отступа ветви дерева — --tree-indent. */
+  --hit-area: 18px;
+  --tree-indent: 16px;
 
   /* cloud geometry (L4 defaults, 11-settings-and-state.md §2.4) */
   --cloud-width: 200px;
@@ -4569,17 +4575,6 @@ body.cloud-dragging * {
   padding-right: 4px;
 }
 
-.st-f-check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 22px;
-  font-size: 13px;
-  cursor: pointer;
-  user-select: none;
-  break-inside: avoid;
-}
-
 .st-f-clear {
   align-self: flex-start;
   padding: 3px 10px;
@@ -6116,23 +6111,10 @@ button.ui-btn--icon.trash-act {
   background: var(--accent-soft);
 }
 
-/* L21: type trees in the type-manager dialogs and filter lists. */
-button.type-tree-toggle {
-  min-width: 20px;
-  padding: 0 4px;
-  color: var(--muted, #8a93a5);
-}
-
-.type-tree-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.type-tree-root > td {
-  border-top: 2px solid var(--border, #d5dae3);
-  font-weight: 600;
-}
+/* L21: строки деревьев типов рисует единый компонент lib/ui/tree.ts
+ * (`.ui-tree*`, задача d1c15a2d) — прежние `type-tree-toggle`/`type-tree-name`/
+ * `.type-tree-root > td` упразднены. Модификатор корня остаётся на строке
+ * компонента (`.ui-tree-row.type-tree-root`, вид — в tree.css). */
 
 .type-combo-toggle {
   flex: none;
@@ -6303,16 +6285,6 @@ button.entity-combo-pick:disabled {
 
 .entity-pick-chips .muted {
   font-size: 12px;
-}
-
-/* Строка чек-листа типов: облачко-чип занимает остаток строки. */
-.st-f-check.entity-pick-row {
-  gap: 6px;
-}
-
-.st-f-check.entity-pick-row .prop-ref-cloud {
-  flex: 1;
-  min-width: 0;
 }
 
 /* Inline tree-checkbox type picker (0.6.5: thought_ref `allowed_type_ids`

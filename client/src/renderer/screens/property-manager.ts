@@ -96,13 +96,8 @@ import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
-import {
-  buildTypeTree,
-  flattenTypeTree,
-  resolveLinkTypeVisual,
-  typeSearchVisibleIds,
-  type FlatTypeRow,
-} from '../lib/type-tree.js';
+import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
+import { createTree, type TreeItem } from '../lib/ui/tree.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { reloadTypeCatalogues, scheduleTypeRepaint } from '../realtime-ui.js';
 // Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
@@ -2416,6 +2411,29 @@ function buildMetadataRowsFromProperty(property: RegistryRow): HTMLElement {
  *     через плоский список «Свойства и связи», где видно
  *     `links_becoming_structural`.
  */
+
+/** Узел дерева типов связей для общего компонента `lib/ui/tree`. */
+interface LinkTypeTreeItem extends TreeItem {
+  type: LinkType;
+  /** Свойство-связь типа (`config.link_type_id`) или `undefined`, если его нет. */
+  prop: RegistryRow | undefined;
+}
+
+/** Строки дерева типов связей из каталога (данные `orderedTypeRows`). */
+function linkTypeTreeItems(
+  types: readonly LinkType[],
+  propertyByLinkTypeId: ReadonlyMap<string, RegistryRow>,
+): LinkTypeTreeItem[] {
+  return orderedTypeRows(types).map((row) => ({
+    id: row.type.id,
+    parentId: row.type.parent_id,
+    hasChildren: row.hasChildren,
+    filterText: `${row.type.name_forward} ${row.type.name_reverse}`,
+    type: row.type,
+    prop: propertyByLinkTypeId.get(row.type.id),
+  }));
+}
+
 export function showLinkTypesTreeDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = footerErrorLine();
@@ -2439,19 +2457,90 @@ export function showLinkTypesTreeDialog(): void {
     }),
     searchInput,
   );
-  body.append(toolbar, tableWrap);
 
-  let expanded = new Set<string>();
+  // Состояние загрузки/ошибки живёт рядом с деревом: сам список рисует общий
+  // компонент `lib/ui/tree.ts`, статус скрывает его на время запроса.
+  const status = div('muted hidden');
   let searchQuery = '';
   let cachedTypes: LinkType[] | null = null;
   let cachedRows: RegistryRow[] | null = null;
   let cachedCounts: Record<string, number> | null = null;
+  // Текущий каталог типов связей — читается рендером строк.
+  let currentTypes: readonly LinkType[] = [];
+  let expansionInitialized = false;
 
   const onChanged = (): void => {
     cachedRows = null;
     cachedCounts = null;
     void reload();
   };
+
+  // Единое дерево списков (задача d1c15a2d, требование 0086037c): каретка,
+  // отступ, колонки и клавиатура — его; экран задаёт данные, свотч линии и
+  // действие строки.
+  let currentItems: LinkTypeTreeItem[] = [];
+  const tree = createTree<LinkTypeTreeItem>({
+    items: () => currentItems,
+    ariaLabel: t('linkTypes.title'),
+    treeColumnHeader: t('linkTypes.col.name'),
+    emptyText: t('linkTypes.empty'),
+    rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
+    onActivate: (item) => {
+      if (item.prop !== undefined) openPropertyManagerEditor(item.prop, onChanged);
+    },
+    columns: [
+      {
+        key: 'connected',
+        header: t('linkTypes.col.connected'),
+        width: '9rem',
+        align: 'end',
+        render: (item) => {
+          // Колонка «Подключено к типам» — сумма обоих сторон свойства-связи
+          // (если оно зарегистрировано). Нет свойства — 0; это «голый» тип
+          // связи, создать рёбра через который нельзя (`etn.links.create` снят
+          // в 0.8.1).
+          const total =
+            item.prop !== undefined
+              ? (item.prop.types_source_count ?? 0) + (item.prop.types_target_count ?? 0)
+              : 0;
+          const cell = span(String(total), item.prop === undefined ? 'muted prop-count-side' : '');
+          if (item.prop === undefined) {
+            setTooltip(
+              cell,
+              'Для этого типа связи ещё нет свойства в реестре. Тип связи без свойства бесполезен — создайте свойство через «Добавить».',
+            );
+          }
+          return cell;
+        },
+      },
+      {
+        key: 'actions',
+        render: (item) =>
+          // Удаления в этом диалоге нет — пользовательский путь лежит через
+          // плоский список «Свойства и связи», где видно
+          // `links_becoming_structural` и подтверждение по числу рёбер
+          // (требование 09f692ff).
+          item.prop === undefined
+            ? span(t('linkTypes.noProperty'), 'muted prop-count-side')
+            : span(''),
+      },
+    ],
+    renderContent: (item) => {
+      const type = item.type;
+      const resolved = resolveLinkTypeVisual(currentTypes, type.id);
+      const swatch = span('', 'link-type-swatch');
+      swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width ?? 2))}px ${
+        resolved.style ?? 'solid'
+      } ${resolved.color ?? '#9aa3b2'}`;
+      swatch.style.display = 'inline-block';
+      swatch.style.width = '32px';
+      swatch.style.marginRight = '8px';
+      swatch.style.verticalAlign = 'middle';
+      return [swatch, span(` ${type.name_forward} / ${type.name_reverse}`)];
+    },
+  });
+  tableWrap.append(status, tree.root);
+  body.append(toolbar, tableWrap);
 
   async function reload(useCache = false): Promise<void> {
     const scrollTop = tableWrap.scrollTop;
@@ -2463,7 +2552,9 @@ export function showLinkTypesTreeDialog(): void {
       counts = cachedCounts;
       rows = cachedRows;
     } else {
-      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+      status.replaceChildren(el('span', 'muted', t('common.loading')));
+      status.classList.remove('hidden');
+      tree.root.classList.add('hidden');
       try {
         [types, rows] = await Promise.all([
           etn.types.listLinkTypes(networkId),
@@ -2475,15 +2566,12 @@ export function showLinkTypesTreeDialog(): void {
           counts = {};
         }
       } catch (err) {
-        tableWrap.replaceChildren(operationError(err));
+        status.replaceChildren(operationError(err));
         return;
       }
       cachedTypes = types;
       cachedRows = rows;
       cachedCounts = counts;
-    }
-    if (expanded.size === 0) {
-      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
     }
     // Map: link_type_id → реестровое свойство (для клика по строке).
     const propertyByLinkTypeId = new Map<string, RegistryRow>();
@@ -2494,106 +2582,28 @@ export function showLinkTypesTreeDialog(): void {
         propertyByLinkTypeId.set(ltId, row);
       }
     }
-    const searching = searchQuery.trim() !== '';
-    const keepIds = typeSearchVisibleIds(types, searchQuery);
-    const rowsOut = (
-      searching
-        ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id)))
-        : flattenTypeTree(buildTypeTree(types), expanded)
-    ).filter((row) => keepIds.has(row.type.id));
-
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Имя (от источника к назначению / обратно)'),
-      el('th', undefined, 'Подключено к типам'),
-      el('th'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    if (rowsOut.length === 0) {
-      const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет типов связей.');
-      emptyCell.colSpan = 3;
-      emptyRow.append(emptyCell);
-      tbody.append(emptyRow);
+    currentTypes = types;
+    // L21: корневой тип связи раскрыт, остальные свёрнуты.
+    if (!expansionInitialized) {
+      tree.collapseAll(types.filter((t) => t.is_root).map((t) => t.id));
+      expansionInitialized = true;
     }
-    for (const row of rowsOut) {
-      const type = row.type;
-      const tr = el('tr');
-      if (type.is_root) tr.classList.add('type-tree-root');
-      const nameCell = el('td');
-      nameCell.style.whiteSpace = 'nowrap';
-      const nameWrap = span('', 'type-tree-name');
-      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
-      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id), searching));
-      const resolved = resolveLinkTypeVisual(types, type.id);
-      const swatch = span('', 'link-type-swatch');
-      swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width ?? 2))}px ${
-        resolved.style ?? 'solid'
-      } ${resolved.color ?? '#9aa3b2'}`;
-      swatch.style.display = 'inline-block';
-      swatch.style.width = '32px';
-      swatch.style.marginRight = '8px';
-      swatch.style.verticalAlign = 'middle';
-      nameWrap.append(swatch, span(` ${type.name_forward} / ${type.name_reverse}`));
-      nameCell.append(nameWrap);
-      // Колонка «Подключено к типам» — сумма обоих сторон свойства-связи
-      // (если оно зарегистрировано). Нет свойства — 0; это «голый» тип связи,
-      // создать рёбра через который нельзя (`etn.links.create` снят в 0.8.1).
-      const prop = propertyByLinkTypeId.get(type.id);
-      const totalAttached =
-        prop !== undefined
-          ? (prop.types_source_count ?? 0) + (prop.types_target_count ?? 0)
-          : 0;
-      const countCell = el('td', 'muted', String(totalAttached));
-      countCell.style.textAlign = 'right';
-      if (prop === undefined) {
-        setTooltip(
-          countCell,
-          'Для этого типа связи ещё нет свойства в реестре. Тип связи без свойства бесполезен — создайте свойство через «Добавить».',
-        );
-      }
-      const actions = el('td');
-      actions.style.whiteSpace = 'nowrap';
-      // Удаления в этом диалоге нет — пользовательский путь лежит через
-      // плоский список «Свойства и связи», где видно
-      // `links_becoming_structural` и подтверждение по числу рёбер
-      // (требование 09f692ff).
-      if (prop === undefined) {
-        actions.append(
-          span('нет свойства', 'muted prop-count-side'),
-        );
-      }
-      tr.append(nameCell, countCell, actions);
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        if (prop !== undefined) {
-          openPropertyManagerEditor(prop, onChanged);
-        }
-      });
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
+    currentItems = linkTypeTreeItems(types, propertyByLinkTypeId);
+    status.classList.add('hidden');
+    tree.root.classList.remove('hidden');
+    tree.setFilter(searchQuery);
+    tree.setItems(currentItems);
     tableWrap.scrollTop = scrollTop;
-  }
-
-  function toggle(typeId: string): void {
-    if (expanded.has(typeId)) expanded.delete(typeId);
-    else expanded.add(typeId);
-    void reload(true);
   }
 
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value;
-    void reload(true);
+    // Фильтр и автораскрытие ветвей — состояние общего компонента.
+    tree.setFilter(searchQuery);
   });
 
   showDialog({
-    title: 'Типы связей',
+    title: t('linkTypes.title'),
     body,
     size: 'm',
     // Ошибки списка — в панели кнопок (требование 397c5a56).
@@ -2623,23 +2633,4 @@ export function showLinkTypesTreeDialog(): void {
   }
 
   void reload();
-}
-
-/** ▸/▾ expander (скопированная логика из type-manager.ts, локально — чтобы не тащить экспорт). */
-function treeToggle(
-  row: FlatTypeRow<LinkType>,
-  expanded: ReadonlySet<string>,
-  onToggle: () => void,
-  forceOpen = false,
-): HTMLElement {
-  const btn = uiButton({
-    label: '',
-    size: 's',
-    class: 'type-tree-toggle',
-    title: row.hasChildren ? 'Развернуть/свернуть' : '',
-    onClick: onToggle,
-  });
-  btn.textContent = row.hasChildren ? (forceOpen || expanded.has(row.type.id) ? '▾' : '▸') : '';
-  btn.disabled = !row.hasChildren || forceOpen;
-  return btn;
 }

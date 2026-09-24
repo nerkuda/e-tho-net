@@ -365,16 +365,21 @@ describe('защита подключена в редакторах (c2d243bb, 7
 describe('регрессии списка типов (c2d243bb)', () => {
   it('клик по строке по-прежнему открывает редактор этого типа (мимо кнопок)', () => {
     const src = source(TYPE_MANAGER_SOURCE);
-    const listenerIdx = src.indexOf("tr.addEventListener('click'");
-    const block = src.slice(listenerIdx, listenerIdx + 260);
-    assert.ok(block.includes("closest('button')"), 'клик по кнопке ▸/▾/✕ не должен открывать редактор');
-    assert.ok(block.includes('showThoughtTypeEditor(type, onChanged)'), 'строка не открывает редактор');
+    // Строку дерева рисует общий компонент `lib/ui/tree.ts` (задача d1c15a2d):
+    // активация строки — его `onActivate`, кнопки (✕) строку не активируют.
+    const listenerIdx = src.indexOf('onActivate:');
+    assert.ok(listenerIdx >= 0, 'у дерева типов нет активации строки');
+    const block = src.slice(listenerIdx, listenerIdx + 160);
+    assert.ok(
+      block.includes('showThoughtTypeEditor(item.type, onChanged)'),
+      'активация строки не открывает редактор этого типа',
+    );
   });
 
   it('понятие текущей строки и запись списка не затронуты защитой', () => {
     const src = source(TYPE_MANAGER_SOURCE);
     assert.ok(src.includes('currentRowId'), 'нет понятия текущей строки');
-    assert.ok(src.includes("tr.classList.add('selected')"), 'текущая строка не подсвечивается');
+    assert.ok(src.includes('tree.setCurrentId(currentRowId)'), 'текущая строка не подсвечивается');
     assert.ok(src.includes('onChanged(current.id)'), 'список не получает id записанного типа');
     assert.ok(
       src.includes('if (appliedTypeId !== undefined) currentRowId = appliedTypeId;'),
