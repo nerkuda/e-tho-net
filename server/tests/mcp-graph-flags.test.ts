@@ -537,6 +537,53 @@ describe('etn.thoughts.neighbors dir=both (0.7.2)', { skip: !nativeAvailable() }
 });
 
 // ---------------------------------------------------------------------------
+// show_inactive (ошибка 6b2e79af, 0.8.3)
+// ---------------------------------------------------------------------------
+
+describe('etn.thoughts.neighbors show_inactive (0.8.3)', { skip: !nativeAvailable() }, () => {
+  it('по умолчанию скрывает неактивного соседа, с show_inactive: true — показывает', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const focus = insertThought(ndb, 'Фокус', null, ctx.adminId);
+      const child = insertThought(ndb, 'Неактивный ребёнок', null, ctx.adminId);
+      insertLink(ndb, focus, child, null, ctx.adminId);
+      ndb.prepare('UPDATE thoughts SET active = 0 WHERE id = ?').run(child);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const hidden = toolJson<{ total: number; neighbors: unknown[] }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.neighbors',
+            arguments: { network_id: ctx.networkId, thought_id: focus, dir: 'both' },
+          }),
+        );
+        assert.equal(hidden.total, 0, 'без show_inactive неактивный сосед скрыт');
+        assert.equal(hidden.neighbors.length, 0);
+
+        const shown = toolJson<{ total: number; neighbors: Array<{ id: string }> }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.neighbors',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_id: focus,
+              dir: 'both',
+              show_inactive: true,
+            },
+          }),
+        );
+        assert.equal(shown.total, 1, 'с show_inactive сосед виден');
+        assert.equal(shown.neighbors[0]!.id, child);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

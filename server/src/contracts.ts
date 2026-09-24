@@ -785,6 +785,7 @@ const NeighborsFields = z.object({
   dir: z.enum(FOCUS_DIRS),
   depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
   link_filter: LinkFilter,
+  show_inactive: z.boolean().optional(),
   view: View,
 });
 export const ThoughtsNeighbors = defineContract('etn.thoughts.neighbors', NeighborsFields, {});

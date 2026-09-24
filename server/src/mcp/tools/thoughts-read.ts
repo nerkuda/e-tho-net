@@ -532,7 +532,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'записи несут `direction: "in"|"out"`. Рёбра несут `has_properties`/`has_comment` — ' +
         'два агрегирующих запроса на весь набор рёбер, не на ребро; `link_marked_for_deletion` ' +
         'говорит, что ребро помечено на удаление (корзина) — оно остаётся ' +
-        'видимым, но помеченным. На `depth: 1` страница 50 — ' +
+        'видимым, но помеченным. НЕАКТИВНЫЕ соседи (мысль или ребро с `active: false`) ' +
+        'скрываются по умолчанию и не входят в `total`; `show_inactive: true` их показывает ' +
+        '(как в `search`/`query`) — и на `depth: 1`, и в BFS-обходе. На `depth: 1` страница 50 — ' +
         '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
         '`link_filter` — { type_ids?, include_structural? } ограничивает связи, по которым считается соседство. ' +
         'Справочники `link_types`/`thought_types`.',
@@ -546,7 +548,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
-          const neighborOpts = { userId: rt.deps.auth.userId, linkFilter: args.link_filter };
+          const neighborOpts = {
+            userId: rt.deps.auth.userId,
+            linkFilter: args.link_filter,
+            showInactive: args.show_inactive,
+          };
           // `dir: "both"` (0.7.2) — both directions in one call. The domain
           // `getNeighbors` is built for parents/children/siblings (REST trio)
           // and would map `both` to siblings; we call it twice and glue the
@@ -648,6 +654,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
           linkFilter: args.link_filter,
+          showInactive: args.show_inactive,
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
         // any inline `data:` icon URL, not just the compact projection.
