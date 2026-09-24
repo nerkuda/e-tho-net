@@ -21,6 +21,7 @@
 import { etnimgUrl } from '../editor/markdown-field.js';
 import { etn } from './etn.js';
 import { el } from './dom.js';
+import { placeAtCursor } from './ui/popover.js';
 import { store } from '../state.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
@@ -164,19 +165,21 @@ export function initImageZoom(): void {
     popup.classList.add('hidden');
   };
 
-  /** Places the popup beside the cursor, keeping it inside the window. */
+  /** Places the popup beside the cursor, keeping it inside the window — the
+   *  shared cursor placement of the popover component `lib/ui/popover.ts`
+   *  (`../image-zoom.ts` is a consumer of its geometry, like the Ctrl+hover
+   *  preview engine is a consumer of its panels). */
   const place = (): void => {
     const rect = popup.getBoundingClientRect();
-    let left = mouseX + POPUP_OFFSET;
-    let top = mouseY + POPUP_OFFSET;
-    if (left + rect.width > window.innerWidth) {
-      left = Math.max(0, mouseX - rect.width - POPUP_OFFSET);
-    }
-    if (top + rect.height > window.innerHeight) {
-      top = Math.max(0, mouseY - rect.height - POPUP_OFFSET);
-    }
-    popup.style.left = `${left}px`;
-    popup.style.top = `${top}px`;
+    const placed = placeAtCursor(
+      { x: mouseX, y: mouseY },
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+      POPUP_OFFSET,
+      0,
+    );
+    popup.style.left = `${placed.left}px`;
+    popup.style.top = `${placed.top}px`;
   };
 
   /** Shows `src` for `anchor`; `zoom` (attachment-backed icon, L16) swaps the

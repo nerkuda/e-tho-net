@@ -120,3 +120,30 @@ export {
   colorField,
 } from './color-field.js';
 export type { ColorFieldOptions, ColorFieldHandle } from './color-field.js';
+
+// Всплывающая панель — общая механика поповеров (задача dd1f47d4,
+// требование f74f1aae): единый вид, позиционирование у якоря/курсора,
+// закрытие кликом вне / Escape / прокруткой / потерей фокуса. Движки
+// (Ctrl+hover-предпросмотр, лупа изображений) — потребители компонента.
+export {
+  POPOVER_CLASS,
+  POPOVER_HEAD_CLASS,
+  POPOVER_BODY_CLASS,
+  POPOVER_MARGIN,
+  POPOVER_GAP,
+  POPOVER_CURSOR_GAP,
+  placeUnderAnchor,
+  placeAtCursor,
+  openPopover,
+} from './popover.js';
+export type {
+  RectLike,
+  SizeLike,
+  PointLike,
+  AnchorPlacement,
+  PointPlacement,
+  PopoverContent,
+  PopoverAnchor,
+  PopoverOptions,
+  PopoverHandle,
+} from './popover.js';
