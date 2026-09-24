@@ -84,6 +84,12 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.equal(ontologyTopic.isError, undefined, toolText(ontologyTopic));
         assert.match(toolText(ontologyTopic), /value_type/);
         assert.match(toolText(ontologyTopic), /reparent_blocked_by_layer/);
+        // 8c64fdd4: тема обязана однозначно говорить, что принимают `parent`
+        // и `id`, — `parent` только id, `id` только существующий элемент.
+        const ontologyText = toolText(ontologyTopic);
+        assert.match(ontologyText, /Адресация и создание элементов/);
+        assert.match(ontologyText, /`parent` — ТОЛЬКО id/);
+        assert.match(ontologyText, /id ему\s*\n?генерирует сервер|генерирует сервер/);
 
         const queryTopic = await handle.client.callTool({
           name: 'etn.guide',
