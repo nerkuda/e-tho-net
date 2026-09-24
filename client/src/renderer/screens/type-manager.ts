@@ -2285,7 +2285,7 @@ async function openAttachDialog(opts: {
           },
         },
       ],
-      onMount: () => list.focusSearch(),
+      onMount: () => list.focus(),
     });
   });
 }

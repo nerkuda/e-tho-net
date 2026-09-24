@@ -8,7 +8,8 @@
  *    обрезка имён по 30-й символ, подпись «связь (имя - имя)», иконки видов
  *    значения, ⓘ-подсказка, эффективное оформление линии;
  *  - привязка слоёв по якорям исходника (клиентские тесты идут без DOM):
- *    одна функция активации на клик и Enter, ↑/↓, контекстное меню (удаление —
+ *    одна функция активации на Enter/двойной клик, клавиатура и текущая строка
+ *    от фасада `lib/ui/table`, контекстное меню из словаря пунктов (удаление —
  *    только в менеджере), отсутствие крестика удаления, использование обоими
  *    потребителями.
  */
@@ -220,25 +221,26 @@ describe('счётчики «Кол-во типов» (требование 6)',
 describe('якоря рендера и режимов (требования 3–9)', () => {
   const src = read(COMPONENT_TS);
 
-  it('одна функция активации обслуживает клик и Enter', () => {
+  it('одна функция активации обслуживает клавиатуру и двойной клик', () => {
     assert.match(src, /function activate\(row: PropertyListRow\): void/, 'единая функция активации');
-    // Клик по строке и Enter зовут одну и ту же функцию.
-    assert.ok(src.includes('activate(row);'), 'клик вызывает activate');
-    assert.ok(src.includes('activate(selected);'), 'Enter вызывает activate');
-    assert.ok(!src.includes('.click()'), 'синтетический клик по строке не используется');
+    // Активация — событие фасада (Enter/двойной клик), а не самодельный keydown.
+    assert.ok(src.includes('onActivate: (row) => activate(row)'), 'фасад зовёт activate');
+    assert.ok(!src.includes("addEventListener('keydown'"), 'своих обработчиков клавиш в модуле нет');
   });
 
-  it('↑/↓ двигают выделение и прокручивают список к строке', () => {
-    assert.match(src, /event\.key === 'ArrowDown' \|\| event\.key === 'ArrowUp'/, 'навигация стрелками');
-    assert.ok(src.includes('scrollIntoView'), 'выделенная строка прокручивается в вид');
+  it('вся клавиатура и текущая строка — от фасада lib/ui/table', () => {
+    assert.ok(src.includes('createTable<PropertyListRow>'), 'список собран фасадом таблицы');
+    assert.ok(!src.includes("'ArrowDown'"), 'самодельной навигации стрелками нет');
+    assert.ok(!src.includes('scrollIntoView'), 'прокрутку к текущей строке ведёт фасад');
   });
 
   it('крестика удаления в строках нет, удаление — в контекстном меню менеджера', () => {
     assert.ok(!src.includes("button('✕'"), 'в списке нет кнопки-крестика');
-    assert.ok(src.includes("label: 'Изменить'"), 'меню содержит «Изменить»');
-    assert.ok(src.includes("label: t('actions.delete')"), 'меню содержит «Удалить» (из словаря)');
+    // Пункты меню — из общего словаря (menuAction), не самодельные объекты.
+    assert.ok(src.includes("menuAction(t('propertyList.menu.edit')"), 'меню содержит «Изменить»');
+    assert.ok(src.includes("menuAction(t('actions.delete')"), 'меню содержит «Удалить» (из словаря)');
     assert.match(src, /mode === 'manager' && callbacks\.onDelete !== undefined/, '«Удалить» только в менеджере');
-    assert.ok(src.includes('showMenuAt('), 'меню открывается общим показом меню');
+    assert.ok(src.includes('rowMenu: (row) => rowMenu(row)'), 'меню отдаётся фасаду');
   });
 
   it('значок конца связи — единый вертикальный SVG в эффективном оформлении связи', () => {

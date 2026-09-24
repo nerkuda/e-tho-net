@@ -27,28 +27,31 @@
  * полное имя — в тултипе; ⓘ с описанием свойства), «Кол-во типов» (число
  * прямых привязок своей стороны, без подписей «ист./назн.»).
  *
- * **Поведение.** Кнопки-крестика удаления в строках нет. ↑/↓ двигают
- * выделение (список прокручивается), Enter и клик вызывают одну и ту же
- * функцию активации (прецедент — панель поиска, коммит 7be39cd). В пикере
- * уже подключённые имена этой стороны заблокированы и помечены, второе имя
- * той же связи остаётся доступным.
+ * **Поведение.** Рендер — единый табличный фасад `lib/ui/table.ts` (задача
+ * ada14160, требование 93115633): текущая строка, клавиатура (↑/↓, Home/End,
+ * PgUp/PgDn, Enter), контекстное меню строки, сортировка по колонкам,
+ * копирование Ctrl+C. Кнопки-крестика удаления в строках нет. Активация
+ * строки — Enter или двойной клик (одна функция `activate`); одиночный клик
+ * ставит текущую строку. В пикере уже подключённые имена этой стороны
+ * заблокированы и помечены, второе имя той же связи остаётся доступным.
  *
- * Модуль самодостаточен: модель строк, форматирование ячеек, фильтр, поиск
- * и рендер живут здесь — параллельных списков свойств в экранах нет
- * (сторож `guard-property-list.test.ts`).
+ * Модуль самодостаточен: модель строк, форматирование ячеек, фильтр и поиск
+ * живут здесь — параллельных списков свойств в экранах нет (сторож
+ * `guard-property-list.test.ts`).
  */
 
 import type { LinkPropertySide, LinkStyle, LinkType, NetworkProperty, PropertyValueType } from '@etn/shared';
 import { t } from './i18n.js';
 
-import { div, el, setTooltip, span } from './dom.js';
+import { div, setTooltip, span } from './dom.js';
 import { svgIcon, type IconName } from './icons.js';
-import { showMenuAt, type MenuItem } from './menu.js';
+import { menuAction, type MenuItem } from './menu.js';
 import { resolveLinkTypeVisual, type ResolvedLinkVisual } from './type-tree.js';
 import { etn } from './etn.js';
 import { store } from '../state.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
+import { createTable, TABLE_EMPTY_CLASS } from './ui/table.js';
 
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
@@ -197,9 +200,14 @@ export function buildPropertyListRows(
   return out;
 }
 
-/** Заголовки колонок списка (задача 6ebde54e, требование 5). */
+/** Заголовки колонок списка (задача 6ebde54e, требование 5; строки — из
+ *  словаря локализации, задача ada14160). */
 export function propertyListColumns(): readonly string[] {
-  return ['Имя', 'Тип значения', 'Кол-во типов'];
+  return [
+    t('propertyList.col.name'),
+    t('propertyList.col.valueType'),
+    t('propertyList.col.typesCount'),
+  ];
 }
 
 /** Единый алфавитный порядок по отображаемому имени строки, вперемешку
@@ -447,8 +455,8 @@ export type PropertyListMode = 'manager' | 'picker';
 
 /** Обработчики списка — всё, что зависит от режима, живёт у потребителя. */
 export interface PropertyListCallbacks {
-  /** Активация строки (клик или Enter): менеджер — редактор свойства, пикер —
-   *  выбор строки. Заблокированные и структурные строки не активируются. */
+  /** Активация строки (Enter или двойной клик): менеджер — редактор свойства,
+   *  пикер — выбор строки. Заблокированные и структурные строки не активируются. */
   onActivate: (row: PropertyListRow) => void;
   /** Контекстное меню «Изменить» — редактор свойства. */
   onEdit: (row: PropertyListRow) => void;
@@ -472,14 +480,20 @@ export interface PropertyListHandle {
   /** Выделяет строку по id, если она есть и доступна (для подсветки свежего
    *  свойства после создания); отсутствующая строка — no-op. */
   selectRow: (id: string) => void;
-  /** Ставит фокус в строку поиска (для `onMount` диалога). */
-  focusSearch: () => void;
+  /** Ставит клавиатурный фокус на таблицу (клавиатура — от фасада). */
+  focus: () => void;
 }
 
 /**
  * Собирает список свойств. Возвращает ручку: потребитель кладёт `root` в тело
  * диалога, наполняет строками через `setRows` и читает `selected()` (например,
  * кнопкой «Выбрать» пикера).
+ *
+ * Источник строк — массив: реестр свойств сети (`GET /networks/{nid}/
+ * properties`) в store не лежит, его загружает и перезагружает потребитель.
+ * Реактивная подписка на селектор появится, когда источник переедет в store
+ * (требование 628d33ee) — до тех пор перерисовку заказывает `setRows`, а
+ * realtime-хук держит потребитель.
  */
 export function buildPropertyList(opts: {
   mode: PropertyListMode;
@@ -496,22 +510,27 @@ export function buildPropertyList(opts: {
   // Верхняя строка: сначала поиск, затем «Добавить» (требование 7).
   toolbar.append(searchInput);
   if (mode === 'manager' && callbacks.onAdd !== undefined) {
-    toolbar.append(uiButton({
-      label: 'Добавить',
-      role: 'secondary',
-      size: 's',
-      title: 'Создать свойство',
-      onClick: () => callbacks.onAdd?.(),
-    }));
+    toolbar.append(
+      uiButton({
+        label: t('propertyList.add'),
+        role: 'secondary',
+        size: 's',
+        title: t('propertyList.addHint'),
+        onClick: () => callbacks.onAdd?.(),
+      }),
+    );
   }
 
   const wrap = div('admin-table-wrap property-list-wrap');
+  // Определённая высота обёртки — сетке нужен ограниченный по высоте
+  // контейнер, иначе вендорская виртуализация/прокрутка не работают.
+  wrap.style.height = '340px';
   const root = div('form-stack property-list');
   root.append(toolbar, wrap);
 
   let allRows: readonly PropertyListRow[] = [];
   let query = '';
-  let selected: PropertyListRow | null = null;
+  let selectedId: string | null = null;
 
   const blockReason = (row: PropertyListRow): string | null =>
     row.structural ? null : callbacks.rowBlocked?.(row) ?? null;
@@ -519,33 +538,27 @@ export function buildPropertyList(opts: {
   const visibleRows = (): PropertyListRow[] =>
     filterPropertyListRows(sortPropertyListRows(allRows), query);
 
-  const selectableRows = (rows: readonly PropertyListRow[]): PropertyListRow[] =>
-    rows.filter((row) => !row.structural && blockReason(row) === null);
-
-  /** Прокручивает список к строке и переносит класс выделения (без полного
-   *  перерендера — стрелка/клик не должны мигать таблицей). */
-  function applySelection(): void {
-    const id = selected?.id ?? null;
-    for (const tr of wrap.querySelectorAll<HTMLTableRowElement>('tbody tr')) {
-      tr.classList.toggle('selected', tr.dataset['rowId'] === id);
-    }
-    wrap.querySelector<HTMLTableRowElement>('tr.selected')?.scrollIntoView({ block: 'nearest' });
-  }
-
-  /** Одна функция активации на клик и Enter (прецедент 7be39cd): менеджер —
-   *  редактор, пикер — выбор строки. */
+  /** Одна функция активации на Enter и двойной клик: менеджер — редактор
+   *  свойства, пикер — выбор строки. Заблокированные и структурные строки не
+   *  активируются. */
   function activate(row: PropertyListRow): void {
     if (row.structural || blockReason(row) !== null) return;
     callbacks.onActivate(row);
   }
 
-  function openRowMenu(row: PropertyListRow, x: number, y: number): void {
-    if (row.structural) return;
-    const items: MenuItem[] = [{ label: 'Изменить', onClick: () => callbacks.onEdit(row) }];
+  /** Контекстное меню строки из общего словаря пунктов (`lib/menu.ts`):
+   *  «Изменить» всем неструктурным, «Удалить» — только менеджеру. */
+  function rowMenu(row: PropertyListRow): MenuItem[] {
+    if (row.structural) return [];
+    const items: MenuItem[] = [
+      menuAction(t('propertyList.menu.edit'), () => callbacks.onEdit(row)),
+    ];
     if (mode === 'manager' && callbacks.onDelete !== undefined) {
-      items.push({ label: t('actions.delete'), danger: true, onClick: () => callbacks.onDelete?.(row) });
+      items.push(
+        menuAction(t('actions.delete'), () => callbacks.onDelete?.(row), { danger: true }),
+      );
     }
-    showMenuAt(x, y, items);
+    return items;
   }
 
   /** Знак перед именем: иконка вида значения у скаляра либо единый значок
@@ -563,26 +576,21 @@ export function buildPropertyList(opts: {
     return icon;
   }
 
-  function buildRow(row: PropertyListRow): HTMLTableRowElement {
-    const blocked = blockReason(row);
-    const tr = el('tr', 'property-list-row');
-    tr.dataset['rowId'] = row.id;
-    if (row.structural || blocked !== null) tr.classList.add('row-disabled');
-
-    const nameCell = el('td', 'property-list-name-cell');
+  /** Ячейка «Имя»: знак + имя, у структурных/заблокированных — пометка и
+   *  подсказка. */
+  function buildNameCell(row: PropertyListRow): Node {
+    const cell = div('property-list-name-cell');
     const mark = buildNameMark(row);
-    if (mark !== null) nameCell.append(mark);
-    nameCell.append(span(row.name, 'prop-name'));
+    if (mark !== null) cell.append(mark);
+    cell.append(span(row.name, 'prop-name'));
+    const blocked = blockReason(row);
     if (row.structural) {
-      nameCell.append(span('  🔒 (структурное)', 'muted'));
-      setTooltip(
-        nameCell,
-        'Системное свойство-связь для нетипизированных рёбер «Родители/Потомки». Не редактируется и не удаляется из этого диалога.',
-      );
+      cell.append(span(`  ${t('propertyList.structuralMark')}`, 'muted'));
+      setTooltip(cell, t('propertyList.structuralHint'));
     } else if (blocked !== null) {
-      nameCell.append(span(`  ${blocked}`, 'muted'));
+      cell.append(span(`  ${blocked}`, 'muted'));
       setTooltip(
-        nameCell,
+        cell,
         blocked === 'унаследовано'
           ? 'Свойство уже наследуется этим типом от предка'
           : row.valueType === 'link'
@@ -590,101 +598,112 @@ export function buildPropertyList(opts: {
             : 'Свойство уже подключено к этому типу',
       );
     }
+    return cell;
+  }
 
-    const typeCell = el('td', 'property-list-type-cell muted');
+  /** Ячейка «Тип значения»: подпись (у связи — имена сторон с обрезкой),
+   *  полное имя пары — тултипом, ⓘ с описанием свойства. */
+  function buildTypeCell(row: PropertyListRow): Node {
+    const cell = div('property-list-type-cell muted');
     const label = valueTypeCellLabel(row);
-    typeCell.append(span(label, 'property-list-type-label'));
+    cell.append(span(label, 'property-list-type-label'));
     if (label !== valueTypeCellLabel(row, true)) {
-      setTooltip(typeCell, valueTypeCellLabel(row, true));
+      setTooltip(cell, valueTypeCellLabel(row, true));
     }
     const hint = propertyDescriptionHint(row);
     if (hint !== null) {
       const info = span('ⓘ', 'muted prop-hint');
       setTooltip(info, hint);
-      typeCell.append(info);
+      cell.append(info);
     }
-
-    const countCell = el('td', 'property-list-count-cell muted', String(row.typesCount));
-
-    tr.append(nameCell, typeCell, countCell);
-    if (!row.structural) {
-      // Заблокированную строку выбирать нельзя (старое поведение пикера):
-      // клик по ней ничего не делает, только контекстное меню.
-      if (blocked === null) {
-        tr.addEventListener('click', (event) => {
-          if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-          selected = row;
-          applySelection();
-          activate(row);
-        });
-      }
-      tr.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
-        openRowMenu(row, event.clientX, event.clientY);
-      });
-    }
-    return tr;
+    return cell;
   }
 
-  function rerender(): void {
-    const rows = visibleRows();
-    const searching = query.trim() !== '';
-    if (rows.length === 0) {
-      wrap.replaceChildren(
-        el('p', 'muted', searching ? 'Ничего не найдено.' : opts.emptyText ?? 'Нет свойств.'),
-      );
-      return;
-    }
-    const table = el('table', 'table-list property-list-table');
-    const head = el('thead');
-    const headRow = el('tr');
-    for (const label of propertyListColumns()) headRow.append(el('th', undefined, label));
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    for (const row of rows) tbody.append(buildRow(row));
-    table.append(tbody);
-    wrap.replaceChildren(table);
-    applySelection();
+  const columns = propertyListColumns();
+
+  const table = createTable<PropertyListRow>({
+    ariaLabel: t('propertyList.aria'),
+    columns: [
+      {
+        key: 'name',
+        header: columns[0] ?? '',
+        width: '45%',
+        sortable: true,
+        sortValue: (row) => row.name,
+        text: (row) => row.name,
+        render: (row) => buildNameCell(row),
+      },
+      {
+        key: 'valueType',
+        header: columns[1] ?? '',
+        width: '40%',
+        sortable: true,
+        sortValue: (row) => valueTypeCellLabel(row),
+        text: (row) => valueTypeCellLabel(row),
+        render: (row) => buildTypeCell(row),
+      },
+      {
+        key: 'typesCount',
+        header: columns[2] ?? '',
+        width: '15%',
+        align: 'end',
+        sortable: true,
+        sortValue: (row) => row.typesCount,
+        text: (row) => String(row.typesCount),
+        render: (row) => span(String(row.typesCount), 'property-list-count-cell muted'),
+      },
+    ],
+    rows: [],
+    rowKey: (row) => row.id,
+    emptyText: opts.emptyText ?? t('propertyList.empty'),
+    onActivate: (row) => activate(row),
+    onCurrentChange: (key) => {
+      selectedId = key;
+    },
+    rowMenu: (row) => rowMenu(row),
+  });
+  wrap.append(table.element);
+
+  /** Пустое состояние зависит от поиска: без совпадений — «Ничего не
+   *  найдено.», иначе текст потребителя. Текст живёт в узле фасада. */
+  const emptySpan = table.element.querySelector<HTMLElement>(`.${TABLE_EMPTY_CLASS} span`);
+  function syncEmptyText(): void {
+    if (emptySpan === null) return;
+    emptySpan.textContent =
+      query.trim() !== ''
+        ? t('propertyList.emptySearch')
+        : opts.emptyText ?? t('propertyList.empty');
+  }
+
+  /** Перерисовывает строки по текущему фильтру/сортировке. */
+  function refresh(): void {
+    syncEmptyText();
+    table.setRows(visibleRows());
   }
 
   searchInput.addEventListener('input', () => {
     query = searchInput.value;
-    rerender();
-  });
-
-  root.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      const rows = selectableRows(visibleRows());
-      if (rows.length === 0) return;
-      event.preventDefault();
-      const at = rows.findIndex((r) => r.id === selected?.id);
-      selected =
-        event.key === 'ArrowDown'
-          ? rows[Math.min(rows.length - 1, at + 1)] ?? rows[0]!
-          : rows[Math.max(0, at - 1)] ?? rows[0]!;
-      applySelection();
-    } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-      if (selected === null) return;
-      event.preventDefault();
-      activate(selected);
-    }
+    refresh();
   });
 
   return {
     root,
     setRows: (rows: readonly PropertyListRow[]) => {
       allRows = rows;
-      if (selected !== null && !rows.some((r) => r.id === selected?.id)) selected = null;
-      rerender();
+      if (selectedId !== null && !rows.some((r) => r.id === selectedId)) {
+        selectedId = null;
+        table.setCurrent(null);
+      }
+      refresh();
     },
-    selected: () => selected,
+    selected: () =>
+      selectedId === null ? null : allRows.find((r) => r.id === selectedId) ?? null,
     selectRow: (id: string) => {
       const row = allRows.find((r) => r.id === id) ?? null;
       if (row === null || row.structural || blockReason(row) !== null) return;
-      selected = row;
-      applySelection();
+      selectedId = id;
+      table.setCurrent(id);
     },
-    focusSearch: () => searchInput.focus(),
+    focus: () => table.focus(),
   };
 }

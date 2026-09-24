@@ -9,20 +9,28 @@
  * собственный хелпер `createTable`) в рендерере вне `lib/ui` запрещена.
  *
  * **Allow-края (инвентарь 3fc7c54d, 12 файлов ручных таблиц).** Это
- * существующие списки на самодельных таблицах; их переводят задачи этапа 2:
- *   • Z4 (ada14160) — менеджеры свойств/типов: `screens/property-manager.ts`,
- *     `screens/type-manager.ts`, `lib/property-list.ts`;
+ * существующие списки на самодельных таблицах. Перевод по задачам этапа 2:
+ *   • Z4 (ada14160) — общий список свойств `lib/property-list.ts` переведён
+ *     (запись снята) — им пользуются и менеджер свойств, и пикер типа;
  *   • Z5 (ae76b75e) — списочные экраны: `screens/chronicle/chronicle.ts`,
  *     `screens/activity/activity.ts`.
+ *
+ * Оставшиеся записи `screens/property-manager.ts` и `screens/type-manager.ts`
+ * НЕ снимаются в Z4: в этих файлах ручные таблицы принадлежат частям, которые
+ * в объём Z4 не входят — таблицам-привязкам внутри редактора свойства/типа и
+ * деревьям типов (деревья переводит Z7, `d1c15a2d`). Их плоские списки
+ * (список «Свойства» и пикер «Добавить свойство») уже идут через общий
+ * `lib/property-list.ts` на фасаде. Снять записи целиком можно будет после
+ * перевода редакторских таблиц и деревьев.
+ *
  * Остальные 7 файлов в объём Z4/Z5 не входят (`admin/admin.ts`,
  * `editor/properties.ts`, `editor/chrono-tab.ts`, `screens/settings-logs.ts`,
  * `screens/workspace-menus.ts`, `screens/thought-type/views-tab.ts`,
  * `selection/dialogs.ts`) — их таблицы остаются как есть до профильных задач.
  *
- * Сторож подключается зелёным: 5 «своих» записей Z4/Z5 не удалены из allow
- * до их перевода (иначе сторож краснел бы на текущем коде — правило «сторож
- * только зелёным», AGENTS.md §2.5). По завершении Z4/Z5 эти записи снимаются
- * вместе с переводом файлов — тогда запрет станет полным.
+ * Сторож подключается зелёным: записи Z5 и редакторов/деревьев не удалены до
+ * их перевода (иначе сторож краснел бы на текущем коде — правило «сторож
+ * только зелёным», AGENTS.md §2.5).
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -39,12 +47,12 @@ import { assertGuardClean, collectViolations, type GuardRule } from './guard-hel
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 
-/** Легаси-файлы с ручными таблицами: переводятся в Z4/Z5 либо вне их объёма. */
+/** Легаси-файлы с ручными таблицами: переводятся в Z5/Z7 либо вне объёма. */
 const LEGACY_TABLE_FILES = new Set([
-  // Z4 — менеджеры свойств и типов.
+  // Редакторские таблицы-привязки и деревья типов — вне объёма Z4
+  // (деревья — Z7, d1c15a2d; редакторы в Z4 не переписываются).
   'screens/property-manager.ts',
   'screens/type-manager.ts',
-  'lib/property-list.ts',
   // Z5 — списочные экраны.
   'screens/chronicle/chronicle.ts',
   'screens/activity/activity.ts',

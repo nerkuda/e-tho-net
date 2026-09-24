@@ -170,9 +170,10 @@ export type RegistryRow = PropertyRegistryRow;
  * связи»). Список — общий компонент `buildPropertyList` в режиме менеджера
  * (задача 6ebde54e): скаляры и оба конца связей отдельными строками, иконки
  * видов значения / линии со стрелками, колонки «Имя» / «Тип значения» /
- * «Кол-во типов», поиск по имени и описанию, ↑/↓ и единая активация Enter/клик,
- * контекстное меню «Изменить»/«Удалить». Ширина — 900 px (≈ на 25 % шире
- * прежних 720 px).
+ * «Кол-во типов», поиск по имени и описанию, текущая строка, клавиатура и
+ * сортировка от табличного фасада `lib/ui/table.ts`, активация Enter/двойной
+ * клик, контекстное меню «Изменить»/«Удалить». Ширина — 900 px (≈ на 25 %
+ * шире прежних 720 px).
  */
 export function showPropertyManagerDialog(): void {
   const networkId = requireNetworkId();
@@ -341,8 +342,9 @@ export function showPropertyManagerDialog(): void {
     // Ошибки реестра — в панели кнопок диалога (требование 397c5a56).
     footerError: errorLine,
     buttons: [{ label: t('actions.close'), primary: true }],
-    // Фокус в поиске: ↑/↓ и Enter сразу работают по списку (требование 9).
-    onMount: () => list.focusSearch(),
+    // Фокус на таблице: клавиатура (↑/↓, Home/End, Enter) сразу работает по
+    // списку — её ведёт фасад `lib/ui/table.ts`.
+    onMount: () => list.focus(),
   });
 
   // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —
