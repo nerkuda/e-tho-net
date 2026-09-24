@@ -963,13 +963,19 @@ function insertAttachment(
   actorUserId: string,
   now: string,
 ): void {
+  // Схема `attachments` (009 + 015 + 025 + 033) не имеет колонки `updated_at`
+  // (только `created_at` + пара `updated_by` / `*_ms`). Пишем существующие
+  // колонки — как в каноническом INSERT `attachment-service.ts` (ошибка
+  // af6ebdea).
+  const nowMs = Date.parse(now);
+  const createdMs = Date.parse(a.created_at);
   ndb
     .prepare(
       `INSERT OR IGNORE INTO attachments (
          id, owner_type, owner_id, kind, url, file_path, file_size,
          mime_type, title, description, icon, position,
-         created_at, created_by, updated_at, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         created_at, created_by, updated_by, created_at_ms, updated_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       a.id,
@@ -986,8 +992,9 @@ function insertAttachment(
       a.position,
       a.created_at,
       a.created_by,
-      now,
       actorUserId,
+      Number.isNaN(createdMs) ? nowMs : createdMs,
+      nowMs,
     );
 }
 
@@ -1019,8 +1026,20 @@ export async function importFromEtnx(
   opts: ImportOptions,
   logger: Logger,
 ): Promise<ImportResult> {
-  const { manifest, attachments } = await readArchive(zipBuffer, logger);
-  return applyManifest(ndb, manifest, attachments, opts, logger);
+  try {
+    const { manifest, attachments } = await readArchive(zipBuffer, logger);
+    return applyManifest(ndb, manifest, attachments, opts, logger);
+  } catch (err) {
+    // Любой сбой импорта (битый zip, несовпадение схемы, отказ политики)
+    // предъявляем агенту как ETN-ошибку с кодом, а не сырым «Unexpected
+    // error» (ошибка af6ebdea). EtnError (в т.ч. VALIDATION_ERROR политики
+    // `fail`) пробрасываем без изменений.
+    if (err instanceof EtnError) throw err;
+    logger.error({ err }, 'import: unexpected failure');
+    throw new EtnError('INTERNAL', 'Не удалось применить .etnx-архив.', {
+      cause: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** Прочитать манифест из .etnx-буфера, не применяя его (для `dry_run`). */
