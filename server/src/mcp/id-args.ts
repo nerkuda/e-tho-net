@@ -62,6 +62,13 @@ function isThoughtScalarSlot(toolName: string, key: string, obj: Record<string, 
 /** Слот нормализации: либо поле-строка, либо массив строк (правится на месте). */
 type Slot = { obj: Record<string, unknown>; key: string } | { array: unknown[] };
 
+/**
+ * Инструменты, где неразрешимый короткий id в МАССИВНОМ слоте не должен
+ * рушить вызов: `etn.thoughts.resolve` кладёт такие id в `missing[]`
+ * (ошибка 8f42dbf3). Прочие инструменты сохраняют прежний отказ NOT_FOUND.
+ */
+const BATCH_MISSING_ARRAY_TOOLS = new Set<string>(['etn.thoughts.resolve']);
+
 /** Собрать все id-слоты с короткой формой id (полные UUID не трогаем). */
 function collect(value: unknown, key: string | undefined, toolName: string, out: Slot[]): void {
   if (Array.isArray(value)) {
@@ -117,12 +124,24 @@ export function normalizeThoughtIdArgs(
   if (networkId === null) return;
   const ndb: NetworkDb = openMemberNetwork(rt, networkId);
   const resolve = (id: string): string => resolveThoughtIdOrThrow(ndb, id);
+  const batchMissing = BATCH_MISSING_ARRAY_TOOLS.has(toolName);
   for (const slot of slots) {
     if ('array' in slot) {
       const arr = slot.array;
       for (let i = 0; i < arr.length; i += 1) {
         const e = arr[i];
-        if (typeof e === 'string' && isIdPrefix(e)) arr[i] = resolve(e);
+        if (typeof e !== 'string' || !isIdPrefix(e)) continue;
+        if (batchMissing) {
+          // Неразрешимый (ненайденный или неоднозначный) короткий id оставляем
+          // как есть — домен положит его в `missing[]`, а не отвергнет батч.
+          try {
+            arr[i] = resolve(e);
+          } catch {
+            // оставляем исходное значение
+          }
+        } else {
+          arr[i] = resolve(e);
+        }
       }
     } else {
       slot.obj[slot.key] = resolve(slot.obj[slot.key] as string);

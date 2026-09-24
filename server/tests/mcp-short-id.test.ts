@@ -151,13 +151,40 @@ describe('MCP: короткие id мыслей', { skip: !nativeAvailable() }, 
         });
         assert.equal(patched.isError, undefined);
 
-        // Отсутствующий префикс — понятная ошибка, а не «тихий» мисс.
+        // Отсутствующий префикс в `get` — понятная ошибка, а не «тихий» мисс.
         const missing = await handle.client.callTool({
           name: 'etn.thoughts.get',
           arguments: { network_id: ctx.networkId, thought_id: 'deadbeef' },
         });
         assert.equal(missing.isError, true);
         assert.match(toolText(missing), /NOT_FOUND/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('resolve: неразрешимый короткий id уходит в missing[], а не рушит батч (8f42dbf3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const parent = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Цель resolve',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+        });
+        const shortParent = parent.id.slice(0, 8);
+
+        const resolved = await handle.client.callTool({
+          name: 'etn.thoughts.resolve',
+          arguments: { network_id: ctx.networkId, thought_ids: [shortParent, 'deadbeef'] },
+        });
+        assert.equal(resolved.isError, undefined, 'батч не должен падать целиком');
+        const payload = toolJson<{ items: Array<{ id: string }>; missing: string[] }>(resolved);
+        assert.deepEqual(payload.items.map((t) => t.id), [parent.id]);
+        assert.deepEqual(payload.missing, ['deadbeef']);
       } finally {
         await handle.close();
       }

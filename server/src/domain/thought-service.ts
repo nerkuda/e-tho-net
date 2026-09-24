@@ -469,13 +469,25 @@ export function getThoughtsByIdsResolved(
   ids: string[],
 ): ResolveResult {
   // Дедуп в порядке первого появления. Короткие id (ошибка d8893a1f)
-  // резолвятся в полные; префикс без совпадений сразу уходит в `missing`.
+  // резолвятся в полные; неразрешимый префикс (нет совпадений ИЛИ
+  // неоднозначный) уходит в `missing` — пакетное чтение не должно падать
+  // целиком из-за одного id (ошибка 8f42dbf3).
   const unique: string[] = [];
   const seen = new Set<string>();
   const unresolved: string[] = [];
   for (const id of ids) {
     if (typeof id !== 'string' || id === '') continue;
-    const full = resolveThoughtId(ndb, id);
+    let full: string | null;
+    try {
+      full = resolveThoughtId(ndb, id);
+    } catch (err) {
+      if (!(err instanceof EtnError)) throw err;
+      if (!seen.has(id)) {
+        seen.add(id);
+        unresolved.push(id);
+      }
+      continue;
+    }
     if (full === null) {
       if (!seen.has(id)) {
         seen.add(id);
