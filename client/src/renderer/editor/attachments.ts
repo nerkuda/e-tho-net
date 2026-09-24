@@ -16,7 +16,7 @@
  * tab title is refreshed after every change.
  */
 
-import type { Attachment } from '@etn/shared';
+import type { Attachment, Thought, ThoughtUpdateInput } from '@etn/shared';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { rememberShownAttachments } from '../lib/attachment-events.js';
@@ -61,6 +61,48 @@ export function registerAttachmentsTab(): void {
 /** True for image files (server-stored or client-local). */
 function isImageFile(a: Attachment): boolean {
   return a.kind === 'file' && (a.mime_type ?? '').startsWith('image/');
+}
+
+/**
+ * Иконка, готовую к назначению иконкой мысли, извлекаемую из url-вложения:
+ * favicon, который сервер положил в `attachment.icon` как `data:`-URL
+ * (best-effort при создании ссылки, см. 03-server-api.md §11). Тот же источник
+ * использует drag-and-drop интернет-ссылки в зону карты (canvas/add-dialog.ts).
+ * `null` — вложение не url или favicon не извлечён; не-image `data:` отсекаем,
+ * чтобы битую строку не отправили в `icon`.
+ */
+export function urlAttachmentIcon(a: Attachment): string | null {
+  if (a.kind !== 'url') return null;
+  const icon = a.icon;
+  return icon !== null && icon.startsWith('data:') ? icon : null;
+}
+
+/**
+ * Виден ли пункт «Назначить иконкой мысли» для вложения: либо файл-картинка
+ * (иконку читает `assignAsThoughtIcon` из самого файла), либо url-ссылка с
+ * извлечённой иконкой. У file-вложений и ссылок без иконки пункта нет.
+ */
+export function canAssignAsThoughtIcon(a: Attachment): boolean {
+  return isImageFile(a) || urlAttachmentIcon(a) !== null;
+}
+
+/**
+ * Ставит мысли иконку-картинку из готового `data:`-URL и разносит результат по
+ * всем видам (карта, карточка, закреплённые/история) через
+ * `reflectThoughtUpdate`. Общий путь для favicon url-вложения (источник как у
+ * drag-and-drop) и вложения-картинки после подготовки data URL.
+ */
+export async function assignDataIconToThought(
+  networkId: string,
+  thought: Thought,
+  icon: string,
+  iconAttachmentId: string | null,
+): Promise<Thought> {
+  const patch: ThoughtUpdateInput = { icon, icon_kind: 'image' };
+  if (iconAttachmentId !== null) patch.icon_attachment_id = iconAttachmentId;
+  const updated = await etn.thoughts.update(networkId, thought.id, patch, thought.version);
+  reflectThoughtUpdate(updated);
+  return updated;
 }
 
 /**
@@ -504,17 +546,34 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   }
 
   /**
-   * «Назначить иконкой мысли» — image files on a thought owner (L1, L16). The
-   * thought icon must be a self-contained `data:image` URL ≤256 KiB (the server
-   * rejects machine-local `etnimg:` paths — other clients cannot resolve them),
-   * so the stored file is read back through the etnimg protocol and inlined;
-   * files over the limit become a downscaled preview instead of being rejected.
-   * `icon_attachment_id` links the icon to the attachment so Ctrl-hover shows
-   * the full picture.
+   * «Назначить иконкой мысли» — доступно для файла-картинки и для url-ссылки с
+   * извлечённой иконкой (L1, L16). У url-вложения favicon уже лежит
+   * `data:`-URL в `attachment.icon` — кладём его как есть, тем же способом, что
+   * drag-and-drop интернет-ссылки в зону карты. Для файла-картинки иконка должна
+   * быть самодостаточным `data:image`-URL ≤256 KiB (сервер отклоняет
+   * machine-local `etnimg:`-пути — другие клиенты их не разрешат), поэтому файл
+   * читается обратно через etnimg-протокол и инлайнится; файлы сверх лимита
+   * становятся уменьшенным превью вместо отказа. `icon_attachment_id` связывает
+   * иконку с вложением — Ctrl-hover показывает полную картинку.
    */
   async function assignAsThoughtIcon(attachment: Attachment): Promise<void> {
     const thought = ctx.thought;
-    if (thought === null || attachment.file_path === null) return;
+    if (thought === null) return;
+
+    // url-вложение с favicon: источник готов, ссылку на вложение не ставим —
+    // у неё нет файла для Ctrl-hover (как и у drag-and-drop).
+    const urlIcon = urlAttachmentIcon(attachment);
+    if (urlIcon !== null) {
+      try {
+        await assignDataIconToThought(networkId, thought, urlIcon, null);
+        notice('Иконка мысли обновлена.');
+      } catch (err) {
+        notice(`Не удалось назначить иконку: ${errText(err)}`, 'error');
+      }
+      return;
+    }
+
+    if (attachment.file_path === null) return;
     let dataUrl: string;
     try {
       const res = await fetch(etnimgUrl(attachment.file_path));
@@ -534,17 +593,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       }
     }
     try {
-      const updated = await etn.thoughts.update(networkId, thought.id, {
-        icon: dataUrl,
-        icon_kind: 'image',
-        icon_attachment_id: attachment.id,
-      }, thought.version);
-      // The new icon must repaint everywhere at once — the editor header, the
-      // canvas clouds, the pinned/history bars, the structures results. The
-      // actor gets no realtime echo (04-realtime.md §5); patching only the
-      // store focus used to leave every other view stale until the next focus
-      // switch (bug fixes/045).
-      reflectThoughtUpdate(updated);
+      await assignDataIconToThought(networkId, thought, dataUrl, attachment.id);
       notice('Иконка мысли обновлена.');
     } catch (err) {
       notice(`Не удалось назначить иконку: ${errText(err)}`, 'error');
@@ -643,7 +692,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         onClick: () => void openDefault(attachment),
       });
     }
-    if (ctx.ownerType === 'thought' && isImageFile(attachment)) {
+    if (ctx.ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
       items.push({
         label: 'Назначить иконкой мысли',
         onClick: () => void assignAsThoughtIcon(attachment),
