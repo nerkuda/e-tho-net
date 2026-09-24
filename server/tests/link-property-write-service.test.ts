@@ -198,6 +198,70 @@ describe(
       }
     });
 
+    it('повторная установка значения восстанавливает корзинное ребро той же тройки', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'используется в' }, USER);
+        const task = createThoughtType(ndb, { name: 'ЗадачаBack' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентBack' }, USER);
+        createTypeProperty(
+          ndb, 'thought_type', task.id,
+          { key: 'зависит от', value_type: 'link', config: { link_type_id: lt.id, direction: 'out' } },
+          USER,
+        );
+        const a = createThought(ndb, { title: 'Задача Back1', type_id: task.id }, USER);
+        const b = createThought(ndb, { title: 'Компонент Back1', type_id: comp.id }, USER);
+
+        const { link_id } = addLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, 'важно', USER);
+        removeLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, USER);
+
+        // Постановка значения поверх корзинного ребра той же тройки: не сырая
+        // ошибка UNIQUE (029) и не дубль, а восстановление того же ребра.
+        const again = addLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, null, USER);
+        assert.equal(again.created, true);
+        assert.equal(again.link_id, link_id, 'восстанавливается то же ребро');
+        const link = getLink(ndb, link_id);
+        assert.ok(link !== null && link.marked_for_deletion === false);
+        const values = getLinkPropertyValues(ndb, 'thought', a.id, lt.id, 'out');
+        assert.equal(values.length, 1);
+        assert.equal(values[0]!.comment, 'важно', 'комментарий корзинного ребра сохраняется');
+
+        // Идемпотентность: повтор по живому ребру — no-op с тем же id.
+        const third = addLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, null, USER);
+        assert.equal(third.created, false);
+        assert.equal(third.link_id, link_id);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('set возвращает в набор значение, чьё ребро в корзине, без сырой ошибки UNIQUE', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'используется в' }, USER);
+        const task = createThoughtType(ndb, { name: 'ЗадачаBackSet' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентBackSet' }, USER);
+        createTypeProperty(
+          ndb, 'thought_type', task.id,
+          { key: 'зависит от', value_type: 'link', config: { link_type_id: lt.id, direction: 'out' } },
+          USER,
+        );
+        const a = createThought(ndb, { title: 'Задача BackSet1', type_id: task.id }, USER);
+        const b = createThought(ndb, { title: 'Компонент BackSet1', type_id: comp.id }, USER);
+        const c = createThought(ndb, { title: 'Компонент BackSet2', type_id: comp.id }, USER);
+
+        setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id, c.id], USER);
+        // c уходит в корзину.
+        setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id], USER);
+        // c возвращается в набор — ребро восстанавливается, а не падает.
+        setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id, c.id], USER);
+        const values = getLinkPropertyValues(ndb, 'thought', a.id, lt.id, 'out');
+        assert.equal(values.length, 2);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('set — полная замена набора, лишние рёбра в корзину', () => {
       const ndb = createInMemoryNetworkDb();
       try {

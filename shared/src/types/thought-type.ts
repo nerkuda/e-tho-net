@@ -453,7 +453,15 @@ import type { CrossNetworkRefValue } from './cross-network.js';
 
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {
-  id: string;
+  /**
+   * Id строки `property_values`. `null` — у свойства-связи (`value_type:
+   * "link"`): её значение — проекция рёбер (`links`), отдельной строки в
+   * `property_values` не существует (ADR «свойство-связь — проекция ребра»;
+   * ошибка 5a50f906 — раньше сюда подставлялась пустая строка). Адрес ребра
+   * берут из чтения значений свойства-связи (`LinkPropertyValueItem.link_id`)
+   * либо из ответа `etn.properties.add` (`link_id`).
+   */
+  id: string | null;
   owner_type: 'thought' | 'link';
   owner_id: string;
   property_id: string;

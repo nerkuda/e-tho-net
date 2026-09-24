@@ -288,4 +288,83 @@ describe('GET /networks/:id/instructions (REST-аналог etn.instructions)', 
       await closeRestContext(ctx);
     }
   });
+
+  // Задача 649c55e2: режимы перечня scope (roots|all) и instruction_ids.
+  it('scope=all, instruction_ids (порядок + missing) и взаимоисключения режимов', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const instructionsTypeId = makeThoughtType(ctx, 'Инструкция');
+      const patch = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/networks/${ctx.networkId}`,
+        headers: authHeaders(ctx),
+        payload: { type_roles: { instructions: instructionsTypeId } },
+      });
+      assert.equal(patch.statusCode, 200);
+
+      const root = makeThought(ctx, 'Root', instructionsTypeId);
+      setPermanent(ctx, root, 'Корневая.');
+      const nested = makeThought(ctx, 'Nested', instructionsTypeId);
+      setPermanent(ctx, nested, 'Подчинённая.');
+      linkParent(ctx, root, nested);
+
+      const base = `/api/v1/networks/${ctx.networkId}/instructions`;
+
+      // По умолчанию — только корневые.
+      const roots = await ctx.app.inject({ method: 'GET', url: base, headers: authHeaders(ctx) });
+      assert.equal(roots.statusCode, 200);
+      assert.deepEqual(
+        roots.json().data.instructions.map((i: { title: string }) => i.title),
+        ['Root'],
+      );
+
+      // scope=all — включая подчинённые.
+      const all = await ctx.app.inject({
+        method: 'GET',
+        url: `${base}?scope=all`,
+        headers: authHeaders(ctx),
+      });
+      assert.equal(all.statusCode, 200);
+      assert.deepEqual(
+        all.json().data.instructions.map((i: { title: string }) => i.title).sort(),
+        ['Nested', 'Root'],
+      );
+      assert.equal(all.json().data.meta.total, 2);
+
+      // instruction_ids — карточки в порядке запроса, ненайденные в missing.
+      const ghost = randomUUID();
+      const ids = await ctx.app.inject({
+        method: 'GET',
+        url: `${base}?instruction_ids=${nested}&instruction_ids=${root}&instruction_ids=${ghost}`,
+        headers: authHeaders(ctx),
+      });
+      assert.equal(ids.statusCode, 200);
+      const idsBody = ids.json().data;
+      assert.deepEqual(
+        idsBody.instructions.map((i: { id: string }) => i.id),
+        [nested, root],
+      );
+      assert.deepEqual(idsBody.missing, [ghost]);
+      assert.equal(idsBody.meta.total, 2);
+
+      // Взаимоисключения режимов — 422.
+      for (const suffix of [
+        `?scope=all&keywords=up`,
+        `?scope=all&instruction_id=${root}`,
+        `?instruction_ids=${nested}&keywords=up`,
+        `?instruction_ids=${nested}&instruction_id=${root}`,
+        `?instruction_ids=${nested}&scope=all`,
+        `?instruction_ids=${nested}&limit=10`,
+      ]) {
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: `${base}${suffix}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 422, `ожидался 422 для ${suffix}`);
+      }
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });

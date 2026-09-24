@@ -529,13 +529,20 @@ export interface McpThoughtWriteItemResult {
   comment?: { id: string; version: number; action: 'created' | 'updated' };
   /** Chronicle entries appended in this batch. */
   chronicle?: Array<{ id: string; version: number }>;
-  /** Per-key property value ids set in this batch. */
-  properties?: Record<string, { id: string }>;
+  /**
+   * Per-key property value ids set in this batch. `id` — id строки
+   * `property_values` для скалярного свойства; `null` для свойства-связи
+   * (её значение — проекция рёбер, отдельной строки нет; адрес ребра —
+   * `link_id` из чтения значений свойства-связи или `etn.properties.add`).
+   * Ошибка 5a50f906: раньше для свойства-связи отдавалась пустая строка.
+   */
+  properties?: Record<string, { id: string | null }>;
   /** Link results: id + (if any) attached properties/comments. */
   links?: Array<{
     id: string;
     version: number;
-    properties?: Record<string, { id: string }>;
+    /** `id` — как у верхнеуровневых `properties` (см. выше). */
+    properties?: Record<string, { id: string | null }>;
     comment?: { id: string; version: number };
   }>;
   /** Attachment ids added in this batch. */

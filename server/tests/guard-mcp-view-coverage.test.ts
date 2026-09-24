@@ -177,6 +177,11 @@ const MCP_READ_ONLY_VIEWS: readonly { tool: string; field: string; note: string 
     note: 'только чтение (readOnlyHint): вид выбирает область полнотекстового поиска.',
   },
   {
+    tool: 'etn.instructions',
+    field: 'scope',
+    note: 'только чтение (readOnlyHint): вид выбирает охват перечня инструкций (roots/all), записи нет.',
+  },
+  {
     tool: 'etn.thoughts.get',
     field: 'view',
     note: 'только чтение (readOnlyHint): проекция ответа compact/full, без записи.',

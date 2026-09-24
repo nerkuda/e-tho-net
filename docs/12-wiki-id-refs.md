@@ -233,7 +233,7 @@ Legacy `[[Имя|alias]]` **не обновляется автоматическ
 
 ## 6. Backlinks: «Ссылки на мысль» в табе «Связи»
 
-### 6.1. Серверный эндпоинт `etn.thoughts.backlinks`
+### 6.1. Серверный эндпоинт backlinks
 
 REST: `GET /networks/{networkId}/thoughts/{id}/backlinks` —
 
@@ -252,10 +252,13 @@ function findBacklinks(ndb: NetworkDb, thoughtId: string): BacklinkHit[]
 - Сниппет через `makeSnippet` (как в `findMentions`).
 - **Runtime** — без отдельной таблицы (решение пользователя).
 
-MCP-инструмент `etn.thoughts.backlinks` (`readOnlyHint: true`,
-`view: 'compact' | 'full'`) и MCP-ресурс `etn.thought.backlinks`
-(шаблон `etn://networks/{network_id}/thoughts/{thought_id}/backlinks`)
-— по образцу `etn.thoughts.usage`.
+В MCP: действие `thoughts.backlinks` исполнителя `etn.ops` (read-only;
+`etn.ops { action: "thoughts.backlinks", params: { network_id, thought_id,
+view? } }` — с 0.8.3 отдельного инструмента `etn.thoughts.backlinks` нет,
+детали — `etn.guide { topic: "thoughts.backlinks" }`) и MCP-ресурс
+`etn.thought.backlinks` (шаблон
+`etn://networks/{network_id}/thoughts/{thought_id}/backlinks`) — по образцу
+`etn.thoughts.usage`.
 
 ### 6.2. UI: две подгруппы в «Упоминания»
 
@@ -263,11 +266,13 @@ MCP-инструмент `etn.thoughts.backlinks` (`readOnlyHint: true`,
 «Упоминания» заменяется на контейнер с двумя подсекциями:
 
 - **«Ссылки на мысль»** (id `mentions:backlinks`, defaultCollapsed: true,
-  lazyCount: true) — через `etn.thoughts.backlinks`. Клик по строке
+  lazyCount: true) — через действие `thoughts.backlinks` исполнителя
+  `etn.ops`. Клик по строке
   открывает комментарий-владелец (через `setFocus` для мысли или
   `openLinkInEditor` для связи).
 - **«Упоминания в тексте»** (id `mentions:text`, defaultCollapsed: true) —
-  текущий `buildMentionsBody` через `etn.thoughts.mentions`.
+  текущий `buildMentionsBody` через действие `thoughts.mentions`
+  исполнителя `etn.ops`.
 
 Обе группы свёрнуты по умолчанию — пользователь явно решает, что готов
 подождать выполнения запроса.
@@ -344,7 +349,8 @@ webContents.send('etn:deep-link', { networkId, thoughtId });
 
 - `etn.thought.backlinks` (ресурс, шаблон
   `etn://networks/{network_id}/thoughts/{thought_id}/backlinks`).
-- `etn.thoughts.backlinks` (инструмент, `readOnlyHint: true`).
+- действие `thoughts.backlinks` исполнителя `etn.ops` (read-only) —
+  отдельного инструмента `etn.thoughts.backlinks` с 0.8.3 нет.
 
 См. `docs/05-mcp-server.md` §4/§5 и `docs/03-server-api.md` §13.
 
@@ -406,6 +412,6 @@ markdown-файлы, письма).
    URL в renderer.
 6. **argv на Win/Linux** — ищем через
    `process.argv.find(arg => arg.startsWith('etn://'))`.
-7. **Кросс-сеть и MCP** — `etn.networks.list` уже выдаёт все доступные
-   пользователю сети, агент может сам резолвить `network_id` →
-   `thought_id`.
+7. **Кросс-сеть и MCP** — действие `networks.list` исполнителя `etn.ops`
+   уже выдаёт все доступные пользователю сети, агент может сам резолвить
+   `network_id` → `thought_id`.

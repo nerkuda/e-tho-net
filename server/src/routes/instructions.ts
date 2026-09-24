@@ -4,8 +4,12 @@
  *
  *   GET /networks/:networkId/instructions
  *     ?instruction_id=<id>   — полный текст одной инструкции;
+ *     ?instruction_ids=<id>&instruction_ids=<id> — карточки перечня по списку
+ *                            (в порядке запроса; ненайденные — в `missing`);
  *     ?keywords=<words>      — фильтр по title+synonyms мини-синтаксом;
- *     ?limit=&offset=        — пейджинг списка (только без instruction_id).
+ *     ?scope=roots|all       — только корневые (по умолчанию) или все активные;
+ *     ?limit=&offset=        — пейджинг списка (только без instruction_id/
+ *                              instruction_ids).
  *
  * Тонкий фасад над доменным {@link getNetworkInstructions}: разбирает вход,
  * зовёт домен, добавляет `network_id` в ответ. Читает **слой сессии** — тот же
@@ -47,13 +51,21 @@ export function createInstructionsRoutes(deps: RouteDeps): FastifyPluginAsync {
           throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
         }
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        // REST-парсер repeatable-массива кладёт `[]` при отсутствии параметра —
+        // пустой список считаем «не передан» (задача 649c55e2).
+        const instructionIds =
+          Array.isArray(input.instruction_ids) && input.instruction_ids.length > 0
+            ? input.instruction_ids
+            : undefined;
         const result = getNetworkInstructions(
           ndb,
           network.type_roles.instructions ?? null,
           input.network_id,
           {
             ...(input.instruction_id !== undefined ? { instructionId: input.instruction_id } : {}),
+            ...(instructionIds !== undefined ? { instructionIds } : {}),
             ...(input.keywords !== undefined ? { keywords: input.keywords } : {}),
+            ...(input.scope !== undefined ? { scope: input.scope } : {}),
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
             ...(input.offset !== undefined ? { offset: input.offset } : {}),
           },

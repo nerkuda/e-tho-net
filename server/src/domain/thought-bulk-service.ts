@@ -15,7 +15,10 @@
  * публикует и не журналирует — он возвращает {@link WriteOutcome}).
  *
  * Семантика канонична REST-спецификации §6.6: удаление связей учитывает
- * все видимые связи пары (любого типа, включая неактивные).
+ * все видимые связи пары (любого типа, включая неактивные). Идемпотентность
+ * создания — по тройке `(source, target, type)` среди живых рёбер
+ * (задача 3f35d354, требование 4591f837), в соответствие с миграцией 029 и
+ * `createLink`.
  *
  * Валидация входов (непустые `ids`, наличие `args.type_id` у `set_type`,
  * резолв имён типов) остаётся в фасадах — это веха 8.
@@ -102,13 +105,26 @@ export function applyBulkThoughtOp(
     activity.push({ kind: 'thought', action, thought: updated });
   };
 
-  /** Создать связь пары, занести эффект и строку журнала из результата. */
+  /**
+   * Создать связь тройки, занести эффект и строку журнала из результата.
+   *
+   * Идемпотентность — по ТРОЙКЕ `(source, target, type)`, а не по паре
+   * (задача 3f35d354): повторный вызов не дублирует живое ребро той же тройки,
+   * но не мешает создать ребро другого типа, если у пары уже есть типизированная
+   * (или помеченная на удаление) связь. Инвариант — тот же, что у миграции 029
+   * (тройка уникальна среди живых строк) и `createLink`.
+   */
   const linkAndRecord = (sourceId: string, targetId: string): void => {
     if (sourceId === targetId) return; // self-loop — молча пропускается (§6.6)
-    if (findLinksBetween(ndb, sourceId, targetId).length > 0) return; // идемпотентность по парам
+    const typeId = args.link_type_id ?? null;
+    // Живое ребро той же тройки (помеченные на удаление не блокируют создание).
+    const liveTriple = findLinksBetween(ndb, sourceId, targetId, typeId).some(
+      (l) => !l.marked_for_deletion,
+    );
+    if (liveTriple) return;
     const link = createLink(
       ndb,
-      { source_id: sourceId, target_id: targetId, type_id: args.link_type_id ?? null },
+      { source_id: sourceId, target_id: targetId, type_id: typeId },
       userId,
     );
     events.push({ type: 'link.created', data: { link } });

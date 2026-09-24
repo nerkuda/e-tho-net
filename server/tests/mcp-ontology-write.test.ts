@@ -7,7 +7,8 @@
  *   * иерархию — 3 типа через `parent_ref`;
  *   * цикл в `parent_ref` → `VALIDATION_ERROR` до транзакции;
  *   * повторяющийся `ref` → `VALIDATION_ERROR`;
- *   * несуществующий `parent` → `NOT_FOUND`;
+ *   * несуществующий `parent` → `NOT_FOUND`; `parent` по имени — тоже
+ *     `NOT_FOUND`, а явный `id` нового типа не принимается (8c64fdd4);
  *   * смену `value_type` — ответ несёт `converted_values`/`dropped_values`;
  *   * идемпотентность — повторный вызов даёт `action: unchanged`;
  *   * `etn.ontology.delete` без `force` на используемом типе → отвергается
@@ -212,6 +213,77 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
           .prepare("SELECT id FROM thought_types_v WHERE name IN ('A', 'B')")
           .all();
         assert.equal(rows.length, 0, 'cycle batch must be rolled back');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('parent принимает только id, а id нового типа — только существующий (8c64fdd4)', async () => {
+    // Контракт операции (гайд `etn.guide { topic: "ontology.write" }`):
+    //   * `id` адресует ТОЛЬКО существующий элемент; новый создаётся по имени;
+    //   * `parent` — только id существующего типа (имя не резолвится).
+    // Тест фиксирует это поведение: если приём имён в `parent` когда-нибудь
+    // расширят, гайд придётся править синхронно.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // 1) Базовый тип создаётся по имени (id генерирует сервер).
+        const base = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ name: 'TEST 0.8.4 — персона' }],
+          },
+        });
+        assert.equal(base.isError, undefined, toolText(base));
+        const baseId = toolJson<OntologyWriteResult>(base).thought_types[0]!.id;
+        assert.ok(baseId.length > 0);
+
+        // 2) `parent` по имени существующего типа — NOT_FOUND.
+        const byName = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ name: 'TEST 0.8.4 — родитель по имени', parent: 'TEST 0.8.4 — персона' }],
+          },
+        });
+        assert.equal(byName.isError, true, 'parent по имени должен отвергаться (NOT_FOUND)');
+        const byNameText = toolText(byName);
+        assert.ok(byNameText.includes('NOT_FOUND'), byNameText);
+        assert.ok(byNameText.includes('parent'), `expected offending field "parent": ${byNameText}`);
+
+        // 3) Явный id НОВОГО типа — NOT_FOUND (id только адресует существующее).
+        const byId = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [
+              { id: '11111111-2222-4333-8444-555555555555', name: 'TEST 0.8.4 — тип с явным id' },
+            ],
+          },
+        });
+        assert.equal(byId.isError, true, 'id нового типа должен отвергаться (NOT_FOUND)');
+        assert.ok(toolText(byId).includes('NOT_FOUND'), toolText(byId));
+
+        // 4) Документированный путь — parent по id существующего типа.
+        const byParentId = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ name: 'TEST 0.8.4 — ребёнок персоны', parent: baseId }],
+          },
+        });
+        assert.equal(byParentId.isError, undefined, toolText(byParentId));
+        const childId = toolJson<OntologyWriteResult>(byParentId).thought_types[0]!.id;
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const row = ndb
+          .prepare('SELECT parent_id FROM thought_types_v WHERE id = ?')
+          .get(childId) as { parent_id: string | null } | undefined;
+        assert.equal(row?.parent_id, baseId);
       } finally {
         await handle.close();
       }
