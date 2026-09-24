@@ -17,6 +17,7 @@
     "rebuild:native": "node scripts/rebuild-native.mjs"
   },
   "dependencies": {
+    "@awesome.me/webawesome": "^3.13.0",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-cpp": "^6.0.3",

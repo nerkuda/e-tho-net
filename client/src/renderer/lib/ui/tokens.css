@@ -1,0 +1,102 @@
+/*
+ * Карта маппинга токенов ETN → переменные Web Awesome (`--wa-*`).
+ *
+ * Единственное место, где токены ETN связываются с вендорской дизайн-системой
+ * (ADR «Основа lib/ui: готовые Web Components за фасадами», компонент lib/ui).
+ * Токены ETN объявлены в `client/src/renderer/styles.css`:
+ *   • светлая тема — блок `:root`;
+ *   • тёмная тема  — блок `[data-theme='dark']`.
+ *
+ * Переопределения объявлены БЕЗ cascade-слоёв. Web Awesome публикует свои
+ * токены внутри `@layer wa-theme`, а unlayered-правила всегда приоритетнее
+ * слоёв — поэтому наши значения перекрывают вендорские. Значения ссылаются
+ * на токены ETN (`var(--accent)` и т. п.), а те меняются вместе с темой:
+ * одна и та же карта красит обе темы, отдельный блок `[data-theme='dark']`
+ * не нужен.
+ *
+ * Прямых hex здесь нет — только ссылки на токены ETN (`white` — ключевое
+ * слово, не hex). Порядок подключения (после вендорских стилей) задаёт
+ * `./register.ts`.
+ */
+
+:root {
+  /* Поверхности: фон карточек, панелей, полей. */
+  --wa-color-surface-default: var(--surface);
+  --wa-color-surface-raised: var(--surface);
+  --wa-color-surface-lowered: var(--surface-2);
+  --wa-color-surface-border: var(--border);
+
+  /* Текст. */
+  --wa-color-text-normal: var(--text);
+  --wa-color-text-quiet: var(--text-dim);
+  --wa-color-text-link: var(--accent);
+
+  /* Фокус, тени, подложка модальных окон. */
+  --wa-color-focus: var(--accent);
+  --wa-color-shadow: var(--shadow-c);
+  --wa-color-overlay-modal: var(--backdrop);
+
+  /* brand ↔ акцент ETN (primary-роль кнопок, активные поля). */
+  --wa-color-brand-fill-quiet: var(--accent-soft);
+  --wa-color-brand-fill-normal: var(--accent-soft);
+  --wa-color-brand-fill-loud: var(--accent);
+  --wa-color-brand-border-quiet: var(--accent-soft);
+  --wa-color-brand-border-normal: var(--accent);
+  --wa-color-brand-border-loud: var(--accent-strong);
+  --wa-color-brand-on-quiet: var(--accent);
+  --wa-color-brand-on-normal: var(--accent-strong);
+  --wa-color-brand-on-loud: white;
+
+  /* success ↔ «успех» ETN. */
+  --wa-color-success-fill-quiet: var(--ok-soft);
+  --wa-color-success-fill-normal: var(--ok-soft);
+  --wa-color-success-fill-loud: var(--ok);
+  --wa-color-success-border-quiet: var(--ok-soft);
+  --wa-color-success-border-normal: var(--ok);
+  --wa-color-success-border-loud: var(--ok);
+  --wa-color-success-on-quiet: var(--ok);
+  --wa-color-success-on-normal: var(--ok);
+  --wa-color-success-on-loud: white;
+
+  /* warning ↔ «предупреждение» ETN. */
+  --wa-color-warning-fill-quiet: var(--warn-soft);
+  --wa-color-warning-fill-normal: var(--warn-soft);
+  --wa-color-warning-fill-loud: var(--warn);
+  --wa-color-warning-border-quiet: var(--warn-soft);
+  --wa-color-warning-border-normal: var(--warn);
+  --wa-color-warning-border-loud: var(--warn-strong);
+  --wa-color-warning-on-quiet: var(--warn-strong);
+  --wa-color-warning-on-normal: var(--warn-strong);
+  --wa-color-warning-on-loud: white;
+
+  /* danger ↔ «опасность» ETN (удаление, ошибки). */
+  --wa-color-danger-fill-quiet: var(--danger-soft);
+  --wa-color-danger-fill-normal: var(--danger-soft);
+  --wa-color-danger-fill-loud: var(--danger);
+  --wa-color-danger-border-quiet: var(--danger-soft);
+  --wa-color-danger-border-normal: var(--danger);
+  --wa-color-danger-border-loud: var(--danger);
+  --wa-color-danger-on-quiet: var(--danger);
+  --wa-color-danger-on-normal: var(--danger);
+  --wa-color-danger-on-loud: white;
+
+  /* neutral ↔ рамки/текст/поверхности ETN (нейтральные кнопки, границы полей). */
+  --wa-color-neutral-fill-quiet: var(--surface-2);
+  --wa-color-neutral-fill-normal: var(--surface-2);
+  --wa-color-neutral-fill-loud: var(--text);
+  --wa-color-neutral-border-quiet: var(--border);
+  --wa-color-neutral-border-normal: var(--border);
+  --wa-color-neutral-border-loud: var(--border-strong);
+  --wa-color-neutral-on-quiet: var(--text-dim);
+  --wa-color-neutral-on-normal: var(--text);
+  --wa-color-neutral-on-loud: var(--surface);
+
+  /* Поля ввода: подсказка-заглушка (вендор по умолчанию берёт серый палитры). */
+  --wa-form-control-placeholder-color: var(--text-faint);
+
+  /* Типографика кода и радиусы: держим плотность и скругления ETN. */
+  --wa-font-family-code: var(--md-mono);
+  --wa-border-radius-s: 6px;
+  --wa-border-radius-m: var(--radius-sm);
+  --wa-border-radius-l: var(--radius);
+}

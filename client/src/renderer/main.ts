@@ -14,6 +14,9 @@ import { div, el } from './lib/dom.js';
 import { initEtnimgLinkNavigation } from './lib/etnimg-link.js';
 import { initHoverPreview } from './lib/hover-preview.js';
 import { initImageZoom } from './lib/image-zoom.js';
+// Дизайн-система: регистрация вендорских Web Components (Web Awesome Core,
+// MIT) и маппинг токенов ETN → --wa-* (задача 95dd50b9).
+import './lib/ui/index.js';
 import { initScreens } from './screens/screens.js';
 
 const appRoot = document.querySelector('#app');
