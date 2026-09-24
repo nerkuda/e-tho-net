@@ -1671,7 +1671,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Справочник редких операций',
       description:
-        'Справочник MCP (прогрессивное раскрытие, ADR b2eebf8b). Без параметров — реестр ' +
+        'Справочник MCP (прогрессивное раскрытие). Без параметров — реестр ' +
         '«действие/тема → когда нужно» (одна строка на запись). С `topic` — полная инструкция: ' +
         'для редких операций — состав `params`, обязательность `confirm`, эффекты, коды ошибок; ' +
         'для частых — снятые из их `description` детали (секции батча, справочник фильтров). ' +
@@ -1708,7 +1708,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Исполнитель редких операций',
       description:
         'Исполнитель редких (низкочастотных) операций, снятых из постоянного набора ' +
-        '(прогрессивное раскрытие, ADR b2eebf8b). `action` — имя из справочника `etn.guide`; ' +
+        '(прогрессивное раскрытие). `action` — имя из справочника `etn.guide`; ' +
         '`params` — плоский объект, состав по инструкции гайда; `confirm: true` — обязателен ' +
         'для деструктивных (delete/purge/truncate/import/layers.delete/merge), без него ' +
         'VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — там состав params и ' +
