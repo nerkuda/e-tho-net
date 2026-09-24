@@ -2373,24 +2373,12 @@ body.cloud-dragging * {
 
 /* --- Horizontal splitter between stacked tab areas (L7) ------------------- */
 
+/* Раскладка шва: размер, курсор. Вид грипа (глиф, наведение) — общий, в
+ * `lib/ui/splitter.css` (`.ui-splitter--grip`, задача 50f57b82). */
 .row-splitter {
   flex: 0 0 14px;
   height: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: row-resize;
-  color: var(--text-faint);
-  font-size: 10px;
-  user-select: none;
-  border-radius: var(--radius-sm);
-  letter-spacing: 2px;
-}
-
-.row-splitter:hover,
-.row-splitter.dragging {
-  background: var(--surface-2);
-  color: var(--accent);
 }
 
 /* --- Compact sub-groups (link types, usage properties, L7) ---------------- */

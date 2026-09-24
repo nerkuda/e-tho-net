@@ -155,10 +155,17 @@ describe('размер панели перетаскиванием границ�
 
   it('в боковом положении тянется ширина, в верхнем — высота', () => {
     const frame = readText(FRAME_TS);
+    // Pointer-drag ведёт общий компонент `lib/ui/splitter` (задача 50f57b82):
+    // каркас задаёт только политику — ось, диапазон и сохранение размера.
     assert.match(
       frame,
-      /placementAtStart === 'top' \? event\.clientY - startPos : event\.clientX - startPos/,
-      'дельта берётся по вертикали вверху и по горизонтали слева',
+      /wireSplitter\(splitter,\s*\{/,
+      'драг разделителя вешает общий компонент lib/ui/splitter',
+    );
+    assert.match(
+      frame,
+      /axis: placementAtStart === 'top' \? 'y' : 'x'/,
+      'ось драга — по положению панели: вверху вертикаль, слева горизонталь',
     );
     assert.match(
       frame,
@@ -167,7 +174,7 @@ describe('размер панели перетаскиванием границ�
     );
     assert.match(
       frame,
-      /apply\(\);\s*persist\(\);\s*\};\s*\n\s*\n\s*splitter\.addEventListener\('pointerdown'/,
+      /commit: \(\) => \{[\s\S]*?apply\(\);\s*persist\(\);/,
       'конец перетаскивания сохраняет размер',
     );
   });

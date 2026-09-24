@@ -51,6 +51,7 @@ import {
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
+import { splitterElement } from '../../lib/ui/splitter.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
 import {
@@ -519,7 +520,7 @@ export function mountStructures(hostEl: HTMLElement): void {
   host.classList.add('hidden');
 
   const panel = div('st-filter');
-  const splitter = div('st-splitter');
+  const splitter = splitterElement('st-splitter');
   const results = div('st-results');
   host.append(panel, splitter, results);
   resultsHost = results;

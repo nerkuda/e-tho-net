@@ -3,6 +3,10 @@
  * screen (08-ui-spec.md §6.3): a thin grab strip that changes the visible
  * height of the area above it.
  *
+ * The pointer-drag lifecycle and the grip live in the shared `lib/ui/splitter`
+ * component (задача 50f57b82); this module keeps only the editor-specific
+ * policy: the always-fixed drag range and the L4 persistence of the height.
+ *
  * Always-fixed policy (bugs 6b757336, ee745368, 4cc6248c; требование «Высота
  * областей и таблиц не зависит от содержимого»): the dragged height is the
  * area's **fixed** height. It never depends on the current content — fewer
@@ -25,11 +29,10 @@
  * The resize target is resolved lazily on drag start because some areas
  * (group bodies) are built asynchronously or are absent while their group is
  * collapsed — a splitter next to a collapsed group is inert.
- *
- * Follows the pointer-capture drag pattern of `screens/editor-resizer.ts`.
  */
 
-import { div } from '../lib/dom.js';
+import { uiSplitter } from '../lib/ui/splitter.js';
+import { t } from '../lib/i18n.js';
 import { applyGroupClamp, saveListClamp } from './list-heights.js';
 
 /**
@@ -73,57 +76,36 @@ export function rowSplitter(
   options: RowSplitterOptions = {},
 ): HTMLElement {
   const min = options.min ?? 34;
-  const strip = div('row-splitter');
-  strip.textContent = '⣿';
-  strip.title = 'Потяните, чтобы изменить высоту';
+  // The target is resolved at drag start; the drag callbacks below close over
+  // this binding so `commit` sees the same element the drag measured.
+  let resizeEl: HTMLElement | null = null;
 
-  strip.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) return;
-    const resizeEl = getResizeEl();
-    if (resizeEl === null) return;
-    event.preventDefault();
-    strip.setPointerCapture(event.pointerId);
-    strip.classList.add('dragging');
-
-    const startY = event.clientY;
-    const startHeight = resizeEl.getBoundingClientRect().height;
-    const max = options.max?.() ?? FIXED_MAX_PX;
-    // The user-requested height (content-unbounded): the visible clamp below
-    // never stretches past `max`, but the saved value follows the pointer
-    // even when the current list is too short to show it (ee745368, 4cc6248c).
-    let requested = startHeight;
-    let moved = false;
-
-    const onMove = (ev: PointerEvent): void => {
-      moved = true;
-      requested = Math.round(startHeight + (ev.clientY - startY));
-      resizeEl.style.maxHeight = `${Math.min(max, Math.max(min, requested))}px`;
-    };
-    const onUp = (ev: PointerEvent): void => {
-      strip.removeEventListener('pointermove', onMove);
-      strip.removeEventListener('pointerup', onUp);
-      strip.removeEventListener('pointercancel', onUp);
-      try {
-        strip.releasePointerCapture(ev.pointerId);
-      } catch {
-        /* already released — ignore */
-      }
-      strip.classList.remove('dragging');
+  return uiSplitter({
+    extraClass: 'row-splitter',
+    title: t('splitter.resizeHint'),
+    plan: () => {
+      resizeEl = getResizeEl();
+      if (resizeEl === null) return null;
+      return {
+        axis: 'y',
+        start: resizeEl.getBoundingClientRect().height,
+        min,
+        max: () => options.max?.() ?? FIXED_MAX_PX,
+      };
+    },
+    apply: (value) => {
+      if (resizeEl !== null) resizeEl.style.maxHeight = `${value}px`;
+    },
+    commit: (value, _plan, moved) => {
       // Remember the drag as the area's exact fixed height and apply it at
       // once (inline `height` + no flex-fill, stale preview cap cleared) so
       // the size holds through content refreshes until the next rebuild,
       // where `applyGroupClamp` / the `--clamp-*` variable re-applies it.
       // A click without a move does not count as a drag.
-      if (options.persistKey !== undefined && moved) {
-        saveListClamp(options.persistKey, Math.min(max, Math.max(min, requested)));
+      if (resizeEl !== null && options.persistKey !== undefined && moved) {
+        saveListClamp(options.persistKey, value);
         applyGroupClamp(resizeEl, options.persistKey);
       }
-    };
-
-    strip.addEventListener('pointermove', onMove);
-    strip.addEventListener('pointerup', onUp);
-    strip.addEventListener('pointercancel', onUp);
+    },
   });
-
-  return strip;
 }

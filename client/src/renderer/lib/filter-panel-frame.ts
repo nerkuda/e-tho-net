@@ -38,6 +38,7 @@ import {
   parseFilterPanelState,
   serializeFilterPanelState,
 } from './pure.js';
+import { wireSplitter } from './ui/splitter.js';
 
 /** Параметры каркаса панели отбора одного экрана. */
 export interface FilterPanelFrameOptions {
@@ -168,55 +169,37 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
     persist();
   });
 
-  // Перетаскивание границы: боковое положение меняет ширину, верхнее — высоту.
-  let dragging = false;
-  let startPos = 0;
-  let startSize = 0;
+  // Перетаскивание границы ведёт общий компонент `lib/ui/splitter`
+  // (задача 50f57b82): каркас задаёт только политику — ось по положению
+  // панели (боковое меняет ширину, верхнее — высоту), диапазон экрана и
+  // сохранение измеренного размера в своё поле состояния.
   let placementAtStart: FilterPanelPlacement = 'side';
-
-  const onMove = (event: PointerEvent): void => {
-    if (!dragging) return;
-    const delta = placementAtStart === 'top' ? event.clientY - startPos : event.clientX - startPos;
-    const { min, max } = limitsOf(placementAtStart);
-    const next = clampFilterPanelSize(startSize + delta, min, max);
-    panel.style.flexBasis = `${next}px`;
-  };
-  const onUp = (event: PointerEvent): void => {
-    if (!dragging) return;
-    dragging = false;
-    splitter.classList.remove('dragging');
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onUp);
-    try {
-      splitter.releasePointerCapture(event.pointerId);
-    } catch {
-      /* capture already released */
-    }
-    const measured =
-      placementAtStart === 'top' ? panel.getBoundingClientRect().height : panel.getBoundingClientRect().width;
-    const { min, max } = limitsOf(placementAtStart);
-    const size = clampFilterPanelSize(measured, min, max);
-    state =
-      placementAtStart === 'top' ? { ...state, height: size } : { ...state, width: size };
-    apply();
-    persist();
-  };
-
-  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0 || state.hidden) return;
-    placementAtStart = currentPlacement();
-    dragging = true;
-    startPos = placementAtStart === 'top' ? event.clientY : event.clientX;
-    const rect = panel.getBoundingClientRect();
-    startSize = placementAtStart === 'top' ? rect.height : rect.width;
-    splitter.classList.add('dragging');
-    try {
-      splitter.setPointerCapture(event.pointerId);
-    } catch {
-      /* capture unavailable — window listeners still track the drag */
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+  wireSplitter(splitter, {
+    plan: () => {
+      if (state.hidden) return null;
+      placementAtStart = currentPlacement();
+      const rect = panel.getBoundingClientRect();
+      const { min, max } = limitsOf(placementAtStart);
+      return {
+        axis: placementAtStart === 'top' ? 'y' : 'x',
+        start: placementAtStart === 'top' ? rect.height : rect.width,
+        min,
+        max,
+      };
+    },
+    apply: (value) => {
+      panel.style.flexBasis = `${value}px`;
+    },
+    commit: () => {
+      const measured =
+        placementAtStart === 'top' ? panel.getBoundingClientRect().height : panel.getBoundingClientRect().width;
+      const { min, max } = limitsOf(placementAtStart);
+      const size = clampFilterPanelSize(measured, min, max);
+      state =
+        placementAtStart === 'top' ? { ...state, height: size } : { ...state, width: size };
+      apply();
+      persist();
+    },
   });
 
   // Положение зависит от ширины полотна: пересчитываем на каждом ресайзе

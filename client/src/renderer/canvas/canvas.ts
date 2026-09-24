@@ -88,6 +88,7 @@ import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
 import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
+import { splitterElement } from '../lib/ui/splitter.js';
 import {
   getActiveMode as getStripActiveMode,
   loadPersistedStrip,
@@ -229,7 +230,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   const top = div('canvas-top');
   const zoneParents = buildZone('parents');
   const zoneSiblings = buildZone('siblings');
-  const zoneSplitterV = div('zone-splitter zone-splitter-v');
+  const zoneSplitterV = splitterElement('zone-splitter zone-splitter-v');
   top.append(zoneParents, zoneSplitterV, zoneSiblings);
 
   focusRow = div('canvas-focus-row');
@@ -237,7 +238,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   const zoneChildren = buildZone('children');
   // Draggable zone splitters (08-ui-spec.md §2.1): vertical inside the top
   // strip, horizontal between the focus row and the children zone.
-  const zoneSplitterH = div('zone-splitter zone-splitter-h');
+  const zoneSplitterH = splitterElement('zone-splitter zone-splitter-h');
 
   const empty = div('canvas-empty');
   empty.textContent = 'Нет открытой сети';

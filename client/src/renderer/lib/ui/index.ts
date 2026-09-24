@@ -169,3 +169,24 @@ export type {
   CommentShellOptions,
   CommentShell,
 } from './comment.js';
+
+// Сплиттер — единый разделитель/ресайзер (задача 50f57b82, инвентаризация
+// 3fc7c54d — раздел «Splitter»): жизненный цикл pointer-drag и гриф живут
+// здесь, ось/знак/min/max/персист задаёт владелец.
+export {
+  SPLITTER_CLASS,
+  SPLITTER_GRIP_CLASS,
+  GRIP_GLYPH,
+  splitterElement,
+  wireSplitter,
+  uiSplitter,
+} from './splitter.js';
+export type {
+  SplitterAxis,
+  SplitterSign,
+  SplitterLimit,
+  SplitterPlan,
+  SplitterDragOptions,
+  SplitterOptions,
+} from './splitter.js';
+

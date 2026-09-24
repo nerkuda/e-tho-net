@@ -1,0 +1,31 @@
+/* Сплиттер `lib/ui` (задача 50f57b82). Здесь — только то, что общее у всех
+ * разделителей: гриф и его вид. Раскладку (размер шва, положение, курсор)
+ * задаёт владелец своим классом в styles.css — у каждой панели она своя.
+ *
+ * Специфичность: правила ниже — одиночный класс (0,1,0), модификаторы
+ * владельцев поверх них поднимать по специфичности, а не полагаться на
+ * порядок в бандле (грабли 36889dd6). Свойства здесь с владельческими не
+ * пересекаются, поэтому база ничего не перебивает. */
+
+.ui-splitter {
+  touch-action: none;
+}
+
+/* Грип: видимый глиф по центру шва. Отдельный класс нужен потому, что у
+ * тонких шовных разделителей глифа нет (`grip: null`). */
+.ui-splitter--grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 2px;
+  user-select: none;
+  border-radius: var(--radius-sm);
+}
+
+.ui-splitter--grip:hover,
+.ui-splitter--grip.dragging {
+  background: var(--surface-2);
+  color: var(--accent);
+}

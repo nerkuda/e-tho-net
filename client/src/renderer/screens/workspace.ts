@@ -47,6 +47,7 @@ import { mountPinnedBar } from './pinned-bar.js';
 import { mountPicker } from './tabs/picker.js';
 import { mountTabStrip } from './tabs/tabs.js';
 import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
+import { splitterElement } from '../lib/ui/splitter.js';
 import { fieldInput } from '../lib/ui/field.js';
 
 /** Hosts exposed to the content modules. */
@@ -242,10 +243,12 @@ export function buildWorkspace(): HTMLElement {
   const editorHost = div('editor hidden');
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
-  const editorResizer = div('editor-resizer hidden');
+  // The element comes from the shared `lib/ui/splitter` component (задача
+  // 50f57b82); its drag is wired in `editor-resizer.ts`.
+  const editorResizer = splitterElement('editor-resizer hidden');
   // Draggable splitter between the selection panel and the canvas (08-ui-spec.md
   // §5). Positioned on the panel's right seam via the --selection-w variable.
-  const selectionResizer = div('selection-resizer hidden');
+  const selectionResizer = splitterElement('selection-resizer hidden');
   body.append(
     selectionHost,
     canvasHost,
@@ -287,7 +290,7 @@ export function buildWorkspace(): HTMLElement {
   // (counts + last realtime event text) by writing `--event-area-w` on the
   // status bar. Cursor is set by `.event-area-resizer` so the affordance is
   // visible without JS on every render.
-  const eventAreaResizer = div('event-area-resizer');
+  const eventAreaResizer = splitterElement('event-area-resizer');
   setTooltip(eventAreaResizer, 'Изменить ширину области событий');
   // Fixed-width region of the status bar. The history strip and the
   // status-light live OUTSIDE this container so they no longer repaint when

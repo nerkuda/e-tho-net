@@ -42,6 +42,7 @@ import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
+import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../../lib/metadata.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
@@ -171,7 +172,7 @@ export function mountChronicle(hostEl: HTMLElement): void {
   // Размер и скрытость панели отбора ведёт общий каркас (задача 2ebe4206):
   // положение по ширине полотна (слева/вверху), перетаскивание границы —
   // ширина слева, высота вверху; состояние — `ui_state.chronicle_filter_panel`.
-  const splitter = div('chron-splitter');
+  const splitter = splitterElement('chron-splitter');
   const main = div('chron-main');
   hostEl.append(filterArea, splitter, main);
   mountFilterPanelFrame({

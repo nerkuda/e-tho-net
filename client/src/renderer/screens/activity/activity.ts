@@ -46,6 +46,7 @@ import {
 } from '../../lib/filter-form.js';
 import { div, el, span, setTooltip } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
+import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
@@ -217,7 +218,7 @@ export function mountActivity(hostEl: HTMLElement): void {
   // каркас (задача 2ebe4206): положение по ширине полотна (слева/вверху) и
   // перетаскивание границы; состояние — `ui_state.activity_filter_panel`.
   const panel = div('activity-filter');
-  const splitter = div('activity-splitter');
+  const splitter = splitterElement('activity-splitter');
   const results = div('activity-results');
   hostEl.append(panel, splitter, results);
   activityFrame = mountFilterPanelFrame({
