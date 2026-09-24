@@ -775,8 +775,10 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     assert.equal(sideRows.length, 2, 'у каждого пункта-стороны — единый значок конца связи');
     const targetRow = rows[1]!;
     const sourceRow = rows[2]!;
-    assert.equal(sourceRow.querySelectorAll('.type-combo-note')[0]?.textContent, `источник · связь (${SIDE_FORWARD} - ${SIDE_REVERSE})`);
-    assert.equal(targetRow.querySelectorAll('.type-combo-note')[0]?.textContent, `назначение · связь (${SIDE_FORWARD} - ${SIDE_REVERSE})`);
+    // Подписи пунктов — пара имён типа связи в скобках через « -> »; прежних
+    // «источник/назначение · связь …» больше нет (ошибка 5817b009).
+    assert.equal(sourceRow.querySelectorAll('.type-combo-note')[0]?.textContent, `(${SIDE_FORWARD} -> ${SIDE_REVERSE})`);
+    assert.equal(targetRow.querySelectorAll('.type-combo-note')[0]?.textContent, `(${SIDE_FORWARD} -> ${SIDE_REVERSE})`);
     assert.equal(sourceRow.querySelectorAll('.property-list-link-icon')[0]?.style.transform, undefined, 'источник — стрелка вправо');
     assert.equal(
       targetRow.querySelectorAll('.property-list-link-icon')[0]?.style.transform,
@@ -786,6 +788,10 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
     assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');
     assert.equal(labels.includes('Тип связи'), false, 'метки «Тип связи» в диалоге карты нет');
+    assert.ok(
+      formStack.querySelector('.link-property-pick') !== null,
+      'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка 5817b009)',
+    );
     pressEscape();
     await done;
   });

@@ -144,6 +144,13 @@ export interface WireSuggestOptions {
    * обработчик вызывающего (токен-комбо, chip-поле).
    */
   pickFirstOnEnter?: boolean;
+  /**
+   * Нижняя граница ширины списка, px (по умолчанию нет — список не уже поля и
+   * не шире 320px). Поле «Свойство связи» просит список заметно шире узкого
+   * поля ввода, иначе имена сторон и пары связи не помещаются (ошибка
+   * 5817b009); значение поднимает и потолок ширины, если он ниже.
+   */
+  minWidth?: number;
   /** Выбрана строка (клик или Enter). Список к этому моменту уже закрыт. */
   onPick(entry: SuggestEntry): void;
 }
@@ -417,7 +424,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     if (fresh) {
       openLists.add(box);
       document.body.append(box);
-      positionBodyDropdown(box, input);
+      positionBodyDropdown(box, input, 320, opts.minWidth ?? 0);
     } else {
       box.scrollTop = prevScroll;
     }

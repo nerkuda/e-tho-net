@@ -1,7 +1,8 @@
 /**
  * Поле выбора свойства-связи с живым поиском — переиспользуемый компонент
  * (ошибка dc175a5b, версия 0.8.3; поле введено коммитом 0d9485d по ошибке
- * 1dd08949).
+ * 1dd08949; паттерн «поле + кнопка → диалог» унифицирован с полем типа мысли
+ * по ошибке 5817b009).
  *
  * **Зачем отдельный модуль.** Поле понадобится не только диалогу добавления
  * мысли с карты: пользователь выбирает СВОЙСТВО-связь (имя его стороны), а не
@@ -10,17 +11,19 @@
  * (`lib/property-list.ts` — единственный владелец реестровых строк, значков
  * концов связи и их поиска).
  *
- * **Поле — ввод с живым поиском, а не «открывашка».** Разметка — обычное поле
- * ввода, список — общая выпадашка подсказок (`wireSuggest`, ADR «одна
- * выпадашка-подсказчик»); собственной сборки списка здесь нет (сторож
- * `guard-suggest-dropdown`).
+ * **Паттерн поля — как у поля типа мысли** (`buildEntityCombo`,
+ * `lib/entity-picker.ts`, ошибка 5817b009): живой поиск в поле (общая
+ * выпадашка `wireSuggest`) плюс компактная кнопка «…», открывающая отдельный
+ * диалог выбора с полным списком и поиском внутри. Знаешь название — ищешь
+ * горячо; не знаешь — смотришь список. Одинаковый UX для подобного — так просил
+ * пользователь; третьего варианта нет.
  *
  * **Что видно в списке.** Пункт «без свойства» (бестиповая связь в направлении
  * диалога) и по одному пункту на КАЖДОЕ имя стороны свойства-связи: значок
  * конца связи (направление + эффективное оформление линии, `buildLinkEndIcon`
- * общего списка), имя стороны и серое уточнение «сторона · связь (прямое -
- * обратное)» — то же оформление, что в списке выбора свойства при
- * редактировании типов мыслей.
+ * общего списка), имя стороны и серая пара связи в скобках
+ * `(прямое -> обратное)`. Прежние подписи «источник/назначение · связь …»
+ * убраны — занимали место без пользы (ошибка 5817b009).
  *
  * **Живой поиск** идёт тем же фильтром, что у общего списка свойств: совпадение
  * по имени стороны, по любому из имён пары типа связи или по описанию
@@ -32,12 +35,13 @@
 
 import type { LinkPropertySide } from '@etn/shared';
 
-import { div, el } from './dom.js';
+import { showDialog } from './dialog.js';
+import { button, div, el, span } from './dom.js';
 import {
+  buildLinkEndIcon,
   filterPropertyListRows,
   linkEndIconSpec,
   sortPropertyListRows,
-  valueTypeCellLabel,
   type LinkEndIconSpec,
   type PropertyListRow,
 } from './property-list.js';
@@ -46,11 +50,21 @@ import { wireSuggest, type SuggestEntry, type SuggestHandle, type SuggestSource 
 /** Подпись пункта «свойство не выбрано» (бестиповая связь в направлении диалога). */
 export const LINK_PROPERTY_NONE_LABEL = 'без свойства';
 
-/** Подписи сторон свойства-связи (как в общем списке свойств). */
-const SIDE_LABELS: Record<LinkPropertySide, string> = {
-  source: 'источник',
-  target: 'назначение',
-};
+/** Заголовок диалога выбора свойства-связи (кнопка «…»). */
+export const LINK_PROPERTY_PICKER_TITLE = 'Выбрать свойство связи';
+
+/**
+ * Минимальная ширина выпадашки, px (ошибка 5817b009): поле ввода в диалоге
+ * добавления узкое (~280px на две колонки), и имена сторон с парами связи в
+ * списке не помещались. Список позиционируется абсолютно (слой в `document.body`),
+ * поэтому может быть заметно шире поля. Потолок выпадашки поднят тем же
+ * значением — иначе `positionBodyDropdown` обрезал бы ширину до прежних 320px.
+ */
+export const LINK_PROPERTY_DROPDOWN_MIN_WIDTH = 640;
+
+/** Ширина диалога выбора свойства-связи, px — чтобы обе подписи (имя стороны и
+ *  пара связи) помещались без обрезки. */
+const PICKER_DIALOG_WIDTH = 640;
 
 /**
  * Выбранное СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает не тип
@@ -83,10 +97,9 @@ export interface LinkPropertyOption {
   label: string;
   /** Сторона свойства. */
   side: LinkPropertySide;
-  /** Подпись стороны: «источник» / «назначение». */
-  sideLabel: string;
-  /** Подписи имён пары типа связи («связь (прямое - обратное)»). */
-  pairLabel: string;
+  /** Пара имён типа связи в скобках: «(прямое -> обратное)»; `null` — тип связи
+   *  каталогу неизвестен, обратное имя назвать нечем. */
+  pairLabel: string | null;
   /** Значок конца связи: направление (зеркалирование) и оформление линии. */
   linkEnd: LinkEndIconSpec;
 }
@@ -95,13 +108,13 @@ export interface LinkPropertyOption {
  *  (скаляры и структурные «Родители»/«Потомки» в поле не выбираются). */
 function optionOf(row: PropertyListRow): LinkPropertyOption | null {
   if (row.valueType !== 'link' || row.structural || row.side === null) return null;
+  const names = row.linkNames;
   return {
     value: row.id,
     row,
     label: row.name,
     side: row.side,
-    sideLabel: SIDE_LABELS[row.side],
-    pairLabel: valueTypeCellLabel(row),
+    pairLabel: names === null ? null : `(${names.forward} -> ${names.reverse})`,
     linkEnd: linkEndIconSpec(row.side, row.visual),
   };
 }
@@ -131,14 +144,41 @@ export function filterLinkPropertyOptions(
   return options.filter((option) => filterPropertyListRows([option.row], query).length > 0);
 }
 
-/** Строка выпадашки по варианту: значок конца связи, имя стороны и уточнение. */
+/** Строка выпадашки по варианту: значок конца связи, имя стороны и пара. */
 function optionEntry(option: LinkPropertyOption): SuggestEntry {
-  return {
+  const entry: SuggestEntry = {
     value: option.value,
     label: option.label,
     linkEnd: option.linkEnd,
-    note: `${option.sideLabel} · ${option.pairLabel}`,
   };
+  if (option.pairLabel !== null) entry.note = option.pairLabel;
+  return entry;
+}
+
+/**
+ * Строка списка диалога выбора по варианту. Класс `link-property-option`
+ * (не `type-combo-item`): строку каталога типов собирает единственный общий
+ * модуль выпадашки (сторож `guard-entity-picker`), а это список свойства-связи
+ * со своей разметкой — значок конца связи рисует общий список свойств
+ * (`buildLinkEndIcon`), подписи те же, что в выпадашке живого поиска.
+ */
+function optionRow(option: LinkPropertyOption, onPick: () => void): HTMLElement {
+  const row = div('link-property-option');
+  row.append(buildLinkEndIcon(option.linkEnd));
+  const label = span(option.label, 'link-property-option-label');
+  label.title = option.label;
+  row.append(label);
+  if (option.pairLabel !== null) row.append(span(option.pairLabel, 'link-property-option-note'));
+  row.addEventListener('click', onPick);
+  return row;
+}
+
+/** Пункт «без свойства» в списке диалога (снимает выбор). */
+function noneRow(onPick: () => void): HTMLElement {
+  const row = div('link-property-option link-property-option-none');
+  row.append(span(LINK_PROPERTY_NONE_LABEL, 'link-property-option-label'));
+  row.addEventListener('click', onPick);
+  return row;
 }
 
 /** Параметры {@link buildLinkPropertyField}. */
@@ -154,7 +194,7 @@ export interface LinkPropertyFieldOptions {
 
 /** Собранное поле выбора свойства-связи. */
 export interface LinkPropertyField {
-  /** Корневой узел поля (поле ввода с живым поиском). */
+  /** Корневой узел поля (поле ввода с живым поиском и кнопкой «…»). */
   root: HTMLElement;
   /** Текущее значение (`null` — «без свойства»). */
   value: () => LinkPropertyPick | null;
@@ -170,21 +210,25 @@ function valueOf(pick: LinkPropertyPick): string {
 }
 
 /**
- * Собирает поле выбора свойства-связи: поле ввода с живым поиском и общая
- * выпадашка подсказок. Пока пользователь печатает — список сужается; выбранное
- * имя стороны показано в поле текстом, повторный фокус очищает поле и снова
- * показывает весь список (потеря фокуса без выбора возвращает подпись).
+ * Собирает поле выбора свойства-связи тем же паттерном, что поле типа мысли
+ * (`buildEntityCombo`, ошибка 5817b009): обычное поле ввода с живым поиском
+ * (общая выпадашка `wireSuggest`) и компактная кнопка «…», открывающая диалог
+ * выбора с полным списком и поиском внутри. Выбранное имя стороны показано в
+ * поле текстом; повторный фокус очищает поле и снова показывает весь список
+ * (потеря фокуса без выбора возвращает подпись).
  */
 export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkPropertyField {
   let rows: readonly PropertyListRow[] = opts.rows;
   let pick: LinkPropertyPick | null = opts.value ?? null;
 
   const root = div('link-property-field');
+  // Поле — единая рамка, как у поля значения свойства-связи: кнопка «…» лежит
+  // в правом углу, строка ввода занимает остальное.
+  const box = div('st-f-chipfield link-property-field-box');
   const input = el('input', 'text-input link-property-input') as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? 'Найти свойство связи…';
-  root.append(input);
 
   /** Подпись текущего выбранного значения (нет — пусто). */
   const currentLabel = (): string => {
@@ -193,6 +237,26 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
     const option = linkPropertyOptions(rows).find((o) => o.value === valueOf(chosen));
     return option?.label ?? chosen.key;
   };
+
+  /** Принимает выбранный вариант (или `null` — «без свойства»): пишет значение,
+   *  подпись в поле и уведомляет потребителя. */
+  const choose = (option: LinkPropertyOption | null): void => {
+    pick =
+      option === null
+        ? null
+        : { propertyId: option.row.propertyId, side: option.side, key: option.label };
+    input.value = option?.label ?? '';
+    opts.onChange(pick);
+  };
+
+  // Кнопка «…» — диалог выбора свойства-связи с полным списком (как у поля
+  // типа мысли). Создаётся до выпадашки, чтобы диалог мог отдать выбор в
+  // общий choose.
+  const pickBtn = button('…', () => openPicker(), 'entity-combo-pick link-property-pick', LINK_PROPERTY_PICKER_TITLE);
+  pickBtn.type = 'button';
+
+  box.append(input, pickBtn);
+  root.append(box);
 
   const source: SuggestSource = {
     when: 'always',
@@ -213,16 +277,67 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
 
   const handle: SuggestHandle = wireSuggest(input, {
     sources: [source],
+    minWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
     onPick: (entry) => {
       const option = linkPropertyOptions(rows).find((o) => o.value === entry.value) ?? null;
-      pick =
-        option === null
-          ? null
-          : { propertyId: option.row.propertyId, side: option.side, key: option.label };
-      input.value = option?.label ?? '';
-      opts.onChange(pick);
+      choose(option);
     },
   });
+
+  /**
+   * Диалог выбора свойства-связи (кнопка «…») — полный список с поиском
+   * внутри, по образцу диалога выбора типа мысли. Клик по строке сразу
+   * выбирает и закрывает диалог; «Отмена», Esc и × — закрытие без выбора.
+   */
+  function openPicker(): void {
+    const search = el('input', 'text-input link-property-search') as HTMLInputElement;
+    search.type = 'text';
+    search.autocomplete = 'off';
+    search.placeholder = 'Найти свойство связи…';
+    const list = div('link-property-picker-list');
+    const body = div('link-property-picker');
+    body.append(search, list);
+
+    let closeSelf: (() => void) | null = null;
+    const render = (): void => {
+      list.replaceChildren();
+      const query = search.value;
+      const needle = query.trim().toLowerCase();
+      const showNone = needle === '' || LINK_PROPERTY_NONE_LABEL.includes(needle);
+      if (showNone) {
+        list.append(
+          noneRow(() => {
+            closeSelf?.();
+            choose(null);
+          }),
+        );
+      }
+      const options = filterLinkPropertyOptions(linkPropertyOptions(rows), query);
+      for (const option of options) {
+        list.append(
+          optionRow(option, () => {
+            closeSelf?.();
+            choose(option);
+          }),
+        );
+      }
+      if (!showNone && options.length === 0) {
+        list.append(el('p', 'muted link-property-empty', 'Ничего не найдено.'));
+      }
+    };
+    search.addEventListener('input', render);
+
+    closeSelf = showDialog({
+      title: LINK_PROPERTY_PICKER_TITLE,
+      body,
+      width: PICKER_DIALOG_WIDTH,
+      buttons: [{ label: 'Отмена' }],
+      onMount: () => {
+        render();
+        search.focus();
+      },
+    });
+  }
 
   // Повторный фокус: подпись выбранного убирается, чтобы источник отдал весь
   // список (иначе фильтр оставил бы только текущую строку) — и список тут же

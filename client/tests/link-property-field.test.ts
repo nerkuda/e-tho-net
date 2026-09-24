@@ -1,17 +1,20 @@
 /**
  * Юнит-тесты переиспользуемого поля выбора свойства-связи с живым поиском
- * (`client/src/renderer/lib/link-property-field.ts`, ошибка dc175a5b).
+ * (`client/src/renderer/lib/link-property-field.ts`, ошибки dc175a5b / 5817b009).
  *
  * Проверяются:
  *  1. чистая модель вариантов — по одному пункту на имя стороны свойства-связи,
- *     единый алфавитный порядок, подпись стороны, имена пары типа связи и
- *     спецификация значка конца связи (направление — зеркалирование);
+ *     единый алфавитный порядок, пара имён типа связи в скобках «(прямое -> обратное)»
+ *     и спецификация значка конца связи (направление — зеркалирование);
  *  2. живой поиск — тот же фильтр, что у общего списка свойств (по имени
  *     стороны, по обратному имени пары, по описанию); скаляры и структурные
  *     «Родители»/«Потомки» в поле не предлагаются;
- *  3. само поле — обычный ввод (не `select`), список открывается по фокусу,
- *     выбор даёт `LinkPropertyPick` с именем стороны-ключом, «без свойства»
- *     снимает выбор, замена строк (`setRows`) обновляет подпись.
+ *  3. само поле — обычный ввод (не `select`) с живым поиском, список открывается
+ *     по фокусу, выбор даёт `LinkPropertyPick` с именем стороны-ключом, «без
+ *     свойства» снимает выбор, замена строк (`setRows`) обновляет подпись;
+ *  4. паттерн как у поля типа мысли (ошибка 5817b009): кнопка «…» открывает
+ *     диалог выбора с полным списком, поиском внутри и теми же подписями;
+ *     выпадашка живого поиска имеет свою минимальную ширину (имена не помещались).
  *
  * Модуль гоняется под Node с общим DOM-шимом (`dom-shim.ts`), как соседние
  * тесты списка свойств и выпадашки подсказок.
@@ -23,6 +26,7 @@ import { describe, it } from 'node:test';
 import type { LinkType } from '@etn/shared';
 
 import {
+  LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
   LINK_PROPERTY_NONE_LABEL,
   buildLinkPropertyField,
   filterLinkPropertyOptions,
@@ -30,6 +34,7 @@ import {
   type LinkPropertyPick,
 } from '../src/renderer/lib/link-property-field.js';
 import { buildPropertyListRows, type PropertyRegistryRow } from '../src/renderer/lib/property-list.js';
+import { closeDialog } from '../src/renderer/lib/dialog.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -38,7 +43,10 @@ import { ShimElement } from './dom-shim.js';
 // DOM-шим (тот же подход, что у suggest-dropdown.test.ts)
 // ---------------------------------------------------------------------------
 
+const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
+
 function installShim(): void {
+  windowListeners.length = 0;
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
@@ -48,8 +56,13 @@ function installShim(): void {
   (globalThis as any).window = {
     innerWidth: 1200,
     innerHeight: 800,
-    addEventListener: (): void => undefined,
-    removeEventListener: (): void => undefined,
+    addEventListener: (type: string, listener: (event: any) => void) => {
+      windowListeners.push({ type, listener });
+    },
+    removeEventListener: (type: string, listener: (event: any) => void) => {
+      const index = windowListeners.findIndex((l) => l.type === type && l.listener === listener);
+      if (index >= 0) windowListeners.splice(index, 1);
+    },
   };
 }
 installShim();
@@ -59,10 +72,14 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+/** Тело документа (шим). */
+function docBody(): ShimElement {
+  return (globalThis as any).document.body as ShimElement;
+}
+
 /** Открытый список поля (слой выпадашки живёт в `document.body`). */
 function openList(): ShimElement | null {
-  const body = (globalThis as any).document.body as ShimElement;
-  return body.children.find((c) => c.className.split(/\s+/).includes('type-combo-list')) ?? null;
+  return docBody().children.find((c) => c.className.split(/\s+/).includes('type-combo-list')) ?? null;
 }
 
 /** Подписи пунктов открытого списка. */
@@ -70,6 +87,23 @@ function listNames(): string[] {
   return (openList() ?? new ShimElement('div'))
     .querySelectorAll('.type-combo-item')
     .map((row) => row.querySelectorAll('.type-combo-label')[0]?.textContent ?? '');
+}
+
+/** Строки открытого диалога выбора свойства-связи. */
+function modalRows(): ShimElement[] {
+  return docBody().querySelectorAll('.link-property-option');
+}
+
+/** Подписи строк открытого диалога выбора. */
+function modalLabels(): string[] {
+  return modalRows().map((row) => row.querySelectorAll('.link-property-option-label')[0]?.textContent ?? '');
+}
+
+/** Строка диалога с нужной подписью. */
+function modalRow(label: string): ShimElement | undefined {
+  return modalRows().find(
+    (row) => row.querySelectorAll('.link-property-option-label')[0]?.textContent === label,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -133,9 +167,23 @@ describe('модель вариантов поля выбора свойства
       ['target', 'source'],
       'порядок отвечает именам сторон',
     );
-    assert.equal(reverse!.sideLabel, 'назначение');
-    assert.equal(forward!.sideLabel, 'источник');
-    assert.equal(reverse!.pairLabel, `связь (${FORWARD} - ${REVERSE})`, 'подпись пары типа связи');
+    assert.equal(
+      reverse!.pairLabel,
+      `(${FORWARD} -> ${REVERSE})`,
+      'пара имён типа связи в скобках через « -> » (ошибка 5817b009)',
+    );
+    assert.equal(forward!.pairLabel, `(${FORWARD} -> ${REVERSE})`, 'пара одна на обе стороны свойства');
+    assert.ok(
+      options.every((o) => !('sideLabel' in o)),
+      'подписей «источник/назначение» у пунктов больше нет (ошибка 5817b009)',
+    );
+  });
+
+  it('без известного типа связи обратное имя назвать нечем — пары нет', () => {
+    const rows = buildPropertyListRows([registryRow({ config: null })], [linkType()]);
+    const options = linkPropertyOptions(rows);
+    assert.equal(options.length, 1, 'сторона одна — каталог типов связей не разрешил пару');
+    assert.equal(options[0]!.pairLabel, null);
   });
 
   it('значок конца связи: направление зеркалированием, оформление — эффективное', () => {
@@ -168,9 +216,10 @@ describe('поле выбора свойства-связи (ошибка dc175a
 
   function build(rows = SIDES): ReturnType<typeof buildLinkPropertyField> {
     changes.length = 0;
-    // Слой выпадашки живёт в `document.body` и у прошлого поля остаётся —
-    // начинаем каждый случай с чистого документа.
-    ((globalThis as any).document.body as ShimElement).replaceChildren();
+    // Слой выпадашки и диалог живут в `document.body` и остаются от прошлого
+    // случая — начинаем каждый с чистого документа.
+    while (docBody().children.some((c) => c.classList.contains('dialog-backdrop'))) closeDialog();
+    docBody().replaceChildren();
     return buildLinkPropertyField({ rows, onChange: (pick) => changes.push(pick) });
   }
 
@@ -199,6 +248,55 @@ describe('поле выбора свойства-связи (ошибка dc175a
     input.focus();
     await settle();
     assert.deepEqual(listNames(), [LINK_PROPERTY_NONE_LABEL, REVERSE, FORWARD]);
+    const list = openList();
+    assert.ok(list !== null, 'список открыт');
+    assert.equal(
+      list!.style.minWidth,
+      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      'у выпадашки своя минимальная ширина — имена помещаются (ошибка 5817b009)',
+    );
+  });
+
+  it('в поле есть кнопка «…», как у поля типа мысли (ошибка 5817b009)', () => {
+    const field = build();
+    const pickBtn = field.root.querySelector('.link-property-pick') as unknown as ShimElement | null;
+    assert.ok(pickBtn !== null, 'кнопка выбора есть в поле');
+    assert.equal(pickBtn!.tagName ?? 'button', 'button');
+  });
+
+  it('кнопка «…» открывает диалог с полным списком и поиском внутри', () => {
+    const field = build();
+    const pickBtn = field.root.querySelector('.link-property-pick') as unknown as ShimElement;
+    pickBtn.click();
+    assert.deepEqual(
+      modalLabels(),
+      [LINK_PROPERTY_NONE_LABEL, REVERSE, FORWARD],
+      'диалог показывает полный список с пунктом «без свойства»',
+    );
+    const search = docBody().querySelectorAll('.link-property-search')[0]!;
+    search.value = 'включ';
+    search.emit('input');
+    assert.deepEqual(modalLabels(), [REVERSE, FORWARD], 'поиск внутри диалога сужает список');
+
+    modalRow(FORWARD)!.click();
+    assert.deepEqual(field.value(), { propertyId: 'p1', side: 'source', key: FORWARD });
+    assert.equal(inputOf(field).value, FORWARD, 'выбор из диалога обновил подпись поля');
+    assert.deepEqual(changes, [{ propertyId: 'p1', side: 'source', key: FORWARD }]);
+    assert.deepEqual(modalLabels(), [], 'выбор закрыл диалог');
+  });
+
+  it('пункт «без свойства» в диалоге снимает выбор', () => {
+    const field = build();
+    const pickBtn = field.root.querySelector('.link-property-pick') as unknown as ShimElement;
+    pickBtn.click();
+    modalRow(REVERSE)!.click();
+    assert.deepEqual(field.value(), { propertyId: 'p1', side: 'target', key: REVERSE });
+
+    pickBtn.click();
+    modalRow(LINK_PROPERTY_NONE_LABEL)!.click();
+    assert.equal(field.value(), null);
+    assert.equal(inputOf(field).value, '');
+    assert.equal(changes.at(-1), null);
   });
 
   it('выбор стороны-источника отдаёт pick с именем стороны-ключом и подписью в поле', async () => {

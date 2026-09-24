@@ -187,16 +187,21 @@ export function hasTextSelection(selection: TextSelectionLike | null): boolean {
  * Places a body-mounted, fixed-position dropdown under `anchor`, flipping up
  * when the bottom screen edge interferes — the shared placement of the
  * property-value pickers (08-ui-spec.md §6.3). The list is never narrower than
- * the anchor and never wider than `maxWidth`.
+ * the anchor and never wider than `maxWidth`. `minWidth` поднимает нижнюю
+ * границу ширины (поле «Свойство связи» просит список заметно шире узкого
+ * поля ввода — имена сторон и пары не помещались, ошибка 5817b009).
  */
 export function positionBodyDropdown(
   list: HTMLElement,
   anchor: HTMLElement,
   maxWidth = 320,
+  minWidth = 0,
 ): void {
+  if (minWidth > 0) list.style.minWidth = `${minWidth}px`;
   const rect = anchor.getBoundingClientRect();
   const listRect = list.getBoundingClientRect();
-  const width = Math.max(rect.width, Math.min(listRect.width, maxWidth));
+  const cap = Math.max(maxWidth, minWidth);
+  const width = Math.max(rect.width, minWidth, Math.min(listRect.width, cap));
   const left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
   let top = rect.bottom + 2;
   if (top + listRect.height > window.innerHeight - 6 && rect.top > listRect.height + 6) {
