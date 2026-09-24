@@ -119,6 +119,9 @@ import { showThoughtTypeEditor } from '../screens/type-manager.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
+import { fieldTextarea } from '../lib/ui/field.js';
 import {
   acquireOrShowBlocked,
   lockHandleFromOutcome,
@@ -1777,7 +1780,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   setTooltip(iconBox, 'Изменить иконку');
   iconBox.addEventListener('click', () => void changeThoughtIcon(thought));
 
-  const titleArea = el('textarea', 'editor-title-input') as HTMLTextAreaElement;
+  const titleArea = fieldTextarea({ extraClass: 'editor-title-input', bare: true }) as HTMLTextAreaElement;
   titleArea.value = thought.title;
   titleArea.maxLength = 400;
   titleArea.rows = 1;
@@ -1881,7 +1884,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   box.append(topRow);
 
   // --- Строка 2: синонимы -------------------------------------------------
-  const synonymsInput = el('input', 'text-input synonyms-input');
+  const synonymsInput = fieldInput({ extraClass: 'synonyms-input' });
   synonymsInput.type = 'text';
   synonymsInput.value = thought.synonyms.join(', ');
   synonymsInput.placeholder = 'Синонимы (через запятую)';
@@ -1936,15 +1939,13 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     },
   });
 
-  const activeLabel = el('label', 'checkbox-row');
-  const activeCheck = el('input');
-  activeCheck.type = 'checkbox';
-  activeCheck.checked = thought.active;
+  const activeRow = checkboxRow({ label: 'актуально', checked: thought.active });
+  const activeLabel = activeRow.row;
+  const activeCheck = activeRow.input;
   activeCheck.disabled = thought.is_protected && thought.is_root; // HOME always active
   activeCheck.addEventListener('change', () => {
     void saveThought({ active: activeCheck.checked });
   });
-  activeLabel.append(activeCheck, span('актуально'));
 
   // Подменю «Действия» — задача 8ab775d9. Команды зеркалят контекстное меню
   // облачка: «В фокус», toggle выделения, toggle закрепления. Меню открывается
@@ -2117,7 +2118,7 @@ function buildThoughtHeaderLoading(thoughtId: string): HTMLElement {
   iconBox.append(svgIcon('loader', 18));
   topRow.append(iconBox);
 
-  const titleArea = el('textarea', 'editor-title-input') as HTMLTextAreaElement;
+  const titleArea = fieldTextarea({ extraClass: 'editor-title-input', bare: true }) as HTMLTextAreaElement;
   titleArea.value = `…загрузка ${thoughtId.slice(0, 8)}`;
   titleArea.maxLength = 400;
   titleArea.rows = 1;
@@ -2207,14 +2208,12 @@ function buildLinkHeader(link: Link): HTMLElement {
     onClick: () => openLinkSettings(link),
   });
 
-  const activeLabel = el('label', 'checkbox-row');
-  const activeCheck = el('input');
-  activeCheck.type = 'checkbox';
-  activeCheck.checked = link.active;
+  const activeRow = checkboxRow({ label: 'актуально', checked: link.active });
+  const activeLabel = activeRow.row;
+  const activeCheck = activeRow.input;
   activeCheck.addEventListener('change', () => {
     void saveLink(link, { active: activeCheck.checked });
   });
-  activeLabel.append(activeCheck, span('актуально'));
 
   row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);

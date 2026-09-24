@@ -19,6 +19,8 @@ import { errorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
+import { fieldRow } from '../lib/ui/field.js';
 
 /**
  * Builds the onboarding screen. The profile list loads asynchronously; form
@@ -51,25 +53,22 @@ export function buildOnboarding(): HTMLElement {
   const formTitle = el('h2', 'form-title', 'Новое подключение');
   const form = div('form-stack');
 
-  const labelInput = el('input', 'text-input');
+  const labelInput = fieldInput();
   labelInput.type = 'text';
   labelInput.placeholder = 'Мой сервер (необязательно)';
-  const labelField = div('field');
-  labelField.append(el('label', 'field-label', 'Название'), labelInput);
+  const labelField = fieldRow({ label: 'Название', control: labelInput });
 
-  const urlInput = el('input', 'text-input');
+  const urlInput = fieldInput();
   urlInput.type = 'text';
   urlInput.placeholder = 'http://localhost:3000';
   urlInput.spellcheck = false;
-  const urlField = div('field');
-  urlField.append(el('label', 'field-label', 'Адрес сервера'), urlInput);
+  const urlField = fieldRow({ label: 'Адрес сервера', control: urlInput });
 
-  const keyInput = el('input', 'text-input');
+  const keyInput = fieldInput();
   keyInput.type = 'password';
   keyInput.placeholder = 'etn_…';
   keyInput.spellcheck = false;
-  const keyField = div('field');
-  keyField.append(el('label', 'field-label', 'API-key'), keyInput);
+  const keyField = fieldRow({ label: 'API-key', control: keyInput });
 
   const submitRow = div('form-row');
   const submit = uiButton({

@@ -19,6 +19,7 @@ import { div, el, errText } from './dom.js';
 import { t } from './i18n.js';
 import { svgIcon } from './icons.js';
 import { iconButton, uiButton } from './ui/button.js';
+import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
 
@@ -468,12 +469,8 @@ export function showDialog(opts: DialogOptions): () => void {
  */
 export function promptDialog(title: string, label: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
-    const input = el('input', 'text-input');
-    input.type = 'text';
-    input.value = initial;
-    const row = div('field');
-    if (label !== '') row.append(el('label', 'field-label', label));
-    row.append(input);
+    const input = fieldInput({ value: initial });
+    const row = fieldRow({ label, control: input });
     const body = div('form-stack');
     body.append(row);
 
@@ -563,12 +560,4 @@ export function errorDialog(title: string, err: unknown): void {
     body: el('p', 'dialog-text dialog-text-error', errText(err)),
     buttons: [{ label: t('actions.close'), primary: true }],
   });
-}
-
-/** Standard field builder: label + control wrapper. */
-export function field(label: string, control: HTMLElement): HTMLDivElement {
-  const row = div('field');
-  row.append(el('label', 'field-label', label));
-  row.append(control);
-  return row;
 }

@@ -45,6 +45,7 @@ import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { iconButton, uiButton } from './lib/ui/button.js';
+import { choiceControl } from './lib/ui/choice-row.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -570,11 +571,11 @@ export async function openThoughtGroupDeleteDialog(
   const buildToggleCell = (id: string): HTMLElement => {
     const blocked = checks[id]?.blocked ?? false;
     const toggle = div('group-delete-toggle');
-    const purgeRadio = el('input') as HTMLInputElement;
-    purgeRadio.type = 'radio';
-    purgeRadio.name = `gd-${id}`;
-    purgeRadio.checked = choice.get(id) === true;
-    purgeRadio.disabled = blocked;
+    const purgeRadio = choiceControl('radio', {
+      name: `gd-${id}`,
+      checked: choice.get(id) === true,
+      disabled: blocked,
+    });
     const blockedTooltip = `Нельзя удалить совсем — ${blockingReasons(
       'мысль',
       checks[id]?.blocking ?? { properties: 0, layers: [] },
@@ -583,10 +584,10 @@ export async function openThoughtGroupDeleteDialog(
     purgeRadio.addEventListener('change', () => {
       if (purgeRadio.checked) choice.set(id, true);
     });
-    const trashRadio = el('input') as HTMLInputElement;
-    trashRadio.type = 'radio';
-    trashRadio.name = `gd-${id}`;
-    trashRadio.checked = choice.get(id) !== true;
+    const trashRadio = choiceControl('radio', {
+      name: `gd-${id}`,
+      checked: choice.get(id) !== true,
+    });
     setTooltip(trashRadio, 'Поместить в корзину');
     trashRadio.addEventListener('change', () => {
       if (trashRadio.checked) choice.set(id, false);

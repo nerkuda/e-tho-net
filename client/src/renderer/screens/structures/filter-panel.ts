@@ -60,6 +60,7 @@ import type { SuggestSource } from '../../lib/suggest-dropdown.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
+import { checkboxRow } from '../../lib/ui/choice-row.js';
 
 import {
   authorFilterActive,
@@ -472,16 +473,17 @@ function buildTraversalSection(ctx: FilterFormContext): FilterSection {
   });
   setTooltip(field.root, 'Ограничить рёбра, по которым раскрывается отбор от «Родительских мыслей»');
   const structural = div('st-f-tri-row');
-  const structuralLabel = el('label', 'checkbox-row') as HTMLLabelElement;
-  const structuralCheck = el('input') as HTMLInputElement;
-  structuralCheck.type = 'checkbox';
-  structuralCheck.checked = state.linkFilterStructural;
-  setTooltip(structuralLabel, 'Учитывать связи без типа (нетипизированные рёбра «родитель/потомок») при обходе');
-  structuralCheck.addEventListener('change', () => {
-    state.linkFilterStructural = structuralCheck.checked;
-    ctx.touch();
+  const structuralRow = checkboxRow({
+    label: TRAVERSAL_UNTYPED_LABEL,
+    checked: state.linkFilterStructural,
+    onChange: (checked) => {
+      state.linkFilterStructural = checked;
+      ctx.touch();
+    },
   });
-  structuralLabel.append(structuralCheck, span(TRAVERSAL_UNTYPED_LABEL));
+  const structuralLabel = structuralRow.row;
+  const structuralCheck = structuralRow.input;
+  setTooltip(structuralLabel, 'Учитывать связи без типа (нетипизированные рёбра «родитель/потомок») при обходе');
   structural.append(structuralLabel);
   section.body.append(field.root, structural);
 

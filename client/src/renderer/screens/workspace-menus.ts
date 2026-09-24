@@ -42,6 +42,7 @@ import { showLinkTypesTreeDialog, showPropertyManagerDialog } from './property-m
 import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
 import { uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
 
 /** Wires the toolbar network menu button. */
 export function wireNetMenu(handles: WorkspaceHandles): void {
@@ -259,7 +260,7 @@ async function membersDialog(): Promise<void> {
     }
     addInput = select;
   } else {
-    const input = el('input', 'text-input');
+    const input = fieldInput();
     input.type = 'text';
     input.placeholder = 'ID пользователя';
     addInput = input;

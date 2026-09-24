@@ -19,7 +19,10 @@ import { LINK_STYLES, type LinkStyle } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, setTooltip } from '../lib/dom.js';
+import { div, el } from '../lib/dom.js';
+import { colorField } from '../lib/ui/color-field.js';
+import { fieldInput } from '../lib/ui/field.js';
+import { TOGGLE_GROUP_CLASS, toggleButton } from '../lib/ui/toggle.js';
 
 /** Resolved thought style (own value, else the type's default). */
 export interface ResolvedThoughtStyle {
@@ -53,7 +56,7 @@ export interface LinkStylePatch {
 }
 
 /** Wraps a control with a small caption. */
-function colorField(caption: string, input: HTMLElement): HTMLElement {
+function colorCaption(caption: string, input: HTMLElement): HTMLElement {
   const wrap = div('style-color-field');
   wrap.append(el('span', 'style-color-caption', caption), input);
   return wrap;
@@ -75,42 +78,42 @@ export function showThoughtStyleDialog(opts: {
   const { resolved, onApply, mode = 'thought', onClose } = opts;
   const body = div('form-stack');
 
-  const fgInput = el('input', 'color-input');
-  fgInput.type = 'color';
-  fgInput.value = resolved.fg ?? '#20242d';
-  fgInput.addEventListener('change', () => void onApply({ fg_color: fgInput.value }));
+  const fgInput = colorField({
+    value: resolved.fg ?? '#20242d',
+    onChange: (hex) => void onApply({ fg_color: hex }),
+  });
 
-  const bgInput = el('input', 'color-input');
-  bgInput.type = 'color';
-  bgInput.value = resolved.bg ?? '#ffffff';
-  bgInput.addEventListener('change', () => void onApply({ bg_color: bgInput.value }));
+  const bgInput = colorField({
+    value: resolved.bg ?? '#ffffff',
+    onChange: (hex) => void onApply({ bg_color: hex }),
+  });
 
   const colorsRow = div('style-colors');
-  colorsRow.append(colorField('Текст', fgInput), colorField('Фон', bgInput));
+  colorsRow.append(colorCaption('Текст', fgInput.picker), colorCaption('Фон', bgInput.picker));
   body.append(colorsRow);
 
-  const toggles = div('font-toggles');
+  const toggles = div(TOGGLE_GROUP_CLASS);
   const fontToggle = (
     glyph: string,
     title: string,
     on: boolean,
     apply: (value: boolean) => Promise<boolean>,
   ): void => {
-    const btn = button(
-      glyph,
-      () => {
-        const next = !btn.classList.contains('on');
-        // Press optimistically; revert when the save fails so the button
-        // never shows a state that was not stored.
-        btn.classList.toggle('on', next);
+    // Тумблер-глиф lib/ui: состояние aria-pressed, клавиатура Space/Enter.
+    // Нажатие оптимистично; при неудаче сохранения состояние откатывается,
+    // чтобы кнопка не показывала несохранённое.
+    const toggle = toggleButton({
+      label: glyph,
+      title,
+      pressed: on,
+      variant: 'glyph',
+      onChange: (next) => {
         void apply(next).then((ok) => {
-          if (!ok) btn.classList.toggle('on', !next);
+          if (!ok) toggle.setPressed(!next);
         });
       },
-      `font-toggle${on ? ' on' : ''}`,
-    );
-    setTooltip(btn, title);
-    toggles.append(btn);
+    });
+    toggles.append(toggle.root);
   };
   fontToggle('Ж', 'Жирный', resolved.bold, (v) => onApply({ font_bold: v }));
   fontToggle('Н', 'Курсив', resolved.italic, (v) => onApply({ font_italic: v }));
@@ -162,11 +165,11 @@ export function showLinkStyleDialog(opts: {
   const { resolved, onApply, mode = 'link', onClose } = opts;
   const body = div('form-stack');
 
-  const colorInput = el('input', 'color-input');
-  colorInput.type = 'color';
-  colorInput.value = resolved.color ?? '#5a6478';
-  colorInput.addEventListener('change', () => void onApply({ color: colorInput.value }));
-  body.append(colorField('Цвет линии', colorInput));
+  const colorInput = colorField({
+    value: resolved.color ?? '#5a6478',
+    onChange: (hex) => void onApply({ color: hex }),
+  });
+  body.append(colorCaption('Цвет линии', colorInput.picker));
 
   const styleSelect = el('select', 'select-input');
   for (const s of LINK_STYLES) {
@@ -178,9 +181,9 @@ export function showLinkStyleDialog(opts: {
   styleSelect.addEventListener('change', () => {
     void onApply({ style: styleSelect.value as LinkStyle });
   });
-  body.append(colorField('Стиль', styleSelect));
+  body.append(colorCaption('Стиль', styleSelect));
 
-  const widthInput = el('input', 'text-input');
+  const widthInput = fieldInput();
   widthInput.type = 'number';
   widthInput.min = '1';
   widthInput.max = '12';
@@ -193,7 +196,7 @@ export function showLinkStyleDialog(opts: {
       widthInput.value = String(resolved.width);
     }
   });
-  body.append(colorField('Толщина', widthInput));
+  body.append(colorCaption('Толщина', widthInput));
 
   showDialog({
     title: mode === 'type' ? 'Настройки типа связи' : 'Настройки связи',

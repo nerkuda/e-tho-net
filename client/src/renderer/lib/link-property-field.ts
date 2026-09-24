@@ -47,6 +47,7 @@ import {
   type PropertyListRow,
 } from './property-list.js';
 import { wireSuggest, type SuggestEntry, type SuggestHandle, type SuggestSource } from './suggest-dropdown.js';
+import { fieldInput } from './ui/field.js';
 
 /** Подпись пункта «свойство не выбрано» (бестиповая связь в направлении диалога). */
 export const LINK_PROPERTY_NONE_LABEL = 'без свойства';
@@ -226,7 +227,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
   // Поле — единая рамка, как у поля значения свойства-связи: кнопка «…» лежит
   // в правом углу, строка ввода занимает остальное.
   const box = div('st-f-chipfield link-property-field-box');
-  const input = el('input', 'text-input link-property-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'link-property-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? t('actions.search');
@@ -291,7 +292,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
    * выбирает и закрывает диалог; «Отмена», Esc и × — закрытие без выбора.
    */
   function openPicker(): void {
-    const search = el('input', 'text-input link-property-search') as HTMLInputElement;
+    const search = fieldInput({ extraClass: 'link-property-search' }) as HTMLInputElement;
     search.type = 'text';
     search.autocomplete = 'off';
     search.placeholder = t('actions.search');

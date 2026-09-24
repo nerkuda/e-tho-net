@@ -217,7 +217,7 @@ describe('прокрутка зон независима (ошибка aa5d0aff)
 describe('компоновка зоны настроек — три строки (задача a3247f84)', () => {
   it('строки: подкорни, места поиска, ограничения', () => {
     const search = readText(SEARCH_TS);
-    assert.match(search, /span\('ограничить потомками мыслей:'\)/);
+    assert.match(search, /label: 'ограничить потомками мыслей:'/);
     assert.match(search, /span\('Места поиска:', 'search-settings-label'\)/);
     assert.match(search, /span\('Ограничения:', 'search-settings-label'\)/);
     assert.equal(
@@ -321,7 +321,7 @@ describe('поле «ограничить потомками мыслей» (з�
     // Пять флажков мест поиска строит общий обработчик — проверяем его якорь.
     assert.match(
       search,
-      /const mkCheck = \([\s\S]*?options = \{ \.\.\.options, \[key\]: check\.checked \};[\s\S]*?persistState\(\);/,
+      /const mkCheck = \([\s\S]*?options = \{ \.\.\.options, \[key\]: checked \};[\s\S]*?persistState\(\);/,
       'общий обработчик флажков мест поиска пишет отбор и применяет его',
     );
   });

@@ -96,6 +96,9 @@ import {
 } from './filter-dialog-pure.js';
 
 import { withReverseLinkPropertySides } from '../../lib/filter-builder.js';
+import { fieldInput, fieldTextarea } from '../../lib/ui/field.js';
+import { checkboxRow } from '../../lib/ui/choice-row.js';
+import { fieldRow } from '../../lib/ui/field.js';
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -184,34 +187,30 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const errorLine = footerErrorLine();
 
   // Name — required, ≤200.
-  const nameInput = el('input', 'text-input') as HTMLInputElement;
+  const nameInput = fieldInput() as HTMLInputElement;
   nameInput.type = 'text';
   nameInput.value = initialName;
   nameInput.maxLength = THOUGHT_TYPE_VIEW_NAME_MAX;
   nameInput.placeholder = 'Название отбора (обязательно)';
-  const nameField = div('field');
-  nameField.append(el('label', 'field-label', `Имя отбора (тип «${typeName}»)`));
   const nameError = fieldError();
-  nameField.append(nameInput, nameError);
+  const nameField = fieldRow({
+    label: `Имя отбора (тип «${typeName}»)`,
+    control: nameInput,
+    error: nameError,
+  });
 
   // Description — optional, ≤1000.
-  const descInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+  const descInput = fieldTextarea() as HTMLTextAreaElement;
   descInput.rows = 3;
   descInput.maxLength = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
   descInput.value = initialDescription;
   descInput.placeholder = 'Описание (его читают и человек, и агент)';
-  const descField = div('field');
-  descField.append(el('label', 'field-label', 'Описание'));
-  descField.append(descInput);
+  const descField = fieldRow({ label: 'Описание', control: descInput });
 
   // «Open by default» checkbox.
-  const defaultLabel = el('label', 'checkbox-row') as HTMLLabelElement;
-  const defaultCheckbox = el('input') as HTMLInputElement;
-  defaultCheckbox.type = 'checkbox';
-  defaultCheckbox.checked = initialIsDefault;
-  defaultLabel.append(defaultCheckbox, span('Открывать по умолчанию'));
-  const defaultField = div('field');
-  defaultField.append(defaultLabel);
+  const defaultRow = checkboxRow({ label: 'Открывать по умолчанию', checked: initialIsDefault });
+  const defaultCheckbox = defaultRow.input;
+  const defaultField = defaultRow.row;
 
   // Criteria builder. Self-contained: it owns the criteria state for the
   // dialog lifetime.
@@ -630,7 +629,7 @@ function buildAuthorSingleEditor(
   onChange: (id: string) => void,
 ): HTMLElement {
   const single = div('author-single-wrap');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'st-f-input', bare: true }) as HTMLInputElement;
   input.type = 'text';
   input.value = currentId === '' || currentId.startsWith('$') ? currentId : (resolveUserName(currentId) ?? currentId);
   input.placeholder = 'Пользователь, id или токен…';

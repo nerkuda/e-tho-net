@@ -50,6 +50,7 @@ import {
 } from '../../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
+import { badge } from '../../lib/ui/badge.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
 import {
@@ -664,8 +665,10 @@ function renderTree(): void {
     more.addEventListener('click', () => void applyQuery(false));
     resultsHost.append(more);
   }
-  const counter = div('st-count');
-  counter.textContent = `Показано ${resultIds.length} из ${total}`;
+  const counter = badge(`Показано ${resultIds.length} из ${total}`, {
+    kind: 'quiet',
+    extraClass: 'ui-badge--block',
+  });
   resultsHost.append(counter);
 
   syncStructuresCursor();

@@ -79,7 +79,7 @@ export function groupSection(spec: GroupSpec): HTMLElement {
       root: 'group',
       header: 'group-header',
       title: 'group-title',
-      count: 'group-count',
+      count: 'ui-badge ui-badge--quiet',
       caret: 'group-caret',
       body: 'group-body',
       actions: 'group-actions',

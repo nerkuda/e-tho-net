@@ -54,10 +54,8 @@ const ALLOWED_RAW_BUTTON_CLASSES = [
   'pinned-more', // «остальные закреплённые»
   'link-trash-badge', // метка корзины на связи (карта/мини-граф)
   'user-multi-x', // снятие чипа пользователя
-  'clearable-clear', // очистка поля значения
   'editor-icon-box', // квадрат иконки редактора
   'editor-trash-mark', // метка корзины в заголовке редактора
-  'font-toggle', // переключатели шрифта (style-dialog)
   'link-value-corner-btn', // угловые кнопки поля значения
   'entity-combo-pick', // «…» комбо сущности
   'link-btn', // текстовая ссылка-кнопка

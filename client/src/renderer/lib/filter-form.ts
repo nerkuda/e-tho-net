@@ -37,7 +37,8 @@ import type {
 } from '@etn/shared';
 import { t } from './i18n.js';
 
-import { buildValueEditor, wrapClearable } from '../editor/value-editor.js';
+import { buildValueEditor } from '../editor/value-editor.js';
+import { wrapClearable } from './ui/field.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
 import { buildEntityChipField, type EntityOption } from './entity-picker.js';
 import { collapsibleSection } from './ui/collapsible.js';

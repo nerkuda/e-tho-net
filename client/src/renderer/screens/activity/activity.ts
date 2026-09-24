@@ -58,6 +58,8 @@ import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/us
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import { uiButton } from '../../lib/ui/button.js';
+import { fieldInput } from '../../lib/ui/field.js';
+import { fieldRow } from '../../lib/ui/field.js';
 import {
   DEFAULT_FILTER,
   ENTITY_TYPE_OPTIONS,
@@ -1092,14 +1094,13 @@ interface MaintenanceOpts {
 }
 
 async function runMaintenance(opts: MaintenanceOpts): Promise<void> {
-  const input = el('input', 'text-input activity-date') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'activity-date' }) as HTMLInputElement;
   input.type = 'date';
   setTooltip(input, 'Все записи журнала до этой даты будут затронуты.');
-  const field = div('field');
-  field.append(el('label', 'field-label', 'Дата (включительно)'), input);
+  const dateField = fieldRow({ label: 'Дата (включительно)', control: input });
   const body = div('form-stack');
   body.append(
-    field,
+    dateField,
     el('p', 'muted activity-maintenance-hint', 'Операция необратима — записи будут удалены без возможности восстановления.'),
   );
   const ok = await new Promise<number | null>((resolve) => {

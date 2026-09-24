@@ -58,6 +58,8 @@ import { store, type Theme } from '../state.js';
 import { buildLogsSection } from './settings-logs.js';
 import { scheduleStructuresRefresh } from './structures/structures.js';
 import { uiButton } from '../lib/ui/button.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
 type Section = 'user' | 'network' | 'client' | 'logs';
@@ -276,7 +278,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       return root;
     }
 
-    const nameInput = el('input', 'text-input');
+    const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.value = draft.displayName;
     nameInput.maxLength = DISPLAY_NAME_MAX_LENGTH;
@@ -286,15 +288,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
-    const username = el('input', 'text-input');
+    const username = fieldInput();
     username.type = 'text';
     username.value = me.username;
     username.disabled = true;
 
     root.append(
       el('h3', 'settings-section-title', 'Профиль пользователя'),
-      field('Имя для отображения', nameInput),
-      field('Логин', username),
+      fieldRow({ label: 'Имя для отображения', control: nameInput }),
+      fieldRow({ label: 'Логин', control: username }),
       el(
         'p',
         'muted',
@@ -378,7 +380,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     const isOwner =
       store.state.network !== null && store.state.network.owner_id === store.state.me?.id;
 
-    const nameInput = el('input', 'text-input');
+    const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.value = draft.networkName;
     nameInput.maxLength = 200;
@@ -461,34 +463,30 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       },
     });
 
-    const showInactiveCheckbox = el('input');
-    showInactiveCheckbox.type = 'checkbox';
-    showInactiveCheckbox.checked = draft.showInactive;
-    showInactiveCheckbox.addEventListener('change', () => {
-      draft.showInactive = showInactiveCheckbox.checked;
-      markDirty();
+    const showInactiveRow = checkboxRow({
+      label: 'Показывать неактуальные мысли и связи в этой сети',
+      checked: draft.showInactive,
+      onChange: (checked) => {
+        draft.showInactive = checked;
+        markDirty();
+      },
     });
-    const showInactiveLabel = el('label', 'checkbox-row');
-    showInactiveLabel.append(
-      showInactiveCheckbox,
-      span('Показывать неактуальные мысли и связи в этой сети'),
-    );
+    const showInactiveLabel = showInactiveRow.row;
+    const showInactiveCheckbox = showInactiveRow.input;
 
     // «Показывать содержимое корзины» (задача 77923b49) — рядом с неактуальными,
     // тот же механизм (L3 `show_trash`): выключено — помеченные на удаление
     // мысли/связи скрыты на карте, в локальном графе редактора и в структурах.
-    const showTrashCheckbox = el('input');
-    showTrashCheckbox.type = 'checkbox';
-    showTrashCheckbox.checked = draft.showTrash;
-    showTrashCheckbox.addEventListener('change', () => {
-      draft.showTrash = showTrashCheckbox.checked;
-      markDirty();
+    const showTrashRow = checkboxRow({
+      label: 'Показывать содержимое корзины в этой сети',
+      checked: draft.showTrash,
+      onChange: (checked) => {
+        draft.showTrash = checked;
+        markDirty();
+      },
     });
-    const showTrashLabel = el('label', 'checkbox-row');
-    showTrashLabel.append(
-      showTrashCheckbox,
-      span('Показывать содержимое корзины в этой сети'),
-    );
+    const showTrashLabel = showTrashRow.row;
+    const showTrashCheckbox = showTrashRow.input;
 
     const ownerHint = isOwner
       ? 'Эти поля задаёт владелец сети; изменения сохраняются для всех участников.'
@@ -496,7 +494,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
     root.append(
       el('h3', 'settings-section-title', 'Настройки сети'),
-      field('Название сети', nameInput),
+      fieldRow({ label: 'Название сети', control: nameInput }),
       el(
         'p',
         'muted',
@@ -507,13 +505,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         'muted',
         'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
       ),
-      field('Узловой тип раздела', typeCombo.root),
+      fieldRow({ label: 'Узловой тип раздела', control: typeCombo.root }),
       el(
         'p',
         'muted',
         'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
       ),
-      field('Тип инструкций агентам', instructionsTypeCombo.root),
+      fieldRow({ label: 'Тип инструкций агентам', control: instructionsTypeCombo.root }),
       el('p', 'muted', ownerHint),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
       showInactiveLabel,
@@ -529,48 +527,46 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     // Язык интерфейса (L5 `client_meta.lang`, задача 57f09136): выбор из
     // зарегистрированных каталогов (`lib/i18n.ts`) рядом с темой — обе
     // настройки клиентские и действуют на всех экранах.
-    const langGroup = div('radio-group');
+    const langGroup = choiceGroup();
     for (const locale of availableLocales()) {
-      const langLabel = el('label', 'radio-row');
-      const langRadio = el('input');
-      langRadio.type = 'radio';
-      langRadio.name = 'settings-lang';
-      langRadio.value = locale.code;
-      langRadio.checked = draft.lang === locale.code;
-      langRadio.addEventListener('change', () => {
-        if (!langRadio.checked) return;
-        draft.lang = locale.code;
-        markDirty();
-      });
-      langLabel.append(langRadio, span(locale.name));
-      langGroup.append(langLabel);
+      langGroup.append(
+        radioRow({
+          label: locale.name,
+          name: 'settings-lang',
+          value: locale.code,
+          checked: draft.lang === locale.code,
+          onChange: (checked) => {
+            if (!checked) return;
+            draft.lang = locale.code;
+            markDirty();
+          },
+        }).row,
+      );
     }
 
-    const themeGroup = div('radio-group');
-    const lightLabel = el('label', 'radio-row');
-    const lightRadio = el('input');
-    lightRadio.type = 'radio';
-    lightRadio.name = 'settings-theme';
-    lightRadio.value = 'light';
-    lightRadio.checked = draft.theme === 'light';
-    lightLabel.append(lightRadio, span('Светлая'));
-    const darkLabel = el('label', 'radio-row');
-    const darkRadio = el('input');
-    darkRadio.type = 'radio';
-    darkRadio.name = 'settings-theme';
-    darkRadio.value = 'dark';
-    darkRadio.checked = draft.theme === 'dark';
-    darkLabel.append(darkRadio, span('Тёмная'));
-    for (const radio of [lightRadio, darkRadio]) {
+    const themeGroup = choiceGroup();
+    const lightOpt = radioRow({
+      label: 'Светлая',
+      name: 'settings-theme',
+      value: 'light',
+      checked: draft.theme === 'light',
+    });
+    const darkOpt = radioRow({
+      label: 'Тёмная',
+      name: 'settings-theme',
+      value: 'dark',
+      checked: draft.theme === 'dark',
+    });
+    for (const radio of [lightOpt.input, darkOpt.input]) {
       radio.addEventListener('change', () => {
         if (!radio.checked) return;
         draft.theme = radio.value as Theme;
         markDirty();
       });
     }
-    themeGroup.append(lightLabel, darkLabel);
+    themeGroup.append(lightOpt.row, darkOpt.row);
 
-    const widthInput = el('input', 'text-input');
+    const widthInput = fieldInput();
     widthInput.type = 'number';
     widthInput.min = String(CLOUD_WIDTH_MIN);
     widthInput.max = String(CLOUD_WIDTH_MAX);
@@ -580,7 +576,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
-    const gapInput = el('input', 'text-input');
+    const gapInput = fieldInput();
     gapInput.type = 'number';
     gapInput.min = String(CLOUD_GAP_MIN);
     gapInput.max = String(CLOUD_GAP_MAX);
@@ -598,8 +594,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       themeGroup,
       el('p', 'muted', 'Применяется на всех экранах. Действует только на этом клиенте.'),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Размер облачка'),
-      field(`Ширина облачка, px (${CLOUD_WIDTH_MIN}–${CLOUD_WIDTH_MAX})`, widthInput),
-      field(`Отступ между облачками, px (${CLOUD_GAP_MIN}–${CLOUD_GAP_MAX})`, gapInput),
+      fieldRow({ label: `Ширина облачка, px (${CLOUD_WIDTH_MIN}–${CLOUD_WIDTH_MAX})`, control: widthInput }),
+      fieldRow({ label: `Отступ между облачками, px (${CLOUD_GAP_MIN}–${CLOUD_GAP_MAX})`, control: gapInput }),
       el('p', 'muted', 'Хранится только на этом клиенте.'),
     );
     return root;
@@ -810,10 +806,3 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   refreshApplyButtons();
 }
 
-/** Standard field builder (label + control wrapper). */
-function field(label: string, control: HTMLElement): HTMLDivElement {
-  const row = div('field');
-  row.append(el('label', 'field-label', label));
-  row.append(control);
-  return row;
-}

@@ -1,0 +1,53 @@
+/**
+ * Стили бейджа `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Виды: `pill` (метка-облачко, тона) и `quiet` (приглушённый счётчик).
+ * Заменяет `.role-badge`, `.group-count`, `.st-count` из `styles.css`.
+ */
+
+.ui-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ui-badge--pill.ui-badge--neutral {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+.ui-badge--pill.ui-badge--accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ui-badge--pill.ui-badge--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.ui-badge--pill.ui-badge--warn {
+  background: var(--warn-soft);
+  color: var(--warn-strong);
+}
+
+.ui-badge--pill.ui-badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Приглушённый счётчик: без фона и паддингов, цвет приглушённый. */
+.ui-badge--quiet {
+  padding: 0;
+  border-radius: 0;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+/* Блочный счётчик под заголовком (бывший `.st-count`). */
+.ui-badge--block {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+}

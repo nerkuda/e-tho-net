@@ -21,8 +21,10 @@ import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
 import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
-import { errorDialog, field, showDialog } from '../lib/dialog.js';
+import { errorDialog, showDialog } from '../lib/dialog.js';
 import { div, el, span } from '../lib/dom.js';
+import { colorField } from '../lib/ui/color-field.js';
+import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
 import { svgIcon } from '../lib/icons.js';
 import {
   defaultLayerColors,
@@ -276,25 +278,11 @@ function colorPickerRow(label: string, initial: string): {
   root: HTMLElement;
   get: () => string;
 } {
-  const picker = el('input', 'color-input') as HTMLInputElement;
-  picker.type = 'color';
-  picker.value = initial;
-  const hex = el('input', 'text-input layer-color-hex') as HTMLInputElement;
-  hex.value = initial;
-  picker.addEventListener('input', () => {
-    hex.value = picker.value;
-  });
-  hex.addEventListener('change', () => {
-    const trimmed = hex.value.trim();
-    if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) picker.value = trimmed.toLowerCase();
-    else hex.value = picker.value;
-  });
-  const row = div('layer-color-row');
-  row.append(picker, hex);
-  const wrap = field(label, row);
+  const f = colorField({ value: initial, withHex: true, extraClass: 'layer-color-row' });
+  const wrap = fieldRow({ label, control: f.root });
   return {
     root: wrap,
-    get: () => picker.value.toLowerCase(),
+    get: () => f.value(),
   };
 }
 
@@ -344,14 +332,15 @@ async function openLayerPropsDialogAsync(networkId: string, layerId: string): Pr
 function showLayerPropsDialog(networkId: string, layer: Layer): void {
   const theme: Theme = store.state.theme;
 
-  const titleInput = el('input', 'text-input') as HTMLInputElement;
-  titleInput.value = layer.title;
+  const titleInput = fieldInput({ value: layer.title });
   if (layer.is_base) titleInput.disabled = true;
-  const commentInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-  commentInput.value = layer.comment ?? '';
+  const commentInput = fieldTextarea({ value: layer.comment ?? '' });
 
   const body = div('form-stack');
-  body.append(field('Название', titleInput), field('Комментарий', commentInput));
+  body.append(
+    fieldRow({ label: 'Название', control: titleInput }),
+    fieldRow({ label: 'Комментарий', control: commentInput }),
+  );
 
   // Colour indication (0.6.4): only for non-base layers.
   const themeLabel = theme === 'dark' ? 'тёмной' : 'светлой';
@@ -423,12 +412,11 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
 }
 
 /** Create-layer dialog (§10.3: the explaining one-liner + comment + git branch). */function openCreateLayerDialog(networkId: string): void {
-  const titleInput = el('input', 'text-input') as HTMLInputElement;
-  titleInput.placeholder = 'Например: Правки августа';
-  const commentInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-  commentInput.placeholder = 'Зачем этот слой — чтобы следующий (или агент) понял без расспросов';
-  const branchInput = el('input', 'text-input') as HTMLInputElement;
-  branchInput.placeholder = 'ветка git (необязательно)';
+  const titleInput = fieldInput({ placeholder: 'Например: Правки августа' });
+  const commentInput = fieldTextarea({
+    placeholder: 'Зачем этот слой — чтобы следующий (или агент) понял без расспросов',
+  });
+  const branchInput = fieldInput({ placeholder: 'ветка git (необязательно)' });
 
   const body = div('form-stack');
   const hint = div('layer-hint');
@@ -438,9 +426,9 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     'Новый слой получит собственные цвета карты (полоса фокуса и фон), чтобы его было видно; их можно поменять в «Свойствах слоя».';
   body.append(
     hint,
-    field('Название', titleInput),
-    field('Комментарий', commentInput),
-    field('Ветка git', branchInput),
+    fieldRow({ label: 'Название', control: titleInput }),
+    fieldRow({ label: 'Комментарий', control: commentInput }),
+    fieldRow({ label: 'Ветка git', control: branchInput }),
     colorsHint,
   );
 

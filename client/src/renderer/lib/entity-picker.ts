@@ -57,6 +57,7 @@ import {
 import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
 import { iconButton, uiButton } from './ui/button.js';
+import { fieldInput } from './ui/field.js';
 
 // ---------------------------------------------------------------------------
 // Опции пикера
@@ -859,7 +860,7 @@ function restoreKeyboardFocus(
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
   const root = div('entity-chip-field st-f-fieldrow');
   const field = div('st-f-chipfield entity-chip-field-inner');
-  const input = el('input', 'text-input entity-chip-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'entity-chip-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? 'Добавить значение…';
@@ -1131,7 +1132,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   // облачке (ошибка ba2f57d3 «Неправильное поле ввода типа в редакторе мысли»).
   const field = div('st-f-chipfield entity-combo-field');
   const valueHost = div('entity-combo-value');
-  const input = el('input', 'text-input entity-combo-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'entity-combo-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.spellcheck = false;

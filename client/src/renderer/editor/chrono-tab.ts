@@ -31,6 +31,7 @@ import { refreshTabCount, registerTabContent, registerTabCount, type EditorConte
 import { createMarkdownField, editMarkdownField } from './markdown-field.js';
 import { rowSplitter } from './splitter.js';
 import { uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
 
 /** Registers the «Хроника» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
@@ -245,15 +246,15 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
    * is null for a new comment; the first non-empty text blur creates it.
    */
   function buildEditor(existing: Comment | null, startEdit: boolean): void {
-    const titleInput = el('input', 'text-input chrono-meta-input');
+    const titleInput = fieldInput({ extraClass: 'chrono-meta-input' });
     titleInput.type = 'text';
     titleInput.value = existing?.title ?? '';
     titleInput.maxLength = 200;
     titleInput.placeholder = 'Заголовок';
-    const fromInput = el('input', 'text-input chrono-meta-input');
+    const fromInput = fieldInput({ extraClass: 'chrono-meta-input' });
     fromInput.type = 'date';
     fromInput.value = existing?.valid_from.slice(0, 10) ?? todayIso();
-    const toInput = el('input', 'text-input chrono-meta-input');
+    const toInput = fieldInput({ extraClass: 'chrono-meta-input' });
     toInput.type = 'date';
     toInput.value = existing?.valid_to?.slice(0, 10) ?? '';
 

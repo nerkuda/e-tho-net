@@ -54,3 +54,69 @@ export {
   isFooterErrorLine,
 } from './messages.js';
 export type { ErrorAddress, FooterErrorLine } from './messages.js';
+
+// Поле ввода — единый фасад (задача f351b894, требование e64083b5).
+export {
+  FIELD_CLASS,
+  FIELD_LABEL_CLASS,
+  FIELD_HINT_CLASS,
+  FIELD_CONTROL_CLASS,
+  FIELD_MULTILINE_CLASS,
+  FIELD_DISABLED_CLASS,
+  FIELD_CLEARABLE_CLASS,
+  FIELD_CLEAR_BTN_CLASS,
+  fieldInput,
+  fieldTextarea,
+  fieldRow,
+  wrapClearable,
+  setFieldDisabled,
+} from './field.js';
+export type {
+  FieldInputType,
+  FieldControlOptions,
+  FieldInputOptions,
+  FieldTextareaOptions,
+  FieldRowOptions,
+} from './field.js';
+
+// Строка-переключатель (флажок / радиокнопка) — единый фасад.
+export {
+  CHOICE_ROW_CLASS,
+  CHOICE_GROUP_CLASS,
+  CHOICE_ROW_LABEL_CLASS,
+  choiceRow,
+  checkboxRow,
+  radioRow,
+  choiceControl,
+  choiceGroup,
+} from './choice-row.js';
+export type {
+  ChoiceKind,
+  ChoiceRowOptions,
+  ChoiceRowHandle,
+  ChoiceControlOptions,
+} from './choice-row.js';
+
+// Сегментный переключатель — ряд взаимоисключающих кнопок.
+export { SEGMENTED_CLASS, segmentedControl } from './segmented.js';
+export type { SegmentSpec, SegmentedOptions, SegmentedHandle } from './segmented.js';
+
+// Тумблер (кнопка с состоянием «нажато»).
+export { TOGGLE_CLASS, TOGGLE_GROUP_CLASS, toggleButton } from './toggle.js';
+export type { ToggleVariant, ToggleOptions, ToggleHandle } from './toggle.js';
+
+// Бейдж — метка/счётчик.
+export { BADGE_CLASS, badge, setBadgeText } from './badge.js';
+export type { BadgeTone, BadgeKind, BadgeOptions } from './badge.js';
+
+// Поле пути к файлу — «поле + Обзор…».
+export { filePathField } from './file-path-field.js';
+export type { FilePathFieldOptions, FilePathFieldHandle } from './file-path-field.js';
+
+// Поле цвета — picker (+ hex).
+export {
+  COLOR_PICKER_CLASS,
+  COLOR_HEX_CLASS,
+  colorField,
+} from './color-field.js';
+export type { ColorFieldOptions, ColorFieldHandle } from './color-field.js';

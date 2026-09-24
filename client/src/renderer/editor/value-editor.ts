@@ -80,6 +80,8 @@ import { toggleSelection } from '../selection/selection.js';
 import { openWikiIdTarget } from './wiki-link.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { uiButton } from '../lib/ui/button.js';
+import { choiceControl } from '../lib/ui/choice-row.js';
+import { fieldInput, wrapClearable } from '../lib/ui/field.js';
 
 // ---------------------------------------------------------------------------
 // Публичный API
@@ -445,7 +447,10 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
 
   // Поле живого веерного поиска по чужим сетям (кнопка выбрасывается при
   // перерисовке — слушатели окна снимаются по `!isConnected`, как в выпадашке).
-  const addInput = el('input', 'value-combo-add cross-network-ref-add') as HTMLInputElement;
+  const addInput = fieldInput({
+    extraClass: 'value-combo-add cross-network-ref-add',
+    bare: true,
+  }) as HTMLInputElement;
   addInput.type = 'text';
   addInput.autocomplete = 'off';
   addInput.placeholder = 'Название мысли в другой сети…';
@@ -654,37 +659,9 @@ export function valueTypeName(valueType: string): string {
 // Общие механики
 // ---------------------------------------------------------------------------
 
-/**
- * Оборачивает поле ввода с кнопкой «✕» очистки значения в правом верхнем
- * углу (приёмка пользователя 0.8.1): у любого поля ввода должен быть
- * однозначный способ убрать значение целиком. У пустого поля кнопка скрыта —
- * очищать нечего (ошибка a8e9eef1); видимость следит за событиями
- * `input`/`change` и за самой очисткой.
- *
- * Экспортирована: поля дат «Создано/Изменено» панели фильтра «Структур»
- * (`datetime-local`, не значение свойства) используют тот же крестик.
- */
-export function wrapClearable(input: HTMLElement, onClear: () => void): HTMLElement {
-  const wrap = div('clearable-field');
-  wrap.append(input);
-  const btn = el('button', 'clearable-clear', '✕');
-  btn.type = 'button';
-  btn.title = t('actions.reset');
-  const sync = (): void => {
-    const node = input as HTMLInputElement;
-    btn.hidden = typeof node.value === 'string' && node.value === '';
-  };
-  btn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    onClear();
-    sync();
-  });
-  input.addEventListener('input', sync);
-  input.addEventListener('change', sync);
-  sync();
-  wrap.append(btn);
-  return wrap;
-}
+// Обёртка поля с кнопкой очистки («✕») перенесена в фасад поля
+// `lib/ui/field.ts` — `wrapClearable` (требование e64083b5: clearable
+// поглощается Field). Импортируется выше и переиспользуется редактором.
 
 /**
  * Очистка крестиком «✕»: change-режим пишет `null` напрямую (blur-обработчика
@@ -917,7 +894,7 @@ function buildMultiTextChipsEditor(opts: {
         }),
       );
     }
-    const input = el('input', 'text-input prop-editor value-chips-input') as HTMLInputElement;
+    const input = fieldInput({ extraClass: 'prop-editor value-chips-input' }) as HTMLInputElement;
     input.type = 'text';
     input.autocomplete = 'off';
     input.placeholder = kind === 'url' ? 'https://… или путь к файлу' : '+ ещё одно значение';
@@ -992,7 +969,7 @@ async function openUrlExternally(value: string): Promise<void> {
 function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): HTMLElement {
   const { definition } = opts;
   const stored = asSingleString(opts.value as StoredTextValue);
-  const input = el('input', 'text-input prop-editor') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'prop-editor' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.value = stored;
@@ -1155,7 +1132,7 @@ function buildUrlEditor(opts: ValueEditorOptions): HTMLElement {
 /** Одиночное число: blur-коммит с baseline (ошибки cefb4db0, 7d094c26). */
 function buildNumberEditor(opts: ValueEditorOptions): HTMLElement {
   const stored = typeof opts.value === 'number' ? opts.value : null;
-  const input = el('input', 'text-input prop-editor') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'prop-editor' }) as HTMLInputElement;
   input.type = 'number';
   input.value = stored === null ? '' : String(stored);
 
@@ -1202,7 +1179,7 @@ function buildDateEditor(opts: ValueEditorOptions): HTMLElement {
     return buildScalarTextEditor(opts, 'text');
   }
   const stored = typeof opts.value === 'string' ? opts.value.slice(0, 10) : null;
-  const input = el('input', 'text-input prop-editor') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'prop-editor' }) as HTMLInputElement;
   input.type = 'date';
   input.value = stored ?? '';
 
@@ -1247,16 +1224,15 @@ function buildBoolEditor(opts: ValueEditorOptions): HTMLElement {
     });
     return select;
   }
-  const input = el('input') as HTMLInputElement;
-  input.type = 'checkbox';
-  input.checked = stored;
-  input.addEventListener('change', () => {
-    const next = input.checked;
-    void Promise.resolve()
-      .then(() => opts.save(next))
-      .then((ok) => {
-        if (ok !== true && commitOn === 'blur') input.checked = !next;
-      });
+  const input = choiceControl('checkbox', {
+    checked: stored,
+    onChange: (checked) => {
+      void Promise.resolve()
+        .then(() => opts.save(checked))
+        .then((ok) => {
+          if (ok !== true && commitOn === 'blur') input.checked = !checked;
+        });
+    },
   });
   return input;
 }
@@ -1790,7 +1766,10 @@ export function buildLinkValueEditor(opts: {
         buildCloud(id, (mode) => removeEdges([id], mode)),
       );
     }
-    const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
+    const addInput = fieldInput({
+      extraClass: 'value-combo-add link-value-add',
+      bare: true,
+    }) as HTMLInputElement;
     addInput.type = 'text';
     addInput.autocomplete = 'off';
     addInput.placeholder = current.length === 0

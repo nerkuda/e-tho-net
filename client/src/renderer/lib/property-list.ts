@@ -48,6 +48,7 @@ import { resolveLinkTypeVisual, type ResolvedLinkVisual } from './type-tree.js';
 import { etn } from './etn.js';
 import { store } from '../state.js';
 import { uiButton } from './ui/button.js';
+import { fieldInput } from './ui/field.js';
 
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
@@ -489,7 +490,7 @@ export function buildPropertyList(opts: {
   const { mode, callbacks } = opts;
 
   const toolbar = div('form-row type-list-toolbar property-list-toolbar');
-  const searchInput = el('input', 'text-input property-list-search') as HTMLInputElement;
+  const searchInput = fieldInput({ extraClass: 'property-list-search' }) as HTMLInputElement;
   searchInput.type = 'text';
   searchInput.placeholder = opts.searchPlaceholder ?? t('actions.search');
   // Верхняя строка: сначала поиск, затем «Добавить» (требование 7).

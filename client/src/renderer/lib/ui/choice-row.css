@@ -1,0 +1,31 @@
+/**
+ * Стили строки-переключателя `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Классы объявлены здесь и в `./choice-row.ts` — старые `checkbox-row` и
+ * `radio-row` удалены из `styles.css`. Значения перенесены без изменения
+ * плотности: те же отступы и выравнивание. Текст подписи кликабелен вместе с
+ * контролом (`<label>`-обёртка).
+ */
+
+.ui-choice-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* В группе отступ снизу не нужен — группу разводит её собственный gap. */
+.ui-choice-group > .ui-choice-row {
+  margin-bottom: 0;
+}
+
+.ui-choice-row-label {
+  /* Подпись наследует шрифт строки; отдельных значений нет. */
+}
+
+.ui-choice-group {
+  display: flex;
+  gap: 16px;
+}

@@ -84,7 +84,6 @@ import { requireNetworkId } from '../app.js';
 import {
   confirmDialog,
   errorDialog,
-  field,
   raiseOpenDialog,
   showDialog,
 } from '../lib/dialog.js';
@@ -121,6 +120,8 @@ import {
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import { uiButton } from '../lib/ui/button.js';
+import { fieldInput, fieldTextarea, fieldRow } from '../lib/ui/field.js';
+import { checkboxRow, choiceControl } from '../lib/ui/choice-row.js';
 import {
   buildPropertyList,
   buildPropertyListRows,
@@ -809,8 +810,8 @@ function twoColumns(left: HTMLElement, right: HTMLElement): HTMLElement {
 /** Поле с тултипом на подписи (задача 99312ffa): `field()` несёт только
  *  текст подписи, а подсказке нужен `title` на элементе подписи. */
 function fieldWithTooltip(label: string, tooltip: string, control: HTMLElement): HTMLElement {
-  const row = field(label, control);
-  const labelEl = row.querySelector('.field-label');
+  const row = fieldRow({ label: label, control: control });
+  const labelEl = row.querySelector('.ui-field-label');
   if (labelEl !== null) setTooltip(labelEl as HTMLElement, tooltip);
   return row;
 }
@@ -820,7 +821,7 @@ function fieldWithTooltip(label: string, tooltip: string, control: HTMLElement):
  *  черновик хранил прежний текст, и «Применить и закрыть» уходил с пустым
  *  PATCH). Вынесено в функцию ради юнит-теста слушателя. */
 export function buildDescriptionField(draft: PropertyDraft): HTMLElement {
-  const descArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+  const descArea = fieldTextarea() as HTMLTextAreaElement;
   descArea.value = draft.description;
   descArea.rows = 3;
   descArea.placeholder =
@@ -1021,7 +1022,7 @@ export function openPropertyManagerEditor(
   // (требование 5a82c709): для существующего свойства оставляем только
   // варианты той же категории.
   typeSelect.value = draft.valueType;
-  const valueTypeField = field('Вид значения', typeSelect);
+  const valueTypeField = fieldRow({ label: 'Вид значения', control: typeSelect });
   body.append(valueTypeField);
 
   // Для уже существующего свойства — отключаем выбор другой категории.
@@ -1037,7 +1038,7 @@ export function openPropertyManagerEditor(
   // Поле вынесено в {@link buildDescriptionField}: textarea обязана зеркалить
   // ввод в draft.description — иначе PATCH уходит со старым описанием
   // (ошибка 9f579e69: «не сохраняется комментарий свойства»).
-  body.append(field('Описание', buildDescriptionField(draft)));
+  body.append(fieldRow({ label: 'Описание', control: buildDescriptionField(draft) }));
 
   // ---- Хосты секций -----------------------------------------------------
   const linkFlagsHost = div('form-row');
@@ -1069,31 +1070,30 @@ export function openPropertyManagerEditor(
 
   function renderLinkFlags(): void {
     linkFlagsHost.append(sectionLabel('Связь'));
-    const showOnMapRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const showOnMapCheck = el('input') as HTMLInputElement;
-    showOnMapCheck.type = 'checkbox';
-    showOnMapCheck.checked = draft.showOnMap;
-    showOnMapCheck.addEventListener('change', () => {
-      draft.showOnMap = showOnMapCheck.checked;
-    });
-    showOnMapRow.append(showOnMapCheck, span('рисовать связь на карте по умолчанию'));
-    linkFlagsHost.append(showOnMapRow);
-
-    const blocksRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const blocksCheck = el('input') as HTMLInputElement;
-    blocksCheck.type = 'checkbox';
-    blocksCheck.checked = draft.blocksTargetDeletion;
-    blocksCheck.addEventListener('change', () => {
-      draft.blocksTargetDeletion = blocksCheck.checked;
-    });
-    blocksRow.append(blocksCheck, span('заполненная ссылка блокирует удаление цели'));
-    linkFlagsHost.append(blocksRow);
+    linkFlagsHost.append(
+      checkboxRow({
+        label: 'рисовать связь на карте по умолчанию',
+        checked: draft.showOnMap,
+        onChange: (checked) => {
+          draft.showOnMap = checked;
+        },
+      }).row,
+    );
+    linkFlagsHost.append(
+      checkboxRow({
+        label: 'заполненная ссылка блокирует удаление цели',
+        checked: draft.blocksTargetDeletion,
+        onChange: (checked) => {
+          draft.blocksTargetDeletion = checked;
+        },
+      }).row,
+    );
   }
 
   function renderScalarBody(): void {
     mainBodyHost.append(sectionLabel('Скалярное свойство'));
     // Имя свойства
-    const nameInput = el('input', 'text-input') as HTMLInputElement;
+    const nameInput = fieldInput() as HTMLInputElement;
     nameInput.type = 'text';
     nameInput.value = draft.name;
     nameInput.maxLength = 200;
@@ -1102,7 +1102,7 @@ export function openPropertyManagerEditor(
       draft.name = nameInput.value;
       revalidateName();
     });
-    mainBodyHost.append(field('Имя свойства', nameInput));
+    mainBodyHost.append(fieldRow({ label: 'Имя свойства', control: nameInput }));
 
     // Две колонки: таблица «Типы мыслей» слева, опции/множественность справа.
     const typesHost = div('form-stack');
@@ -1113,7 +1113,7 @@ export function openPropertyManagerEditor(
 
     const defaultsHost = div('form-stack');
     defaultsHost.append(
-      field('Значение по умолчанию', buildValueEditor({
+      fieldRow({ label: 'Значение по умолчанию', control: buildValueEditor({
         networkId,
         definition: scalarDefaultDefinition(draft),
         value: draft.defaultValue,
@@ -1122,7 +1122,7 @@ export function openPropertyManagerEditor(
           return true;
         },
         commitOn: 'change',
-      })),
+      }) }),
     );
 
     const grid = twoColumns(typesHost, optionsHost);
@@ -1132,7 +1132,7 @@ export function openPropertyManagerEditor(
   function renderLinkBody(): void {
     linkBodyHost.append(sectionLabel('Свойство-связь'));
     // Имена сторон + таблицы + родительский тип + оформление.
-    const nameForwardInput = el('input', 'text-input') as HTMLInputElement;
+    const nameForwardInput = fieldInput() as HTMLInputElement;
     nameForwardInput.type = 'text';
     nameForwardInput.value = draft.nameForward;
     nameForwardInput.maxLength = 200;
@@ -1140,7 +1140,7 @@ export function openPropertyManagerEditor(
     nameForwardInput.addEventListener('input', () => {
       draft.nameForward = nameForwardInput.value;
     });
-    const nameReverseInput = el('input', 'text-input') as HTMLInputElement;
+    const nameReverseInput = fieldInput() as HTMLInputElement;
     nameReverseInput.type = 'text';
     nameReverseInput.value = draft.nameReverse;
     nameReverseInput.maxLength = 200;
@@ -1166,7 +1166,7 @@ export function openPropertyManagerEditor(
     buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target', refreshCommonDefaults);
     const leftCol = div('form-stack');
     for (const part of linkSideColumnParts({
-      nameField: field('Имя в источнике', nameForwardInput),
+      nameField: fieldRow({ label: 'Имя в источнике', control: nameForwardInput }),
       tableHost: leftTypesHost,
       commonDefaultHost: sourceDefaultsHost,
     })) {
@@ -1174,7 +1174,7 @@ export function openPropertyManagerEditor(
     }
     const rightCol = div('form-stack');
     for (const part of linkSideColumnParts({
-      nameField: field('Имя в назначении', nameReverseInput),
+      nameField: fieldRow({ label: 'Имя в назначении', control: nameReverseInput }),
       tableHost: rightTypesHost,
       commonDefaultHost: targetDefaultsHost,
     })) {
@@ -1204,7 +1204,7 @@ export function openPropertyManagerEditor(
       onClick: () => openLinkStyle(),
     });
     parentRow.append(parentCombo.root, styleBtn);
-    linkBodyHost.append(field('Родительский тип связи', parentRow));
+    linkBodyHost.append(fieldRow({ label: 'Родительский тип связи', control: parentRow }));
 
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
@@ -1298,12 +1298,12 @@ export function openPropertyManagerEditor(
 
       // Обязательное
       const reqCell = el('td');
-      const reqCheck = el('input') as HTMLInputElement;
-      reqCheck.type = 'checkbox';
-      reqCheck.checked = row.required;
-      reqCheck.addEventListener('change', () => {
-        row.required = reqCheck.checked;
-        row.dirty = true;
+      const reqCheck = choiceControl('checkbox', {
+        checked: row.required,
+        onChange: (checked) => {
+          row.required = checked;
+          row.dirty = true;
+        },
       });
       reqCell.append(reqCheck);
       tr.append(reqCell);
@@ -2159,11 +2159,7 @@ function scalarDefaultDefinition(draft: PropertyDraft): EffectiveTypeProperty {
  */
 export function buildScalarOptionsBlockImpl(draft: PropertyDraft): HTMLElement {
   const host = div('form-stack');
-  const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
-  const choiceCheck = el('input') as HTMLInputElement;
-  choiceCheck.type = 'checkbox';
-  choiceCheck.checked = draft.choiceOn;
-  const area = el('textarea', 'textarea-input prop-options-area') as HTMLTextAreaElement;
+  const area = fieldTextarea({ extraClass: 'prop-options-area' }) as HTMLTextAreaElement;
   area.value = draft.optionsText;
   area.rows = 4;
   area.placeholder = 'Варианты значения — по одному в строке';
@@ -2171,21 +2167,26 @@ export function buildScalarOptionsBlockImpl(draft: PropertyDraft): HTMLElement {
   area.addEventListener('input', () => {
     draft.optionsText = area.value;
   });
-  choiceCheck.addEventListener('change', () => {
-    draft.choiceOn = choiceCheck.checked;
-    area.style.display = draft.choiceOn ? '' : 'none';
-  });
-  choiceRow.append(choiceCheck, span('выбирать из списка'));
-  host.append(choiceRow, area);
-  const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
-  const multiCheck = el('input') as HTMLInputElement;
-  multiCheck.type = 'checkbox';
-  multiCheck.checked = draft.multipleOn;
-  multiCheck.addEventListener('change', () => {
-    draft.multipleOn = multiCheck.checked;
-  });
-  multiRow.append(multiCheck, span('несколько значений'));
-  host.append(multiRow);
+  host.append(
+    checkboxRow({
+      label: 'выбирать из списка',
+      checked: draft.choiceOn,
+      onChange: (checked) => {
+        draft.choiceOn = checked;
+        area.style.display = checked ? '' : 'none';
+      },
+    }).row,
+    area,
+  );
+  host.append(
+    checkboxRow({
+      label: 'несколько значений',
+      checked: draft.multipleOn,
+      onChange: (checked) => {
+        draft.multipleOn = checked;
+      },
+    }).row,
+  );
   return host;
 }
 
@@ -2421,7 +2422,7 @@ export function showLinkTypesTreeDialog(): void {
   const body = div('form-stack');
 
   const toolbar = div('form-row type-list-toolbar');
-  const searchInput = el('input', 'text-input') as HTMLInputElement;
+  const searchInput = fieldInput() as HTMLInputElement;
   searchInput.type = 'text';
   searchInput.placeholder = t('actions.search');
   toolbar.append(

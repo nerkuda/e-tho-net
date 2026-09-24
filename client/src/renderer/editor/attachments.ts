@@ -21,8 +21,11 @@ import { t } from '../lib/i18n.js';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { rememberShownAttachments } from '../lib/attachment-events.js';
-import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
+import { closeDialog, confirmDialog, showDialog } from '../lib/dialog.js';
 import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { radioRow } from '../lib/ui/choice-row.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { filePathField } from '../lib/ui/file-path-field.js';
 import { errorLine as panelErrorLine, footerErrorLine, operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
@@ -729,44 +732,40 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     // «Создать новое» — the classic form (URL/path + title + description).
     // «Найти существующее» — network-wide search by title/description/url/file_path,
     // reuses an existing attachment instead of uploading a fresh copy (L25).
-    const tabCreate = el('input');
-    tabCreate.type = 'radio';
-    tabCreate.name = 'att-tab';
-    tabCreate.checked = true;
-    const tabSearch = el('input');
-    tabSearch.type = 'radio';
-    tabSearch.name = 'att-tab';
+    const tabCreateOpt = radioRow({ label: 'Создать новое', name: 'att-tab', checked: true });
+    const tabSearchOpt = radioRow({ label: 'Найти существующее', name: 'att-tab' });
+    const tabCreate = tabCreateOpt.input;
+    const tabSearch = tabSearchOpt.input;
 
     // --- create panel (the classic form) ------------------------------------
-    const kindUrl = el('input');
-    kindUrl.type = 'radio';
-    kindUrl.name = 'att-kind';
-    kindUrl.checked = true;
-    const kindFile = el('input');
-    kindFile.type = 'radio';
-    kindFile.name = 'att-kind';
+    const kindUrlOpt = radioRow({ label: 'Ссылка (URL)', name: 'att-kind', checked: true });
+    const kindFileOpt = radioRow({ label: 'Файл (путь)', name: 'att-kind' });
+    const kindUrl = kindUrlOpt.input;
+    const kindFile = kindFileOpt.input;
 
-    const locationInput = el('input', 'text-input');
-    locationInput.type = 'text';
-    locationInput.placeholder = 'https://…';
+    const titleInput = fieldInput({ maxLength: 300 });
+    const descInput = fieldInput({ maxLength: 2000 });
+    const errorLine = footerErrorLine();
+
     // «Открыть с диска…» fills the path via the OS picker; the file reaches
     // the server only when «Добавить» is pressed (§6.5).
-    const pickBtn = uiButton({
-      label: t('actions.browse'),
-      role: 'secondary',
-      size: 's',
-      onClick: () => void pickFileFromDisk(),
+    const location = filePathField({
+      placeholder: 'https://…',
+      onPick: async () => {
+        try {
+          const picked = await etn.system.pickFile();
+          if (picked.status !== 'ok') return null;
+          if (titleInput.value.trim() === '') titleInput.value = picked.name;
+          return picked.path;
+        } catch (err) {
+          errorLine.show(errText(err));
+          return null;
+        }
+      },
     });
-    const locationRow = div('input-with-btn');
-    locationRow.append(locationInput, pickBtn);
-
-    const titleInput = el('input', 'text-input');
-    titleInput.type = 'text';
-    titleInput.maxLength = 300;
-    const descInput = el('input', 'text-input');
-    descInput.type = 'text';
-    descInput.maxLength = 2000;
-    const errorLine = footerErrorLine();
+    const locationInput = location.input;
+    const pickBtn = location.button;
+    const locationRow = location.root;
 
     const syncKind = (): void => {
       locationInput.placeholder = kindFile.checked ? 'Путь к файлу' : 'https://…';
@@ -776,40 +775,22 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     kindFile.addEventListener('change', syncKind);
     syncKind();
 
-    /** OS file picker → the path field (and the file name as the title). */
-    async function pickFileFromDisk(): Promise<void> {
-      try {
-        const picked = await etn.system.pickFile();
-        if (picked.status !== 'ok') return;
-        locationInput.value = picked.path;
-        if (titleInput.value.trim() === '') titleInput.value = picked.name;
-      } catch (err) {
-        errorLine.show(errText(err));
-      }
-    }
-
     const kindRow = div('form-row');
-    const urlLabel = el('label', 'checkbox-row');
-    urlLabel.append(kindUrl, span('Ссылка (URL)'));
-    const fileLabel = el('label', 'checkbox-row');
-    fileLabel.append(kindFile, span('Файл (путь)'));
-    kindRow.append(urlLabel, fileLabel);
+    kindRow.append(kindUrlOpt.row, kindFileOpt.row);
 
     const createPanel = div('att-tab-panel');
     createPanel.append(
-      field('Тип', kindRow),
-      field('Адрес / путь', locationRow),
-      field('Заголовок (необязательно)', titleInput),
-      field('Комментарий (необязательно)', descInput),
+      fieldRow({ label: 'Тип', control: kindRow }),
+      fieldRow({ label: 'Адрес / путь', control: locationRow }),
+      fieldRow({ label: 'Заголовок (необязательно)', control: titleInput }),
+      fieldRow({ label: 'Комментарий (необязательно)', control: descInput }),
     );
     // errorLine уходит в панель кнопок диалога (`footerError`, ошибка
     // add8d09d): сообщение о неудачном добавлении должно быть видно и на
     // вкладке «Найти существующее», а не только в теле «Создать новое».
 
     // --- search panel --------------------------------------------------------
-    const searchInput = el('input', 'text-input');
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Название, файл, URL, комментарий…';
+    const searchInput = fieldInput({ placeholder: 'Название, файл, URL, комментарий…' });
     const searchResults = div('att-search-results');
     const searchHint = el('p', 'muted att-search-hint', 'Введите запрос для поиска по сети.');
     searchResults.append(searchHint);
@@ -817,7 +798,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
 
     const searchPanel = div('att-tab-panel hidden');
     searchPanel.append(
-      field('Поиск', searchInput),
+      fieldRow({ label: 'Поиск', control: searchInput }),
       searchResults,
       searchError,
     );
@@ -895,11 +876,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
 
     // --- tabs ---------------------------------------------------------------
     const tabRow = div('form-row');
-    const createLabel = el('label', 'checkbox-row');
-    createLabel.append(tabCreate, span('Создать новое'));
-    const searchLabel = el('label', 'checkbox-row');
-    searchLabel.append(tabSearch, span('Найти существующее'));
-    tabRow.append(createLabel, searchLabel);
+    tabRow.append(tabCreateOpt.row, tabSearchOpt.row);
 
     const applyTabs = (): void => {
       if (tabCreate.checked) {
@@ -915,7 +892,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     tabSearch.addEventListener('change', applyTabs);
 
     const body = div('form-stack');
-    body.append(field('Режим', tabRow), createPanel, searchPanel);
+    body.append(fieldRow({ label: 'Режим', control: tabRow }), createPanel, searchPanel);
 
     showDialog({
       title: 'Добавить вложение',

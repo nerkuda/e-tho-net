@@ -147,6 +147,9 @@ import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dia
 import { renderMarkdown } from '@etn/markdown';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
+import { fieldInput, fieldTextarea } from '../lib/ui/field.js';
+import { choiceControl } from '../lib/ui/choice-row.js';
+import { FIELD_CLASS } from '../lib/ui/field.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
@@ -392,7 +395,7 @@ export function showThoughtTypesDialog(): void {
   // Toolbar (top of the list, task «Улучшить диалог…»): «Добавить»,
   // «Свернуть все»/«Развернуть все» and the name-search box.
   const toolbar = div('form-row type-list-toolbar');
-  const searchInput = el('input', 'text-input') as HTMLInputElement;
+  const searchInput = fieldInput() as HTMLInputElement;
   searchInput.type = 'text';
   searchInput.placeholder = t('actions.search');
   toolbar.append(
@@ -902,7 +905,7 @@ export function showThoughtTypeEditor(
       },
     });
   });
-  const nameInput = el('input', 'text-input');
+  const nameInput = fieldInput();
   nameInput.type = 'text';
   nameInput.value = draft.name;
   nameInput.maxLength = 200;
@@ -925,7 +928,7 @@ export function showThoughtTypeEditor(
   // Parent picker (L21). The root type has no parent; the picked value is
   // staged and re-checked by the server on apply (a type in use cannot be
   // reparented, no cycles, max 4 levels).
-  const parentField = div('field');
+  const parentField = div(FIELD_CLASS);
   const parentLabel = el('p', 'muted', 'Родитель (наследование свойств и стиля)');
   parentLabel.style.margin = '8px 0 2px';
   if (type?.is_root === true) {
@@ -949,7 +952,7 @@ export function showThoughtTypeEditor(
   descriptionPane.append(parentField);
 
   // Comment (type description / usage rules) — placeholder only, no label.
-  const descArea = el('textarea', 'textarea-input');
+  const descArea = fieldTextarea();
   descArea.value = draft.description;
   descArea.rows = 3;
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
@@ -1868,11 +1871,11 @@ function buildStagedPropertySection(opts: {
       tr.append(el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]));
       tr.append(el('td', 'muted', sideLabel(row.side)));
       const requiredCell = el('td');
-      const requiredCheck = el('input') as HTMLInputElement;
-      requiredCheck.type = 'checkbox';
-      requiredCheck.checked = row.required;
-      requiredCheck.addEventListener('change', () => {
-        setRequired(row.id, requiredCheck.checked);
+      const requiredCheck = choiceControl('checkbox', {
+        checked: row.required,
+        onChange: (checked) => {
+          setRequired(row.id, checked);
+        },
       });
       requiredCell.append(requiredCheck);
       tr.append(requiredCell);
@@ -2468,7 +2471,7 @@ function openDescriptionOverrideDialog(opts: {
   const { networkId, ownerType, typeId, def, onDone } = opts;
   const errorLine = footerErrorLine();
 
-  const area = el('textarea', 'textarea-input');
+  const area = fieldTextarea();
   area.value = def.description ?? '';
   area.rows = 5;
   area.placeholder = 'Описание свойства для этого типа (пусто — наследуется от родителя)';

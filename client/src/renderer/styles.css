@@ -219,9 +219,7 @@ textarea {
  * Shared controls
  * ------------------------------------------------------------------------- */
 
-.text-input,
-.select-input,
-.textarea-input {
+.select-input {
   width: 100%;
   padding: 5px 8px;
   border: 1px solid var(--border-strong);
@@ -230,18 +228,9 @@ textarea {
   outline: none;
 }
 
-.text-input:focus,
-.select-input:focus,
-.textarea-input:focus {
+.select-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
-.textarea-input {
-  resize: vertical;
-  min-height: 72px;
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-size: 13px;
 }
 
 /* Кнопки-действия переехали в словарь `lib/ui` — стили ролей, плотностей
@@ -252,18 +241,6 @@ textarea {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.field-label {
-  font-size: 12px;
-  color: var(--text-dim);
 }
 
 .form-stack {
@@ -293,18 +270,9 @@ textarea {
   align-items: center;
 }
 
-.input-with-btn .text-input {
+.input-with-btn .ui-input {
   flex: 1;
   min-width: 0;
-}
-
-.checkbox-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  margin-bottom: 6px;
-  cursor: pointer;
-  user-select: none;
 }
 
 .muted {
@@ -458,20 +426,6 @@ textarea {
   display: flex;
   gap: 10px;
   align-items: center;
-}
-
-.role-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.role-badge.owner {
-  background: var(--warn-soft);
-  color: var(--warn-strong);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2756,7 +2710,7 @@ body.cloud-dragging * {
   margin-bottom: 12px;
 }
 
-.editor-field .field-label {
+.editor-field .ui-field-label {
   font-weight: 600;
   color: var(--text);
   font-size: 12px;
@@ -2793,7 +2747,7 @@ body.cloud-dragging * {
   width: 56px;
 }
 
-.editor-header-row .color-input {
+.editor-header-row .ui-color-input {
   width: 34px;
   height: 26px;
   padding: 1px;
@@ -2801,28 +2755,6 @@ body.cloud-dragging * {
   border-radius: var(--radius-sm);
   background: var(--surface);
   cursor: pointer;
-}
-
-.font-toggles {
-  display: flex;
-  gap: 4px;
-}
-
-.font-toggle {
-  width: 30px;
-  height: 26px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.font-toggle.on {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 700;
 }
 
 /* Thought header: icon box + large multiline title (08-ui-spec.md §6.2.1). */
@@ -3035,7 +2967,7 @@ body.cloud-dragging * {
   margin-bottom: 10px;
 }
 
-.icon-source-row .text-input {
+.icon-source-row .ui-input {
   flex: 1 1 auto;
 }
 
@@ -3089,11 +3021,6 @@ body.cloud-dragging * {
 
 .group-title {
   font-weight: 600;
-}
-
-.group-count {
-  color: var(--text-faint);
-  font-size: 11px;
 }
 
 .group-actions {
@@ -4006,7 +3933,7 @@ body.cloud-dragging * {
   white-space: nowrap;
 }
 
-.search-settings-row .checkbox-row {
+.search-settings-row .ui-choice-row {
   margin-bottom: 0;
 }
 
@@ -4610,7 +4537,7 @@ body.cloud-dragging * {
   gap: 6px;
 }
 
-.add-search-row .textarea-input {
+.add-search-row .ui-textarea {
   flex: 1 1 0;
   min-width: 0;
 }
@@ -5204,12 +5131,6 @@ body.cloud-dragging * {
   background: var(--surface-2);
 }
 
-.st-count {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: 4px;
-}
-
 .st-empty {
   padding: 24px 0;
   color: var(--text-faint);
@@ -5434,7 +5355,7 @@ body.cloud-dragging * {
   padding: 14px;
 }
 
-.dialog-body .field-label {
+.dialog-body .ui-field-label {
   font-size: 13px;
 }
 
@@ -5974,18 +5895,6 @@ button.ui-btn--icon.trash-act {
   cursor: default;
 }
 
-.radio-group {
-  display: flex;
-  gap: 16px;
-}
-
-.radio-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
 /* --- add-thought dialog (H14) -------------------------------------------- */
 
 .add-types-row {
@@ -5994,7 +5903,7 @@ button.ui-btn--icon.trash-act {
   margin-bottom: 10px;
 }
 
-.add-types-row .field {
+.add-types-row .ui-field {
   flex: 1;
   margin-bottom: 0;
 }
@@ -6720,8 +6629,8 @@ button.entity-combo-pick:disabled {
 }
 
 /* Type editors (L6): disabled settings/icon buttons and a stretching name. */
-.editor-top-row .text-input,
-.type-editor-row .text-input {
+.editor-top-row .ui-input,
+.type-editor-row .ui-input {
   flex: 1;
   min-width: 0;
 }
@@ -6757,7 +6666,7 @@ button.entity-combo-pick:disabled {
 .attachment-item,
 .mention-item,
 .type-combo-item,
-.font-toggle,
+.ui-toggle,
 .editor-icon-box,
 .row-splitter,
 .profile-item,
@@ -6785,7 +6694,7 @@ button.entity-combo-pick:disabled {
   .attachment-item,
   .mention-item,
   .type-combo-item,
-  .font-toggle,
+  .ui-toggle,
   .editor-icon-box,
   .row-splitter,
   .profile-item,
@@ -7184,16 +7093,6 @@ table.chron-table thead th {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.layer-color-hex {
-  width: 90px;
-  font-family: var(--md-mono);
-  text-transform: lowercase;
-}
-
-.field.disabled {
-  opacity: 0.45;
 }
 
 /* Diff dialog (S11): вкладки «Связи»/«Содержание» — общий механизм
@@ -7659,7 +7558,7 @@ table.activity-table thead th {
   max-height: min(70vh, 760px);
   overflow-y: auto;
 }
-.view-editor-body .field-label {
+.view-editor-body .ui-field-label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8026,40 +7925,6 @@ table.activity-table thead th {
 /* Поле ввода с угловым «✕» очистки значения (приёмка 0.8.1) — обёртка
  * любого одиночного поля (text/number/date/url таблицы свойств; поля дат
  * панели фильтра «Структур» — ошибка a8e9eef1). */
-.clearable-field {
-  position: relative;
-  flex: 1 1 auto;
-  display: flex;
-  min-width: 0;
-}
-.clearable-field .text-input {
-  width: 100%;
-  padding-right: 22px;
-}
-.clearable-field .st-f-input {
-  padding-right: 22px;
-}
-.clearable-clear {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-faint);
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-}
-.clearable-clear:hover {
-  color: var(--accent);
-  background: var(--surface-2);
-}
 /* Имя свойства в таблице: липнет к верхней кромке прокручиваемой области,
  * пока его (возможно многострочная) ячейка значения не проскроллится
  * целиком (приёмка 0.8.1). Фон обязателен — под ним проплывают чипы. */

@@ -13,8 +13,10 @@
 import { disconnect, openNetwork } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { showAboutDialog } from './about-dialog.js';
-import { confirmDialog, field, showDialog } from '../lib/dialog.js';
+import { confirmDialog, showDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
+import { badge } from '../lib/ui/badge.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { errorParagraph, footerErrorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
@@ -23,9 +25,9 @@ import { uiButton } from '../lib/ui/button.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
-  const badge = span(role === 'owner' ? 'владелец' : 'участник', 'role-badge');
-  if (role === 'owner') badge.classList.add('owner');
-  return badge;
+  return badge(role === 'owner' ? 'владелец' : 'участник', {
+    tone: role === 'owner' ? 'warn' : 'accent',
+  });
 }
 
 /** Builds the network list screen. The list loads asynchronously. */
@@ -144,15 +146,14 @@ export function buildNetworks(): HTMLElement {
  * network menu, 08-ui-spec.md §8). Opens the created network immediately (A1).
  */
 export async function showCreateNetworkDialog(): Promise<void> {
-  const nameInput = el('input', 'text-input');
-  nameInput.type = 'text';
-  nameInput.maxLength = 200;
-  const descInput = el('input', 'text-input');
-  descInput.type = 'text';
-  descInput.maxLength = 2000;
+  const nameInput = fieldInput({ maxLength: 200 });
+  const descInput = fieldInput({ maxLength: 2000 });
   const errorLine = footerErrorLine();
   const body = div('form-stack');
-  body.append(field('Название сети', nameInput), field('Описание (необязательно)', descInput));
+  body.append(
+    fieldRow({ label: 'Название сети', control: nameInput }),
+    fieldRow({ label: 'Описание (необязательно)', control: descInput }),
+  );
 
   let creating = false;
   await new Promise<void>((resolve) => {

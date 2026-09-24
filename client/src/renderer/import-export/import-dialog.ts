@@ -18,6 +18,8 @@ import { t } from '../lib/i18n.js';
 
 import { div, el } from '../lib/dom.js';
 import { showDialog } from '../lib/dialog.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
 
 interface DialogResult {
   /** `undefined` — the user cancelled. */
@@ -59,31 +61,31 @@ export function showImportEtnxDialog(
     };
     const cancelled: DialogResult = { filePath: undefined, options: undefined };
 
-    const pathInput = el('input', 'text-input') as HTMLInputElement;
-    pathInput.type = 'text';
-    pathInput.id = 'etnx-import-filepath';
-    pathInput.value = filePath;
-    pathInput.spellcheck = false;
-    pathInput.readOnly = true;
+    const pathInput = fieldInput({
+      id: 'etnx-import-filepath',
+      value: filePath,
+      spellcheck: false,
+      readonly: true,
+    });
 
-    const includeTypes = makeCheckbox(
-      'Импортировать типы мыслей и связей',
-      initial.include_types ?? DEFAULT_SLICES.include_types,
-    );
-    const includeAttachments = makeCheckbox(
-      'Импортировать вложения (файлы внутри архива)',
-      initial.include_attachments ?? DEFAULT_SLICES.include_attachments,
-    );
-    const includeChronology = makeCheckbox(
-      'Импортировать хронологические комментарии',
-      initial.include_chronology ?? DEFAULT_SLICES.include_chronology,
-    );
+    const includeTypes = checkboxRow({
+      label: 'Импортировать типы мыслей и связей',
+      checked: initial.include_types ?? DEFAULT_SLICES.include_types,
+    });
+    const includeAttachments = checkboxRow({
+      label: 'Импортировать вложения (файлы внутри архива)',
+      checked: initial.include_attachments ?? DEFAULT_SLICES.include_attachments,
+    });
+    const includeChronology = checkboxRow({
+      label: 'Импортировать хронологические комментарии',
+      checked: initial.include_chronology ?? DEFAULT_SLICES.include_chronology,
+    });
 
-    const pathField = div('field');
-    const pathLabel = el('label', 'field-label');
-    pathLabel.htmlFor = 'etnx-import-filepath';
-    pathLabel.textContent = 'Файл архива';
-    pathField.append(pathLabel, pathInput);
+    const pathField = fieldRow({
+      label: 'Файл архива',
+      control: pathInput,
+      id: 'etnx-import-filepath',
+    });
 
     const optionsHead = el('h4', 'dialog-subhead');
     optionsHead.textContent = 'Что импортировать';
@@ -134,24 +136,4 @@ export function showImportEtnxDialog(
       onClose: () => finish(cancelled),
     });
   });
-}
-
-/**
- * Same shape as `export-dialog.ts:makeCheckbox` — returns the wrapping
- * `<label>` AND the underlying `<input>`. Earlier revisions dropped the
- * label by returning only the input; that left a bare checkbox with no
- * caption. Always use both.
- */
-function makeCheckbox(
-  labelText: string,
-  initial: boolean,
-): { row: HTMLLabelElement; input: HTMLInputElement } {
-  const row = el('label', 'checkbox-row');
-  const input = el('input') as HTMLInputElement;
-  input.type = 'checkbox';
-  input.checked = initial;
-  const text = el('span');
-  text.textContent = labelText;
-  row.append(input, text);
-  return { row, input };
 }

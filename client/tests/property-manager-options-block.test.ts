@@ -102,7 +102,7 @@ function findAll(root: ShimElement, cls: string): ShimElement[] {
 
 /** Чекбокс «выбирать из списка» в блоке. */
 function findChoiceCheck(block: ShimElement): ShimElement {
-  const label = findChild(block, 'checkbox-row');
+  const label = findChild(block, 'ui-choice-row');
   if (label === undefined) throw new Error('нет строки флажка');
   const input = label.children.find((c) => c.tagName === 'input');
   if (input === undefined) throw new Error('нет input в строке флажка');
@@ -111,7 +111,7 @@ function findChoiceCheck(block: ShimElement): ShimElement {
 
 /** Чекбокс «несколько значений» — вторая строка флажка. */
 function findMultiCheck(block: ShimElement): ShimElement {
-  const rows = block.children.filter((c) => c.className.includes('checkbox-row'));
+  const rows = block.children.filter((c) => c.className.includes('ui-choice-row'));
   if (rows.length < 2) throw new Error(`нет второй строки флажка: ${rows.length}`);
   const input = rows[1]!.children.find((c) => c.tagName === 'input');
   if (input === undefined) throw new Error('нет input во второй строке флажка');
@@ -161,7 +161,7 @@ describe('buildScalarOptionsBlockImpl — сценарий ошибки 322a2694
     assert.equal(area.style.display, '');
     // Секция — ровно один блок с ровно одной textarea и двумя чекбоксами.
     assert.equal(findAll(block, 'prop-options-area').length, 1);
-    assert.equal(block.children.filter((c: ShimElement) => c.className.includes('checkbox-row')).length, 2);
+    assert.equal(block.children.filter((c: ShimElement) => c.className.includes('ui-choice-row')).length, 2);
   });
 
   it('выключение флажка скрывает textarea и сохраняет черновик optionsText', () => {
@@ -187,7 +187,7 @@ describe('buildScalarOptionsBlockImpl — сценарий ошибки 322a2694
     for (let i = 0; i < 8; i++) toggle(check);
     // Контейнер — единственный, чекбоксов — два (choice + multi), textarea — одна.
     assert.equal(findAll(block, 'prop-options-area').length, 1);
-    assert.equal(block.children.filter((c) => c.className.includes('checkbox-row')).length, 2);
+    assert.equal(block.children.filter((c) => c.className.includes('ui-choice-row')).length, 2);
     // В контейнере нет «лишних» строк: всего две строки-флажка + одна textarea.
     assert.equal(block.children.length, 3);
   });

@@ -12,11 +12,13 @@
 import type { AuditLogEntry, Network, User } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
-import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
+import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { operationError } from '../lib/ui/messages.js';
 
 /** Opens the admin panel modal. */
@@ -101,18 +103,13 @@ async function renderUsers(content: HTMLElement): Promise<void> {
 function addUserRow(): HTMLElement {
   const box = div('form-row');
   box.style.marginTop = '10px';
-  const usernameInput = el('input', 'text-input');
-  usernameInput.type = 'text';
-  usernameInput.placeholder = 'username';
+  const usernameInput = fieldInput({ placeholder: 'username' });
   usernameInput.style.width = '160px';
-  const displayInput = el('input', 'text-input');
-  displayInput.type = 'text';
-  displayInput.placeholder = 'Отображаемое имя';
+  const displayInput = fieldInput({ placeholder: 'Отображаемое имя' });
   displayInput.style.width = '180px';
-  const adminLabel = el('label', 'checkbox-row');
-  const adminCheck = el('input');
-  adminCheck.type = 'checkbox';
-  adminLabel.append(adminCheck, span('админ'));
+  const admin = checkboxRow({ label: 'админ' });
+  const adminCheck = admin.input;
+  const adminLabel = admin.row;
   // «Добавить пользователя» is enabled only when `username` is non-empty
   // (08-ui-spec.md §10.1; the server rejects empty usernames with
   // VALIDATION_ERROR, so the button is useless until the field has a value).
@@ -154,16 +151,17 @@ function contentOf(node: HTMLElement): HTMLElement {
 async function generateKey(user: User): Promise<void> {
   // O8: the key can carry a per-key MCP write rate limit override (empty — the
   // server-wide `mcp.max_writes_per_minute`).
-  const limitInput = el('input', 'text-input');
-  limitInput.type = 'number';
-  limitInput.min = '1';
-  limitInput.step = '1';
-  limitInput.placeholder = 'серверный лимит';
+  const limitInput = fieldInput({
+    type: 'number',
+    min: 1,
+    step: 1,
+    placeholder: 'серверный лимит',
+  });
   limitInput.style.width = '120px';
   const body = div('form-stack');
   const limitRow = div('hint-field');
   limitRow.append(limitInput, span('пусто — серверный лимит', 'muted'));
-  body.append(field('Лимит записи MCP (в мин.)', limitRow));
+  body.append(fieldRow({ label: 'Лимит записи MCP (в мин.)', control: limitRow }));
   showDialog({
     title: 'Сгенерировать API-key',
     size: 's',
@@ -354,11 +352,9 @@ function renderAudit(content: HTMLElement): void {
     option.value = category;
     categorySelect.append(option);
   }
-  const fromInput = el('input', 'text-input');
-  fromInput.type = 'date';
+  const fromInput = fieldInput({ type: 'date' });
   fromInput.style.width = '140px';
-  const toInput = el('input', 'text-input');
-  toInput.type = 'date';
+  const toInput = fieldInput({ type: 'date' });
   toInput.style.width = '140px';
   filterRow.append(
     span('Категория:'),

@@ -36,6 +36,18 @@ import './tabs.css';
 // дублирование у поля; задача e20761c2).
 import './messages.css';
 
+// Поля ввода, строки-переключатели, сегменты, тумблеры и бейджи — словарь
+// фасадов этапа полей (задача f351b894): базовые классы полей
+// (`ui-input`/`ui-field`/`ui-clearable`), строк (`ui-choice-row`),
+// сегментов, тумблеров и бейджей. Старые `text-input`/`checkbox-row`/
+// `radio-row`/`font-toggle`/`role-badge`/`group-count`/`st-count` удалены
+// из `styles.css`.
+import './field.css';
+import './choice-row.css';
+import './segmented.css';
+import './toggle.css';
+import './badge.css';
+
 // Компоненты этапа 1: кнопки, поля, переключатели, вкладки, тосты,
 // тултипы, деревья, аккордеоны, сплиттеры. Каждый модуль регистрирует
 // свой custom element; повторный импорт безопасен (ESM-кеш).

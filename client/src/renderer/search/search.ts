@@ -91,6 +91,7 @@ import {
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 import { iconButton } from '../lib/ui/button.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
 
 /**
  * Настройки строки поиска карты (§3.2): критерии — общая модель конструктора
@@ -974,11 +975,12 @@ function buildSettingsZone(zone: HTMLElement): void {
 
   // --- 1-я строка: ограничение поддеревом ----------------------------------
   const subtreeRow = div('search-settings-row');
-  const subtreeLabel = el('label', 'checkbox-row');
-  const subtreeCheck = el('input');
-  subtreeCheck.type = 'checkbox';
-  subtreeCheck.checked = options.subtree;
-  subtreeLabel.append(subtreeCheck, span('ограничить потомками мыслей:'));
+  const subtreeHandle = checkboxRow({
+    label: 'ограничить потомками мыслей:',
+    checked: options.subtree,
+  });
+  const subtreeLabel = subtreeHandle.row;
+  const subtreeCheck = subtreeHandle.input;
 
   // Поле мыслей-подкорней — общий чип-лист пикера (инструкция «Использовать
   // унифицированные поля выбора ссылок в диалогах»), тот же, что у поля
@@ -1026,17 +1028,15 @@ function buildSettingsZone(zone: HTMLElement): void {
     label: string,
     key: 'onlyThoughts' | 'onlyLinks' | 'onlyChrono' | 'showInactive' | 'trashed',
   ): HTMLElement => {
-    const wrap = el('label', 'checkbox-row');
-    const check = el('input');
-    check.type = 'checkbox';
-    check.checked = options[key];
-    check.addEventListener('change', () => {
-      options = { ...options, [key]: check.checked };
-      persistState();
-      refreshSearchIfVisible();
-    });
-    wrap.append(check, span(label));
-    return wrap;
+    return checkboxRow({
+      label,
+      checked: options[key],
+      onChange: (checked) => {
+        options = { ...options, [key]: checked };
+        persistState();
+        refreshSearchIfVisible();
+      },
+    }).row;
   };
   const placesRow = div('search-settings-row');
   placesRow.append(

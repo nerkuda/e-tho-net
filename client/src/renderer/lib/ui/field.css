@@ -1,0 +1,143 @@
+/**
+ * Стили фасада поля `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Базовые классы поля объявлены здесь и в `./field.ts` — старые
+ * (`.text-input`, `.textarea-input`, `.field`, `.field-label`,
+ * `.clearable-field`, `.clearable-clear`) удалены из `styles.css`. Значения
+ * перенесены без изменения плотности и размеров (визуальная преемственность):
+ * те же отступы, рамки, радиусы и токены ETN. Обе темы работают через токены —
+ * отдельного блока для `[data-theme='dark']` нет.
+ *
+ * Состояния: `:hover` (не задано — рамка меняется только на фокусе, как
+ * раньше), `:focus`, `:disabled`, `[readonly]`. Модификаторы
+ * (`--multiline`, `--disabled`) — часть словаря; прикладные классы-владельцы
+ * (`st-f-input`, `entity-chip-input`) идут через `extraClass` и остаются в
+ * `styles.css`.
+ */
+
+.ui-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+}
+
+.ui-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.ui-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ui-input[readonly] {
+  background: var(--surface-2);
+}
+
+.ui-textarea {
+  resize: vertical;
+  min-height: 72px;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+}
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.ui-field-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.ui-field-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.ui-field--disabled {
+  opacity: 0.45;
+}
+
+/* Поле с угловым «✕» очистки значения (перенесено из `wrapClearable`).
+   Обёртка любого одиночного поля — значение свойства, поля дат фильтра. */
+.ui-clearable {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+}
+
+.ui-clearable .ui-input {
+  width: 100%;
+  padding-right: 22px;
+}
+
+.ui-clearable .st-f-input {
+  padding-right: 22px;
+}
+
+.ui-clearable-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ui-clearable-btn:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+/* --- поле цвета (ColorField) -------------------------------------------- */
+
+.ui-color-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-color-input {
+  width: 34px;
+  height: 26px;
+  padding: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.ui-color-hex {
+  width: 90px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+  font-family: var(--md-mono);
+  text-transform: lowercase;
+}
+
+.ui-color-hex:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}

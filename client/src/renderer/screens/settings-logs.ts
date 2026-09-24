@@ -30,6 +30,7 @@ import { div, el, errText, span } from '../lib/dom.js';
 import { errorParagraph, setStatusText } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { uiButton } from '../lib/ui/button.js';
+import { checkboxRow, choiceControl } from '../lib/ui/choice-row.js';
 
 /**
  * Confirmation seam: unit tests substitute their own resolver, the dialog
@@ -63,31 +64,31 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       ),
     );
 
-    const toggle = el('input');
-    toggle.type = 'checkbox';
-    toggle.checked = clientState?.enabled ?? false;
-    toggle.disabled = clientState === null;
-    toggle.addEventListener('change', () => {
-      const next = toggle.checked;
-      toggle.disabled = true;
-      void etn.system
-        .setClientLogging(next)
-        .then((state) => {
-          clientState = state;
-          setClientMsg(next ? 'Логирование клиента включено.' : 'Логирование клиента выключено.');
-          renderClient();
-        })
-        .catch((err: unknown) => {
-          // Immediate apply failed — revert the visual state and say why.
-          toggle.checked = !next;
-          setClientMsg(errText(err), true);
-        })
-        .finally(() => {
-          toggle.disabled = false;
-        });
+    const logToggle = checkboxRow({
+      label: 'Логирование клиента',
+      checked: clientState?.enabled ?? false,
+      disabled: clientState === null,
+      onChange: (next) => {
+        const toggle = logToggle.input;
+        toggle.disabled = true;
+        void etn.system
+          .setClientLogging(next)
+          .then((state) => {
+            clientState = state;
+            setClientMsg(next ? 'Логирование клиента включено.' : 'Логирование клиента выключено.');
+            renderClient();
+          })
+          .catch((err: unknown) => {
+            // Immediate apply failed — revert the visual state and say why.
+            toggle.checked = !next;
+            setClientMsg(errText(err), true);
+          })
+          .finally(() => {
+            toggle.disabled = false;
+          });
+      },
     });
-    const toggleLabel = el('label', 'checkbox-row');
-    toggleLabel.append(toggle, span('Логирование клиента'));
+    const toggleLabel = logToggle.row;
 
     const filePath = clientState?.logFile ?? '—';
     const fileCode = el('code', 'settings-log-path', filePath);
@@ -183,30 +184,30 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       ),
     );
 
-    const toggle = el('input');
-    toggle.type = 'checkbox';
-    toggle.checked = status?.enabled ?? false;
-    toggle.disabled = status === null;
-    toggle.addEventListener('change', () => {
-      const next = toggle.checked;
-      toggle.disabled = true;
-      void etn.system
-        .setServerLogging(next)
-        .then((fresh) => {
-          serverStatus = fresh;
-          setServerMsg(next ? 'Логирование сервера включено.' : 'Логирование сервера выключено.');
-          renderServer();
-        })
-        .catch((err: unknown) => {
-          toggle.checked = !next;
-          setServerMsg(errText(err), true);
-        })
-        .finally(() => {
-          toggle.disabled = false;
-        });
+    const logToggle = checkboxRow({
+      label: 'Логирование сервера',
+      checked: status?.enabled ?? false,
+      disabled: status === null,
+      onChange: (next) => {
+        const toggle = logToggle.input;
+        toggle.disabled = true;
+        void etn.system
+          .setServerLogging(next)
+          .then((fresh) => {
+            serverStatus = fresh;
+            setServerMsg(next ? 'Логирование сервера включено.' : 'Логирование сервера выключено.');
+            renderServer();
+          })
+          .catch((err: unknown) => {
+            toggle.checked = !next;
+            setServerMsg(errText(err), true);
+          })
+          .finally(() => {
+            toggle.disabled = false;
+          });
+      },
     });
-    const toggleLabel = el('label', 'checkbox-row');
-    toggleLabel.append(toggle, span('Логирование сервера'));
+    const toggleLabel = logToggle.row;
 
     const dir = status?.logDir ?? '—';
     const dirCode = el('code', 'settings-log-path', dir);
@@ -222,12 +223,12 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       const tbody = el('tbody');
       for (const file of status.files) {
         const row = el('tr');
-        const pick = el('input');
-        pick.type = 'radio';
-        pick.name = 'settings-server-log-file';
-        pick.checked = file.name === selectedServerFile;
-        pick.addEventListener('change', () => {
-          selectedServerFile = pick.checked ? file.name : null;
+        const pick = choiceControl('radio', {
+          name: 'settings-server-log-file',
+          checked: file.name === selectedServerFile,
+          onChange: (checked) => {
+            selectedServerFile = checked ? file.name : null;
+          },
         });
         const pickCell = el('td');
         pickCell.append(pick);

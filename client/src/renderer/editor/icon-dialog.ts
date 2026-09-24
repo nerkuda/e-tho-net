@@ -30,6 +30,7 @@ import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
+import { fieldInput } from '../lib/ui/field.js';
 
 /** The original picked file, carried to the caller for the attachment upload. */
 export interface IconPickSource {
@@ -256,7 +257,7 @@ export function showIconDialog(opts: {
   function buildUrlTab(): HTMLElement {
     const box = div('icon-source');
     const row = div('icon-source-row');
-    urlInputEl = el('input', 'text-input') as HTMLInputElement;
+    urlInputEl = fieldInput() as HTMLInputElement;
     urlInputEl.type = 'text';
     urlInputEl.value = urlValue;
     urlInputEl.placeholder = 'URL изображения';

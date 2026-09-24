@@ -29,12 +29,14 @@ import type { NetworkListItem } from '@etn/shared';
 import { upsertTab } from './tab-state.js';
 import { refreshTabAccessibility } from './tab-accessibility.js';
 import { uiButton } from '../../lib/ui/button.js';
+import { fieldInput } from '../../lib/ui/field.js';
+import { badge } from '../../lib/ui/badge.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
-  const badge = span(role === 'owner' ? 'владелец' : 'участник', 'role-badge');
-  if (role === 'owner') badge.classList.add('owner');
-  return badge;
+  return badge(role === 'owner' ? 'владелец' : 'участник', {
+    tone: role === 'owner' ? 'warn' : 'accent',
+  });
 }
 
 /**
@@ -125,11 +127,11 @@ export function mountPicker(host: HTMLElement): void {
   }
 
   async function showCreateDialog(): Promise<void> {
-    const nameInput = el('input', 'text-input');
+    const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.maxLength = 200;
     nameInput.placeholder = 'Название';
-    const descInput = el('input', 'text-input');
+    const descInput = fieldInput();
     descInput.type = 'text';
     descInput.maxLength = 2000;
     descInput.placeholder = 'Описание (необязательно)';

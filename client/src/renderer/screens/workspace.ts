@@ -47,6 +47,7 @@ import { mountPinnedBar } from './pinned-bar.js';
 import { mountPicker } from './tabs/picker.js';
 import { mountTabStrip } from './tabs/tabs.js';
 import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -188,8 +189,7 @@ export function buildWorkspace(): HTMLElement {
   // The search row belongs to the map view (L18): it sits under the top bar
   // and hides in the structures view, which replaces canvas + search with its
   // own space.
-  const searchInput = el('input', 'search-input');
-  searchInput.type = 'text';
+  const searchInput = fieldInput({ extraClass: 'search-input', bare: true });
   searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+F');
   setTooltip(searchInput, 'Поиск по сети');
 

@@ -1,0 +1,35 @@
+/**
+ * Стили тумблера `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Базовый тумблер вида не задаёт: вид компонента-владельца живёт в
+ * `styles.css` (`search-settings-toggle`, `fp-toggle`, полоса фильтров холста)
+ * и адресует состояние селектором `[aria-pressed='true']`. Фасад владеет
+ * поведением и ARIA. Вид `glyph` (переключатели шрифта стиля мысли) объявлен
+ * здесь — заменяет удалённые `.font-toggles`/`.font-toggle`.
+ */
+
+.ui-toggle {
+  /* Вид задаёт владелец через `extraClass`. */
+}
+
+.ui-toggle-group {
+  display: flex;
+  gap: 4px;
+}
+
+.ui-toggle--glyph {
+  width: 30px;
+  height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.ui-toggle--glyph[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}

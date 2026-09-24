@@ -59,6 +59,9 @@ import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
+import { fieldTextarea } from '../lib/ui/field.js';
+import { radioRow } from '../lib/ui/choice-row.js';
+import { fieldRow } from '../lib/ui/field.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
 export type ThoughtPickItem =
@@ -393,19 +396,11 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const lines: AddLine[] = [];
 
     const modeRow = div('add-mode-row');
-    const singleRadio = el('input');
-    singleRadio.type = 'radio';
-    singleRadio.name = 'add-mode';
-    singleRadio.checked = !multi;
-    const multiRadio = el('input');
-    multiRadio.type = 'radio';
-    multiRadio.name = 'add-mode';
-    multiRadio.checked = multi;
-    const singleLabel = el('label', 'checkbox-row');
-    singleLabel.append(singleRadio, span('одна'));
-    const multiLabel = el('label', 'checkbox-row');
-    multiLabel.append(multiRadio, span('несколько'));
-    modeRow.append(singleLabel, multiLabel);
+    const singleOpt = radioRow({ label: 'одна', name: 'add-mode', checked: !multi });
+    const multiOpt = radioRow({ label: 'несколько', name: 'add-mode', checked: multi });
+    const singleRadio = singleOpt.input;
+    const multiRadio = multiOpt.input;
+    modeRow.append(singleOpt.row, multiOpt.row);
     singleRadio.addEventListener('change', () => {
       multi = false;
       // Switching «несколько» → «одна» drops the accumulated list (карточка ETN
@@ -425,7 +420,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // Starts hidden unless the prefill switched multi mode on.
     const lineList = div(multi ? 'add-list' : 'add-list hidden');
 
-    const input = el('textarea', 'textarea-input');
+    const input = fieldTextarea();
     input.rows = 2;
     input.placeholder =
       allowCreate ? 'Введите название или вставьте список…' : 'Введите название для поиска…';
@@ -494,15 +489,21 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
 
     const body = div('form-stack');
     const typeRow = div('add-types-row');
-    const thoughtTypeField = div('field add-types-field');
-    thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
-    const linkTypeField = div('field add-types-field');
-    linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
-    const linkPropertyFieldWrap = div('field add-types-field');
-    linkPropertyFieldWrap.append(
-      el('label', 'field-label', 'Свойство связи'),
-      linkPropertyField.root,
-    );
+    const thoughtTypeField = fieldRow({
+      label: 'Тип мысли',
+      control: thoughtTypeCombo.root,
+      class: 'add-types-field',
+    });
+    const linkTypeField = fieldRow({
+      label: 'Тип связи',
+      control: linkTypeCombo.root,
+      class: 'add-types-field',
+    });
+    const linkPropertyFieldWrap = fieldRow({
+      label: 'Свойство связи',
+      control: linkPropertyField.root,
+      class: 'add-types-field',
+    });
     if (allowCreate) typeRow.append(thoughtTypeField);
     if (allowLinkProperty) typeRow.append(linkPropertyFieldWrap);
     else if (allowLinkType) typeRow.append(linkTypeField);

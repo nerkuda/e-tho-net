@@ -812,7 +812,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       '4,8 9,3 14,8',
       'шеврон входящей стороны смотрит вверх',
     );
-    const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
+    const labels = formStack.querySelectorAll('.ui-field-label').map((l) => l.textContent);
     assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');
     assert.equal(labels.includes('Тип связи'), false, 'метки «Тип связи» в диалоге карты нет');
     assert.ok(
