@@ -35,6 +35,7 @@ import {
   setPropertyValue,
 } from './property-service.js';
 import { findDuplicates } from './search-service.js';
+import { projectThoughtRows } from './response-projection.js';
 import { createThought, getThoughtOrThrow, updateThought } from './thought-service.js';
 
 /** Resolve the bundle's thought: explicit `thought_id`, or find-or-create-or-match. */
@@ -119,7 +120,12 @@ function resolveThought(
     throw new EtnError('INTERNAL', 'find_duplicates returned an empty hit unexpectedly');
   }
   if (policy === 'fail') {
-    throw new EtnError('DUPLICATE', 'a matching thought already exists', { candidates: hits });
+    // Кандидаты в ответе той же формы, что и у `etn.thoughts.find_duplicates`:
+    // снимаем визуальные/сервисные поля (fg_color, font_*, …) единым
+    // compact-сериализатором (мелкий дефект превью, 0.8.3).
+    throw new EtnError('DUPLICATE', 'a matching thought already exists', {
+      candidates: projectThoughtRows(hits),
+    });
   }
   const matched = getThoughtOrThrow(ndb, topHit.id);
   if (policy === 'update') {

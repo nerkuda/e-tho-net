@@ -1056,14 +1056,22 @@ export interface ImportThoughtPlan {
   thoughts_to_create: number;
   thoughts_to_reuse: number;
   thoughts_to_skip: number;
+  /**
+   * `true`, когда политика `fail` и есть конфликты: импорт будет ОТВЕРГНУТ
+   * целиком (ничего не создастся, не переиспользуется и не пропустится).
+   * Отличает отказ `fail` от реального пропуска `skip` (мелкий дефект
+   * превью, 0.8.3).
+   */
+  rejected: boolean;
   conflicts: ImportConflict[];
 }
 
 /**
  * Отражают ли план `overwrite`/`fail`-без-конфликтов обновление существующей
- * мысли, `fail`-с-конфликтами — полный отказ, `skip` — пропуск, `rename` —
- * создание новой. Используется `etn.import.dry_run`, чтобы превью совпадало
- * с фактическим поведением `importFromEtnx` (ошибка ebe93450).
+ * мысли, `fail`-с-конфликтами — полный отказ (`rejected: true`, счётчики
+ * нулевые), `skip` — пропуск, `rename` — создание новой. Используется
+ * `etn.import.dry_run`, чтобы превью совпадало с фактическим поведением
+ * `importFromEtnx` (ошибки ebe93450, 0.8.3).
  */
 export function planImportThoughts(
   ndb: NetworkDb,
@@ -1073,7 +1081,15 @@ export function planImportThoughts(
   const conflicts = findImportConflicts(ndb, manifest);
   const total = manifest.thoughts.length;
   if (policy === 'fail' && conflicts.length > 0) {
-    return { thoughts_to_create: 0, thoughts_to_reuse: 0, thoughts_to_skip: total, conflicts };
+    // `fail` отвергает весь импорт — превью не должно показывать это как
+    // «пропуск» (`skip`): счётчики нулевые, отказ — в `rejected` + `conflicts`.
+    return {
+      thoughts_to_create: 0,
+      thoughts_to_reuse: 0,
+      thoughts_to_skip: 0,
+      rejected: true,
+      conflicts,
+    };
   }
   if (policy === 'skip') {
     const skipped = computeSkippedThoughtIds(ndb, manifest);
@@ -1081,11 +1097,18 @@ export function planImportThoughts(
       thoughts_to_create: total - skipped.size,
       thoughts_to_reuse: 0,
       thoughts_to_skip: skipped.size,
+      rejected: false,
       conflicts,
     };
   }
   if (policy === 'rename') {
-    return { thoughts_to_create: total, thoughts_to_reuse: 0, thoughts_to_skip: 0, conflicts };
+    return {
+      thoughts_to_create: total,
+      thoughts_to_reuse: 0,
+      thoughts_to_skip: 0,
+      rejected: false,
+      conflicts,
+    };
   }
   // `overwrite` (по умолчанию) и `fail` без конфликтов: существующая мысль
   // обновляется/переиспользуется, новые создаются.
@@ -1093,6 +1116,7 @@ export function planImportThoughts(
     thoughts_to_create: total - conflicts.length,
     thoughts_to_reuse: conflicts.length,
     thoughts_to_skip: 0,
+    rejected: false,
     conflicts,
   };
 }

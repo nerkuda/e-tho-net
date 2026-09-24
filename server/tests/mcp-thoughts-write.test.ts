@@ -443,6 +443,17 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.equal(result.isError, true);
         const text = toolText(result);
         assert.ok(text.includes('DUPLICATE') || text.includes('duplicate'), text);
+        // Кандидаты — в той же compact-форме, что и `find_duplicates`: без
+        // визуальных полей (мелкий дефект 0.8.3).
+        const details = JSON.parse(text.slice(text.indexOf('Details: ') + 'Details: '.length)) as {
+          candidates: Array<Record<string, unknown>>;
+        };
+        const candidate = details.candidates[0];
+        assert.ok(candidate, 'в details.candidates есть кандидат');
+        assert.equal(candidate.title, 'Уникальная мысль');
+        for (const visual of ['fg_color', 'bg_color', 'font_bold', 'font_italic', 'font_underline', 'font_strike']) {
+          assert.ok(!(visual in candidate), `кандидат не несёт визуальное поле ${visual}`);
+        }
       } finally {
         await handle.close();
       }

@@ -42,6 +42,8 @@ export interface ImportPlanResult {
     thoughts_to_create: number;
     thoughts_to_reuse: number;
     thoughts_to_skip: number;
+    /** `fail` + конфликты: импорт будет отвергнут целиком (0.8.3). */
+    rejected: boolean;
     links_to_create: number;
     attachments_to_import: number;
     thought_types_to_create: number;
@@ -121,6 +123,7 @@ export async function planImportFromBuffer(
     thoughts_to_create: thoughtPlan.thoughts_to_create,
     thoughts_to_reuse: thoughtPlan.thoughts_to_reuse,
     thoughts_to_skip: thoughtPlan.thoughts_to_skip,
+    rejected: thoughtPlan.rejected,
     links_to_create: manifest.links.length,
     attachments_to_import: manifest.attachments.length,
     thought_types_to_create: manifest.thought_types.length,

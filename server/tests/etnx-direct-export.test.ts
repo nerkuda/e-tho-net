@@ -4,7 +4,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -20,6 +20,9 @@ import {
   nativeAvailable,
 } from './rest-helpers.js';
 import { exportToEtnx } from '../src/domain/export-service.js';
+import { readManifestFromBuffer } from '../src/domain/import-service.js';
+import { createAttachment } from '../src/domain/attachment-service.js';
+import { logger } from '../src/logger.js';
 
 /** `promisify` picks the callback-only overload of `fromBuffer`, losing `options` — type it explicitly. */
 const yauzlFromBuffer = promisify(yauzl.fromBuffer) as (
@@ -79,6 +82,62 @@ describe(
         console.log(`[debug] zip entries: ${entries.join(', ')}`);
         assert.ok(entries.includes('manifest.json'), 'manifest.json must be present');
       } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('include_attachments: false убирает из манифеста URL-вложения (0.8.3)', async () => {
+      const ctx = await buildRestContext();
+      const outWith = path.join(tmpdir(), `etnx-att-on-${randomUUID()}.zip`);
+      const outWithout = path.join(tmpdir(), `etnx-att-off-${randomUUID()}.zip`);
+      try {
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: authHeaders(ctx),
+          payload: { title: 'TEST 0.8.3 — мысль с URL-вложением' },
+        });
+        assert.equal(created.statusCode, 201);
+        const thoughtId = (created.json().data as { id: string }).id;
+        createAttachment(
+          ctx.ndb,
+          'thought',
+          thoughtId,
+          { kind: 'url', url: 'https://example.com/export' },
+          ctx.adminId,
+        );
+
+        const source = {
+          network_id: ctx.networkId,
+          network_name: ctx.networkId,
+          user_id: 'test-user',
+        };
+        await exportToEtnx(
+          ctx.ndb,
+          [thoughtId],
+          { include_attachments: true, include_chronology: false, include_types: true },
+          source,
+          outWith,
+        );
+        await exportToEtnx(
+          ctx.ndb,
+          [thoughtId],
+          { include_attachments: false, include_chronology: false, include_types: true },
+          source,
+          outWithout,
+        );
+
+        const withManifest = await readManifestFromBuffer(readFileSync(outWith), logger);
+        const withoutManifest = await readManifestFromBuffer(readFileSync(outWithout), logger);
+        assert.equal(withManifest.attachments.length, 1, 'include_attachments: true — вложение в манифесте');
+        assert.equal(
+          withoutManifest.attachments.length,
+          0,
+          'include_attachments: false — манифест без вложений',
+        );
+      } finally {
+        rmSync(outWith, { force: true });
+        rmSync(outWithout, { force: true });
         await closeRestContext(ctx);
       }
     });

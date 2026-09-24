@@ -69,8 +69,8 @@ const ETNX_EXPORT_MAX_NODES = 1000;
  *   4. Pull `comments` (permanent + chronological when requested) and
  *      `comment_targets` for those ids.
  *   5. Pull `property_values` whose `owner_id IN (ids)` for thoughts.
- *   6. Pull `attachments` for thoughts (`kind = 'url'` always, `kind = 'file'`
- *      only when `include_attachments`).
+ *   6. Pull `attachments` for thoughts — только при `include_attachments`;
+ *      при `false` в манифест не попадает ни одной записи (ни URL, ни файл).
  *   7. Pull `thought_types`/`link_types` that are actually referenced —
  *      plus the root types, so the imported graph always has a base.
  *   8. Pull `type_properties` for those types (so imported thoughts carry
@@ -111,8 +111,9 @@ export function buildManifest(
   //    importer will rebind `owner_id` after link creation)
   const propertyValues = collectPropertyValues(ndb, allIds);
 
-  // 7. Attachments (only thought attachments; only file binaries on request)
-  const attachments = collectAttachments(ndb, allIds);
+  // 7. Attachments (only thought attachments; the whole slice is gated by
+  //    `include_attachments` — both URL metadata and file binaries).
+  const attachments = options.include_attachments ? collectAttachments(ndb, allIds) : [];
 
   // 8. Type graph: referenced types + root types
   const referencedThoughtTypeIds = collectThoughtTypeIds(ndb, thoughts);

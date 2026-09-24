@@ -316,6 +316,22 @@ describe('etn.import.subgraph: значения collision_policy (стандар
       assert.equal(skipData.plan.thoughts_to_create, 0, 'skip-превью: новых мыслей нет');
       assert.equal(skipData.conflicts.length, 1, 'skip-превью: конфликт показан');
 
+      // fail: превью сигналит полный отказ (rejected), а не «пропуск» как у skip.
+      const failRes = await callOp(dstHandle.client, 'import.dry_run', {
+        network_id: dst.networkId,
+        source: { kind: 'etnx_base64', content_base64: content_b64 },
+        collision_policy: 'fail',
+      });
+      assert.equal(failRes.isError, undefined, toolText(failRes));
+      const failData = toolJson<{
+        plan: { rejected: boolean; thoughts_to_create: number; thoughts_to_skip: number };
+        conflicts: unknown[];
+      }>(failRes);
+      assert.equal(failData.plan.rejected, true, 'fail-превью: импорт будет отвергнут');
+      assert.equal(failData.plan.thoughts_to_skip, 0, 'fail-превью: это не пропуск');
+      assert.equal(failData.plan.thoughts_to_create, 0, 'fail-превью: ничего не создаётся');
+      assert.equal(failData.conflicts.length, 1, 'fail-превью: конфликт показан');
+
       // rename: превью обещает создание обеих мыслей без конфликтов-пропусков.
       const renameRes = await callOp(dstHandle.client, 'import.dry_run', {
           network_id: dst.networkId,

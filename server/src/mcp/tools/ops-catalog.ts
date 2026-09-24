@@ -679,7 +679,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: false,
     readOnly: true,
-    effects: 'чтение (валидация manifest + план); без записи.',
+    effects:
+      'чтение (валидация manifest + план); без записи. `plan.rejected: true` при `collision_policy: fail` с конфликтами — импорт будет отвергнут целиком.',
     errors: '`VALIDATION_ERROR`.',
     paramsContract: ImportDryRun,
   },
