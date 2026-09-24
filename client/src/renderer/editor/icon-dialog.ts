@@ -27,6 +27,7 @@ import { etn } from '../lib/etn.js';
 import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** The original picked file, carried to the caller for the attachment upload. */
 export interface IconPickSource {
@@ -198,7 +199,12 @@ export function showIconDialog(opts: {
     const box = div('icon-source');
     box.append(el('div', 'icon-section-title', 'Иконки типов мыслей'), buildTypeIconsGrid());
     const pickRow = div('icon-pick-row');
-    pickRow.append(button('Выбрать файл…', () => void pickFile(), 'btn small'));
+    pickRow.append(uiButton({
+      label: 'Выбрать файл…',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void pickFile(),
+    }));
     box.append(pickRow);
     filePreviewEl = div('icon-preview');
     box.append(filePreviewEl);

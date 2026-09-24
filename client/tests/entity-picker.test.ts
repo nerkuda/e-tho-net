@@ -812,7 +812,7 @@ describe('entity-picker: команды-иконки верхней строки
     const searchbar = findByClass(backdrop, 'st-f-searchbar');
     assert.ok(searchbar, 'есть верхняя строка');
     assert.ok(findByClass(searchbar, 'st-f-search'), 'в верхней строке есть поиск');
-    const commands = findAllByClass(searchbar, 'icon-btn');
+    const commands = findAllByClass(searchbar, 'ui-btn--icon');
     assert.equal(commands.length, 3, 'три команды-иконки в верхней строке');
     assert.deepEqual(
       commands.map((b) => b.title),
@@ -824,7 +824,7 @@ describe('entity-picker: команды-иконки верхней строки
     }
 
     // Футер: ровно «Отмена» и «Применить и закрыть», без команд.
-    const footerButtons = findAllByClass(backdrop, 'dialog-btn');
+    const footerButtons = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon'));
     assert.deepEqual(
       footerButtons.map((b) => b.textContent),
       ['Отмена', 'Применить и закрыть'],
@@ -849,7 +849,7 @@ describe('entity-picker: команды-иконки верхней строки
     });
     const backdrop = body.children[0];
     assert.ok(backdrop, 'диалог смонтирован');
-    const clear = findAllByClass(backdrop, 'icon-btn')[0];
+    const clear = findAllByClass(backdrop, 'ui-btn--secondary')[0];
     assert.ok(clear, 'есть кнопка «Очистить»');
     assert.equal(clear.disabled, false, 'при непустом наборе активна');
     clear.click();
@@ -904,7 +904,7 @@ describe('entity-picker: завершение модального чек-лис
     const backdrop = body.children[0];
     assert.ok(backdrop, 'диалог смонтирован');
     assert.deepEqual(
-      findAllByClass(backdrop, 'dialog-btn').map((b) => b.textContent),
+      findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).map((b) => b.textContent),
       ['Отмена'],
       'одиночный режим завершается выбором строки, а не кнопкой применения',
     );
@@ -929,7 +929,7 @@ describe('entity-picker: завершение модального чек-лис
     findAllByClass(backdrop, 'entity-pick-row')[0]!.click();
     assert.equal(body.children.length, 1, 'клик по строке не закрыл диалог');
     assert.equal(result, undefined, 'до применения результат не отдан');
-    const apply = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Применить');
+    const apply = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Применить');
     assert.ok(apply, 'в футере есть кнопка применения');
     apply!.click();
     await done;
@@ -951,7 +951,7 @@ describe('entity-picker: отмена модального чек-листа (12
 
   /** Кнопка «Отмена» футера открытого диалога. */
   function cancelButton(backdrop: ShimElement): ShimElement {
-    const btn = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Отмена');
+    const btn = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Отмена');
     assert.ok(btn !== undefined, 'в футере есть «Отмена»');
     return btn!;
   }
@@ -1011,7 +1011,7 @@ describe('entity-picker: отмена модального чек-листа (12
     });
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог смонтирован');
-    const closeBtn = findAllByClass(backdrop, 'dialog-close')[0];
+    const closeBtn = findAllByClass(backdrop, 'ui-btn--ghost')[0];
     assert.ok(closeBtn !== undefined, 'в заголовке есть ×');
     closeBtn!.click();
     await done;
@@ -1034,7 +1034,7 @@ describe('entity-picker: отмена модального чек-листа (12
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог смонтирован');
     // «Очистить» меняет набор, но промис до завершения молчит.
-    findAllByClass(backdrop, 'icon-btn')[0]!.click();
+    findAllByClass(backdrop, 'ui-btn--secondary')[0]!.click();
     assert.equal(result, undefined, 'до завершения результат не отдан');
     cancelButton(backdrop).click();
     await done;
@@ -1054,7 +1054,7 @@ describe('entity-picker: отмена модального чек-листа (12
     });
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог смонтирован');
-    const apply = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Применить');
+    const apply = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Применить');
     assert.ok(apply !== undefined, 'в футере есть «Применить»');
     apply!.click();
     await done;

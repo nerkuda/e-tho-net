@@ -80,7 +80,7 @@ describe('переключатель-лейка зоны «Настройки п
     );
     assert.match(
       search,
-      /toggle\.addEventListener\('click', \(\) => \{\s*setSettingsOpen\(!settingsOpen\);\s*persistSettingsOpen\(\);/,
+      /onClick: \(\) => \{\s*setSettingsOpen\(!settingsOpen\);\s*persistSettingsOpen\(\);/,
       'клик по лейке показывает/скрывает зону и сохраняет состояние',
     );
     assert.match(

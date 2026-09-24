@@ -38,11 +38,12 @@ import { scheduleStructuresRefresh } from './screens/structures/structures.js';
 import { refreshSelectionPanel } from './selection/selection.js';
 import { patchFocusEdge, store } from './state.js';
 import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
-import { button, div, el, setTooltip, span } from './lib/dom.js';
+import { div, el, setTooltip, span } from './lib/dom.js';
 import { svgIcon } from './lib/icons.js';
 import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
+import { iconButton, uiButton } from './lib/ui/button.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -511,13 +512,20 @@ export async function openThoughtGroupDeleteDialog(
   const toolbar = div('group-delete-toolbar');
   toolbar.append(span('Переключить:', 'group-delete-toolbar-label'));
   toolbar.append(
-    button('все в корзину', () => massToggle('all-trash'), 'btn small', 'Все строки — «В корзину»'),
-    button(
-      'удалять возможное',
-      () => massToggle('delete-possible'),
-      'btn small',
-      'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
-    ),
+    uiButton({
+      label: 'все в корзину',
+      role: 'secondary',
+      size: 's',
+      title: 'Все строки — «В корзину»',
+      onClick: () => massToggle('all-trash'),
+    }),
+    uiButton({
+      label: 'удалять возможное',
+      role: 'secondary',
+      size: 's',
+      title: 'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
+      onClick: () => massToggle('delete-possible'),
+    }),
   );
 
   /** Sets every row at once (§5a.2 semantics) and syncs the radio inputs. */
@@ -708,13 +716,12 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     danger: boolean,
     onClick: () => void,
   ): HTMLButtonElement => {
-    const btn = el('button', danger ? 'icon-btn trash-act trash-act-danger' : 'icon-btn trash-act');
-    btn.type = 'button';
-    btn.append(svgIcon(icon, 15));
-    setTooltip(btn, label);
-    btn.setAttribute('aria-label', label);
-    btn.addEventListener('click', onClick);
-    return btn;
+    return iconButton({
+      icon: svgIcon(icon, 15),
+      title: label,
+      class: danger ? 'trash-act trash-act-danger' : 'trash-act',
+      onClick,
+    });
   };
 
   /** Колонка действий строки: «Восстановить» всегда, «Удалить» — по блокировке. */

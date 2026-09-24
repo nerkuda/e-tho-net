@@ -40,12 +40,13 @@
 
 import type { LinkPropertySide, LinkStyle, LinkType, NetworkProperty, PropertyValueType } from '@etn/shared';
 
-import { button, div, el, setTooltip, span } from './dom.js';
+import { div, el, setTooltip, span } from './dom.js';
 import { svgIcon, type IconName } from './icons.js';
 import { showMenuAt, type MenuItem } from './menu.js';
 import { resolveLinkTypeVisual, type ResolvedLinkVisual } from './type-tree.js';
 import { etn } from './etn.js';
 import { store } from '../state.js';
+import { uiButton } from './ui/button.js';
 
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
@@ -493,7 +494,13 @@ export function buildPropertyList(opts: {
   // Верхняя строка: сначала поиск, затем «Добавить» (требование 7).
   toolbar.append(searchInput);
   if (mode === 'manager' && callbacks.onAdd !== undefined) {
-    toolbar.append(button('Добавить', () => callbacks.onAdd?.(), 'btn small', 'Создать свойство'));
+    toolbar.append(uiButton({
+      label: 'Добавить',
+      role: 'secondary',
+      size: 's',
+      title: 'Создать свойство',
+      onClick: () => callbacks.onAdd?.(),
+    }));
   }
 
   const wrap = div('admin-table-wrap property-list-wrap');

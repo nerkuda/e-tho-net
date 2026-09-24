@@ -38,7 +38,7 @@ import { createMarkdownField, editMarkdownField } from '../../editor/markdown-fi
 import { rowSplitter } from '../../editor/splitter.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { confirmDialog } from '../../lib/dialog.js';
-import { button, div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
+import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../../lib/metadata.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
@@ -56,6 +56,7 @@ import {
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
 import { parseChronicleState } from './state.js';
+import { uiButton } from '../../lib/ui/button.js';
 // Критерии отбора «Хроники» читает и пишет единый конструктор
 // (`lib/filter-builder.ts`) — собственных парсера и конвертера у экрана нет.
 import {
@@ -188,11 +189,31 @@ export function mountChronicle(hostEl: HTMLElement): void {
   const pager = div('chron-pager');
   pagerLabel = span('', 'muted');
   pager.append(
-    button('≪', () => gotoPage(0), 'btn small'),
-    button('‹', () => gotoPage(offset - CHRONICLE_PAGE_SIZE), 'btn small'),
+    uiButton({
+      label: '≪',
+      role: 'secondary',
+      size: 's',
+      onClick: () => gotoPage(0),
+    }),
+    uiButton({
+      label: '‹',
+      role: 'secondary',
+      size: 's',
+      onClick: () => gotoPage(offset - CHRONICLE_PAGE_SIZE),
+    }),
     pagerLabel,
-    button('›', () => gotoPage(offset + CHRONICLE_PAGE_SIZE), 'btn small'),
-    button('≫', () => gotoPage(Math.floor((total - 1) / CHRONICLE_PAGE_SIZE) * CHRONICLE_PAGE_SIZE), 'btn small'),
+    uiButton({
+      label: '›',
+      role: 'secondary',
+      size: 's',
+      onClick: () => gotoPage(offset + CHRONICLE_PAGE_SIZE),
+    }),
+    uiButton({
+      label: '≫',
+      role: 'secondary',
+      size: 's',
+      onClick: () => gotoPage(Math.floor((total - 1) / CHRONICLE_PAGE_SIZE) * CHRONICLE_PAGE_SIZE),
+    }),
   );
   top.append(wrap, pager);
   editorArea = div('chron-editor');
@@ -671,12 +692,13 @@ function buildEditor(existing: Comment | null, startEdit = false): void {
   metaRow.append(titleInput, fromInput, toInput);
   if (existing !== null) {
     metaRow.append(
-      button(
-        'Удалить',
-        () => void removeComment(existing),
-        'btn small danger',
-        'Удалить хронологический комментарий',
-      ),
+      uiButton({
+        label: 'Удалить',
+        role: 'danger',
+        size: 's',
+        title: 'Удалить хронологический комментарий',
+        onClick: () => void removeComment(existing),
+      }),
     );
   }
 

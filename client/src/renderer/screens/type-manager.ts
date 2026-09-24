@@ -144,6 +144,7 @@ import { createMarkdownField } from '../editor/markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
 import { renderMarkdown } from '@etn/markdown';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
@@ -362,7 +363,13 @@ function treeToggle(
    *  and inert so it does not fight the search's own expansion. */
   forceOpen = false,
 ): HTMLElement {
-  const btn = button('', onToggle, 'btn small type-tree-toggle', row.hasChildren ? 'Развернуть/свернуть' : '');
+  const btn = uiButton({
+    label: '',
+    size: 's',
+    class: 'type-tree-toggle',
+    title: row.hasChildren ? 'Развернуть/свернуть' : '',
+    onClick: onToggle,
+  });
   btn.textContent = row.hasChildren ? (forceOpen || expanded.has(row.type.id) ? '▾' : '▸') : '';
   btn.disabled = !row.hasChildren || forceOpen;
   return btn;
@@ -387,9 +394,27 @@ export function showThoughtTypesDialog(): void {
   searchInput.type = 'text';
   searchInput.placeholder = 'Поиск по названию…';
   toolbar.append(
-    button('Добавить', () => showThoughtTypeEditor(null, onChanged), 'btn small', 'Создать тип'),
-    button('Свернуть все', () => collapseAll(), 'btn small', 'Свернуть всю иерархию'),
-    button('Развернуть все', () => expandAll(), 'btn small', 'Развернуть всю иерархию'),
+    uiButton({
+      label: 'Добавить',
+      role: 'secondary',
+      size: 's',
+      title: 'Создать тип',
+      onClick: () => showThoughtTypeEditor(null, onChanged),
+    }),
+    uiButton({
+      label: 'Свернуть все',
+      role: 'secondary',
+      size: 's',
+      title: 'Свернуть всю иерархию',
+      onClick: () => collapseAll(),
+    }),
+    uiButton({
+      label: 'Развернуть все',
+      role: 'secondary',
+      size: 's',
+      title: 'Развернуть всю иерархию',
+      onClick: () => expandAll(),
+    }),
     searchInput,
   );
   body.append(toolbar, tableWrap, errorLine);
@@ -518,7 +543,13 @@ export function showThoughtTypesDialog(): void {
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
       if (!type.is_root) {
-        actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
+        actions.append(uiButton({
+          label: '✕',
+          role: 'secondary',
+          size: 's',
+          title: 'Удалить тип',
+          onClick: () => void removeRow(type),
+        }));
       }
       tr.append(nameCell, descCell, countCell, actions);
       // Clicks on the ▸/▾ toggle or the ✕ button must not open the editor.
@@ -914,8 +945,11 @@ export function showThoughtTypeEditor(
   nameInput.value = draft.name;
   nameInput.maxLength = 200;
   nameInput.placeholder = 'Название типа (обязательно)';
-  const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
-  settingsBtn.append(svgIcon('settings', 14));
+  const settingsBtn = iconButton({
+    icon: svgIcon('settings', 14),
+    title: 'Настройки типа',
+    onClick: openStyle,
+  });
   topRow.append(iconBox, nameInput, settingsBtn);
   descriptionPane.append(topRow);
 
@@ -1441,12 +1475,13 @@ function buildStagedPropertySection(opts: {
   actions.style.gap = '8px';
   actions.style.flexWrap = 'wrap';
   actions.append(
-    button(
-      'Добавить свойство…',
-      () => void openAttachPropertyDialog(),
-      'btn small',
-      'Подключить свойство из справочника сети (новое создаётся кнопкой «Создать свойство» в диалоге выбора)',
-    ),
+    uiButton({
+      label: 'Добавить свойство…',
+      role: 'secondary',
+      size: 's',
+      title: 'Подключить свойство из справочника сети (новое создаётся кнопкой «Создать свойство» в диалоге выбора)',
+      onClick: () => void openAttachPropertyDialog(),
+    }),
   );
   box.append(actions);
 
@@ -1797,12 +1832,24 @@ function buildStagedPropertySection(opts: {
         // физической привязки — переопределять нечего.
         if (liveTypeId !== null && def.mirrored !== true) {
           actions.append(
-            button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
+            uiButton({
+              label: 'описание…',
+              role: 'secondary',
+              size: 's',
+              title: 'Переопределить описание свойства',
+              onClick: () => showDescriptionOverrideDialog(def),
+            }),
           );
         }
         if (liveTypeId !== null && def.description_overridden) {
           actions.append(
-            button('сбросить ◆', () => void clearDescriptionOverride(def), 'btn small', 'Сбросить переопределение описания'),
+            uiButton({
+              label: 'сбросить ◆',
+              role: 'secondary',
+              size: 's',
+              title: 'Сбросить переопределение описания',
+              onClick: () => void clearDescriptionOverride(def),
+            }),
           );
         }
         row.append(actions);
@@ -1874,18 +1921,37 @@ function buildStagedPropertySection(opts: {
       // стороне свойства-связи.
       if (canReorderBinding(row)) {
         actions.append(
-          button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
-          button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),
+          uiButton({
+            label: '▲',
+            role: 'secondary',
+            size: 's',
+            title: 'Выше',
+            onClick: () => move(row.id, -1),
+          }),
+          uiButton({
+            label: '▼',
+            role: 'secondary',
+            size: 's',
+            title: 'Ниже',
+            onClick: () => move(row.id, 1),
+          }),
         );
       }
       actions.append(
-        button(
-          '✎',
-          () => editNature(row),
-          'btn small',
-          'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
-        ),
-        button('✕', () => void unbind(row), 'btn small', 'Снять привязку свойства — значения не удаляются'),
+        uiButton({
+          label: '✎',
+          role: 'secondary',
+          size: 's',
+          title: 'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
+          onClick: () => editNature(row),
+        }),
+        uiButton({
+          label: '✕',
+          role: 'secondary',
+          size: 's',
+          title: 'Снять привязку свойства — значения не удаляются',
+          onClick: () => void unbind(row),
+        }),
       );
       tr.append(actions);
       tbody.append(tr);

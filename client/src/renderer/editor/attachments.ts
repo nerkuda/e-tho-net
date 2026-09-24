@@ -21,7 +21,7 @@ import type { Attachment, Thought, ThoughtUpdateInput } from '@etn/shared';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { rememberShownAttachments } from '../lib/attachment-events.js';
 import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -37,6 +37,7 @@ import {
   type EditorContext,
 } from './editor.js';
 import { rowSplitter } from './splitter.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Registers the attachments tab content and its badge counter (L7). */
 export function registerAttachmentsTab(): void {
@@ -217,7 +218,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   drop.textContent = 'Перетащите файлы или ссылки сюда';
   const list = div('attachments-list');
   const actions = div('attachments-actions');
-  actions.append(button('Добавить вложение', () => openAddDialog(), 'btn small'));
+  actions.append(uiButton({
+    label: 'Добавить вложение',
+    role: 'secondary',
+    size: 's',
+    onClick: () => openAddDialog(),
+  }));
   top.append(drop, list, actions);
 
   const bottom = div('attachment-viewer-area');
@@ -444,11 +450,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
    * does not depend on the double-click/context menu being discovered.
    */
   function buildOpenDefaultButton(attachment: Attachment): HTMLElement {
-    return button(
-      'Открыть в приложении по умолчанию',
-      () => void openDefault(attachment),
-      'btn small',
-    );
+    return uiButton({
+      label: 'Открыть в приложении по умолчанию',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void openDefault(attachment),
+    });
   }
 
   /** Shows a muted hint in the viewer area (nothing selected). */
@@ -742,7 +749,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     locationInput.placeholder = 'https://…';
     // «Открыть с диска…» fills the path via the OS picker; the file reaches
     // the server only when «Добавить» is pressed (§6.5).
-    const pickBtn = button('Открыть с диска…', () => void pickFileFromDisk(), 'btn small');
+    const pickBtn = uiButton({
+      label: 'Открыть с диска…',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void pickFileFromDisk(),
+    });
     const locationRow = div('input-with-btn');
     locationRow.append(locationInput, pickBtn);
 

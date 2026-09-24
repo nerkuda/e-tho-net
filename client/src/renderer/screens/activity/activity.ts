@@ -43,7 +43,7 @@ import {
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
-import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
+import { div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
@@ -55,6 +55,7 @@ import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/fi
 import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
+import { uiButton } from '../../lib/ui/button.js';
 import {
   DEFAULT_FILTER,
   ENTITY_TYPE_OPTIONS,
@@ -232,8 +233,18 @@ export function mountActivity(hostEl: HTMLElement): void {
   // actions stay visibly apart from the table.
   const toolbar = div('activity-toolbar');
   toolbar.append(
-    button('Свернуть до даты…', () => void rollupDialog(), 'btn small'),
-    button('Обрезать до даты…', () => void truncateDialog(), 'btn small danger'),
+    uiButton({
+      label: 'Свернуть до даты…',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void rollupDialog(),
+    }),
+    uiButton({
+      label: 'Обрезать до даты…',
+      role: 'danger',
+      size: 's',
+      onClick: () => void truncateDialog(),
+    }),
   );
   results.append(toolbar);
 
@@ -242,11 +253,31 @@ export function mountActivity(hostEl: HTMLElement): void {
   const pager = div('activity-pager');
   pagerLabel = span('', 'muted');
   pager.append(
-    button('≪', () => void gotoPage(0), 'btn small'),
-    button('‹', () => void gotoPage(offset - PAGE_SIZE), 'btn small'),
+    uiButton({
+      label: '≪',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(0),
+    }),
+    uiButton({
+      label: '‹',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(offset - PAGE_SIZE),
+    }),
     pagerLabel,
-    button('›', () => void gotoPage(offset + PAGE_SIZE), 'btn small'),
-    button('≫', () => void gotoPage(Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE), 'btn small'),
+    uiButton({
+      label: '›',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(offset + PAGE_SIZE),
+    }),
+    uiButton({
+      label: '≫',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE),
+    }),
   );
   results.append(tableWrapEl, pager);
 

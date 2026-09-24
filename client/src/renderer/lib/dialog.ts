@@ -15,8 +15,9 @@
  * the already-open editor instead of stacking a second one (ошибка c2d243bb).
  */
 
-import { button, div, el, errText } from './dom.js';
+import { div, el, errText } from './dom.js';
 import { svgIcon } from './icons.js';
+import { iconButton, uiButton } from './ui/button.js';
 
 /** A dialog footer button. */
 export interface DialogButton {
@@ -252,8 +253,13 @@ export function showDialog(opts: DialogOptions): () => void {
 
   const header = div('dialog-header');
   header.append(el('span', 'dialog-title', opts.title));
-  const closeBtn = button('', () => close(), 'dialog-close', 'Закрыть (Esc)');
-  closeBtn.append(svgIcon('x', 14));
+  const closeBtn = iconButton({
+    icon: svgIcon('x', 14),
+    title: 'Закрыть (Esc)',
+    role: 'ghost',
+    size: 's',
+    onClick: () => close(),
+  });
   header.append(closeBtn);
   box.append(header);
 
@@ -272,18 +278,16 @@ export function showDialog(opts: DialogOptions): () => void {
       footer.append(opts.footerError);
     }
     for (const item of opts.buttons) {
-      const btn = button(
-        item.label,
-        () => {
+      const btn = uiButton({
+        label: item.label,
+        role: item.danger === true ? 'danger' : item.primary === true ? 'primary' : 'secondary',
+        onClick: () => {
           item.onClick?.(close);
           // Default: a click dismisses the dialog. Buttons that need to stay
           // open (validation/async) set `keepOpen: true` and close themselves.
           if (item.keepOpen !== true) close();
         },
-        ['dialog-btn', item.primary === true ? 'primary' : '', item.danger === true ? 'danger' : '']
-          .filter((c) => c !== '')
-          .join(' '),
-      );
+      });
       if (item.confirm === true || (item.confirm === undefined && item.primary === true)) {
         if (primaryBtn === null) primaryBtn = btn;
       }

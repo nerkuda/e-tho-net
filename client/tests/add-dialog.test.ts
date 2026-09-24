@@ -164,7 +164,7 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
     formStack.children.find((c) => c.className.split(/\s+/).includes('add-list')) ?? new ShimElement('div');
   const footer = box.children.find((c) => c.className === 'dialog-footer');
   const primaryBtn =
-    footer?.children.find((c) => c.className.split(/\s+/).includes('primary')) ?? new ShimElement('button');
+    footer?.children.find((c) => c.className.split(/\s+/).includes('ui-btn--primary')) ?? new ShimElement('button');
   const cancelBtn = footer?.children.find((c) => c !== primaryBtn) ?? new ShimElement('button');
   const lineTitles = (): string[] =>
     lineList.children
@@ -301,7 +301,7 @@ describe('заголовок диалога называет якорь, а не
     );
     // Отмена: диалог закрывается, ничего не создаётся.
     const footer = box?.children.find((c) => c.className === 'dialog-footer');
-    footer?.children.find((c) => !c.className.split(/\s+/).includes('primary'))?.click();
+    footer?.children.find((c) => !c.className.split(/\s+/).includes('ui-btn--primary'))?.click();
     assert.equal(await done, undefined);
     store.update({ networkId: null, focus: null });
   });
@@ -550,7 +550,7 @@ function clickBackdrop(backdrop: ShimElement): void {
 
 /** Клик по × в заголовке. */
 function clickClose(backdrop: ShimElement): void {
-  const closeBtn = backdrop.querySelector('.dialog-close');
+  const closeBtn = backdrop.querySelector('.ui-btn--ghost');
   assert.ok(closeBtn !== null, 'в заголовке есть ×');
   closeBtn!.click();
 }

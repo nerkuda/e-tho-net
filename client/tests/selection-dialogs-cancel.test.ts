@@ -85,7 +85,7 @@ function openBackdrop(body: ShimElement): ShimElement {
 
 /** Кнопка футера по подписи. */
 function footerButton(backdrop: ShimElement, label: string): ShimElement {
-  const btn = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === label);
+  const btn = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === label);
   assert.ok(btn !== undefined, `в футере есть кнопка «${label}»`);
   return btn!;
 }
@@ -101,7 +101,7 @@ function clickBackdrop(backdrop: ShimElement): void {
 
 /** Клик по × в заголовке. */
 function clickClose(backdrop: ShimElement): void {
-  const closeBtn = findAllByClass(backdrop, 'dialog-close')[0];
+  const closeBtn = findAllByClass(backdrop, 'ui-btn--ghost')[0];
   assert.ok(closeBtn !== undefined, 'в заголовке есть ×');
   closeBtn!.click();
 }

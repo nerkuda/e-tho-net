@@ -15,6 +15,7 @@ import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js'
 import { button, div, el, errText, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Opens the admin panel modal. */
 export function openAdminPanel(): void {
@@ -145,9 +146,11 @@ function addUserRow(): HTMLElement {
   // «Добавить пользователя» is enabled only when `username` is non-empty
   // (08-ui-spec.md §10.1; the server rejects empty usernames with
   // VALIDATION_ERROR, so the button is useless until the field has a value).
-  const submit = button(
-    'Добавить пользователя',
-    () => {
+  const submit = uiButton({
+    label: 'Добавить пользователя',
+    role: 'primary',
+    size: 's',
+    onClick: () => {
       void (async () => {
         try {
           const result = await etn.admin.createUser({
@@ -162,8 +165,7 @@ function addUserRow(): HTMLElement {
         }
       })();
     },
-    'btn small primary',
-  );
+  });
   const syncSubmit = (): void => {
     submit.disabled = usernameInput.value.trim() === '';
   };
@@ -241,16 +243,17 @@ function showApiKey(apiKey: string): void {
   const code = el('code', undefined, apiKey);
   keyBox.append(code);
   keyBox.append(
-    button(
-      'Копировать',
-      () => {
+    uiButton({
+      label: 'Копировать',
+      role: 'secondary',
+      size: 's',
+      onClick: () => {
         void navigator.clipboard.writeText(apiKey).then(
           () => notice('Ключ скопирован.'),
           () => notice('Не удалось скопировать ключ.', 'error'),
         );
       },
-      'btn small',
-    ),
+    }),
   );
   box.append(keyBox);
   showDialog({
@@ -392,7 +395,12 @@ function renderAudit(content: HTMLElement): void {
     fromInput,
     span('по', undefined),
     toInput,
-    button('Показать', () => void loadAudit(), 'btn small'),
+    uiButton({
+      label: 'Показать',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void loadAudit(),
+    }),
   );
   const tableWrap = div('admin-table-wrap');
   content.append(filterRow, tableWrap);

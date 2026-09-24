@@ -157,7 +157,7 @@ describe('клик по подложке НЕ закрывает диалог (c
   it('× по-прежнему закрывает диалог', () => {
     installShim();
     const backdrop = openDialog('Диалог');
-    const closeBtn = backdrop.querySelector('.dialog-close');
+    const closeBtn = backdrop.querySelector('.ui-btn--ghost');
     assert.ok(closeBtn !== null, 'в заголовке есть ×');
     closeBtn!.click();
     assert.equal(backdrops().length, 0, '× закрывает диалог');

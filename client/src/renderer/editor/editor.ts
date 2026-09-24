@@ -55,7 +55,7 @@ import {
   offlineNotice,
   saveDraft,
 } from '../drafts.js';
-import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
@@ -118,6 +118,7 @@ import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
 import {
   acquireOrShowBlocked,
   lockHandleFromOutcome,
@@ -507,9 +508,14 @@ export function mountEditor(editorHost: HTMLElement): void {
 
   const header = div('editor-header');
   titleEl = span('', 'editor-title');
-  positionButton = button('', () => void openPositionMenu(), 'btn small');
+  positionButton = uiButton({
+    label: '',
+    size: 's',
+    title: 'Положение редактора',
+    onClick: () => void openPositionMenu(),
+  });
   positionButton.append(svgIcon('chevron-down', 12));
-  setTooltip(positionButton, 'Положение редактора');
+  positionButton.setAttribute('aria-label', 'Положение редактора');
   header.append(titleEl, positionButton);
   scrollBox = div('editor-scroll');
   // Carries the saved list max-heights as --clamp-* variables (ee745368).
@@ -1864,8 +1870,11 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }
   });
 
-  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
-  settingsBtn.append(svgIcon('settings', 14));
+  const settingsBtn = iconButton({
+    icon: svgIcon('settings', 14),
+    title: 'Цвет и стиль',
+    onClick: () => openThoughtSettings(thought),
+  });
   settingsBtn.setAttribute('aria-label', 'Настройки мысли');
 
   topRow.append(iconBox, titleArea, settingsBtn);
@@ -1940,7 +1949,12 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // Подменю «Действия» — задача 8ab775d9. Команды зеркалят контекстное меню
   // облачка: «В фокус», toggle выделения, toggle закрепления. Меню открывается
   // и с клавиатуры (Enter/Space).
-  const actionsBtn = button('Действия ▾', () => void openThoughtActionsMenu(thought, actionsBtn), 'btn small');
+  const actionsBtn = uiButton({
+    label: 'Действия ▾',
+    role: 'secondary',
+    size: 's',
+    onClick: () => void openThoughtActionsMenu(thought, actionsBtn),
+  });
   actionsBtn.type = 'button';
 
   row.append(typeCombo.root, activeLabel, actionsBtn);
@@ -2187,8 +2201,11 @@ function buildLinkHeader(link: Link): HTMLElement {
     },
   });
 
-  const settingsBtn = button('', () => openLinkSettings(link), 'icon-btn', 'Цвет и стиль линии');
-  settingsBtn.append(svgIcon('settings', 14));
+  const settingsBtn = iconButton({
+    icon: svgIcon('settings', 14),
+    title: 'Цвет и стиль линии',
+    onClick: () => openLinkSettings(link),
+  });
 
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');

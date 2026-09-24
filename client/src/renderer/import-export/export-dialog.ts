@@ -24,9 +24,10 @@ import {
   type ExportEtnxOptions,
 } from '@etn/shared';
 
-import { div, el, button } from '../lib/dom.js';
+import { div, el } from '../lib/dom.js';
 import { showDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
+import { uiButton } from '../lib/ui/button.js';
 
 interface DialogResult {
   /** `undefined` — the user cancelled. */
@@ -73,9 +74,7 @@ export function showExportEtnxDialog(
     filenameLabel.textContent = 'Имя файла';
     const filenameRow = div('input-with-btn');
     filenameRow.append(filenameInput);
-    const browseBtn = button('Обзор…', () => void browse());
-    browseBtn.type = 'button';
-    browseBtn.classList.add('dialog-btn');
+    const browseBtn = uiButton({ label: 'Обзор…', onClick: () => void browse() });
     filenameRow.append(browseBtn);
     filenameField.append(filenameLabel, filenameRow);
 

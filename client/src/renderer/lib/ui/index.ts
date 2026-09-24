@@ -14,3 +14,13 @@
  */
 
 import './register.js';
+
+// Словарь кнопок — единственный API кнопок клиента (задача 56f1dcb2).
+export {
+  BUTTON_CLASS,
+  BUTTON_ACTIVE_CLASS,
+  uiButton,
+  iconButton,
+  setButtonActive,
+} from './button.js';
+export type { ButtonRole, ButtonSize, ButtonOptions, IconButtonOptions } from './button.js';

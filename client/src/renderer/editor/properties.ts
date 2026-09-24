@@ -51,6 +51,7 @@ import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
+import { uiButton } from '../lib/ui/button.js';
 import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
@@ -618,12 +619,13 @@ function buildOutsideValueCell(
 
   /** Read-only «Открыть» button for a single URL value. */
 function buildUrlOpenBtn(value: string): HTMLButtonElement {
-    const btn = button(
-      'Открыть',
-      () => void openOneUrl(value),
-      'btn small',
-      'Открыть в системном обработчике',
-    );
+    const btn = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      title: 'Открыть в системном обработчике',
+      onClick: () => void openOneUrl(value),
+    });
     btn.disabled = value.trim() === '';
     return btn;
   }
@@ -886,12 +888,13 @@ export function buildMultiUrlReadonly(opts: {
 
 /** Builds a disabled «Открыть» button bound to {@link onOpen}; used in readonly cells. */
 function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): HTMLButtonElement {
-  const btn = button(
-    'Открыть',
-    () => onOpen(value),
-    'btn small',
-    'Открыть в системном обработчике',
-  );
+  const btn = uiButton({
+    label: 'Открыть',
+    role: 'secondary',
+    size: 's',
+    title: 'Открыть в системном обработчике',
+    onClick: () => onOpen(value),
+  });
   btn.disabled = value.trim() === '';
   return btn;
 }

@@ -88,6 +88,7 @@ import {
 } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
+import { iconButton } from '../lib/ui/button.js';
 
 /**
  * Настройки строки поиска карты (§3.2): критерии — общая модель конструктора
@@ -156,15 +157,17 @@ export function mountSearch(next: SearchChrome): void {
   const { host, input } = next;
   host.replaceChildren();
 
-  const toggle = el('button', 'tb-btn tb-icon search-settings-toggle', '');
-  toggle.type = 'button';
-  toggle.setAttribute('aria-pressed', 'false');
-  toggle.append(svgIcon('filter'));
-  setTooltip(toggle, 'Настройки поиска');
-  toggle.addEventListener('click', () => {
-    setSettingsOpen(!settingsOpen);
-    persistSettingsOpen();
+  const toggle = iconButton({
+    icon: svgIcon('filter'),
+    title: 'Настройки поиска',
+    role: 'ghost',
+    class: 'search-settings-toggle',
+    onClick: () => {
+      setSettingsOpen(!settingsOpen);
+      persistSettingsOpen();
+    },
   });
+  toggle.setAttribute('aria-pressed', 'false');
 
   // Кнопка-лейка — в верхнем углу панели (заголовочная строка, прижата вправо).
   const panelHeader = div('search-panel-header');

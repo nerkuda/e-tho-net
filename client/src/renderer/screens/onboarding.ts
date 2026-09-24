@@ -13,9 +13,10 @@
 
 import { restoreSession } from '../app.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /**
  * Builds the onboarding screen. The profile list loads asynchronously; form
@@ -69,7 +70,12 @@ export function buildOnboarding(): HTMLElement {
   keyField.append(el('label', 'field-label', 'API-key'), keyInput);
 
   const submitRow = div('form-row');
-  const submit = button('Подключиться', () => void submitForm(), 'btn primary');
+  const submit = uiButton({
+    label: 'Подключиться',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void submitForm(),
+  });
   const formError = span('', 'error-text');
   submitRow.append(submit, formError);
   form.append(labelField, urlField, keyField, submitRow);
@@ -107,7 +113,12 @@ export function buildOnboarding(): HTMLElement {
       const item = div('profile-item' + (p.isActive ? ' active' : ''));
       const info = div('profile-info');
       info.append(span(p.label, 'profile-label'), span(p.baseUrl, 'profile-url'));
-      const removeBtn = button('Удалить', () => void removeSavedProfile(p), 'btn small danger');
+      const removeBtn = uiButton({
+        label: 'Удалить',
+        role: 'danger',
+        size: 's',
+        onClick: () => void removeSavedProfile(p),
+      });
       // The whole row also acts as a "connect" affordance; the delete button
       // must not bubble the click or it would both delete and connect at once.
       removeBtn.addEventListener('click', (ev) => ev.stopPropagation());

@@ -21,13 +21,14 @@ import type { Comment } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { button, div, el, errText, fmtDate, span } from '../lib/dom.js';
+import { div, el, errText, fmtDate, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../lib/metadata.js';
 import { notice } from '../lib/notice.js';
 import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext } from './editor.js';
 import { createMarkdownField, editMarkdownField } from './markdown-field.js';
 import { rowSplitter } from './splitter.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Registers the «Хроника» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
@@ -60,7 +61,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
 
   const top = div('chrono-top');
   const toolbar = div('chrono-toolbar');
-  toolbar.append(button('Добавить', () => startNew(), 'btn small'));
+  toolbar.append(uiButton({
+    label: 'Добавить',
+    role: 'secondary',
+    size: 's',
+    onClick: () => startNew(),
+  }));
   const tableWrap = div('admin-table-wrap chrono-table');
   top.append(toolbar, tableWrap);
 
@@ -256,12 +262,13 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     metaRow.append(titleInput, fromInput, toInput);
     if (existing !== null) {
       metaRow.append(
-        button(
-          'Удалить',
-          () => void removeComment(),
-          'btn small danger',
-          'Удалить хронологический комментарий',
-        ),
+        uiButton({
+          label: 'Удалить',
+          role: 'danger',
+          size: 's',
+          title: 'Удалить хронологический комментарий',
+          onClick: () => void removeComment(),
+        }),
       );
     }
 

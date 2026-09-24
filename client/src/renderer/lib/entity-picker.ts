@@ -43,7 +43,7 @@ import type { LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
-import { button, div, el, span } from './dom.js';
+import { div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { svgIcon, type IconName } from './icons.js';
 import { parseThoughtIdLookupQuery } from './pure.js';
@@ -55,6 +55,7 @@ import {
 } from './suggest-dropdown.js';
 import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
+import { iconButton, uiButton } from './ui/button.js';
 
 // ---------------------------------------------------------------------------
 // Опции пикера
@@ -409,16 +410,11 @@ export interface EntityPickerModalOptions {
 /**
  * Кнопка-иконка команды верхней строки пикера: единый набор иконок проекта,
  * тултип и `aria-label` (клавиатурная доступность — нативный `<button>`).
- * Класс `.icon-btn` сужен до строки поиска правилом `.st-f-searchbar .icon-btn`.
+ * Кнопка-иконка словаря `lib/ui` (задача 56f1dcb2): тултип становится
+ * `aria-label`. Размер в строке поиска сужает правило `.st-f-searchbar .ui-btn--icon`.
  */
 function commandButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
-  const btn = el('button', 'icon-btn') as HTMLButtonElement;
-  btn.type = 'button';
-  btn.title = title;
-  btn.setAttribute('aria-label', title);
-  btn.append(svgIcon(icon, 14));
-  btn.addEventListener('click', onClick);
-  return btn;
+  return iconButton({ icon: svgIcon(icon, 14), title, onClick });
 }
 
 /**
@@ -962,8 +958,7 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   if (opts.picker !== undefined) {
     const { picker } = opts;
     const managed = (): string[] => opts.getValues().filter((v) => !v.startsWith('$'));
-    pickBtn = el('button', 'btn small entity-chip-pick', picker.label) as HTMLButtonElement;
-    pickBtn.type = 'button';
+    pickBtn = uiButton({ label: picker.label, size: 's', class: 'entity-chip-pick' });
     pickBtn.addEventListener('click', () => {
       if (disabled) return;
       void picker.open(managed()).then((next) => {
@@ -1145,13 +1140,12 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   input.disabled = opts.disabled === true;
   const caret = span('', 'type-combo-caret entity-combo-caret');
   caret.append(svgIcon('chevron-down', 12));
-  const pickBtn = button(
-    '…',
-    () => openPicker(),
-    'entity-combo-pick',
-    opts.pickerTitle ?? PICKER_TITLES[opts.kind],
-  );
-  pickBtn.type = 'button';
+  const pickBtn = uiButton({
+    label: '…',
+    class: 'entity-combo-pick',
+    title: opts.pickerTitle ?? PICKER_TITLES[opts.kind],
+    onClick: () => openPicker(),
+  });
   field.append(valueHost, input, caret, pickBtn);
   root.append(field);
 

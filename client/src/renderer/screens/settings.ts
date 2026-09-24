@@ -45,7 +45,7 @@ import {
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -53,6 +53,7 @@ import { clip } from '../lib/pure.js';
 import { store, type Theme } from '../state.js';
 import { buildLogsSection } from './settings-logs.js';
 import { scheduleStructuresRefresh } from './structures/structures.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
 type Section = 'user' | 'network' | 'client' | 'logs';
@@ -213,17 +214,30 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     errorLine,
   );
   const btnGroup = div('settings-footer-buttons');
-  const btnApply = button('Применить', () => void applyDraft(false), 'dialog-btn');
+  const btnApply = uiButton({
+    label: 'Применить',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => void applyDraft(false),
+  });
   btnApply.title = 'Применить (Shift+Enter)';
-  const btnApplyClose = button(
-    'Применить и закрыть',
-    () => void applyDraft(true),
-    'dialog-btn primary',
-  );
+  const btnApplyClose = uiButton({
+    label: 'Применить и закрыть',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void applyDraft(true),
+  });
   btnApplyClose.title = 'Применить и закрыть (Ctrl+Enter)';
-  const btnCancel = button('Отменить', () => closeDialog(), 'dialog-btn');
+  const btnCancel = uiButton({
+    label: 'Отменить',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => closeDialog(),
+  });
   btnCancel.title = 'Отменить (Esc)';
-  btnGroup.append(btnApply, btnApplyClose, btnCancel);
+  // Primary-действие — крайним справа (требование edc5faea): панель
+  // кнопок диалога держит главное действие последним.
+  btnGroup.append(btnApply, btnCancel, btnApplyClose);
   footer.append(btnGroup);
 
   // -- helpers -----------------------------------------------------------

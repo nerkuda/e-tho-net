@@ -13,10 +13,11 @@
 import { disconnect, openNetwork } from '../app.js';
 import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import type { NetworkListItem } from '@etn/shared';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
@@ -35,9 +36,24 @@ export function buildNetworks(): HTMLElement {
   header.style.marginBottom = '12px';
   const title = el('h1', 'networks-title', 'Мыслесети');
   title.style.flex = '1';
-  const createButton = button('Создать сеть', () => void showCreateNetworkDialog(), 'btn primary');
-  const aboutButton = button('О программе', () => showAboutDialog(), 'btn');
-  const logoutButton = button('Отключиться', () => void confirmDisconnect(), 'btn');
+  const createButton = uiButton({
+    label: 'Создать сеть',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void showCreateNetworkDialog(),
+  });
+  const aboutButton = uiButton({
+    label: 'О программе',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => showAboutDialog(),
+  });
+  const logoutButton = uiButton({
+    label: 'Отключиться',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => void confirmDisconnect(),
+  });
   header.append(title, createButton, aboutButton, logoutButton);
   card.append(header);
 

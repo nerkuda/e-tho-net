@@ -87,7 +87,7 @@ import {
   raiseOpenDialog,
   showDialog,
 } from '../lib/dialog.js';
-import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { showLinkStyleDialog } from '../editor/style-dialog.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
@@ -117,6 +117,7 @@ import {
 } from '../lib/type-definitions.js';
 import { buildEntityCombo, normalizeParentTypeId, pickEntitiesModal } from '../lib/entity-picker.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
+import { uiButton } from '../lib/ui/button.js';
 import {
   buildPropertyList,
   buildPropertyListRows,
@@ -1195,7 +1196,12 @@ export function openPropertyManagerEditor(
         draft.parentLinkTypeId = id;
       },
     });
-    const styleBtn = button('Оформление…', () => openLinkStyle(), 'btn small');
+    const styleBtn = uiButton({
+      label: 'Оформление…',
+      role: 'secondary',
+      size: 's',
+      onClick: () => openLinkStyle(),
+    });
     parentRow.append(parentCombo.root, styleBtn);
     linkBodyHost.append(field('Родительский тип связи', parentRow));
 
@@ -1356,7 +1362,13 @@ export function openPropertyManagerEditor(
 
       // Удалить строку
       const actionCell = el('td');
-      const rm = button('✕', () => removeRow(row), 'btn small', 'Снять привязку');
+      const rm = uiButton({
+        label: '✕',
+        role: 'secondary',
+        size: 's',
+        title: 'Снять привязку',
+        onClick: () => removeRow(row),
+      });
       actionCell.append(rm);
       tr.append(actionCell);
       return tr;
@@ -1415,7 +1427,13 @@ export function openPropertyManagerEditor(
     }
 
     host.append(
-      button('Добавить тип', () => void addRow(), 'btn small', 'Добавить привязку свойства к типу мысли'),
+      uiButton({
+        label: 'Добавить тип',
+        role: 'secondary',
+        size: 's',
+        title: 'Добавить привязку свойства к типу мысли',
+        onClick: () => void addRow(),
+      }),
     );
 
     renderTable();
@@ -2301,7 +2319,13 @@ function buildUsagePanel(
       const tr = el('tr');
       const nameCell = el('td');
       nameCell.style.whiteSpace = 'nowrap';
-      const link = button(b.owner_name, () => openTypeEditorByUsage(b), 'btn small link-btn', 'Открыть тип');
+      const link = uiButton({
+        label: b.owner_name,
+        size: 's',
+        class: 'link-btn',
+        title: 'Открыть тип',
+        onClick: () => openTypeEditorByUsage(b),
+      });
       nameCell.append(link);
       const countCell = el('td', 'muted', String(b.values_in_type_count));
       countCell.style.textAlign = 'right';
@@ -2401,7 +2425,13 @@ export function showLinkTypesTreeDialog(): void {
   toolbar.append(
     // «Добавить» создаёт свойство-связь. `value_type` пользователь выбирает
     // в форме; пары `name_forward`/`name_reverse` заполняет там же.
-    button('Добавить', () => openPropertyManagerEditor(null, onChanged), 'btn small', 'Создать свойство-связь'),
+    uiButton({
+      label: 'Добавить',
+      role: 'secondary',
+      size: 's',
+      title: 'Создать свойство-связь',
+      onClick: () => openPropertyManagerEditor(null, onChanged),
+    }),
     searchInput,
   );
   body.append(toolbar, tableWrap, errorLine);
@@ -2595,7 +2625,13 @@ function treeToggle(
   onToggle: () => void,
   forceOpen = false,
 ): HTMLElement {
-  const btn = button('', onToggle, 'btn small type-tree-toggle', row.hasChildren ? 'Развернуть/свернуть' : '');
+  const btn = uiButton({
+    label: '',
+    size: 's',
+    class: 'type-tree-toggle',
+    title: row.hasChildren ? 'Развернуть/свернуть' : '',
+    onClick: onToggle,
+  });
   btn.textContent = row.hasChildren ? (forceOpen || expanded.has(row.type.id) ? '▾' : '▸') : '';
   btn.disabled = !row.hasChildren || forceOpen;
   return btn;

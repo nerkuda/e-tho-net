@@ -45,6 +45,7 @@ import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
 import { mountPicker } from './tabs/picker.js';
 import { mountTabStrip } from './tabs/tabs.js';
+import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -129,55 +130,55 @@ export function buildWorkspace(): HTMLElement {
   // Network menu (Q3-bugfix, 08-ui-spec.md §8.1): sits in the toolbar to the
   // left of the view switcher. The label is fixed ("Мыслесеть") — the active
   // tab is the source of truth for the current network's name.
-  const netMenuButton = el('button', 'tb-btn', '');
-  netMenuButton.type = 'button';
+  const netMenuButton = uiButton({ role: 'ghost', title: 'Меню мыслесети' });
   netMenuButton.append(
     svgIcon('network'),
     span('Мыслесеть', 'tb-label'),
     svgIcon('chevron-down', 12),
   );
-  setTooltip(netMenuButton, 'Меню мыслесети');
 
   // Layer menu (S11, 08-ui-spec.md §8.2): right after «Мыслесеть». The label
   // is the session's current layer title — «Основа» by default — which makes
   // the menu itself the constant «where am I» indicator (§10.3).
-  const layerMenuButton = el('button', 'tb-btn', '');
-  layerMenuButton.type = 'button';
+  const layerMenuButton = uiButton({ role: 'ghost', title: 'Слои изменений' });
   const layerMenuLabel = span('Основа', 'tb-label');
   layerMenuButton.append(
     svgIcon('layers'),
     layerMenuLabel,
     svgIcon('chevron-down', 12),
   );
-  setTooltip(layerMenuButton, 'Слои изменений');
 
   // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
   // menu. The pressed button marks the active view.
-  const mapViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  mapViewButton.type = 'button';
-  mapViewButton.append(svgIcon('mindmap'));
-  setTooltip(mapViewButton, 'Карта мыслей');
-  mapViewButton.addEventListener('click', () => setActiveView('map'));
+  const mapViewButton = iconButton({
+    icon: svgIcon('mindmap'),
+    title: 'Карта мыслей',
+    role: 'ghost',
+    onClick: () => setActiveView('map'),
+  });
 
-  const structuresViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  structuresViewButton.type = 'button';
-  structuresViewButton.append(svgIcon('tree'));
-  setTooltip(structuresViewButton, 'Структуры мыслей');
-  structuresViewButton.addEventListener('click', () => setActiveView('structures'));
+  const structuresViewButton = iconButton({
+    icon: svgIcon('tree'),
+    title: 'Структуры мыслей',
+    role: 'ghost',
+    onClick: () => setActiveView('structures'),
+  });
 
-  const chronicleViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  chronicleViewButton.type = 'button';
-  chronicleViewButton.append(svgIcon('history'));
-  setTooltip(chronicleViewButton, 'Хроника');
-  chronicleViewButton.addEventListener('click', () => setActiveView('chronicle'));
+  const chronicleViewButton = iconButton({
+    icon: svgIcon('history'),
+    title: 'Хроника',
+    role: 'ghost',
+    onClick: () => setActiveView('chronicle'),
+  });
 
   // Activity-feed view button (задача f27809d0 «События»): fourth view
   // showing the network's `activity_log` (lenta from `GET /activity`).
-  const activityViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  activityViewButton.type = 'button';
-  activityViewButton.append(svgIcon('activity'));
-  setTooltip(activityViewButton, 'События');
-  activityViewButton.addEventListener('click', () => setActiveView('activity'));
+  const activityViewButton = iconButton({
+    icon: svgIcon('activity'),
+    title: 'События',
+    role: 'ghost',
+    onClick: () => setActiveView('activity'),
+  });
 
   // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
   // switcher, visible in both views.
@@ -196,19 +197,14 @@ export function buildWorkspace(): HTMLElement {
   const searchRow = div('search-row');
   searchRow.append(searchInput);
 
-  const userMenuButton = el('button', 'tb-btn', '');
-  userMenuButton.type = 'button';
+  const userMenuButton = uiButton({ role: 'ghost', title: 'Меню пользователя' });
   const userMenuLabel = span('—', 'tb-label');
   userMenuButton.append(svgIcon('user'), userMenuLabel, svgIcon('chevron-down', 12));
-  setTooltip(userMenuButton, 'Меню пользователя');
 
   // Workspace-layout commands menu (replaces the duplicated status dot — the
   // connection indicator lives in the status bar). First command toggles the
   // editor panel, which is otherwise unreachable once hidden.
-  const viewMenuButton = el('button', 'tb-btn tb-icon', '');
-  viewMenuButton.type = 'button';
-  viewMenuButton.append(svgIcon('menu'));
-  setTooltip(viewMenuButton, 'Вид');
+  const viewMenuButton = iconButton({ icon: svgIcon('menu'), title: 'Вид', role: 'ghost' });
 
   // The pinned panel (L18) stretches across the whole free toolbar width —
   // it is one big drop target between the view switcher and the user menu.
@@ -407,10 +403,10 @@ export function buildWorkspace(): HTMLElement {
     const structuresActive = st.activeView === 'structures';
     const chronicleActive = st.activeView === 'chronicle';
     const activityActive = st.activeView === 'activity';
-    mapViewButton.classList.toggle('active', mapActive);
-    structuresViewButton.classList.toggle('active', structuresActive);
-    chronicleViewButton.classList.toggle('active', chronicleActive);
-    activityViewButton.classList.toggle('active', activityActive);
+    setButtonActive(mapViewButton, mapActive);
+    setButtonActive(structuresViewButton, structuresActive);
+    setButtonActive(chronicleViewButton, chronicleActive);
+    setButtonActive(activityViewButton, activityActive);
     canvasHost.classList.toggle('hidden', !mapActive);
     structuresHost.classList.toggle('hidden', !structuresActive);
     chronicleHost.classList.toggle('hidden', !chronicleActive);
@@ -434,8 +430,7 @@ export function buildWorkspace(): HTMLElement {
  * whenever the active tab becomes inaccessible (Q5, 08-ui-spec.md §1.1).
  */
 function mountInaccessiblePlaceholder(host: HTMLElement): void {
-  const closeBtn = el('button', 'btn primary', 'Закрыть таб') as HTMLButtonElement;
-  closeBtn.type = 'button';
+  const closeBtn = uiButton({ label: 'Закрыть таб', role: 'primary' });
   closeBtn.addEventListener('click', () => {
     const id = store.state.activeTabId;
     if (id === null) return;

@@ -244,61 +244,9 @@ textarea {
   font-size: 13px;
 }
 
-.btn {
-  padding: 6px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn:hover {
-  background: var(--surface-2);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.btn.primary:hover {
-  background: var(--accent-strong);
-}
-
-.btn.danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
-.btn.danger:hover {
-  background: var(--danger-soft);
-}
-
-/* «Записать»-подобная кнопка в заглушках несохранённого типа (задача
- * e7352642): зелёный фон, белая надпись — должна привлекать внимание. */
-.btn.success {
-  background: var(--ok);
-  border-color: var(--ok);
-  color: #fff;
-}
-
-.btn.success:hover {
-  background: color-mix(in srgb, var(--ok) 88%, #000);
-  border-color: color-mix(in srgb, var(--ok) 88%, #000);
-}
-
-.btn.small {
-  padding: 2px 8px;
-  font-size: 12px;
-}
-
+/* Кнопки-действия переехали в словарь `lib/ui` — стили ролей, плотностей
+   и состояний лежат в `lib/ui/button.css` (задача 56f1dcb2). Здесь остаётся
+   только прикладной модификатор ссылки-кнопки. */
 .link-btn {
   color: var(--accent);
   cursor: pointer;
@@ -545,23 +493,6 @@ textarea {
   padding: 0 10px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-}
-
-.tb-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-}
-
-.tb-btn:hover {
-  background: var(--surface-2);
-}
-
-.tb-btn.tb-icon {
-  padding: 5px 8px;
 }
 
 .tb-label {
@@ -1577,9 +1508,9 @@ body.resizing-h {
 }
 
 .canvas-filter-strip-btn {
-  /* Reuse the toolbar button palette (.tb-btn) for consistent hover/active
-   * states across the app; the strip is the only canvas element that
-   * carries that palette. */
+  /* Опирается на тон ghost-роли словаря кнопок (`lib/ui/button.css`) для
+   * единых hover/active-состояний; полоса — единственный элемент холста,
+   * который его несёт. */
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2976,26 +2907,6 @@ body.cloud-dragging * {
   margin-bottom: 10px;
 }
 
-.icon-btn {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0;
-}
-
-.icon-btn:hover {
-  border-color: var(--accent);
-}
-
 /* Settings dialog (08-ui-spec.md §6.9). */
 .style-colors {
   display: flex;
@@ -4329,12 +4240,6 @@ body.cloud-dragging * {
  * Structures view (L15, 08-ui-spec.md §15)
  * ------------------------------------------------------------------------- */
 
-/* Toolbar view-switcher segment: the pressed button marks the active view. */
-.tb-btn.view-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 .structures {
   flex: 1;
   min-width: 0;
@@ -4729,7 +4634,7 @@ body.cloud-dragging * {
 
 /* Команда-иконка в строке поиска — по высоте поля поиска, а не общей
  * кнопки-иконки 30px. */
-.st-f-searchbar .icon-btn {
+.st-f-searchbar .ui-btn.ui-btn--icon {
   width: 26px;
   height: 26px;
 }
@@ -5102,23 +5007,14 @@ body.cloud-dragging * {
   min-width: 0;
 }
 
-.sfb-btn {
+/* Иконочные кнопки панели сохранённых отборов — поверх словаря
+   (задача 56f1dcb2): тон текста и акцент при наведении. */
+.sfb-row .ui-btn--icon {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
   color: var(--text-dim);
-  cursor: pointer;
 }
 
-.sfb-btn:hover {
-  background: var(--surface-2);
+.sfb-row .ui-btn--icon:hover {
   color: var(--accent);
 }
 
@@ -5513,17 +5409,6 @@ body.cloud-dragging * {
   flex: 1;
 }
 
-.dialog-close {
-  font-size: 16px;
-  color: var(--text-dim);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-}
-
-.dialog-close:hover {
-  background: var(--surface-2);
-}
-
 .dialog-body {
   padding: 14px;
   overflow-y: auto;
@@ -5554,37 +5439,6 @@ body.cloud-dragging * {
   min-width: 0;
   margin-right: 12px;
   text-align: left;
-}
-
-.dialog-btn {
-  padding: 6px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  cursor: pointer;
-}
-
-.dialog-btn:hover {
-  background: var(--surface-2);
-}
-
-.dialog-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.dialog-btn.primary:hover {
-  background: var(--accent-strong);
-}
-
-.dialog-btn.danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
-.dialog-btn.danger:hover {
-  background: var(--danger-soft);
 }
 
 .dialog-text {
@@ -5865,7 +5719,7 @@ body.cloud-dragging * {
   border-left: 1px solid var(--border);
 }
 
-.trash-act {
+button.ui-btn--icon.trash-act {
   width: 26px;
   height: 26px;
 }
@@ -6140,7 +5994,7 @@ body.cloud-dragging * {
   flex: 0 0 auto;
 }
 
-.settings-footer-buttons .dialog-btn:disabled {
+.settings-footer-buttons .ui-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -6503,7 +6357,7 @@ body.cloud-dragging * {
 }
 
 /* L21: type trees in the type-manager dialogs and filter lists. */
-.type-tree-toggle {
+button.type-tree-toggle {
   min-width: 20px;
   padding: 0 4px;
   color: var(--muted, #8a93a5);
@@ -6712,7 +6566,7 @@ body.cloud-dragging * {
 /* «…» — диалог выбора единственного значения (как угловая кнопка поля
  * значения свойства-связи): компактная, в правом углу поля, ширину не
  * отъедает. */
-.entity-combo-pick {
+button.entity-combo-pick {
   position: absolute;
   right: 4px;
   top: 50%;
@@ -6731,12 +6585,12 @@ body.cloud-dragging * {
   cursor: pointer;
 }
 
-.entity-combo-pick:hover {
+button.entity-combo-pick:hover {
   background: rgba(127, 127, 127, 0.18);
   color: var(--text);
 }
 
-.entity-combo-pick:disabled {
+button.entity-combo-pick:disabled {
   opacity: 0.35;
   cursor: default;
 }
@@ -6904,13 +6758,11 @@ body.cloud-dragging * {
   min-width: 0;
 }
 
-.icon-btn:disabled,
 .editor-icon-box:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.icon-btn:disabled:hover,
 .editor-icon-box:disabled:hover {
   border-color: var(--border-strong);
 }
@@ -6922,11 +6774,8 @@ body.cloud-dragging * {
 /* Gentle colour transitions for hover/active states of interactive elements.
  * Transform is deliberately NOT transitioned: cloud transforms belong to the
  * FLIP focus choreography (§2.8), and hover shifts would fight it. */
-.btn,
-.tb-btn,
+.ui-btn,
 .menu-item,
-.dialog-btn,
-.dialog-close,
 .history-cloud,
 .history-more,
 .editor-tab,
@@ -6941,7 +6790,6 @@ body.cloud-dragging * {
 .attachment-item,
 .mention-item,
 .type-combo-item,
-.icon-btn,
 .font-toggle,
 .editor-icon-box,
 .row-splitter,
@@ -6955,11 +6803,8 @@ body.cloud-dragging * {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .btn,
-  .tb-btn,
+  .ui-btn,
   .menu-item,
-  .dialog-btn,
-  .dialog-close,
   .history-cloud,
   .history-more,
   .editor-tab,
@@ -6974,7 +6819,6 @@ body.cloud-dragging * {
   .attachment-item,
   .mention-item,
   .type-combo-item,
-  .icon-btn,
   .font-toggle,
   .editor-icon-box,
   .row-splitter,
@@ -8024,7 +7868,7 @@ table.activity-table thead th {
 /* Кнопки перестановки отборов внутри вкладки «Отборы». Тот же тон,
    что и в таблицах свойств, чтобы строки были визуально одного
    семейства. */
-.views-tab-table .btn.small {
+.views-tab-table .ui-btn--s {
   font-size: 12px;
 }
 
@@ -8074,12 +7918,12 @@ table.activity-table thead th {
   flex: 1 1 auto;
   min-width: 0;
 }
-.editor-top-row > .icon-btn {
+.editor-top-row > .ui-btn--icon {
   flex: 0 0 auto;
 }
 
 /* Подменю «Действия» в шапке */
-.editor-header-row .btn.small {
+.editor-header-row .ui-btn--s {
   flex: 0 0 auto;
 }
 

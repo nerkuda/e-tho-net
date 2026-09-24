@@ -20,10 +20,11 @@
  */
 
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
-import { button, div, el, setTooltip } from './dom.js';
+import { div, el } from './dom.js';
 import { svgIcon } from './icons.js';
 import { showMenuAt, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
+import { iconButton } from './ui/button.js';
 import {
   duplicateFilterName,
   filterSavedByName,
@@ -90,23 +91,27 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
   nameInput.addEventListener('input', () => opts.setName(nameInput.value));
   nameWrap.append(nameInput);
 
-  const saveBtn = button('', () => void save(), 'sfb-btn');
-  saveBtn.type = 'button';
-  saveBtn.append(svgIcon('save', 15));
-  setTooltip(saveBtn, 'Записать настройки отбора');
-  saveBtn.setAttribute('aria-label', 'Записать настройки отбора');
+  const saveBtn = iconButton({
+    icon: svgIcon('save', 15),
+    title: 'Записать настройки отбора',
+    size: 's',
+    onClick: () => void save(),
+  });
 
-  const deleteBtn = button('', () => void removeCurrent(), 'sfb-btn');
-  deleteBtn.type = 'button';
-  deleteBtn.append(svgIcon('x', 15));
-  setTooltip(deleteBtn, 'Удалить настройки отбора');
-  deleteBtn.setAttribute('aria-label', 'Удалить настройки отбора');
+  const deleteBtn = iconButton({
+    icon: svgIcon('x', 15),
+    title: 'Удалить настройки отбора',
+    size: 's',
+    onClick: () => void removeCurrent(),
+  });
 
-  const moreBtn = el('button', 'sfb-btn sfb-more', '…') as HTMLButtonElement;
-  moreBtn.type = 'button';
-  setTooltip(moreBtn, 'Выбрать сохранённый отбор');
-  moreBtn.setAttribute('aria-label', 'Выбрать сохранённый отбор');
-  moreBtn.addEventListener('click', () => openPicker());
+  const moreBtn = iconButton({
+    icon: el('span', undefined, '…'),
+    title: 'Выбрать сохранённый отбор',
+    size: 's',
+    class: 'sfb-more',
+    onClick: () => openPicker(),
+  });
 
   root.append(nameWrap, saveBtn, deleteBtn, moreBtn);
 

@@ -41,6 +41,7 @@ import { store } from '../state.js';
 import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
 import { openThoughtDeleteDialog, openThoughtGroupDeleteDialog } from '../trash.js';
 import { THOUGHT_RESOLVE_MAX_IDS, type ExportEtnxOptions, type ExportFormat, type ExportRequest } from '@etn/shared';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
@@ -53,7 +54,13 @@ export function mountSelection(selectionHost: HTMLElement): void {
 
   const header = div('selection-header');
   const title = span('Выделение', 'selection-title');
-  const clearButton = button('✕', () => clearSelection(), 'btn small', 'Очистить список');
+  const clearButton = uiButton({
+    label: '✕',
+    role: 'secondary',
+    size: 's',
+    title: 'Очистить список',
+    onClick: () => clearSelection(),
+  });
   header.append(title, clearButton);
   const menuBar = div('selection-menu');
   const menus: Array<[string, () => MenuItem[]]> = [
@@ -166,7 +173,13 @@ async function renderList(ids: string[]): Promise<void> {
     // Stage 3: no per-indicator icons in the selection list — Ctrl+hover on
     // the row shows the thought's permanent comment.
     markThoughtCommentPreview(item, id, ref?.title ?? id);
-    const removeBtn = button('✕', () => toggleSelection([id]), 'btn small', 'Убрать из выделения');
+    const removeBtn = uiButton({
+      label: '✕',
+      role: 'secondary',
+      size: 's',
+      title: 'Убрать из выделения',
+      onClick: () => toggleSelection([id]),
+    });
     // Keep the row click (focus) from firing alongside the removal.
     removeBtn.addEventListener('click', (event) => event.stopPropagation());
     item.append(removeBtn);

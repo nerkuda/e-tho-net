@@ -20,12 +20,13 @@
  *  └──────────────────────────────────────────────────────┘
  */
 import { openNetwork } from '../../app.js';
-import { button, div, el, errText, span } from '../../lib/dom.js';
+import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { NetworkListItem } from '@etn/shared';
 import { upsertTab } from './tab-state.js';
 import { refreshTabAccessibility } from './tab-accessibility.js';
+import { uiButton } from '../../lib/ui/button.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
@@ -47,8 +48,18 @@ export function mountPicker(host: HTMLElement): void {
   const title = el('h1', 'picker-title', 'Открыть сеть');
   const subtitle = el('p', 'picker-sub muted', 'Выберите сеть или создайте новую. Закрыть — любой другой таб.');
 
-  const createButton = button('+ Создать сеть', () => void showCreateDialog(), 'btn primary');
-  const cancelButton = button('Отмена', () => closePicker(), 'btn');
+  const createButton = uiButton({
+    label: '+ Создать сеть',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void showCreateDialog(),
+  });
+  const cancelButton = uiButton({
+    label: 'Отмена',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => closePicker(),
+  });
   const actions = div('picker-actions');
   actions.append(createButton, cancelButton);
 

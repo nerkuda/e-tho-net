@@ -5,9 +5,9 @@
  * и отборов недоступно — «Типы источников»/«Типы назначений» для нового
  * свойства не настроить, потому что создаваемого типа ещё нет в списках.
  *
- * Заметная зелёная кнопка «Сохранить» (класс `btn success`, палитра
- * `var(--ok)`) вызывает переданный колбэк — ту же команду, что у кнопки
- * «Записать» в футере диалога (`apply('stay', …)`): пишет накопленный
+ * Заметная кнопка «Сохранить» (роль `primary` словаря `lib/ui`, задачи
+ * 56f1dcb2 / e7352642) вызывает переданный колбэк — ту же команду, что у
+ * кнопки «Записать» в футере диалога (`apply('stay', …)`): пишет накопленный
  * черновик на сервер без закрытия диалога, после чего обе вкладки
  * оживают (`getTypeId()` начинает возвращать id, перерисовка через
  * `render()` / `refresh()`).
@@ -17,7 +17,8 @@
  * кнопки быть не должно.
  */
 
-import { button, div, el } from './dom.js';
+import { div, el } from './dom.js';
+import { uiButton } from './ui/button.js';
 
 export interface NewTypeHintOpts {
   /** Подсказка под кнопкой: разная на «Свойствах» и «Отборах». */
@@ -32,12 +33,13 @@ export function renderNewTypeHint(opts: NewTypeHintOpts): HTMLElement {
   wrap.append(el('p', 'muted new-type-hint-text', opts.message));
   if (opts.onSave !== undefined) {
     wrap.append(
-      button(
-        'Сохранить',
-        () => opts.onSave?.(),
-        'btn success',
-        'Записать тип и не закрывать диалог',
-      ),
+      uiButton({
+        label: 'Сохранить',
+        role: 'primary',
+        size: 'm',
+        title: 'Записать тип и не закрывать диалог',
+        onClick: () => opts.onSave?.(),
+      }),
     );
   }
   return wrap;

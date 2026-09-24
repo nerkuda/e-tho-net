@@ -78,6 +78,7 @@ import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
 import { openWikiIdTarget } from './wiki-link.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { uiButton } from '../lib/ui/button.js';
 
 // ---------------------------------------------------------------------------
 // Публичный API
@@ -945,7 +946,13 @@ function buildMultiTextChipsEditor(opts: {
       });
       // Угловая каретка — полный список вариантов (handle.open игнорирует when).
       if (kind === 'text') {
-        const caret = button('▾', () => handle?.open(), 'btn small', 'Выбрать значение из списка');
+        const caret = uiButton({
+          label: '▾',
+          role: 'secondary',
+          size: 's',
+          title: 'Выбрать значение из списка',
+          onClick: () => handle?.open(),
+        });
         caret.style.marginLeft = '4px';
         root.append(caret);
       }
@@ -1069,12 +1076,23 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
     row.style.marginBottom = '0';
     row.append(
       wrapClearable(input, clearNow),
-      button('▾', () => handle?.open(), 'btn small', 'Выбрать значение из списка'),
+      uiButton({
+        label: '▾',
+        role: 'secondary',
+        size: 's',
+        title: 'Выбрать значение из списка',
+        onClick: () => handle?.open(),
+      }),
     );
     return row;
   }
   if (kind === 'url') {
-    const openBtn = button('Открыть', () => void openUrlExternally(input.value), 'btn small');
+    const openBtn = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void openUrlExternally(input.value),
+    });
     const syncOpenBtn = (): void => {
       openBtn.disabled = input.value.trim() === '';
     };

@@ -25,8 +25,9 @@ import type { SystemLoggingStatus } from '@etn/shared';
 
 import type { ClientLogState, DeleteLogsResult } from '../../main/ipc/contract.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /**
  * Confirmation seam: unit tests substitute their own resolver, the dialog
@@ -92,14 +93,21 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     fileCode.title = filePath;
 
     const btnRow = div('form-row');
-    const btnOpen = button('Открыть', () => void openClientJournal(), 'btn small', 'Открыть файл журнала');
+    const btnOpen = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      title: 'Открыть файл журнала',
+      onClick: () => void openClientJournal(),
+    });
     btnOpen.disabled = clientState === null;
-    const btnDelete = button(
-      'Удалить',
-      () => void deleteClientJournals(),
-      'btn small danger',
-      'Удалить все файлы журнала клиента',
-    );
+    const btnDelete = uiButton({
+      label: 'Удалить',
+      role: 'danger',
+      size: 's',
+      title: 'Удалить все файлы журнала клиента',
+      onClick: () => void deleteClientJournals(),
+    });
     btnDelete.disabled = clientState === null;
     btnRow.append(btnOpen, btnDelete);
 
@@ -236,26 +244,29 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     }
 
     const btnRow = div('form-row');
-    const btnDownload = button(
-      'Скачать…',
-      () => void downloadServerJournal(),
-      'btn small',
-      'Скачать файл журнала сервера',
-    );
+    const btnDownload = uiButton({
+      label: 'Скачать…',
+      role: 'secondary',
+      size: 's',
+      title: 'Скачать файл журнала сервера',
+      onClick: () => void downloadServerJournal(),
+    });
     btnDownload.disabled = status === null;
-    const btnOpen = button(
-      'Открыть',
-      () => void openServerJournal(),
-      'btn small',
-      'Открыть текущий файл журнала сервера',
-    );
+    const btnOpen = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      title: 'Открыть текущий файл журнала сервера',
+      onClick: () => void openServerJournal(),
+    });
     btnOpen.disabled = status === null;
-    const btnDelete = button(
-      'Удалить',
-      () => void deleteServerJournals(),
-      'btn small danger',
-      'Удалить все файлы журнала сервера',
-    );
+    const btnDelete = uiButton({
+      label: 'Удалить',
+      role: 'danger',
+      size: 's',
+      title: 'Удалить все файлы журнала сервера',
+      onClick: () => void deleteServerJournals(),
+    });
     btnDelete.disabled = status === null;
     btnRow.append(btnDownload, btnOpen, btnDelete);
 

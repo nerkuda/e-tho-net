@@ -30,7 +30,7 @@ import type { ThoughtTypeView } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
-import { button, div, el, errText, span } from '../../lib/dom.js';
+import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
@@ -38,6 +38,7 @@ import { onRealtimeEvent } from '../../realtime.js';
 
 import { openViewEditorDialog } from './filter-dialog.js';
 import { renderNewTypeHint } from '../../lib/type-editor-hints.js';
+import { uiButton } from '../../lib/ui/button.js';
 import {
   applyViewUpdates,
   ownViewsOf,
@@ -96,7 +97,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     'Отборы — публикуют кнопки полосы под мыслью в фокусе',
   );
   headerLabel.style.flex = '1';
-  const addBtn = button('+ отбор', () => void onAdd(), 'btn small', 'Создать отбор');
+  const addBtn = uiButton({
+    label: '+ отбор',
+    role: 'secondary',
+    size: 's',
+    title: 'Создать отбор',
+    onClick: () => void onAdd(),
+  });
   headerRow.append(headerLabel, addBtn);
   const tableWrap = div('admin-table-wrap views-tab-table-wrap');
   const errorLine = span('', 'error-text');
@@ -278,30 +285,39 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
 
     // Кнопки: порядок, «по умолчанию» и удаление — эмодзи.
     const actions = el('td', 'views-tab-actions');
-    const upBtn = button(
-      '▲',
-      () => void onMove(view, idx, idx - 1, sorted),
-      'btn small',
-      idx === 0 ? 'Уже первый — выше некуда' : 'Выше',
-    );
+    const upBtn = uiButton({
+      label: '▲',
+      role: 'secondary',
+      size: 's',
+      title: idx === 0 ? 'Уже первый — выше некуда' : 'Выше',
+      onClick: () => void onMove(view, idx, idx - 1, sorted),
+    });
     if (idx === 0) upBtn.disabled = true;
-    const downBtn = button(
-      '▼',
-      () => void onMove(view, idx, idx + 1, sorted),
-      'btn small',
-      idx === sorted.length - 1 ? 'Уже последний — ниже некуда' : 'Ниже',
-    );
+    const downBtn = uiButton({
+      label: '▼',
+      role: 'secondary',
+      size: 's',
+      title: idx === sorted.length - 1 ? 'Уже последний — ниже некуда' : 'Ниже',
+      onClick: () => void onMove(view, idx, idx + 1, sorted),
+    });
     if (idx === sorted.length - 1) downBtn.disabled = true;
     actions.append(
       upBtn,
       downBtn,
-      button(
-        view.is_default ? '☆' : '⭐',
-        () => (view.is_default ? void onClearDefault(view) : void onSetDefault(view)),
-        'btn small',
-        view.is_default ? 'Снять признак «по умолчанию»' : 'Сделать отбором по умолчанию',
-      ),
-      button('🗑️', () => void onDelete(view), 'btn small', 'Удалить отбор'),
+      uiButton({
+        label: view.is_default ? '☆' : '⭐',
+        role: 'secondary',
+        size: 's',
+        title: view.is_default ? 'Снять признак «по умолчанию»' : 'Сделать отбором по умолчанию',
+        onClick: () => (view.is_default ? void onClearDefault(view) : void onSetDefault(view)),
+      }),
+      uiButton({
+        label: '🗑️',
+        role: 'secondary',
+        size: 's',
+        title: 'Удалить отбор',
+        onClick: () => void onDelete(view),
+      }),
     );
     tr.append(actions);
 

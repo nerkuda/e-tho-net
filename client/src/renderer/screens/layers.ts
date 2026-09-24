@@ -21,7 +21,7 @@ import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerDiffResult, type
 import { etn } from '../lib/etn.js';
 import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, span } from '../lib/dom.js';
+import { div, el, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
 import {
   defaultLayerColors,

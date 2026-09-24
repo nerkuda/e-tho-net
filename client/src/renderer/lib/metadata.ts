@@ -19,6 +19,7 @@
 import { button, div, el, setTooltip, span } from './dom.js';
 import { notice } from './notice.js';
 import { ensureLoaded, resolve, subscribe } from './users.js';
+import { uiButton } from './ui/button.js';
 
 /** Plain record of authorship fields used by the block. */
 export interface MetadataFields {
@@ -81,17 +82,18 @@ function buildIdRow(id: string | null): HTMLElement {
       sel.addRange(range);
     }
   });
-  const copyBtn = button(
-    'Копировать',
-    () => {
+  const copyBtn = uiButton({
+    label: 'Копировать',
+    role: 'secondary',
+    size: 's',
+    title: 'Скопировать ID в буфер обмена',
+    onClick: () => {
       void navigator.clipboard.writeText(id).then(
         () => notice('ID скопирован.'),
         () => notice('Не удалось скопировать ID.', 'error'),
       );
     },
-    'btn small',
-    'Скопировать ID в буфер обмена',
-  );
+  });
   row.append(label, value, copyBtn);
   return row;
 }

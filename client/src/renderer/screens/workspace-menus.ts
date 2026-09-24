@@ -39,6 +39,7 @@ import { showThoughtTypesDialog } from './type-manager.js';
 import { showLinkTypesTreeDialog, showPropertyManagerDialog } from './property-manager.js';
 import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Wires the toolbar network menu button. */
 export function wireNetMenu(handles: WorkspaceHandles): void {
@@ -263,9 +264,11 @@ async function membersDialog(): Promise<void> {
   }
   addRow.append(
     addInput,
-    button(
-      'Добавить',
-      () => {
+    uiButton({
+      label: 'Добавить',
+      role: 'secondary',
+      size: 's',
+      onClick: () => {
         void (async () => {
           try {
             await etn.networks.addMember(networkId, addInput.value.trim());
@@ -276,8 +279,7 @@ async function membersDialog(): Promise<void> {
           }
         })();
       },
-      'btn small',
-    ),
+    }),
   );
   body.append(addRow);
 

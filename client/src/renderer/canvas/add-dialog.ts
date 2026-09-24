@@ -35,7 +35,7 @@ import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 // Строки кандидатов-дублей рисует общая фабрика облачка мысли.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
@@ -56,6 +56,7 @@ import {
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
 export type ThoughtPickItem =
@@ -796,15 +797,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       const head = div('add-list-head');
       head.append(span(`Выбрано: ${lines.length}`, 'muted'));
       head.append(
-        button(
-          'Очистить',
-          () => {
+        uiButton({
+          label: 'Очистить',
+          role: 'secondary',
+          size: 's',
+          title: 'Очистить список',
+          onClick: () => {
             lines.length = 0;
             renderLines();
           },
-          'btn small',
-          'Очистить список',
-        ),
+        }),
       );
       lineList.append(head);
       lines.forEach((line, index) => {
@@ -818,15 +820,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         title.title = line.raw;
         row.append(status, title);
         row.append(
-          button(
-            '×',
-            () => {
+          uiButton({
+            label: '×',
+            role: 'secondary',
+            size: 's',
+            title: 'Удалить строку',
+            onClick: () => {
               lines.splice(index, 1);
               renderLines();
             },
-            'btn small',
-            'Удалить строку',
-          ),
+          }),
         );
         lineList.append(row);
       });

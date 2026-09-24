@@ -75,7 +75,7 @@ describe('строка сохранённых отборов (задача 2ebe4
     assert.match(bar, /placeholder = 'имя отбора'/, 'поле имени отбора');
     assert.match(bar, /svgIcon\('save', 15\)/, 'кнопка-дискета «записать настройки отбора»');
     assert.match(bar, /svgIcon\('x', 15\)/, 'кнопка-крестик «удалить настройки отбора»');
-    assert.match(bar, /el\('button', 'sfb-btn sfb-more', '…'\)/, 'кнопка с многоточием «выбрать отбор»');
+    assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка с многоточием «выбрать отбор»');
     assert.match(bar, /root\.append\(nameWrap, saveBtn, deleteBtn, moreBtn\)/, 'порядок элементов строки');
     const icons = readText(ICONS_TS);
     assert.match(icons, /\n  save:/, 'иконка дискеты объявлена в общем наборе иконок');
@@ -116,7 +116,7 @@ describe('строка сохранённых отборов (задача 2ebe4
 describe('диалог выбора сохранённого отбора (задача 2ebe4206)', () => {
   it('открывается кнопкой «…», вверху — поиск по именам', () => {
     const bar = readText(BAR_TS);
-    assert.match(bar, /moreBtn\.addEventListener\('click', \(\) => openPicker\(\)\)/, 'кнопка «…» открывает диалог');
+    assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка «…» открывает диалог');
     assert.match(bar, /title: 'Сохранённые отборы'/, 'диалог подписан');
     assert.match(bar, /search\.placeholder = 'Поиск по имени…'/, 'строка поиска по именам — вверху списка');
     assert.match(bar, /body\.append\(search, list\)/, 'поиск стоит перед списком');

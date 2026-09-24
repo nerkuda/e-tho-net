@@ -262,8 +262,8 @@ describe('type-manager — вкладки несохранённого типа:
       'renderNewTypeHint не экспортирован из type-editor-hints.ts',
     );
     assert.ok(
-      helper.includes("'btn success'"),
-      'кнопка «Сохранить» в хелпере должна нести класс btn success',
+      helper.includes("role: 'primary'"),
+      'кнопка «Сохранить» в хелпере должна нести primary-роль словаря lib/ui',
     );
     assert.ok(
       helper.includes('Записать тип и не закрывать диалог'),
@@ -310,18 +310,20 @@ describe('type-manager — вкладки несохранённого типа:
     );
   });
 
-  it('CSS: у .btn.success зелёный фон var(--ok) и белый текст', () => {
+  it('CSS: primary-роль словаря залита акцентом и белым текстом', () => {
     const cssPath = resolve(
       import.meta.dirname,
       '..',
       'src',
       'renderer',
-      'styles.css',
+      'lib',
+      'ui',
+      'button.css',
     );
     const css = readFileSync(cssPath, 'utf8');
-    assert.ok(/\.btn\.success\s*\{/.test(css), '.btn.success не объявлен в styles.css');
-    assert.ok(/background:\s*var\(--ok\)/.test(css), '.btn.success должен иметь фон var(--ok)');
-    assert.ok(/color:\s*#fff/.test(css), '.btn.success должен иметь белый текст (#fff)');
+    assert.ok(/\.ui-btn--primary\s*\{/.test(css), '.ui-btn--primary не объявлен в lib/ui/button.css');
+    assert.ok(/background:\s*var\(--accent\)/.test(css), 'primary-роль должна иметь фон var(--accent)');
+    assert.ok(/color:\s*#fff/.test(css), 'primary-роль должна иметь белый текст (#fff)');
   });
 
   it('регрессия 74d9b4ed: ключ дедупликации нового типа не сломан', () => {
