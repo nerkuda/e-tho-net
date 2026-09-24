@@ -126,16 +126,19 @@ function keywordClauseFor(keywords: string | undefined): {
 /**
  * SQL-условие «корневая инструкция»: среди родителей мысли нет другой
  * инструкции (мысли того же поддерева типов роли `instructions`). Родительские
- * рёбра — структурные (нетипизированные). Живые родители: активные и не в
- * корзине. `placeholders` — заполнители под `instructionsTypeIds`; условие
- * использует их повторно, поэтому при связывании параметров набор типов
- * передаётся второй раз.
+ * рёбра — структурные (нетипизированные): только отсутствие типа (`type_id
+ * IS NULL`) делает мысль подчинённой, типизированная связь («см. также»)
+ * иерархию не образует (требование 825800fc, ошибка fa7df2c3). Живые родители:
+ * активные и не в корзине. `placeholders` — заполнители под
+ * `instructionsTypeIds`; условие использует их повторно, поэтому при связывании
+ * параметров набор типов передаётся второй раз.
  */
 function rootInstructionClause(placeholders: string): string {
   return (
     ' AND NOT EXISTS (' +
     'SELECT 1 FROM links_v l JOIN thoughts_v p ON p.id = l.source_id' +
     ' WHERE l.target_id = t.id AND l.active = 1 AND l.marked_for_deletion = 0' +
+    ' AND l.type_id IS NULL' +
     ` AND p.type_id IN (${placeholders})` +
     ' AND p.active = 1 AND p.marked_for_deletion = 0)'
   );
