@@ -77,6 +77,80 @@ export const ru = {
   'propertyList.structuralHint':
     'Системное свойство-связь для нетипизированных рёбер «Родители/Потомки». Не редактируется и не удаляется из этого диалога.',
 
+  // -- Экран «События» (activity.ts) --------------------------------------
+  /** ARIA-подпись ленты активности. */
+  'activity.aria': 'Лента событий',
+  'activity.col.time': 'Время',
+  'activity.col.author': 'Автор',
+  'activity.col.action': 'Действие',
+  'activity.col.entity': 'Сущность',
+  'activity.col.layer': 'Слой',
+  /** Пустое состояние ленты. */
+  'activity.empty': 'Событий нет.',
+  /** Метки действий журнала (код действия — английский). */
+  'activity.action.created': 'создал(а)',
+  'activity.action.updated': 'изменил(а)',
+  'activity.action.deleted': 'удалил(а)',
+  'activity.action.trashed': 'пометил(а) на удаление',
+  'activity.action.restored': 'восстановил(а)',
+  /** Метки типов сущностей (код — английский). */
+  'activity.entity.thought': 'мысль',
+  'activity.entity.link': 'связь',
+  'activity.entity.thought_type': 'тип мысли',
+  'activity.entity.link_type': 'тип связи',
+  'activity.entity.property': 'свойство',
+  'activity.entity.comment': 'комментарий',
+  'activity.entity.attachment': 'вложение',
+  'activity.entity.layer': 'слой',
+
+  // -- Корзина и групповое удаление (trash.ts) ----------------------------
+  /** ARIA-подпись таблицы корзины. */
+  'trash.aria': 'Корзина',
+  'trash.col.item': 'В корзине',
+  'trash.col.count': 'Ссылок',
+  'trash.col.actions': 'Действия',
+  /** Пустое состояние корзины. */
+  'trash.empty': 'Корзина пуста.',
+  /** ARIA-подпись таблицы группового удаления. */
+  'trash.group.aria': 'Групповое удаление',
+  'trash.group.col.thought': 'Мысль',
+  'trash.group.col.action': 'Действие',
+
+  // -- Сохранённые отборы (saved-filter-bar.ts) ---------------------------
+  /** ARIA-подпись диалога сохранённых отборов. */
+  'savedFilters.aria': 'Сохранённые отборы',
+  /** Заголовок диалога выбора сохранённого отбора. */
+  'savedFilters.title': 'Сохранённые отборы',
+  'savedFilters.col.name': 'Имя',
+  /** Пустое состояние: сохранённых отборов нет. */
+  'savedFilters.empty': 'Нет сохранённых отборов',
+  /** Пустое состояние при поиске без совпадений. */
+  'savedFilters.emptySearch': 'Ничего не найдено',
+  'savedFilters.menu.rename': 'Переименовать',
+  'savedFilters.menu.copy': 'Скопировать',
+
+  // -- Админ-панель (admin.ts) --------------------------------------------
+  'admin.users.aria': 'Участники (пользователи)',
+  'admin.networks.aria': 'Сети',
+  'admin.audit.aria': 'Журнал аудита',
+  'admin.col.user': 'Пользователь',
+  'admin.col.role': 'Роль',
+  'admin.col.status': 'Статус',
+  'admin.col.created': 'Создан',
+  'admin.col.createdF': 'Создана',
+  'admin.col.actions': 'Действия',
+  'admin.col.network': 'Сеть',
+  'admin.col.owner': 'Владелец',
+  'admin.col.time': 'Время',
+  'admin.col.who': 'Кто',
+  'admin.col.category': 'Категория',
+  'admin.col.action': 'Действие',
+  'admin.col.target': 'Цель',
+  'admin.role.admin': 'админ',
+  'admin.role.user': 'пользователь',
+  'admin.status.active': 'активен',
+  'admin.status.disabled': 'отключен',
+
   // -- Комментарий ---------------------------------------------------------
   /** Тело оболочки комментария, когда комментарий пуст. */
   'comment.empty': 'Комментарий пуст.',

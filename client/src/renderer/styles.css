@@ -5380,45 +5380,9 @@ body.cloud-dragging * {
   color: var(--text-dim);
 }
 
-.group-delete-table {
-  max-height: calc(var(--gd-row-h) * 10 + var(--gd-head-h));
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.group-delete-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  min-height: var(--gd-row-h);
-  border-bottom: 1px solid var(--border);
-}
-
-.group-delete-row:last-child {
-  border-bottom: none;
-}
-
-/* Шапка «Мысль | Действие» — прилипает к верху при прокрутке. */
-.group-delete-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  min-height: var(--gd-head-h);
-  background: var(--surface);
-  font-weight: 600;
-  color: var(--text-dim);
-}
-
-.group-delete-head-cloud {
-  padding: 4px 6px 4px 12px;
-}
-
-.group-delete-head-toggle {
-  padding: 4px 12px 4px 16px;
-  border-left: 1px solid var(--border);
-  text-align: right;
-}
+/* Таблицу группового удаления собирает единый фасад `lib/ui/table.ts` (Z5):
+ * прежние `.group-delete-table`/`-row`/`-head*` удалены вместе с ручной
+ * таблицей; высоту сетки задаёт вызывающий инлайном. */
 
 /* Первая колонка — фабричное мини-облачко мысли (профиль `chip`, класс
  * `.prop-ref-cloud`) с модификатором строки таблицы: отступ в ячейке, лёгкая
@@ -5504,53 +5468,13 @@ body.cloud-dragging * {
   --tr-head-h: 30px;
 }
 
-/* Таблица «что в корзине | ссылок | действия»: высота строки фиксирована
- * (однострочное название с многоточием и подсказкой полного текста), поэтому
- * лимит «10 строк + шапка» стабилен; дальше — прокрутка. */
+/* Оболочка таблицы «что в корзине | ссылок | действия»: высоту задаёт
+ * вызывающий инлайном (фасад `lib/ui/table.ts` — владелец прокрутки), здесь
+ * только рамка. Прежние `.trash-row*`/`.trash-head*` удалены вместе с
+ * самодельной таблицей (Z5). */
 .trash-table {
-  max-height: calc(var(--tr-row-h) * 10 + var(--tr-head-h));
-  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-}
-
-.trash-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  min-height: var(--tr-row-h);
-  border-bottom: 1px solid var(--border);
-}
-
-.trash-row:last-child {
-  border-bottom: none;
-}
-
-/* Шапка таблицы — прилипает к верху при прокрутке. */
-.trash-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  min-height: var(--tr-head-h);
-  background: var(--surface);
-  font-weight: 600;
-  color: var(--text-dim);
-}
-
-.trash-head-item {
-  padding: 4px 6px 4px 12px;
-}
-
-.trash-head-count {
-  padding: 4px 12px;
-  border-left: 1px solid var(--border);
-  text-align: right;
-}
-
-.trash-head-actions {
-  padding: 4px 12px 4px 16px;
-  border-left: 1px solid var(--border);
-  text-align: right;
 }
 
 /* Первая колонка: название мысли или подпись связи — одна строка с
@@ -6011,32 +5935,6 @@ button.ui-btn--icon.trash-act {
   max-height: 380px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-}
-
-.admin-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.admin-table th {
-  position: sticky;
-  top: 0;
-  background: var(--surface-2);
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.admin-table td {
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-.admin-table tr:last-child td {
-  border-bottom: none;
 }
 
 .api-key-box {
@@ -7438,53 +7336,12 @@ table.chron-table thead th {
   border-top: 1px solid var(--border);
 }
 
-table.activity-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-table.activity-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--surface-2);
-  text-align: left;
-}
-
-.activity-row {
-  cursor: pointer;
-}
-
-.activity-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.activity-row td {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity-row:hover td {
-  background: var(--accent-soft);
-}
-
-/* Подсветка строки под курсором клавиатуры / выбранной строки
- * (замечание пользователя — «нет выделения цветом текущей строки»). */
-.activity-row.activity-row-cursor td {
-  background: var(--accent-soft);
-}
-
-/* Рамка вокруг строки, чья сущность сейчас открыта в редакторе
- * (замечание пользователя — «нет выделения рамкой открытой сущности»). */
-.activity-row.activity-row-current td {
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.activity-row.activity-row-current.activity-row-cursor td {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 2px var(--accent);
+/* Ячейка таблицы событий: содержимое обрезается многоточием, а обёртка
+ * несёт подсветку строки, открытой в редакторе (§18). Строки ленты собирает
+ * единый фасад `lib/ui/table.ts` — прежние правила `.activity-row*` и
+ * `table.activity-table*` удалены вместе с самодельной таблицей (Z5). */
+.activity-cell {
+  min-width: 0;
 }
 
 .activity-time {

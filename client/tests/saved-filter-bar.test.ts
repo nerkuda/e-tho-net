@@ -113,39 +113,38 @@ describe('строка сохранённых отборов (задача 2ebe4
   });
 });
 
-describe('диалог выбора сохранённого отбора (задача 2ebe4206)', () => {
+describe('диалог выбора сохранённого отбора (задача 2ebe4206, фасад таблицы — ae76b75e)', () => {
   it('открывается кнопкой «…», вверху — поиск по именам', () => {
     const bar = readText(BAR_TS);
     assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка «…» открывает диалог');
-    assert.match(bar, /title: 'Сохранённые отборы'/, 'диалог подписан');
+    assert.match(bar, /title: t\('savedFilters\.title'\)/, 'заголовок диалога — из словаря');
     assert.match(bar, /search\.placeholder = t\('actions\.search'\)/, 'единый плейсхолдер поиска — вверху списка');
-    assert.match(bar, /body\.append\(search, list\)/, 'поиск стоит перед списком');
+    assert.match(bar, /body\.append\(search, listHost\)/, 'поиск стоит перед списком');
     assert.match(bar, /onMount: \(\) => search\.focus\(\)/, 'фокус — в поле поиска');
   });
 
-  it('навигация ↑/↓ и выбор кликом/Enter', () => {
+  it('список — единая таблица фасада: текущая строка, клавиатура, выбор', () => {
     const bar = readText(BAR_TS);
+    assert.match(bar, /createTable<SavedFilterEntry>\(\{/, 'список собирает фасад lib/ui/table.ts');
+    assert.match(bar, /rowKey: \(entry\) => entry\.id/, 'строка адресуется стабильным id');
+    assert.match(bar, /onRowClick: \(entry\) => pick\(entry\)/, 'клик по строке выбирает отбор');
+    assert.match(bar, /onActivate: \(entry\) => pick\(entry\)/, 'Enter/двойной клик выбирают строку');
+    // Клавиатура — от фасада: стрелки/Enter из поля поиска перенаправляются
+    // таблице, чтобы текущая строка была видна.
     assert.match(
       bar,
-      /if \(event\.key === 'ArrowDown' \|\| event\.key === 'ArrowUp'\)/,
-      'стрелки двигают курсор',
+      /table\.element\.dispatchEvent\(new KeyboardEvent\('keydown', \{ key: event\.key, bubbles: true \}\)\)/,
+      'клавиатура поля поиска перенаправляется таблице',
     );
-    assert.match(
-      bar,
-      /moveSavedFilterCursor\(cursor, visible\.length, event\.key === 'ArrowDown' \? 1 : -1\)/,
-      'курсор ходит по видимому (отфильтрованному) списку',
-    );
-    assert.match(bar, /else if \(event\.key === 'Enter'\)/, 'Enter выбирает строку под курсором');
-    assert.match(bar, /row\.addEventListener\('click', \(\) => pick\(entry\)\)/, 'клик по строке выбирает отбор');
+    assert.match(bar, /table\.setRows\(visible\)/, 'перерисовка списка по фильтру');
   });
 
   it('контекстное меню строки: переименовать / скопировать / удалить', () => {
     const bar = readText(BAR_TS);
-    for (const label of ['Переименовать', 'Скопировать']) {
-      assert.ok(bar.includes(`label: '${label}'`), `команда «${label}» в контекстном меню строки`);
-    }
-    assert.ok(bar.includes("label: t('actions.delete')"), 'команда «Удалить» — из словаря');
-    assert.match(bar, /row\.addEventListener\('contextmenu',/, 'контекстное меню открывается по правому клику');
+    assert.ok(bar.includes("menuAction(t('savedFilters.menu.rename')"), 'команда «Переименовать» — из словаря');
+    assert.ok(bar.includes("menuAction(t('savedFilters.menu.copy')"), 'команда «Скопировать» — из словаря');
+    assert.ok(bar.includes("t('actions.delete')"), 'команда «Удалить» — из словаря');
+    assert.match(bar, /rowMenu: \(entry\) => rowMenu\(entry\)/, 'меню строки собирает словарь lib/menu');
     assert.match(
       bar,
       /await opts\.store\.create\(copyName, entry\.definition\)/,

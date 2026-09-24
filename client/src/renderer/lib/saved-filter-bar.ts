@@ -6,8 +6,11 @@
  * кнопка-дискета («записать настройки отбора»), кнопка-крестик («удалить
  * настройки отбора») и кнопка с многоточием («выбрать сохранённый отбор»).
  * Список сохранённых отборов показывается ОТДЕЛЬНЫМ ДИАЛОГОМ: сверху поиск по
- * именам, навигация ↑/↓, выбор кликом или Enter, у каждой строки контекстное
- * меню «Переименовать» / «Скопировать» (копия с « (копия)») / «Удалить».
+ * именам, сам список — единый табличный фасад `lib/ui/table.ts` (задача
+ * ae76b75e, требование 93115633): текущая строка, клавиатура (↑/↓, Home/End,
+ * PgUp/PgDn, Enter), контекстное меню строки, копирование Ctrl+C. Выбор —
+ * кликом или Enter; у строки контекстное меню «Переименовать» / «Скопировать»
+ * (копия с « (копия)») / «Удалить».
  *
  * Экран передаёт каркасу только своё: хранилище отборов (REST-виды разные —
  * `structures` и `chronicle`), конвертер текущих настроек в определение и
@@ -21,16 +24,13 @@
 
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
 import { t } from './i18n.js';
-import { div, el } from './dom.js';
+import { div, el, span } from './dom.js';
 import { svgIcon } from './icons.js';
-import { showMenuAt, type MenuItem } from './menu.js';
+import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton } from './ui/button.js';
-import {
-  duplicateFilterName,
-  filterSavedByName,
-  moveSavedFilterCursor,
-} from './pure.js';
+import { TABLE_EMPTY_CLASS, createTable } from './ui/table.js';
+import { duplicateFilterName, filterSavedByName } from './pure.js';
 
 /** Запись сохранённого отбора. `definition` — непрозрачное определение вида. */
 export interface SavedFilterEntry {
@@ -274,85 +274,88 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   const search = el('input', 'st-f-input sfd-search') as HTMLInputElement;
   search.type = 'text';
   search.placeholder = t('actions.search');
-  const list = div('sfd-list');
-  body.append(search, list);
+  const listHost = div('sfd-list');
+  // Определённая высота обёртки — сетке нужен ограниченный по высоте
+  // контейнер, иначе вендорская виртуализация/прокрутка не работают.
+  listHost.style.height = '260px';
+  body.append(search, listHost);
 
-  let cursor = 0;
-  /** Видимые строки текущей отрисовки — по ним ходит клавиатура. */
+  /** Видимые строки текущей отрисовки — источник массива для фасада. */
   let visible: SavedFilterEntry[] = [];
   /** Закрытие диалога; присваивается сразу после `showDialog`. */
   let close: () => void = () => undefined;
 
-  const render = (): void => {
-    visible = filterSavedByName(opts.entries(), search.value);
-    cursor = visible.length === 0 ? -1 : Math.min(Math.max(cursor, 0), visible.length - 1);
-    list.replaceChildren();
-    if (visible.length === 0) {
-      list.append(
-        el(
-          'div',
-          'st-f-empty',
-          opts.entries().length === 0 ? 'Нет сохранённых отборов' : 'Ничего не найдено',
-        ),
-      );
-      return;
-    }
-    visible.forEach((entry, index) => {
-      const row = el('button', 'sfd-row');
-      row.type = 'button';
-      if (entry.id === opts.selectedId()) row.classList.add('active');
-      if (index === cursor) row.classList.add('cursor');
-      row.textContent = entry.name;
-      row.addEventListener('click', () => pick(entry));
-      row.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
-        cursor = index;
-        render();
-        openRowMenu(entry, event.clientX, event.clientY);
-      });
-      list.append(row);
-    });
-  };
+  const table = createTable<SavedFilterEntry>({
+    ariaLabel: t('savedFilters.aria'),
+    columns: [
+      {
+        key: 'name',
+        header: t('savedFilters.col.name'),
+        sortable: true,
+        sortValue: (entry) => entry.name,
+        text: (entry) => entry.name,
+        // Применённый отбор подсвечиваем жирным: фасад держит только текущую
+        // (клавиатурную) строку, а «применённый» — отдельное состояние экрана.
+        render: (entry) => {
+          const node = span(entry.name);
+          if (entry.id === opts.selectedId()) node.style.fontWeight = '600';
+          return node;
+        },
+      },
+    ],
+    rows: [],
+    rowKey: (entry) => entry.id,
+    emptyText: t('savedFilters.empty'),
+    onRowClick: (entry) => pick(entry),
+    onActivate: (entry) => pick(entry),
+    rowMenu: (entry) => rowMenu(entry),
+  });
+  listHost.append(table.element);
 
   const pick = (entry: SavedFilterEntry): void => {
     opts.onPick(entry);
     close();
   };
 
-  const openRowMenu = (entry: SavedFilterEntry, x: number, y: number): void => {
-    const items: MenuItem[] = [
-      { label: 'Переименовать', onClick: () => void opts.onRename(entry).then(render) },
-      { label: 'Скопировать', onClick: () => void opts.onCopy(entry).then(render) },
-      {
-        label: t('actions.delete'),
-        danger: true,
-        onClick: () => void opts.onDelete(entry).then(opts.onRefresh).then(render),
-      },
-    ];
-    showMenuAt(x, y, items);
+  /** Контекстное меню строки из общего словаря пунктов (`lib/menu.ts`). */
+  const rowMenu = (entry: SavedFilterEntry): MenuItem[] => [
+    menuAction(t('savedFilters.menu.rename'), () => void opts.onRename(entry).then(render)),
+    menuAction(t('savedFilters.menu.copy'), () => void opts.onCopy(entry).then(render)),
+    menuAction(
+      t('actions.delete'),
+      () => void opts.onDelete(entry).then(opts.onRefresh).then(render),
+      { danger: true },
+    ),
+  ];
+
+  const render = (): void => {
+    visible = filterSavedByName(opts.entries(), search.value);
+    // Пустое состояние зависит от поиска: без сохранённых — свой текст, без
+    // совпадений — «Ничего не найдено» (текст живёт в узле фасада).
+    const emptySpan = table.element.querySelector<HTMLElement>(`.${TABLE_EMPTY_CLASS} span`);
+    if (emptySpan !== null) {
+      emptySpan.textContent =
+        opts.entries().length === 0 ? t('savedFilters.empty') : t('savedFilters.emptySearch');
+    }
+    table.setRows(visible);
+    const selected = opts.selectedId();
+    table.setCurrent(
+      selected !== null && visible.some((entry) => entry.id === selected) ? selected : null,
+    );
   };
 
-  search.addEventListener('input', () => {
-    cursor = 0;
-    render();
-  });
+  // Ввод в поле поиска фильтрует список; стрелки/Enter перенаправляем таблице,
+  // чтобы клавиатура оставалась от фасада (текущая строка и подсветка видны).
+  search.addEventListener('input', () => render());
   search.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (visible.length === 0) return;
-      cursor = moveSavedFilterCursor(cursor, visible.length, event.key === 'ArrowDown' ? 1 : -1);
-      render();
-      const row = list.children[cursor];
-      if (row instanceof HTMLElement) row.scrollIntoView({ block: 'nearest' });
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      const entry = visible[cursor];
-      if (entry !== undefined) pick(entry);
-    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
+    event.preventDefault();
+    table.focus();
+    table.element.dispatchEvent(new KeyboardEvent('keydown', { key: event.key, bubbles: true }));
   });
 
   close = showDialog({
-    title: 'Сохранённые отборы',
+    title: t('savedFilters.title'),
     body,
     size: 's',
     buttons: [{ label: t('actions.close'), onClick: (c) => c() }],

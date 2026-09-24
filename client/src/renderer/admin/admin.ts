@@ -20,6 +20,7 @@ import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { operationError } from '../lib/ui/messages.js';
+import { createTable } from '../lib/ui/table.js';
 
 /** Opens the admin panel modal. */
 export function openAdminPanel(): void {
@@ -58,44 +59,77 @@ async function renderUsers(content: HTMLElement): Promise<void> {
   }
 
   const wrap = div('admin-table-wrap');
-  const table = el('table', 'admin-table');
-  const head = el('thead');
-  const headRow = el('tr');
-  headRow.append(
-    el('th', undefined, 'Пользователь'),
-    el('th', undefined, 'Роль'),
-    el('th', undefined, 'Статус'),
-    el('th', undefined, 'Создан'),
-    el('th', undefined, 'Действия'),
-  );
-  head.append(headRow);
-  table.append(head);
-  const tbody = el('tbody');
-  for (const user of users) {
-    const row = el('tr');
-    const name = el('td');
-    name.append(span(`${user.display_name ?? user.username}`, undefined));
-    name.append(el('div', 'faint', user.username));
-    row.append(
-      name,
-      el('td', undefined, user.is_admin ? 'админ' : 'пользователь'),
-      el('td', undefined, user.disabled ? 'отключен' : 'активен'),
-      el('td', undefined, fmtDateTime(user.created_at)),
-    );
-    const actions = el('td');
-    actions.style.whiteSpace = 'nowrap';
-    actions.append(
-      button('ключ', () => void generateKey(user), 'link-btn', 'Сгенерировать API-key'),
-      span(' · '),
-      button(user.disabled ? 'включить' : 'отключить', () => void toggleDisabled(user), 'link-btn'),
-      span(' · '),
-      button('удалить', () => void removeUserRow(user, content), 'link-btn'),
-    );
-    row.append(actions);
-    tbody.append(row);
-  }
-  table.append(tbody);
-  wrap.append(table);
+  // Определённая высота обёртки — сетке нужен ограниченный контейнер.
+  wrap.style.height = '400px';
+  // Список участников — единая таблица фасада `lib/ui/table.ts` (задача
+  // ae76b75e, требование 93115633): колонки с сортировкой, текущая строка,
+  // клавиатура, копирование Ctrl+C. Строки — из словаря локализации.
+  const table = createTable<User>({
+    ariaLabel: t('admin.users.aria'),
+    columns: [
+      {
+        key: 'user',
+        header: t('admin.col.user'),
+        sortable: true,
+        sortValue: (user) => user.display_name ?? user.username,
+        text: (user) => `${user.display_name ?? user.username} (${user.username})`,
+        render: (user) => {
+          const cell = div();
+          cell.append(span(user.display_name ?? user.username, undefined));
+          cell.append(el('div', 'faint', user.username));
+          return cell;
+        },
+      },
+      {
+        key: 'role',
+        header: t('admin.col.role'),
+        sortable: true,
+        sortValue: (user) => (user.is_admin ? t('admin.role.admin') : t('admin.role.user')),
+        text: (user) => (user.is_admin ? t('admin.role.admin') : t('admin.role.user')),
+        render: (user) => span(user.is_admin ? t('admin.role.admin') : t('admin.role.user')),
+      },
+      {
+        key: 'status',
+        header: t('admin.col.status'),
+        sortable: true,
+        sortValue: (user) => (user.disabled ? t('admin.status.disabled') : t('admin.status.active')),
+        text: (user) => (user.disabled ? t('admin.status.disabled') : t('admin.status.active')),
+        render: (user) => span(user.disabled ? t('admin.status.disabled') : t('admin.status.active')),
+      },
+      {
+        key: 'created',
+        header: t('admin.col.created'),
+        sortable: true,
+        sortValue: (user) => user.created_at,
+        text: (user) => fmtDateTime(user.created_at),
+        render: (user) => span(fmtDateTime(user.created_at)),
+      },
+      {
+        key: 'actions',
+        header: t('admin.col.actions'),
+        width: '220px',
+        render: (user) => {
+          const actions = div('admin-user-actions');
+          actions.style.whiteSpace = 'nowrap';
+          actions.append(
+            button('ключ', () => void generateKey(user), 'link-btn', 'Сгенерировать API-key'),
+            span(' · '),
+            button(
+              user.disabled ? 'включить' : 'отключить',
+              () => void toggleDisabled(user),
+              'link-btn',
+            ),
+            span(' · '),
+            button('удалить', () => void removeUserRow(user, content), 'link-btn'),
+          );
+          return actions;
+        },
+      },
+    ],
+    rows: users,
+    rowKey: (user) => user.id,
+  });
+  wrap.append(table.element);
   content.replaceChildren(wrap, addUserRow());
 }
 
@@ -280,57 +314,69 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     return;
   }
   const wrap = div('admin-table-wrap');
-  const table = el('table', 'admin-table');
-  const head = el('thead');
-  const headRow = el('tr');
-  headRow.append(
-    el('th', undefined, 'Сеть'),
-    el('th', undefined, 'Владелец'),
-    el('th', undefined, 'Создана'),
-    el('th', undefined, 'Действия'),
-  );
-  head.append(headRow);
-  table.append(head);
-  const tbody = el('tbody');
-  for (const network of networks) {
-    const row = el('tr');
-    row.append(
-      el('td', undefined, network.display_name),
-      el('td', undefined, network.owner_id),
-      el('td', undefined, fmtDateTime(network.created_at)),
-    );
-    const actions = el('td');
-    actions.append(
-      button(
-        'удалить сеть',
-        () => {
-          void (async () => {
-            if (
-              !(await confirmDialog(
-                'Удалить сеть',
-                `Удалить сеть «${network.display_name}»?`,
-                true,
-              ))
-            ) {
-              return;
-            }
-            try {
-              await etn.admin.removeNetwork(network.id);
-              notice('Сеть удалена.');
-              void renderNetworks(content);
-            } catch (err) {
-              errorDialog('Удалить сеть', err);
-            }
-          })();
-        },
-        'link-btn',
-      ),
-    );
-    row.append(actions);
-    tbody.append(row);
-  }
-  table.append(tbody);
-  wrap.append(table);
+  wrap.style.height = '400px';
+  const table = createTable<Network>({
+    ariaLabel: t('admin.networks.aria'),
+    columns: [
+      {
+        key: 'network',
+        header: t('admin.col.network'),
+        sortable: true,
+        sortValue: (network) => network.display_name,
+        text: (network) => network.display_name,
+        render: (network) => span(network.display_name),
+      },
+      {
+        key: 'owner',
+        header: t('admin.col.owner'),
+        sortable: true,
+        sortValue: (network) => network.owner_id,
+        text: (network) => network.owner_id,
+        render: (network) => span(network.owner_id),
+      },
+      {
+        key: 'created',
+        header: t('admin.col.createdF'),
+        sortable: true,
+        sortValue: (network) => network.created_at,
+        text: (network) => fmtDateTime(network.created_at),
+        render: (network) => span(fmtDateTime(network.created_at)),
+      },
+      {
+        key: 'actions',
+        header: t('admin.col.actions'),
+        width: '140px',
+        render: (network) =>
+          button(
+            'удалить сеть',
+            () => {
+              void (async () => {
+                if (
+                  !(await confirmDialog(
+                    'Удалить сеть',
+                    `Удалить сеть «${network.display_name}»?`,
+                    true,
+                  ))
+                ) {
+                  return;
+                }
+                try {
+                  await etn.admin.removeNetwork(network.id);
+                  notice('Сеть удалена.');
+                  void renderNetworks(content);
+                } catch (err) {
+                  errorDialog('Удалить сеть', err);
+                }
+              })();
+            },
+            'link-btn',
+          ),
+      },
+    ],
+    rows: networks,
+    rowKey: (network) => network.id,
+  });
+  wrap.append(table.element);
   content.replaceChildren(wrap);
 }
 
@@ -371,6 +417,7 @@ function renderAudit(content: HTMLElement): void {
     }),
   );
   const tableWrap = div('admin-table-wrap');
+  tableWrap.style.height = '400px';
   content.append(filterRow, tableWrap);
 
   async function loadAudit(): Promise<void> {
@@ -382,34 +429,62 @@ function renderAudit(content: HTMLElement): void {
         to: toInput.value === '' ? undefined : toInput.value,
         limit: 100,
       })) as { entries: AuditLogEntry[]; total: number };
-      const table = el('table', 'admin-table');
-      const head = el('thead');
-      const headRow = el('tr');
-      headRow.append(
-        el('th', undefined, 'Время'),
-        el('th', undefined, 'Кто'),
-        el('th', undefined, 'Сеть'),
-        el('th', undefined, 'Категория'),
-        el('th', undefined, 'Действие'),
-        el('th', undefined, 'Цель'),
-      );
-      head.append(headRow);
-      table.append(head);
-      const tbody = el('tbody');
-      for (const entry of result.entries) {
-        const row = el('tr');
-        row.append(
-          el('td', undefined, fmtDateTime(entry.ts)),
-          el('td', undefined, entry.actor_user_id ?? '—'),
-          el('td', undefined, entry.network_id ?? '—'),
-          el('td', undefined, entry.category),
-          el('td', undefined, entry.action),
-          el('td', undefined, `${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—'),
-        );
-        tbody.append(row);
-      }
-      table.append(tbody);
-      tableWrap.replaceChildren(table, el('p', 'faint', `Всего записей: ${result.total}`));
+      const table = createTable<AuditLogEntry>({
+        ariaLabel: t('admin.audit.aria'),
+        columns: [
+          {
+            key: 'ts',
+            header: t('admin.col.time'),
+            sortable: true,
+            sortValue: (entry) => entry.ts,
+            text: (entry) => fmtDateTime(entry.ts),
+            render: (entry) => span(fmtDateTime(entry.ts)),
+          },
+          {
+            key: 'actor',
+            header: t('admin.col.who'),
+            sortable: true,
+            sortValue: (entry) => entry.actor_user_id ?? '',
+            text: (entry) => entry.actor_user_id ?? '—',
+            render: (entry) => span(entry.actor_user_id ?? '—'),
+          },
+          {
+            key: 'network',
+            header: t('admin.col.network'),
+            sortable: true,
+            sortValue: (entry) => entry.network_id ?? '',
+            text: (entry) => entry.network_id ?? '—',
+            render: (entry) => span(entry.network_id ?? '—'),
+          },
+          {
+            key: 'category',
+            header: t('admin.col.category'),
+            sortable: true,
+            sortValue: (entry) => entry.category,
+            text: (entry) => entry.category,
+            render: (entry) => span(entry.category),
+          },
+          {
+            key: 'action',
+            header: t('admin.col.action'),
+            sortable: true,
+            sortValue: (entry) => entry.action,
+            text: (entry) => entry.action,
+            render: (entry) => span(entry.action),
+          },
+          {
+            key: 'target',
+            header: t('admin.col.target'),
+            text: (entry) =>
+              `${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—',
+            render: (entry) =>
+              span(`${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—'),
+          },
+        ],
+        rows: result.entries,
+        rowKey: (entry) => String(entry.id),
+      });
+      tableWrap.replaceChildren(table.element, el('p', 'faint', `Всего записей: ${result.total}`));
     } catch (err) {
       tableWrap.replaceChildren(operationError(err));
     }

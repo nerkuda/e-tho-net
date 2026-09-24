@@ -46,6 +46,7 @@ import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { iconButton, uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
+import { createTable } from './lib/ui/table.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -538,7 +539,6 @@ export async function openThoughtGroupDeleteDialog(
     syncRadios();
   };
 
-  const table = div('group-delete-table');
   /** Radio inputs per row — kept so mass toggles repaint without a rebuild. */
   const radiosById = new Map<string, { purge: HTMLInputElement; trash: HTMLInputElement }>();
 
@@ -601,24 +601,34 @@ export async function openThoughtGroupDeleteDialog(
     return toggle;
   };
 
-  const renderTable = (): void => {
-    table.replaceChildren();
-    radiosById.clear();
-    const head = div('group-delete-row group-delete-head');
-    head.append(
-      span('Мысль', 'group-delete-head-cloud'),
-      span('Действие', 'group-delete-head-toggle'),
-    );
-    table.append(head);
-    for (const id of ids) {
-      const row = div('group-delete-row');
-      row.append(buildCloudCell(id), buildToggleCell(id));
-      table.append(row);
-    }
-  };
-  renderTable();
+  // Список группового удаления — единая таблица фасада `lib/ui/table.ts`
+  // (задача ae76b75e, требование 93115633): текущая строка, клавиатура,
+  // копирование; строки — из словаря локализации. Radio-приёмка строки
+  // остаётся прежней (одна модель `choice`, массовые переключатели её правят).
+  const table = createTable<string>({
+    ariaLabel: t('trash.group.aria'),
+    columns: [
+      {
+        key: 'thought',
+        header: t('trash.group.col.thought'),
+        text: (id) => refById.get(id)?.title ?? id,
+        render: (id) => buildCloudCell(id),
+      },
+      {
+        key: 'action',
+        header: t('trash.group.col.action'),
+        width: '260px',
+        text: (id) => (choice.get(id) === true ? t('actions.deleteForever') : t('actions.toTrash')),
+        render: (id) => buildToggleCell(id),
+      },
+    ],
+    rows: ids,
+    rowKey: (id) => id,
+  });
+  // Сетке нужен ограниченный контейнер (прежний лимит «10 строк + шапка»).
+  table.element.style.height = 'min(50vh, 420px)';
 
-  body.append(toolbar, table);
+  body.append(toolbar, table.element);
   if (totalOrphaned > 0) {
     body.append(
       el(
@@ -692,6 +702,7 @@ export async function openThoughtGroupDeleteDialog(
       },
       { label: t('actions.cancel') },
     ],
+    onClose: () => table.destroy(),
   });
 }
 
@@ -708,10 +719,25 @@ export async function openThoughtGroupDeleteDialog(
  * Имена концов связей и число мест использования мыслей диалог догружает к
  * одному `GET /trash` — у ребра в ответе только id, а использования он не несёт.
  */
+/** Строка диалога корзины — модель, которой живёт единая таблица фасада. */
+interface TrashDialogRow {
+  id: string;
+  kind: 'thought' | 'link';
+  label: string;
+  count: number | null;
+  blocked: boolean;
+  reason: string;
+  onRestore: () => Promise<void>;
+  onDelete: () => Promise<void>;
+}
+
 export async function openTrashDialog(networkId: string): Promise<void> {
   const body = div('trash');
-  const table = div('trash-table');
-  body.append(table);
+  const listHost = div('trash-table');
+  // Определённая высота оболочки — сетке нужен ограниченный контейнер.
+  listHost.style.height = 'min(60vh, 440px)';
+  listHost.style.maxHeight = 'none';
+  body.append(listHost);
 
   /** Кнопка-иконка действия строки — как в остальном UI: svg + тултип. */
   const actionButton = (
@@ -748,30 +774,52 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     return cell;
   };
 
-  /** Строка таблицы: что в корзине, число мест использования, действия. */
-  const renderRow = (
-    label: string,
-    blocked: boolean,
-    reason: string,
-    count: number | null,
-    onRestore: () => Promise<void>,
-    onDelete: () => Promise<void>,
-  ): HTMLElement => {
-    const row = div('trash-row');
+  /** Ячейка «что в корзине»: подпись строки и метка блокировки (§5a.4). */
+  const buildItemCell = (row: TrashDialogRow): HTMLElement => {
     const item = div('trash-item');
-    item.append(span(label, 'trash-item-title'));
-    if (blocked) {
-      // Замок — статичная индикация блокировки (§5a.4): видно, не наводя курсор.
+    item.append(span(row.label, 'trash-item-title'));
+    if (row.blocked) {
+      // Замок — статичная индикация блокировки: видно, не наводя курсор.
       const lock = span('🔒', 'trash-item-lock');
-      setTooltip(lock, reason || 'заблокировано для удаления');
+      setTooltip(lock, row.reason || 'заблокировано для удаления');
       item.append(lock);
     }
-    setTooltip(item, label);
-    row.append(item);
-    row.append(span(referencesText(count), 'trash-count'));
-    row.append(buildActions(blocked, reason, onRestore, onDelete));
-    return row;
+    setTooltip(item, row.label);
+    return item;
   };
+
+  // Единая таблица корзины (задача ae76b75e, требование 93115633): текущая
+  // строка, клавиатура, копирование; строки — из словаря локализации.
+  const table = createTable<TrashDialogRow>({
+    ariaLabel: t('trash.aria'),
+    columns: [
+      {
+        key: 'item',
+        header: t('trash.col.item'),
+        text: (row) => row.label,
+        render: (row) => buildItemCell(row),
+      },
+      {
+        key: 'count',
+        header: t('trash.col.count'),
+        width: '90px',
+        align: 'end',
+        text: (row) => referencesText(row.count),
+        render: (row) => span(referencesText(row.count), 'trash-count'),
+      },
+      {
+        key: 'actions',
+        header: t('trash.col.actions'),
+        width: '120px',
+        text: () => '',
+        render: (row) => buildActions(row.blocked, row.reason, row.onRestore, row.onDelete),
+      },
+    ],
+    rows: [],
+    rowKey: (row) => row.id,
+    emptyText: t('trash.empty'),
+  });
+  listHost.append(table.element);
 
   const render = async (): Promise<void> => {
     let trash: TrashListResult;
@@ -783,7 +831,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     }
 
     if (trash.thoughts.length === 0 && trash.links.length === 0) {
-      table.replaceChildren(el('p', 'dialog-text', 'Корзина пуста.'));
+      table.setRows([]);
       return;
     }
 
@@ -804,40 +852,34 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       }),
     );
 
-    const head = div('trash-row trash-head');
-    head.append(
-      span('В корзине', 'trash-head-item'),
-      span('Ссылок', 'trash-head-count'),
-      span('Действия', 'trash-head-actions'),
-    );
-    const rows: HTMLElement[] = [head];
+    const out: TrashDialogRow[] = [];
     for (const t of trash.thoughts) {
       const view = thoughtTrashRow(t, usageById.get(t.id) ?? null);
-      rows.push(
-        renderRow(
-          view.label,
-          t.blocked,
-          blockingReasons('мысль', t.blocking).join('; '),
-          view.count,
-          () => restoreThought(networkId, t.id),
-          () => deleteFromTrash(networkId, t.id),
-        ),
-      );
+      out.push({
+        id: t.id,
+        kind: 'thought',
+        label: view.label,
+        count: view.count,
+        blocked: t.blocked,
+        reason: blockingReasons('мысль', t.blocking).join('; '),
+        onRestore: () => restoreThought(networkId, t.id),
+        onDelete: () => deleteFromTrash(networkId, t.id),
+      });
     }
     for (const l of trash.links) {
       const view = linkTrashRow(l, titles);
-      rows.push(
-        renderRow(
-          view.label,
-          l.blocked,
-          blockingReasons('связь', l.blocking).join('; '),
-          view.count,
-          () => restoreLink(networkId, l.id),
-          () => deleteLinkFromTrash(networkId, l.id),
-        ),
-      );
+      out.push({
+        id: l.id,
+        kind: 'link',
+        label: view.label,
+        count: view.count,
+        blocked: l.blocked,
+        reason: blockingReasons('связь', l.blocking).join('; '),
+        onRestore: () => restoreLink(networkId, l.id),
+        onDelete: () => deleteLinkFromTrash(networkId, l.id),
+      });
     }
-    table.replaceChildren(...rows);
+    table.setRows(out);
   };
 
   const restoreThought = async (networkId: string, id: string): Promise<void> => {
@@ -915,5 +957,6 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       { label: t('actions.close'), primary: true },
     ],
     onMount: () => void render(),
+    onClose: () => table.destroy(),
   });
 }
