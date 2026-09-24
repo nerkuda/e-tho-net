@@ -25,6 +25,7 @@ import {
   buildEntityChipField,
   buildEntityCombo,
   filterEntityOptions,
+  linkPropertyEntityOptions,
   linkTypeEntityOptions,
   normalizeParentTypeId,
   pickEntitiesModal,
@@ -33,6 +34,10 @@ import {
   visibleEntityIds,
   type EntityOption,
 } from '../src/renderer/lib/entity-picker.js';
+import {
+  buildPropertyListRows,
+  type PropertyRegistryRow,
+} from '../src/renderer/lib/property-list.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -119,7 +124,7 @@ describe('entity-picker: каталоги типов без корня иера�
     );
     assert.ok(options.every((o) => o.selectable === true));
     // Облачко резолвит значок/цвета/начертание по типу.
-    assert.ok(options.every((o) => o.cloud.type_id === o.id));
+    assert.ok(options.every((o) => o.cloud?.type_id === o.id));
   });
 
   it('linkTypeEntityOptions подписывает «прямое / обратное» и несёт свотч', () => {
@@ -634,7 +639,7 @@ describe('entity-picker: выбор из списка не роняет клав
   });
 
   it('комбо: выбор строки с клавиатуры (Enter) тоже удерживает фокус в поле', async () => {
-    const { body } = installShim();
+    installShim();
     store.update({ thoughtTypes: THOUGHT_TYPES });
     const combo = buildEntityCombo({
       networkId: 'n',
@@ -1104,5 +1109,201 @@ describe('entity-picker: отмена модального чек-листа (12
     assert.deepEqual(calls, ['c'], 'выбор строки задал значение');
     assert.equal(combo.value(), 'c', 'значение в поле обновилось');
     assert.equal(body.children.length, 0, 'диалог закрыт выбором');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Четвёртый источник: свойства-связи (требование cdb6b52f, ошибка a7abe50e).
+// Поглощён прежний модуль lib/link-property-field.ts: то же поле — общее комбо.
+// ---------------------------------------------------------------------------
+
+const LP_FORWARD = 'запланировано в версию';
+const LP_REVERSE = 'включает работы';
+
+function lpLinkType(): LinkType {
+  return {
+    id: 'lt1',
+    name_forward: LP_FORWARD,
+    name_reverse: LP_REVERSE,
+    parent_id: null,
+    is_root: false,
+    color: '#e08a3c',
+    style: 'dashed',
+    width: 3,
+    description: null,
+    version: 1,
+    created_at: '',
+    updated_at: '',
+    created_by: '',
+  };
+}
+
+function lpRow(extra: Partial<PropertyRegistryRow>): PropertyRegistryRow {
+  return {
+    id: 'p1',
+    name: LP_FORWARD,
+    value_type: 'link',
+    config: { link_type_id: 'lt1' },
+    description: null,
+    created_at: '',
+    updated_at: '',
+    types_count: 2,
+    values_count: 0,
+    types_source_count: 1,
+    types_target_count: 1,
+    ...extra,
+  } as PropertyRegistryRow;
+}
+
+/** Свойство-связь (две стороны) + скаляр + структурное — в поле попадают только стороны. */
+const LP_ROWS = buildPropertyListRows(
+  [
+    lpRow({}),
+    lpRow({ id: 'p2', name: 'Скаляр', value_type: 'text', config: null }),
+    lpRow({ id: 'p3', name: 'Родители', config: { structural: true } }),
+  ],
+  [lpLinkType()],
+);
+
+describe('entity-picker: четвёртый источник «свойство связи» (требование cdb6b52f)', () => {
+  it('по варианту на имя стороны, единый алфавит, парная подпись и значок конца связи', () => {
+    const options = linkPropertyEntityOptions(LP_ROWS);
+    assert.deepEqual(options.map((o) => o.title), [LP_REVERSE, LP_FORWARD]);
+    assert.deepEqual(options.map((o) => o.linkProperty?.side), ['target', 'source']);
+    assert.equal(options[0]!.note, `(${LP_FORWARD} -> ${LP_REVERSE})`, 'пара имён типа связи в скобках');
+    assert.equal(options[0]!.linkEnd?.direction, 'up', 'назначение — входящая, стрелка вверх');
+    assert.equal(options[1]!.linkEnd?.direction, 'down', 'источник — исходящая, стрелка вниз');
+    assert.equal(options[0]!.linkEnd?.color, '#e08a3c');
+    assert.deepEqual(
+      options[1]!.linkProperty,
+      { propertyId: 'p1', side: 'source', key: LP_FORWARD },
+      'значение варианта — свойство, сторона и имя стороны-ключ',
+    );
+    assert.ok(options.every((o) => o.cloud === undefined), 'у варианта-свойства нет облачка мысли');
+  });
+
+  it('живой поиск находит свойство по обратному имени и по описанию', () => {
+    const options = linkPropertyEntityOptions(LP_ROWS);
+    const found = visibleEntityIds(options, 'включает', new Set());
+    assert.deepEqual(
+      options.filter((o) => found.has(o.id)).map((o) => o.title),
+      [LP_REVERSE, LP_FORWARD],
+      'обратное имя находит свойство целиком (обе стороны)',
+    );
+    const withDesc = linkPropertyEntityOptions(
+      buildPropertyListRows([lpRow({ description: 'планирование версии' })], [lpLinkType()]),
+    );
+    assert.equal(visibleEntityIds(withDesc, 'планирование', new Set()).size, 2, 'поиск по описанию');
+  });
+
+  it('без известного типа связи обратное имя назвать нечем — пары нет, сторона одна', () => {
+    const options = linkPropertyEntityOptions(
+      buildPropertyListRows([lpRow({ config: null })], [lpLinkType()]),
+    );
+    assert.equal(options.length, 1);
+    assert.equal(options[0]!.note, undefined);
+  });
+});
+
+describe('entity-picker: комбо свойства-связи как поле «Тип мысли» (ошибка a7abe50e)', () => {
+  it('пустое поле подписано «без свойства», а не «поиск»; список — обе стороны со значком', async () => {
+    const { body } = installShim();
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'link-properties',
+      value: null,
+      placeholder: 'без свойства',
+      emptyLabel: 'без свойства',
+      linkPropertyRows: () => LP_ROWS,
+      onChange: () => undefined,
+    });
+    const { input, caret, pick } = parts(combo);
+    assert.equal(input.placeholder, 'без свойства', 'подпись пустого значения — «без свойства», не «поиск»');
+    assert.ok(pick.classList.contains('entity-combo-pick'), 'кнопка «…» — как у поля типа');
+    assert.ok(caret.classList.contains('entity-combo-caret'), 'каретка ▾ — как у поля типа');
+    input.emit('focus');
+    await flush();
+    const labels = itemRows(body).map((r) => r.querySelector('.type-combo-label')?.textContent ?? '');
+    assert.deepEqual(
+      labels,
+      ['без свойства', LP_REVERSE, LP_FORWARD],
+      'в списке — «без свойства» и обе стороны свойства-связи; скаляр и структурное отсеяны',
+    );
+    const sideRow = itemRows(body).find(
+      (r) => r.querySelector('.type-combo-label')?.textContent === LP_FORWARD,
+    );
+    assert.ok(sideRow !== undefined, 'строка-сторона есть в списке');
+    assert.ok(
+      sideRow!.querySelector('.property-list-link-icon') !== null,
+      'у строки-стороны значок конца связи (направление + оформление)',
+    );
+    assert.equal(
+      sideRow!.querySelector('.type-combo-note')?.textContent,
+      `(${LP_FORWARD} -> ${LP_REVERSE})`,
+    );
+  });
+
+  it('выбор стороны отдаёт вариант с linkProperty; крестик очищает значение', async () => {
+    const { body } = installShim();
+    const entities: Array<EntityOption | null> = [];
+    const ids: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'link-properties',
+      value: null,
+      emptyLabel: 'без свойства',
+      linkPropertyRows: () => LP_ROWS,
+      onChange: (id) => ids.push(id),
+      onChangeEntity: (opt) => entities.push(opt),
+    });
+    const { input, pick } = parts(combo);
+    input.emit('focus');
+    await flush();
+    const row = itemRows(body).find((r) => r.querySelector('.type-combo-label')?.textContent === LP_FORWARD);
+    assert.ok(row !== undefined, 'строка-сторона есть');
+    row!.emit('mousedown', mousedownEvent(row));
+    row!.click();
+    assert.equal(combo.value(), 'p1:source');
+    assert.deepEqual(
+      entities.at(-1)?.linkProperty,
+      { propertyId: 'p1', side: 'source', key: LP_FORWARD },
+    );
+    assert.deepEqual(ids, ['p1:source']);
+    assert.equal(pick.focused, true, 'фокус удержан на живом узле поля');
+
+    const remove = findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline');
+    assert.ok(remove !== undefined, 'у значения есть крестик очистки, как у поля типа');
+    remove!.emit('click', { stopPropagation: () => undefined });
+    assert.equal(combo.value(), null);
+    assert.equal(entities.at(-1), null, 'очистка отдаёт null');
+  });
+
+  it('кнопка «…» открывает тот же диалог пикера с полным списком свойства-связи', async () => {
+    const { body } = installShim();
+    const entities: Array<EntityOption | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'link-properties',
+      value: null,
+      emptyLabel: 'без свойства',
+      pickerTitle: 'Выбрать свойство связи',
+      linkPropertyRows: () => LP_ROWS,
+      onChange: () => undefined,
+      onChangeEntity: (opt) => entities.push(opt),
+    });
+    parts(combo).pick.click();
+    await flush();
+    await flush();
+    const rows = findAllByClass(body, 'entity-pick-row');
+    assert.equal(rows.length, 2, 'в диалоге — обе стороны свойства-связи (скаляр и структурное отсеяны)');
+    const target = rows.find((r) => findByClass(r, 'entity-pick-label')?.textContent === LP_REVERSE);
+    assert.ok(target !== undefined, 'в диалоге есть строка обратной стороны');
+    target!.click();
+    await flush();
+    assert.deepEqual(
+      entities.at(-1)?.linkProperty,
+      { propertyId: 'p1', side: 'target', key: LP_REVERSE },
+    );
+    assert.equal(combo.value(), 'p1:target');
   });
 });

@@ -44,17 +44,12 @@ import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
-import { buildEntityCombo, loadCrossNetworkCandidates } from '../lib/entity-picker.js';
+import { buildEntityCombo, loadCrossNetworkCandidates, type LinkPropertyPick } from '../lib/entity-picker.js';
 import {
   buildPropertyListRows,
   ensurePropertyLinkTypes,
   type PropertyListRow,
 } from '../lib/property-list.js';
-import {
-  buildLinkPropertyField,
-  LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
-  type LinkPropertyPick,
-} from '../lib/link-property-field.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
@@ -79,11 +74,19 @@ export type ThoughtPickItem =
   | { kind: 'new'; title: string; synonyms: string[]; raw: string };
 
 /**
- * Выбранное в диалоге СВОЙСТВО-связь — тип и поведение компонента поля
- * (`lib/link-property-field.ts`, ошибка dc175a5b). Реэкспорт: карточка диалога
- * и его потребители адресуют значение одним именем.
+ * Ширина выпадашек диалога добавления, px (ошибка 5c7f8376): списки типа мысли
+ * и свойства связи заметно шире узкого поля и должны совпадать по ширине.
+ * Выпадашка общего комбо-пикера позиционируется абсолютно и может быть шире
+ * поля. 560px — по фидбэку приёмки (прежние 640 были избыточны).
  */
-export type { LinkPropertyPick } from '../lib/link-property-field.js';
+export const ADD_DIALOG_DROPDOWN_MIN_WIDTH = 560;
+
+/**
+ * Выбранное в диалоге СВОЙСТВО-связь — значение четвёртого источника общего
+ * комбо-пикера (`lib/entity-picker.ts`, требование cdb6b52f). Реэкспорт:
+ * карточка диалога и его потребители адресуют значение одним именем.
+ */
+export type { LinkPropertyPick } from '../lib/entity-picker.js';
 
 /** Result of {@link pickThoughtsDialog} (null = cancelled). */
 export interface ThoughtPickResult {
@@ -211,11 +214,12 @@ function thoughtToCandidate(thought: Thought): DuplicateHit {
 }
 
 /**
- * Варианты поля «Свойство связи» строит переиспользуемый компонент
- * (`lib/link-property-field.ts`, ошибка dc175a5b): одна строка на КАЖДОЕ имя
- * стороны свойства-связи (прямое — источник, обратное — назначение) со
- * значком направления, как в общем списке свойств. Пункт «без свойства» —
- * связь создаётся бестиповой в направлении диалога.
+ * Варианты поля «Свойство связи» строит четвёртый источник общего комбо-пикера
+ * (`buildEntityCombo`, `kind: 'link-properties'`, требование cdb6b52f): одна
+ * строка на КАЖДОЕ имя стороны свойства-связи (прямое — источник, обратное —
+ * назначение) со значком направления, как в общем списке свойств. Пустое
+ * значение — свойство не выбрано: связь создаётся бестиповой в направлении
+ * диалога.
  */
 
 let mounted = false;
@@ -440,7 +444,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       emptyLabel: 'без типа',
       // Однообразная ширина выпадашек диалога (ошибка 5c7f8376): список типов
       // шире узкого поля и не уступает по ширине списку свойства связи.
-      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
+      dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         newThoughtTypeId = typeId;
       },
@@ -456,7 +460,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       placeholder: 'без типа',
       emptyLabel: 'без типа',
       // Та же ширина, что у списка типа мысли (ошибка 5c7f8376).
-      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
+      dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         linkTypeId = typeId;
         store.update({ lastUsedLinkTypeId: typeId });
@@ -466,8 +470,10 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       },
     });
 
-    // Поле «Свойство связи» (ошибка 1dd08949; компонент — ошибка dc175a5b):
-    // вместо типа связи — СВОЙСТВО-связь отдельными пунктами по именам сторон.
+    // Поле «Свойство связи» (ошибка 1dd08949; с версии 0.9.1 — четвёртый
+    // источник общего комбо-пикера, требование cdb6b52f): вместо типа связи —
+    // СВОЙСТВО-связь отдельными пунктами по именам сторон, тем же полем, что
+    // «Тип мысли» (кнопка «…», единый вид), пустое значение — «без свойства».
     // Выбранное имя стороны адресует серверу и свойство, и направление ребра;
     // свойство заполняется у добавляемой мысли значением якоря. Строки (реестр +
     // имена сторон) готовит вызывающий. Тип связи при этом не выбирается вовсе —
@@ -477,10 +483,19 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       ? opts.linkProperty?.rows ?? []
       : [];
     let linkPropertyPick: LinkPropertyPick | null = null;
-    const linkPropertyField = buildLinkPropertyField({
-      rows: propertyRows,
-      onChange: (pick) => {
-        linkPropertyPick = pick;
+    const linkPropertyCombo = buildEntityCombo({
+      networkId,
+      kind: 'link-properties',
+      value: null,
+      placeholder: t('linkProperty.empty'),
+      emptyLabel: t('linkProperty.empty'),
+      pickerTitle: t('linkProperty.pickerTitle'),
+      // Однообразная ширина выпадашек диалога (ошибка 5c7f8376).
+      dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
+      linkPropertyRows: () => propertyRows,
+      onChange: () => undefined,
+      onChangeEntity: (option) => {
+        linkPropertyPick = option?.linkProperty ?? null;
       },
     });
 
@@ -501,8 +516,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     });
     const linkPropertyFieldWrap = fieldRow({
       label: 'Свойство связи',
-      control: linkPropertyField.root,
-      class: 'add-types-field',
+      control: linkPropertyCombo.root,
+      class: 'add-types-field add-link-property-combo',
     });
     if (allowCreate) typeRow.append(thoughtTypeField);
     if (allowLinkProperty) typeRow.append(linkPropertyFieldWrap);

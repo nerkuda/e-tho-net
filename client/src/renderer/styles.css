@@ -6169,8 +6169,8 @@ button.type-tree-toggle {
 }
 
 /* Уточнение строки выпадашки (пара имён типа связи в скобках «(прямое -> обратное)»)
-   — серым справа от имени, обрезается многоточием (lib/link-property-field.ts,
-   ошибки dc175a5b / 5817b009). */
+   — серым справа от имени, обрезается многоточием (общий комбо-пикер
+   lib/entity-picker.ts, четвёртый источник «свойство связи»; требование cdb6b52f). */
 .type-combo-note {
   flex: none;
   max-width: 55%;
@@ -6184,80 +6184,18 @@ button.type-tree-toggle {
   margin: 4px 8px;
 }
 
-/* Поле выбора свойства-связи (ошибка 5817b009): та же рамка, что у поля значения,
- * кнопка «…» — как у поля типа мысли (`.entity-combo-pick`): живой поиск в поле
- * плюс диалог выбора с полным списком. */
-.link-property-field {
-  position: relative;
-  min-width: 0;
-  width: 100%;
-}
-
-.link-property-field-box {
-  position: relative;
-  flex-wrap: nowrap;
-  padding-right: 28px;
-}
-
-.link-property-field-box .link-property-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  padding: 0;
-}
-
-.link-property-field-box .link-property-input:focus {
-  outline: none;
-}
-
-/* Диалог выбора свойства-связи (кнопка «…»): поиск внутри и полный список. */
-.link-property-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.link-property-picker-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.link-property-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.link-property-option:hover {
-  background: var(--accent-soft);
-}
-
-.link-property-option-label {
+/* Строка модального пикера для варианта-свойства-связи: подпись именем стороны
+   и парная подпись серым (у варианта нет облачка мысли). */
+.entity-pick-label {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.link-property-option-note {
+.entity-pick-note {
   flex: none;
   color: var(--muted, #8a93a5);
   font-size: 0.85em;
-}
-
-.link-property-option-none .link-property-option-label {
-  color: var(--muted, #8a93a5);
-}
-
-.link-property-empty {
-  margin: 4px 8px;
 }
 
 /* «Создать новый „<имя>“» row — quick type creation from the type picker. */

@@ -348,8 +348,9 @@ function svgNode(name: string, attrs: Record<string, string | number>): SVGEleme
  *  (источник) — сверху вниз, входящая (цель) — снизу вверх.
  *
  *  Экспортирован для переиспользования другими списками выбора свойства-связи
- *  (поле «Свойство связи» с живым поиском, `lib/link-property-field.ts`): значок
- *  рисует ТОЛЬКО общий список свойств — второй отрисовки линии со стрелкой нет. */
+ *  (общий комбо-пикер, четвёртый источник «свойство связи», `lib/entity-picker.ts`;
+ *  требование cdb6b52f): значок рисует ТОЛЬКО общий список свойств — второй
+ *  отрисовки линии со стрелкой нет. */
 export function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
   const { size, mid, start, end, wing } = LINK_END_ICON;
   const down = spec.direction === 'down';
