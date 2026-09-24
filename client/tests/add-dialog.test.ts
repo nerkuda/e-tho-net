@@ -780,11 +780,23 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     // «источник/назначение · связь …» больше нет (ошибка 5817b009).
     assert.equal(sourceRow.querySelectorAll('.type-combo-note')[0]?.textContent, `(${SIDE_FORWARD} -> ${SIDE_REVERSE})`);
     assert.equal(targetRow.querySelectorAll('.type-combo-note')[0]?.textContent, `(${SIDE_FORWARD} -> ${SIDE_REVERSE})`);
-    assert.equal(sourceRow.querySelectorAll('.property-list-link-icon')[0]?.style.transform, undefined, 'источник — стрелка вправо');
+    const sourceIcon = sourceRow.querySelectorAll('.property-list-link-icon')[0]!;
+    const targetIcon = targetRow.querySelectorAll('.property-list-link-icon')[0]!;
+    // Направление — вертикальное (задача 88def930): исходящая сторона вниз,
+    // входящая вверх; проверяемо структурно (атрибут и точки шеврона), карта
+    // и структуры кладут предков сверху, потомков снизу.
+    assert.equal(sourceIcon.getAttribute('data-direction'), 'down', 'источник — стрелка вниз');
+    assert.equal(targetIcon.getAttribute('data-direction'), 'up', 'назначение — стрелка вверх');
+    assert.equal(sourceIcon.style.transform, undefined, 'зеркалирования значка больше нет');
     assert.equal(
-      targetRow.querySelectorAll('.property-list-link-icon')[0]?.style.transform,
-      'scaleX(-1)',
-      'назначение — значок зеркалится',
+      sourceIcon.children[1]?.getAttribute('points'),
+      '4,9 9,14 14,9',
+      'шеврон исходящей стороны смотрит вниз',
+    );
+    assert.equal(
+      targetIcon.children[1]?.getAttribute('points'),
+      '4,8 9,3 14,8',
+      'шеврон входящей стороны смотрит вверх',
     );
     const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
     assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');

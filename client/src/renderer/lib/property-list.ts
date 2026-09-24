@@ -13,14 +13,15 @@
  *     закрывает пикер; контекстное меню — только «Изменить».
  *
  * **Строка.** Скалярное свойство — одна строка; свойство-связь — ВСЕГДА две
- * строки: имя в источнике (`side: 'source'`, стрелка вправо) и имя в
- * назначении (`side: 'target'`, стрелка влево). Порядок — единый алфавит по
+ * строки: имя в источнике (`side: 'source'`, исходящая — стрелка вниз) и имя в
+ * назначении (`side: 'target'`, входящая — стрелка вверх, задача 88def930).
+ * Порядок — единый алфавит по
  * отображаемому имени строки, скаляры и концы связей вперемешку. Структурные
  * «Родители» / «Потомки» — системные строки: одно имя, замок, без активации и
  * меню (как было в прежнем списке).
  *
  * **Колонки.** «Имя» (перед именем — иконка типа значения у скаляров либо
- * единый значок «короткая линия со стрелкой на конце» в эффективном
+ * единый значок «вертикальная линия со стрелкой на конце» в эффективном
  * оформлении связи), «Тип значения»
  * (у конца связи «связь (имя - имя)» с обрезкой имён по 30-й символ,
  * полное имя — в тултипе; ⓘ с описанием свойства), «Кол-во типов» (число
@@ -264,12 +265,15 @@ export function valueTypeCellLabel(row: PropertyListRow, full = false): string {
 }
 
 /**
- * Спецификация единого значка конца связи (требование 4): зеркалирование
- * направления плюс эффективное оформление линии. Чистая — юнит-тест.
+ * Спецификация единого значка конца связи (требование 4): направление стрелки
+ * плюс эффективное оформление линии. Чистая — юнит-тест.
  */
 export interface LinkEndIconSpec {
-  /** У имени назначения значок зеркалится — стрелка смотрит влево. */
-  mirrored: boolean;
+  /** Направление стрелки значка: `down` — исходящая связь (владелец — источник,
+   *  «потомки»-подобная), `up` — входящая (владелец — цель,
+   *  «родители»-подобная). Совпадает с расположением предков (сверху) и
+   *  потомков (снизу) на карте и в структурах (задача 88def930). */
+  direction: LinkEndDirection;
   /** Толщина линии в px (1..6) из эффективных настроек связи. */
   width: number;
   style: LinkStyle;
@@ -277,10 +281,14 @@ export interface LinkEndIconSpec {
   color: string | null;
 }
 
-/** Направление стрелки значка: `right` у имени источника, `left` у имени
- *  назначения (требование 4). Чистая — юнит-тест. */
-export function linkEndDirection(side: LinkPropertySide | null): 'left' | 'right' {
-  return side === 'target' ? 'left' : 'right';
+/** Направление стрелки значка. */
+export type LinkEndDirection = 'down' | 'up';
+
+/** Направление стрелки значка: `down` у стороны-источника (исходящая связь),
+ *  `up` у стороны-цели (входящая); бестиповый конец ведёт себя как исходящий.
+ *  Чистая — юнит-тест. */
+export function linkEndDirection(side: LinkPropertySide | null): LinkEndDirection {
+  return side === 'target' ? 'up' : 'down';
 }
 
 /** Собирает спецификацию значка из стороны строки и эффективного оформления
@@ -290,7 +298,7 @@ export function linkEndIconSpec(
   visual: ResolvedLinkVisual | null,
 ): LinkEndIconSpec {
   return {
-    mirrored: linkEndDirection(side) === 'left',
+    direction: linkEndDirection(side),
     width: linkEndLineWidth(visual),
     style: linkEndLineStyle(visual),
     color: visual?.color ?? null,
@@ -300,10 +308,12 @@ export function linkEndIconSpec(
 /**
  * Геометрия единого значка в CSS-пикселях: `viewBox` совпадает с размером
  * элемента, поэтому толщина линии задаётся настройками связи напрямую (1..6px).
- * Линия вдвое короче прежних 22px, стрелка-шеврон приделана вершиной к её
- * концу — один цельный указатель направления вместо линии и глифа рядом.
+ * Линия вертикальная, стрелка-шеврон приделана вершиной к её концу — один
+ * цельный указатель направления вместо линии и глифа рядом. Направление —
+ * координатами (вниз/вверх), а не зеркалированием: предки на карте сверху,
+ * потомки снизу (задача 88def930).
  */
-const LINK_END_ICON = { size: 18, y: 9, x1: 3, x2: 14, wingX: 9, wingDy: 5 } as const;
+const LINK_END_ICON = { size: 18, mid: 9, start: 3, end: 14, wing: 5 } as const;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -321,15 +331,22 @@ function svgNode(name: string, attrs: Record<string, string | number>): SVGEleme
   return node;
 }
 
-/** Единый значок конца связи: `svg` с линией и приделанной к её концу стрелкой
- *  (требование 4). Оформление линии — из эффективных настроек связи;
- *  направление — зеркалированием (`mirrored`), поэтому значок один.
+/** Единый значок конца связи: `svg` с вертикальной линией и приделанной к её
+ *  концу стрелкой (требование 4; задача 88def930). Оформление линии — из
+ *  эффективных настроек связи; направление задаётся координатами: исходящая
+ *  (источник) — сверху вниз, входящая (цель) — снизу вверх.
  *
  *  Экспортирован для переиспользования другими списками выбора свойства-связи
  *  (поле «Свойство связи» с живым поиском, `lib/link-property-field.ts`): значок
  *  рисует ТОЛЬКО общий список свойств — второй отрисовки линии со стрелкой нет. */
 export function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
-  const { size, y, x1, x2, wingX, wingDy } = LINK_END_ICON;
+  const { size, mid, start, end, wing } = LINK_END_ICON;
+  const down = spec.direction === 'down';
+  // Линия: у исходящей рисуется сверху вниз, у входящей — снизу вверх; вершина
+  // шеврона — на конце линии (`y2`), крылья — на `wing` позади неё.
+  const y1 = down ? start : end;
+  const y2 = down ? end : start;
+  const wingY = down ? y2 - wing : y2 + wing;
   const svg = svgNode('svg', {
     class: 'property-list-link-icon',
     viewBox: `0 0 ${size} ${size}`,
@@ -340,16 +357,16 @@ export function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
     'stroke-width': spec.width,
     'stroke-linecap': 'round',
     'stroke-linejoin': 'round',
+    'data-direction': spec.direction,
     'aria-hidden': 'true',
   }) as SVGSVGElement;
-  const line = svgNode('line', { x1, y1: y, x2, y2: y });
+  const line = svgNode('line', { x1: mid, y1, x2: mid, y2 });
   const dash = linkEndDashArray(spec.style);
   if (dash !== null) line.setAttribute('stroke-dasharray', dash);
   const head = svgNode('polyline', {
-    points: `${wingX},${y - wingDy} ${x2},${y} ${wingX},${y + wingDy}`,
+    points: `${mid - wing},${wingY} ${mid},${y2} ${mid + wing},${wingY}`,
   });
   svg.append(line, head);
-  if (spec.mirrored) svg.style.transform = 'scaleX(-1)';
   if (spec.color !== null) svg.style.color = spec.color;
   return svg;
 }
