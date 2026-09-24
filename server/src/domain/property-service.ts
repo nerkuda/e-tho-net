@@ -4313,7 +4313,12 @@ function setPropertyValueForProperty(
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     const nowMs = Date.now();
     return {
-      id: '',
+      // Свойство-связь — проекция рёбер (ADR «свойство-связь — проекция ребра»):
+      // строки `property_values` у неё нет, поэтому id честно `null`, а не
+      // пустая строка-заглушка (ошибка 5a50f906 — `id: ""` в ответе читалось
+      // как «id есть, но пустой»). Адрес ребра — `link_id` из
+      // `LinkPropertyValueItem` (чтение значений) / `etn.properties.add`.
+      id: null,
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: prop.id,

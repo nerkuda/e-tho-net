@@ -8,6 +8,7 @@
  *   * `on_duplicate: fail | reuse | update`;
  *   * `chronicle[]` (append-only), `comment`, `properties`, `attachments`,
  *     `links[].properties`, `links[].comment`;
+ *   * свойство-связь в ответе — `id: null`, скаляр — непустой id (5a50f906);
  *   * транзакционный откат — частичный успех невозможен;
  *   * HOME-мысль не деактивируется через `active: false`;
  *   * ключ свойства не из реестра → NOT_FOUND;
@@ -45,11 +46,11 @@ interface WriteItemResult {
   matched_on: 'title' | 'synonym' | 'partial' | null;
   comment?: { id: string; version: number; action: 'created' | 'updated' };
   chronicle?: Array<{ id: string; version: number }>;
-  properties?: Record<string, { id: string }>;
+  properties?: Record<string, { id: string | null }>;
   links?: Array<{
     id: string;
     version: number;
-    properties?: Record<string, { id: string }>;
+    properties?: Record<string, { id: string | null }>;
     comment?: { id: string; version: number };
   }>;
   attachments?: Array<{ id: string }>;
@@ -986,6 +987,112 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.equal(result.isError, true);
         const text = toolText(result);
         assert.ok(text.includes('NOT_FOUND'), text);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('свойство-связь в ответе отдаёт id: null, а не пустую строку (5a50f906)', async () => {
+    // Симптом: `items[i].properties["<связь>"].id === ""`, хотя ребро создано;
+    // у скалярного свойства id заполнен. Свойство-связь — проекция рёбер, у неё
+    // нет строки `property_values`, поэтому id честно `null`.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Онтология: тип-носитель + скаляр «Статус» + свойство-связь; всё одним батчем.
+        const ontology = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ ref: 'bearer', name: 'TEST 0.8.4 — носитель' }],
+            properties: [
+              { ref: 'status', name: 'Статус', value_type: 'text' },
+              {
+                ref: 'rel',
+                name: 'TEST 0.8.4 — фикс-связь',
+                value_type: 'link',
+                name_forward: 'TEST 0.8.4 связь прямая',
+                name_reverse: 'TEST 0.8.4 связь обратная',
+              },
+            ],
+            type_properties: [
+              { owner: 'thought_type', type_ref: 'bearer', property_ref: 'status' },
+              { owner: 'thought_type', type_ref: 'bearer', property_ref: 'rel' },
+            ],
+          },
+        });
+        assert.equal(ontology.isError, undefined, toolText(ontology));
+
+        // Свойство-связь хранит не входной `name`, а display-имя стороны
+        // типа связи (требование 38eaa15c) — ключом для записи берём
+        // фактическое имя из реестра.
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const linkProp = ndb
+          .prepare("SELECT name FROM properties_v WHERE value_type = 'link'")
+          .get() as { name: string } | undefined;
+        assert.ok(linkProp !== undefined, 'link property must be registered');
+        const linkKey = linkProp.name;
+
+        // Цель связи — обычная мысль.
+        const target = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'target', thought: { title: 'TEST 0.8.4 — цель связи' } }],
+            },
+          }),
+        );
+        const targetId = target.items[0]!.id;
+
+        // Носитель со скаляром и свойством-связью в одном ответе.
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                ref: 'owner',
+                thought: { title: 'TEST 0.8.4 — носитель связи', type: 'TEST 0.8.4 — носитель' },
+                properties: {
+                  'Статус': 'готово',
+                  [linkKey]: targetId,
+                },
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        const props = data.items[0]?.properties ?? {};
+        const ownerId = data.items[0]!.id;
+
+        // Скаляр — id строки property_values (непустой).
+        const scalarId = props['Статус']?.id;
+        assert.equal(typeof scalarId, 'string', `scalar id must be a string: ${JSON.stringify(props)}`);
+        assert.notEqual(scalarId, '', 'scalar property id must not be empty');
+
+        // Свойство-связь — `null`, и точно не пустая строка.
+        assert.ok(linkKey in props, `link property missing in response: ${JSON.stringify(props)}`);
+        assert.equal(
+          props[linkKey]?.id,
+          null,
+          `link property id must be null, got ${JSON.stringify(props[linkKey])}`,
+        );
+
+        // Ребро действительно создано (ответ не врёт об отсутствии записи).
+        // Направление ребра зависит от стороны привязки — проверяем оба конца.
+        const edge = ndb
+          .prepare(
+            `SELECT COUNT(*) AS c FROM links_v
+             WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)`,
+          )
+          .get(ownerId, targetId, targetId, ownerId) as { c: number };
+        assert.equal(edge.c, 1, 'the link property edge must exist');
       } finally {
         await handle.close();
       }
