@@ -15,7 +15,8 @@ import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { buildValueEditor } from '../editor/value-editor.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { showDialog } from '../lib/dialog.js';
@@ -188,7 +189,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
         }
       }
     }
-    if (applied > 0) notice(`Значения применены (${applied}).`);
+    if (applied > 0) notice(`Значения применены (${applied}).`, 'success');
     if (failed > 0) notice(`Не удалось применить: ${failed}.`, 'error');
     // Своя запись значения (в т.ч. свойства-связи) не поднимает версию мысли, а
     // собственному клиенту не приходит realtime-эхо (G8), поэтому ни таблица
@@ -208,7 +209,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     try {
       refs = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
     } catch (err) {
-      body.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      body.replaceChildren(operationError(err));
       return;
     }
     selectedRefs = refs;
@@ -224,7 +225,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       );
       for (const [typeId, defs] of perType) defsByType.set(typeId, defs);
     } catch (err) {
-      body.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      body.replaceChildren(operationError(err));
       return;
     }
 

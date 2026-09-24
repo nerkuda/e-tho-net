@@ -14,6 +14,7 @@
 import { restoreSession } from '../app.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
+import { errorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
@@ -76,7 +77,7 @@ export function buildOnboarding(): HTMLElement {
     size: 'm',
     onClick: () => void submitForm(),
   });
-  const formError = span('', 'error-text');
+  const formError = errorLine();
   submitRow.append(submit, formError);
   form.append(labelField, urlField, keyField, submitRow);
   card.append(formTitle, form);

@@ -39,6 +39,7 @@ import { rowSplitter } from '../../editor/splitter.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
+import { operationError } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../../lib/metadata.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
@@ -312,7 +313,7 @@ function renderLoading(): void {
 
 function renderError(err: unknown): void {
   if (tableWrap === null) return;
-  tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+  tableWrap.replaceChildren(operationError(err));
 }
 
 function gotoPage(next: number): void {

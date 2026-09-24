@@ -47,6 +47,7 @@ import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
 import { uiTabs } from '../lib/ui/tabs.js';
 import { div, el, errText, span } from '../lib/dom.js';
+import { footerErrorLine } from '../lib/ui/messages.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -204,7 +205,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // Строка ошибки живёт в sticky-футере (ниже), а не в теле: она обязана быть
   // видна на любой вкладке/разделе диалога, в т.ч. при прокрученном
   // содержимом (ошибка add8d09d).
-  const errorLine = span('', 'error-text settings-error');
+  const errorLine = footerErrorLine('settings-error');
 
   body.append(nav, content);
 
@@ -581,7 +582,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       navButtons[key].setAttribute('aria-current', key === active ? 'page' : 'false');
     }
     content.replaceChildren();
-    errorLine.textContent = '';
+    errorLine.clear();
     let section: HTMLElement;
     switch (active) {
       case 'user':
@@ -724,7 +725,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       return;
     }
     setBusy(true);
-    errorLine.textContent = '';
+    errorLine.clear();
     try {
       await applyDiff();
       // Resync from the store: empty display_name normalises to null, etc.
@@ -744,10 +745,10 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.cloudGap = draft.cloudGap;
       refreshApplyButtons();
       renderContent();
-      notice('Настройки сохранены.');
+      notice('Настройки сохранены.', 'success');
       if (thenClose) closeDialog();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     } finally {
       setBusy(false);
     }

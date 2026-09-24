@@ -88,6 +88,7 @@ import {
   showDialog,
 } from '../lib/dialog.js';
 import { div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { footerErrorLine, operationError, operationErrorText } from '../lib/ui/messages.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { showLinkStyleDialog } from '../editor/style-dialog.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
@@ -173,7 +174,7 @@ export type RegistryRow = PropertyRegistryRow;
  */
 export function showPropertyManagerDialog(): void {
   const networkId = requireNetworkId();
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   let cachedRows: RegistryRow[] | null = null;
 
   const list = buildPropertyList({
@@ -188,7 +189,7 @@ export function showPropertyManagerDialog(): void {
   });
 
   const body = div('form-stack');
-  body.append(list.root, errorLine);
+  body.append(list.root);
 
   function onChanged(): void {
     cachedRows = null;
@@ -203,7 +204,7 @@ export function showPropertyManagerDialog(): void {
       try {
         rows = await etn.propertyRegistry.list(networkId);
       } catch (err) {
-        errorLine.textContent = `Ошибка: ${errText(err)}`;
+        errorLine.show(operationErrorText(err));
         return;
       }
       cachedRows = rows;
@@ -335,6 +336,8 @@ export function showPropertyManagerDialog(): void {
     title: 'Свойства',
     body,
     size: 'l',
+    // Ошибки реестра — в панели кнопок диалога (требование 397c5a56).
+    footerError: errorLine,
     buttons: [{ label: 'Закрыть', primary: true }],
     // Фокус в поиске: ↑/↓ и Enter сразу работают по списку (требование 9).
     onMount: () => list.focusSearch(),
@@ -907,7 +910,7 @@ export function openPropertyManagerEditor(
   // Server snapshot: starts at the row passed in, refreshed after a successful
   // apply, kept on a failed apply so a retry re-diffs against the same state.
   let current: RegistryRow | null = property;
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   const body = div('form-stack');
   // Auto-acquire the registry-row lock (task 4f141756). For a new property
   // there is no id yet, so we skip acquire (the editor stays usable; the
@@ -1539,11 +1542,12 @@ export function openPropertyManagerEditor(
     if (lockedCategory !== null && categoryOf(next) !== lockedCategory) {
       // Защита: запрет смены категории (требование 5a82c709).
       typeSelect.value = prev;
-      errorLine.textContent =
-        'Сменить категорию (скаляр ↔ связь) нельзя: значения связи живут рёбрами, а не в таблице значений.';
+      errorLine.show(
+        'Сменить категорию (скаляр ↔ связь) нельзя: значения связи живут рёбрами, а не в таблице значений.',
+      );
       return;
     }
-    errorLine.textContent = '';
+    errorLine.clear();
     // При смене скалярного вида между собой — сбрасываем вид-специфичное.
     if (prev !== 'link' && next !== 'link') {
       if (prev === 'text' && next !== 'text') {
@@ -1560,10 +1564,10 @@ export function openPropertyManagerEditor(
 
   function revalidateName(): void {
     if (nameClash(draft.name) !== null) {
-      errorLine.textContent = DUP_NAME_MSG;
+      errorLine.show(DUP_NAME_MSG);
       if (applyBtn !== null) applyBtn.disabled = true;
     } else {
-      if (errorLine.textContent === DUP_NAME_MSG) errorLine.textContent = '';
+      if (errorLine.textContent === DUP_NAME_MSG) errorLine.clear();
       if (applyBtn !== null) applyBtn.disabled = false;
     }
   }
@@ -1590,16 +1594,16 @@ export function openPropertyManagerEditor(
     // Базовые проверки.
     if (draft.valueType === 'link') {
       if (draft.nameForward.trim() === '' || draft.nameReverse.trim() === '') {
-        errorLine.textContent = 'Укажите имена обеих сторон.';
+        errorLine.show('Укажите имена обеих сторон.');
         return;
       }
     } else if (draft.name.trim() === '') {
-      errorLine.textContent = 'Название свойства обязательно.';
+      errorLine.show('Название свойства обязательно.');
       return;
     }
     const name = draft.valueType === 'link' ? draft.nameForward.trim() : draft.name.trim();
     if (nameClash(name) !== null) {
-      errorLine.textContent = DUP_NAME_MSG;
+      errorLine.show(DUP_NAME_MSG);
       return;
     }
 
@@ -1716,7 +1720,7 @@ export function openPropertyManagerEditor(
       onChanged();
       close();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
@@ -2290,7 +2294,7 @@ function buildUsagePanel(
       const usage: PropertyUsage = await etn.propertyRegistry.usage(networkId, propertyId);
       renderUsage(usage);
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
     }
   }
 
@@ -2410,7 +2414,7 @@ function buildMetadataRowsFromProperty(property: RegistryRow): HTMLElement {
  */
 export function showLinkTypesTreeDialog(): void {
   const networkId = requireNetworkId();
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '340px';
   const body = div('form-stack');
@@ -2431,7 +2435,7 @@ export function showLinkTypesTreeDialog(): void {
     }),
     searchInput,
   );
-  body.append(toolbar, tableWrap, errorLine);
+  body.append(toolbar, tableWrap);
 
   let expanded = new Set<string>();
   let searchQuery = '';
@@ -2467,7 +2471,7 @@ export function showLinkTypesTreeDialog(): void {
           counts = {};
         }
       } catch (err) {
-        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        tableWrap.replaceChildren(operationError(err));
         return;
       }
       cachedTypes = types;
@@ -2588,6 +2592,8 @@ export function showLinkTypesTreeDialog(): void {
     title: 'Типы связей',
     body,
     size: 'm',
+    // Ошибки списка — в панели кнопок (требование 397c5a56).
+    footerError: errorLine,
     buttons: [{ label: 'Закрыть', primary: true }],
   });
 

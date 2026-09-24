@@ -30,7 +30,8 @@ import type { ThoughtTypeView } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
-import { div, el, errText, span } from '../../lib/dom.js';
+import { div, el } from '../../lib/dom.js';
+import { errorLine as panelErrorLine, operationError } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
@@ -106,7 +107,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   });
   headerRow.append(headerLabel, addBtn);
   const tableWrap = div('admin-table-wrap views-tab-table-wrap');
-  const errorLine = span('', 'error-text');
+  const errorLine = panelErrorLine();
   root.append(headerRow, tableWrap, errorLine);
 
   /** Latest loaded snapshot — drives both the rendered rows and any
@@ -204,7 +205,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       views = ownViewsOf(resp.data, typeId);
       renderRows();
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
     } finally {
       loading = false;
     }

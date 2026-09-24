@@ -26,6 +26,7 @@ import type { SystemLoggingStatus } from '@etn/shared';
 import type { ClientLogState, DeleteLogsResult } from '../../main/ipc/contract.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
+import { errorParagraph, setStatusText } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { uiButton } from '../lib/ui/button.js';
 
@@ -48,8 +49,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
   const clientMsg = span('', 'muted');
 
   function setClientMsg(text: string, isError = false): void {
-    clientMsg.textContent = text;
-    clientMsg.className = isError ? 'error-text' : 'muted';
+    setStatusText(clientMsg, text, isError);
   }
 
   function renderClient(): void {
@@ -155,8 +155,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
   const serverMsg = span('', 'muted');
 
   function setServerMsg(text: string, isError = false): void {
-    serverMsg.textContent = text;
-    serverMsg.className = isError ? 'error-text' : 'muted';
+    setStatusText(serverMsg, text, isError);
   }
 
   function renderServer(): void {
@@ -168,7 +167,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       // Admin-only endpoints refused us or the server is unreachable — the
       // block shows the reason and stays inert (08-ui-spec.md §9.7).
       serverBox.append(
-        el('p', 'error-text', serverError),
+        errorParagraph(serverError),
         el('p', 'muted', 'Управление журналом сервера доступно администратору при подключённом сервере.'),
       );
       return;

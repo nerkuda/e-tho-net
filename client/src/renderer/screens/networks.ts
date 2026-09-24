@@ -14,6 +14,7 @@ import { disconnect, openNetwork } from '../app.js';
 import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
+import { errorParagraph, footerErrorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import type { NetworkListItem } from '@etn/shared';
@@ -72,7 +73,7 @@ export function buildNetworks(): HTMLElement {
   card.append(userLine);
 
   const list = div('networks-list');
-  const errorLine = el('p', 'error-text');
+  const errorLine = errorParagraph();
   errorLine.hidden = true;
   card.append(list, errorLine);
 
@@ -148,13 +149,9 @@ export async function showCreateNetworkDialog(): Promise<void> {
   const descInput = el('input', 'text-input');
   descInput.type = 'text';
   descInput.maxLength = 2000;
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   const body = div('form-stack');
-  body.append(
-    field('Название сети', nameInput),
-    field('Описание (необязательно)', descInput),
-    errorLine,
-  );
+  body.append(field('Название сети', nameInput), field('Описание (необязательно)', descInput));
 
   let creating = false;
   await new Promise<void>((resolve) => {
@@ -162,6 +159,9 @@ export async function showCreateNetworkDialog(): Promise<void> {
       title: 'Создать мыслесеть',
       body,
       size: 's',
+      // Ошибка создания — в панели кнопок, единственное обязательное место
+      // ошибки диалога (требование 397c5a56).
+      footerError: errorLine,
       buttons: [
         { label: 'Отмена', onClick: () => resolve() },
         {
@@ -173,7 +173,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
               if (creating) return;
               const name = nameInput.value.trim();
               if (name === '') {
-                errorLine.textContent = 'Введите название сети.';
+                errorLine.show('Введите название сети.', { field: () => nameInput });
                 return;
               }
               creating = true;
@@ -183,7 +183,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
                 close();
                 await openNetwork(network.id);
               } catch (err) {
-                errorLine.textContent = errText(err);
+                errorLine.show(errText(err));
               } finally {
                 creating = false;
                 resolve();

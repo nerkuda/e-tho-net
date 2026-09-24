@@ -81,6 +81,7 @@ import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon } from '../lib/thought-cloud.js';
 import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
+import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLine } from '../lib/ui/messages.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
@@ -382,7 +383,7 @@ function treeToggle(
 /** Opens the thought-types tree dialog (L6/L21). */
 export function showThoughtTypesDialog(): void {
   const networkId = requireNetworkId();
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '340px';
   const body = div('form-stack');
@@ -417,7 +418,7 @@ export function showThoughtTypesDialog(): void {
     }),
     searchInput,
   );
-  body.append(toolbar, tableWrap, errorLine);
+  body.append(toolbar, tableWrap);
 
   // L21: the root type is always expanded; everything else starts collapsed.
   let expanded = new Set<string>();
@@ -456,7 +457,7 @@ export function showThoughtTypesDialog(): void {
           etn.types.getThoughtTypeCounts(networkId),
         ]);
       } catch (err) {
-        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        tableWrap.replaceChildren(operationError(err));
         return;
       }
       cachedTypes = types;
@@ -623,6 +624,8 @@ export function showThoughtTypesDialog(): void {
     title: 'Типы мыслей',
     body,
     size: 'm',
+    // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
+    footerError: errorLine,
     buttons: [{ label: 'Закрыть', primary: true }],
   });
   void reload();
@@ -836,7 +839,7 @@ export function showThoughtTypeEditor(
   // The id of the type created in this session — handed to the caller when
   // the dialog closes.
   let createdId: string | null = null;
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
 
   // ---- Tabs (задача b8301c16, требование 344b8798; общий механизм a57e7998)
   // Состояние черновика живёт в замыкании выше (draft, templateMd, props…)
@@ -910,6 +913,13 @@ export function showThoughtTypeEditor(
   });
   topRow.append(iconBox, nameInput, settingsBtn);
   descriptionPane.append(topRow);
+
+  /**
+   * Адрес ошибок имени: вкладка «Описание» (там живёт поле) + само поле.
+   * Клик по строке ошибки в футере переключает на эту вкладку и ставит фокус
+   * (требование 397c5a56).
+   */
+  const nameAddress = (): ErrorAddress => ({ tab: 'description', field: () => nameInput });
 
   // Parent picker (L21). The root type has no parent; the picked value is
   // staged and re-checked by the server on apply (a type in use cannot be
@@ -999,8 +1009,9 @@ export function showThoughtTypeEditor(
       draft.parent_id ?? findRootType(store.state.thoughtTypes)?.id ?? null,
     onOverrideApplied: onChanged,
     // Ошибки записи привязок идут в общую строку панели кнопок: пользователь
-    // может находиться на любой вкладке (ошибка add8d09d).
+    // может находиться на любой вкладке; клик по строке вернёт на «Свойства».
     errorLine,
+    errorAddress: { tab: 'properties' },
     onSave: () => {
       // Эмулируем клик по «Записать» — `close` тут no-op, диалог не закрываем.
       void apply('stay', () => undefined);
@@ -1050,9 +1061,9 @@ export function showThoughtTypeEditor(
   function revalidateName(): void {
     const clash = nameClash(nameInput.value) !== null;
     if (clash) {
-      errorLine.textContent = DUP_NAME_MSG;
+      errorLine.show(DUP_NAME_MSG, nameAddress());
     } else if (errorLine.textContent === DUP_NAME_MSG) {
-      errorLine.textContent = '';
+      errorLine.clear();
     }
     if (applyBtn !== null) applyBtn.disabled = clash;
     if (saveBtn !== null) saveBtn.disabled = clash;
@@ -1100,14 +1111,14 @@ export function showThoughtTypeEditor(
   async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
     // Строка ошибки в панели кнопок общая для диалога: перед новой попыткой
     // гасим прошлое сообщение (иначе оно «залипает» и видно на всех вкладках).
-    errorLine.textContent = '';
+    errorLine.clear();
     const name = nameInput.value.trim();
     if (name === '') {
-      errorLine.textContent = 'Название типа обязательно.';
+      errorLine.show('Название типа обязательно.', nameAddress());
       return;
     }
     if (nameClash(name) !== null) {
-      errorLine.textContent = DUP_NAME_MSG;
+      errorLine.show(DUP_NAME_MSG, nameAddress());
       return;
     }
     const description = descArea.value.trim();
@@ -1171,7 +1182,7 @@ export function showThoughtTypeEditor(
                   err.details.thoughts_count,
                 ))
               ) {
-                errorLine.textContent = 'Смена родителя отменена.';
+                errorLine.show('Смена родителя отменена.');
                 return;
               }
               const reparentVersion = await readFreshTypeVersion(
@@ -1227,7 +1238,7 @@ export function showThoughtTypeEditor(
       onChanged(current.id);
       if (mode === 'close') close();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
@@ -1400,15 +1411,18 @@ function buildStagedPropertySection(opts: {
   onOverrideApplied?: () => void;
   /**
    * Общая строка ошибки диалога (в панели кнопок): ошибки записи привязок
-   * выводятся сюда, чтобы быть видимыми на любой вкладке (ошибка add8d09d).
+   * выводятся сюда, чтобы быть видимыми на любой вкладке. Клик по строке
+   * ведёт на вкладку «Свойства» (требование 397c5a56).
    */
-  errorLine: HTMLElement;
+  errorLine: FooterErrorLine;
+  /** Адрес ошибок привязок — вкладка «Свойства» для перехода по клику. */
+  errorAddress: ErrorAddress;
   /** Команда «Сохранить» для заглушки несохранённого типа (задача e7352642):
    *  запись без закрытия диалога; после неё секция свойств оживает (id
    *  появляется). У существующего типа — `undefined`, заглушка не нужна. */
   onSave?: () => void;
 }): StagedPropertySection {
-  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine, onSave } = opts;
+  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine, errorAddress, onSave } = opts;
   // Текущее «живое» id типа: для НОВОГО — стартует `null`, после успешного
   // `applyChanges(targetId)` обновляется до созданного id — заглушка
   // (задача e7352642) перестаёт показываться, секция оживает. У
@@ -1978,7 +1992,7 @@ function buildStagedPropertySection(opts: {
         inherited = defs;
       }
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
       return;
     }
     if (box.isConnected) everMounted = true;
@@ -2037,7 +2051,7 @@ function buildStagedPropertySection(opts: {
           );
         }
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err), errorAddress);
         render();
         return false;
       }
@@ -2051,7 +2065,7 @@ function buildStagedPropertySection(opts: {
           ownDraft.map((d) => d.id),
         );
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err), errorAddress);
         return false;
       }
     }
@@ -2072,7 +2086,7 @@ function buildStagedPropertySection(opts: {
           write.value,
         );
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err), errorAddress);
         render();
         return false;
       }
@@ -2080,7 +2094,7 @@ function buildStagedPropertySection(opts: {
       if (draftEntry !== undefined) draftEntry.initial = draftEntry.value;
     }
     deletedIds = [];
-    errorLine.textContent = '';
+    errorLine.clear();
     render();
     // Refresh the inherited view too: reparenting on the same apply may have
     // changed what this type receives from its ancestors.
@@ -2176,7 +2190,7 @@ async function openAttachDialog(opts: {
   await ensurePropertyLinkTypes(networkId, registryRows);
 
   return new Promise((resolve) => {
-    const errorLine = span('', 'error-text');
+    const errorLine = footerErrorLine();
 
     /** Строки каталога по текущему снимку каталога типов связей. */
     const list = buildPropertyList({
@@ -2198,7 +2212,7 @@ async function openAttachDialog(opts: {
     /** Активация строки: подтверждение перенимаемых привязок потомков, затем
      *  возврат черновика привязки — выбранное имя задаёт сторону. */
     async function choose(row: PropertyListRow): Promise<void> {
-      errorLine.textContent = '';
+      errorLine.clear();
       const warning = await warnDescendantBindings(networkId, row.registry, {
         ownerType,
         types,
@@ -2235,12 +2249,14 @@ async function openAttachDialog(opts: {
     }
 
     const body = div('form-stack');
-    body.append(list.root, errorLine);
+    body.append(list.root);
 
     const close = showDialog({
       title: 'Добавить свойство',
       body,
       size: 'l',
+      // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
+      footerError: errorLine,
       buttons: [
         { label: 'Отмена' },
         {
@@ -2449,7 +2465,7 @@ function openDescriptionOverrideDialog(opts: {
   onDone: () => void;
 }): void {
   const { networkId, ownerType, typeId, def, onDone } = opts;
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
 
   const area = el('textarea', 'textarea-input');
   area.value = def.description ?? '';
@@ -2464,7 +2480,7 @@ function openDescriptionOverrideDialog(opts: {
       'Здесь задаётся описание свойства только для этого типа (и его подчинённых, пока те не переопределят сами).',
   );
   hint.style.margin = '0';
-  body.append(hint, area, errorLine);
+  body.append(hint, area);
 
   /** Applies the override (or clears it when the field is empty). */
   async function apply(close: () => void): Promise<void> {
@@ -2480,7 +2496,7 @@ function openDescriptionOverrideDialog(opts: {
       onDone();
       close();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
@@ -2488,6 +2504,8 @@ function openDescriptionOverrideDialog(opts: {
     title: `Описание свойства — «${def.key}»`,
     body,
     size: 's',
+    // Ошибка записи — в панели кнопок (требование 397c5a56).
+    footerError: errorLine,
     buttons: [
       { label: 'Отменить' },
       ...(def.description_overridden
@@ -2508,7 +2526,7 @@ function openDescriptionOverrideDialog(opts: {
                     onDone();
                     close();
                   } catch (err) {
-                    errorLine.textContent = errText(err);
+                    errorLine.show(errText(err));
                   }
                 })();
               },

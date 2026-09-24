@@ -30,6 +30,15 @@ import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/**
+ * Элемент ли это кнопки словаря (`ui-btn`). В футере диалога рядом с кнопками
+ * лежит строка ошибки (`footerError`, требование 397c5a56) — её клик ничего
+ * не делает, поэтому искать «неосновную кнопку» нужно среди кнопок.
+ */
+function isUiButton(node: ShimElement): boolean {
+  return node.className.split(/\s+/).includes('ui-btn');
+}
+
 /** Keydown-like event with the exact shape the dialog reads. */
 function key(name: string, mods: Record<string, boolean> = {}): any {
   return {
@@ -162,10 +171,13 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
   const input = formStack.querySelector('textarea') ?? new ShimElement('textarea');
   const lineList =
     formStack.children.find((c) => c.className.split(/\s+/).includes('add-list')) ?? new ShimElement('div');
-  const footer = box.children.find((c) => c.className === 'dialog-footer');
+  const footer = box.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
   const primaryBtn =
     footer?.children.find((c) => c.className.split(/\s+/).includes('ui-btn--primary')) ?? new ShimElement('button');
-  const cancelBtn = footer?.children.find((c) => c !== primaryBtn) ?? new ShimElement('button');
+  // Кнопка — элемент словаря (`ui-btn`): в футере рядом с ними лежит строка
+  // ошибки (`footerError`), её клик ничего не делает.
+  const cancelBtn =
+    footer?.children.find((c) => c !== primaryBtn && isUiButton(c)) ?? new ShimElement('button');
   const lineTitles = (): string[] =>
     lineList.children
       .filter((row) => row.className === 'add-list-item')
@@ -300,8 +312,10 @@ describe('заголовок диалога называет якорь, а не
       'Добавить мысль (вниз к «Источник драга»)',
     );
     // Отмена: диалог закрывается, ничего не создаётся.
-    const footer = box?.children.find((c) => c.className === 'dialog-footer');
-    footer?.children.find((c) => !c.className.split(/\s+/).includes('ui-btn--primary'))?.click();
+    const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+    footer?.children
+      .find((c) => isUiButton(c) && !c.className.split(/\s+/).includes('ui-btn--primary'))
+      ?.click();
     assert.equal(await done, undefined);
     store.update({ networkId: null, focus: null });
   });

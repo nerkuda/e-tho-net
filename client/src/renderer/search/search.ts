@@ -47,7 +47,8 @@ import { setFocus } from '../app.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import type { ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { openLinkInEditor } from '../editor/editor.js';
-import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
+import { div, el, renderHtml, setTooltip, span } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
@@ -593,7 +594,7 @@ async function run(): Promise<void> {
     renderResults(lastResults);
   } catch (err) {
     if (resultsBox !== null) {
-      resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
+      resultsBox.replaceChildren(operationError(err, 'Ошибка поиска'));
     }
   }
 }
@@ -616,7 +617,7 @@ async function runById(networkId: string, id: string): Promise<void> {
     if (chrome !== null) {
       const resultsBox = chrome.host.querySelector('.search-results');
       if (resultsBox !== null) {
-        resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
+        resultsBox.replaceChildren(operationError(err, 'Ошибка поиска'));
       }
     }
   }

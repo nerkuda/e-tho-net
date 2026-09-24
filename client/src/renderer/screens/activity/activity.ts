@@ -43,7 +43,8 @@ import {
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
-import { div, el, errText, span, setTooltip } from '../../lib/dom.js';
+import { div, el, span, setTooltip } from '../../lib/dom.js';
+import { operationError } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
@@ -537,7 +538,7 @@ function renderLoading(): void {
 
 function renderError(err: unknown): void {
   if (tableWrap === null) return;
-  tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+  tableWrap.replaceChildren(operationError(err));
   repaintPager();
 }
 

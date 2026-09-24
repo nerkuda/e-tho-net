@@ -36,3 +36,21 @@ export type {
   CollapsibleSection,
   CollapsibleClasses,
 } from './collapsible.js';
+
+// Сообщения и строки ошибок — единственный вид строк ошибок клиента
+// (задача e20761c2, требование 397c5a56).
+export {
+  ERROR_LINE_CLASS,
+  FIELD_ERROR_CLASS,
+  FOOTER_ERROR_CLASS,
+  ERROR_LINE_LINK_CLASS,
+  errorLine,
+  errorParagraph,
+  fieldError,
+  operationError,
+  operationErrorText,
+  setStatusText,
+  footerErrorLine,
+  isFooterErrorLine,
+} from './messages.js';
+export type { ErrorAddress, FooterErrorLine } from './messages.js';

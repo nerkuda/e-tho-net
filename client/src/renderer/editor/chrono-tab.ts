@@ -21,7 +21,8 @@ import type { Comment } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { div, el, errText, fmtDate, span } from '../lib/dom.js';
+import { div, el, errText, fmtDate } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../lib/metadata.js';
 import { notice } from '../lib/notice.js';
@@ -103,7 +104,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
       return;
     }
     const chrono = comments.filter((c) => c.kind === 'chronological');

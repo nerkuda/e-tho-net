@@ -18,7 +18,8 @@
 import { div, el, errText } from './dom.js';
 import { svgIcon } from './icons.js';
 import { iconButton, uiButton } from './ui/button.js';
-import { uiTabs } from './ui/tabs.js';
+import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
+import { uiTabs, type TabsHandle } from './ui/tabs.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -95,17 +96,20 @@ export interface DialogOptions {
    */
   customFooter?: HTMLElement;
   /**
-   * Строка ошибки в панели кнопок (футере) — видна при активной ЛЮБОЙ вкладке
-   * диалога (ошибка add8d09d «Сообщения об ошибках диалогов с вкладками видны
-   * на любой вкладке»).
+   * Строка ошибки в панели кнопок (футере) — ОБЯЗАТЕЛЬНОЕ место любой ошибки
+   * диалога: футер лежит вне тела и не переключается вместе с вкладками,
+   * поэтому сообщение видно при активной любой вкладке (требование 397c5a56
+   * «Сообщения диалога: любая ошибка — строкой на панели кнопок, клик ведёт к
+   * полю»; ранее — ошибка add8d09d).
    *
-   * Футер лежит вне тела диалога и не переключается вместе с вкладками,
-   * поэтому у диалога с вкладками глобальное сообщение о неудачной записи
-   * выводится сюда, а не в тело вкладки. Вызывающий создаёт элемент сам
-   * (`span('', 'error-text')`) и пишет в него текст (`footerError.textContent = …`).
-   * Ошибки, относящиеся к конкретному полю вкладки, допустимо дублировать на
-   * месте; относится только к дефолтному футеру ({@link buttons}), при
-   * {@link customFooter} вызывающий кладёт строку в свой футер.
+   * Строку создаёт {@link footerErrorLine} из `lib/ui/messages.ts`; у неё есть
+   * адрес ошибки (вкладка + поле) и клик по строке переключает на нужную
+   * вкладку и ставит фокус в проблемное поле — переход подключает этот каркас
+   * ({@link ErrorAddress}). Произвольный элемент (например, простой `span`)
+   * каркас принимает и ставит в футер как прежде — без перехода.
+   *
+   * Относится только к дефолтному футеру ({@link buttons}); при
+   * {@link customFooter} вызывающий кладёт строку в свой футер сам.
    */
   footerError?: HTMLElement;
   /**
@@ -265,6 +269,22 @@ function focusFirstField(backdrop: HTMLDivElement): void {
 }
 
 /**
+ * Переход по клику на строку ошибки панели кнопок
+ * ({@link DialogOptions.footerError}, требование 397c5a56): активирует вкладку
+ * (или собственное состояние вкладок вызывающего — {@link ErrorAddress.activate})
+ * и ставит фокус в проблемное поле. Поле берётся геттером уже ПОСЛЕ активации:
+ * панель вкладки ленива и к моменту показа ошибки могла быть ещё не построена.
+ */
+function navigateToError(address: ErrorAddress, tabs: TabsHandle | null): void {
+  address.activate?.();
+  if (address.tab !== undefined && tabs !== null) tabs.setActive(address.tab);
+  const field = address.field?.() ?? null;
+  if (field === null) return;
+  field.focus();
+  if (typeof field.scrollIntoView === 'function') field.scrollIntoView({ block: 'nearest' });
+}
+
+/**
  * Shows a modal dialog. Returns its close function. Opening while another
  * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */
@@ -293,6 +313,8 @@ export function showDialog(opts: DialogOptions): () => void {
   // Тело: либо вкладки (единый механизм lib/ui/tabs.ts), либо единый блок
   // тела. Оба варианта занимают оставшуюся высоту и прокручиваются внутри —
   // высота задана ролью, а не содержимым.
+  /** Дескриптор вкладок диалога — нужен переходу по клику на строку ошибки. */
+  let tabsHandle: TabsHandle | null = null;
   if (opts.tabs !== undefined && opts.tabs.length > 0) {
     // Признак вкладочного диалога: CSS фиксирует его высоту ролью, поэтому
     // переключение вкладок высоту не меняет (требование 13464c39).
@@ -303,6 +325,7 @@ export function showDialog(opts: DialogOptions): () => void {
       activeId: opts.activeTab,
       onChange: opts.onTabChange,
     });
+    tabsHandle = tabs;
     host.append(tabs.root);
     box.append(host);
   } else {
@@ -315,10 +338,15 @@ export function showDialog(opts: DialogOptions): () => void {
     box.append(opts.customFooter);
   } else if (opts.buttons !== undefined && opts.buttons.length > 0) {
     const footer = div('dialog-footer');
-    // Строка ошибки в панели кнопок — видна на любой вкладке (ошибка add8d09d).
-    // Кнопки прижимаются вправо, ошибка занимает свободное место слева.
+    // Строка ошибки в панели кнопок — видна на любой вкладке (требование
+    // 397c5a56): ошибка занимает свободное место слева, кнопки — справа.
     if (opts.footerError !== undefined) {
       footer.classList.add('dialog-footer-with-error');
+      // Строке словаря подключаем переход к вкладке и полю; произвольный
+      // элемент (старые вызовы) просто кладётся в футер.
+      if (isFooterErrorLine(opts.footerError)) {
+        opts.footerError.setNavigate((address) => navigateToError(address, tabsHandle));
+      }
       footer.append(opts.footerError);
     }
     for (const item of opts.buttons) {

@@ -21,6 +21,7 @@
  */
 import { openNetwork } from '../../app.js';
 import { div, el, errText, span } from '../../lib/dom.js';
+import { errorParagraph, footerErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { NetworkListItem } from '@etn/shared';
@@ -42,7 +43,7 @@ function roleBadge(role: string): HTMLElement {
  * revoked network is reflected immediately.
  */
 export function mountPicker(host: HTMLElement): void {
-  const errorLine = el('p', 'error-text');
+  const errorLine = errorParagraph();
   errorLine.hidden = true;
 
   const title = el('h1', 'picker-title', 'Открыть сеть');
@@ -131,9 +132,9 @@ export function mountPicker(host: HTMLElement): void {
     descInput.type = 'text';
     descInput.maxLength = 2000;
     descInput.placeholder = 'Описание (необязательно)';
-    const dialogError = span('', 'error-text');
+    const dialogError = footerErrorLine();
     const body = div('form-stack');
-    body.append(nameInput, descInput, dialogError);
+    body.append(nameInput, descInput);
 
     const { showDialog } = await import('../../lib/dialog.js');
     let busy = false;
@@ -141,6 +142,8 @@ export function mountPicker(host: HTMLElement): void {
       title: 'Создать мыслесеть',
       body,
       size: 's',
+      // Ошибка создания — в панели кнопок (требование 397c5a56).
+      footerError: dialogError,
       buttons: [
         { label: 'Отмена' },
         {
@@ -152,7 +155,7 @@ export function mountPicker(host: HTMLElement): void {
               if (busy) return;
               const name = nameInput.value.trim();
               if (name === '') {
-                dialogError.textContent = 'Введите название сети.';
+                dialogError.show('Введите название сети.', { field: () => nameInput });
                 return;
               }
               busy = true;
@@ -164,7 +167,7 @@ export function mountPicker(host: HTMLElement): void {
                 await refreshNetworkList();
                 await pickNetwork(network.id);
               } catch (err) {
-                dialogError.textContent = errText(err);
+                dialogError.show(errText(err));
               } finally {
                 busy = false;
               }

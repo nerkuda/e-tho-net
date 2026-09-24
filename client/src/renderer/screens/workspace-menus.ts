@@ -25,7 +25,8 @@ import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
 import { openAdminPanel } from '../admin/admin.js';
 import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { button, div, el, errText } from '../lib/dom.js';
+import { footerErrorLine } from '../lib/ui/messages.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -105,11 +106,11 @@ export function buildNetMenuItems(trashCount = 0): MenuItem[] {
 async function membersDialog(): Promise<void> {
   const networkId = requireNetworkId();
 
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   const body = div('form-stack');
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '260px';
-  body.append(tableWrap, errorLine);
+  body.append(tableWrap);
 
   let users: User[] = [];
   if (store.state.me?.is_admin === true) {
@@ -129,7 +130,7 @@ async function membersDialog(): Promise<void> {
     try {
       members = await etn.networks.listMembers(networkId);
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
       return;
     }
     const table = el('table', 'table-list');
@@ -167,7 +168,7 @@ async function membersDialog(): Promise<void> {
             clear: (nid, uid) => etn.locks.clear(nid, uid),
             onCleared: (message) => notice(message),
             onError: (message) => {
-              errorLine.textContent = message;
+              errorLine.show(message);
             },
             refresh: async () => {
               await refreshLockCounts();
@@ -221,7 +222,7 @@ async function membersDialog(): Promise<void> {
       await etn.networks.transferOwnership(networkId, userId);
       await refresh();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
@@ -233,7 +234,7 @@ async function membersDialog(): Promise<void> {
       await etn.networks.removeMember(networkId, userId);
       await refresh();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
@@ -275,7 +276,7 @@ async function membersDialog(): Promise<void> {
             addInput.value = '';
             await refresh();
           } catch (err) {
-            errorLine.textContent = errText(err);
+            errorLine.show(errText(err));
           }
         })();
       },
@@ -287,6 +288,8 @@ async function membersDialog(): Promise<void> {
     title: 'Участники сети',
     body,
     size: 'm',
+    // Ошибки записи — в панели кнопок (требование 397c5a56).
+    footerError: errorLine,
     buttons: [{ label: 'Закрыть', primary: true }],
   });
   await refresh();

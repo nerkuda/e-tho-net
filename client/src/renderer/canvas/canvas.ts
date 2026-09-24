@@ -2309,7 +2309,7 @@ async function createLinkFromDrop(
     // update, and animate the thought flowing into its new zone.
     requestZoneAnimation();
     scheduleRefresh();
-    notice('Связь создана.');
+    notice('Связь создана.', 'success');
   } catch (err) {
     notice(
       `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,

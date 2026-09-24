@@ -35,6 +35,7 @@ import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 // Строки кандидатов-дублей рисует общая фабрика облачка мысли.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showDialog } from '../lib/dialog.js';
+import { footerErrorLine } from '../lib/ui/messages.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
@@ -488,7 +489,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     });
 
     const candidates = div('dup-list');
-    const errorLine = span('', 'error-text');
+    const errorLine = footerErrorLine();
 
     const body = div('form-stack');
     const typeRow = div('add-types-row');
@@ -521,7 +522,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // исключительно кросс-режим (ea04a185), охват задан принудительно.
     const searchRow = div('add-search-row');
     searchRow.append(input);
-    body.append(modeRow, searchRow, hintLine, candidates, lineList, errorLine);
+    body.append(modeRow, searchRow, hintLine, candidates, lineList);
     if (crossNetwork !== undefined) {
       const note = el(
         'p',
@@ -603,7 +604,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                 );
                 return;
               }
-              errorLine.textContent = errText(err);
+              errorLine.show(errText(err));
             }
             return;
           }
@@ -629,7 +630,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
               ),
             );
           } catch (err) {
-            errorLine.textContent = errText(err);
+            errorLine.show(errText(err));
           }
         })();
       }, 200);
@@ -727,7 +728,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       }
       const first = lastCandidates[0];
       if (first === undefined) {
-        errorLine.textContent = 'Совпадений нет — создание новых мыслей отключено.';
+        errorLine.show('Совпадений нет — создание новых мыслей отключено.');
         return null;
       }
       return {
@@ -761,7 +762,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       );
       const resolvedId = existingId ?? exact?.id ?? null;
       if (resolvedId !== null && lines.some((l) => l.existingId === resolvedId)) {
-        errorLine.textContent = 'Эта мысль уже в списке.';
+        errorLine.show('Эта мысль уже в списке.');
         return;
       }
       lines.push({
@@ -772,7 +773,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         matchKind: matchKind ?? exact?.matched_on ?? null,
         networkId: resolvedId !== null ? candidateNetworks.get(resolvedId) ?? null : null,
       });
-      errorLine.textContent = '';
+      errorLine.clear();
       renderLines();
     }
 
@@ -787,7 +788,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         matchKind: 'title',
         networkId: candidate.network_id ?? null,
       });
-      errorLine.textContent = '';
+      errorLine.clear();
       renderLines();
     }
 
@@ -1054,6 +1055,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       title,
       body,
       size: 'm',
+      // Ошибка выбора/ввода — строкой в панели кнопок, а не в теле:
+      // единственное обязательное место ошибки диалога (требование 397c5a56).
+      footerError: errorLine,
       buttons: [
         { label: 'Отмена', onClick: () => finish(null) },
         {

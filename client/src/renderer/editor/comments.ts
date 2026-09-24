@@ -22,7 +22,8 @@ import {
   saveDraft,
   type DraftKind,
 } from '../drafts.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
@@ -226,7 +227,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
-      box.replaceChildren(span(`Не удалось загрузить: ${errText(err)}`, 'error-text'));
+      box.replaceChildren(operationError(err, 'Не удалось загрузить'));
       return;
     }
     permanent = comments.find((c) => c.kind === 'permanent') ?? null;

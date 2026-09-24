@@ -6209,6 +6209,16 @@ button.ui-btn--icon.trash-act {
   border-left-color: var(--danger);
 }
 
+/* Виды тоста (задача e20761c2): успех — зелёный токен, внимание — жёлтый;
+ * info остаётся акцентной полосой по умолчанию. */
+.notice.success {
+  border-left-color: var(--ok);
+}
+
+.notice.warning {
+  border-left-color: var(--warn);
+}
+
 .notice .notice-text {
   flex: 1;
   overflow-wrap: break-word;

@@ -12,10 +12,11 @@
 import type { AuditLogEntry, Network, User } from '@etn/shared';
 
 import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, fmtDateTime, span } from '../lib/dom.js';
+import { button, div, el, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
+import { operationError } from '../lib/ui/messages.js';
 
 /** Opens the admin panel modal. */
 export function openAdminPanel(): void {
@@ -49,7 +50,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
   try {
     users = await etn.admin.listUsers();
   } catch (err) {
-    content.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+    content.replaceChildren(operationError(err));
     return;
   }
 
@@ -276,7 +277,7 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
   try {
     networks = await etn.admin.listNetworks();
   } catch (err) {
-    content.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+    content.replaceChildren(operationError(err));
     return;
   }
   const wrap = div('admin-table-wrap');
@@ -413,7 +414,7 @@ function renderAudit(content: HTMLElement): void {
       table.append(tbody);
       tableWrap.replaceChildren(table, el('p', 'faint', `Всего записей: ${result.total}`));
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
     }
   }
 

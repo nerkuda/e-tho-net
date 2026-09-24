@@ -50,6 +50,7 @@ import {
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
+import { fieldError, footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import {
   buildAuthorshipSection,
@@ -177,7 +178,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
 
   // 3. Build the form DOM.
   const body = div('form-stack view-editor-body');
-  const errorLine = span('', 'error-text');
+  // Ошибка отбора живёт в панели кнопок (единственное обязательное место
+  // ошибки диалога, требование 397c5a56); у поля имени — дублирование.
+  const errorLine = footerErrorLine();
 
   // Name — required, ≤200.
   const nameInput = el('input', 'text-input') as HTMLInputElement;
@@ -187,7 +190,8 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   nameInput.placeholder = 'Название отбора (обязательно)';
   const nameField = div('field');
   nameField.append(el('label', 'field-label', `Имя отбора (тип «${typeName}»)`));
-  nameField.append(nameInput);
+  const nameError = fieldError();
+  nameField.append(nameInput, nameError);
 
   // Description — optional, ≤1000.
   const descInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
@@ -215,7 +219,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // Section title — жирный, чтобы «Критерии отбора» читались как заголовок.
   const criteriaLabel = el('div', 'view-editor-section-title', 'Критерии отбора');
 
-  body.append(nameField, descField, defaultField, criteriaLabel, criteria.root, errorLine);
+  body.append(nameField, descField, defaultField, criteriaLabel, criteria.root);
 
   // 4. Show the dialog. The Save button keeps itself open on validation
   //    failure; we close only when the IPC call resolves.
@@ -224,6 +228,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     title,
     body,
     size: 'l',
+    // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
+    // ошибки полей видны только на своей вкладке/месте, футер — всегда.
+    footerError: errorLine,
     buttons: [
       { label: 'Отмена' },
       {
@@ -244,6 +251,8 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
             version: initialVersion,
             criteria,
             errorLine,
+            nameError,
+            nameAddress: { field: () => nameInput },
           });
         },
       },
@@ -267,17 +276,22 @@ interface SaveCtx {
   isDefault: boolean;
   version: number;
   criteria: CriteriaBuilder;
-  errorLine: HTMLElement;
+  /** Строка ошибки в панели кнопок диалога. */
+  errorLine: FooterErrorLine;
+  /** Дублирование ошибки у поля имени. */
+  nameError: HTMLElement;
+  /** Адрес ошибок имени — поле имени для перехода по клику на строку. */
+  nameAddress: ErrorAddress;
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
   const trimmedName = ctx.name.trim();
   if (trimmedName === '') {
-    showFieldError(ctx, 'Укажите имя отбора.');
+    showNameError(ctx, 'Укажите имя отбора.');
     return;
   }
   if (trimmedName.length > THOUGHT_TYPE_VIEW_NAME_MAX) {
-    showFieldError(
+    showNameError(
       ctx,
       `Имя не должно превышать ${THOUGHT_TYPE_VIEW_NAME_MAX} символов (сейчас ${trimmedName.length}).`,
     );
@@ -301,7 +315,8 @@ async function onSave(ctx: SaveCtx): Promise<void> {
   const definitionJson = JSON.stringify(definition);
 
   if (ctx.saveBtn !== null) ctx.saveBtn.disabled = true;
-  ctx.errorLine.textContent = '';
+  ctx.errorLine.clear();
+  ctx.nameError.textContent = '';
 
   const { networkId, thoughtTypeId, view } = ctx.opts;
   try {
@@ -338,8 +353,19 @@ async function onSave(ctx: SaveCtx): Promise<void> {
 }
 
 function showFieldError(ctx: SaveCtx, message: string): void {
-  ctx.errorLine.textContent = message;
-  notice(message, 'error');
+  // Ошибка не про имя — убираем дублирование у поля, чтобы оно не «залипало».
+  ctx.nameError.textContent = '';
+  ctx.errorLine.show(message);
+}
+
+/**
+ * Ошибка поля имени: строка в панели кнопок (обязательное место) + то же
+ * сообщение дублируется у самого поля. Тоста нет — ошибка диалога не
+ * неблокирующее уведомление (требование 397c5a56).
+ */
+function showNameError(ctx: SaveCtx, message: string): void {
+  ctx.errorLine.show(message, ctx.nameAddress);
+  ctx.nameError.textContent = message;
 }
 
 // ---------------------------------------------------------------------------

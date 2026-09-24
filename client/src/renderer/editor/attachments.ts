@@ -22,6 +22,7 @@ import { invalidateIndicators } from '../canvas/canvas.js';
 import { rememberShownAttachments } from '../lib/attachment-events.js';
 import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { errorLine as panelErrorLine, footerErrorLine, operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -331,7 +332,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     try {
       attachments = await etn.attachments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
-      list.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      list.replaceChildren(operationError(err));
       return;
     }
     // Показанный список — источник индекса владельцев для realtime-событий
@@ -508,7 +509,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       content = await etn.attachments.getContent(networkId, attachment.id);
       if (content.text === null) throw new Error('не текстовое вложение');
     } catch (err) {
-      bottom.replaceChildren(span(`Не удалось прочитать файл: ${errText(err)}`, 'error-text'));
+      bottom.replaceChildren(operationError(err, 'Не удалось прочитать файл'));
       return;
     }
     // Another attachment may have been picked while the content loaded.
@@ -764,7 +765,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const descInput = el('input', 'text-input');
     descInput.type = 'text';
     descInput.maxLength = 2000;
-    const errorLine = span('', 'error-text');
+    const errorLine = footerErrorLine();
 
     const syncKind = (): void => {
       locationInput.placeholder = kindFile.checked ? 'Путь к файлу' : 'https://…';
@@ -782,7 +783,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         locationInput.value = picked.path;
         if (titleInput.value.trim() === '') titleInput.value = picked.name;
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err));
       }
     }
 
@@ -811,7 +812,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const searchResults = div('att-search-results');
     const searchHint = el('p', 'muted att-search-hint', 'Введите запрос для поиска по сети.');
     searchResults.append(searchHint);
-    const searchError = span('', 'error-text');
+    const searchError = panelErrorLine();
 
     const searchPanel = div('att-tab-panel hidden');
     searchPanel.append(
@@ -937,7 +938,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
               const kind = kindFile.checked ? 'file' : 'url';
               const location = locationInput.value.trim();
               if (location === '') {
-                errorLine.textContent = 'Укажите адрес или путь.';
+                errorLine.show('Укажите адрес или путь.');
                 return;
               }
               try {
@@ -965,7 +966,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
                 close();
                 await reload();
               } catch (err) {
-                errorLine.textContent = errText(err);
+                errorLine.show(errText(err));
               }
             })();
           },

@@ -1,0 +1,22 @@
+/* Строки ошибок `lib/ui` — добавки к базовому виду `.error-text`
+ * (он объявлен в `styles.css`). Виды здесь: кликабельная строка панели
+ * кнопок и строка-дублирование у поля (задача e20761c2, требование 397c5a56). */
+
+/* Кликабельная строка ошибки: клик ведёт на вкладку и к полю ошибки.
+ * Маркер ставит `footerErrorLine`, только когда у строки есть адрес и
+ * подключён переход (`lib/dialog.ts`). */
+.error-text--link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.error-text--link:hover {
+  color: var(--text);
+}
+
+/* Дублирование ошибки у поля — отдельным блоком под контролом. */
+.error-text.field-error {
+  display: block;
+  margin-top: 4px;
+}
