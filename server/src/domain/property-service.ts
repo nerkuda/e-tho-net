@@ -71,6 +71,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
+import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import {
   type CrossNetworkRefValue,
@@ -1068,7 +1069,17 @@ function listLiveLinkTargets(
   return out;
 }
 
-/** Создать ребро (низкоуровневая вставка, без связи с link-service — цикл). */
+/**
+ * Обеспечить ЖИВОЕ ребро тройки (низкоуровневая запись значения свойства-связи,
+ * без связи с link-service — цикл; примитив тройки — в `link-live-triple`).
+ *
+ * Тройка уникальна среди живых рёбер (требование 4591f837): живой дубль не
+ * плодим, а корзинное ребро той же тройки не блокирует постановку значения —
+ * снимаем пометку (комментарий сохраняется, как у `etn.links.restore`) и
+ * выставляем позицию. Иначе повторная установка значения поверх корзинного
+ * ребра падала сырой ошибкой `UNIQUE constraint failed` (миграция 029 держит
+ * тройку и за помеченными строками).
+ */
 function insertLinkRow(
   ndb: NetworkDb,
   sourceId: string,
@@ -1077,6 +1088,14 @@ function insertLinkRow(
   position: number,
   actorUserId: string,
 ): string {
+  const twin = findLinkTripleRow(ndb, sourceId, targetId, linkTypeId);
+  if (twin !== null) {
+    if (twin.marked_for_deletion) {
+      restoreLinkRow(ndb, twin.id, actorUserId);
+      setLinkPosition(ndb, twin.id, position, actorUserId);
+    }
+    return twin.id;
+  }
   const id = randomUUID();
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();

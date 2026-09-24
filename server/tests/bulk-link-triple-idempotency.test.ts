@@ -177,6 +177,36 @@ describe('bulk-связи: идемпотентность по тройке жи
     }
   });
 
+  it('link_parents восстанавливает корзинное ребро ТОЙ ЖЕ тройки, а не падает DUPLICATE', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const ndb = ctx.ndb;
+      const linkTypeId = insertLinkType(ndb, 'корзинная-же-тройка', ctx.adminId);
+      const a = insertThought(ndb, 'A', ctx.adminId);
+      const p = insertThought(ndb, 'P', ctx.adminId);
+      // Пара связана ровно той же тройкой, что просит операция, но ребро в корзине.
+      insertLink(ndb, p, a, linkTypeId, ctx.adminId, { trashed: true });
+
+      const result = await runBatch(ctx, 'link_parents', [a], {
+        parent_ids: [p],
+        link_type_id: linkTypeId,
+      });
+      assert.equal(result.affected, 1);
+      assert.deepEqual(result.failures, []);
+      assert.equal(
+        liveTripleCount(ndb, p, a, linkTypeId),
+        1,
+        'корзинное ребро той же тройки обязано восстановиться',
+      );
+      const rows = ndb
+        .prepare('SELECT COUNT(*) AS c FROM links_v WHERE source_id = ? AND target_id = ?')
+        .get(p, a) as { c: number };
+      assert.equal(rows.c, 1, 'вторая строка той же тройки не создаётся');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
   it('set_only_parents досоздаёт структурное ребро при существующей типизированной связи якоря', async () => {
     const ctx = await buildRestContext();
     try {

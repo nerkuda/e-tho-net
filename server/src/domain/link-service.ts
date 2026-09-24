@@ -33,6 +33,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import { listLinkHoldingLayers } from './holding-layers.js';
+import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
 import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.js';
 import { assertLinkTypeAssignable } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
@@ -394,13 +395,13 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
       // The root type is never assignable to links (L21, docs/08-ui-spec.md §8.1).
       assertLinkTypeAssignable(ndb, typeId);
     }
-    // Duplicate guard, NULL-safe on both sides.
-    const dup = ndb
-      .prepare(
-        'SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ? LIMIT 1',
-      )
-      .get(input.source_id, input.target_id, NULL_TYPE_SENTINEL, typeIdOrSentinel(typeId));
-    if (dup) {
+    // Duplicate guard по тройке среди ЖИВЫХ рёбер (требование 4591f837,
+    // миграция 029): живой дубль отвергается, а ребро той же тройки в корзине
+    // создание не блокирует — оно восстанавливается (комментарий сохраняется);
+    // иначе вставка упиралась бы в partial-UNIQUE-индекс, который освобождает
+    // тройку лишь для надгробия слоя.
+    const twin = findLinkTripleRow(ndb, input.source_id, input.target_id, typeId);
+    if (twin !== null && !twin.marked_for_deletion) {
       throw new EtnError('DUPLICATE', 'an equivalent link already exists', {
         source_id: input.source_id,
         target_id: input.target_id,
@@ -408,34 +409,40 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
       });
     }
 
-    const id = randomUUID();
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
-    ndb
-      .prepare(
-        `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, color, style, width, active, version,
+    let id: string;
+    if (twin !== null) {
+      restoreLinkRow(ndb, twin.id, actorUserId);
+      id = twin.id;
+    } else {
+      id = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, color, style, width, active, version,
                             created_at, updated_at, created_by, updated_by,
                             created_at_ms, updated_at_ms)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        ndb.layerId,
-        input.source_id,
-        input.target_id,
-        typeId,
-        input.position ?? 0,
-        input.color ?? null,
-        input.style ?? null,
-        input.width ?? null,
-        input.active === false ? 0 : 1,
-        now,
-        now,
-        actorUserId,
-        actorUserId,
-        nowMs,
-        nowMs,
-      );
+        )
+        .run(
+          id,
+          ndb.layerId,
+          input.source_id,
+          input.target_id,
+          typeId,
+          input.position ?? 0,
+          input.color ?? null,
+          input.style ?? null,
+          input.width ?? null,
+          input.active === false ? 0 : 1,
+          now,
+          now,
+          actorUserId,
+          actorUserId,
+          nowMs,
+          nowMs,
+        );
+    }
     // Task 053751b5 (0.7.2) — extend createLink to take `properties`/`comment`
     // so the batch `etn.thoughts.write` tool and other callers can write
     // knowledge onto the link in the same transaction. Both are optional;
