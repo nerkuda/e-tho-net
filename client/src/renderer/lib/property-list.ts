@@ -323,8 +323,12 @@ function svgNode(name: string, attrs: Record<string, string | number>): SVGEleme
 
 /** Единый значок конца связи: `svg` с линией и приделанной к её концу стрелкой
  *  (требование 4). Оформление линии — из эффективных настроек связи;
- *  направление — зеркалированием (`mirrored`), поэтому значок один. */
-function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
+ *  направление — зеркалированием (`mirrored`), поэтому значок один.
+ *
+ *  Экспортирован для переиспользования другими списками выбора свойства-связи
+ *  (поле «Свойство связи» с живым поиском, `lib/link-property-field.ts`): значок
+ *  рисует ТОЛЬКО общий список свойств — второй отрисовки линии со стрелкой нет. */
+export function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
   const { size, y, x1, x2, wingX, wingDy } = LINK_END_ICON;
   const svg = svgNode('svg', {
     class: 'property-list-link-icon',

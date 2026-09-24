@@ -43,6 +43,9 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
       this.defaultPrevented = true;
     },
     stopPropagation(): void {},
+    // Общая выпадашка подсказок гасит Esc через `stopImmediatePropagation`;
+    // шим считает это no-op — диалог всё равно получает Esc и закрывается.
+    stopImmediatePropagation(): void {},
   };
 }
 
@@ -657,7 +660,35 @@ const REGISTRY: any[] = [
   },
 ];
 
-describe('openAddDialog: поле «Свойство связи» (ошибка 1dd08949)', () => {
+/** Открытый список-подсказчик поля «Свойство связи» (общая выпадашка, живой поиск). */
+function propertySuggestList(): ShimElement {
+  const body = (globalThis as any).document.body as ShimElement;
+  const list = body.children.find((c) => c.className.split(/\s+/).includes('type-combo-list'));
+  assert.ok(list !== undefined, 'список поля «Свойство связи» открыт');
+  return list!;
+}
+
+/** Подписи-имена пунктов открытого списка поля (без значков и уточнений). */
+function propertySuggestNames(list: ShimElement): string[] {
+  return list
+    .querySelectorAll('.type-combo-item')
+    .map((row) => row.querySelectorAll('.type-combo-label')[0]?.textContent ?? '');
+}
+
+/** Выбирает пункт поля «Свойство связи» по имени стороны (через живой поиск). */
+async function choosePropertySide(formStack: ShimElement, label: string): Promise<void> {
+  const input = formStack.querySelector('.link-property-input');
+  assert.ok(input !== null, 'поле «Свойство связи» — поле ввода с живым поиском');
+  input!.focus();
+  await settle();
+  const row = propertySuggestList()
+    .querySelectorAll('.type-combo-item')
+    .find((r) => r.querySelectorAll('.type-combo-label')[0]?.textContent === label);
+  assert.ok(row !== undefined, `в списке есть пункт «${label}»`);
+  row!.click();
+}
+
+describe('openAddDialog: поле «Свойство связи» (ошибка 1dd08949, доработка dc175a5b)', () => {
   const writes: any[][] = [];
   const creates: any[] = [];
   const batches: any[][] = [];
@@ -723,15 +754,34 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     return { done, formStack, backdrop };
   }
 
-  it('поле «Свойство связи» перечисляет имена сторон; поля «Тип связи» нет', async () => {
+  it('поле — ввод с живым поиском; в списке имена сторон со значком и подписью', async () => {
     armEtn();
     const { done, formStack } = await openCanvasDialog();
-    const select = formStack.querySelector('.add-link-property');
-    assert.ok(select !== null, 'поле «Свойство связи» есть');
+    const input = formStack.querySelector('.link-property-input');
+    assert.ok(input !== null, 'поле «Свойство связи» — поле ввода');
+    assert.equal(input!.tagName, 'input', 'никакой «открывашки»-select нет');
+    assert.equal(formStack.querySelector('.add-link-property'), null, 'прежнего select-поля нет');
+    input!.focus();
+    await settle();
+    const list = propertySuggestList();
     assert.deepEqual(
-      select!.children.map((o) => o.textContent),
-      ['без свойства', SIDE_FORWARD, SIDE_REVERSE],
-      'в списке — пустой пункт и обе стороны свойства-связи, скаляр не попал',
+      propertySuggestNames(list),
+      ['без свойства', SIDE_REVERSE, SIDE_FORWARD],
+      'в списке — «без свойства» и обе стороны свойства-связи (единый алфавит имён), скаляр не попал',
+    );
+    // Проверяемая структура пункта: значок направления + подпись стороны/пары.
+    const rows = list.querySelectorAll('.type-combo-item');
+    const sideRows = rows.filter((r) => r.querySelectorAll('.property-list-link-icon').length === 1);
+    assert.equal(sideRows.length, 2, 'у каждого пункта-стороны — единый значок конца связи');
+    const targetRow = rows[1]!;
+    const sourceRow = rows[2]!;
+    assert.equal(sourceRow.querySelectorAll('.type-combo-note')[0]?.textContent, `источник · связь (${SIDE_FORWARD} - ${SIDE_REVERSE})`);
+    assert.equal(targetRow.querySelectorAll('.type-combo-note')[0]?.textContent, `назначение · связь (${SIDE_FORWARD} - ${SIDE_REVERSE})`);
+    assert.equal(sourceRow.querySelectorAll('.property-list-link-icon')[0]?.style.transform, undefined, 'источник — стрелка вправо');
+    assert.equal(
+      targetRow.querySelectorAll('.property-list-link-icon')[0]?.style.transform,
+      'scaleX(-1)',
+      'назначение — значок зеркалится',
     );
     const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
     assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');
@@ -740,12 +790,37 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await done;
   });
 
+  it('живой поиск сужает список до свойства (обе его стороны), скаляры не предлагаются', async () => {
+    armEtn();
+    const { done, formStack } = await openCanvasDialog();
+    const input = formStack.querySelector('.link-property-input')!;
+    input.focus();
+    await settle();
+    input.value = 'включает';
+    input.emit('input');
+    await settle();
+    assert.deepEqual(
+      propertySuggestNames(propertySuggestList()),
+      [SIDE_REVERSE, SIDE_FORWARD],
+      'по обратному имени нашлось свойство — обе его стороны (как поиск общего списка свойств)',
+    );
+    input.value = 'Скаляр';
+    input.emit('input');
+    await settle();
+    const body = (globalThis as any).document.body as ShimElement;
+    assert.equal(
+      body.children.some((c) => c.className.split(/\s+/).includes('type-combo-list')),
+      false,
+      'скалярное свойство в поле не предлагается — вариантов нет, список закрыт',
+    );
+    pressEscape();
+    await done;
+  });
+
   it('выбор стороны-источника заполняет свойство новой мысли значением якоря', async () => {
     armEtn();
     const { done, formStack } = await openCanvasDialog();
-    const select = formStack.querySelector('.add-link-property')!;
-    select.value = 'p1:source';
-    select.emit('change');
+    await choosePropertySide(formStack, SIDE_FORWARD);
     const input = formStack.querySelector('textarea')!;
     input.value = 'Задача';
     input.emit('keydown', key('Enter'));
@@ -762,9 +837,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
   it('выбор стороны-назначения пишет обратное имя (ребро развернётся сервером)', async () => {
     armEtn();
     const { done, formStack } = await openCanvasDialog();
-    const select = formStack.querySelector('.add-link-property')!;
-    select.value = 'p1:target';
-    select.emit('change');
+    await choosePropertySide(formStack, SIDE_REVERSE);
     const input = formStack.querySelector('textarea')!;
     input.value = 'Задача';
     input.emit('keydown', key('Enter'));
@@ -813,9 +886,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     const multiRadio = modeRow.children[1]!.children[0]!;
     multiRadio.checked = true;
     multiRadio.emit('change');
-    const select = formStack.querySelector('.add-link-property')!;
-    select.value = 'p1:source';
-    select.emit('change');
+    await choosePropertySide(formStack, SIDE_FORWARD);
     const input = formStack.querySelector('textarea')!;
     input.value = 'Существующая';
     input.emit('input');
@@ -870,9 +941,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     const { done, formStack } = await openCanvasDialog();
     const modeRow = formStack.children.find((c) => c.className === 'add-mode-row')!;
     modeRow.children[1]!.children[0]!.emit('change');
-    const select = formStack.querySelector('.add-link-property')!;
-    select.value = 'p1:source';
-    select.emit('change');
+    await choosePropertySide(formStack, SIDE_FORWARD);
     const input = formStack.querySelector('textarea')!;
     input.value = 'Существующая';
     input.emit('input');

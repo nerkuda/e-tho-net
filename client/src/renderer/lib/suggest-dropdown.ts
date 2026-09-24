@@ -46,6 +46,7 @@ import type { LinkStyle } from '@etn/shared';
 
 import { div, el, positionBodyDropdown, span } from './dom.js';
 import { svgIcon } from './icons.js';
+import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
 import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 
 /** Одна выбираемая строка выпадашки. */
@@ -74,6 +75,18 @@ export interface SuggestEntry {
   indent?: number;
   /** Свотч линии перед строкой — вид линии типа связи (цвет/штрих/толщина). */
   swatch?: { color: string | null; style: LinkStyle | null; width: number | null } | null;
+  /**
+   * Значок конца связи перед подписью (линия со стрелкой, зеркалится у обратной
+   * стороны). Рисуется общим списком свойств (`buildLinkEndIcon`) — строки
+   * выбора стороны свойства-связи выглядят как строки списка свойств
+   * (`lib/link-property-field.ts`, ошибка dc175a5b).
+   */
+  linkEnd?: LinkEndIconSpec | null;
+  /**
+   * Уточнение справа от подписи (серым): сторона и имена пары типа связи
+   * («источник · связь (прямое - обратное)»). Нет — строка без уточнения.
+   */
+  note?: string;
   /**
    * Узел дерева с раскрытием: слева рисуется треугольник ▾/▸. Клик по
    * треугольнику вызывает `onToggle` (источник меняет своё состояние
@@ -359,6 +372,11 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
           swatch.style.borderTop = `${width}px ${dash} ${entry.swatch.color ?? '#9aa3b2'}`;
           row.append(swatch);
         }
+        // Значок конца связи (направление + оформление линии) — тот же, что в
+        // общем списке свойств: второй отрисовки линии со стрелкой нет.
+        if (entry.linkEnd !== undefined && entry.linkEnd !== null) {
+          row.append(buildLinkEndIcon(entry.linkEnd));
+        }
         if (entry.thought !== undefined) {
           // Строка-мысль — готовое облачко фабрики: значок, цвета,
           // начертание, бледность неактуальной, метка корзины и обрезка
@@ -378,6 +396,10 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
           label.title = entry.label;
           label.style.flex = '1';
           row.append(label);
+          // Уточнение (сторона и имена пары типа связи) — серым справа от имени.
+          if (entry.note !== undefined && entry.note !== '') {
+            row.append(span(entry.note, 'type-combo-note'));
+          }
         }
         if (entry.disabled !== true) {
           // Фокус остаётся в поле — нет blur-коммита во время выбора.

@@ -6554,6 +6554,17 @@ body.cloud-dragging * {
   text-overflow: ellipsis;
 }
 
+/* Уточнение строки выпадашки (сторона и имена пары типа связи) — серым справа
+   от имени, обрезается многоточием (lib/link-property-field.ts, ошибка dc175a5b). */
+.type-combo-note {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted, #8a93a5);
+  font-size: 0.85em;
+}
+
 .type-combo-empty {
   margin: 4px 8px;
 }

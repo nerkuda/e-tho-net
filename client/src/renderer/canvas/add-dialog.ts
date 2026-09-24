@@ -48,8 +48,9 @@ import {
   ensurePropertyLinkTypes,
   type PropertyListRow,
 } from '../lib/property-list.js';
+import { buildLinkPropertyField, type LinkPropertyPick } from '../lib/link-property-field.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import { UI_STATE_KEY, type LinkPropertySide, type Thought } from '@etn/shared';
+import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
@@ -68,22 +69,11 @@ export type ThoughtPickItem =
   | { kind: 'new'; title: string; synonyms: string[]; raw: string };
 
 /**
- * Выбранное в диалоге СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает
- * не тип связи, а имя стороны свойства-связи — `key` (display-имя стороны)
- * адресует серверу и свойство, и направление ребра. Свойство заполняется у
- * ДОБАВЛЯЕМОЙ мысли значением якоря (мысли, от которой строится связь), так
- * что ребро попадает в типизированное свойство, а не в «Свойства вне типа».
+ * Выбранное в диалоге СВОЙСТВО-связь — тип и поведение компонента поля
+ * (`lib/link-property-field.ts`, ошибка dc175a5b). Реэкспорт: карточка диалога
+ * и его потребители адресуют значение одним именем.
  */
-export interface LinkPropertyPick {
-  /** Id реестровой записи свойства — для карточки/диагностики. */
-  propertyId: string;
-  /** Сторона свойства (`source` — имя прямого, `target` — обратного). */
-  side: LinkPropertySide;
-  /** Display-имя выбранной стороны: ключ записи (`properties.set`). Имя
-   *  однозначно задаёт направление ребра (name_forward → исходящее,
-   *  name_reverse → входящее). */
-  key: string;
-}
+export type { LinkPropertyPick } from '../lib/link-property-field.js';
 
 /** Result of {@link pickThoughtsDialog} (null = cancelled). */
 export interface ThoughtPickResult {
@@ -211,14 +201,12 @@ function thoughtToCandidate(thought: Thought): DuplicateHit {
 }
 
 /**
- * Варианты поля «Свойство связи» (ошибка 1dd08949): одна строка на КАЖДОЕ имя
- * стороны свойства-связи (прямое — источник, обратное — назначение), как в
- * общем списке свойств (`buildPropertyListRows`). Пустое значение —
- * «без свойства»: тогда связь создаётся бестиповой в направлении диалога.
+ * Варианты поля «Свойство связи» строит переиспользуемый компонент
+ * (`lib/link-property-field.ts`, ошибка dc175a5b): одна строка на КАЖДОЕ имя
+ * стороны свойства-связи (прямое — источник, обратное — назначение) со
+ * значком направления, как в общем списке свойств. Пункт «без свойства» —
+ * связь создаётся бестиповой в направлении диалога.
  */
-function propertySideOptions(rows: readonly PropertyListRow[]): Array<{ value: string; label: string }> {
-  return rows.map((row) => ({ value: row.id, label: row.name }));
-}
 
 let mounted = false;
 /** Mounts the dialog opener into the canvas drag gestures (called by the workspace). */
@@ -471,35 +459,22 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       },
     });
 
-    // Поле «Свойство связи» (ошибка 1dd08949): вместо типа связи —
-    // СВОЙСТВО-связь, отдельными пунктами имена его сторон. Выбранное имя
-    // стороны адресует серверу и свойство, и направление ребра; свойство
-    // заполняется у добавляемой мысли значением якоря. Строки (реестр + имена
-    // сторон) готовит вызывающий. Тип связи при этом не выбирается вовсе —
+    // Поле «Свойство связи» (ошибка 1dd08949; компонент — ошибка dc175a5b):
+    // вместо типа связи — СВОЙСТВО-связь отдельными пунктами по именам сторон.
+    // Выбранное имя стороны адресует серверу и свойство, и направление ребра;
+    // свойство заполняется у добавляемой мысли значением якоря. Строки (реестр +
+    // имена сторон) готовит вызывающий. Тип связи при этом не выбирается вовсе —
     // направление «вверх/вниз» остаётся только для бестиповой связи, когда
     // свойство не выбрано.
     const propertyRows: readonly PropertyListRow[] = allowLinkProperty
-      ? (opts.linkProperty?.rows ?? []).filter((row) => row.valueType === 'link' && !row.structural)
+      ? opts.linkProperty?.rows ?? []
       : [];
     let linkPropertyPick: LinkPropertyPick | null = null;
-    const linkPropertySelect = el('select', 'select-input add-link-property') as HTMLSelectElement;
-    // Пустой пункт — «без свойства»: бестиповая связь в направлении диалога.
-    const noneOption = el('option') as HTMLOptionElement;
-    noneOption.value = '';
-    noneOption.textContent = 'без свойства';
-    linkPropertySelect.append(noneOption);
-    for (const side of propertySideOptions(propertyRows)) {
-      const option = el('option') as HTMLOptionElement;
-      option.value = side.value;
-      option.textContent = side.label;
-      linkPropertySelect.append(option);
-    }
-    linkPropertySelect.addEventListener('change', () => {
-      const row = propertyRows.find((r) => r.id === linkPropertySelect.value);
-      linkPropertyPick =
-        row === undefined || row.side === null
-          ? null
-          : { propertyId: row.propertyId, side: row.side, key: row.name };
+    const linkPropertyField = buildLinkPropertyField({
+      rows: propertyRows,
+      onChange: (pick) => {
+        linkPropertyPick = pick;
+      },
     });
 
     const candidates = div('dup-list');
@@ -511,13 +486,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
     const linkTypeField = div('field add-types-field');
     linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
-    const linkPropertyField = div('field add-types-field');
-    linkPropertyField.append(
+    const linkPropertyFieldWrap = div('field add-types-field');
+    linkPropertyFieldWrap.append(
       el('label', 'field-label', 'Свойство связи'),
-      linkPropertySelect,
+      linkPropertyField.root,
     );
     if (allowCreate) typeRow.append(thoughtTypeField);
-    if (allowLinkProperty) typeRow.append(linkPropertyField);
+    if (allowLinkProperty) typeRow.append(linkPropertyFieldWrap);
     else if (allowLinkType) typeRow.append(linkTypeField);
     // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers on one
     // row, then the name input with the found-thoughts list directly beneath
