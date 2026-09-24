@@ -13,6 +13,10 @@
  * 2. Индексная арифметика ↑/↓ по строкам не копируется: хелпер `navIndex`
  *    существует только в общей выпадашке (до задачи у него было четыре
  *    копии — suggest-dropdown, thought-picker, recent-values, value-combo).
+ * 3. Список кандидатов диалога добавления мысли рисуется общей выпадашкой:
+ *    классы прежней самодельной сборки (`dup-item`/`dup-list`/`dup-parent`/
+ *    `dup-network`) упразднены (требование d1cd2095, задача f348e095) —
+ *    строку собирает `buildSuggestRow` из `lib/suggest-dropdown.ts`.
  *
  * Сторож вводится зелёным — в том же изменении, которое сводит все копии
  * выпадашки к одной (мета-стандарт «Правило без теста-сторожа не считается
@@ -26,7 +30,12 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { assertGuardClean, collectViolations } from './guard-helpers.js';
+import {
+  assertGuardClean,
+  collectViolations,
+  DEFAULT_GUARD_EXTENSIONS,
+  type GuardRule,
+} from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -63,9 +72,30 @@ const RULES = [
   },
 ];
 
+/** Классы прежнего самодельного списка кандидатов диалога добавления. */
+const LEGACY_CANDIDATE_CLASSES: GuardRule = {
+  name: 'no-legacy-candidate-classes',
+  description:
+    'Классы прежнего самодельного списка кандидатов (dup-item/dup-list/dup-parent/' +
+    'dup-network) упразднены: строку списка найденных диалога добавления собирает ' +
+    'общая выпадашка (buildSuggestRow в lib/suggest-dropdown.ts, требование d1cd2095).',
+  pattern: /\bdup-(?:item|list|parent|network)\b/,
+};
+
+/** Расширения сканирования с CSS: классы-самоделки могут жить в стилях. */
+const GUARD_EXTENSIONS_WITH_CSS = [...DEFAULT_GUARD_EXTENSIONS, '.css'];
+
 describe('guard: выпадашка подсказок существует в одном экземпляре', () => {
   it('своя выпадашка и своя навигация ↑/↓ не пишутся вне общей', () => {
     assertGuardClean(RENDERER_ROOT, RULES);
+  });
+
+  it('список кандидатов рисует общая выпадашка — прежних классов нет', () => {
+    // Классы dup-* (в т.ч. в styles.css) упразднены: строку собирает общая
+    // выпадашка (требование d1cd2095, задача f348e095).
+    assertGuardClean(RENDERER_ROOT, [LEGACY_CANDIDATE_CLASSES], {
+      extensions: GUARD_EXTENSIONS_WITH_CSS,
+    });
   });
 
   it('каждое правило краснеет на умышленно добавленном нарушении', () => {
@@ -93,6 +123,20 @@ describe('guard: выпадашка подсказок существует в �
       assert.ok(
         names.has('no-own-suggest-nav'),
         'локальная копия navIndex обязана попадать в нарушение',
+      );
+
+      // Прежний класс списка кандидатов — тоже нарушение (в т.ч. в CSS).
+      fs.writeFileSync(
+        path.join(dir, 'legacy.css'),
+        '.dup-item { padding: 0 }',
+        'utf8',
+      );
+      const legacy = collectViolations(dir, [LEGACY_CANDIDATE_CLASSES], {
+        extensions: GUARD_EXTENSIONS_WITH_CSS,
+      });
+      assert.ok(
+        legacy.some((v) => v.rule === 'no-legacy-candidate-classes'),
+        'прежний класс dup-item обязан попадать в нарушение',
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

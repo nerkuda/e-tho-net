@@ -5855,7 +5855,12 @@ button.ui-btn--icon.trash-act {
   white-space: nowrap;
 }
 
-.dup-list {
+/* Список найденных кандидатов диалога добавления (08-ui-spec.md §4.2):
+   строки рисует общая сборка строки выпадашки (`lib/suggest-dropdown.ts`),
+   здесь — только раскладка списка в теле диалога и «телесный» вид строки
+   (рамка/фон вместо наведения летящей выпадашки). Классы `dup-*` упразднены
+   (требование d1cd2095). */
+.add-candidates {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -5864,53 +5869,23 @@ button.ui-btn--icon.trash-act {
   margin-top: 8px;
 }
 
-.dup-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
+.add-candidates .type-combo-item {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   font-size: 13px;
-  cursor: pointer;
 }
 
-.dup-item:focus-visible {
+.add-candidates .type-combo-item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
 
-.dup-item:hover {
+.add-candidates .type-combo-item:hover {
   background: var(--surface-2);
 }
 
-/* Keyboard selection (↑/↓, Ctrl+↑/↓, Ctrl+Enter in the thought picker). */
-.dup-item.selected {
-  background: var(--accent-soft);
-}
-
-/* The parent's title (first 60 chars) under/next to equal titles —
-   disambiguates duplicates living under different parents. */
-.dup-item .dup-parent {
-  flex: none;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-/* Имя сети в кросс-сетевом режиме (ошибка defcd811): тот же слот, что
-   `.dup-parent`, но цвет другой — акцентный, чтобы сеть не путалась с
-   локальным «родителем», который показывается в обычном режиме. */
-.dup-item .dup-network {
-  flex: none;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
+/* Метка-уточнение акцентным цветом — имя сети в кросс-сетевом режиме
+   (ошибка defcd811), чтобы не путать с приглушённым именем родителя. */
+.type-combo-note--accent {
   color: var(--accent);
 }
 
@@ -7141,52 +7116,13 @@ table.chron-table thead th {
 
 
 
-/* Виджет мульти-выбора пользователей (задача 59119797, эволюция операторов). */
-.user-multi-select {
+/* Обёртка мульти-выбора пользователей: подпись + общий чип-лист
+ * `lib/ui/chip-list.ts` (задача 59119797; требование d1cd2095). Вид чипов и
+ * поля добавления — в `chip-list.css`; прежние самодельные классы упразднены. */
+.user-chip-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.user-multi-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-height: 22px;
-}
-
-.user-multi-empty {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.user-multi-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  font-size: 12px;
-}
-
-.user-multi-x {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1;
-}
-
-.user-multi-x:hover {
-  color: var(--text);
-}
-
-.user-multi-add {
-  width: 100%;
 }
 
 /* Строка условия авторства в Структурах (задача 59119797). */

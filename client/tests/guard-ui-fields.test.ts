@@ -18,7 +18,12 @@
  *   5. `font-toggle(s)` — тумблер строит `toggleButton`, ряд — `ui-toggle-group`;
  *   6. `role-badge` / `group-count` / `st-count` — бейдж строит `badge`;
  *   7. `clearable-field` / `clearable-clear` / `color-input` — обёртку очистки
- *      и поле цвета строят `wrapClearable` / `colorField`.
+ *      и поле цвета строят `wrapClearable` / `colorField`;
+ *   8. `user-multi-*` — самодельный мультивыбор пользователей упразднён: чипы
+ *      строит общий generic-чип-лист `lib/ui/chip-list.ts` (требование
+ *      d1cd2095);
+ *   9. `ui-chip*` — классы generic-чип-листа собирает только фасад
+ *      `lib/ui/chip-list.ts`.
  *
  * **Allow-края (этап 2).** Общие компоненты отбора и сущностей несут
  * собственную лексику контролов (`st-f-*`) и относятся к под-проекту «единый
@@ -34,7 +39,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { assertGuardClean, type GuardRule } from './guard-helpers.js';
+import {
+  assertGuardClean,
+  DEFAULT_GUARD_EXTENSIONS,
+  type GuardRule,
+} from './guard-helpers.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -116,11 +125,36 @@ function rules(): GuardRule[] {
       include,
       allow: outsideFacades,
     },
+    {
+      name: 'no-own-user-multi',
+      description:
+        'Самодельный мультивыбор пользователей (классы user-multi-*) упразднён: ' +
+        'чипы и поле добавления строит общий generic-чип-лист lib/ui/chip-list.ts ' +
+        '(требование d1cd2095).',
+      pattern: /\buser-multi-[\w-]+/,
+      include,
+      allow: outsideFacades,
+    },
+    {
+      name: 'no-own-chip-list',
+      description:
+        'Generic-чип-лист (классы ui-chip*) собирает только фасад ' +
+        'lib/ui/chip-list.ts: потребители ходят через chipList() (требование d1cd2095).',
+      pattern: /\bui-chip[\w-]*/,
+      include,
+      allow: outsideFacades,
+    },
   ];
 }
 
 describe('guard: фасады полей и переключателей lib/ui', () => {
   it('самодельных полей, переключателей, бейджей и полей цвета нет', () => {
     assertGuardClean(RENDERER_ROOT, rules());
+  });
+
+  it('самодельного мультивыбора пользователей и чипов вне фасада нет (в т.ч. в CSS)', () => {
+    assertGuardClean(RENDERER_ROOT, rules(), {
+      extensions: [...DEFAULT_GUARD_EXTENSIONS, '.css'],
+    });
   });
 });

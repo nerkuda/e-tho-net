@@ -290,7 +290,7 @@ describe('редактор cross_network_ref: выбор из диалога (ea
     textarea!.emit('input');
     await settle();
 
-    const rows = form!.querySelectorAll('.dup-item');
+    const rows = form!.querySelectorAll('.type-combo-item');
     assert.equal(rows.length, 1, 'в выдаче только мысль другой сети');
     rows[0]!.emit('click', {
       target: rows[0],
@@ -317,7 +317,7 @@ describe('редактор cross_network_ref: выбор из диалога (ea
     textarea.value = 'Чужая';
     textarea.emit('input');
     await settle();
-    const rows = form!.querySelectorAll('.dup-item');
+    const rows = form!.querySelectorAll('.type-combo-item');
     assert.equal(rows.length, 1, 'в выдаче только мысль другой сети');
     rows[0]!.emit('click', {
       target: rows[0],
@@ -341,7 +341,7 @@ describe('редактор cross_network_ref: выбор из диалога (ea
     textarea.value = 'мысль';
     textarea.emit('input');
     await settle();
-    const titles = form!.querySelectorAll('.dup-item').map((r) => r.flatText());
+    const titles = form!.querySelectorAll('.type-combo-item').map((r) => r.flatText());
     assert.equal(titles.some((t) => t.includes('Своя мысль')), false, 'своя сеть отфильтрована');
     const backdrop = ((globalThis as any).document.body as ShimElement).children[0];
     backdrop?.querySelectorAll('button').find((b) => b.textContent === 'Отмена')?.click();

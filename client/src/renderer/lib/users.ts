@@ -22,6 +22,8 @@ import type { User } from '@etn/shared';
 
 import { div, el } from './dom.js';
 import { etn } from './etn.js';
+import { t } from './i18n.js';
+import { chipList } from './ui/chip-list.js';
 import { store } from '../state.js';
 
 interface CacheState {
@@ -216,9 +218,11 @@ export function buildUserSelectWidget(opts: {
 
 /**
  * Виджет мульти-выбора пользователей для условий `created_by` / `updated_by`
- * с операторами `in` / `not_in` (задача 59119797). Чипы показывают имя из
- * кэша (best-effort), «×» снимает выбор. Под полем — `<select>` для
- * добавления нового пользователя (повторно выбранные пропускаются).
+ * с операторами `in` / `not_in` (задача 59119797). Чипы выбранных участников
+ * и поле добавления строит общий generic-чип-лист `lib/ui/chip-list.ts`
+ * (требование d1cd2095): собственной сборки чипов здесь больше нет. Чипы
+ * показывают имя из кэша (best-effort), «×» снимает выбор; поле добавления
+ * перечисляет ещё не выбранных пользователей.
  *
  * @param opts.label - подпись слева сверху.
  * @param opts.currentIds - текущий список id (пустой = никого не выбрано).
@@ -230,61 +234,17 @@ export function buildUserMultiSelectWidget(opts: {
   onChange: (ids: string[]) => void;
 }): HTMLElement {
   ensureLoaded();
-  const wrap = div('user-multi-select');
+  const wrap = div('user-chip-field');
   if (opts.label !== '') {
     wrap.append(el('span', 'user-select-label', opts.label));
   }
-  const chipsBox = div('user-multi-chips');
-  const addSelect = el('select', 'select-input user-multi-add') as HTMLSelectElement;
 
   // Локальная рабочая копия выбранных id. Раньше виджет читал `opts.currentIds`
   // — массив, захваченный по ссылке при сборке — и после `onChange` продолжал
   // видеть устаревший список (чипы не появлялись, «ничего не происходит»,
-  // ошибка e8365d29). Теперь виджет держит собственный список и перерисовывается
-  // после каждого изменения.
+  // ошибка e8365d29). Теперь виджет держит собственный список: чип-лист читает
+  // его через `getValues`, изменения уведомляют владельца.
   let ids = opts.currentIds.slice();
-
-  /** Снимает выбор с указанного id и уведомляет. */
-  const remove = (id: string): void => {
-    ids = ids.filter((x) => x !== id);
-    opts.onChange(ids.slice());
-    render();
-  };
-
-  /** Рендер чипов и опций добавления. */
-  const render = (): void => {
-    chipsBox.replaceChildren();
-    if (ids.length === 0) {
-      chipsBox.append(el('span', 'user-multi-empty', 'не выбрано'));
-    } else {
-      for (const id of ids) {
-        const user = state.byId.get(id);
-        const name = user?.display_name ?? user?.username ?? id;
-        const chip = div('user-multi-chip');
-        chip.append(el('span', '', name));
-        const x = el('button', 'user-multi-x', '×');
-        x.type = 'button';
-        x.title = 'Убрать';
-        x.addEventListener('click', () => remove(id));
-        chip.append(x);
-        chipsBox.append(chip);
-      }
-    }
-
-    addSelect.replaceChildren();
-    const placeholder = el('option', undefined, '+ добавить пользователя…');
-    placeholder.value = '';
-    addSelect.append(placeholder);
-    const users = [...state.byId.values()].sort((a, b) =>
-      (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
-    );
-    for (const u of users) {
-      if (ids.includes(u.id)) continue;
-      const opt = el('option', undefined, `${u.display_name ?? u.username} (${u.username})`);
-      opt.value = u.id;
-      addSelect.append(opt);
-    }
-  };
 
   // Seed unknown ids so chips show something before the roster arrives.
   for (const id of ids) {
@@ -301,19 +261,41 @@ export function buildUserMultiSelectWidget(opts: {
       });
     }
   }
-  render();
 
-  addSelect.addEventListener('change', () => {
-    const id = addSelect.value;
-    if (id === '') return;
-    if (ids.includes(id)) return;
-    ids = [...ids, id];
-    opts.onChange(ids.slice());
-    addSelect.value = '';
-    render();
+  /** Пользователи кэша, отсортированные по отображаемому имени. */
+  const sortedUsers = (): User[] =>
+    [...state.byId.values()].sort((a, b) =>
+      (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
+    );
+
+  const field = chipList({
+    getValues: () => ids,
+    labelOf: (id) => {
+      const user = state.byId.get(id);
+      return user?.display_name ?? user?.username ?? id;
+    },
+    onRemove: (id) => {
+      ids = ids.filter((x) => x !== id);
+      opts.onChange(ids.slice());
+    },
+    getOptions: () =>
+      sortedUsers().map((u) => ({
+        value: u.id,
+        label: `${u.display_name ?? u.username} (${u.username})`,
+      })),
+    onAdd: (id) => {
+      if (ids.includes(id)) return;
+      ids = [...ids, id];
+      opts.onChange(ids.slice());
+    },
+    addPlaceholder: t('userMulti.addPlaceholder'),
+    emptyText: t('chipList.empty'),
+    removeTitle: t('chipList.remove'),
   });
-  subscribe(render);
 
-  wrap.append(chipsBox, addSelect);
+  // Реактивно перерисовываем при появлении админ-roster'а.
+  subscribe(field.refresh);
+
+  wrap.append(field.root);
   return wrap;
 }

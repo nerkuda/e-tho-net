@@ -262,5 +262,18 @@ export type {
   TreeHandle,
 } from './tree.js';
 
+// Generic-чип-лист — чипы выбранных значений с крестиком снятия и поле
+// добавления (требование d1cd2095). Значения и подписи даёт владелец;
+// чипы-облачка сущностей остаются у `lib/entity-picker.ts`.
+export {
+  CHIP_LIST_CLASS,
+  CHIP_CLASS,
+  CHIP_REMOVE_CLASS,
+  CHIP_LIST_ADD_CLASS,
+  CHIP_LIST_EMPTY_CLASS,
+  chipList,
+} from './chip-list.js';
+export type { ChipListOption, ChipListOptions, ChipListHandle } from './chip-list.js';
+
 
 

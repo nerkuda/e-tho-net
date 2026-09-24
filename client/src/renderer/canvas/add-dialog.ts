@@ -33,8 +33,9 @@
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
-// Строки кандидатов-дублей рисует общая фабрика облачка мысли.
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+// Строки кандидатов-дублей рисует общая выпадашка подсказок (общая сборка
+// строки) — собственной разметки списка нет (требование d1cd2095).
+import { buildSuggestRow, type SuggestEntry } from '../lib/suggest-dropdown.js';
 import { showDialog } from '../lib/dialog.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { div, el, errText, span } from '../lib/dom.js';
@@ -499,7 +500,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       },
     });
 
-    const candidates = div('dup-list');
+    const candidates = div('add-candidates');
     const errorLine = footerErrorLine();
 
     const body = div('form-stack');
@@ -675,7 +676,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       // ↓ moves into the found-thoughts list (keyboard path of picking a
       // candidate); Tab reaches it as the next tab stop.
       if (event.key === 'ArrowDown') {
-        const first = candidates.querySelector<HTMLElement>('.dup-item');
+        const first = candidates.querySelector<HTMLElement>('.type-combo-item');
         if (first !== null) {
           event.preventDefault();
           first.focus();
@@ -857,47 +858,49 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     function renderCandidates(list: DuplicateHit[]): void {
       candidates.replaceChildren();
       if (list.length === 0) return;
-      candidates.append(el('p', 'muted', 'Найденные мысли:'));
+      candidates.append(el('p', 'muted', t('addDialog.candidatesHeader')));
       for (const candidate of list) {
-        // Строка-облачко — общая фабрика (профиль `tree`, ширина — по ширине
-        // списка): значок, цвета и начертание мысли; так равные имена легко
-        // отличить друг от друга, а длинное имя обрезается многоточием по
-        // ширине списка, а не по холстовым 200px (ошибка a42ea662).
-        // Жесты фабрики не подходят — строка это цель выбора, поэтому
-        // облачко строится чисто визуальным, а клик/клавиатуру вешает диалог.
-        const row = createThoughtCloud(candidate, {
-          profile: 'tree',
-          width: 'container',
-        });
-        row.classList.add('dup-item');
+        // Точность совпадения (точное имя / синоним / частичное) показана
+        // подсказкой строки, а не пометкой в ней (08-ui-spec.md §4.2).
+        const matchLabel =
+          candidate.matched_on === 'title'
+            ? t('addDialog.matchExact')
+            : candidate.matched_on === 'synonym'
+              ? t('addDialog.matchSynonym', candidate.matched_synonym ?? '')
+              : t('addDialog.matchPartial');
+        // Строка-облачко — общая сборка строки выпадашки (профиль `tree`,
+        // ширина — по ширине списка): значок, цвета и начертание мысли; так
+        // равные имена легко отличить друг от друга, а длинное имя обрезается
+        // многоточием по ширине списка, а не по холстовым 200px (ошибка
+        // a42ea662). Жесты выпадашки не подходят — строка это цель выбора,
+        // поэтому клик/клавиатуру вешает диалог; строка фокусируема.
+        const entry: SuggestEntry = {
+          value: candidate.id,
+          label: candidate.title,
+          thought: candidate,
+          tooltip:
+            candidate.synonyms.length > 0
+              ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
+              : `${candidate.title} — ${matchLabel}`,
+        };
         // В кросс-сетевом режиме (ea04a185) у чужой мысли родитель внутри её
         // сети мало что говорит пользователю текущей сети; подпись «сеть»
         // снимает неоднозначность одноимённых мыслей в разных сетях
-        // (ошибка defcd811). Цвет другой — чтобы не путать с локальным
+        // (ошибка defcd811). Цвет акцентный — чтобы не путать с локальным
         // «родителем», который остаётся в обычном режиме.
         if (crossNetwork !== undefined && typeof candidate.network_id === 'string' && candidate.network_id !== '') {
-          const netName = networkDisplayName(candidate.network_id);
-          const net = span(netName, 'dup-network');
-          net.title = candidate.network_id;
-          row.append(net);
+          entry.trailing = {
+            text: networkDisplayName(candidate.network_id),
+            tone: 'accent',
+            tooltip: candidate.network_id,
+          };
         } else if (candidate.parent_title !== null) {
           // The parent's title instead of the «использовать» button — the whole
           // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
           // tooltip; the visible length is limited by layout.
-          const parent = span(candidate.parent_title, 'dup-parent');
-          parent.title = candidate.parent_title;
-          row.append(parent);
+          entry.trailing = { text: candidate.parent_title, tooltip: candidate.parent_title };
         }
-        const matchLabel =
-          candidate.matched_on === 'title'
-            ? 'точное имя'
-            : candidate.matched_on === 'synonym'
-              ? `синоним «${candidate.matched_synonym ?? ''}»`
-              : 'частичное совпадение';
-        row.title =
-          candidate.synonyms.length > 0
-            ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
-            : `${candidate.title} — ${matchLabel}`;
+        const row = buildSuggestRow(entry, { cloudProfile: 'tree', focusable: true });
         row.addEventListener('click', () => {
           pickCandidate(candidate);
         });
@@ -920,7 +923,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
             event.preventDefault();
             const next =
               event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
-            if (next instanceof HTMLElement && next.classList.contains('dup-item')) {
+            if (next instanceof HTMLElement && next.classList.contains('type-combo-item')) {
               next.focus();
               next.scrollIntoView({ block: 'nearest' });
             } else if (event.key === 'ArrowUp') {
@@ -1087,7 +1090,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       // Ctrl+Shift+Enter applies the list and focuses the first inserted item
       // from any field except the found-thoughts list (the field-level handler
       // on `input` already does `preventDefault`, so the dialog handler is a
-      // no-op there; the dup-item rows also call `preventDefault`, so the
+      // no-op there; the candidate rows also call `preventDefault`, so the
       // shortcut does not fire while the caret sits in the candidate list).
       extraShortcuts: {
         ctrlShiftEnter: () => apply(true),

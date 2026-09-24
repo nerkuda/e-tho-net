@@ -1,0 +1,53 @@
+/**
+ * Стили generic-чип-листа `lib/ui` (требование d1cd2095): чипы выбранных
+ * значений с крестиком снятия и поле добавления. Вид чипа — из токенов темы
+ * (поверхность, рамка, скругление); заменяет самодельные `.user-multi-*` из
+ * `styles.css`.
+ */
+
+.ui-chip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ui-chip-list-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.ui-chip-list-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.ui-chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ui-chip-remove:hover {
+  color: var(--text);
+}
+
+.ui-chip-list-add {
+  width: 100%;
+}

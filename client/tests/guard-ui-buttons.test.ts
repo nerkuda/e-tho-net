@@ -53,7 +53,6 @@ const ALLOWED_RAW_BUTTON_CLASSES = [
   'history-more', // «остальная история» (компонент истории)
   'pinned-more', // «остальные закреплённые»
   'link-trash-badge', // метка корзины на связи (карта/мини-граф)
-  'user-multi-x', // снятие чипа пользователя
   'editor-icon-box', // квадрат иконки редактора
   'editor-trash-mark', // метка корзины в заголовке редактора
   'link-value-corner-btn', // угловые кнопки поля значения

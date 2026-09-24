@@ -47,7 +47,7 @@ import type { LinkStyle } from '@etn/shared';
 import { div, el, positionBodyDropdown, span } from './dom.js';
 import { svgIcon } from './icons.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
-import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
+import { createThoughtCloud, type CloudProfile, type ThoughtCloudInput } from './thought-cloud.js';
 
 /** Одна выбираемая строка выпадашки. */
 export interface SuggestEntry {
@@ -86,8 +86,22 @@ export interface SuggestEntry {
   /**
    * Уточнение справа от подписи (серым): сторона и имена пары типа связи
    * («источник · связь (прямое - обратное)»). Нет — строка без уточнения.
+   * Рисуется только у «голых» строк (без облачка).
    */
   note?: string;
+  /**
+   * Подсказка всей строки (`title`). Список найденных диалога добавления несёт
+   * здесь полное имя и точность совпадения (точное имя / синоним / частичное) —
+   * их показывают подсказкой, а не отдельной пометкой в строке (08-ui-spec.md
+   * §4.2). Нет — подсказки строки нет (у «голых» строк остаётся `label`).
+   */
+  tooltip?: string;
+  /**
+   * Дополнительная метка справа от облачка/подписи: имя родителя или имя сети
+   * (различение одноимённых мыслей; 08-ui-spec.md §4.2, ошибка defcd811).
+   * `tone: 'accent'` — акцентный цвет (имя чужой сети), иначе приглушённый.
+   */
+  trailing?: { text: string; tone?: 'muted' | 'accent'; tooltip?: string };
   /**
    * Узел дерева с раскрытием: слева рисуется треугольник ▾/▸. Клик по
    * треугольнику вызывает `onToggle` (источник меняет своё состояние
@@ -209,6 +223,118 @@ function navIndex(cursor: number | null, count: number, delta: 1 | -1): number |
 
 /** Порог близости к нижней границе списка, px: ближе — догружаем порцию. */
 const SUGGEST_SCROLL_THRESHOLD_PX = 48;
+
+/** Опции сборки одной строки списка (см. {@link buildSuggestRow}). */
+export interface SuggestRowOptions {
+  /**
+   * Профиль облачка строки-мысли (по умолчанию `chip` — строка летящей
+   * выпадашки). Список найденных диалога добавления просит `tree`: строка
+   * лежит в теле диалога и несёт более крупное облачко (§4.2).
+   */
+  cloudProfile?: CloudProfile;
+  /**
+   * Строка — самостоятельная цель фокуса: `tabindex=0`, `mousedown` НЕ гасится,
+   * поэтому `Tab`/`↑`/`↓` ходят по строкам (список найденных диалога добавления).
+   * По умолчанию `false` — фокус остаётся в поле ввода (летящая выпадашка).
+   */
+  focusable?: boolean;
+  /**
+   * Выбор строки: `mousedown` гасится (фокус не уходит из поля) и вешается
+   * `click`. Недоступная строка (`disabled`) выбора не получает.
+   */
+  onPick?: (entry: SuggestEntry) => void;
+  /** Клик по треугольнику раскрытия — владелец меняет состояние и перерисовывает. */
+  onToggle?: (entry: SuggestEntry) => void;
+}
+
+/**
+ * Собирает одну строку списка подсказок (`type-combo-item`) — единственное
+ * место разметки строки: значок раскрытия, свотч линии, значок конца связи,
+ * облачко мысли общей фабрики, «голая» подпись и метка-уточнение. Летящая
+ * выпадашка ({@link wireSuggest}) и список найденных диалога добавления
+ * (`canvas/add-dialog.ts`) строят строки здесь, а не собственными копиями
+ * (ADR «одна выпадашка-подсказчик»; сторож `guard-suggest-dropdown`).
+ */
+export function buildSuggestRow(entry: SuggestEntry, options: SuggestRowOptions = {}): HTMLElement {
+  const row = div('type-combo-item');
+  if (entry.create === true) row.classList.add('type-combo-create');
+  if (entry.disabled === true) row.classList.add('disabled');
+  // Отступ дерева типов: строки с отступом получают колонку тоггла,
+  // у листа она пустая — подписи соседних уровней не разъезжаются.
+  if (entry.indent !== undefined) {
+    row.style.paddingLeft = `${8 + Math.max(0, entry.indent) * 16}px`;
+  }
+  if (entry.toggle !== undefined) {
+    const toggle = span(entry.toggle.expanded ? '▾' : '▸', 'type-combo-toggle');
+    toggle.addEventListener('mousedown', (event) => event.preventDefault());
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      entry.toggle?.onToggle();
+      options.onToggle?.(entry);
+    });
+    row.append(toggle);
+  } else if (entry.indent !== undefined) {
+    row.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
+  }
+  if (entry.swatch !== undefined && entry.swatch !== null) {
+    const swatch = span('', 'type-combo-swatch');
+    const style = entry.swatch.style;
+    const dash = style === 'dashed' ? 'dashed' : style === 'dotted' ? 'dotted' : 'solid';
+    const width = Math.max(1, Math.min(6, entry.swatch.width ?? 1));
+    swatch.style.borderTop = `${width}px ${dash} ${entry.swatch.color ?? '#9aa3b2'}`;
+    row.append(swatch);
+  }
+  // Значок конца связи (направление + оформление линии) — тот же, что в
+  // общем списке свойств: второй отрисовки линии со стрелкой нет.
+  if (entry.linkEnd !== undefined && entry.linkEnd !== null) {
+    row.append(buildLinkEndIcon(entry.linkEnd));
+  }
+  if (entry.thought !== undefined) {
+    // Строка-мысль — готовое облачко фабрики: значок, цвета, начертание,
+    // бледность неактуальной, метка корзины и обрезка имени по ширине
+    // строки. Профиль по умолчанию `chip` — списочная строка выпадашки,
+    // метка корзины встроена в пилюлю и не вылезает за край.
+    row.append(
+      createThoughtCloud(entry.thought, {
+        profile: options.cloudProfile ?? 'chip',
+        width: 'container',
+      }),
+    );
+  } else if (entry.create === true) {
+    const icon = span('', 'type-combo-icon');
+    icon.append(svgIcon('plus', 12));
+    row.append(icon);
+    const label = el('span', 'type-combo-label');
+    label.style.flex = '1';
+    label.append(entry.label);
+    row.append(label);
+  } else {
+    const label = el('span', 'type-combo-label', entry.label);
+    label.title = entry.label;
+    label.style.flex = '1';
+    row.append(label);
+    // Уточнение (сторона и имена пары типа связи) — серым справа от имени.
+    if (entry.note !== undefined && entry.note !== '') {
+      row.append(span(entry.note, 'type-combo-note'));
+    }
+  }
+  // Метка-уточнение родителя/сети — справа от облачка или подписи, у любого
+  // вида строки (у кандидатов-мыслей облачко, у «голой» — подпись).
+  if (entry.trailing !== undefined) {
+    const tone = entry.trailing.tone === 'accent' ? ' type-combo-note--accent' : '';
+    const trailing = span(entry.trailing.text, `type-combo-note${tone}`);
+    if (entry.trailing.tooltip !== undefined) trailing.title = entry.trailing.tooltip;
+    row.append(trailing);
+  }
+  if (entry.tooltip !== undefined) row.title = entry.tooltip;
+  if (options.focusable === true) row.tabIndex = 0;
+  if (options.onPick !== undefined && entry.disabled !== true) {
+    // Фокус остаётся в поле — нет blur-коммита во время выбора.
+    row.addEventListener('mousedown', (event) => event.preventDefault());
+    row.addEventListener('click', () => options.onPick?.(entry));
+  }
+  return row;
+}
 
 /**
  * Подключает выпадашку подсказок к полю ввода.
@@ -352,71 +478,14 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
           box.append(el('p', 'muted type-combo-empty', entry.section));
         }
         lastSection = entry.section;
-        const row = div('type-combo-item');
-        if (entry.create === true) row.classList.add('type-combo-create');
-        if (entry.disabled === true) row.classList.add('disabled');
-        // Отступ дерева типов: строки с отступом получают колонку тоггла,
-        // у листа она пустая — подписи соседних уровней не разъезжаются.
-        if (entry.indent !== undefined) {
-          row.style.paddingLeft = `${8 + Math.max(0, entry.indent) * 16}px`;
-        }
-        if (entry.toggle !== undefined) {
-          const toggle = span(entry.toggle.expanded ? '▾' : '▸', 'type-combo-toggle');
-          toggle.addEventListener('mousedown', (event) => event.preventDefault());
-          toggle.addEventListener('click', (event) => {
-            event.stopPropagation();
-            entry.toggle?.onToggle();
-            refresh(false);
-          });
-          row.append(toggle);
-        } else if (entry.indent !== undefined) {
-          row.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
-        }
-        if (entry.swatch !== undefined && entry.swatch !== null) {
-          const swatch = span('', 'type-combo-swatch');
-          const style = entry.swatch.style;
-          const dash = style === 'dashed' ? 'dashed' : style === 'dotted' ? 'dotted' : 'solid';
-          const width = Math.max(1, Math.min(6, entry.swatch.width ?? 1));
-          swatch.style.borderTop = `${width}px ${dash} ${entry.swatch.color ?? '#9aa3b2'}`;
-          row.append(swatch);
-        }
-        // Значок конца связи (направление + оформление линии) — тот же, что в
-        // общем списке свойств: второй отрисовки линии со стрелкой нет.
-        if (entry.linkEnd !== undefined && entry.linkEnd !== null) {
-          row.append(buildLinkEndIcon(entry.linkEnd));
-        }
-        if (entry.thought !== undefined) {
-          // Строка-мысль — готовое облачко фабрики: значок, цвета,
-          // начертание, бледность неактуальной, метка корзины и обрезка
-          // имени по ширине выпадашки. Профиль `chip` — списочная строка,
-          // метка корзины у него встроена в пилюлю и не вылезает за край.
-          row.append(createThoughtCloud(entry.thought, { profile: 'chip', width: 'container' }));
-        } else if (entry.create === true) {
-          const icon = span('', 'type-combo-icon');
-          icon.append(svgIcon('plus', 12));
-          row.append(icon);
-          const label = el('span', 'type-combo-label');
-          label.style.flex = '1';
-          label.append(entry.label);
-          row.append(label);
-        } else {
-          const label = el('span', 'type-combo-label', entry.label);
-          label.title = entry.label;
-          label.style.flex = '1';
-          row.append(label);
-          // Уточнение (сторона и имена пары типа связи) — серым справа от имени.
-          if (entry.note !== undefined && entry.note !== '') {
-            row.append(span(entry.note, 'type-combo-note'));
-          }
-        }
-        if (entry.disabled !== true) {
-          // Фокус остаётся в поле — нет blur-коммита во время выбора.
-          row.addEventListener('mousedown', (event) => event.preventDefault());
-          row.addEventListener('click', () => {
+        // Разметку строки собирает общий модуль — второго места нет.
+        const row = buildSuggestRow(entry, {
+          onToggle: () => refresh(false),
+          onPick: (picked) => {
             close();
-            opts.onPick(entry);
-          });
-        }
+            opts.onPick(picked);
+          },
+        });
         box.append(row);
         rows.push(row);
         rowEntries.push(entry);

@@ -468,12 +468,17 @@ describe('pickThoughtsDialog: подпись сети у чужих мыслей
     ui.input.emit('input');
     await settle();
 
-    const rows = ui.formStack.querySelectorAll('.dup-item');
+    const rows = ui.formStack.querySelectorAll('.type-combo-item');
     assert.equal(rows.length, 1, 'один кандидат в выдаче');
-    const net = rows[0]!.querySelector('.dup-network');
-    assert.ok(net !== null, 'есть подпись сети (`.dup-network`)');
+    const notes = rows[0]!.querySelectorAll('.type-combo-note');
+    const net = notes.find((n) => n.classList.contains('type-combo-note--accent'));
+    assert.ok(net !== undefined, 'есть подпись сети (акцентная метка `.type-combo-note--accent`)');
     assert.equal(net!.textContent, 'Заметки по работе', 'подпись — display_name чужой сети');
-    assert.equal(rows[0]!.querySelector('.dup-parent'), null, 'родитель НЕ показывается в кросс-режиме');
+    assert.equal(
+      notes.some((n) => !n.classList.contains('type-combo-note--accent')),
+      false,
+      'родитель НЕ показывается в кросс-режиме',
+    );
     ui.cancelBtn.click();
     await ui.promise;
   });
@@ -491,8 +496,11 @@ describe('pickThoughtsDialog: подпись сети у чужих мыслей
     ui.input.value = 'Чужая';
     ui.input.emit('input');
     await settle();
-    const net = ui.formStack.querySelectorAll('.dup-item')[0]!.querySelector('.dup-network');
-    assert.ok(net !== null, 'подпись сети есть даже без display_name');
+    const net = ui.formStack
+      .querySelectorAll('.type-combo-item')[0]!
+      .querySelectorAll('.type-combo-note')
+      .find((n) => n.classList.contains('type-combo-note--accent'));
+    assert.ok(net !== undefined, 'подпись сети есть даже без display_name');
     assert.equal(net!.textContent, 'n2', 'фолбэк — короткий id сети');
     ui.cancelBtn.click();
     await ui.promise;
@@ -524,9 +532,14 @@ describe('pickThoughtsDialog: подпись сети у чужих мыслей
     ui.input.value = 'Своя';
     ui.input.emit('input');
     await settle();
-    const row = ui.formStack.querySelectorAll('.dup-item')[0]!;
-    assert.equal(row.querySelector('.dup-parent')?.textContent, 'Локальный родитель');
-    assert.equal(row.querySelector('.dup-network'), null, 'в обычном режиме сеть НЕ подписывается');
+    const row = ui.formStack.querySelectorAll('.type-combo-item')[0]!;
+    const notes = row.querySelectorAll('.type-combo-note');
+    assert.equal(notes[0]?.textContent, 'Локальный родитель');
+    assert.equal(
+      notes.some((n) => n.classList.contains('type-combo-note--accent')),
+      false,
+      'в обычном режиме сеть НЕ подписывается',
+    );
     ui.cancelBtn.click();
     await ui.promise;
   });
@@ -969,7 +982,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     input.value = 'Существующая';
     input.emit('input');
     await settle();
-    const candidate = formStack.querySelectorAll('.dup-item')[0];
+    const candidate = formStack.querySelectorAll('.type-combo-item')[0];
     assert.ok(candidate !== undefined, 'кандидат-существующая мысль найден');
     candidate!.emit('click');
     const primary = openBackdrop()
@@ -1024,7 +1037,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     input.value = 'Существующая';
     input.emit('input');
     await settle();
-    formStack.querySelectorAll('.dup-item')[0]!.emit('click');
+    formStack.querySelectorAll('.type-combo-item')[0]!.emit('click');
     openBackdrop()
       .querySelectorAll('button')
       .find((b) => b.textContent === 'Добавить')!
