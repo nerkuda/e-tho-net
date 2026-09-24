@@ -88,6 +88,15 @@ export interface DialogOptions {
    * По умолчанию `m`.
    */
   size?: DialogSize;
+  /**
+   * Фиксирует высоту диалога ролью {@link size}: тело прокручивается внутри,
+   * а высота окна не меняется при смене содержимого внутри роли (требование
+   * 13464c39 «Стабильные размеры диалога»). Нужен диалогам с переменным
+   * содержимым, у которых нет вкладок: вкладочный диалог фиксирует высоту
+   * автоматически, а без этого флага окно подстраивается под содержимое в
+   * пределах роли и «дёргается» (ошибка 0ab63eac — настройки).
+   */
+  fixedHeight?: boolean;
   buttons?: DialogButton[];
   /**
    * Sticky custom footer element. When provided, {@link buttons} is ignored:
@@ -296,6 +305,10 @@ export function showDialog(opts: DialogOptions): () => void {
   // Роль размера (требование 13464c39): класс несёт ширину и ФИКСИРОВАННУЮ
   // высоту, поэтому переключение вкладок и смена содержимого высоту не меняют.
   box.dataset['dialogSize'] = opts.size ?? 'm';
+  // Диалог с переменным содержимым без вкладок (настройки) фиксирует высоту
+  // ролью явно — тело тогда прокручивается, а окно не «дёргается» (ошибка
+  // 0ab63eac, требование 13464c39).
+  if (opts.fixedHeight === true) box.dataset['dialogFixedHeight'] = 'true';
 
   /** Confirm button of this dialog — Ctrl+Enter clicks it. */
   let primaryBtn: HTMLButtonElement | null = null;

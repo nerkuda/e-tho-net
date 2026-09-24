@@ -118,6 +118,42 @@ describe('диалог: роли размера (требование 13464c39)'
   });
 });
 
+describe('диалог: фиксация высоты по роли без вкладок (требование 13464c39)', () => {
+  it('опция fixedHeight помечает диалог атрибутом data-dialog-fixed-height', () => {
+    installShim();
+    showDialog({
+      title: 'Диалог',
+      size: 'l',
+      fixedHeight: true,
+      body: new ShimElement('div', 'dialog-body') as any,
+    });
+    assert.equal(
+      lastBox().dataset['dialogFixedHeight'],
+      'true',
+      'диалог с переменным содержимым фиксирует высоту ролью',
+    );
+    // Высота приходит от роли (CSS), а не из inline-стиля.
+    assert.equal(lastBox().style.getPropertyValue('height'), '', 'высота не задаётся из содержимого');
+    closeDialog();
+  });
+
+  it('без опции fixedHeight атрибут не выставляется', () => {
+    installShim();
+    showDialog({ title: 'Диалог', size: 'l', body: new ShimElement('div', 'dialog-body') as any });
+    assert.notEqual(lastBox().dataset['dialogFixedHeight'], 'true');
+    closeDialog();
+  });
+
+  it('CSS фиксирует высоту такого диалога ролью', () => {
+    const css = readFileSync(CSS_PATH, 'utf8');
+    assert.match(
+      css,
+      /\.dialog-box\[data-dialog-fixed-height='true'\]\s*\{[^}]*height:\s*min\(var\(--dialog-h/,
+      'диалог с фиксацией высоты обязан иметь высоту роли (с пределом по экрану)',
+    );
+  });
+});
+
 describe('диалог: вкладки общего механизма и стабильная высота', () => {
   it('вкладочный диалог помечен, активна первая вкладка', () => {
     installShim();
