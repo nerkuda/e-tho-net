@@ -140,7 +140,7 @@ export function mountPicker(host: HTMLElement): void {
     showDialog({
       title: 'Создать мыслесеть',
       body,
-      width: 460,
+      size: 's',
       buttons: [
         { label: 'Отмена' },
         {

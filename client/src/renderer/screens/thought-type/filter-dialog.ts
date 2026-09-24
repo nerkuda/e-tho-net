@@ -223,7 +223,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   showDialog({
     title,
     body,
-    width: 760,
+    size: 'l',
     buttons: [
       { label: 'Отмена' },
       {

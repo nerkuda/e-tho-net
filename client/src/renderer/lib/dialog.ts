@@ -18,6 +18,24 @@
 import { div, el, errText } from './dom.js';
 import { svgIcon } from './icons.js';
 import { iconButton, uiButton } from './ui/button.js';
+import { uiTabs } from './ui/tabs.js';
+
+/**
+ * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
+ * роли S/M/L/XL, высота не зависит от вкладки»). Роль задаёт ширину и высоту:
+ * высота фиксирована, поэтому переключение вкладок и раскрытие групп не
+ * «дёргают» окно — длинное содержимое прокручивается внутри тела. Авто-высота
+ * по содержимому запрещена.
+ */
+export type DialogSize = 's' | 'm' | 'l' | 'xl';
+
+/** Вкладка диалога: подпись и ленивое содержимое панели (`lib/ui/tabs.ts`). */
+export interface DialogTab {
+  id: string;
+  label: string;
+  content: HTMLElement | (() => HTMLElement);
+}
+
 
 /** A dialog footer button. */
 export interface DialogButton {
@@ -47,7 +65,26 @@ export interface DialogButton {
 /** Options of {@link showDialog}. */
 export interface DialogOptions {
   title: string;
-  body: HTMLElement;
+  /**
+   * Тело диалога. Не задаётся, когда содержимое разложено по вкладкам
+   * ({@link tabs}); в остальных случаях обязательно.
+   */
+  body?: HTMLElement;
+  /**
+   * Вкладки диалога — единый механизм (`lib/ui/tabs.ts`). Панели ленивые,
+   * высота диалога фиксирована ролью {@link size}, поэтому переключение
+   * вкладок её не меняет. При заданных вкладках {@link body} не используется.
+   */
+  tabs?: DialogTab[];
+  /** Активная вкладка при открытии (по умолчанию — первая). */
+  activeTab?: string;
+  /** Уведомление о переключении вкладки. */
+  onTabChange?: (id: string) => void;
+  /**
+   * Роль размера — ширина и фиксированная высота (требование 13464c39).
+   * По умолчанию `m`.
+   */
+  size?: DialogSize;
   buttons?: DialogButton[];
   /**
    * Sticky custom footer element. When provided, {@link buttons} is ignored:
@@ -86,15 +123,8 @@ export interface DialogOptions {
      */
     ctrlShiftEnter?: () => void;
   };
-  width?: number;
-  /**
-   * Extra class on the dialog box — for CSS-driven sizing that a fixed px
-   * {@link width} cannot express (e.g. the group-delete table dialog,
-   * §5a.2: `clamp(400px, …, 1000px)` "as much as fits the screen").
-   */
-  boxClass?: string;
   /** Called after the dialog is mounted (focus management, etc.). */
-  onMount?: (close: () => void) => void;
+  onMount?: (close: () => void, box: HTMLElement) => void;
   /**
    * Called once when the dialog closes by ANY path — Esc, the × button, a
    * footer button, or `closeDialog()` popping the stack: it fires from the
@@ -241,12 +271,9 @@ function focusFirstField(backdrop: HTMLDivElement): void {
 export function showDialog(opts: DialogOptions): () => void {
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
-  if (opts.boxClass !== undefined) box.classList.add(...opts.boxClass.split(/\s+/));
-  if (opts.width !== undefined) box.style.width = `${opts.width}px`;
-  // Custom footers (e.g. the unified settings dialog) want a scrollable body
-  // and a sticky bottom bar; opt in via the `dialog-box-tall` class so the
-  // default one-button footer stays as small as before.
-  if (opts.customFooter !== undefined) box.classList.add('dialog-box-tall');
+  // Роль размера (требование 13464c39): класс несёт ширину и ФИКСИРОВАННУЮ
+  // высоту, поэтому переключение вкладок и смена содержимого высоту не меняют.
+  box.dataset['dialogSize'] = opts.size ?? 'm';
 
   /** Confirm button of this dialog — Ctrl+Enter clicks it. */
   let primaryBtn: HTMLButtonElement | null = null;
@@ -263,9 +290,26 @@ export function showDialog(opts: DialogOptions): () => void {
   header.append(closeBtn);
   box.append(header);
 
-  const body = div('dialog-body');
-  body.append(opts.body);
-  box.append(body);
+  // Тело: либо вкладки (единый механизм lib/ui/tabs.ts), либо единый блок
+  // тела. Оба варианта занимают оставшуюся высоту и прокручиваются внутри —
+  // высота задана ролью, а не содержимым.
+  if (opts.tabs !== undefined && opts.tabs.length > 0) {
+    // Признак вкладочного диалога: CSS фиксирует его высоту ролью, поэтому
+    // переключение вкладок высоту не меняет (требование 13464c39).
+    box.dataset['dialogTabs'] = 'true';
+    const host = div('dialog-tabs-host');
+    const tabs = uiTabs({
+      tabs: opts.tabs,
+      activeId: opts.activeTab,
+      onChange: opts.onTabChange,
+    });
+    host.append(tabs.root);
+    box.append(host);
+  } else {
+    const body = div('dialog-body');
+    if (opts.body !== undefined) body.append(opts.body);
+    box.append(body);
+  }
 
   if (opts.customFooter !== undefined) {
     box.append(opts.customFooter);
@@ -385,7 +429,7 @@ export function showDialog(opts: DialogOptions): () => void {
     backdrop.removeEventListener('click', onBackdropClick);
     opts.onClose?.();
   });
-  opts.onMount?.(close);
+  opts.onMount?.(close, box);
   return close;
 }
 
@@ -420,6 +464,7 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
     };
     closeSelf = showDialog({
       title,
+      size: 's',
       body,
       buttons: [
         { label: 'Отмена', onClick: () => finish(null) },
@@ -462,6 +507,7 @@ export function confirmDialog(title: string, message: string, danger = false): P
     };
     showDialog({
       title,
+      size: 's',
       body: el('p', 'dialog-text', message),
       buttons: [
         { label: 'Отмена', onClick: () => finish(false) },
@@ -484,6 +530,7 @@ export function confirmDialog(title: string, message: string, danger = false): P
 export function errorDialog(title: string, err: unknown): void {
   showDialog({
     title,
+    size: 's',
     body: el('p', 'dialog-text dialog-text-error', errText(err)),
     buttons: [{ label: 'Закрыть', primary: true }],
   });

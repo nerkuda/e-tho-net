@@ -45,6 +45,7 @@ import {
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
+import { uiTabs } from '../lib/ui/tabs.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
@@ -380,17 +381,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
-    // Tabs for the four markdown self-description fields (O5).
-    let activeTab: NetworkTab = 'description';
-    const tabsBar = el('div', 'settings-md-tabs');
-    const tabButtons: Record<NetworkTab, HTMLButtonElement> = {
-      description: el('button', 'settings-md-tab'),
-      when_to_use: el('button', 'settings-md-tab'),
-      conventions: el('button', 'settings-md-tab'),
-      examples: el('button', 'settings-md-tab'),
-    };
-    const tabPanel = div('settings-md-panel');
-
+    // Вкладки четырёх markdown-полей самоописания сети (O5) — общий механизм
+    // `lib/ui/tabs.ts` (задача a57e7998): панели сохраняются, поле каждой
+    // вкладки строится лениво при первом показе.
     const fieldSetters: Record<NetworkTab, (md: string) => void> = {
       description: (md) => {
         draft.networkDescription = md;
@@ -412,35 +405,21 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       examples: () => draft.networkExamples,
     };
 
-    function paintTabs(): void {
-      for (const key of Object.keys(tabButtons) as NetworkTab[]) {
-        const btn = tabButtons[key];
-        const isActive = key === activeTab;
-        btn.classList.toggle('active', isActive);
-        btn.setAttribute('aria-current', isActive ? 'page' : 'false');
-      }
-      tabPanel.replaceChildren();
-      tabPanel.append(
-        renderMarkdownField({
-          tab: activeTab,
-          getValue: fieldGetters[activeTab],
-          setValue: fieldSetters[activeTab],
-          disabled: !isOwner,
+    const mdTabs = uiTabs({
+      tabs: (['description', 'when_to_use', 'conventions', 'examples'] as NetworkTab[]).map(
+        (key) => ({
+          id: key,
+          label: NETWORK_TAB_TITLES[key],
+          content: () =>
+            renderMarkdownField({
+              tab: key,
+              getValue: fieldGetters[key],
+              setValue: fieldSetters[key],
+              disabled: !isOwner,
+            }),
         }),
-      );
-    }
-    for (const key of Object.keys(tabButtons) as NetworkTab[]) {
-      const btn = tabButtons[key];
-      btn.type = 'button';
-      btn.textContent = NETWORK_TAB_TITLES[key];
-      btn.addEventListener('click', () => {
-        if (activeTab === key) return;
-        activeTab = key;
-        paintTabs();
-      });
-      tabsBar.append(btn);
-    }
-    paintTabs();
+      ),
+    });
 
     // Node-section type field (O5). The catalogue comes from the in-memory
     // store (refreshed on type changes by realtime); `null` means "no
@@ -516,9 +495,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         'muted',
         'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
       ),
-      tabsBar,
-      tabPanel,
-      el(
+      mdTabs.root,      el(
         'p',
         'muted',
         'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
@@ -778,9 +755,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
   closeDialog = showDialog({
     title: 'Настройки',
+    size: 'l',
     body,
     customFooter: footer,
-    width: 760,
     extraShortcuts: {
       shiftEnter: () => void applyDraft(false),
     },

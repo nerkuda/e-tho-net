@@ -143,7 +143,7 @@ export function showExportEtnxDialog(
     showDialog({
       title: 'Экспорт в .etnx',
       body,
-      width: 520,
+      size: 'm',
       buttons: [
         {
           label: 'Отмена',

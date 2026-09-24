@@ -29,7 +29,6 @@ import type { LinkType } from '@etn/shared';
 import {
   LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
   LINK_PROPERTY_NONE_LABEL,
-  LINK_PROPERTY_PICKER_WIDTH,
   buildLinkPropertyField,
   filterLinkPropertyOptions,
   linkPropertyOptions,
@@ -279,9 +278,9 @@ describe('поле выбора свойства-связи (ошибка dc175a
       .querySelectorAll('.dialog-box')
       .find((box) => box.querySelectorAll('.link-property-picker').length > 0);
     assert.equal(
-      dialogBox?.style.width,
-      `${LINK_PROPERTY_PICKER_WIDTH}px`,
-      'диалог выбора свойства-связи — 560px, как и выпадашки (ошибка 5c7f8376)',
+      dialogBox?.dataset['dialogSize'],
+      'm',
+      'диалог выбора свойства-связи — роль m (560px, как у выпадашек; ошибка 5c7f8376)',
     );
     const search = docBody().querySelectorAll('.link-property-search')[0]!;
     search.value = 'включ';

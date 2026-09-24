@@ -302,6 +302,7 @@ export async function openThoughtDeleteDialog(
 
   showDialog({
     title: `Удаление мысли «${target.title}»`,
+    size: 's',
     body,
     buttons,
     onMount: () => deleteBtn?.focus(),
@@ -364,6 +365,7 @@ export async function openLinkDeleteDialog(
 
   showDialog({
     title: 'Удаление связи',
+    size: 's',
     body,
     buttons: [
       {
@@ -627,8 +629,8 @@ export async function openThoughtGroupDeleteDialog(
 
   showDialog({
     title: `Удаление выбранного (${ids.length})`,
+    size: 'l',
     body,
-    boxClass: 'group-delete-box',
     buttons: [
       {
         label: 'Применить',
@@ -890,10 +892,8 @@ export async function openTrashDialog(networkId: string): Promise<void> {
 
   showDialog({
     title: 'Корзина',
+    size: 'xl',
     body,
-    // Ширина задаётся классом (§5a.4, ошибка 009784ad): таблица из трёх колонок
-    // не должна ломать строки переносом, окно растёт вместе с экраном.
-    boxClass: 'trash-box',
     buttons: [
       {
         label: 'Удалить всё, что возможно',

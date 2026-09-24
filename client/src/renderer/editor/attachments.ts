@@ -918,7 +918,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     showDialog({
       title: 'Добавить вложение',
       body,
-      width: 520,
+      size: 'm',
       // Ошибка добавления — в панели кнопок, видимой на обеих вкладках
       // (ошибка add8d09d); на вкладке «Найти существующее» своя строка
       // `searchError` для ошибок поиска (локальная операция вкладки).

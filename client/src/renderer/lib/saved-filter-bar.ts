@@ -353,7 +353,7 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   close = showDialog({
     title: 'Сохранённые отборы',
     body,
-    width: 420,
+    size: 's',
     buttons: [{ label: 'Закрыть', onClick: (c) => c() }],
     onMount: () => search.focus(),
   });

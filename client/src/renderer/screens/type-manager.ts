@@ -622,7 +622,7 @@ export function showThoughtTypesDialog(): void {
   showDialog({
     title: 'Типы мыслей',
     body,
-    width: 640,
+    size: 'm',
     buttons: [{ label: 'Закрыть', primary: true }],
   });
   void reload();
@@ -724,20 +724,16 @@ export interface TypeEditorExtras {
 }
 
 /**
- * Ширина диалога редактора типа мысли (ошибка 3c7213ec).
+ * Ширина диалога редактора типа мысли (ошибка 3c7213ec) задана ролью размера
+ * `l` (lib/dialog.ts, требование 13464c39: «широкие» диалоги — L/XL).
  *
- * Самое широкое содержимое диалога — таблица «Свойства типа» на вкладке
- * «Свойства»: шесть колонок, где «По умолчанию» держит редактор значения
- * (у свойства-связи — `.link-value-wrap` с полом 220px), а последняя —
- * кнопки ▲/▼/✎/✕ с `nowrap`. Таблица остаётся на auto-раскладке, поэтому её
- * ширина упирается в min-content строки: замер зондом на Chromium (реальный
- * `styles.css`, самый длинный набор свойств сети ETN) даёт 688px. Прежние
- * 600px отдавали таблице ≈560px — и `.admin-table-wrap` получал
- * горизонтальную прокрутку. 760px — наименьшая из стандартных «широких»
- * ширин проекта (столько же у «Настроек», «Администрирования» и диалога
- * отборов) и даёт таблице ≈720px, то есть запас над замеренным min-content.
+ * Самое широкое содержимое — таблица «Свойства типа» на вкладке «Свойства»:
+ * шесть колонок, где «По умолчанию» держит редактор значения (у
+ * свойства-связи — `.link-value-wrap` с полом 220px), а последняя — кнопки
+ * ▲/▼/✎/✕ с `nowrap`. Таблица на auto-раскладке, её ширина упирается в
+ * min-content строки: замер зондом на Chromium (реальный `styles.css`, самый
+ * длинный набор свойств сети ETN) даёт 688px; 900px роли L оставляют запас.
  */
-const TYPE_EDITOR_DIALOG_WIDTH = 760;
 
 /**
  * Ключ редактора ещё не созданного типа мысли (ошибка 74d9b4ed).
@@ -841,57 +837,19 @@ export function showThoughtTypeEditor(
   // the dialog closes.
   let createdId: string | null = null;
   const errorLine = span('', 'error-text');
-  const body = div('form-stack type-editor');
 
-  // ---- Tabs (задача b8301c16, требование 344b8798) -----------------------
+  // ---- Tabs (задача b8301c16, требование 344b8798; общий механизм a57e7998)
   // Состояние черновика живёт в замыкании выше (draft, templateMd, props…)
   // — при переключении вкладок ничего не теряется и ничего не пишется.
   // Единственная точка записи — «Применить и закрыть» в футере диалога.
-  const TAB_KEYS = ['description', 'template', 'properties', 'views', 'metadata'] as const;
-  type TabKey = (typeof TAB_KEYS)[number];
-  const tabRow = div('type-editor-tabs');
-  const tabPanes = new Map<TabKey, HTMLElement>();
-  const tabButtons = new Map<TabKey, HTMLButtonElement>();
-  let activeTab: TabKey = 'description';
-
-  const activateTab = (key: TabKey): void => {
-    activeTab = key;
-    for (const [tabKey, pane] of tabPanes) {
-      pane.classList.toggle('active', tabKey === key);
-    }
-    for (const [tabKey, btn] of tabButtons) {
-      btn.classList.toggle('active', tabKey === key);
-    }
-  };
-
-  const tabButton = (key: TabKey, label: string): HTMLButtonElement => {
-    const btn = button(label, () => activateTab(key), 'type-editor-tab');
-    btn.type = 'button';
-    btn.dataset['tabKey'] = key;
-    tabButtons.set(key, btn);
-    return btn;
-  };
-
-  const tabPane = (key: TabKey): HTMLElement => {
-    const pane = div('type-editor-tab-pane');
-    tabPanes.set(key, pane);
-    return pane;
-  };
-
-  tabRow.append(
-    tabButton('description', 'Описание'),
-    tabButton('template', 'Шаблон'),
-    tabButton('properties', 'Свойства'),
-    tabButton('views', 'Отборы'),
-    tabButton('metadata', 'Метаданные'),
-  );
-  body.append(tabRow);
-
-  const descriptionPane = tabPane('description');
-  const templatePane = tabPane('template');
-  const propertiesPane = tabPane('properties');
-  const viewsPane = tabPane('views');
-  const metadataPane = tabPane('metadata');
+  // Полоса вкладок и панели — общий механизм каркаса диалога
+  // (`DialogOptions.tabs`, lib/ui/tabs.ts): панели не пересобираются, высота
+  // диалога задана ролью и при переключении не меняется.
+  const descriptionPane = div('type-editor-pane');
+  const templatePane = div('type-editor-pane');
+  const propertiesPane = div('type-editor-pane');
+  const viewsPane = div('type-editor-pane');
+  const metadataPane = div('type-editor-pane');
 
   // Duplicate-name guard: type names are unique ignoring case (08-ui-spec.md
   // §8.4). The catalogue is loaded once on open; the server re-checks on apply.
@@ -1078,9 +1036,7 @@ export function showThoughtTypeEditor(
   });
   viewsPane.append(viewsTab.root);
 
-  // Подвесить все панели к body и активировать первую.
-  body.append(descriptionPane, templatePane, propertiesPane, viewsPane, metadataPane);
-  activateTab(activeTab);
+  // Панели вкладок передаются каркасу диалога (см. `tabs` ниже).
 
   /** Existing type with the same normalized name as `name` (self excluded). */
   function nameClash(name: string): ThoughtType | null {
@@ -1318,8 +1274,14 @@ export function showThoughtTypeEditor(
   return new Promise<string | null>((resolve) => {
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
-      body,
-      width: TYPE_EDITOR_DIALOG_WIDTH,
+      size: 'l',
+      tabs: [
+        { id: 'description', label: 'Описание', content: descriptionPane },
+        { id: 'template', label: 'Шаблон', content: templatePane },
+        { id: 'properties', label: 'Свойства', content: propertiesPane },
+        { id: 'views', label: 'Отборы', content: viewsPane },
+        { id: 'metadata', label: 'Метаданные', content: metadataPane },
+      ],
       // Идентичность сущности для повторного открытия (ошибки c2d243bb,
       // 74d9b4ed): второй клик по строке этого типа — или по «Добавить» при
       // ещё не созданном типе (`thought-type:new`) — поднимает этот диалог,
@@ -1352,11 +1314,10 @@ export function showThoughtTypeEditor(
           },
         },
       ],
-      onMount: () => {
-        // Шапку диалога можно переписать после первой записи: находим её от
-        // тела диалога (оба уже в DOM к моменту onMount).
-        dialogTitleEl =
-          body.closest('.dialog-box')?.querySelector<HTMLElement>('.dialog-title') ?? null;
+      onMount: (_close, box) => {
+        // Шапку диалога можно переписать после первой записи: каркас отдаёт
+        // бокс диалога (оба уже в DOM к моменту onMount).
+        dialogTitleEl = box.querySelector<HTMLElement>('.dialog-title');
         syncDialogTitle();
         nameInput.focus();
       },
@@ -2279,7 +2240,7 @@ async function openAttachDialog(opts: {
     const close = showDialog({
       title: 'Добавить свойство',
       body,
-      width: 760,
+      size: 'l',
       buttons: [
         { label: 'Отмена' },
         {
@@ -2526,7 +2487,7 @@ function openDescriptionOverrideDialog(opts: {
   showDialog({
     title: `Описание свойства — «${def.key}»`,
     body,
-    width: 460,
+    size: 's',
     buttons: [
       { label: 'Отменить' },
       ...(def.description_overridden

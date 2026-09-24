@@ -68,7 +68,7 @@ export function showAboutDialog(): void {
   showDialog({
     title: 'О программе',
     body,
-    width: 420,
+    size: 's',
     buttons: [{ label: 'Закрыть', primary: true }],
   });
 

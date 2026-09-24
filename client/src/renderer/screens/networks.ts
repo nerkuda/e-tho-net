@@ -161,7 +161,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
     showDialog({
       title: 'Создать мыслесеть',
       body,
-      width: 460,
+      size: 's',
       buttons: [
         { label: 'Отмена', onClick: () => resolve() },
         {

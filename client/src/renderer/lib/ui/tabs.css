@@ -1,0 +1,66 @@
+/**
+ * Вкладки `lib/ui` — единый вид полосы вкладок (задача a57e7998).
+ *
+ * Заменяет частные стили `admin-tabs`, `icon-tabs`, `diff-tabs`,
+ * `type-editor-tabs`, `settings-md-tabs` (инвентаризация 3fc7c54d: шесть
+ * реализаций вкладок с разошедшимся видом и без клавиатуры). Подключается из
+ * `lib/ui/register.ts`; цвета — только токены ETN, чтобы работали обе темы.
+ */
+
+.ui-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ui-tablist {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.ui-tab {
+  appearance: none;
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-tab:hover:not(.active) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.ui-tab.active {
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.ui-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ui-tabpanels {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* Панель занимает оставшуюся высоту хоста и прокручивается сама; неактивные
+   панели скрыты атрибутом `hidden` (см. lib/ui/tabs.ts). */
+.ui-tabpanel {
+  min-height: 0;
+}
+
+.ui-tabpanel[hidden] {
+  display: none;
+}

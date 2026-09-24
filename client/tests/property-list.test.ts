@@ -268,7 +268,7 @@ describe('якоря потребителей (требование 1, 10)', () 
     assert.ok(src.includes('buildPropertyList({'), 'менеджер использует общий список');
     assert.match(src, /mode: 'manager'/);
     assert.match(src, /title: 'Свойства'/, 'команда/диалог «Свойства»');
-    assert.match(src, /width: 900/, '~25% шире прежних 720px');
+    assert.match(src, /size: 'l'/, 'диалог «Свойства» — роль l (900px, шире прежних 720px)');
     assert.match(src, /onAdd: \(\) => openPropertyManagerEditor\(null/, '«Добавить» открывает редактор на создании');
     assert.match(src, /onDelete: \(row\) => void removeRow\(row\.registry\)/, 'удаление — подтверждение менеджера');
   });

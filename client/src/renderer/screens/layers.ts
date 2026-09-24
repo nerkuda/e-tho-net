@@ -372,7 +372,7 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
   showDialog({
     title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
     body,
-    width: 460,
+    size: 's',
     buttons: [
       { label: 'Отмена', onClick: (close) => close() },
       {
@@ -446,7 +446,7 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
   showDialog({
     title: 'Новый слой изменений',
     body,
-    width: 460,
+    size: 's',
     buttons: [
       { label: 'Отмена', onClick: (close) => close() },
       {
@@ -505,7 +505,7 @@ function openDeleteLayerDialog(networkId: string, layerId: string): void {
   showDialog({
     title: `Удалить слой «${layer.title}»?`,
     body,
-    width: 460,
+    size: 's',
     buttons: [
       { label: 'Отмена', onClick: (close) => close() },
       {
@@ -555,7 +555,7 @@ function openMergeLayerDialog(networkId: string, layerId: string): void {
   showDialog({
     title: `Слить «${layer.title}» в «${targetTitle}»?`,
     body,
-    width: 460,
+    size: 's',
     buttons: [
       { label: 'Отмена', onClick: (close) => close() },
       {
@@ -607,7 +607,7 @@ function showMergeReport(report: LayerMergeReport): void {
   showDialog({
     title: 'Слой слит',
     body,
-    width: 460,
+    size: 's',
     buttons: [{ label: 'Закрыть', onClick: (close) => close() }],
   });
 }
@@ -621,52 +621,48 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
   const targetTitle =
     store.state.layers.find((l) => l.id === layer?.parent_id)?.title ?? 'Основа';
 
-  const tabBar = div('diff-tabs');
-  const contentHost = div('diff-content');
-  const body = div('diff-body');
-  body.append(tabBar, contentHost);
-
-  const structuralBtn = el('button', 'diff-tab active', 'Связи') as HTMLButtonElement;
-  structuralBtn.type = 'button';
-  const textBtn = el('button', 'diff-tab', 'Содержание') as HTMLButtonElement;
-  textBtn.type = 'button';
-  tabBar.append(structuralBtn, textBtn);
+  // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
+  // сохраняются, данные диффа наполняют свою панель по готовности.
+  const structuralHost = div('diff-content');
+  const textHost = div('diff-content');
 
   let structural: LayerDiffResult | null = null;
   let textEntries: ReturnType<typeof lineDiff> | null = null;
 
-  const render = (mode: 'structural' | 'text'): void => {
-    structuralBtn.classList.toggle('active', mode === 'structural');
-    textBtn.classList.toggle('active', mode === 'text');
-    contentHost.replaceChildren();
-    if (mode === 'structural' && structural !== null) {
-      contentHost.append(renderStructuralDiff(networkId, structural));
-    } else if (mode === 'text' && textEntries !== null) {
-      contentHost.append(renderTextDiff(textEntries));
-    } else {
-      const loading = span('Загрузка…', 'layer-hint');
-      contentHost.append(loading);
-    }
+  const paintStructural = (): void => {
+    structuralHost.replaceChildren(
+      structural !== null
+        ? renderStructuralDiff(networkId, structural)
+        : span('Загрузка…', 'layer-hint'),
+    );
   };
+  const paintText = (): void => {
+    textHost.replaceChildren(
+      textEntries !== null ? renderTextDiff(textEntries) : span('Загрузка…', 'layer-hint'),
+    );
+  };
+  paintStructural();
+  paintText();
 
   showDialog({
     title: `Отличия «${layer?.title ?? 'слоя'}» от «${targetTitle}»`,
-    body,
-    width: 720,
-    boxClass: 'diff-dialog',
+    size: 'l',
+    tabs: [
+      { id: 'structural', label: 'Связи', content: structuralHost },
+      { id: 'text', label: 'Содержание', content: textHost },
+    ],
     buttons: [{ label: 'Закрыть', onClick: (close) => close() }],
     onMount: () => {
-      structuralBtn.addEventListener('click', () => render('structural'));
-      textBtn.addEventListener('click', () => render('text'));
       void (async () => {
         try {
           structural = await etn.layers.diff(networkId, layerId);
-          render('structural');
+          paintStructural();
           const docs = await etn.layers.diffDoc(networkId, layerId);
           textEntries = lineDiff(docs.target_doc, docs.layer_doc);
-          render('text');
+          paintText();
         } catch (err) {
-          contentHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
+          structuralHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
+          textHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
         }
       })();
     },

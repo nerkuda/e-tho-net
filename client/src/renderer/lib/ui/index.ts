@@ -24,3 +24,15 @@ export {
   setButtonActive,
 } from './button.js';
 export type { ButtonRole, ButtonSize, ButtonOptions, IconButtonOptions } from './button.js';
+
+// Вкладки — единый механизм вкладок диалогов и экранов (задача a57e7998).
+export { uiTabs } from './tabs.js';
+export type { TabSpec, TabsOptions, TabsHandle } from './tabs.js';
+
+// Сворачиваемые группы — единый компонент секций (задача a57e7998).
+export { collapsibleSection } from './collapsible.js';
+export type {
+  CollapsibleSpec,
+  CollapsibleSection,
+  CollapsibleClasses,
+} from './collapsible.js';

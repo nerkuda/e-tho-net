@@ -2925,30 +2925,8 @@ body.cloud-dragging * {
   color: var(--text-muted, var(--text));
 }
 
-/* Icon picker dialog (08-ui-spec.md §6.8). */
-.icon-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.icon-tab {
-  flex: 1 1 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.icon-tab.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
-
+/* Icon picker dialog (08-ui-spec.md §6.8). Полоса вкладок — общий механизм
+ * `lib/ui/tabs.ts` (задача a57e7998); частные `.icon-tabs`/`-tab` упразднены. */
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(10, 1fr);
@@ -2957,7 +2935,8 @@ body.cloud-dragging * {
   overflow-y: auto;
 }
 
-/* Full emoji set grouped by category (§6.8, L17): collapsible <details>. */
+/* Full emoji set grouped by category (§6.8, L17): сворачиваемые группы через
+   общий компонент `lib/ui/collapsible.ts` (задача a57e7998), прежде — <details>. */
 .emoji-groups {
   max-height: 330px;
   overflow-y: auto;
@@ -2971,31 +2950,15 @@ body.cloud-dragging * {
 }
 
 .emoji-group-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   cursor: pointer;
   padding: 6px 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   user-select: none;
-  list-style: none;
-}
-
-.emoji-group-title::-webkit-details-marker {
-  display: none;
-}
-
-.emoji-group-title::before {
-  content: '▸ ';
-  display: inline-block;
-  transition: transform 0.15s ease;
-}
-
-.emoji-group[open] .emoji-group-title {
-  color: var(--text);
-}
-
-.emoji-group[open] .emoji-group-title::before {
-  transform: rotate(90deg);
 }
 
 .emoji-group-title:hover {
@@ -5367,14 +5330,47 @@ body.cloud-dragging * {
   background: var(--surface);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  width: 480px;
+  /* Роль размера задаёт ширину и ПРЕДЕЛ высоты (требование 13464c39
+     «Стабильные размеры диалога: роли S/M/L/XL, высота не зависит от
+     вкладки»). Диалог с вкладками фиксирует высоту по роли ниже — длинное
+     содержимое прокручивается внутри тела и переключение вкладок высоту не
+     меняет; диалог без вкладок не выше предела. */
+  width: var(--dialog-w, 560px);
   max-width: calc(100vw - 40px);
-  max-height: calc(100vh - 60px);
+  max-height: min(var(--dialog-h, 560px), calc(100vh - 60px));
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   /* Dialog content is one step larger than the app base (13px) — the base
      font is too small for modal forms (add-thought dialog report). */
   font-size: 14px;
+}
+
+/* Вкладочный диалог: высота ФИКСИРОВАНА ролью — переключение вкладок и
+   раскрытие групп её не меняют. */
+.dialog-box[data-dialog-tabs='true'] {
+  height: var(--dialog-h, 560px);
+}
+
+/* Роли размера: s / m / l / xl (lib/dialog.ts, DialogSize). */
+.dialog-box[data-dialog-size='s'] {
+  --dialog-w: 460px;
+  --dialog-h: 320px;
+}
+
+.dialog-box[data-dialog-size='m'] {
+  --dialog-w: 560px;
+  --dialog-h: 560px;
+}
+
+.dialog-box[data-dialog-size='l'] {
+  --dialog-w: 900px;
+  --dialog-h: 680px;
+}
+
+.dialog-box[data-dialog-size='xl'] {
+  --dialog-w: 1240px;
+  --dialog-h: 820px;
 }
 
 .dialog-header {
@@ -5411,7 +5407,31 @@ body.cloud-dragging * {
 
 .dialog-body {
   padding: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+}
+
+/* Хост вкладок диалога: полоса вкладок фиксирована, панели занимают
+   оставшуюся высоту и прокручиваются внутри — высота диалога от выбранной
+   вкладки не зависит (требование 13464c39). */
+.dialog-tabs-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-tabs-host > .ui-tabs {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dialog-tabs-host .ui-tabpanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
 }
 
 .dialog-body .field-label {
@@ -5468,12 +5488,8 @@ body.cloud-dragging * {
 
 /* --- Групповое удаление (S13, 08-ui-spec.md §5a.2) ------------------------- */
 
-/* Ширина диалога: не меньше 400px и не больше 1000px, «сколько поместится на
- * экране» — clamp растёт с окном, а собственный max-width `.dialog-box`
- * (100vw − 40px) удерживает диалог внутри маленького экрана. */
-.dialog-box.group-delete-box {
-  width: clamp(400px, 60vw, 1000px);
-}
+/* Ширина и высота диалога задаются ролью размера (lib/dialog.ts, требование
+ * 13464c39); прежний точечный `group-delete-box` с clamp-шириной упразднён. */
 
 /* Таблица: две колонки — мини-облачко мысли и переключатель «Удалить /
  * В корзину». Высота строки фиксирована (однострочный заголовок с
@@ -5617,13 +5633,8 @@ body.cloud-dragging * {
 
 /* --- Корзина (S13, 08-ui-spec.md §5a.4; ошибка 009784ad) ------------------- */
 
-/* Окно шире дефолтного: таблице из трёх колонок тесно в 480px, строки
- * переносились и теряли связь с кнопками. Как у группового удаления (§5a.2),
- * clamp растёт с окном, а собственный max-width `.dialog-box` (100vw − 40px)
- * удерживает диалог внутри маленького экрана. */
-.dialog-box.trash-box {
-  width: clamp(520px, 70vw, 1100px);
-}
+/* Ширина и высота — ролью размера (lib/dialog.ts, требование 13464c39);
+ * прежний точечный `trash-box` с clamp-шириной упразднён. */
 
 .trash {
   --tr-row-h: 40px;
@@ -5796,21 +5807,9 @@ button.ui-btn--icon.trash-act {
 
 /* --- unified settings dialog (H18+, 08-ui-spec.md §9) --------------------- */
 
-/* When the dialog carries a custom footer (currently only the Settings
- * dialog) it becomes a flex column with a scrollable body and a sticky
- * footer — same look as the OS-standard "page + bottom action bar". */
-.dialog-box.dialog-box-tall {
-  display: flex;
-  flex-direction: column;
-  max-height: min(85vh, 720px);
-  overflow: hidden;
-}
-
-.dialog-box.dialog-box-tall > .dialog-body {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  min-height: 0;
-}
+/* Высота диалога и прокрутка тела заданы ролью размера и каркасом
+ * (lib/dialog.ts): прежний `dialog-box-tall` для кастомного футера упразднён —
+ * теперь так устроен каждый диалог (требование 13464c39). */
 
 .settings-body {
   display: flex;
@@ -5884,33 +5883,9 @@ button.ui-btn--icon.trash-act {
   border-top: 1px solid var(--border);
 }
 
-/* Task O5: tab strip + live preview for the four network markdown fields. */
-.settings-md-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-  margin-top: 4px;
-}
-.settings-md-tab {
-  appearance: none;
-  background: transparent;
-  border: none;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-.settings-md-tab:hover:not(.active):not(:disabled) {
-  color: var(--fg);
-}
-.settings-md-tab.active {
-  color: var(--fg);
-  border-bottom-color: var(--accent);
-  font-weight: 600;
-}
+/* Task O5: tab strip + live preview for the four network markdown fields.
+ * Полоса вкладок — общий механизм `lib/ui/tabs.ts` (задача a57e7998); частные
+ * `.settings-md-tabs`/`-tab` упразднены. */
 .settings-md-panel {
   padding-top: 8px;
 }
@@ -6135,25 +6110,8 @@ button.ui-btn--icon.trash-act {
   min-height: 320px;
 }
 
-.admin-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.admin-tab {
-  padding: 6px 12px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  cursor: pointer;
-  color: var(--text-dim);
-}
-
-.admin-tab.active {
-  color: var(--accent);
-  font-weight: 700;
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
+/* Полоса вкладок админ-панели — общий механизм `lib/ui/tabs.ts`
+ * (задача a57e7998); частные `.admin-tabs`/`-tab` упразднены. */
 .admin-table-wrap {
   overflow: auto;
   max-height: 380px;
@@ -6779,8 +6737,7 @@ button.entity-combo-pick:disabled {
 .history-cloud,
 .history-more,
 .editor-tab,
-.admin-tab,
-.icon-tab,
+.ui-tab,
 .emoji-cell,
 .link-group-item,
 .selection-item,
@@ -6808,8 +6765,7 @@ button.entity-combo-pick:disabled {
   .history-cloud,
   .history-more,
   .editor-tab,
-  .admin-tab,
-  .icon-tab,
+  .ui-tab,
   .emoji-cell,
   .link-group-item,
   .selection-item,
@@ -7230,32 +7186,8 @@ table.chron-table thead th {
   opacity: 0.45;
 }
 
-/* Diff dialog (S11): tab bar + two views. */
-.diff-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.diff-tabs {
-  display: flex;
-  gap: 6px;
-}
-
-.diff-tab {
-  padding: 5px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border, #ccc);
-  background: transparent;
-  cursor: pointer;
-}
-
-.diff-tab.active {
-  background: var(--accent, #6a7dff);
-  color: #fff;
-  border-color: var(--accent, #6a7dff);
-}
-
+/* Diff dialog (S11): вкладки «Связи»/«Содержание» — общий механизм
+   `lib/ui/tabs.ts` (задача a57e7998). */
 .diff-content {
   max-height: 55vh;
   overflow: auto;
@@ -7829,41 +7761,8 @@ table.activity-table thead th {
    редактора типа мысли. Редактор типа связи остаётся без табов — состав
    полей прежний, и он не набирает нужной массы. */
 
-.type-editor-tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--border);
-  margin: 0 0 8px;
-}
-
-.type-editor-tab {
-  padding: 6px 12px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  cursor: pointer;
-  color: var(--text-dim);
-  background: transparent;
-  border: none;
-  font: inherit;
-}
-
-.type-editor-tab:hover:not(.active) {
-  color: var(--text);
-  background: var(--surface-2);
-}
-
-.type-editor-tab.active {
-  color: var(--accent);
-  font-weight: 700;
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
-.type-editor-tab-pane {
-  display: none;
-}
-
-.type-editor-tab-pane.active {
-  display: block;
-}
+/* Полоса вкладок редактора типа — общий механизм `lib/ui/tabs.ts`
+ * (задача a57e7998); частные `.type-editor-tabs`/`-tab`/`-pane` упразднены. */
 
 /* Кнопки перестановки отборов внутри вкладки «Отборы». Тот же тон,
    что и в таблицах свойств, чтобы строки были визуально одного

@@ -1041,7 +1041,7 @@ function showSnapshotDialog(row: ActivityRow): void {
   showDialog({
     title: 'Снимок события',
     body,
-    width: 560,
+    size: 'm',
     buttons: [{ label: 'Закрыть', primary: true }],
   });
 }
@@ -1104,7 +1104,7 @@ async function runMaintenance(opts: MaintenanceOpts): Promise<void> {
     showDialog({
       title: opts.title,
       body,
-      width: 420,
+      size: 's',
       buttons: [
         { label: 'Отмена', onClick: () => resolve(null) },
         {

@@ -65,11 +65,6 @@ export const LINK_PROPERTY_PICKER_TITLE = 'Выбрать свойство св�
  */
 export const LINK_PROPERTY_DROPDOWN_MIN_WIDTH = 560;
 
-/** Ширина диалога выбора свойства-связи, px — чтобы обе подписи (имя стороны и
- *  пара связи) помещались без обрезки (560 — как у выпадашек диалога, ошибка
- *  5c7f8376). */
-export const LINK_PROPERTY_PICKER_WIDTH = 560;
-
 /**
  * Выбранное СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает не тип
  * связи, а имя стороны свойства-связи — `key` (display-имя стороны) адресует
@@ -335,7 +330,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
     closeSelf = showDialog({
       title: LINK_PROPERTY_PICKER_TITLE,
       body,
-      width: LINK_PROPERTY_PICKER_WIDTH,
+      size: 'm',
       buttons: [{ label: 'Отмена' }],
       onMount: () => {
         render();

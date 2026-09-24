@@ -104,7 +104,7 @@ export function showImportEtnxDialog(
     showDialog({
       title: 'Импорт из .etnx',
       body,
-      width: 520,
+      size: 'm',
       buttons: [
         {
           label: 'Отмена',

@@ -57,24 +57,44 @@ const RULES: GuardRule[] = [
 /** Панель вкладки в исходнике: `div('type-editor-tab-pane')`, `div('att-tab-panel')`. */
 const TAB_PANE_DECL = /div\('[a-z0-9-]*-tab-(?:pane|panel)'\)/;
 
+/** Вкладочный диалог каркаса: `showDialog({ … tabs: [ … ] })` (a57e7998). */
+function hasDialogTabs(content: string): boolean {
+  const re = /showDialog\(\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    if (/\btabs:\s*\[/.test(content.slice(match.index, match.index + 1500))) return true;
+  }
+  return false;
+}
+
+/** Файл объявляет вкладочный диалог любым из двух способов. */
+function isTabbedDialogFile(content: string): boolean {
+  return TAB_PANE_DECL.test(content) || hasDialogTabs(content);
+}
+
 /**
  * Правило 2 (многофайловое: нужен весь текст файла). Ищет файлы, которые
- * строят панели вкладок, но не передают `footerError` в `showDialog`.
+ * строят вкладочный диалог (панели вкладок либо `tabs: […]` общего механизма
+ * каркаса) и ведут общую строку ошибки записи (`errorLine`), но не передают её
+ * в `footerError` — тогда ошибка видна только на активной вкладке (add8d09d).
  */
 function findTabbedDialogsWithoutFooterError(root: string): GuardViolation[] {
   const violations: GuardViolation[] = [];
   for (const file of listSourceFiles(root)) {
     const rel = path.relative(root, file).replace(/\\/g, '/');
     const content = fs.readFileSync(file, 'utf8');
-    if (!TAB_PANE_DECL.test(content)) continue;
+    if (rel.startsWith('lib/ui/')) continue;
+    if (!isTabbedDialogFile(content)) continue;
+    if (!/\berrorLine\b/.test(content)) continue;
     if (content.includes('footerError:')) continue;
     const index = content.search(TAB_PANE_DECL);
-    const line = content.slice(0, index).split('\n').length;
+    const at = index >= 0 ? index : content.indexOf('tabs: [');
+    const line = content.slice(0, at).split('\n').length;
     violations.push({
       rule: 'tabbed-dialog-uses-footer-error',
       file: rel,
       line,
-      text: "div('…-tab-pane') without `footerError:` in showDialog",
+      text: 'вкладочный диалог без `footerError:` in showDialog',
     });
   }
   return violations;
@@ -128,9 +148,11 @@ describe('guard: ошибка диалога с вкладками — в пан
     try {
       fs.writeFileSync(
         path.join(dir, 'inline-tabbed.ts'),
-        ["const pane = div('x-tab-pane');", 'showDialog({ title: t, body, buttons: [] });'].join(
-          '\n',
-        ),
+        [
+          "const pane = div('x-tab-pane');",
+          "const errorLine = span('', 'error-text');",
+          'showDialog({ title: t, body, buttons: [] });',
+        ].join('\n'),
         'utf8',
       );
       const violations = findTabbedDialogsWithoutFooterError(dir);

@@ -28,6 +28,7 @@ import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-prev
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
+import { collapsibleSection } from '../lib/ui/collapsible.js';
 
 /** The original picked file, carried to the caller for the attachment upload. */
 export interface IconPickSource {
@@ -53,23 +54,10 @@ export function showIconDialog(opts: {
 }): void {
   const { current, onPick } = opts;
   let tab: Tab = current.kind === 'image' ? 'url' : 'emoji';
+  /** Закрывающая функция каркаса: панели строятся лениво, после открытия. */
+  let closeSelf: (() => void) | null = null;
 
-  const body = div('icon-dialog');
-
-  // Tab switcher.
-  const tabsBar = div('icon-tabs');
-  const mkTab = (id: Tab, label: string): HTMLButtonElement =>
-    button(label, () => switchTab(id), 'icon-tab');
-  const emojiTab = mkTab('emoji', 'Эмодзи');
-  const fileTab = mkTab('file', 'Файл');
-  const urlTab = mkTab('url', 'URL');
-  tabsBar.append(emojiTab, fileTab, urlTab);
-  body.append(tabsBar);
-
-  const content = div('icon-content');
-  body.append(content);
-
-  // Per-tab selection state (survives tab switches, reset per dialog open).
+  // Per-tab selection state (lives in the closure, survives tab switches).
   let urlValue = ''; // text typed on the URL tab
   let urlValid: string | null = null; // a URL that loaded successfully
   let urlInputEl: HTMLInputElement | null = null;
@@ -91,32 +79,35 @@ export function showIconDialog(opts: {
   // --- emoji tab ------------------------------------------------------------
 
   /** Builds the collapsible emoji groups (full set, lazy cell rendering). */
-  function buildEmojiGrid(close: () => void): HTMLElement {
+  function buildEmojiGrid(): HTMLElement {
     const root = div('emoji-groups');
     EMOJI_GROUPS.forEach((group, index) => {
-      const details = el('details', 'emoji-group');
-      if (index === 0) details.open = true;
-      const summary = el('summary', 'emoji-group-title', `${group.name} · ${group.items.length}`);
-      const grid = div('emoji-grid');
-      details.append(summary, grid);
-      const populate = (): void => {
-        if (grid.childElementCount > 0) return;
-        for (const glyph of group.items) {
-          grid.append(
-            button(glyph, () => {
-              void onPick({ icon: glyph, kind: 'emoji' }).then((ok) => {
-                if (ok) close();
-              });
-            }, 'emoji-cell'),
-          );
-        }
-      };
-      if (details.open) populate();
-      // Build cells on first expand — 1900+ glyphs would be wasteful upfront.
-      details.addEventListener('toggle', () => {
-        if (details.open) populate();
+      // Сворачиваемая эмодзи-группа — общий компонент lib/ui/collapsible.ts
+      // (задача a57e7998): тело (сетка глифов) строится при первом раскрытии.
+      const section = collapsibleSection({
+        title: `${group.name} · ${group.items.length}`,
+        collapsed: index !== 0,
+        caretKind: 'triangle',
+        classes: {
+          root: 'emoji-group',
+          header: 'emoji-group-title',
+          body: 'emoji-group-body',
+        },
+        buildBody: () => {
+          const grid = div('emoji-grid');
+          for (const glyph of group.items) {
+            grid.append(
+              button(glyph, () => {
+                void onPick({ icon: glyph, kind: 'emoji' }).then((ok) => {
+                  if (ok) closeSelf?.();
+                });
+              }, 'emoji-cell'),
+            );
+          }
+          return grid;
+        },
       });
-      root.append(details);
+      root.append(section.root);
     });
     return root;
   }
@@ -126,7 +117,7 @@ export function showIconDialog(opts: {
   /** Applies a thought type's icon immediately (same UX as the emoji grid). */
   function applyTypeIcon(type: ThoughtType): void {
     void onPick({ icon: type.icon, kind: type.icon_kind }).then((ok) => {
-      if (ok) close();
+      if (ok) closeSelf?.();
     });
   }
 
@@ -285,7 +276,7 @@ export function showIconDialog(opts: {
   // --- apply ----------------------------------------------------------------
 
   /** Applies the active tab's selection (file or URL) — the bottom button. */
-  async function applySelection(close: () => void): Promise<void> {
+  async function applySelection(): Promise<void> {
     if (tab === 'file') {
       if (fileDataUrl === null || fileSource === null) return;
       let icon = fileDataUrl;
@@ -298,52 +289,34 @@ export function showIconDialog(opts: {
         }
       }
       const ok = await onPick({ icon, kind: 'image', source: fileSource });
-      if (ok) close();
+      if (ok) closeSelf?.();
       return;
     }
     if (tab === 'url' && urlValid !== null) {
       const ok = await onPick({ icon: urlValid, kind: 'image' });
-      if (ok) close();
+      if (ok) closeSelf?.();
     }
   }
 
-  // --- tabs -----------------------------------------------------------------
+  // --- dialog ---------------------------------------------------------------
 
-  /** Re-renders the active tab (selections survive across switches). */
-  function renderContent(close: () => void): void {
-    content.replaceChildren();
-    urlInputEl = null;
-    urlPreviewEl = null;
-    filePreviewEl = null;
-    for (const t of [emojiTab, fileTab, urlTab]) {
-      t.classList.toggle('active', t === activeTabBtn());
-    }
-    if (tab === 'emoji') {
-      content.append(buildEmojiGrid(close));
-    } else if (tab === 'file') {
-      content.append(buildFileTab());
-    } else {
-      content.append(buildUrlTab());
-    }
-    refreshApply();
-  }
-
-  function activeTabBtn(): HTMLButtonElement {
-    return tab === 'emoji' ? emojiTab : tab === 'file' ? fileTab : urlTab;
-  }
-
-  function switchTab(next: Tab): void {
-    if (tab === next) return;
-    // Preserve the typed URL text between switches.
-    if (urlInputEl !== null) urlValue = urlInputEl.value;
-    tab = next;
-    renderContent(close);
-  }
-
-  const close = showDialog({
+  // Вкладки — общий механизм каркаса (задача a57e7998): панели строятся лениво
+  // при первом показе и НЕ пересобираются при переключении, поэтому выбор и
+  // введённый URL переживают смену вкладок, а высота диалога задана ролью.
+  closeSelf = showDialog({
     title: 'Иконка',
-    body,
-    width: 520,
+    size: 'm',
+    activeTab: tab,
+    onTabChange: (id) => {
+      if (urlInputEl !== null) urlValue = urlInputEl.value;
+      tab = id as Tab;
+      refreshApply();
+    },
+    tabs: [
+      { id: 'emoji', label: 'Эмодзи', content: () => buildEmojiGrid() },
+      { id: 'file', label: 'Файл', content: () => buildFileTab() },
+      { id: 'url', label: 'URL', content: () => buildUrlTab() },
+    ],
     buttons: [
       {
         label: 'Очистить',
@@ -360,7 +333,7 @@ export function showIconDialog(opts: {
         label: 'Применить',
         primary: true,
         keepOpen: true,
-        onClick: (c) => void applySelection(c),
+        onClick: () => void applySelection(),
         ref: (el) => {
           applyBtn = el;
         },
@@ -368,5 +341,7 @@ export function showIconDialog(opts: {
     ],
   });
 
-  renderContent(close);
+  // Активная панель уже построена каркасом — синхронизируем доступность
+  // «Применить» с выбранной вкладкой.
+  refreshApply();
 }

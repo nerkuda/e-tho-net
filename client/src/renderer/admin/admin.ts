@@ -19,55 +19,23 @@ import { uiButton } from '../lib/ui/button.js';
 
 /** Opens the admin panel modal. */
 export function openAdminPanel(): void {
-  const tabs = ['users', 'networks', 'audit'] as const;
-  let active: (typeof tabs)[number] = 'users';
-
-  const tabRow = div('admin-tabs');
-  const content = div('admin-content');
-
-  const tabButton = (key: (typeof tabs)[number], label: string): HTMLButtonElement => {
-    const btn = button(
-      label,
-      () => {
-        active = key;
-        refresh();
-      },
-      `admin-tab${active === key ? ' active' : ''}`,
-    );
-    return btn;
+  // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
+  // строятся лениво при первом показе, переключение не пересобирает узел.
+  const pane = (render: (host: HTMLElement) => void): (() => HTMLElement) => () => {
+    const host = div('admin-content');
+    render(host);
+    return host;
   };
-  tabRow.append(
-    tabButton('users', 'Пользователи'),
-    tabButton('networks', 'Сети'),
-    tabButton('audit', 'Аудит'),
-  );
 
-  const body = div('admin-panel');
-  body.append(tabRow, content);
-
-  function refresh(): void {
-    for (const btn of Array.from(tabRow.querySelectorAll<HTMLElement>('.admin-tab'))) {
-      btn.classList.remove('active');
-    }
-    const index = tabs.indexOf(active);
-    const activeBtn = tabRow.children[index];
-    if (activeBtn !== undefined) activeBtn.classList.add('active');
-    content.replaceChildren();
-    switch (active) {
-      case 'users':
-        void renderUsers(content);
-        break;
-      case 'networks':
-        void renderNetworks(content);
-        break;
-      case 'audit':
-        void renderAudit(content);
-        break;
-    }
-  }
-
-  showDialog({ title: 'Администрирование', body, width: 760 });
-  refresh();
+  showDialog({
+    title: 'Администрирование',
+    size: 'l',
+    tabs: [
+      { id: 'users', label: 'Пользователи', content: pane((h) => void renderUsers(h)) },
+      { id: 'networks', label: 'Сети', content: pane((h) => void renderNetworks(h)) },
+      { id: 'audit', label: 'Аудит', content: pane((h) => void renderAudit(h)) },
+    ],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +164,7 @@ async function generateKey(user: User): Promise<void> {
   body.append(field('Лимит записи MCP (в мин.)', limitRow));
   showDialog({
     title: 'Сгенерировать API-key',
+    size: 's',
     body,
     buttons: [
       { label: 'Отмена' },
@@ -258,6 +227,7 @@ function showApiKey(apiKey: string): void {
   box.append(keyBox);
   showDialog({
     title: 'API-key (показан один раз)',
+    size: 'm',
     body: box,
     buttons: [{ label: 'Закрыть', primary: true }],
   });

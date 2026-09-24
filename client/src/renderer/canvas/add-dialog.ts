@@ -1053,7 +1053,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const closeSelf = showDialog({
       title,
       body,
-      width: 620,
+      size: 'm',
       buttons: [
         { label: 'Отмена', onClick: () => finish(null) },
         {

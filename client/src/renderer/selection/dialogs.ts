@@ -71,7 +71,7 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
     showDialog({
       title,
       body: combo.root,
-      width: 420,
+      size: 's',
       buttons: [
         { label: 'Отмена', onClick: () => finish(undefined) },
         {
@@ -121,7 +121,7 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
     showDialog({
       title: 'Изменить тип мыслей',
       body: combo.root,
-      width: 420,
+      size: 's',
       buttons: [
         { label: 'Отмена', onClick: () => finish(undefined) },
         {
@@ -163,7 +163,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   showDialog({
     title: 'Значения свойств выделенных мыслей',
     body,
-    width: 560,
+    size: 'm',
     buttons: [{ label: 'Закрыть', onClick: () => undefined }, applyBtn],
   });
 

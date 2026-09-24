@@ -119,6 +119,7 @@ export function showThoughtStyleDialog(opts: {
 
   showDialog({
     title: mode === 'type' ? 'Настройки типа мысли' : 'Настройки мысли',
+    size: 'm',
     body,
     buttons: [
       {
@@ -195,6 +196,7 @@ export function showLinkStyleDialog(opts: {
 
   showDialog({
     title: mode === 'type' ? 'Настройки типа связи' : 'Настройки связи',
+    size: 'm',
     body,
     buttons: [
       {

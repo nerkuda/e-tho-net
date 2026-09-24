@@ -401,8 +401,6 @@ export interface EntityPickerModalOptions {
    * (ошибка bd8b78a0), поэтому все команды живут в верхней строке.
    */
   commands?: (ctx: EntityPickerDialogCtx) => EntityPickerCommand[];
-  /** Ширина диалога, px (по умолчанию 480). */
-  width?: number;
   /** Подпись кнопки применения (по умолчанию «Применить»). */
   applyLabel?: string;
 }
@@ -604,7 +602,7 @@ export async function pickEntitiesModal(
       closeSelf = showDialog({
         title: opts.title,
         body,
-        width: opts.width ?? 480,
+        size: 's',
         buttons,
         onMount: () => searchInput.focus(),
         // Любое закрытие каркаса — «Отмена», Esc, ×, программный
@@ -745,7 +743,7 @@ export async function pickEntitiesModal(
     closeSelf = showDialog({
       title: opts.title,
       body,
-      width: opts.width ?? 480,
+      size: 's',
       buttons,
       onMount: () => {
         renderList();

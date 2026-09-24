@@ -88,6 +88,7 @@ import {
   showDialog,
 } from '../lib/dialog.js';
 import { div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { showLinkStyleDialog } from '../editor/style-dialog.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
@@ -333,7 +334,7 @@ export function showPropertyManagerDialog(): void {
   showDialog({
     title: 'Свойства',
     body,
-    width: 900,
+    size: 'l',
     buttons: [{ label: 'Закрыть', primary: true }],
     // Фокус в поиске: ↑/↓ и Enter сразу работают по списку (требование 9).
     onMount: () => list.focusSearch(),
@@ -764,25 +765,21 @@ function lockCategoryFor(existing: PropertyValueType | null): ValueCategory | nu
 // ---------------------------------------------------------------------------
 
 /** Сворачиваемая группа: `summary` кликабельный, `body` показывается по клику. */
+/** Сворачиваемая группа формы — общий компонент lib/ui/collapsible.ts
+ *  (задача a57e7998): тело готовит вызывающий, компонент показывает его и
+ *  вращает каретку-треугольник. */
 function buildCollapsibleGroup(title: string, body: HTMLElement, defaultCollapsed: boolean): HTMLElement {
-  const wrap = div('form-stack collapsible-group');
-  const summary = el('summary', 'collapsible-summary');
-  const arrow = span('▸', 'collapsible-arrow');
-  summary.append(arrow, span(` ${title}`));
-  wrap.append(summary, body);
-  let collapsed = defaultCollapsed;
-  function apply(): void {
-    arrow.textContent = collapsed ? '▸' : '▾';
-    body.style.display = collapsed ? 'none' : '';
-  }
-  apply();
-  summary.addEventListener('click', () => {
-    collapsed = !collapsed;
-    apply();
-  });
-  summary.style.cursor = 'pointer';
-  summary.style.userSelect = 'none';
-  return wrap;
+  return collapsibleSection({
+    title,
+    collapsed: defaultCollapsed,
+    caretKind: 'triangle',
+    body,
+    classes: {
+      root: 'form-stack collapsible-group',
+      header: 'collapsible-summary',
+      caret: 'collapsible-arrow',
+    },
+  }).root;
 }
 
 /** Разделитель секций в форме. */
@@ -1832,7 +1829,7 @@ export function openPropertyManagerEditor(
   showDialog({
     title: property === null ? 'Новое свойство' : `Свойство — «${property.name}»`,
     body,
-    width: 1240,
+    size: 'xl',
     // Идентичность сущности для повторного открытия (ошибки c2d243bb,
     // 74d9b4ed): клик по этому же свойству — или по «Добавить» при ещё не
     // созданном свойстве (`property:new`) — поднимает уже открытый диалог, а
@@ -2590,7 +2587,7 @@ export function showLinkTypesTreeDialog(): void {
   showDialog({
     title: 'Типы связей',
     body,
-    width: 640,
+    size: 'm',
     buttons: [{ label: 'Закрыть', primary: true }],
   });
 

@@ -32,6 +32,7 @@ export function isPinned(thoughtId: string): boolean {
 export function showPinLimitMessage(): void {
   showDialog({
     title: 'Закреплённые мысли',
+    size: 's',
     body: el(
       'div',
       'dialog-text',

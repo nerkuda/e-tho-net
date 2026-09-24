@@ -286,7 +286,7 @@ async function membersDialog(): Promise<void> {
   showDialog({
     title: 'Участники сети',
     body,
-    width: 560,
+    size: 'm',
     buttons: [{ label: 'Закрыть', primary: true }],
   });
   await refresh();
