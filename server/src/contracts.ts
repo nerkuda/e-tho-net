@@ -1432,13 +1432,24 @@ export const MetricsTools = defineContract(
   {},
 );
 
+/**
+ * `instruction_ids` фактически передан и непуст. REST-парсер repeatable-массива
+ * кладёт `[]` при отсутствии параметра — пустой список считается отсутствующим
+ * (задача 649c55e2). Общий предикат взаимоисключений MCP и REST.
+ */
+function instructionIdsPresent(v: { instruction_ids?: string[] | undefined }): boolean {
+  return Array.isArray(v.instruction_ids) && v.instruction_ids.length > 0;
+}
+
 export const Instructions = defineContract(
   'etn.instructions',
   z
     .object({
       network_id: NetworkId,
       instruction_id: z.string().min(1).optional(),
+      instruction_ids: z.array(ThoughtId).min(1).max(50).optional(),
       keywords: z.string().min(1).optional(),
+      scope: z.enum(['roots', 'all']).optional(),
       limit: z.number().int().min(1).max(200).optional(),
       offset: z.number().int().min(0).optional(),
     })
@@ -1446,9 +1457,29 @@ export const Instructions = defineContract(
     .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
       message: 'instruction_id и keywords взаимоисключимы',
     })
-    .refine((v) => v.instruction_id === undefined || (v.limit === undefined && v.offset === undefined), {
-      message: 'limit/offset применимы только к режимам перечня, не к instruction_id',
-    }),
+    .refine((v) => v.instruction_id === undefined || !instructionIdsPresent(v), {
+      message: 'instruction_id и instruction_ids взаимоисключимы',
+    })
+    .refine((v) => !instructionIdsPresent(v) || v.keywords === undefined, {
+      message: 'instruction_ids и keywords взаимоисключимы',
+    })
+    .refine(
+      (v) =>
+        v.scope === undefined ||
+        (v.keywords === undefined && v.instruction_id === undefined && !instructionIdsPresent(v)),
+      {
+        message:
+          'scope применим только к режиму перечня без keywords, instruction_id и instruction_ids',
+      },
+    )
+    .refine(
+      (v) =>
+        (v.instruction_id === undefined && !instructionIdsPresent(v)) ||
+        (v.limit === undefined && v.offset === undefined),
+      {
+        message: 'limit/offset применимы только к режимам перечня, не к instruction_id/instruction_ids',
+      },
+    ),
   {},
 );
 
@@ -1686,20 +1717,46 @@ export const RestInstructions = defineContract(
     .object({
       network_id: NetworkId,
       instruction_id: z.string().min(1).optional(),
+      instruction_ids: z.array(z.string().min(1)).max(50).optional(),
       keywords: z.string().min(1).optional(),
+      scope: z.enum(['roots', 'all']).optional(),
       limit: z.number().int().min(1).max(200).optional(),
       offset: z.number().int().min(0).optional(),
     })
     .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
       message: 'instruction_id и keywords взаимоисключимы',
     })
-    .refine((v) => v.instruction_id === undefined || (v.limit === undefined && v.offset === undefined), {
-      message: 'limit/offset применимы только к режиму перечня, не к instruction_id',
-    }),
+    .refine((v) => v.instruction_id === undefined || !instructionIdsPresent(v), {
+      message: 'instruction_id и instruction_ids взаимоисключимы',
+    })
+    .refine((v) => !instructionIdsPresent(v) || v.keywords === undefined, {
+      message: 'instruction_ids и keywords взаимоисключимы',
+    })
+    .refine(
+      (v) =>
+        v.scope === undefined ||
+        (v.keywords === undefined && v.instruction_id === undefined && !instructionIdsPresent(v)),
+      {
+        message:
+          'scope применим только к режиму перечня без keywords, instruction_id и instruction_ids',
+      },
+    )
+    .refine(
+      (v) =>
+        (v.instruction_id === undefined && !instructionIdsPresent(v)) ||
+        (v.limit === undefined && v.offset === undefined),
+      {
+        message: 'limit/offset применимы только к режимам перечня, не к instruction_id/instruction_ids',
+      },
+    ),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     instruction_id: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined) },
+    // `repeatable: true` — `?instruction_ids=a&instruction_ids=b`; при отсутствии
+    // параметра парсер кладёт `[]`, который предикаты считают «не передан».
+    instruction_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
     keywords: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined) },
+    scope: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined) },
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
   },

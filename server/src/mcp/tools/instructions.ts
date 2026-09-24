@@ -16,11 +16,15 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   // ---------------------------------------------------------------------------
   // этон.instructions — витрина инструкций сети (ADR 717f04df, спека 14b0cc4f).
   //
-  // Три режима через дискриминированное объединение:
+  // Режимы (взаимоисключающие, схема — один объект с `.refine()`):
   //   * `{ network_id, instruction_id }` — полный текст одной инструкции
   //     (постоянный комментарий мысли целиком, без обрезки);
+  //   * `{ network_id, instruction_ids }` — карточки перечня для указанных id
+  //     в порядке запроса (ненайденные — в `missing`);
   //   * `{ network_id, keywords }` — фильтр по title+synonyms мини-синтаксом;
-  //   * `{ network_id }` — корневые актуальные инструкции сети (модель скиллов).
+  //   * `{ network_id }` — актуальные инструкции сети (модель скиллов):
+  //     по умолчанию (`scope: "roots"`) только корневые, `scope: "all"` — все,
+  //     включая подчинённые.
   //
   // Если роль `instructions` не задана, ответ — `{ has_instructions: false, instructions: [] }`
   // (без ошибки). Только актуальные мысли; помеченные на удаление исключаются;
@@ -41,12 +45,11 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Витрина инструкций сети',
       description:
-        'Read the network\'s instructions. Three modes: `{ network_id, instruction_id }` returns the FULL ' +
-        'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
-        'whitespace-AND, `-word` exclusion) across ALL instructions, sub-instructions included; `{ network_id }` ' +
-        'returns every active ROOT instruction (skill model — an instruction whose parent is not another ' +
-        'instruction), previews capped at 300 chars. When the network ' +
-        'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
+        'Read the network\'s instructions. Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` ' +
+        '→ cards (title, synonyms, preview ≤ 300) in request order, unresolved in `missing`; `{ keywords }` ' +
+        '→ filter by title+synonyms (whitespace-AND, `-word`); `{ network_id }` → active, default ROOT only ' +
+        '(no untyped parent link), `scope: "all"` adds sub-instructions. No role → ' +
+        '`{ has_instructions: false, instructions: [] }`.',
       inputSchema: Instructions.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
     },
@@ -73,7 +76,11 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
             ...(args.instruction_id !== undefined
               ? { instructionId: args.instruction_id }
               : {}),
+            ...(args.instruction_ids !== undefined
+              ? { instructionIds: args.instruction_ids }
+              : {}),
             ...(args.keywords !== undefined ? { keywords: args.keywords } : {}),
+            ...(args.scope !== undefined ? { scope: args.scope } : {}),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.offset !== undefined ? { offset: args.offset } : {}),
           },

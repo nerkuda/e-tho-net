@@ -190,6 +190,11 @@ const READ_ONLY_VIEWS: readonly { contract: string; field: string; note: string 
     note: 'GET /search — только чтение',
   },
   {
+    contract: 'RestInstructions',
+    field: 'scope',
+    note: 'GET /networks/:id/instructions — только чтение',
+  },
+  {
     contract: 'RestNeighborsQuery',
     field: 'dir',
     note: 'GET /thoughts/:id/neighbors — только чтение',

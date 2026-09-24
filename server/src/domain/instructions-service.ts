@@ -9,11 +9,15 @@
  * Режимы:
  *   * `{ instruction_id }` — полный текст одной инструкции (постоянный
  *     комментарий целиком, без обрезки);
+ *   * `{ instruction_ids }` — карточки перечня для указанных id в порядке
+ *     запроса (задача 649c55e2);
  *   * `{ keywords }` — фильтр по title+synonyms мини-синтаксом
  *     (`whitespace-AND`, `-word` исключение);
- *   * без обоих — корневые актуальные инструкции (пейджинг `limit`/`offset`);
- *     под-инструкции (у которых родитель — тоже инструкция) в перечень не
- *     попадают — их находит `keywords` из текста корневой инструкции.
+ *   * без них — актуальные инструкции (пейджинг `limit`/`offset`): по
+ *     умолчанию (`scope: "roots"`) только корневые, `scope: "all"` — все
+ *     активные, включая подчинённые. Под-инструкции (родитель — тоже
+ *     инструкция) в корневой перечень не попадают — их находит `keywords`
+ *     из текста корневой инструкции.
  *
  * Если роль `instructions` не задана — `{ has_instructions: false,
  * instructions: [] }` без ошибки. Только актуальные мысли; помеченные на
@@ -62,27 +66,43 @@ export interface InstructionsListResult {
   meta: { total: number; matched?: number };
 }
 
+/** Результат: карточки по указанным id (режим `instruction_ids`). */
+export interface InstructionsSelectionResult {
+  has_instructions: true;
+  instructions: InstructionsListItem[];
+  /** Запрошенные id, не найденные среди активных инструкций роли. */
+  missing: string[];
+  meta: { total: number };
+}
+
 export type NetworkInstructionsResult =
   | NoInstructionsResult
   | SingleInstructionResult
-  | InstructionsListResult;
+  | InstructionsListResult
+  | InstructionsSelectionResult;
 
 /** Параметры выборки (режим выбирается по фактически переданным полям). */
 export interface NetworkInstructionsQuery {
   instructionId?: string;
+  /**
+   * Режим «указанные» (задача 649c55e2): карточки в форме перечня для
+   * перечисленных id — в порядке запроса, дубликаты схлопываются. Полный
+   * текст — по-прежнему режимом `instructionId` по одной инструкции.
+   */
+  instructionIds?: string[];
   keywords?: string;
   limit?: number;
   offset?: number;
   /**
-   * Режим без `keywords`: отдавать только корневые инструкции (мысль типа
-   * «инструкция», у которой среди родителей нет другой инструкции) — модель
+   * Режим перечня без `keywords` (задача 649c55e2): `roots` (по умолчанию) —
+   * только корневые инструкции (мысль типа «инструкция», у которой среди
+   * родителей нет другой инструкции по нетипизированному ребру) — модель
    * скиллов витрины (требование «Перечень etn.instructions отдаёт только
-   * корневые инструкции»). По умолчанию `true`: норма действует одинаково для
-   * обоих фасадов — MCP-витрины `etn.instructions` и REST
-   * `GET /networks/:id/instructions` (задача 65cf6074). Режим `keywords`
-   * фильтр не применяет — он ищет по всем инструкциям, включая подчинённые.
+   * корневые инструкции»); `all` — все активные инструкции, включая
+   * подчинённые. Режим `keywords` фильтр не применяет — он ищет по всем
+   * инструкциям, включая подчинённые.
    */
-  rootsOnly?: boolean;
+  scope?: 'roots' | 'all';
   /**
    * Предел превью постоянного комментария в перечне (символы). По умолчанию
    * {@link INSTRUCTIONS_PREVIEW_CHARS} — агенту в перечне хватает блока
@@ -189,8 +209,20 @@ function fetchInstructionsList(
     title: string;
     type_id: string | null;
   }>;
-  if (rows.length === 0) return [];
+  return buildListItems(ndb, rows, previewChars);
+}
 
+/**
+ * Собрать карточки перечня из строк (id/title/type_id): загрузить синонимы
+ * одним запросом на страницу и приложить превью постоянного комментария
+ * (задача 649c55e2 — общий сборщик режимов «перечень» и «указанные»).
+ */
+function buildListItems(
+  ndb: NetworkDb,
+  rows: ReadonlyArray<{ id: string; title: string; type_id: string | null }>,
+  previewChars: number,
+): InstructionsListItem[] {
+  if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
   const idPlaceholders = ids.map(() => '?').join(',');
   const synRows = ndb
@@ -289,23 +321,68 @@ export function getNetworkInstructions(
     };
   }
 
-  // --- Список (с ключевыми словами или без) ------------------------------
+  // --- Общий резолв роли для перечневых режимов --------------------------
   if (typeof roleTypeId !== 'string') {
     return { has_instructions: false, instructions: [] };
   }
   const instructionsTypeIds = expandTypeIdsToSubtree(ndb, 'thought_types', [roleTypeId]);
+  const previewChars = query.previewChars ?? INSTRUCTIONS_PREVIEW_CHARS;
+
+  // --- Режим «указанные» (instruction_ids) --------------------------------
+  if (query.instructionIds !== undefined && query.instructionIds.length > 0) {
+    if (instructionsTypeIds.length === 0) {
+      return {
+        has_instructions: true,
+        instructions: [],
+        missing: [...new Set(query.instructionIds)],
+        meta: { total: 0 },
+      };
+    }
+    // Порядок запроса, дубликаты схлопываются (задача 649c55e2).
+    const requested = [...new Set(query.instructionIds)];
+    const idPlaceholders = requested.map(() => '?').join(',');
+    const placeholders = instructionsTypeIds.map(() => '?').join(',');
+    const rows = ndb
+      .prepare(
+        `SELECT t.id AS id, t.title AS title, t.type_id AS type_id
+           FROM thoughts_v t
+          WHERE t.id IN (${idPlaceholders})
+            AND t.type_id IN (${placeholders})
+            AND t.active = 1
+            AND t.marked_for_deletion = 0`,
+      )
+      .all(...requested, ...instructionsTypeIds) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+    }>;
+    const byId = new Map(rows.map((r) => [r.id, r] as const));
+    const foundRows = requested.flatMap((id) => {
+      const row = byId.get(id);
+      return row === undefined ? [] : [row];
+    });
+    const missing = requested.filter((id) => !byId.has(id));
+    const items = buildListItems(ndb, foundRows, previewChars);
+    return {
+      has_instructions: true,
+      instructions: projectThoughtRows(items),
+      missing,
+      meta: { total: items.length },
+    };
+  }
+
+  // --- Список (с ключевыми словами или без) ------------------------------
   if (instructionsTypeIds.length === 0) {
     return { has_instructions: true, instructions: [], meta: { total: 0 } };
   }
   const limit = Math.min(Math.max(query.limit ?? 50, 1), 200);
   const offset = Math.max(query.offset ?? 0, 0);
   const keywords = query.keywords;
-  // Режим без ключевых слов — только корневые инструкции (модель скиллов,
-  // требование «Перечень etn.instructions отдаёт только корневые инструкции»).
-  // Норма общая для обоих фасадов (задача 65cf6074): по умолчанию — корневые.
-  // `keywords` ищет по всем, включая подчинённые.
-  const rootsOnly = (query.rootsOnly ?? true) && keywords === undefined;
-  const previewChars = query.previewChars ?? INSTRUCTIONS_PREVIEW_CHARS;
+  // Режим без ключевых слов: `scope: "roots"` (по умолчанию) — только корневые
+  // инструкции (модель скиллов, требование «Перечень etn.instructions отдаёт
+  // только корневые инструкции»); `scope: "all"` — все активные, включая
+  // подчинённые. `keywords` ищет по всем и scope не применяет (задача 649c55e2).
+  const rootsOnly = (query.scope ?? 'roots') === 'roots' && keywords === undefined;
 
   const keyword = keywordClauseFor(keywords);
   const placeholders = instructionsTypeIds.map(() => '?').join(',');
