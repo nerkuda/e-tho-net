@@ -190,3 +190,10 @@ export type {
   SplitterOptions,
 } from './splitter.js';
 
+// Реактивная основа списков — селекторы поверх store (задача 60fcc702,
+// требование 628d33ee, компонент ebe5e19f). Не вендорский фасад, а слой
+// состояния для будущего табличного фасада; реэкспортируется здесь по
+// barrel-дисциплине `lib/ui` (сторож guard-ui-facades).
+export { select, selectMany, deepEqual } from './state.js';
+export type { StateSelector, SelectOptions } from './state.js';
+
