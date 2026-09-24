@@ -197,3 +197,38 @@ export type {
 export { select, selectMany, deepEqual } from './state.js';
 export type { StateSelector, SelectOptions } from './state.js';
 
+// Единая таблица списков — фасад над Vaadin Grid (задача dad2b029,
+// требование 93115633, компонент 88111458). Единственный разрешённый способ
+// сборки списков в рендерере (сторож guard-ui-tables).
+export {
+  TABLE_CLASS,
+  TABLE_EMPTY_CLASS,
+  TABLE_CELL_EMPTY_CLASS,
+  TABLE_EMPTY_CELL,
+  NO_SORT,
+  cycleSort,
+  sortRows,
+  nextRowIndex,
+  isNavKey,
+  escapeTsvCell,
+  cellText,
+  rowsToTsv,
+  emptyState,
+  createTable,
+} from './table.js';
+export type {
+  SortDir,
+  SortState,
+  NavKey,
+  CellContext,
+  TableColumn,
+  TableSpec,
+  TableHandle,
+} from './table.js';
+
+// Адаптер таблицы к вендорскому Vaadin Grid (задача dad2b029): контракт
+// `GridTableAdapter` (стаб в тестах) и реализация поверх `vaadin-grid`.
+export { vaadinGridAdapter } from './table-grid.js';
+export type { GridColumnSpec, GridTableAdapter, GridPoint } from './table-grid.js';
+
+

@@ -68,6 +68,10 @@ import './comment.css';
 // здесь только общее — глиф и его состояния. Вид перенесён из `.row-splitter`.
 import './splitter.css';
 
+// Единая таблица списков — обёртка, растяжение сетки и пустое состояние
+// (`.ui-table*`, задача dad2b029).
+import './table.css';
+
 
 // Компоненты этапа 1: кнопки, поля, переключатели, вкладки, тосты,
 // тултипы, деревья, аккордеоны, сплиттеры. Каждый модуль регистрирует
@@ -103,4 +107,22 @@ import '@vaadin/grid/vaadin-grid-sort-column.js';
 // Карта маппинга токенов ETN → `--vaadin-*` (светлая и тёмная темы).
 // В Vaadin 25 `--lumo-*` заменены токенами `--vaadin-*` — см. шапку файла.
 import './vaadin-tokens.css';
+
+// --- Телеметрия Vaadin (vaadin-usage-statistics) отключена ---
+// Vaadin в режиме разработки собирает статистику использования компонентов.
+// Документированный opt-out — флаг проекта "vaadin": {"disableUsageStatistics": true}
+// в корневом package.json: postinstall `@vaadin/vaadin-usage-statistics`
+// подменяет `vaadin-usage-statistics.js` пустым (`check.cjs`). Дополнительно
+// глушим колбэк в рантайме сразу после импорта элементов (element-mixin
+// заводит его синхронно при импорте и вызывает на idle через debounce —
+// перезапись до срабатывания делает вызов пустым). См. карточку компонента
+// 88111458.
+{
+  const host = window as unknown as {
+    Vaadin?: { developmentModeCallback?: Record<string, () => void> };
+  };
+  if (host.Vaadin?.developmentModeCallback !== undefined) {
+    host.Vaadin.developmentModeCallback['vaadin-usage-statistics'] = () => undefined;
+  }
+}
 

@@ -1,0 +1,613 @@
+/**
+ * Таблица списков `lib/ui` — единый фасад над Vaadin Grid (задача dad2b029,
+ * требование 93115633 «Единый табличный компонент списков», техпроект
+ * 78398ec5, ADR 03eb2c61, компонент 88111458, инвентаризация 3fc7c54d).
+ *
+ * **Зачем.** Навигация стрелками в списочных экранах продублирована вручную
+ * примерно в десяти модулях и расходится; текущей строки, единых контекстных
+ * меню и сортировки нет. Этот модуль — тот самый единый список: им обязаны
+ * пользоваться все списочные экраны вместо самодельных `<table>` (сторож
+ * `tests/guard-ui-tables.test.ts`).
+ *
+ * **Что наше, что вендорское.** Вендорскому Grid отданы виртуализация и
+ * отрисовка строк. Всё поведение — наше и живёт здесь: сортировка (цикл
+ * asc → desc → нет), текущая строка, клавиатурная навигация, контекстное
+ * меню, копирование, подписка на селектор store. Общение с элементом Grid
+ * изолировано тонким адаптером {@link GridTableAdapter} (`./table-grid.ts`).
+ *
+ * **Тестируемость (ключевое решение).** `vaadin-grid` — custom element: на
+ * используемом в тестах DOM-шиме он не исполняется. Поэтому фасад разделён на
+ *  • чистые функции — {@link cycleSort}, {@link sortRows},
+ *    {@link nextRowIndex}, {@link rowsToTsv} (сортировка, навигационная
+ *    математика, формат копирования);
+ *  • обёртку на обычных элементах — контейнер `.ui-table`, клавиатура, меню,
+ *    копирование, пустое состояние;
+ *  • адаптер сетки, который в тестах заменяется стабом (опция `adapter`).
+ * Тесты проверяют поведение через стаб и чистые функции — без настоящего Grid.
+ *
+ * **Источник данных.** `rows` — массив ИЛИ селектор `lib/ui/state.ts`. Во
+ * втором случае таблица подписывается сама (`select`, структурное сравнение
+ * среза) и перерисовывается на каждое изменение store, куда realtime-канал
+ * фан-аутит события. Ручные `invalidate`-хуки вызывающего не нужны
+ * (требование 628d33ee) — это и есть реактивная основа списков.
+ *
+ * **Строки.** Заголовки колонок и тексты (в т.ч. пустого состояния и ячеек)
+ * задаёт вызывающий уже локализованными (`t('…')` из `lib/i18n.ts`): словарь
+ * ключей расширяется вызывающим, фасад ключей не придумывает. Значение по
+ * умолчанию для пустого состояния — `t('table.empty')`.
+ *
+ * **Копирование (Ctrl+C).** Формат — TSV (значения, разделённые табуляцией):
+ * первая строка — заголовки колонок, далее строки. Это машинно-читаемый и
+ * «вставляемый» формат по умолчанию для табличных процессоров (Excel,
+ * LibreOffice, Google Sheets); при вставке в них TSV разбивается на ячейки
+ * без диалога импорта. Ячейки с табуляцией, переводом строки или кавычкой
+ * оборачиваются в двойные кавычки (удвоение внутренних кавычек) — так же, как
+ * это делает Excel при копировании.
+ */
+
+import { div, el, span } from '../dom.js';
+import { t } from '../i18n.js';
+import { showMenuAt, type MenuItem } from '../menu.js';
+import { select, type StateSelector } from './state.js';
+import {
+  vaadinGridAdapter,
+  type GridColumnSpec,
+  type GridPoint,
+  type GridTableAdapter,
+} from './table-grid.js';
+
+/** Корневой класс обёртки таблицы. */
+export const TABLE_CLASS = 'ui-table';
+
+/** Класс элемента пустого состояния. */
+export const TABLE_EMPTY_CLASS = 'ui-table-empty';
+
+/** Класс ячейки с «пустым» значением (нет данных у строки). */
+export const TABLE_CELL_EMPTY_CLASS = 'ui-table-cell-empty';
+
+/** Значение ячейки по умолчанию, когда данных нет. */
+export const TABLE_EMPTY_CELL = '—';
+
+/** Направление сортировки. */
+export type SortDir = 'asc' | 'desc';
+
+/** Состояние сортировки таблицы: колонка и направление. */
+export interface SortState {
+  /** Ключ колонки-сортировки; `null` — сортировки нет. */
+  key: string | null;
+  /** Направление; `null` — сортировки нет. */
+  dir: SortDir | null;
+}
+
+/** Исходное состояние: данные в порядке источника. */
+export const NO_SORT: SortState = { key: null, dir: null };
+
+/** Клавиша навигации, обрабатываемая таблицей. */
+export type NavKey = 'ArrowUp' | 'ArrowDown' | 'Home' | 'End' | 'PageUp' | 'PageDown';
+
+/** Является ли имя клавиши навигационной. */
+export function isNavKey(key: string): key is NavKey {
+  return (
+    key === 'ArrowUp' ||
+    key === 'ArrowDown' ||
+    key === 'Home' ||
+    key === 'End' ||
+    key === 'PageUp' ||
+    key === 'PageDown'
+  );
+}
+
+/** Контекст ячейки для пользовательского рендера. */
+export interface CellContext<T> {
+  /** Индекс строки в текущем порядке отображения. */
+  index: number;
+  /** Колонка. */
+  column: TableColumn<T>;
+  /** Ячейка принадлежит текущей строке. */
+  isCurrent: boolean;
+}
+
+/** Декларативное описание колонки. */
+export interface TableColumn<T> {
+  /** Ключ колонки: идентификатор, путь сортировки и доступ к полю строки. */
+  key: string;
+  /** Заголовок (локализован вызывающим через `t('…')`). */
+  header: string;
+  /** Ширина CSS (например, `12rem`); не задана — колонка тянется. */
+  width?: string;
+  /** Выравнивание содержимого. */
+  align?: 'start' | 'center' | 'end';
+  /** Сортируема ли колонка по клику заголовка. */
+  sortable?: boolean;
+  /** Значение для сортировки; по умолчанию — поле `row[key]`. */
+  sortValue?: (row: T, index: number) => string | number | boolean | null | undefined;
+  /** Значение для копирования (TSV); по умолчанию — текстовое представление `sortValue`/поля. */
+  text?: (row: T, index: number) => string;
+  /** Пользовательский рендер ячейки (узел или строка). */
+  render?: (row: T, context: CellContext<T>) => Node | string | null | undefined;
+  /** Текст «пустой» ячейки (нет данных); по умолчанию {@link TABLE_EMPTY_CELL}. */
+  empty?: string;
+}
+
+/** Настройки таблицы. */
+export interface TableSpec<T> {
+  /** Колонки в порядке отображения. */
+  columns: TableColumn<T>[];
+  /** Источник строк: массив или селектор среза store (реактивная подписка). */
+  rows: readonly T[] | StateSelector<readonly T[]>;
+  /**
+   * Стабильный ключ строки (идентификатор сущности). Обязан НЕ зависеть от
+   * порядка строк — им адресуются текущая строка и выделение.
+   */
+  rowKey: (row: T, index: number) => string;
+  /** Текст пустого состояния (локализован); по умолчанию `t('table.empty')`. */
+  emptyText?: string;
+  /** ARIA-подпись таблицы. */
+  ariaLabel?: string;
+  /** Начальная текущая строка (ключ). */
+  current?: string | null;
+  /** Смена текущей строки (клавиатура, клик, внешняя установка). */
+  onCurrentChange?: (key: string | null, row: T | null, index: number) => void;
+  /** Активация строки: Enter или двойной клик. */
+  onActivate?: (row: T, index: number) => void;
+  /** Одиночный клик по строке. */
+  onRowClick?: (row: T, index: number) => void;
+  /** Пункты контекстного меню строки (пусто — меню не показывается). */
+  rowMenu?: (row: T, index: number) => MenuItem[];
+  /** Режим выделения: `single` (только текущая) или `multi` (Space переключает). */
+  selection?: 'single' | 'multi';
+  /** Копирование по Ctrl+C (по умолчанию включено). */
+  copy?: boolean;
+  /** Шаг PgUp/PgDn в строках (по умолчанию 10). */
+  pageStep?: number;
+  /** Запись в буфер обмена; по умолчанию `navigator.clipboard.writeText`. */
+  clipboard?: (text: string) => void;
+  /** Вызывается после формирования текста копирования (для тестов/логов). */
+  onCopy?: (text: string) => void;
+  /** Замена адаптера сетки (тесты подставляют стаб). */
+  adapter?: GridTableAdapter;
+}
+
+/** Публичный дескриптор таблицы. */
+export interface TableHandle<T> {
+  /** Обёртка для монтирования (`<div class="ui-table">`). */
+  readonly element: HTMLElement;
+  /** Текущий порядок строк (с учётом сортировки). */
+  getRows(): T[];
+  /** Заменяет источник строк (режим массива; селектор игнорируется). */
+  setRows(rows: readonly T[]): void;
+  /** Устанавливает текущую строку по ключу (без уведомления `onCurrentChange`). */
+  setCurrent(key: string | null): void;
+  /** Текущая строка. */
+  getCurrent(): { key: string; row: T; index: number } | null;
+  /** Пересчитывает сортировку по клику заголовка (используется адаптером и тестами). */
+  requestSort(key: string): void;
+  /** Текущее состояние сортировки. */
+  getSort(): SortState;
+  /** Заменяет выделение (в режиме `multi`). */
+  setSelection(keys: readonly string[]): void;
+  /** Ключи выделенных строк. */
+  getSelection(): string[];
+  /** Текст копирования текущего выделения/строки (TSV с заголовками). */
+  buildCopyText(): string;
+  /** Перерисовывает колонки и строки (например, после смены языка). */
+  refresh(): void;
+  /** Переводит клавиатурный фокус на таблицу. */
+  focus(): void;
+  /** Отписывается от селектора и удаляет узел. */
+  destroy(): void;
+}
+
+// --- Чистые функции: сортировка, навигация, копирование -------------------
+
+/**
+ * Цикл сортировки по клику заголовка: другая колонка → `asc`; та же →
+ * `asc` → `desc` → нет сортировки.
+ */
+export function cycleSort(current: SortState, key: string): SortState {
+  if (current.key !== key) return { key, dir: 'asc' };
+  if (current.dir === 'asc') return { key, dir: 'desc' };
+  return { key: null, dir: null };
+}
+
+/** Сравнение значений колонки: числа — численно, строки — по-русски; `null` в конце. */
+function compareValues(a: unknown, b: unknown): number {
+  const aEmpty = a === null || a === undefined || a === '';
+  const bEmpty = b === null || b === undefined || b === '';
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return 1;
+  if (bEmpty) return -1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), 'ru');
+}
+
+/** Значение строки по колонке (для сортировки/копирования). */
+function columnValue<T>(column: TableColumn<T>, row: T, index: number): unknown {
+  if (column.sortValue !== undefined) return column.sortValue(row, index);
+  return (row as Record<string, unknown>)[column.key];
+}
+
+/**
+ * Сортирует строки по состоянию. Сортировка СТАБИЛЬНА: равные значения
+ * сохраняют исходный порядок. Без сортировки (`key`/`dir` пусты) возвращает
+ * копию входного массива.
+ */
+export function sortRows<T>(
+  rows: readonly T[],
+  columns: readonly TableColumn<T>[],
+  sort: SortState,
+): T[] {
+  if (sort.key === null || sort.dir === null) return [...rows];
+  const column = columns.find((c) => c.key === sort.key);
+  if (column === undefined) return [...rows];
+  const sign = sort.dir === 'asc' ? 1 : -1;
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const diff = compareValues(
+        columnValue(column, a.row, a.index),
+        columnValue(column, b.row, b.index),
+      );
+      return diff !== 0 ? diff * sign : a.index - b.index;
+    })
+    .map((entry) => entry.row);
+}
+
+/**
+ * Целевой индекс строки для клавиши навигации. Без текущей строки
+ * (`current < 0`) первое нажатие встаёт: `End` — на последнюю, `PageDown` —
+ * на последнюю строку первой страницы, остальные — на первую. Возвращает
+ * `-1`, если строк нет.
+ */
+export function nextRowIndex(
+  key: NavKey,
+  current: number,
+  count: number,
+  pageStep: number,
+): number {
+  if (count <= 0) return -1;
+  const last = count - 1;
+  const step = pageStep >= 1 ? pageStep : 1;
+  if (current < 0) {
+    if (key === 'End') return last;
+    if (key === 'PageDown') return Math.min(last, step - 1);
+    return 0;
+  }
+  switch (key) {
+    case 'ArrowDown':
+      return Math.min(last, current + 1);
+    case 'ArrowUp':
+      return Math.max(0, current - 1);
+    case 'Home':
+      return 0;
+    case 'End':
+      return last;
+    case 'PageDown':
+      return Math.min(last, current + step);
+    case 'PageUp':
+      return Math.max(0, current - step);
+  }
+}
+
+/** Экранирует ячейку TSV: табуляция/перевод строки/кавычка — в кавычки (стиль Excel). */
+export function escapeTsvCell(value: string): string {
+  if (/[\t\n\r"]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+/** Текстовое представление ячейки для копирования. */
+export function cellText<T>(column: TableColumn<T>, row: T, index: number): string {
+  if (column.text !== undefined) return column.text(row, index);
+  const value = columnValue(column, row, index);
+  return value === null || value === undefined ? '' : String(value);
+}
+
+/**
+ * Строки в TSV: первая строка — заголовки колонок, далее строки. Строки
+ * разделяются CRLF (как в буфере Excel), ячейки — табуляцией.
+ */
+export function rowsToTsv<T>(
+  columns: readonly TableColumn<T>[],
+  rows: readonly T[],
+  indexes?: readonly number[],
+): string {
+  const line = (cells: string[]): string => cells.map(escapeTsvCell).join('\t');
+  const header = line(columns.map((column) => column.header));
+  const body = rows.map((row, i) =>
+    line(columns.map((column) => cellText(column, row, indexes?.[i] ?? i))),
+  );
+  return [header, ...body].join('\r\n');
+}
+
+/** Элемент пустого состояния (`role="status"`). Текст локализует вызывающий. */
+export function emptyState(text: string): HTMLDivElement {
+  const box = el('div', TABLE_EMPTY_CLASS);
+  box.setAttribute('role', 'status');
+  box.append(span(text));
+  return box;
+}
+
+// --- Фасад -----------------------------------------------------------------
+
+/**
+ * Создаёт таблицу. Источник-массив отрисовывается сразу; источник-селектор —
+ * с подпиской на store (с отпиской в {@link TableHandle.destroy}).
+ */
+export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
+  const columns = spec.columns;
+  const multi = spec.selection === 'multi';
+  const pageStep = spec.pageStep ?? 10;
+  const copyEnabled = spec.copy !== false;
+  const emptyText = spec.emptyText ?? t('table.empty');
+
+  const wrapper = div(TABLE_CLASS);
+  wrapper.tabIndex = 0;
+  if (spec.ariaLabel !== undefined) wrapper.setAttribute('aria-label', spec.ariaLabel);
+
+  const adapter = spec.adapter ?? vaadinGridAdapter();
+  const emptyEl = emptyState(emptyText);
+  emptyEl.hidden = true;
+  wrapper.append(adapter.element, emptyEl);
+  if (spec.ariaLabel !== undefined) adapter.element.setAttribute('aria-label', spec.ariaLabel);
+  if (multi) adapter.element.setAttribute('aria-multiselectable', 'true');
+
+  let rows: readonly T[] = [];
+  let sort: SortState = NO_SORT;
+  let currentKey: string | null = spec.current ?? null;
+  const selected = new Set<string>();
+  let unsubscribe: (() => void) | null = null;
+
+  /** Строки в порядке отображения. */
+  const ordered = (): T[] => sortRows(rows, columns, sort);
+
+  const currentIndexOf = (data: readonly T[]): number => {
+    if (currentKey === null) return -1;
+    return data.findIndex((row, index) => spec.rowKey(row, index) === currentKey);
+  };
+
+  const isCurrentRow = (row: T, index: number): boolean =>
+    currentKey !== null && spec.rowKey(row, index) === currentKey;
+
+  const renderCell = (column: TableColumn<T>, row: T, index: number): Node => {
+    if (column.render !== undefined) {
+      const out = column.render(row, { index, column, isCurrent: isCurrentRow(row, index) });
+      if (out === null || out === undefined || out === '') {
+        return span(column.empty ?? TABLE_EMPTY_CELL, TABLE_CELL_EMPTY_CLASS);
+      }
+      return typeof out === 'string' ? span(out) : out;
+    }
+    const text = cellText(column, row, index);
+    return text === ''
+      ? span(column.empty ?? TABLE_EMPTY_CELL, TABLE_CELL_EMPTY_CLASS)
+      : span(text);
+  };
+
+  // Пользовательский рендер может зависеть от «текущая ли строка»: тогда после
+  // смены текущей строки освежаем видимые ячейки (переустановка строк дешевле
+  // пересборки колонок и не сбрасывает позицию виртуализации).
+  const hasCustomRender = columns.some((column) => column.render !== undefined);
+
+  const renderColumns = (): void => {
+    adapter.setColumns(
+      columns.map(
+        (column): GridColumnSpec => ({
+          key: column.key,
+          header: column.header,
+          ...(column.width !== undefined ? { width: column.width } : {}),
+          ...(column.align !== undefined ? { align: column.align } : {}),
+          sortable: column.sortable === true,
+          sortDir: sort.key === column.key ? sort.dir : null,
+          render: (row: unknown, index: number): Node => renderCell(column, row as T, index),
+        }),
+      ),
+    );
+  };
+
+  const renderItems = (): void => {
+    const data = ordered();
+    adapter.setItems(data);
+    emptyEl.hidden = data.length > 0;
+    const current = currentIndexOf(data);
+    adapter.setActive(current >= 0 ? data[current] : null);
+    if (multi) {
+      adapter.setSelected(data.filter((row, index) => selected.has(spec.rowKey(row, index))));
+    }
+  };
+
+  const applyCurrent = (index: number, notify: boolean): void => {
+    const data = ordered();
+    const row = data[index];
+    if (row === undefined) return;
+    currentKey = spec.rowKey(row, index);
+    adapter.setActive(row);
+    adapter.scrollToRow(row);
+    if (hasCustomRender) adapter.setItems(data); // освежить рендер «текущей» ячейки
+    if (notify) spec.onCurrentChange?.(currentKey, row, index);
+  };
+
+  const activate = (index: number): void => {
+    const data = ordered();
+    const row = data[index];
+    if (row !== undefined) spec.onActivate?.(row, index);
+  };
+
+  const copy = (): void => {
+    if (!copyEnabled) return;
+    const data = ordered();
+    let text: string;
+    if (multi && selected.size > 0) {
+      const picked = data
+        .map((row, index) => ({ row, index }))
+        .filter(({ row, index }) => selected.has(spec.rowKey(row, index)));
+      text = rowsToTsv(
+        columns,
+        picked.map((p) => p.row),
+        picked.map((p) => p.index),
+      );
+    } else {
+      const index = currentIndexOf(data);
+      if (index < 0) return;
+      text = rowsToTsv(columns, [data[index] as T], [index]);
+    }
+    spec.onCopy?.(text);
+    if (spec.clipboard !== undefined) spec.clipboard(text);
+    else void navigator.clipboard?.writeText(text);
+  };
+
+  // --- Клавиатура (наша, не вендорская) ---
+  // Фокус удерживается на обёртке: `mousedown` не даёт браузеру перевести его
+  // внутрь теневого DOM сетки, где включена вендорская навигация (иначе обе
+  // навигации сработали бы на одно нажатие).
+  wrapper.addEventListener('mousedown', (event) => {
+    if ((event as MouseEvent).button !== 0) return;
+    event.preventDefault();
+    wrapper.focus();
+  });
+  wrapper.addEventListener('keydown', (event) => {
+    const key = event as KeyboardEvent;
+    if (key.ctrlKey || key.metaKey) {
+      if (key.key === 'c' || key.key === 'C') {
+        key.preventDefault();
+        copy();
+      }
+      return; // прочие Ctrl-сочетания — глобальным обработчикам
+    }
+    if (isNavKey(key.key)) {
+      key.preventDefault();
+      const data = ordered();
+      const target = nextRowIndex(key.key, currentIndexOf(data), data.length, pageStep);
+      if (target >= 0) applyCurrent(target, true);
+      return;
+    }
+    if (key.key === 'Enter') {
+      key.preventDefault();
+      activate(currentIndexOf(ordered()));
+      return;
+    }
+    if (key.key === ' ' && multi) {
+      key.preventDefault();
+      const index = currentIndexOf(ordered());
+      const data = ordered();
+      const row = data[index];
+      if (row === undefined) return;
+      const id = spec.rowKey(row, index);
+      if (selected.has(id)) selected.delete(id);
+      else selected.add(id);
+      renderItems();
+    }
+  });
+
+  // --- Сортировка ---
+  const requestSort = (key: string): void => {
+    const column = columns.find((c) => c.key === key);
+    if (column === undefined || column.sortable !== true) return;
+    sort = cycleSort(sort, key);
+    renderColumns();
+    renderItems();
+  };
+
+  // --- Адаптер: события строк ---
+  adapter.onRowClick((index): void => {
+    const data = ordered();
+    const row = data[index];
+    if (row === undefined) return;
+    applyCurrent(index, true);
+    spec.onRowClick?.(row, index);
+  });
+  adapter.onRowDblClick((index): void => {
+    const data = ordered();
+    if (data[index] === undefined) return;
+    applyCurrent(index, true);
+    activate(index);
+  });
+  adapter.onRowContextMenu((index: number, at: GridPoint): void => {
+    const data = ordered();
+    const row = data[index];
+    if (row === undefined) return;
+    applyCurrent(index, true);
+    const items = spec.rowMenu?.(row, index) ?? [];
+    if (items.length > 0) showMenuAt(at.x, at.y, items);
+  });
+  adapter.onSortRequest((key): void => {
+    requestSort(key);
+  });
+
+  // --- Первый рендер / подписка на источник ---
+  if (typeof spec.rows === 'function') {
+    const source = spec.rows;
+    unsubscribe = select(source, (next) => {
+      rows = next;
+      renderItems();
+    });
+  } else {
+    rows = spec.rows;
+    renderItems();
+  }
+  renderColumns();
+
+  return {
+    element: wrapper,
+    getRows(): T[] {
+      return ordered();
+    },
+    setRows(next: readonly T[]): void {
+      rows = next;
+      renderItems();
+    },
+    setCurrent(key: string | null): void {
+      currentKey = key;
+      const data = ordered();
+      const index = currentIndexOf(data);
+      adapter.setActive(index >= 0 ? data[index] : null);
+      if (index >= 0) adapter.scrollToRow(data[index] as T);
+      if (hasCustomRender) adapter.setItems(data);
+    },
+    getCurrent(): { key: string; row: T; index: number } | null {
+      const data = ordered();
+      const index = currentIndexOf(data);
+      if (index < 0) return null;
+      return { key: currentKey as string, row: data[index] as T, index };
+    },
+    requestSort,
+    getSort(): SortState {
+      return { ...sort };
+    },
+    setSelection(keys: readonly string[]): void {
+      selected.clear();
+      for (const key of keys) selected.add(key);
+      renderItems();
+    },
+    getSelection(): string[] {
+      return [...selected];
+    },
+    buildCopyText(): string {
+      const data = ordered();
+      if (multi && selected.size > 0) {
+        const picked = data
+          .map((row, index) => ({ row, index }))
+          .filter(({ row, index }) => selected.has(spec.rowKey(row, index)));
+        return rowsToTsv(
+          columns,
+          picked.map((p) => p.row),
+          picked.map((p) => p.index),
+        );
+      }
+      const index = currentIndexOf(data);
+      if (index < 0) return rowsToTsv(columns, []);
+      return rowsToTsv(columns, [data[index] as T], [index]);
+    },
+    refresh(): void {
+      renderColumns();
+      renderItems();
+    },
+    focus(): void {
+      wrapper.focus();
+    },
+    destroy(): void {
+      unsubscribe?.();
+      unsubscribe = null;
+      adapter.destroy();
+      wrapper.remove();
+    },
+  };
+}

@@ -28,6 +28,9 @@
     "prettier": "^3.9.0",
     "typescript-eslint": "^8.67.0"
   },
+  "vaadin": {
+    "disableUsageStatistics": true
+  },
   "engines": {
     "node": ">=20"
   }
