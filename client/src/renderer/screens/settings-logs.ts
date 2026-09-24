@@ -22,6 +22,7 @@
  */
 
 import type { SystemLoggingStatus } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import type { ClientLogState, DeleteLogsResult } from '../../main/ipc/contract.js';
 import { confirmDialog } from '../lib/dialog.js';
@@ -102,7 +103,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     });
     btnOpen.disabled = clientState === null;
     const btnDelete = uiButton({
-      label: 'Удалить',
+      label: t('actions.delete'),
       role: 'danger',
       size: 's',
       title: 'Удалить все файлы журнала клиента',
@@ -260,7 +261,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     });
     btnOpen.disabled = status === null;
     const btnDelete = uiButton({
-      label: 'Удалить',
+      label: t('actions.delete'),
       role: 'danger',
       size: 's',
       title: 'Удалить все файлы журнала сервера',

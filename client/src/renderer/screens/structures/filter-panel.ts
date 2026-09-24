@@ -22,6 +22,7 @@ import {
   type StructureKeywordScope,
   type StructurePropertyCondition,
 } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
@@ -590,7 +591,7 @@ function renderPanel(): void {
             allowLinkType: false,
             selectedIds: state.parentIds,
             title: 'Родительские мысли',
-            applyLabel: 'Применить',
+            applyLabel: t('actions.apply'),
           });
           return result === null ? null : pickedThoughtIds(result);
         },

@@ -18,6 +18,7 @@
  */
 
 import { div, el } from './dom.js';
+import { t } from './i18n.js';
 import { uiButton } from './ui/button.js';
 
 export interface NewTypeHintOpts {
@@ -34,10 +35,10 @@ export function renderNewTypeHint(opts: NewTypeHintOpts): HTMLElement {
   if (opts.onSave !== undefined) {
     wrap.append(
       uiButton({
-        label: 'Сохранить',
+        label: t('actions.apply'),
         role: 'primary',
         size: 'm',
-        title: 'Записать тип и не закрывать диалог',
+        title: t('typeEditor.saveHint'),
         onClick: () => opts.onSave?.(),
       }),
     );

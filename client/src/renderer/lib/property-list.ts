@@ -39,6 +39,7 @@
  */
 
 import type { LinkPropertySide, LinkStyle, LinkType, NetworkProperty, PropertyValueType } from '@etn/shared';
+import { t } from './i18n.js';
 
 import { div, el, setTooltip, span } from './dom.js';
 import { svgIcon, type IconName } from './icons.js';
@@ -490,7 +491,7 @@ export function buildPropertyList(opts: {
   const toolbar = div('form-row type-list-toolbar property-list-toolbar');
   const searchInput = el('input', 'text-input property-list-search') as HTMLInputElement;
   searchInput.type = 'text';
-  searchInput.placeholder = opts.searchPlaceholder ?? 'Поиск по имени или описанию…';
+  searchInput.placeholder = opts.searchPlaceholder ?? t('actions.search');
   // Верхняя строка: сначала поиск, затем «Добавить» (требование 7).
   toolbar.append(searchInput);
   if (mode === 'manager' && callbacks.onAdd !== undefined) {
@@ -541,7 +542,7 @@ export function buildPropertyList(opts: {
     if (row.structural) return;
     const items: MenuItem[] = [{ label: 'Изменить', onClick: () => callbacks.onEdit(row) }];
     if (mode === 'manager' && callbacks.onDelete !== undefined) {
-      items.push({ label: 'Удалить', danger: true, onClick: () => callbacks.onDelete?.(row) });
+      items.push({ label: t('actions.delete'), danger: true, onClick: () => callbacks.onDelete?.(row) });
     }
     showMenuAt(x, y, items);
   }

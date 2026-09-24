@@ -16,6 +16,7 @@
  */
 
 import { showDialog } from '../lib/dialog.js';
+import { t } from '../lib/i18n.js';
 import { button, div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -69,7 +70,7 @@ export function showAboutDialog(): void {
     title: 'О программе',
     body,
     size: 's',
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 
   void etn.system.appInfo().then((info) => {

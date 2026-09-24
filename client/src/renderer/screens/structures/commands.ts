@@ -25,6 +25,7 @@ import {
   type ThoughtBatchArgs,
   type ThoughtBatchOp,
 } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { errText } from '../../lib/dom.js';
@@ -67,7 +68,7 @@ function buildMenu(ctx: FilterCommandsContext): MenuItem[] {
     { label: 'Добавить подчинённые мысли…', onClick: () => void cmdLinkAnchors(ctx, 'children') },
     { label: 'Разорвать связи с подчинёнными…', onClick: () => void cmdUnlinkAnchors(ctx, 'children') },
     MENU_SEPARATOR,
-    { label: 'Удалить', danger: true, onClick: () => void cmdDelete(ctx) },
+    { label: t('actions.delete'), danger: true, onClick: () => void cmdDelete(ctx) },
   ];
 }
 

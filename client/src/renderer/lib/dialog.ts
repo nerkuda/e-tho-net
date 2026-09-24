@@ -16,6 +16,7 @@
  */
 
 import { div, el, errText } from './dom.js';
+import { t } from './i18n.js';
 import { svgIcon } from './icons.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
@@ -302,7 +303,7 @@ export function showDialog(opts: DialogOptions): () => void {
   header.append(el('span', 'dialog-title', opts.title));
   const closeBtn = iconButton({
     icon: svgIcon('x', 14),
-    title: 'Закрыть (Esc)',
+    title: t('actions.closeShortcut', 'Esc'),
     role: 'ghost',
     size: 's',
     onClick: () => close(),
@@ -495,9 +496,9 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
       size: 's',
       body,
       buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
+        { label: t('actions.cancel'), onClick: () => finish(null) },
         {
-          label: 'OK',
+          label: t('actions.apply'),
           primary: true,
           onClick: () => finish(input.value),
         },
@@ -538,9 +539,9 @@ export function confirmDialog(title: string, message: string, danger = false): P
       size: 's',
       body: el('p', 'dialog-text', message),
       buttons: [
-        { label: 'Отмена', onClick: () => finish(false) },
+        { label: t('actions.cancel'), onClick: () => finish(false) },
         {
-          label: 'Подтвердить',
+          label: t('actions.confirm'),
           primary: !danger,
           danger,
           confirm: true,
@@ -560,7 +561,7 @@ export function errorDialog(title: string, err: unknown): void {
     title,
     size: 's',
     body: el('p', 'dialog-text dialog-text-error', errText(err)),
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 }
 

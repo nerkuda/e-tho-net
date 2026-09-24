@@ -19,6 +19,7 @@
  */
 
 import type { IconKind, ThoughtType } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el } from '../lib/dom.js';
@@ -191,7 +192,7 @@ export function showIconDialog(opts: {
     box.append(el('div', 'icon-section-title', 'Иконки типов мыслей'), buildTypeIconsGrid());
     const pickRow = div('icon-pick-row');
     pickRow.append(uiButton({
-      label: 'Выбрать файл…',
+      label: t('actions.browse'),
       role: 'secondary',
       size: 's',
       onClick: () => void pickFile(),
@@ -319,7 +320,7 @@ export function showIconDialog(opts: {
     ],
     buttons: [
       {
-        label: 'Очистить',
+        label: t('actions.reset'),
         danger: true,
         keepOpen: true,
         onClick: (c) => {
@@ -328,9 +329,9 @@ export function showIconDialog(opts: {
           });
         },
       },
-      { label: 'Отменить' },
+      { label: t('actions.cancel') },
       {
-        label: 'Применить',
+        label: t('actions.apply'),
         primary: true,
         keepOpen: true,
         onClick: () => void applySelection(),

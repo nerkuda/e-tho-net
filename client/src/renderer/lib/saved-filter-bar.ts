@@ -20,6 +20,7 @@
  */
 
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
+import { t } from './i18n.js';
 import { div, el } from './dom.js';
 import { svgIcon } from './icons.js';
 import { showMenuAt, type MenuItem } from './menu.js';
@@ -272,7 +273,7 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   const body = div('sfd');
   const search = el('input', 'st-f-input sfd-search') as HTMLInputElement;
   search.type = 'text';
-  search.placeholder = 'Поиск по имени…';
+  search.placeholder = t('actions.search');
   const list = div('sfd-list');
   body.append(search, list);
 
@@ -323,7 +324,7 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
       { label: 'Переименовать', onClick: () => void opts.onRename(entry).then(render) },
       { label: 'Скопировать', onClick: () => void opts.onCopy(entry).then(render) },
       {
-        label: 'Удалить',
+        label: t('actions.delete'),
         danger: true,
         onClick: () => void opts.onDelete(entry).then(opts.onRefresh).then(render),
       },
@@ -354,7 +355,7 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     title: 'Сохранённые отборы',
     body,
     size: 's',
-    buttons: [{ label: 'Закрыть', onClick: (c) => c() }],
+    buttons: [{ label: t('actions.close'), onClick: (c) => c() }],
     onMount: () => search.focus(),
   });
   render();

@@ -22,6 +22,7 @@
  */
 
 import type { ActivityEntityType, ActivityRow } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
@@ -1043,7 +1044,7 @@ function showSnapshotDialog(row: ActivityRow): void {
     title: 'Снимок события',
     body,
     size: 'm',
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 }
 
@@ -1107,7 +1108,7 @@ async function runMaintenance(opts: MaintenanceOpts): Promise<void> {
       body,
       size: 's',
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(null) },
+        { label: t('actions.cancel'), onClick: () => resolve(null) },
         {
           label: opts.buttonLabel,
           primary: !opts.danger,

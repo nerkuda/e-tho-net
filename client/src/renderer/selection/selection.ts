@@ -16,6 +16,7 @@
  */
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { t } from '../lib/i18n.js';
 import {
   setAddToSelectionHook,
   showSelectionThoughtContextMenu,
@@ -317,7 +318,7 @@ function buildActionsMenu(): MenuItem[] {
     },
     MENU_SEPARATOR,
     {
-      label: 'Удалить',
+      label: t('actions.delete'),
       danger: true,
       onClick: () => void batchDelete(),
     },

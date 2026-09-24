@@ -236,7 +236,7 @@ describe('якоря рендера и режимов (требования 3–
   it('крестика удаления в строках нет, удаление — в контекстном меню менеджера', () => {
     assert.ok(!src.includes("button('✕'"), 'в списке нет кнопки-крестика');
     assert.ok(src.includes("label: 'Изменить'"), 'меню содержит «Изменить»');
-    assert.ok(src.includes("label: 'Удалить'"), 'меню содержит «Удалить»');
+    assert.ok(src.includes("label: t('actions.delete')"), 'меню содержит «Удалить» (из словаря)');
     assert.match(src, /mode === 'manager' && callbacks\.onDelete !== undefined/, '«Удалить» только в менеджере');
     assert.ok(src.includes('showMenuAt('), 'меню открывается общим показом меню');
   });

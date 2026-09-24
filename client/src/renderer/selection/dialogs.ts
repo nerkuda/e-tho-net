@@ -12,6 +12,7 @@
  */
 
 import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { buildValueEditor } from '../editor/value-editor.js';
@@ -66,7 +67,7 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
       kind: 'link-types',
       value: store.state.lastUsedLinkTypeId,
       emptyLabel: 'Без типа',
-      placeholder: 'Поиск типа связи…',
+      placeholder: t('actions.search'),
       onChange: () => undefined,
     });
     showDialog({
@@ -74,9 +75,9 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
       body: combo.root,
       size: 's',
       buttons: [
-        { label: 'Отмена', onClick: () => finish(undefined) },
+        { label: t('actions.cancel'), onClick: () => finish(undefined) },
         {
-          label: 'OK',
+          label: t('actions.apply'),
           primary: true,
           onClick: () => {
             const id = combo.value();
@@ -116,7 +117,7 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
       kind: 'thought-types',
       value: initial,
       emptyLabel: 'Без типа',
-      placeholder: 'Поиск типа…',
+      placeholder: t('actions.search'),
       onChange: () => undefined,
     });
     showDialog({
@@ -124,9 +125,9 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
       body: combo.root,
       size: 's',
       buttons: [
-        { label: 'Отмена', onClick: () => finish(undefined) },
+        { label: t('actions.cancel'), onClick: () => finish(undefined) },
         {
-          label: 'OK',
+          label: t('actions.apply'),
           primary: true,
           onClick: () => finish(combo.value()),
         },
@@ -156,7 +157,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   let defsByType = new Map<string, EffectiveTypeProperty[]>();
 
   const applyBtn = {
-    label: 'Применить',
+    label: t('actions.apply'),
     primary: true,
     keepOpen: true,
     onClick: (close: () => void) => void applyAll(close),
@@ -165,7 +166,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     title: 'Значения свойств выделенных мыслей',
     body,
     size: 'm',
-    buttons: [{ label: 'Закрыть', onClick: () => undefined }, applyBtn],
+    buttons: [{ label: t('actions.close'), onClick: () => undefined }, applyBtn],
   });
 
   /** Writes every filled value to the thoughts whose type defines the property. */

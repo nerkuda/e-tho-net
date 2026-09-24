@@ -48,6 +48,8 @@ import { showDialog } from '../lib/dialog.js';
 import { uiTabs } from '../lib/ui/tabs.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
+import { availableLocales, getLang, t } from '../lib/i18n.js';
+import { applyLang } from '../lib/lang.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -111,6 +113,8 @@ interface Draft {
   showInactive: boolean;
   showTrash: boolean;
   theme: Theme;
+  /** Язык интерфейса (L5 `client_meta.lang`, задача 57f09136). */
+  lang: string;
   cloudWidth: number;
   cloudGap: number;
 }
@@ -137,6 +141,7 @@ function readInitialDraft(): Draft {
     showInactive: store.state.showInactive,
     showTrash: store.state.showTrash,
     theme: store.state.theme,
+    lang: getLang(),
     cloudWidth: store.state.cloudWidth,
     cloudGap: store.state.cloudGap,
   };
@@ -156,6 +161,7 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.showInactive !== b.showInactive ||
     a.showTrash !== b.showTrash ||
     a.theme !== b.theme ||
+    a.lang !== b.lang ||
     a.cloudWidth !== b.cloudWidth ||
     a.cloudGap !== b.cloudGap
   );
@@ -217,26 +223,26 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   );
   const btnGroup = div('settings-footer-buttons');
   const btnApply = uiButton({
-    label: 'Применить',
+    label: t('actions.apply'),
     role: 'secondary',
     size: 'm',
     onClick: () => void applyDraft(false),
   });
-  btnApply.title = 'Применить (Shift+Enter)';
+  btnApply.title = t('actions.applyShortcut', 'Shift+Enter');
   const btnApplyClose = uiButton({
-    label: 'Применить и закрыть',
+    label: t('actions.applyClose'),
     role: 'primary',
     size: 'm',
     onClick: () => void applyDraft(true),
   });
-  btnApplyClose.title = 'Применить и закрыть (Ctrl+Enter)';
+  btnApplyClose.title = t('actions.applyCloseShortcut', 'Ctrl+Enter');
   const btnCancel = uiButton({
-    label: 'Отменить',
+    label: t('actions.cancel'),
     role: 'secondary',
     size: 'm',
     onClick: () => closeDialog(),
   });
-  btnCancel.title = 'Отменить (Esc)';
+  btnCancel.title = t('actions.cancelShortcut', 'Esc');
   // Primary-действие — крайним справа (требование edc5faea): панель
   // кнопок диалога держит главное действие последним.
   btnGroup.append(btnApply, btnCancel, btnApplyClose);
@@ -520,6 +526,26 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   function renderClientSection(): HTMLElement {
     const root = div('settings-section');
 
+    // Язык интерфейса (L5 `client_meta.lang`, задача 57f09136): выбор из
+    // зарегистрированных каталогов (`lib/i18n.ts`) рядом с темой — обе
+    // настройки клиентские и действуют на всех экранах.
+    const langGroup = div('radio-group');
+    for (const locale of availableLocales()) {
+      const langLabel = el('label', 'radio-row');
+      const langRadio = el('input');
+      langRadio.type = 'radio';
+      langRadio.name = 'settings-lang';
+      langRadio.value = locale.code;
+      langRadio.checked = draft.lang === locale.code;
+      langRadio.addEventListener('change', () => {
+        if (!langRadio.checked) return;
+        draft.lang = locale.code;
+        markDirty();
+      });
+      langLabel.append(langRadio, span(locale.name));
+      langGroup.append(langLabel);
+    }
+
     const themeGroup = div('radio-group');
     const lightLabel = el('label', 'radio-row');
     const lightRadio = el('input');
@@ -565,7 +591,10 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     });
 
     root.append(
-      el('h3', 'settings-section-title', 'Тема'),
+      el('h3', 'settings-section-title', t('settings.language')),
+      langGroup,
+      el('p', 'muted', t('settings.languageHint')),
+      el('h3', 'settings-section-title settings-section-title-spaced', 'Тема'),
       themeGroup,
       el('p', 'muted', 'Применяется на всех экранах. Действует только на этом клиенте.'),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Размер облачка'),
@@ -701,6 +730,18 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
+    // Client: язык интерфейса (L5 `client_meta.lang`, задача 57f09136).
+    // Как тема: применить сразу (каркас i18n + атрибут `lang` документа),
+    // затем сохранить выбор.
+    if (draft.lang !== original.lang) {
+      tasks.push(
+        (async () => {
+          await etn.meta.set(CLIENT_META_KEY.LANG, draft.lang);
+          applyLang(draft.lang);
+        })(),
+      );
+    }
+
     // Client: cloud_width / cloud_gap (L4). Clipped to the system constants.
     if (draft.cloudWidth !== original.cloudWidth || draft.cloudGap !== original.cloudGap) {
       const w = clip(Math.round(draft.cloudWidth), CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX);
@@ -741,6 +782,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.showInactive = draft.showInactive;
       original.showTrash = draft.showTrash;
       original.theme = draft.theme;
+      original.lang = draft.lang;
       original.cloudWidth = draft.cloudWidth;
       original.cloudGap = draft.cloudGap;
       refreshApplyButtons();

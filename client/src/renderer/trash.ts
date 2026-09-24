@@ -20,6 +20,7 @@ import {
   type ThoughtDeletionCheckResult,
   type TrashListResult,
 } from '@etn/shared';
+import { t } from './lib/i18n.js';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
@@ -241,7 +242,7 @@ export async function openThoughtDeleteDialog(
   let deleteBtn: HTMLButtonElement | null = null;
   const buttons: DialogButton[] = [
     {
-      label: 'Удалить совсем',
+      label: t('actions.deleteForever'),
       danger: true,
       ref: (btn) => {
         deleteBtn = btn;
@@ -264,7 +265,7 @@ export async function openThoughtDeleteDialog(
       },
     },
     {
-      label: alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину',
+      label: alreadyMarked ? t('actions.restore') : t('actions.toTrash'),
       keepOpen: true,
       onClick: async (close) => {
         try {
@@ -289,7 +290,7 @@ export async function openThoughtDeleteDialog(
         }
       },
     },
-    { label: 'Отмена' },
+    { label: t('actions.cancel') },
   ];
 
   // Auto-acquire the thought lock for the lifetime of the delete dialog (task
@@ -369,7 +370,7 @@ export async function openLinkDeleteDialog(
     body,
     buttons: [
       {
-        label: 'Удалить совсем',
+        label: t('actions.deleteForever'),
         danger: true,
         ref: (btn) => {
           btn.disabled = blocked;
@@ -398,7 +399,7 @@ export async function openLinkDeleteDialog(
         },
       },
       {
-        label: alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину',
+        label: alreadyMarked ? t('actions.restore') : t('actions.toTrash'),
         keepOpen: true,
         onClick: async (close) => {
           try {
@@ -416,7 +417,7 @@ export async function openLinkDeleteDialog(
           }
         },
       },
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
     ],
     onClose: () => void releaseHeld(handle),
   });
@@ -578,7 +579,7 @@ export async function openThoughtGroupDeleteDialog(
       'мысль',
       checks[id]?.blocking ?? { properties: 0, layers: [] },
     ).join('; ')}`;
-    setTooltip(purgeRadio, blocked ? blockedTooltip : 'Удалить совсем');
+    setTooltip(purgeRadio, blocked ? blockedTooltip : t('actions.deleteForever'));
     purgeRadio.addEventListener('change', () => {
       if (purgeRadio.checked) choice.set(id, true);
     });
@@ -591,7 +592,7 @@ export async function openThoughtGroupDeleteDialog(
       if (trashRadio.checked) choice.set(id, false);
     });
     const purgeLabel = el('label', 'group-delete-option');
-    purgeLabel.append(purgeRadio, span(blocked ? 'Удалить (недост.)' : 'Удалить'));
+    purgeLabel.append(purgeRadio, span(blocked ? 'Удалить (недост.)' : t('actions.delete')));
     const trashLabel = el('label', 'group-delete-option');
     trashLabel.append(trashRadio, span('В корзину'));
     toggle.append(purgeLabel, trashLabel);
@@ -633,7 +634,7 @@ export async function openThoughtGroupDeleteDialog(
     body,
     buttons: [
       {
-        label: 'Применить',
+        label: t('actions.apply'),
         primary: true,
         keepOpen: true,
         ref: (btn) => setTooltip(btn, 'Применить указанные удаление/помещение в корзину'),
@@ -688,7 +689,7 @@ export async function openThoughtGroupDeleteDialog(
           }
         },
       },
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
     ],
   });
 }
@@ -737,7 +738,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     cell.append(actionButton('undo', 'Восстановить', false, () => void onRestore()));
     const delBtn = actionButton(
       'trash',
-      blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : 'Удалить совсем',
+      blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : t('actions.deleteForever'),
       true,
       () => void onDelete(),
     );
@@ -875,7 +876,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       await onThoughtDeleted(id);
       await render();
     } catch (err) {
-      errorDialog('Удалить', err);
+      errorDialog(t('actions.delete'), err);
     }
   };
   const deleteLinkFromTrash = async (networkId: string, id: string): Promise<void> => {
@@ -886,7 +887,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       scheduleRefresh();
       await render();
     } catch (err) {
-      errorDialog('Удалить', err);
+      errorDialog(t('actions.delete'), err);
     }
   };
 
@@ -910,7 +911,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
           }
         },
       },
-      { label: 'Закрыть', primary: true },
+      { label: t('actions.close'), primary: true },
     ],
     onMount: () => void render(),
   });

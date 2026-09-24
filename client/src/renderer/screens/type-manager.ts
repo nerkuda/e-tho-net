@@ -72,6 +72,7 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import { typeNameKey, EtnError } from '@etn/shared';
 
@@ -393,7 +394,7 @@ export function showThoughtTypesDialog(): void {
   const toolbar = div('form-row type-list-toolbar');
   const searchInput = el('input', 'text-input') as HTMLInputElement;
   searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск по названию…';
+  searchInput.placeholder = t('actions.search');
   toolbar.append(
     uiButton({
       label: 'Добавить',
@@ -626,7 +627,7 @@ export function showThoughtTypesDialog(): void {
     size: 'm',
     // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
   void reload();
 }
@@ -1303,12 +1304,12 @@ export function showThoughtTypeEditor(
       // быть видна на любой вкладке диалога (ошибка add8d09d).
       footerError: errorLine,
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
         // содержимое обновляется (отборы нового типа становятся доступны,
         // «Метаданные» показывают id/даты) — ошибка 51732f9b.
         {
-          label: 'Записать',
+          label: t('actions.apply'),
           keepOpen: true,
           onClick: (close) => void apply('stay', close),
           ref: (btn) => {
@@ -1316,7 +1317,7 @@ export function showThoughtTypeEditor(
           },
         },
         {
-          label: 'Применить и закрыть',
+          label: t('actions.applyClose'),
           primary: true,
           keepOpen: true,
           onClick: (close) => void apply('close', close),
@@ -2195,7 +2196,7 @@ async function openAttachDialog(opts: {
     /** Строки каталога по текущему снимку каталога типов связей. */
     const list = buildPropertyList({
       mode: 'picker',
-      searchPlaceholder: 'Поиск по имени или описанию…',
+      searchPlaceholder: t('actions.search'),
       callbacks: {
         rowBlocked: (row) => rowBlockReason(row, existingSides, inheritedPropertyIds),
         onActivate: (row) => void choose(row),
@@ -2258,7 +2259,7 @@ async function openAttachDialog(opts: {
       // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
       footerError: errorLine,
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         {
           label: 'Создать свойство',
           keepOpen: true,
@@ -2507,7 +2508,7 @@ function openDescriptionOverrideDialog(opts: {
     // Ошибка записи — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
     buttons: [
-      { label: 'Отменить' },
+      { label: t('actions.cancel') },
       ...(def.description_overridden
         ? [
             {
@@ -2533,7 +2534,7 @@ function openDescriptionOverrideDialog(opts: {
             } satisfies DialogButton,
           ]
         : []),
-      { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+      { label: t('actions.apply'), primary: true, keepOpen: true, onClick: (close) => void apply(close) },
     ],
   });
 }

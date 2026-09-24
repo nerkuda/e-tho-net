@@ -118,7 +118,7 @@ describe('диалог выбора сохранённого отбора (за�
     const bar = readText(BAR_TS);
     assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка «…» открывает диалог');
     assert.match(bar, /title: 'Сохранённые отборы'/, 'диалог подписан');
-    assert.match(bar, /search\.placeholder = 'Поиск по имени…'/, 'строка поиска по именам — вверху списка');
+    assert.match(bar, /search\.placeholder = t\('actions\.search'\)/, 'единый плейсхолдер поиска — вверху списка');
     assert.match(bar, /body\.append\(search, list\)/, 'поиск стоит перед списком');
     assert.match(bar, /onMount: \(\) => search\.focus\(\)/, 'фокус — в поле поиска');
   });
@@ -141,9 +141,10 @@ describe('диалог выбора сохранённого отбора (за�
 
   it('контекстное меню строки: переименовать / скопировать / удалить', () => {
     const bar = readText(BAR_TS);
-    for (const label of ['Переименовать', 'Скопировать', 'Удалить']) {
+    for (const label of ['Переименовать', 'Скопировать']) {
       assert.ok(bar.includes(`label: '${label}'`), `команда «${label}» в контекстном меню строки`);
     }
+    assert.ok(bar.includes("label: t('actions.delete')"), 'команда «Удалить» — из словаря');
     assert.match(bar, /row\.addEventListener\('contextmenu',/, 'контекстное меню открывается по правому клику');
     assert.match(
       bar,

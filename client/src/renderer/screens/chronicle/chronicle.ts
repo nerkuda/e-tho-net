@@ -25,6 +25,7 @@ import {
   type Link,
   type ThoughtRef,
 } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { findRootThought, requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
@@ -694,7 +695,7 @@ function buildEditor(existing: Comment | null, startEdit = false): void {
   if (existing !== null) {
     metaRow.append(
       uiButton({
-        label: 'Удалить',
+        label: t('actions.delete'),
         role: 'danger',
         size: 's',
         title: 'Удалить хронологический комментарий',
@@ -901,7 +902,7 @@ function showRowMenu(x: number, y: number, rowId: string): void {
     },
     MENU_SEPARATOR,
     {
-      label: 'Удалить',
+      label: t('actions.delete'),
       danger: true,
       onClick: () =>
         void (async () => {

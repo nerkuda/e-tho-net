@@ -12,6 +12,7 @@
  */
 
 import { restoreSession } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { errorLine } from '../lib/ui/messages.js';
@@ -115,7 +116,7 @@ export function buildOnboarding(): HTMLElement {
       const info = div('profile-info');
       info.append(span(p.label, 'profile-label'), span(p.baseUrl, 'profile-url'));
       const removeBtn = uiButton({
-        label: 'Удалить',
+        label: t('actions.delete'),
         role: 'danger',
         size: 's',
         onClick: () => void removeSavedProfile(p),

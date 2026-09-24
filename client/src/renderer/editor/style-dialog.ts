@@ -16,6 +16,7 @@
  */
 
 import { LINK_STYLES, type LinkStyle } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el, setTooltip } from '../lib/dom.js';
@@ -123,7 +124,7 @@ export function showThoughtStyleDialog(opts: {
     body,
     buttons: [
       {
-        label: 'Сброс',
+        label: t('actions.reset'),
         danger: true,
         keepOpen: true,
         onClick: (close) => {
@@ -143,7 +144,7 @@ export function showThoughtStyleDialog(opts: {
           });
         },
       },
-      { label: 'Закрыть', primary: true },
+      { label: t('actions.close'), primary: true },
     ],
     onClose,
   });
@@ -200,7 +201,7 @@ export function showLinkStyleDialog(opts: {
     body,
     buttons: [
       {
-        label: 'Сброс',
+        label: t('actions.reset'),
         danger: true,
         keepOpen: true,
         onClick: (close) => {
@@ -210,7 +211,7 @@ export function showLinkStyleDialog(opts: {
           void onApply({ color: null, style: null, width: null }).then(() => close());
         },
       },
-      { label: 'Закрыть', primary: true },
+      { label: t('actions.close'), primary: true },
     ],
     onClose,
   });

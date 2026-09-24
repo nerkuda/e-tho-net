@@ -14,6 +14,7 @@
  */
 
 import { type ImportEtnxOptions } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { div, el } from '../lib/dom.js';
 import { showDialog } from '../lib/dialog.js';
@@ -107,7 +108,7 @@ export function showImportEtnxDialog(
       size: 'm',
       buttons: [
         {
-          label: 'Отмена',
+          label: t('actions.cancel'),
           onClick: () => finish(cancelled),
         },
         {

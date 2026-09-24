@@ -13,6 +13,7 @@
  */
 
 import { PINNED_THOUGHTS_LIMIT } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
 import { el } from '../lib/dom.js';
@@ -39,7 +40,7 @@ export function showPinLimitMessage(): void {
       `Закрепить можно не более ${PINNED_THOUGHTS_LIMIT} мыслей. ` +
         'Сначала открепите лишние мысли из панели закреплённых.',
     ),
-    buttons: [{ label: 'ОК', primary: true }],
+    buttons: [{ label: t('actions.apply'), primary: true }],
   });
 }
 

@@ -46,6 +46,7 @@ import {
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
 } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
@@ -232,9 +233,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,
     buttons: [
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       {
-        label: 'Сохранить',
+        label: t('actions.apply'),
         primary: true,
         keepOpen: true,
         ref: (b) => {

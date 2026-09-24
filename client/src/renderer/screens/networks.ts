@@ -11,6 +11,7 @@
  */
 
 import { disconnect, openNetwork } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
@@ -163,7 +164,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
       // ошибки диалога (требование 397c5a56).
       footerError: errorLine,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve() },
+        { label: t('actions.cancel'), onClick: () => resolve() },
         {
           label: 'Создать',
           primary: true,

@@ -63,6 +63,7 @@ function installShim(): void {
 installShim();
 
 const { confirmDialog, promptDialog } = await import('../src/renderer/lib/dialog.js');
+const { t } = await import('../src/renderer/lib/i18n.js');
 
 function body(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
@@ -136,19 +137,19 @@ describe('promptDialog: отмена любым путём закрытия (e03
     const { settled } = await resolvesTo(done);
     assert.equal(settled, false, 'клик мимо не резолвит промис');
     assert.equal(body().children.length, 1, 'диалог остался открыт');
-    footerButton(openBackdrop(), 'Отмена').emit('click');
+    footerButton(openBackdrop(), t('actions.cancel')).emit('click');
     const { value } = await resolvesTo(done);
     assert.equal(value, null, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
 
-  it('«OK» резолвит введённый текст', async () => {
+  it('«Применить» резолвит введённый текст', async () => {
     installShim();
     const done = promptDialog('Вопрос', 'Поле', 'старт');
     const backdrop = openBackdrop();
     const input = backdrop.querySelector('input');
     assert.ok(input !== null, 'в диалоге есть поле ввода');
     input!.value = 'итог';
-    footerButton(backdrop, 'OK').emit('click');
+    footerButton(backdrop, t('actions.apply')).emit('click');
     const { value } = await resolvesTo(done);
     assert.equal(value, 'итог', 'кнопка отдаёт введённый текст');
   });
@@ -156,7 +157,7 @@ describe('promptDialog: отмена любым путём закрытия (e03
   it('«Отмена» резолвит null', async () => {
     installShim();
     const done = promptDialog('Вопрос', 'Поле', 'старт');
-    footerButton(openBackdrop(), 'Отмена').emit('click');
+    footerButton(openBackdrop(), t('actions.cancel')).emit('click');
     const { value } = await resolvesTo(done);
     assert.equal(value, null, 'кнопка отмены — null');
   });
@@ -186,7 +187,7 @@ describe('confirmDialog: отмена любым путём закрытия (e0
     const { settled } = await resolvesTo(done);
     assert.equal(settled, false, 'клик мимо не резолвит промис');
     assert.equal(body().children.length, 1, 'диалог остался открыт');
-    footerButton(openBackdrop(), 'Отмена').emit('click');
+    footerButton(openBackdrop(), t('actions.cancel')).emit('click');
     const { value } = await resolvesTo(done);
     assert.equal(value, false, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
@@ -202,7 +203,7 @@ describe('confirmDialog: отмена любым путём закрытия (e0
   it('«Отмена» резолвит false', async () => {
     installShim();
     const done = confirmDialog('Вопрос', 'Текст', true);
-    footerButton(openBackdrop(), 'Отмена').emit('click');
+    footerButton(openBackdrop(), t('actions.cancel')).emit('click');
     const { value } = await resolvesTo(done);
     assert.equal(value, false, 'кнопка отмены — false');
   });

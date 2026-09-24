@@ -17,6 +17,7 @@
  */
 
 import type { Attachment, Thought, ThoughtUpdateInput } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { rememberShownAttachments } from '../lib/attachment-events.js';
@@ -751,7 +752,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     // «Открыть с диска…» fills the path via the OS picker; the file reaches
     // the server only when «Добавить» is pressed (§6.5).
     const pickBtn = uiButton({
-      label: 'Открыть с диска…',
+      label: t('actions.browse'),
       role: 'secondary',
       size: 's',
       onClick: () => void pickFileFromDisk(),
@@ -925,7 +926,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       // `searchError` для ошибок поиска (локальная операция вкладки).
       footerError: errorLine,
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         {
           label: 'Добавить',
           primary: true,

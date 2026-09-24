@@ -16,12 +16,12 @@
  *   • {@link errorLine} / {@link errorParagraph} — строки ошибок панелей,
  *     таблиц и экранов (не диалогов): вид единый, место — по месту панели.
  *
- * Тексты здесь — литералы: локализация (ревизия терминологии) отдельной
- * задачей; сюда же переехал префикс `Ошибка:` — единственная точка его
- * объявления.
+ * Тексты берутся из словаря локализации (`lib/i18n.ts`, требование 0e5ff1c6):
+ * здесь литералов пользовательских строк нет — сторож `guard-ui-i18n.test.ts`.
  */
 
 import { el, errText, span } from '../dom.js';
+import { t } from '../i18n.js';
 
 /** Класс строки ошибки — единственная точка определения (вид в `styles.css`). */
 export const ERROR_LINE_CLASS = 'error-text';
@@ -59,16 +59,16 @@ export function fieldError(text = ''): HTMLSpanElement {
 }
 
 /**
- * Текст ошибки операции из брошенного значения: `<prefix>: <сообщение>`.
- * Единственная точка префикса `Ошибка:` — вызывающий передаёт свой только
- * для уточнённых формулировок («Ошибка поиска», «Не удалось загрузить»).
+ * Текст ошибки операции из брошенного значения: `<префикс>: <сообщение>`.
+ * Единственная точка префикса (`errors.prefix`) — вызывающий передаёт свой
+ * только для уточнённых формулировок («Ошибка поиска», «Не удалось загрузить»).
  */
-export function operationErrorText(err: unknown, prefix = 'Ошибка'): string {
+export function operationErrorText(err: unknown, prefix = t('errors.prefix')): string {
   return `${prefix}: ${errText(err)}`;
 }
 
 /** Строка ошибки операции готовым элементом ({@link operationErrorText}). */
-export function operationError(err: unknown, prefix = 'Ошибка'): HTMLSpanElement {
+export function operationError(err: unknown, prefix = t('errors.prefix')): HTMLSpanElement {
   return errorLine(operationErrorText(err, prefix));
 }
 

@@ -22,6 +22,7 @@
  */
 
 import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { openAdminPanel } from '../admin/admin.js';
 import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
@@ -290,7 +291,7 @@ async function membersDialog(): Promise<void> {
     size: 'm',
     // Ошибки записи — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
   await refresh();
 }

@@ -22,6 +22,7 @@
  */
 
 import type { FocusDir, Link } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { getActiveMode as getStripActiveMode } from './focus-filter-strip.js';
@@ -199,7 +200,7 @@ function buildLinkMenuItems(networkId: string, linkId: string): MenuItem[] {
     },
     MENU_SEPARATOR,
     {
-      label: 'Удалить',
+      label: t('actions.delete'),
       danger: true,
       onClick: () => void deleteLink(networkId, linkId),
     },
@@ -607,7 +608,7 @@ export function buildThoughtMenuItems(
       // For a thought already in the trash the label becomes
       // «Удалить/восстановить» (S13, 08-ui-spec.md §2.6) — the action is the
       // same two-phase dialog either way.
-      label: trashed ? 'Удалить/восстановить' : 'Удалить',
+      label: trashed ? 'Удалить/восстановить' : t('actions.delete'),
       danger: true,
       onClick: () => void deleteThought(networkId, target),
     },

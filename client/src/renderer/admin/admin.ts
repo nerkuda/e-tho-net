@@ -10,6 +10,7 @@
  */
 
 import type { AuditLogEntry, Network, User } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, fmtDateTime, span } from '../lib/dom.js';
@@ -168,7 +169,7 @@ async function generateKey(user: User): Promise<void> {
     size: 's',
     body,
     buttons: [
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       {
         label: 'Создать',
         primary: true,
@@ -230,7 +231,7 @@ function showApiKey(apiKey: string): void {
     title: 'API-key (показан один раз)',
     size: 'm',
     body: box,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 }
 

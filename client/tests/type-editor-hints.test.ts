@@ -38,6 +38,7 @@ installShim();
 const { renderNewTypeHint } = await import(
   '../src/renderer/lib/type-editor-hints.js'
 );
+const { t } = await import('../src/renderer/lib/i18n.js');
 
 describe('renderNewTypeHint — заглушка несохранённого типа (e7352642)', () => {
   it('без onSave — текст подсказки есть, кнопки нет', () => {
@@ -49,7 +50,7 @@ describe('renderNewTypeHint — заглушка несохранённого т
     assert.equal(hint.querySelector('button'), null, 'кнопка не должна рисоваться без onSave');
   });
 
-  it('с onSave — рисуется кнопка «Сохранить» primary-роли словаря lib/ui', () => {
+  it('с onSave — рисуется кнопка «Применить» primary-роли словаря lib/ui', () => {
     const hint = renderNewTypeHint({
       message: 'Подсказка.',
       onSave: () => undefined,
@@ -65,10 +66,10 @@ describe('renderNewTypeHint — заглушка несохранённого т
       btn.classList.contains('ui-btn--primary'),
       'кнопка «Сохранить» должна нести primary-роль словаря',
     );
-    assert.equal(btn.textContent, 'Сохранить');
+    assert.equal(btn.textContent, t('actions.apply'));
     assert.equal(
       btn.title,
-      'Записать тип и не закрывать диалог',
+      t('typeEditor.saveHint'),
       'title кнопки должен объяснять действие',
     );
     assert.equal(btn.type, 'button', 'кнопка должна быть type=button (не submit)');

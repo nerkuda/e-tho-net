@@ -17,6 +17,7 @@
  */
 
 import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerDiffResult, type LayerMergeReport } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
 import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -374,9 +375,9 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     body,
     size: 's',
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
+      { label: t('actions.cancel'), onClick: (close) => close() },
       {
-        label: 'Сохранить',
+        label: t('actions.apply'),
         primary: true,
         onClick: async (close) => {
           const title = titleInput.value.trim();
@@ -448,7 +449,7 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     body,
     size: 's',
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
+      { label: t('actions.cancel'), onClick: (close) => close() },
       {
         label: 'Создать',
         primary: true,
@@ -507,7 +508,7 @@ function openDeleteLayerDialog(networkId: string, layerId: string): void {
     body,
     size: 's',
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
+      { label: t('actions.cancel'), onClick: (close) => close() },
       {
         label: 'Удалить слой',
         danger: true,
@@ -557,7 +558,7 @@ function openMergeLayerDialog(networkId: string, layerId: string): void {
     body,
     size: 's',
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
+      { label: t('actions.cancel'), onClick: (close) => close() },
       {
         label: 'Слить',
         primary: true,
@@ -608,7 +609,7 @@ function showMergeReport(report: LayerMergeReport): void {
     title: 'Слой слит',
     body,
     size: 's',
-    buttons: [{ label: 'Закрыть', onClick: (close) => close() }],
+    buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
   });
 }
 
@@ -651,7 +652,7 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
       { id: 'structural', label: 'Связи', content: structuralHost },
       { id: 'text', label: 'Содержание', content: textHost },
     ],
-    buttons: [{ label: 'Закрыть', onClick: (close) => close() }],
+    buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
     onMount: () => {
       void (async () => {
         try {

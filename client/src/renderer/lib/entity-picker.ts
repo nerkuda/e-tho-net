@@ -39,6 +39,7 @@
  */
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
+import { t } from './i18n.js';
 import type { LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
@@ -471,7 +472,7 @@ export async function pickEntitiesModal(
       const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
       searchInput.type = 'text';
       searchInput.autocomplete = 'off';
-      searchInput.placeholder = 'Найти мысль…';
+      searchInput.placeholder = t('actions.search');
       // Охват поиска задан назначением выбора (требование 79755f76, ошибка
       // 81be082f): цели внутрисетевых связей ищутся только по текущей сети,
       // переключателя охвата здесь нет.
@@ -567,7 +568,7 @@ export async function pickEntitiesModal(
       const buttons: DialogButton[] = [];
       if (!single) {
         buttons.push({
-          label: 'Очистить',
+          label: t('actions.reset'),
           keepOpen: true,
           ref: (btn) => {
             clearBtn = btn;
@@ -584,12 +585,12 @@ export async function pickEntitiesModal(
       buttons.push(
         // «Отмена» без `onClick`: каркас снимает диалог сам, а отмену
         // фиксирует `onClose` ниже (ошибка 12dfb87e).
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         ...(single
           ? []
           : [
               {
-                label: opts.applyLabel ?? 'Применить',
+                label: opts.applyLabel ?? t('actions.apply'),
                 primary: true,
                 ref: (btn: HTMLButtonElement) => {
                   applyBtn = btn;
@@ -623,7 +624,7 @@ export async function pickEntitiesModal(
     const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
     searchInput.type = 'text';
     searchInput.autocomplete = 'off';
-    searchInput.placeholder = 'Найти…';
+    searchInput.placeholder = t('actions.search');
     const list = div('st-f-checks st-f-picker-list');
 
     /** Id, видимые при поиске (пустой запрос — весь каталог). */
@@ -708,7 +709,7 @@ export async function pickEntitiesModal(
     const searchBar = div('st-f-searchbar');
     searchBar.append(searchInput);
     if (!single) {
-      clearBtn = commandButton('eraser', 'Очистить', () => {
+      clearBtn = commandButton('eraser', t('actions.reset'), () => {
         checked.clear();
         renderList();
         updateButtons();
@@ -724,12 +725,12 @@ export async function pickEntitiesModal(
     const buttons: DialogButton[] = [
       // «Отмена» без `onClick`: отмену фиксирует `onClose` диалога ниже
       // (ошибка 12dfb87e), поэтому она работает и для Esc, и для ×.
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       ...(single
         ? []
         : [
             {
-              label: opts.applyLabel ?? 'Применить',
+              label: opts.applyLabel ?? t('actions.apply'),
               primary: true,
               ref: (btn: HTMLButtonElement) => {
                 applyBtn = btn;

@@ -31,6 +31,7 @@
  */
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 // Строки кандидатов-дублей рисует общая фабрика облачка мысли.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -799,7 +800,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       head.append(span(`Выбрано: ${lines.length}`, 'muted'));
       head.append(
         uiButton({
-          label: 'Очистить',
+          label: t('actions.reset'),
           role: 'secondary',
           size: 's',
           title: 'Очистить список',
@@ -1059,7 +1060,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       // единственное обязательное место ошибки диалога (требование 397c5a56).
       footerError: errorLine,
       buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
+        { label: t('actions.cancel'), onClick: () => finish(null) },
         {
           label: applyLabel,
           primary: true,

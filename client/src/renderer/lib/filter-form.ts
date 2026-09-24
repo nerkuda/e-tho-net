@@ -35,6 +35,7 @@ import type {
   StructurePropertyOp,
   StructureSort,
 } from '@etn/shared';
+import { t } from './i18n.js';
 
 import { buildValueEditor, wrapClearable } from '../editor/value-editor.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
@@ -210,7 +211,7 @@ export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSecti
   }
   const clearBtn = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
   clearBtn.type = 'button';
-  setTooltip(clearBtn, 'Очистить');
+  setTooltip(clearBtn, t('actions.reset'));
   clearBtn.addEventListener('click', () => {
     ctx.getState().keywords = '';
     input.value = '';
@@ -1126,10 +1127,10 @@ export function buildFilterFooterButtons(opts: {
   extra?: HTMLElement[];
 }): HTMLElement {
   const row = div('st-f-btnrow');
-  const apply = el('button', 'st-f-apply', opts.applyLabel ?? 'Применить');
+  const apply = el('button', 'st-f-apply', opts.applyLabel ?? t('actions.apply'));
   apply.type = 'button';
   apply.addEventListener('click', () => opts.onApply());
-  const clearBtn = el('button', 'st-f-clear', opts.clearLabel ?? 'Очистить');
+  const clearBtn = el('button', 'st-f-clear', opts.clearLabel ?? t('actions.reset'));
   clearBtn.type = 'button';
   clearBtn.addEventListener('click', () => opts.onClear());
   row.append(apply, clearBtn, ...(opts.extra ?? []));

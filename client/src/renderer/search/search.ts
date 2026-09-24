@@ -42,6 +42,7 @@
  */
 
 import { setFocus } from '../app.js';
+import { t } from '../lib/i18n.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -1003,7 +1004,7 @@ function buildSettingsZone(zone: HTMLElement): void {
           allowLinkType: false,
           selectedIds: options.subrootIds,
           title: 'Ограничить потомками мыслей',
-          applyLabel: 'Применить',
+          applyLabel: t('actions.apply'),
         });
         return result === null ? null : pickedThoughtIds(result);
       },

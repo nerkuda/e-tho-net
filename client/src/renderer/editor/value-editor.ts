@@ -49,6 +49,7 @@ import type {
   SearchNameHit,
   ThoughtRef,
 } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 import { formatCrossNetworkAddress, parseCrossNetworkAddress } from '@etn/shared';
 
 import { store } from '../state.js';
@@ -668,7 +669,7 @@ export function wrapClearable(input: HTMLElement, onClear: () => void): HTMLElem
   wrap.append(input);
   const btn = el('button', 'clearable-clear', '✕');
   btn.type = 'button';
-  btn.title = 'Очистить';
+  btn.title = t('actions.reset');
   const sync = (): void => {
     const node = input as HTMLInputElement;
     btn.hidden = typeof node.value === 'string' && node.value === '';

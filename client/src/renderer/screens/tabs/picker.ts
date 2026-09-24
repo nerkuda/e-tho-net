@@ -20,6 +20,7 @@
  *  └──────────────────────────────────────────────────────┘
  */
 import { openNetwork } from '../../app.js';
+import { t } from '../../lib/i18n.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { errorParagraph, footerErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
@@ -56,7 +57,7 @@ export function mountPicker(host: HTMLElement): void {
     onClick: () => void showCreateDialog(),
   });
   const cancelButton = uiButton({
-    label: 'Отмена',
+    label: t('actions.cancel'),
     role: 'secondary',
     size: 'm',
     onClick: () => closePicker(),
@@ -145,7 +146,7 @@ export function mountPicker(host: HTMLElement): void {
       // Ошибка создания — в панели кнопок (требование 397c5a56).
       footerError: dialogError,
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         {
           label: 'Создать',
           primary: true,

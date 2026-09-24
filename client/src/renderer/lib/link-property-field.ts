@@ -34,6 +34,7 @@
  */
 
 import type { LinkPropertySide } from '@etn/shared';
+import { t } from './i18n.js';
 
 import { showDialog } from './dialog.js';
 import { button, div, el, span } from './dom.js';
@@ -228,7 +229,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
   const input = el('input', 'text-input link-property-input') as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
-  input.placeholder = opts.placeholder ?? 'Найти свойство связи…';
+  input.placeholder = opts.placeholder ?? t('actions.search');
 
   /** Подпись текущего выбранного значения (нет — пусто). */
   const currentLabel = (): string => {
@@ -293,7 +294,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
     const search = el('input', 'text-input link-property-search') as HTMLInputElement;
     search.type = 'text';
     search.autocomplete = 'off';
-    search.placeholder = 'Найти свойство связи…';
+    search.placeholder = t('actions.search');
     const list = div('link-property-picker-list');
     const body = div('link-property-picker');
     body.append(search, list);
@@ -331,7 +332,7 @@ export function buildLinkPropertyField(opts: LinkPropertyFieldOptions): LinkProp
       title: LINK_PROPERTY_PICKER_TITLE,
       body,
       size: 'm',
-      buttons: [{ label: 'Отмена' }],
+      buttons: [{ label: t('actions.cancel') }],
       onMount: () => {
         render();
         search.focus();

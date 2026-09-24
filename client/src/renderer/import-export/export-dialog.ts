@@ -23,6 +23,7 @@ import {
   ETNX_SUBTREE_DEPTH_MAX,
   type ExportEtnxOptions,
 } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { div, el } from '../lib/dom.js';
 import { showDialog } from '../lib/dialog.js';
@@ -74,7 +75,7 @@ export function showExportEtnxDialog(
     filenameLabel.textContent = 'Имя файла';
     const filenameRow = div('input-with-btn');
     filenameRow.append(filenameInput);
-    const browseBtn = uiButton({ label: 'Обзор…', onClick: () => void browse() });
+    const browseBtn = uiButton({ label: t('actions.browse'), onClick: () => void browse() });
     filenameRow.append(browseBtn);
     filenameField.append(filenameLabel, filenameRow);
 
@@ -146,7 +147,7 @@ export function showExportEtnxDialog(
       size: 'm',
       buttons: [
         {
-          label: 'Отмена',
+          label: t('actions.cancel'),
           onClick: () => finish(cancelled),
         },
         {

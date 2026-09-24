@@ -24,6 +24,7 @@
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
+import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
@@ -189,7 +190,7 @@ export function buildWorkspace(): HTMLElement {
   // own space.
   const searchInput = el('input', 'search-input');
   searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск… (Ctrl+F)';
+  searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+F');
   setTooltip(searchInput, 'Поиск по сети');
 
   // The drop-panel settings gear used to sit here (задача a3247f84, 0.8.2);

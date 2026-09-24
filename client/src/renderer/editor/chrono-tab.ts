@@ -17,6 +17,7 @@
  */
 
 import type { Comment } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
@@ -264,7 +265,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     if (existing !== null) {
       metaRow.append(
         uiButton({
-          label: 'Удалить',
+          label: t('actions.delete'),
           role: 'danger',
           size: 's',
           title: 'Удалить хронологический комментарий',

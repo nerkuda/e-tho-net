@@ -22,6 +22,7 @@
  */
 
 import { div, el, span } from '../dom.js';
+import { t } from '../i18n.js';
 import { svgIcon } from '../icons.js';
 
 /** Классы разметки: потребитель подставляет своё оформление. */
@@ -211,7 +212,7 @@ export function collapsibleSection(spec: CollapsibleSpec): CollapsibleSection {
     // оформление и сплиттеры адресуют тело надёжно.
     const bodyBox = div();
     bodyBox.classList.add(...classes.body);
-    bodyBox.append(el('span', 'muted', 'Загрузка…'));
+    bodyBox.append(el('span', 'muted', t('common.loading')));
     root.append(bodyBox);
     body = bodyBox;
     void Promise.resolve(spec.buildBody()).then((content) => {

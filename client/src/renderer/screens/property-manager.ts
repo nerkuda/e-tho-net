@@ -78,6 +78,7 @@ import type {
   PropertyConfig,
   PropertyValueType,
 } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
 import {
@@ -179,7 +180,7 @@ export function showPropertyManagerDialog(): void {
 
   const list = buildPropertyList({
     mode: 'manager',
-    searchPlaceholder: 'Поиск по имени или описанию…',
+    searchPlaceholder: t('actions.search'),
     callbacks: {
       onAdd: () => openPropertyManagerEditor(null, onChanged),
       onActivate: (row) => openPropertyManagerEditor(row.registry, onChanged),
@@ -338,7 +339,7 @@ export function showPropertyManagerDialog(): void {
     size: 'l',
     // Ошибки реестра — в панели кнопок диалога (требование 397c5a56).
     footerError: errorLine,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
     // Фокус в поиске: ↑/↓ и Enter сразу работают по списку (требование 9).
     onMount: () => list.focusSearch(),
   });
@@ -1403,7 +1404,7 @@ export function openPropertyManagerEditor(
         // нетронутые сохраняют настройки (ошибка a3828b28).
         currentIds: currentTypeRowIds(draft.typeRows, side),
         allowEmpty: false,
-        applyLabel: 'Применить и закрыть',
+        applyLabel: t('actions.applyClose'),
         commands: (ctx) => [
           {
             icon: 'check-check',
@@ -1844,9 +1845,9 @@ export function openPropertyManagerEditor(
     // ошибки записи; приём и требование — ошибка add8d09d).
     footerError: errorLine,
     buttons: [
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       {
-        label: 'Применить и закрыть',
+        label: t('actions.applyClose'),
         primary: true,
         keepOpen: true,
         onClick: (close) => void apply(close),
@@ -2422,7 +2423,7 @@ export function showLinkTypesTreeDialog(): void {
   const toolbar = div('form-row type-list-toolbar');
   const searchInput = el('input', 'text-input') as HTMLInputElement;
   searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск по имени…';
+  searchInput.placeholder = t('actions.search');
   toolbar.append(
     // «Добавить» создаёт свойство-связь. `value_type` пользователь выбирает
     // в форме; пары `name_forward`/`name_reverse` заполняет там же.
@@ -2594,7 +2595,7 @@ export function showLinkTypesTreeDialog(): void {
     size: 'm',
     // Ошибки списка — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 
   // Realtime: `link-type.*` инвалидирует кеш; `property-registry.*` тоже —

@@ -216,6 +216,8 @@ export const CLIENT_META_KEY = {
   CLIENT_ID: 'client_id',
   LAST_SEQ: 'last_seq',
   THEME: 'theme',
+  /** Язык интерфейса клиента (задача 57f09136); исходный — `ru`. */
+  LANG: 'lang',
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
   WINDOW_BOUNDS: 'window_bounds',
