@@ -18,9 +18,19 @@
  */
 
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { readRendererCss } from './renderer-css.js';
+import { collectViolations, type GuardRule } from './guard-helpers.js';
+
+const RENDERER_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'src',
+  'renderer',
+);
 
 /** Классы однострочных полей ввода (кроме `input`/`select` по элементу). */
 const FIELD_CLASSES = [
@@ -123,5 +133,34 @@ describe('guard: высота однострочных полей — тольк
     assert.deepEqual(fieldHeightViolations(ok), [], 'токен — не нарушение');
     const multiline = parseRules('.ui-textarea { min-height: var(--field-textarea-min-h); }');
     assert.deepEqual(fieldHeightViolations(multiline), [], 'многострочное поле вне правила');
+  });
+
+  it('глобальное правило высоты поля объявлено по токену (стили не отменяют его молча)', () => {
+    const css = readRendererCss();
+    assert.match(
+      css,
+      /\binput\b[\s\S]*?,\s*select\s*\{\s*height:\s*var\(--field-h\)/,
+      'глобальная высота input/select обязана браться из токена --field-h',
+    );
+  });
+
+  it('высота однострочного поля не задаётся инлайном в TS (обход CSS-правила)', () => {
+    const rules: GuardRule[] = [
+      {
+        name: 'no-inline-field-height',
+        description:
+          'Высота однострочного поля не задаётся инлайном (`style.height`/`minHeight` ' +
+          'на input/select) — только токен --field-h (ошибки 80871d3d / c9ef88e7).',
+        pattern: /\b\w*(?:Input|Select)\b[^\n]*\.style\.(?:height|minHeight)\s*=/,
+      },
+    ];
+    const violations = collectViolations(RENDERER_ROOT, rules, { extensions: ['.ts'] });
+    assert.deepEqual(
+      violations,
+      [],
+      `высота поля задана инлайном вне токена:\n${violations
+        .map((v) => `  • ${v.file}:${v.line} — ${v.text}`)
+        .join('\n')}`,
+    );
   });
 });

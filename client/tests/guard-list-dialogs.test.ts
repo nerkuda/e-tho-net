@@ -32,7 +32,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
-import { collectViolations, type GuardRule } from './guard-helpers.js';
+import { collectViolations, listSourceFiles, type GuardRule } from './guard-helpers.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -551,5 +551,151 @@ describe('guard: единые правила диалогов-списков (11
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ревизия всех диалогов и панелей (задача 76cd9cf3, 0.9.1): полный перечень
+// мест вместо выборочных проверок — новый экран не может «молча выпасть».
+// ---------------------------------------------------------------------------
+
+/**
+ * Полный перечень модулей рендерера, открывающих модальный диалог вызовом
+ * `showDialog(` (сам каркас `lib/dialog.ts` не в счёт — он объявляет функцию).
+ * Новый диалог обязан быть добавлен сюда вместе с классификацией: диалог-список
+ * — в {@link LIST_DIALOG_FILES}, иначе достаточно записи в этом перечне. Так
+ * ревизия фиксирует ВСЕ места, а сторож краснеет на неучтённом новом диалоге.
+ */
+const DIALOG_FILES = new Set([
+  'admin/admin.ts',
+  'canvas/add-dialog.ts',
+  'editor/attachments.ts',
+  'editor/icon-dialog.ts',
+  'editor/style-dialog.ts',
+  'editor/wiki-link.ts',
+  'import-export/export-dialog.ts',
+  'import-export/import-dialog.ts',
+  'lib/entity-picker.ts',
+  'lib/saved-filter-bar.ts',
+  'pinned/pins.ts',
+  'screens/about-dialog.ts',
+  'screens/activity/activity.ts',
+  'screens/layers.ts',
+  'screens/networks.ts',
+  'screens/property-manager.ts',
+  'screens/settings.ts',
+  'screens/tabs/picker.ts',
+  'screens/thought-type/filter-dialog.ts',
+  'screens/type-manager.ts',
+  'screens/workspace-menus.ts',
+  'selection/dialogs.ts',
+  'trash.ts',
+]);
+
+/**
+ * Диалоги-СПИСКИ (основное содержимое — список): их тело обязано нести
+ * раскладку `.list-dialog-body` (правило 9 требования 11ddd910). Полный
+ * перечень, а не исключения: добавил новый список-диалог — добавь файл и сюда,
+ * и в {@link DIALOG_FILES}.
+ */
+const LIST_DIALOG_FILES = new Set([
+  'admin/admin.ts',
+  'lib/entity-picker.ts',
+  'lib/saved-filter-bar.ts',
+  'screens/property-manager.ts',
+  'screens/type-manager.ts',
+  'trash.ts',
+]);
+
+/** Классы рядов управления, которые обязаны быть компактными (правило 12). */
+const MANAGEMENT_ROWS = ['.type-list-toolbar', '.chrono-toolbar', '.views-tab-header'];
+
+describe('guard: ревизия всех диалогов и панелей (76cd9cf3, 0.9.1)', () => {
+  it('полный перечень диалогов: неучтённого модуля с showDialog нет', () => {
+    const found = listSourceFiles(RENDERER_ROOT, { extensions: ['.ts'] })
+      .map((abs) => path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/'))
+      .filter((rel) => rel !== 'lib/dialog.ts')
+      .filter((rel) =>
+        fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8').includes('showDialog('),
+      );
+    const unknown = found.filter((rel) => !DIALOG_FILES.has(rel));
+    assert.deepEqual(
+      unknown,
+      [],
+      'Новый диалог обязан быть в перечне DIALOG_FILES (сторож «ревизия всех ' +
+        'диалогов»): классифицируй его — диалог-список идёт в LIST_DIALOG_FILES ' +
+        `и получает \`.list-dialog-body\`. Неучтённые: ${unknown.join(', ')}`,
+    );
+    const stale = [...DIALOG_FILES].filter((rel) => !found.includes(rel));
+    assert.deepEqual(stale, [], `В DIALOG_FILES устаревшие записи: ${stale.join(', ')}`);
+  });
+
+  it('каждый диалог-список несёт раскладку .list-dialog-body (правило 9)', () => {
+    for (const rel of LIST_DIALOG_FILES) {
+      assert.ok(
+        source(rel).includes('list-dialog-body'),
+        `${rel}: диалог-список без раскладки .list-dialog-body — область списка ` +
+          'не тянется на роль и схлопывается (правило 9)',
+      );
+    }
+    const css = source('styles/dialogs.css');
+    assert.match(
+      css,
+      /\.list-dialog-body\s*\{[^}]*height:\s*100%/s,
+      'нет раскладки .list-dialog-body на всю высоту тела диалога',
+    );
+  });
+
+  it('правило 10: ОБА фасада списков несут общий якорь фокуса', () => {
+    // Общий атрибут объявлен один раз; фасады и каркас диалога берут его оттуда.
+    const anchor = source('lib/ui/focus-anchor.ts');
+    assert.match(
+      anchor,
+      /FOCUS_ANCHOR_ATTR\s*=\s*'data-focus-anchor'/,
+      'атрибут якоря фокуса объявляется в lib/ui/focus-anchor.ts',
+    );
+    for (const [name, file, rootVar] of [
+      ['дерево', 'lib/ui/tree.ts', 'root'],
+      ['таблица', 'lib/ui/table.ts', 'wrapper'],
+    ] as const) {
+      const src = source(file);
+      assert.ok(
+        src.includes("from './focus-anchor.js'"),
+        `${name} (${file}): якорь обязан браться из общего модуля focus-anchor`,
+      );
+      assert.ok(
+        src.includes(`${rootVar}.setAttribute(FOCUS_ANCHOR_ATTR`),
+        `${name} (${file}): корень списка не помечен якорем фокуса — после закрытия ` +
+          'редактора стрелочная навигация не оживает без повторного клика (правило 10)',
+      );
+    }
+    const dialog = source('lib/dialog.ts');
+    assert.ok(
+      dialog.includes("from './ui/focus-anchor.js'"),
+      'каркас диалога обязан читать общий атрибут якоря, а не свой литерал',
+    );
+  });
+
+  it('правило 12: компактная высота покрывает ВСЕ ряды управления', () => {
+    const css = source('styles/dialogs.css');
+    for (const cls of MANAGEMENT_ROWS) {
+      const re = new RegExp(
+        `${cls.replace('.', '\\.')}[^{]*\\{[^}]*height:\\s*var\\(--list-btn-h\\)`,
+      );
+      assert.match(css, re, `ряд управления ${cls} не покрыт компактной высотой --list-btn-h`);
+    }
+  });
+
+  it('правило 8: табличные списки админки дают команды в меню строки', () => {
+    // Полный перечень табличных списков админки (перенесено из «ячеек действий»
+    // в контекстное меню строки — правило 8 требования 11ddd910).
+    assert.ok(
+      adminUsersTab().includes('rowMenu:'),
+      'admin/Участники: у таблицы нет контекстного меню строки (правило 8)',
+    );
+    assert.ok(
+      adminNetworksTab().includes('rowMenu:'),
+      'admin/Сети: у таблицы нет контекстного меню строки (правило 8)',
+    );
   });
 });
