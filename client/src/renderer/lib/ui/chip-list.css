@@ -7,6 +7,10 @@
  * Редакция 0.9.1 (требование 0dddd939): размеры — по шкалам токенов.
  * Приглушённый цвет чипа — `--text-dim` (прежде ссылка на необъявленный
  * `--muted` не давала эффекта и чип наследовал цвет текста).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): крестик снятия чипа —
+ * интерактивный контрол с полным набором (`:hover`, `:active`,
+ * `:focus-visible`, `:disabled`); переходы — по `--transition-hover`.
  */
 
 .ui-chip-list {
@@ -46,10 +50,29 @@
   font: inherit;
   font-size: var(--font-size-m);
   line-height: var(--line-height-none);
+  border-radius: var(--radius-s);
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
 }
 
-.ui-chip-remove:hover {
+.ui-chip-remove:hover:not(:disabled) {
   color: var(--text);
+}
+
+.ui-chip-remove:active:not(:disabled) {
+  color: var(--accent-fg);
+  background: var(--danger);
+}
+
+.ui-chip-remove:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-chip-remove:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .ui-chip-list-add {

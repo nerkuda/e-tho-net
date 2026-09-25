@@ -11,9 +11,16 @@
  * (`--space-*`, `--font-size-*`, `--control-*`, `--line-height-*`); текст
  * primary-кнопки берёт `--accent-fg` вместо литерала `#fff`.
  *
+ * Состояния (задача 0af93058, требование 5bbf9e45): полный набор — покой,
+ * `:hover`, `:active` (нажатие), `:focus-visible`, `:disabled`. Реакции на
+ * наведение/нажатие отключены у `:disabled` (`:not(:disabled)`); фокусное
+ * кольцо — из токенов `--accent`/`--focus-ring-width`; переходы — по
+ * `--transition-hover` (гасятся при reduce-motion).
+ *
  * Роли: `--primary`, `--secondary`, `--danger`, `--ghost`.
  * Плотность: `--s` (компактная), `--m` (обычная).
- * Состояния: `:disabled`, `:hover`, `--active`, `--icon`.
+ * Состояния: `:disabled`, `:hover`, `:active`, `:focus-visible`, `--active`
+ * (выбранный сегмент), `--icon`.
  *
  * Комбинация `--ghost --icon` намеренно идёт последней: у ghost-роли
  * иконочная кнопка не квадрат, а кнопка-иконка с паддингами тулбара
@@ -27,14 +34,28 @@
   background: var(--surface);
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    background-color var(--transition-hover) ease,
+    border-color var(--transition-hover) ease,
+    color var(--transition-hover) ease,
+    box-shadow var(--transition-hover) ease;
 }
 
-.ui-btn:hover {
+.ui-btn:hover:not(:disabled) {
   background: var(--surface-2);
 }
 
+.ui-btn:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.ui-btn:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
 .ui-btn:disabled {
-  opacity: 0.5;
+  opacity: var(--state-disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -47,8 +68,12 @@
   color: var(--accent-fg);
 }
 
-.ui-btn--primary:hover {
+.ui-btn--primary:hover:not(:disabled) {
   background: var(--accent-strong);
+}
+
+.ui-btn--primary:active:not(:disabled) {
+  background: var(--accent-pressed);
 }
 
 /* danger — разрушающее действие: контур и текст цвета опасности. */
@@ -57,8 +82,14 @@
   border-color: var(--danger);
 }
 
-.ui-btn--danger:hover {
+.ui-btn--danger:hover:not(:disabled) {
   background: var(--danger-soft);
+}
+
+/* Нажатие разрушающего действия — заливка опасности (наглядное подтверждение). */
+.ui-btn--danger:active:not(:disabled) {
+  background: var(--danger);
+  color: var(--accent-fg);
 }
 
 /* ghost — малозначимое без рамки; панели и тулбар (плотность тулбара). */
@@ -71,8 +102,12 @@
   background: transparent;
 }
 
-.ui-btn--ghost:hover {
+.ui-btn--ghost:hover:not(:disabled) {
   background: var(--surface-2);
+}
+
+.ui-btn--ghost:active:not(:disabled) {
+  background: var(--bg-active);
 }
 
 /* --- плотность ----------------------------------------------------------- */
@@ -105,7 +140,7 @@
 
 /* Иконочная кнопка подсвечивает рамку при наведении — узнаваемая
    реакция, перенесённая из прежнего `.icon-btn`. */
-.ui-btn--icon:hover {
+.ui-btn--icon:hover:not(:disabled) {
   border-color: var(--accent);
 }
 

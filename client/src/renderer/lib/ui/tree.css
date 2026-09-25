@@ -14,6 +14,11 @@
  *
  * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--space-*`,
  * `--font-*`, `--tree-caret-w`, `--focus-ring-width`, `--border-thick`).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): строка — покой, `:hover`,
+ * `:active`, `:focus-visible` (внутреннее кольцо), недоступность при
+ * отключённом флажке (`:has(:disabled)`); каретка раскрытия — нативная кнопка
+ * со своим полным набором. Переходы — по `--transition-hover`.
  */
 
 .ui-tree {
@@ -47,10 +52,26 @@
   padding-left: calc(var(--space-4) + var(--tree-level, 0) * var(--tree-indent));
   cursor: default;
   user-select: none;
+  transition: background-color var(--transition-hover) ease;
 }
 
 .ui-tree-row:hover {
   background: var(--bg-hover);
+}
+
+.ui-tree-row:active {
+  background: var(--bg-active);
+}
+
+.ui-tree-row:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+/* Недоступная строка — отключённый флажок внутри (мышь и клавиатура мертвы). */
+.ui-tree-row:has(.ui-tree-check:disabled) {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .ui-tree-row--current {
@@ -76,6 +97,28 @@
   line-height: var(--line-height-none);
   text-align: center;
   cursor: pointer;
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-tree-caret:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.ui-tree-caret:active:not(:disabled) {
+  color: var(--accent);
+  background: var(--bg-active);
+}
+
+.ui-tree-caret:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-tree-caret:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .ui-tree-caret--leaf {

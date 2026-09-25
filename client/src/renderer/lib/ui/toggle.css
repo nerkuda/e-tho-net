@@ -9,6 +9,10 @@
  *
  * Редакция 0.9.1 (требование 0dddd939): размеры — по токенам
  * (`--control-*`, `--space-*`, `--font-*`).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): нативный `<button>` с
+ * `aria-pressed` — покой, `:hover`, `:active`, `:focus-visible`, `:disabled`,
+ * а также нажатое `[aria-pressed='true']`. Переходы — по `--transition-hover`.
  */
 
 .ui-toggle {
@@ -28,6 +32,28 @@
   background: var(--surface);
   cursor: pointer;
   font-size: var(--font-size-xs);
+  transition:
+    background-color var(--transition-hover) ease,
+    border-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-toggle--glyph:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ui-toggle--glyph:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.ui-toggle--glyph:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-toggle--glyph:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .ui-toggle--glyph[aria-pressed='true'] {

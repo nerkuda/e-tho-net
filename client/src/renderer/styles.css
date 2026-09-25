@@ -27,6 +27,8 @@
   --accent: #2f6fed;
   /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
   --accent-strong: #245cc9;
+  /* Нажатие акцентной заливки (primary-кнопка). */
+  --accent-pressed: #1d4aa8;
   --accent-soft: #e4ecfd;
   /* Текст и иконки НА акцентной заливке (primary-кнопка, активная вкладка).
      От темы не зависит: акцент обеих тем — насыщенный синий, на нём читается
@@ -130,6 +132,16 @@
   --focus-ring-width: 2px;
   --underline-offset: 2px;
   --letter-spacing-wide: 2px;
+
+  /* Микроанимации состояний контролов: hover/active-переходы ~120 мс по
+     background/border/color/box-shadow (Технические принципы UI). При
+     `prefers-reduced-motion` токен обнуляется одним правилом ниже — компоненты
+     ссылаются на него и ничего не дублируют. */
+  --transition-hover: 120ms;
+
+  /* Параметры состояний: приглушение недоступного контрола (disabled). Цвета
+     состояний — существующие --bg-hover/--bg-active/--accent-pressed/--accent-soft. */
+  --state-disabled-opacity: 0.5;
 
   /* Геометрия контролов словаря `lib/ui` (размеры вне шкалы отступов):
      высоты/ширины конкретных контролов. */
@@ -237,6 +249,7 @@
   --text-faint: #67707f;
   --accent: #5b8cff;
   --accent-strong: #7ba1ff;
+  --accent-pressed: #4d7fe8;
   --accent-soft: #22304d;
   /* Фон текстового выделения (06b18f19): акцент #5b8cff с альфой — на тёмных
      фонах поля и блоков кода смесь достаточно светлая и заметная, светлый
@@ -279,6 +292,16 @@
   --hljs-section: #79c0ff;
   --hljs-addition: #3fb950;
   --hljs-deletion: #f85149;
+}
+
+/* Отключение микроанимаций состояний при reduce-motion (Технические принципы
+   UI). Компоненты `lib/ui` задают переходы через `--transition-hover`, поэтому
+   обнуления токена достаточно — специфичность их правил не важна, а порядок в
+   бандле ни на что не влияет (грабли 36889dd6). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-hover: 0ms;
+  }
 }
 
 * {

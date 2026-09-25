@@ -8,6 +8,10 @@
  *
  * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--space-*`,
  * `--font-weight-*`, `--focus-ring-width`, `--border-thick`).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): покой, `:hover`,
+ * `:active` (нажатие), `:focus-visible` (внутреннее кольцо), `:disabled`,
+ * выбранная вкладка — класс `.active`. Переходы — по `--transition-hover`.
  */
 
 .ui-tabs {
@@ -33,11 +37,19 @@
   color: var(--text-dim);
   font: inherit;
   cursor: pointer;
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease,
+    box-shadow var(--transition-hover) ease;
 }
 
-.ui-tab:hover:not(.active) {
+.ui-tab:hover:not(.active):not(:disabled) {
   color: var(--text);
   background: var(--surface-2);
+}
+
+.ui-tab:active:not(.active):not(:disabled) {
+  background: var(--bg-active);
 }
 
 .ui-tab.active {
@@ -49,6 +61,11 @@
 .ui-tab:focus-visible {
   outline: var(--focus-ring-width) solid var(--accent);
   outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-tab:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .ui-tabpanels {

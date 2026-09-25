@@ -7,6 +7,13 @@
  * контролом (`<label>`-обёртка).
  *
  * Редакция 0.9.1 (требование 0dddd939): отступы — по шкале `--space-*`.
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): строка — интерактивная
+ * `<label>`; контрол внутри нативный (чекбокс/радио), поэтому состояние
+ * недоступности и фокуса строка читает через `:has()`. При наведении подпись
+ * подсвечивается акцентом, при нажатии — текстовым цветом; фокус контрола
+ * рисует общее кольцо вокруг строки (видимо с клавиатуры); у отключённого
+ * контрола строка гаснет и не реагирует на мышь и клавиатуру.
  */
 
 .ui-choice-row {
@@ -14,8 +21,29 @@
   gap: var(--space-3);
   align-items: center;
   margin-bottom: var(--space-3);
+  border-radius: var(--radius-s);
   cursor: pointer;
   user-select: none;
+  transition: color var(--transition-hover) ease;
+}
+
+.ui-choice-row:hover {
+  color: var(--accent);
+}
+
+.ui-choice-row:active {
+  color: var(--text);
+}
+
+/* Фокус контрола — общее кольцо вокруг строки (достижимо с клавиатуры). */
+.ui-choice-row:has(:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-choice-row:has(:disabled) {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
 }
 
 /* В группе отступ снизу не нужен — группу разводит её собственный gap. */
