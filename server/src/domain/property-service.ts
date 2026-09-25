@@ -4669,7 +4669,13 @@ export function computeThoughtCardWarnings(
     if (def.value_type === 'link') {
       const cfg = def.config ?? {};
       const linkTypeId = cfg.link_type_id as string;
-      const direction = linkPropertyDirection(def.config);
+      // Направление свойства-связи задаётся привязкой (`type_properties.side`,
+      // миграция 042), а не `config.direction` — та же единая точка
+      // интерпретации, что и в чтении карточки (`emitExplicit`). Без учёта
+      // стороны обязательное свойство «применяется к», заполненное ребром из
+      // того же батча, ложно давало `REQUIRED_PROPERTY_MISSING`
+      // (ошибка cb9fec6b-4606-4ddb-bd93-10716007b659).
+      const direction = linkPropertyDirection(def.config, def.side ?? null);
       if ((edgeCounts.get(`${linkTypeId}|${direction}`) ?? 0) > 0) continue;
     } else if (hasValue(stored.get(def.property_id))) {
       continue;

@@ -948,6 +948,45 @@ describe(
         ndb.close();
       }
     });
+
+    it('required link property filled by an edge uses the binding side (ошибка cb9fec6b)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'применяется к', name_reverse: 'регулируется из' },
+          USER,
+        );
+        const requirement = createThoughtType(ndb, { name: 'ТребованиеW' }, USER);
+        const component = createThoughtType(ndb, { name: 'КомпонентW' }, USER);
+        // Обязательное свойство-связь, направление задано ПРИВЯЗКОЙ
+        // (`side: 'source'`), а в `config.direction` его нет — привязка-источник
+        // означает ребро «владелец → цель» (direction `out`). До правки
+        // направление бралось только из config и ребро не находилось.
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          requirement.id,
+          {
+            key: 'применяется к',
+            value_type: 'link',
+            required: true,
+            config: { link_type_id: lt.id },
+            side: 'source',
+          },
+          USER,
+        );
+        const req = seedTypedThought(ndb, requirement.id);
+        const comp = seedTypedThought(ndb, component.id);
+        // Пустая карточка — предупреждение обязано быть.
+        assert.equal(computeThoughtCardWarnings(ndb, req).length, 1);
+        // Свойство заполнено тем же вызовом/ребром — предупреждения нет.
+        setPropertyValue(ndb, 'thought', req, 'применяется к', comp, USER);
+        assert.deepEqual(computeThoughtCardWarnings(ndb, req), []);
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
 
