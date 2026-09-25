@@ -25,6 +25,7 @@
 
 .ui-input {
   width: 100%;
+  height: var(--field-h);
   padding: var(--control-pad-y) var(--space-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -60,6 +61,9 @@
 }
 
 .ui-textarea {
+  /* Многострочное поле высотой не ограничено единой высотой однострочного
+     (требование b0e0e5a4): растягивается вручную, минимум — токен. */
+  height: auto;
   resize: vertical;
   min-height: var(--field-textarea-min-h);
   font-family: var(--user-font-mono);

@@ -11,6 +11,21 @@
   outline: none;
 }
 
+/* Единая высота ОДНОСТРОЧНЫХ полей ввода и однострочных чип-полей на всех
+   экранах (требование b0e0e5a4, ошибка 80871d3d): один токен дизайн-системы
+   `--field-h`, размер шрифта не меняется. Многострочные (`textarea`) и неполя
+   (флажок, радио, файл, ползунок, свотч цвета) не затрагиваются. Правило
+   покрывает и поля фасада `lib/ui` (`.ui-input`), и специализированные
+   однострочные контролы. */
+input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']):not(
+    [type='color']
+  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not(
+    [type='image']
+  ),
+select {
+  height: var(--field-h);
+}
+
 .select-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
