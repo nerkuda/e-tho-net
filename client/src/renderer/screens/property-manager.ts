@@ -1266,6 +1266,21 @@ export function openPropertyManagerEditor(
     onRowsChanged?: () => void,
   ): void {
     host.append(sectionLabel(isLink ? (side === 'source' ? 'Типы источников' : 'Типы назначений') : 'Типы мыслей'));
+    // Кнопка «Добавить тип» — ВВЕРХУ своей таблицы (как кнопки управления
+    // списком в диалогах), компактной высоты `--list-btn-h`, с небольшими
+    // отступами по вертикали — единым правилом дизайн-системы
+    // (`.type-list-toolbar .ui-btn`, ошибка 945fc265).
+    const toolbar = div('form-row type-list-toolbar type-rows-toolbar');
+    toolbar.append(
+      uiButton({
+        label: 'Добавить тип',
+        role: 'secondary',
+        size: 's',
+        title: 'Добавить привязку свойства к типу мысли',
+        onClick: () => void addRow(),
+      }),
+    );
+    host.append(toolbar);
     const tableWrap = div('admin-table-wrap');
     tableWrap.style.maxHeight = '160px';
     host.append(tableWrap);
@@ -1442,16 +1457,6 @@ export function openPropertyManagerEditor(
       // пересобирается по живому черновику (задача 99312ffa).
       onRowsChanged?.();
     }
-
-    host.append(
-      uiButton({
-        label: 'Добавить тип',
-        role: 'secondary',
-        size: 's',
-        title: 'Добавить привязку свойства к типу мысли',
-        onClick: () => void addRow(),
-      }),
-    );
 
     renderTable();
   }

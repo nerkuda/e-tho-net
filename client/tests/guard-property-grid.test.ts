@@ -108,3 +108,41 @@ describe('сторож раскладки таблиц свойств (prop-grid
     assert.match(outside, /min-width:\s*0/, 'без min-width:0 flex-строка не даст сжаться');
   });
 });
+
+describe('сторож кнопки «Добавить тип» таблиц привязок (ошибка 945fc265)', () => {
+  it('кнопка стоит ВВЕРХУ своей таблицы и идёт компактным рядом управления', () => {
+    const src = fs.readFileSync(path.join(RENDERER_ROOT, 'screens', 'property-manager.ts'), 'utf8');
+    const table = src.slice(
+      src.indexOf('function buildTypeRowsTable('),
+      src.indexOf('/** Загрузка строк таблицы привязок'),
+    );
+    const toolbarAt = table.indexOf('type-rows-toolbar');
+    const tableWrapAt = table.indexOf('const tableWrap');
+    assert.ok(toolbarAt >= 0, 'нет ряда «Добавить тип» (type-rows-toolbar)');
+    assert.ok(tableWrapAt >= 0, 'нет обёртки таблицы привязок');
+    assert.ok(
+      toolbarAt < tableWrapAt,
+      '«Добавить тип» обязан стоять ВВЕРХУ таблицы, до её обёртки (ошибка 945fc265)',
+    );
+    assert.ok(
+      table.includes("label: 'Добавить тип'"),
+      'кнопка «Добавить тип» пропала из таблиц привязок',
+    );
+  });
+
+  it('высота кнопок ряда — токен --list-btn-h, общее правило для всех диалогов', () => {
+    const css = fs.readFileSync(STYLES_CSS, 'utf8');
+    const rule = cssRuleBody(css, '.type-list-toolbar .ui-btn');
+    assert.match(
+      rule,
+      /height:\s*var\(--list-btn-h\)/,
+      'кнопки управления списком/таблицей обязаны брать высоту из токена --list-btn-h',
+    );
+    assert.match(
+      cssRuleBody(css, '.type-rows-toolbar'),
+      /padding:\s*var\(--space-\d\) 0/,
+      'у ряда «Добавить тип» нет небольших отступов сверху/снизу (ошибка 945fc265)',
+    );
+  });
+});
+

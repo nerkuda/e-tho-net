@@ -1554,7 +1554,7 @@ function buildStagedPropertySection(opts: {
   // привязки, отдельного диалога «Сторона привязки» нет. «Создать свойство» —
   // кнопка самого диалога выбора. Строки ошибки здесь нет: ошибки записи
   // уходят в футер диалога (ошибка add8d09d).
-  const addRow = div('form-row te-split-add');
+  const addRow = div('form-row type-list-toolbar type-rows-toolbar te-split-add');
   addRow.append(
     uiButton({
       label: t('typeEditor.addProperty'),
