@@ -3441,35 +3441,47 @@ body.cloud-dragging * {
   line-height: 1.55;
 }
 
+/* Единый вид форм-гридов редакторов (задача 0a1a2414, требование 0dddd939):
+ * таблицы-ФОРМЫ ввода (привязки свойств и типов, значения выделения, списки
+ * вкладок редактора) остаются `<table>()`, но выглядят одним семейством с
+ * табличным фасадом `lib/ui/table.ts` — шапка, плотность строк, границы и
+ * состояния по токенам. Роли/структуру формы вид не меняет. */
 .table-list {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .table-list th {
   text-align: left;
   color: var(--text-dim);
-  font-weight: 600;
-  padding: 3px 6px;
+  font-weight: var(--font-weight-semibold);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
 }
 
 .table-list td {
-  padding: 4px 6px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
 
-.table-list tr:hover td {
-  background: var(--surface-2);
+/* Строки: покой, наведение указателя и текущая (клавиатурная) — те же
+   состояния и токены, что у строк табличного фасада. */
+.table-list tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.table-list tr.current td {
+  background: var(--accent-soft);
 }
 
 .attachment-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 4px;
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--border);
 }
 
@@ -3477,13 +3489,23 @@ body.cloud-dragging * {
   border-bottom: none;
 }
 
+.attachment-item:hover {
+  background: var(--bg-hover);
+}
+
+/* Текущая (выделенная клавиатурой) строка списка вложений — тем же токеном,
+   что строки `.ui-table`/форм-гридов. */
+.attachment-item.selected {
+  background: var(--accent-soft);
+}
+
 .attachment-item .att-title {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .attachment-item .att-meta {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 }
 
 /* «Добавить вложение» — вкладки (workplan L25). */
@@ -3495,13 +3517,13 @@ body.cloud-dragging * {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-s);
   max-height: 240px;
   overflow-y: auto;
 }
 
 .att-search-results .att-search-hint {
-  padding: 8px 10px;
+  padding: var(--space-4) var(--space-5);
 }
 
 .att-search-result {
@@ -3702,7 +3724,7 @@ body.cloud-dragging * {
 .prop-default-cell {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -3719,25 +3741,25 @@ body.cloud-dragging * {
  * same chip / cloud / text visuals but without any editor widget. The only
  * action is the row's «×» removing the value (with confirmation). */
 .prop-outside-wrap {
-  margin-top: 6px;
+  margin-top: var(--space-3);
 }
 
 .prop-outside-header {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin: 0 0 4px;
-  padding: 0 2px;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-1);
 }
 
 .prop-outside-title {
-  font-weight: 600;
-  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
   color: var(--text);
 }
 
 .prop-outside-hint {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 }
 
 .prop-outside-table {
@@ -3746,18 +3768,18 @@ body.cloud-dragging * {
 
 .prop-outside-table td {
   vertical-align: top;
-  padding: 4px 6px;
+  padding: var(--space-2) var(--space-3);
 }
 
 .prop-outside-table td:first-child {
-  color: var(--text-muted, var(--muted, #666));
+  color: var(--text-dim);
   word-break: break-word;
 }
 
 .prop-outside-cell {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .prop-outside-cell .form-row {
@@ -5937,7 +5959,7 @@ button.ui-btn--icon.trash-act {
 }
 
 .settings-log-files td {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .settings-log-file-name {
@@ -7494,7 +7516,7 @@ button.entity-combo-pick:disabled {
    что и в таблицах свойств, чтобы строки были визуально одного
    семейства. */
 .views-tab-table .ui-btn--s {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 /* Колонки таблицы отборов (e8365d29, доработка): «Имя» — 40%, «Описание» —
@@ -7518,7 +7540,7 @@ button.entity-combo-pick:disabled {
 
 .views-tab-table .views-tab-default-mark {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
 }
 
 .views-tab-table .views-tab-actions {
