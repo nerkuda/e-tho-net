@@ -14,6 +14,8 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
+import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE } from '@etn/shared';
+
 import { SERVER_VERSION } from '../version.js';
 import { contractFor, mcpValidationError } from '../contracts.js';
 import { createRuntime, etnErrorText, type McpRuntime } from './context.js';
@@ -115,6 +117,43 @@ function isToolErrorResult(result: unknown): boolean {
 }
 
 /**
+ * Распознать неинформативный сбой разбора аргументов КРУПНОГО вызова и
+ * заменить его понятной ошибкой (ошибка a64c66f7-8c7a-431d-a91b-90a57b99928f).
+ *
+ * Симптом: длинный `etn.thoughts.write` с экранированием приходил на сервер
+ * как `thoughts`, переданный СТРОКОЙ, и отвергался либо хостом («thoughts
+ * expected as array but provided as string»), либо общей схемой — без
+ * указания причины и лимита. Здесь, пока аргументы ещё сырые, проверяем тип
+ * `thoughts` ДО канонической валидации и отдаём `VALIDATION_ERROR` с полем,
+ * полученным типом, причиной и лимитом батча.
+ *
+ * Транспортные лимиты, о которых стоит помнить вызывающему: тело POST /mcp —
+ * 10 МиБ (`MAX_MCP_BODY_BYTES` в `http.ts`); на отдельном `ETN_MCP_PORT` тот же
+ * предел. Дробить вызов на батчи по `MCP_MAX_THOUGHTS_PER_WRITE` мыслей — и
+ * штатный, и рекомендованный способ обхода.
+ */
+function preflightToolArgs(name: string, args: unknown): EtnError | null {
+  if (name !== 'etn.thoughts.write') return null;
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return null;
+  const thoughts = (args as { thoughts?: unknown }).thoughts;
+  if (thoughts === undefined || Array.isArray(thoughts)) return null;
+  const received = thoughts === null ? 'null' : typeof thoughts;
+  return new EtnError(
+    'VALIDATION_ERROR',
+    `thoughts должен быть массивом, а получен ${received} — вероятно, аргумент передан ` +
+      `JSON-строкой или обрезан из-за размера/экранирования payload. ` +
+      `Разбейте вызов: не более ${MCP_MAX_THOUGHTS_PER_WRITE} мыслей на батч, ` +
+      `крупные тексты — отдельными вызовами (пошагово — etn.guide { topic: "how_to_write_batch" }).`,
+    {
+      field: 'thoughts',
+      received,
+      max_items: MCP_MAX_THOUGHTS_PER_WRITE,
+      how_to: 'etn.how_to_write_batch',
+    },
+  );
+}
+
+/**
  * Единая валидация входа (задача c9d5f21e, веха 8 версии 0.8.2): SDK
  * проверяет `inputSchema` инструмента ДО вызова обработчика и на неудаче
  * возвращает собственный английский текст. Перехватчик регистрирует
@@ -146,6 +185,12 @@ function installCanonicalToolValidation(mcp: McpServer, rt: McpRuntime): void {
       const validating = (request: unknown, extra: unknown): Promise<unknown> | unknown => {
         const params = (request as { params?: { name?: unknown; arguments?: unknown } }).params;
         const name = typeof params?.name === 'string' ? params.name : undefined;
+        if (name !== undefined) {
+          const preflight = preflightToolArgs(name, params?.arguments);
+          if (preflight !== null) {
+            return { content: [{ type: 'text', text: etnErrorText(preflight) }], isError: true };
+          }
+        }
         const contract = name === undefined ? undefined : contractFor(name);
         if (contract !== undefined) {
           const err = mcpValidationError(contract, params?.arguments);

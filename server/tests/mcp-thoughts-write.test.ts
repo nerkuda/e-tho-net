@@ -331,6 +331,43 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('rejects an unknown nested key (links inside comment) with VALIDATION_ERROR (8b76e94e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Симптом ошибки 8b76e94e: `links` внутри `comment` молча терялись —
+        // вызов успешен, `links: []`. Теперь вложенный неизвестный ключ
+        // отвергается так же, как верхнеуровневый.
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                ref: 'a',
+                thought: { title: 'Nested strict A' },
+                comment: {
+                  body_md: 'Текст',
+                  links: [{ direction: 'child', target_id: ctx.homeId }],
+                },
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('links'), `expected offending nested key in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('still accepts documented top-level keys (network_id/local_refs/thoughts)', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -377,6 +414,36 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const text = toolText(result);
         assert.ok(text.includes('duplicate ref'), text);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('informative VALIDATION_ERROR when thoughts arrives as a string (a64c66f7)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Симптом ошибки a64c66f7: крупный/экранированный payload приходил как
+        // `thoughts`-строка и отвергался неинформативно. Теперь — явный
+        // VALIDATION_ERROR с полем, полученным типом, лимитом и подсказкой.
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: { network_id: ctx.networkId, thoughts: '[{"ref":"a"}]' },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('thoughts') && text.includes('массивом'), text);
+        assert.ok(text.includes('string'), `expected received type in error: ${text}`);
+        assert.ok(
+          text.includes(String(MCP_MAX_THOUGHTS_PER_WRITE)),
+          `expected per-batch limit in error: ${text}`,
+        );
+        assert.ok(text.includes('how_to_write_batch'), `expected how_to hint: ${text}`);
       } finally {
         await handle.close();
       }

@@ -34,6 +34,11 @@ import {
 import { NetworkId, TYPE_ID_TYPE_CONFLICT, LinkDirection } from './shared.js';
 
 export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
+  // Все вложенные объекты батча — `.strict()` (ошибка 8b76e94e): неизвестный
+  // ключ ВНУТРИ элемента `thoughts[]` (например, `comment.links`) обязан
+  // отвергаться `VALIDATION_ERROR`, как и ключ верхнего уровня, а не молча
+  // отбрасываться вместе с намерением агента. `.strict()` ставится ДО
+  // `.refine()`/`.superRefine()` (ZodEffects не имеет метода `.strict()`).
   const BundleThoughtSchema = z
     .object({
       title: z.string().min(1),
@@ -42,15 +47,18 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       type: z.string().min(1).optional(),
       active: z.boolean().optional(),
     })
+    .strict()
     .refine((v) => v.type_id === undefined || v.type === undefined, {
       message: TYPE_ID_TYPE_CONFLICT,
     });
-  const BundleCommentSchema = z.object({
-    title: z.string().nullable().optional(),
-    body_md: z.string().min(1),
-    valid_from: z.string().min(1).optional(),
-    valid_to: z.string().nullable().optional(),
-  });
+  const BundleCommentSchema = z
+    .object({
+      title: z.string().nullable().optional(),
+      body_md: z.string().min(1),
+      valid_from: z.string().min(1).optional(),
+      valid_to: z.string().nullable().optional(),
+    })
+    .strict();
 
   // =========================================================================
   // `etn.thoughts.write` — задача 053751b5, 0.7.2: батч-запись связанных
@@ -60,12 +68,14 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   // удалены в 0.8.2 (задача 937480ca).
   // =========================================================================
 
-  const WriteChronicleItemSchema = z.object({
-    title: z.string().nullable().optional(),
-    body_md: z.string().min(1),
-    valid_from: z.string().min(1).optional(),
-    valid_to: z.string().nullable().optional(),
-  });
+  const WriteChronicleItemSchema = z
+    .object({
+      title: z.string().nullable().optional(),
+      body_md: z.string().min(1),
+      valid_from: z.string().min(1).optional(),
+      valid_to: z.string().nullable().optional(),
+    })
+    .strict();
   const WriteLinkSpecSchema = z
     .object({
       direction: LinkDirection,
@@ -79,21 +89,25 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
           title: z.string().nullable().optional(),
           body_md: z.string().min(1),
         })
+        .strict()
         .optional(),
     })
+    .strict()
     .refine((v) => v.type_id === undefined || v.type === undefined, {
       message: TYPE_ID_TYPE_CONFLICT,
     })
     .refine((v) => (v.target_id !== undefined) !== (v.target_ref !== undefined), {
       message: 'each links[] entry must set exactly one of target_id or target_ref',
     });
-  const WriteAttachmentSpecSchema = z.object({
-    kind: z.enum(ATTACHMENT_KINDS),
-    url: z.string().min(1).nullable().optional(),
-    file_path: z.string().min(1).nullable().optional(),
-    title: z.string().nullable().optional(),
-    description: z.string().nullable().optional(),
-  });
+  const WriteAttachmentSpecSchema = z
+    .object({
+      kind: z.enum(ATTACHMENT_KINDS),
+      url: z.string().min(1).nullable().optional(),
+      file_path: z.string().min(1).nullable().optional(),
+      title: z.string().nullable().optional(),
+      description: z.string().nullable().optional(),
+    })
+    .strict();
   const WriteItemSchema = z
     .object({
       ref: z.string().min(1).optional(),
@@ -120,6 +134,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       links: z.array(WriteLinkSpecSchema).optional(),
       attachments: z.array(WriteAttachmentSpecSchema).optional(),
     })
+    .strict()
     // Ровно ОДНО из `thought_id` (адресация существующей мысли) или `thought`
     // (новая/совпадающая мысль) — единый источник истины здесь домен
     // (`validateEnvelope` в `thought-write-service.ts`, ошибка
@@ -194,11 +209,11 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         MCP_MAX_THOUGHTS_PER_WRITE +
         ' связанных единиц знания одной транзакцией: мысли + постоянные/хронологические комментарии ' +
         '+ свойства + связи + вложения. `thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR ' +
-        '`target_ref`; `on_duplicate`: `fail`/`reuse`/`update`. Правка существующей мысли — item-level ' +
-        '`title`/`synonyms`/`type`/`type_id`/`active` (несовместимы с `thought`, кроме `active`); ' +
-        '`synonyms` ЗАМЕНЯЮТ весь набор. Циклы `ref`/`target_ref` разрешены. Один write-бюджет + одна ' +
-        'строка `audit_log` на вызов; `warnings` агрегированы по батчу. Неизвестные ключи верхнего ' +
-        'уровня отвергаются `VALIDATION_ERROR` (`details.fields`). Пошагово — `etn.how_to_write_batch`.',
+        '`target_ref`; `on_duplicate`: `fail`/`reuse`/`update`. Правка существующей — item-level ' +
+        '`title`/`synonyms`/`type`/`type_id`/`active`; `synonyms` ЗАМЕНЯЮТ набор. Циклы ' +
+        '`ref`/`target_ref` разрешены. Один write-бюджет + одна строка `audit_log` на вызов; ' +
+        '`warnings` агрегированы по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +
+        '(`details.fields`). Пошагово — `etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },
