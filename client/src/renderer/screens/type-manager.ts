@@ -74,7 +74,7 @@ import type {
 import { t } from '../lib/i18n.js';
 import { menuAction, type MenuItem } from '../lib/menu.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
-import { typeNameKey, EtnError } from '@etn/shared';
+import { typeNameKey, EtnError, UI_STATE_KEY } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 // Иконки превью типов — каноном общей фабрики облачка (пилюля типа — не
@@ -100,6 +100,13 @@ import {
   subtreeHeight,
 } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
+import { collapsibleSection } from '../lib/ui/collapsible.js';
+import { uiSplitter } from '../lib/ui/splitter.js';
+import {
+  TYPE_EDITOR_SPLIT_DEFAULT,
+  parseTypeEditorSplit,
+  splitRatioFromPx,
+} from '../lib/pure.js';
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 // Локальные уведомления открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
@@ -821,6 +828,21 @@ export function thoughtTypeDialogKey(id: string | null): string {
 }
 
 /**
+ * Классы разметки сворачиваемых групп редактора типа (ошибка 58807d03):
+ * общий вид групп редактора (`.group`-семейство из `styles/editor.css` и
+ * `styles/layout.css`) — тот же, что у групп панели «Свойства» редактора
+ * мысли. Компонент {@link collapsibleSection} отвечает за состояние, вид —
+ * за этими классами.
+ */
+const TYPE_EDITOR_GROUP_CLASSES = {
+  root: 'group',
+  header: 'group-header',
+  title: 'group-title',
+  caret: 'group-caret',
+  body: 'group-body',
+} as const;
+
+/**
  * Opens the thought-type editor; `type === null` edits a NEW type (L6/L21).
  *
  * One and the same form for a new and an existing type (task «Улучшить диалог
@@ -901,11 +923,15 @@ export function showThoughtTypeEditor(
   // Полоса вкладок и панели — общий механизм каркаса диалога
   // (`DialogOptions.tabs`, lib/ui/tabs.ts): панели не пересобираются, высота
   // диалога задана ролью и при переключении не меняется.
-  const descriptionPane = div('type-editor-pane');
-  const templatePane = div('type-editor-pane');
-  const propertiesPane = div('type-editor-pane');
+  // Панели вкладок. Идентичность типа (иконка · название · ⚙ и родитель)
+  // живёт в постоянной шапке диалога НАД вкладками (`headerBox` ниже) — она
+  // общая для всех вкладок, а не принадлежит первой (ошибка 58807d03).
+  const descriptionPane = div('type-editor-pane type-editor-basic');
+  const propertiesPane = div('type-editor-pane type-editor-properties');
   const viewsPane = div('type-editor-pane');
-  const metadataPane = div('type-editor-pane');
+  /** Постоянная шапка: строка «иконка + название + шестерёнка» и строка
+   *  «родитель»; под ними — вкладки (каркас диалога, опция `headerExtra`). */
+  const headerBox = div('type-editor-header');
 
   // Duplicate-name guard: type names are unique ignoring case (08-ui-spec.md
   // §8.4). The catalogue is loaded once on open; the server re-checks on apply.
@@ -965,14 +991,14 @@ export function showThoughtTypeEditor(
     onClick: openStyle,
   });
   topRow.append(iconBox, nameInput, settingsBtn);
-  descriptionPane.append(topRow);
+  headerBox.append(topRow);
 
   /**
-   * Адрес ошибок имени: вкладка «Описание» (там живёт поле) + само поле.
+   * Адрес ошибок имени: вкладка «Основное» (там живёт поле) + само поле.
    * Клик по строке ошибки в футере переключает на эту вкладку и ставит фокус
    * (требование 397c5a56).
    */
-  const nameAddress = (): ErrorAddress => ({ tab: 'description', field: () => nameInput });
+  const nameAddress = (): ErrorAddress => ({ tab: 'basic', field: () => nameInput });
 
   // Parent picker (L21). The root type has no parent; the picked value is
   // staged and re-checked by the server on apply (a type in use cannot be
@@ -998,13 +1024,17 @@ export function showThoughtTypeEditor(
     });
     parentField.append(picker.root);
   }
-  descriptionPane.append(parentField);
+  headerBox.append(parentField);
 
   // Comment (type description / usage rules) — placeholder only, no label.
+  // Высота — 4 строки; растягивается по вертикали пользователем штатным
+  // средством дизайн-системы (`.ui-textarea { resize: vertical }`, требование
+  // b0e0e5a4) — своего ресайз-механизма не заводим.
   const descArea = fieldTextarea();
   descArea.value = draft.description;
-  descArea.rows = 3;
+  descArea.rows = 4;
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
+  descArea.classList.add('type-editor-description');
   descriptionPane.append(descArea);
 
   // Строка ошибки диалога живёт в панели кнопок (футер), а не в теле вкладки:
@@ -1019,33 +1049,37 @@ export function showThoughtTypeEditor(
   // Ctrl+Enter сохраняет, Esc — отмена. С задачи «Улучшить диалог…» шаблон
   // тоже черновой: поле коммитит текст локально (onSave без сети), а на сервер
   // markdown уходит одним пакетом по «Применить и закрыть».
-  const templateLabel = el(
-    'p',
-    'muted',
-    'Шаблон комментария (применяется к пустому комментарию мысли при создании/назначении типа)',
-  );
-  templateLabel.style.margin = '0 0 2px';
-  templatePane.append(templateLabel);
-  /** Last markdown committed inside the field (Esc reverts the mirror to it). */
+  // Ошибка 58807d03: с вкладки «Шаблон» поле переехало в сворачиваемую группу
+  // «Шаблон» вкладки «Основное» (по умолчанию свёрнута), рамка — как у поля
+  // описания (`.ui-textarea`).
+  /** Последний markdown, зафиксированный внутри поля (Esc возвращает к нему). */
   let committedTemplateMd = templateMd;
-  templatePane.append(
-    createMarkdownField({
-      md: templateMd,
-      html: renderTemplateHtml(templateMd),
-      onInput: (md) => {
-        templateMd = md;
-      },
-      onSave: async (md) => {
-        templateMd = md;
-        committedTemplateMd = md;
-        return renderTemplateHtml(md);
-      },
-      onCancel: () => {
-        templateMd = committedTemplateMd;
-      },
-      minRows: 5,
-    }),
-  );
+  const templateField = createMarkdownField({
+    md: templateMd,
+    html: renderTemplateHtml(templateMd),
+    onInput: (md) => {
+      templateMd = md;
+    },
+    onSave: async (md) => {
+      templateMd = md;
+      committedTemplateMd = md;
+      return renderTemplateHtml(md);
+    },
+    onCancel: () => {
+      templateMd = committedTemplateMd;
+    },
+    minRows: 4,
+  });
+  templateField.classList.add('type-editor-template-field');
+  const templateBody = div('group-body');
+  templateBody.append(templateField);
+  const templateGroup = collapsibleSection({
+    title: t('typeEditor.group.template'),
+    collapsed: true,
+    caretKind: 'chevron',
+    body: templateBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
 
   // Property sections (own staged + inherited). For a new type the inherited
   // preview follows the picked parent; for an existing type the inherited
@@ -1072,18 +1106,30 @@ export function showThoughtTypeEditor(
   });
   propertiesPane.append(props.root);
 
-  // Вкладка «Метаданные» — автор, даты, id сущности (задача 04cd9794). Для
-  // нового типа до первой записи показываем подсказку «id будет присвоен при
-  // сохранении»; после «Записать» вкладка перерисовывается настоящими
-  // метаданными (ошибка 51732f9b: раньше подсказка оставалась до переоткрытия).
+  // Группа «Метаданные» (вкладка «Основное») — автор, даты, id сущности
+  // (задача 04cd9794). Для нового типа до первой записи показываем подсказку
+  // «id будет присвоен при сохранении»; после «Записать» тело группы
+  // перерисовывается настоящими метаданными (ошибка 51732f9b). По умолчанию
+  // группа свёрнута (ошибка 58807d03).
+  const metadataBody = div('group-body');
+  const metadataGroup = collapsibleSection({
+    title: t('typeEditor.group.metadata'),
+    collapsed: true,
+    caretKind: 'chevron',
+    body: metadataBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
   function renderMetadataPane(): void {
-    metadataPane.replaceChildren(
+    metadataBody.replaceChildren(
       current !== null
         ? buildMetadataRowsFromType(current)
         : el('p', 'muted', 'id появится после первой записи типа.'),
     );
   }
   renderMetadataPane();
+  // Порядок вкладки «Основное»: описание → группа «Шаблон» → группа
+  // «Метаданные».
+  descriptionPane.append(templateGroup.root, metadataGroup.root);
 
   // Вкладка «Отборы» — собственная подписка на realtime-события
   // (thought-type-view.{created,updated,deleted}); диалог вызывает dispose()
@@ -1339,12 +1385,17 @@ export function showThoughtTypeEditor(
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
       size: 'l',
+      // Постоянная шапка над вкладками: иконка · название · ⚙ и родитель
+      // (ошибка 58807d03). Общая для всех вкладок — на «Свойствах» и
+      // «Отборах» тип тоже виден и правится.
+      headerExtra: headerBox,
+      // Три вкладки: «Основное» (описание + группы «Шаблон»/«Метаданные»),
+      // «Свойства» (две таблицы со сплиттером) и «Отборы». Прежние отдельные
+      // вкладки «Шаблон» и «Метаданные» стали группами внутри «Основного».
       tabs: [
-        { id: 'description', label: 'Описание', content: descriptionPane },
-        { id: 'template', label: 'Шаблон', content: templatePane },
-        { id: 'properties', label: 'Свойства', content: propertiesPane },
-        { id: 'views', label: 'Отборы', content: viewsPane },
-        { id: 'metadata', label: 'Метаданные', content: metadataPane },
+        { id: 'basic', label: t('typeEditor.tab.basic'), content: descriptionPane },
+        { id: 'properties', label: t('typeEditor.tab.properties'), content: propertiesPane },
+        { id: 'views', label: t('typeEditor.tab.views'), content: viewsPane },
       ],
       // Идентичность сущности для повторного открытия (ошибки c2d243bb,
       // 74d9b4ed): второй клик по строке этого типа — или по «Добавить» при
@@ -1481,37 +1532,140 @@ function buildStagedPropertySection(opts: {
   // (задача e7352642) перестаёт показываться, секция оживает. У
   // существующего типа совпадает с `typeId` всё время.
   let liveTypeId: string | null = typeId;
-  const box = div('form-stack');
-  const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '220px';
+  // Две сворачиваемые таблицы (ошибка 58807d03): унаследованные свойства —
+  // сверху, собственные — снизу, между ними вертикальный сплиттер. Группы —
+  // общий компонент `lib/ui/collapsible.ts`; тела постоянные (таблицы
+  // перерисовываются в те же узлы, состояние формы цело).
+  const box = div('te-split');
+  const inheritedBody = div('group-body te-split-body');
+  const ownBody = div('group-body te-split-body');
+  const inheritedScroll = div('admin-table-wrap');
+  const ownScroll = div('admin-table-wrap');
   // The first load often starts before the dialog mounts this box — show the
   // placeholder up front instead of a blank gap.
-  tableWrap.append(loadingState());
-  // Заголовка «Свойства» над таблицей нет (ошибка 3c7213ec): вкладка уже
-  // называется «Свойства», подпись только дублировала её. Подзаголовок
-  // «Свойства типа» остаётся — он отличает собственную таблицу от
-  // унаследованной. Строки ошибки здесь нет: ошибки записи уходят в футер
-  // диалога (ошибка add8d09d).
-  box.append(tableWrap);
-  // Кнопка добавления свойства (задача 298fe6f3): в списке диалога «Добавить
-  // свойство» свойство-связь показано парой КОНКРЕТНЫХ имён — прямое
-  // (`name_forward`, сторона `source`) и обратное (`name_reverse`, сторона
-  // `target`); выбор имени сразу задаёт сторону привязки, отдельного диалога
-  // «Сторона привязки» нет. «Создать свойство» — кнопка самого диалога выбора,
-  // отдельной кнопки вкладки нет.
-  const actions = div('form-row');
-  actions.style.gap = '8px';
-  actions.style.flexWrap = 'wrap';
-  actions.append(
+  inheritedScroll.append(loadingState());
+  ownScroll.append(loadingState());
+  // Кнопка добавления свойства (задача 298fe6f3): над таблицей СВОБСТВЕННЫХ
+  // свойств, пониженной высоты (как кнопки управления списком —
+  // `--list-btn-h`), с небольшими отступами по вертикали (единым правилом в
+  // CSS). В списке диалога «Добавить свойство» свойство-связь показано парой
+  // КОНКРЕТНЫХ имён — прямое (`name_forward`, сторона `source`) и обратное
+  // (`name_reverse`, сторона `target`); выбор имени сразу задаёт сторону
+  // привязки, отдельного диалога «Сторона привязки» нет. «Создать свойство» —
+  // кнопка самого диалога выбора. Строки ошибки здесь нет: ошибки записи
+  // уходят в футер диалога (ошибка add8d09d).
+  const addRow = div('form-row te-split-add');
+  addRow.append(
     uiButton({
-      label: 'Добавить свойство…',
+      label: t('typeEditor.addProperty'),
       role: 'secondary',
       size: 's',
-      title: 'Подключить свойство из справочника сети (новое создаётся кнопкой «Создать свойство» в диалоге выбора)',
+      title: t('typeEditor.addPropertyHint'),
       onClick: () => void openAttachPropertyDialog(),
     }),
   );
-  box.append(actions);
+  ownBody.append(addRow, ownScroll);
+  inheritedBody.append(inheritedScroll);
+
+  const inheritedGroup = collapsibleSection({
+    title: t('typeEditor.group.inherited'),
+    collapsed: false,
+    caretKind: 'chevron',
+    body: inheritedBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
+  const ownGroup = collapsibleSection({
+    title: t('typeEditor.group.own'),
+    collapsed: false,
+    caretKind: 'chevron',
+    body: ownBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
+
+  // Пропорция сплиттера — на клиенте (L4 `ui_state`, ошибка 58807d03):
+  // восстанавливается при открытии, обновляется на отпускании ручки. Само
+  // значение — доля верхней таблицы (чистая логика — `lib/pure.ts`).
+  let splitRatio = TYPE_EDITOR_SPLIT_DEFAULT;
+  let splitActive = false;
+  /** Минимальная высота таблицы при перетаскивании, px. */
+  const SPLIT_MIN_PX = 60;
+
+  const splitter = uiSplitter({
+    extraClass: 'te-splitter',
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaVertical'),
+    // Сплиттер доступен ТОЛЬКО когда раскрыты обе группы (ошибка 58807d03):
+    // `plan()` возвращает `null` в остальных состояниях, и драг/клавиатура
+    // молча не начинаются.
+    plan: () => {
+      if (!splitActive) return null;
+      const total = box.clientHeight;
+      if (!Number.isFinite(total) || total <= 0) return null;
+      return {
+        axis: 'y',
+        start: inheritedGroup.root.getBoundingClientRect().height,
+        min: SPLIT_MIN_PX,
+        max: Math.max(SPLIT_MIN_PX, total - SPLIT_MIN_PX),
+      };
+    },
+    apply: (value) => {
+      inheritedGroup.root.style.flex = `0 0 ${value}px`;
+      ownGroup.root.style.flex = '1 1 auto';
+    },
+    commit: (value, _plan, moved) => {
+      if (!moved) return;
+      splitRatio = splitRatioFromPx(value, box.clientHeight);
+      void etn.ui
+        .setState(networkId, UI_STATE_KEY.TYPE_EDITOR_PROPERTY_SPLIT, String(splitRatio))
+        .catch(() => undefined);
+    },
+  });
+
+  /**
+   * Раскладка пары групп: обе раскрыты — верхняя держит сохранённую долю,
+   * нижняя добирает остаток, сплиттер активен; одна раскрыта — она занимает
+   * всю свободную высоту, вторая схлопота до заголовка, сплиттер инертен
+   * (ошибка 58807d03). Свёрнутость между открытиями не сохраняется.
+   */
+  function relayoutSplit(): void {
+    const inheritedOpen = !inheritedGroup.collapsed();
+    const ownOpen = !ownGroup.collapsed();
+    splitActive = inheritedOpen && ownOpen;
+    splitter.setAttribute('aria-disabled', splitActive ? 'false' : 'true');
+    splitter.classList.toggle('disabled', !splitActive);
+    if (splitActive) {
+      if (!splitter.hasAttribute('tabindex')) splitter.setAttribute('tabindex', '0');
+    } else {
+      splitter.removeAttribute('tabindex');
+    }
+    if (splitActive) {
+      inheritedGroup.root.style.flex = `0 0 ${splitRatio * 100}%`;
+      ownGroup.root.style.flex = '1 1 auto';
+    } else if (inheritedOpen) {
+      inheritedGroup.root.style.flex = '1 1 auto';
+      ownGroup.root.style.flex = '0 0 auto';
+    } else if (ownOpen) {
+      ownGroup.root.style.flex = '1 1 auto';
+      inheritedGroup.root.style.flex = '0 0 auto';
+    } else {
+      inheritedGroup.root.style.flex = '0 0 auto';
+      ownGroup.root.style.flex = '0 0 auto';
+    }
+  }
+  inheritedGroup.root.addEventListener('etn:toggled', relayoutSplit);
+  ownGroup.root.addEventListener('etn:toggled', relayoutSplit);
+  relayoutSplit();
+  // Восстановление сохранённой пропорции (ошибка 58807d03): нет значения —
+  // остаётся стандартная доля из `relayoutSplit`.
+  void etn.ui
+    .getState(networkId, UI_STATE_KEY.TYPE_EDITOR_PROPERTY_SPLIT)
+    .then((raw) => {
+      splitRatio = parseTypeEditorSplit(raw);
+      relayoutSplit();
+    })
+    .catch(() => undefined);
+
+  box.append(inheritedGroup.root, splitter, ownGroup.root);
 
   /** Server-side snapshot of the type's OWN bindings (kept in sync after
    *  every applied op — the base the next diff is computed against). */
@@ -1773,7 +1927,8 @@ function buildStagedPropertySection(opts: {
 
   /** Renders the staged own table + the inherited table. */
   function render(): void {
-    tableWrap.replaceChildren();
+    inheritedScroll.replaceChildren();
+    ownScroll.replaceChildren();
 
     // Заглушка несохранённого типа (задача e7352642): свойства и отборы
     // недоступны, пока у типа нет id — «Типы источников»/«Типы назначений»
@@ -1781,27 +1936,22 @@ function buildStagedPropertySection(opts: {
     // в списках. Тот же подход, что на «Отборах» (уже было): единая
     // разметка-заглушка с кнопкой «Сохранить» (зелёная, та же команда, что
     // «Записать» в футере — пишет накопленный черновик без закрытия диалога,
-    // после чего обе вкладки оживают).
+    // после чего обе вкладки оживают). Заглушка живёт в таблице СВОБСТВЕННЫХ
+    // свойств; унаследованная группа в этом состоянии пуста.
     if (liveTypeId === null) {
-      tableWrap.append(
+      ownScroll.append(
         renderNewTypeHint({
           message: 'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
           onSave,
         }),
       );
+      inheritedScroll.append(
+        el('p', 'muted', 'Свойства появятся после сохранения типа.'),
+      );
       return;
     }
 
     if (inherited.length > 0) {
-      const inhLabel = el(
-        'p',
-        'muted',
-        liveTypeId === null
-          ? 'Унаследованные свойства (передадутся от выбранного родителя)'
-          : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание; обязательность задаётся на типе, который подключил свойство)',
-      );
-      inhLabel.style.margin = '0 0 2px';
-      tableWrap.append(inhLabel);
       const inhTable = el('table', 'table-list prop-table');
       const inhHead = el('thead');
       const inhHeadRow = el('tr');
@@ -1884,10 +2034,9 @@ function buildStagedPropertySection(opts: {
         inhBody.append(row);
       }
       inhTable.append(inhBody);
-      tableWrap.append(inhTable);
-      const ownLabel = el('p', 'muted', 'Свойства типа');
-      ownLabel.style.margin = '8px 0 2px';
-      tableWrap.append(ownLabel);
+      inheritedScroll.append(inhTable);
+    } else {
+      inheritedScroll.append(el('p', 'muted', 'Унаследованных свойств нет.'));
     }
 
     const table = el('table', 'table-list prop-table');
@@ -1985,9 +2134,9 @@ function buildStagedPropertySection(opts: {
       tbody.append(tr);
     }
     table.append(tbody);
-    tableWrap.append(table);
-    if (ownDraft.length === 0 && inherited.length === 0) {
-      tableWrap.append(el('p', 'muted', 'У типа нет свойств.'));
+    ownScroll.append(table);
+    if (ownDraft.length === 0) {
+      ownScroll.append(el('p', 'muted', 'У типа нет собственных свойств.'));
     }
   }
 
@@ -2045,7 +2194,10 @@ function buildStagedPropertySection(opts: {
         inherited = defs;
       }
     } catch (err) {
-      tableWrap.replaceChildren(operationError(err));
+      // Ошибка чтения набора свойств — одной строкой в нижней таблице; верхняя
+      // остаётся пустой, чтобы не дублировать сообщение.
+      inheritedScroll.replaceChildren();
+      ownScroll.replaceChildren(operationError(err));
       return;
     }
     if (box.isConnected) everMounted = true;

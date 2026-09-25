@@ -58,6 +58,12 @@ import {
   shortenCompoundName,
   splitCompoundName,
   zoomStep,
+  TYPE_EDITOR_SPLIT_DEFAULT,
+  TYPE_EDITOR_SPLIT_MAX,
+  TYPE_EDITOR_SPLIT_MIN,
+  clampTypeEditorSplit,
+  parseTypeEditorSplit,
+  splitRatioFromPx,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -1124,5 +1130,43 @@ describe('shortenCompoundName (08-ui-spec §2.2.3)', () => {
 
   it('a plain (non-compound) name is never shortened', () => {
     assert.equal(shortenCompoundName('Задачи разработки', ['Задачи разработки']), 'Задачи разработки');
+  });
+});
+
+describe('type-editor property split (ошибка 58807d03)', () => {
+  it('нет сохранённого значения — стандартная пропорция', () => {
+    assert.equal(parseTypeEditorSplit(null), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(parseTypeEditorSplit(''), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(parseTypeEditorSplit('   '), TYPE_EDITOR_SPLIT_DEFAULT);
+  });
+
+  it('нечисловой/битый мусор — стандартная пропорция', () => {
+    assert.equal(parseTypeEditorSplit('abc'), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(parseTypeEditorSplit('NaN'), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(clampTypeEditorSplit(Number.NaN), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(clampTypeEditorSplit(Number.POSITIVE_INFINITY), TYPE_EDITOR_SPLIT_DEFAULT);
+  });
+
+  it('корректное значение разбирается и прижимается к диапазону', () => {
+    assert.equal(parseTypeEditorSplit('0.5'), 0.5);
+    assert.equal(parseTypeEditorSplit('0.3'), 0.3);
+    assert.equal(parseTypeEditorSplit('0'), TYPE_EDITOR_SPLIT_MIN);
+    assert.equal(parseTypeEditorSplit('1'), TYPE_EDITOR_SPLIT_MAX);
+    assert.equal(parseTypeEditorSplit('-5'), TYPE_EDITOR_SPLIT_MIN);
+    assert.equal(parseTypeEditorSplit('42'), TYPE_EDITOR_SPLIT_MAX);
+  });
+
+  it('доля из пикселей: вырожденные входы дают стандарт', () => {
+    assert.equal(splitRatioFromPx(100, 0), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(splitRatioFromPx(100, -10), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(splitRatioFromPx(Number.NaN, 200), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(splitRatioFromPx(Number.POSITIVE_INFINITY, 200), TYPE_EDITOR_SPLIT_DEFAULT);
+  });
+
+  it('доля из пикселей: нормальный расчёт и кламп', () => {
+    assert.equal(splitRatioFromPx(100, 200), 0.5);
+    assert.equal(splitRatioFromPx(20, 200), TYPE_EDITOR_SPLIT_MIN);
+    assert.equal(splitRatioFromPx(40, 200), 0.2);
+    assert.equal(splitRatioFromPx(190, 200), TYPE_EDITOR_SPLIT_MAX);
   });
 });

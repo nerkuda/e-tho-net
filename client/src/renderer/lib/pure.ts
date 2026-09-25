@@ -782,6 +782,54 @@ export function parseListHeights(raw: string | null): Record<string, number> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Type-editor property split (ошибка 58807d03)
+// ---------------------------------------------------------------------------
+
+/**
+ * Стандартная доля верхней («унаследованные свойства») таблицы редактора типа
+ * — ровно половина свободной высоты вкладки «Свойства». Применяется, когда
+ * пользователь ещё не двигал сплиттер (нет сохранённого значения).
+ */
+export const TYPE_EDITOR_SPLIT_DEFAULT = 0.5;
+
+/** Нижняя граница доли: верхняя таблица не схлопывается до заголовка. */
+export const TYPE_EDITOR_SPLIT_MIN = 0.15;
+
+/** Верхняя граница доли: нижняя таблица не схлопывается до заголовка. */
+export const TYPE_EDITOR_SPLIT_MAX = 0.85;
+
+/**
+ * Прижимает долю сплиттера к допустимому диапазону. Мусор (NaN, ∞, доля вне
+ * диапазона) заменяется стандартной пропорцией — битое значение не должно
+ * обнулять или вырождать раскладку.
+ */
+export function clampTypeEditorSplit(value: number): number {
+  if (!Number.isFinite(value)) return TYPE_EDITOR_SPLIT_DEFAULT;
+  return clip(value, TYPE_EDITOR_SPLIT_MIN, TYPE_EDITOR_SPLIT_MAX);
+}
+
+/**
+ * Разбирает сохранённую в L4 долю сплиттера (обычная десятичная строка).
+ * Отсутствие значения (`null`/пусто) и нечисловой мусор дают стандартную
+ * пропорцию.
+ */
+export function parseTypeEditorSplit(raw: string | null): number {
+  if (raw === null || raw.trim() === '') return TYPE_EDITOR_SPLIT_DEFAULT;
+  return clampTypeEditorSplit(Number(raw));
+}
+
+/**
+ * Доля верхней таблицы по её пиксельной высоте и доступной высоте контейнера
+ * (пишется на отпускании сплиттера). Вырожденные входы (нет места, битый
+ * замер) дают стандартную пропорцию.
+ */
+export function splitRatioFromPx(topPx: number, availablePx: number): number {
+  if (!Number.isFinite(availablePx) || availablePx <= 0) return TYPE_EDITOR_SPLIT_DEFAULT;
+  if (!Number.isFinite(topPx)) return TYPE_EDITOR_SPLIT_DEFAULT;
+  return clampTypeEditorSplit(topPx / availablePx);
+}
+
 /** Parses `last_used_link_type_id` ui_state value (uuid or null). */
 export function parseLinkTypeId(raw: string | null): string | null {
   if (raw === null || raw.trim() === '') return null;

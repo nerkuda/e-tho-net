@@ -182,6 +182,105 @@
   padding: 14px;
 }
 
+/* Постоянная шапка содержимого диалога (опция `headerExtra`): идентичность
+   сущности (иконка · название · ⚙, родитель) над вкладками — общая для всех
+   вкладок, не прокручивается, высота по содержимому. Полосы вкладок и тело
+   забирают остаток фиксированной высоты роли. */
+.dialog-header-extra {
+  padding: 12px 14px 0;
+}
+
+/* --- Редактор типа мысли (ошибка 58807d03): вкладка «Основное» ----------- */
+
+/* Идентичность типа (шапка над вкладками): строка «иконка · название · ⚙» и
+   строка «родитель». */
+.type-editor-header .editor-top-row {
+  margin-bottom: 8px;
+}
+
+/* Описание: 4 строки, растягивается по вертикали штатным `resize: vertical`
+   многострочного поля (`.ui-textarea`, требование b0e0e5a4). */
+.type-editor-basic .type-editor-description {
+  margin-bottom: var(--space-5);
+}
+
+/* Поле шаблона — в рамке, как поле описания. */
+.type-editor-template-field {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--surface);
+}
+
+/* --- Редактор типа мысли: вкладка «Свойства» (две таблицы + сплиттер) ----- */
+
+/* Контейнер занимает всю высоту панели вкладки; размер таблиц не зависит от
+   числа записей — им управляет пользователь сплиттером, а по умолчанию —
+   стандартная пропорция (ошибка 58807d03). */
+.type-editor-properties {
+  height: 100%;
+  min-height: 0;
+}
+
+.te-split {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.te-split > .group {
+  margin-bottom: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.te-split > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.te-split-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Таблицы свойств скроллятся внутри своей группы (общая высота роли). */
+.te-split .admin-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* Кнопка «Добавить свойство» — пониженной высоты (как кнопки управления
+   списком), с небольшими отступами сверху и снизу. */
+.te-split-add {
+  margin: 0;
+  padding: var(--space-2) 0;
+}
+
+.te-split-add .ui-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--list-btn-h);
+  padding-block: 0;
+}
+
+/* Вертикальный сплиттер между таблицами: тонкий шов. В неактивном состоянии
+   (одна из групп свёрнута) он не фокусируется и не перетаскивается. */
+.te-splitter {
+  flex: 0 0 12px;
+  height: 12px;
+  cursor: row-resize;
+}
+
+.te-splitter.disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
 .dialog-body .ui-field-label {
   font-size: 13px;
 }

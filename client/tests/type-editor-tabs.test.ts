@@ -1,15 +1,18 @@
 /**
  * Smoke checks for the thought-type editor tabs (задача b8301c16, требование
- * 344b8798, 0.7.3; перевод на общий механизм — задача a57e7998).
+ * 344b8798; перекомпоновка — ошибка 58807d03, 0.9.1; перевод на общий
+ * механизм — задача a57e7998).
  *
  * The DOM-bound code (`type-manager.ts`/`views-tab.ts`) pulls in IPC,
  * realtime and the dialog module — heavy for the unit runner. These tests
  * stay cheap by checking the structural anchors the editor relies on:
  *
- *   - The five tab labels («Описание», «Шаблон», «Свойства», «Отборы»,
- *     «Метаданные») match the requirement word-for-word and are handed to the
- *     dialog's shared tab mechanism (`showDialog({ tabs: [...] })`) in order,
- *     with «Описание» first (the default tab);
+ *   - The three tab labels («Основное», «Свойства», «Отборы») are handed to
+ *     the dialog's shared tab mechanism (`showDialog({ tabs: [...] })`) in
+ *     order, with «Основное» first (the default tab). Идентичность типа
+ *     (иконка · название · ⚙ и родитель) вынесена в постоянную шапку
+ *     диалога (`headerExtra`) НАД вкладками; шаблон и метаданные — группы
+ *     внутри «Основного» (ошибка 58807d03);
  *   - The shared tab component declares the class names it emits
  *     (`.ui-tab`, `.ui-tablist`, `.ui-tabpanel` — `lib/ui/tabs.css`);
  *   - The pure helpers in `views-tab-pure.ts` stay stable for the keys
@@ -68,12 +71,19 @@ const SOURCE_FILES = {
   ),
 };
 
-const REQUIRED_TAB_LABELS = [
-  '«Описание»',
-  '«Шаблон»',
-  '«Свойства»',
-  '«Отборы»',
-  '«Метаданные»',
+/** Идентификаторы вкладок редактора типа в требуемом порядке (ошибка
+ *  58807d03): «Основное», «Свойства», «Отборы». */
+const REQUIRED_TAB_IDS = ['basic', 'properties', 'views'];
+
+/** Ключи словаря подписей вкладок и групп (ошибка 58807d03). */
+const REQUIRED_I18N_KEYS = [
+  'typeEditor.tab.basic',
+  'typeEditor.tab.properties',
+  'typeEditor.tab.views',
+  'typeEditor.group.template',
+  'typeEditor.group.metadata',
+  'typeEditor.group.inherited',
+  'typeEditor.group.own',
 ];
 
 /** Plain string-substring search — the labels are unique enough that a
@@ -83,26 +93,35 @@ function readText(path: string): string {
 }
 
 describe('thought-type editor — tabs (задача b8301c16)', () => {
-  it('type-manager hands the five tab labels to the shared tab mechanism in order', () => {
+  it('type-manager hands the three tab ids to the shared tab mechanism in order', () => {
     const src = readText(SOURCE_FILES.typeManager);
     const start = src.indexOf('tabs: [');
     assert.ok(start > 0, 'type-manager must pass `tabs: [...]` to showDialog');
     const end = src.indexOf('],', start);
     const block = src.slice(start, end);
-    const labels = [...block.matchAll(/label: '([^']+)'/g)].map((m) => m[1]);
+    const ids = [...block.matchAll(/id: '([^']+)'/g)].map((m) => m[1]);
     assert.deepEqual(
-      labels,
-      ['Описание', 'Шаблон', 'Свойства', 'Отборы', 'Метаданные'],
+      ids,
+      REQUIRED_TAB_IDS,
       'вкладки редактора типа — общий механизм каркаса диалога, в требуемом порядке',
     );
   });
 
-  it('type-manager activates the «Описание» tab by default', () => {
+  it('type-manager activates the «Основное» tab by default (id basic first)', () => {
     const src = readText(SOURCE_FILES.typeManager);
     assert.match(
       src,
-      /tabs:\s*\[\s*\{\s*id: 'description'/,
-      'первая (активная по умолчанию) вкладка — «Описание»',
+      /tabs:\s*\[\s*\{\s*id: 'basic'/,
+      'первая (активная по умолчанию) вкладка — «Основное»',
+    );
+  });
+
+  it('идентичность типа вынесена в шапку диалога над вкладками (58807d03)', () => {
+    const src = readText(SOURCE_FILES.typeManager);
+    assert.match(
+      src,
+      /headerExtra:\s*headerBox/,
+      'иконка · название · ⚙ и родитель живут в постоянной шапке диалога, а не во вкладке',
     );
   });
 
@@ -174,15 +193,12 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
     assert.ok(src.includes('dispose'), 'views-tab exposes dispose()');
   });
 
-  it('lists the five required tab labels in the requirement reference', () => {
-    // Mirror the labels documented in the requirement so a future rename
-    // goes through the test on both sides.
+  it('редактор типа берёт подписи вкладок и групп из словаря (ошибка 58807d03)', () => {
     const src = readText(SOURCE_FILES.typeManager);
-    for (const label of REQUIRED_TAB_LABELS) {
-      const plain = label.replace(/[«»]/g, '');
+    for (const key of REQUIRED_I18N_KEYS) {
       assert.ok(
-        src.includes(plain),
-        `tab label «${plain}» not referenced in the editor source`,
+        src.includes(`'${key}'`),
+        `ключ словаря ${key} не используется в редакторе типа`,
       );
     }
   });
