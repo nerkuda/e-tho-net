@@ -36,7 +36,8 @@ import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
-import { findMentionsInTexts, search } from '../domain/search-service.js';
+import { findMentionsInTexts } from '../domain/search-service.js';
+import { searchAsync } from '../domain/heavy-read.js';
 import {
   fanOutSearch,
   type CrossNetworkAccess,
@@ -189,7 +190,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           offset,
         };
 
-        let response: SearchResponse = search(
+        let response: SearchResponse = await searchAsync(
           ndb,
           { ...requestBase, scope: granularScopes[0] },
           showInactiveDefault,
@@ -197,7 +198,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         for (let i = 1; i < granularScopes.length; i += 1) {
           response = mergeSearchResponses(
             response,
-            search(ndb, { ...requestBase, scope: granularScopes[i] }, showInactiveDefault),
+            await searchAsync(ndb, { ...requestBase, scope: granularScopes[i] }, showInactiveDefault),
           );
         }
         sendSuccess(reply, response);

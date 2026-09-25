@@ -38,6 +38,7 @@ const TEST_CONFIG: ServerConfig = {
   tls: null,
   logLevel: 'silent',
   mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
+  readerPool: { size: 1, taskTimeoutMs: 30000 },
 };
 
 async function buildApp(): Promise<{ app: FastifyInstance; sys: SystemDb; adminKey: string }> {

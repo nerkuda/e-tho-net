@@ -19,9 +19,10 @@ import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, 
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
-import { findDuplicates, resolveThoughts, search } from '../../domain/search-service.js';
+import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
-import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
+import { mcpRequestToQuery } from '../../domain/query-service.js';
+import { queryThoughtsAsync, searchAsync } from '../../domain/heavy-read.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
@@ -163,7 +164,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         } else if (args.type_id !== undefined && args.type_id !== null) {
           typeIdForDomain = [args.type_id];
         }
-        const result = search(ndb, {
+        const result = await searchAsync(ndb, {
           q: args.query,
           scope: args.scope,
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
@@ -270,7 +271,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             domainProperties = out;
             if (resolved !== null) resolvedProperties = resolved;
           }
-          const result = fanOutQuery(access, {
+          const result = await fanOutQuery(access, {
             networkIds: access.accessibleIds,
             // Используем `mcpRequestToQuery` — единый канонический конвертер,
             // тот же, что и в обычном (односетевом) пути ниже.
@@ -350,7 +351,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Единый движок выборки (задача c5265deb): MCP-запрос переводится в
         // канонический адаптером (имена типов/свойств уже отрезолвнуты фасадом
         // выше) и исполняется той же доменной функцией, что REST-фильтр.
-        const result = queryThoughts(
+        const result = await queryThoughtsAsync(
           ndb,
           rt.deps.auth.userId,
           mcpRequestToQuery(

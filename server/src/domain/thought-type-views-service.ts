@@ -53,7 +53,8 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
-import { queryThoughts, structureRequestToQuery, type ThoughtQueryResult } from './query-service.js';
+import { structureRequestToQuery, type ThoughtQueryRequest, type ThoughtQueryResult } from './query-service.js';
+import { queryThoughtsAsync } from './heavy-read.js';
 import {
   buildResolveContext,
   resolveTokensInDefinition as resolveTokensDefinition,
@@ -735,14 +736,14 @@ function collectThoughtPropertyValues(
  * Этап 5 упакует результат в REST-ответ `POST /thoughts/{id}/views/{view}/run`;
  * здесь только чистый pipeline без HTTP-обвязки.
  */
-export function runViewForThought(
+export async function runViewForThought(
   ndb: NetworkDb,
   view: ThoughtTypeView,
   thoughtId: string,
   userId: string,
   requestId?: string,
   options?: RunViewQueryOptions,
-): RunViewResult {
+): Promise<RunViewResult> {
   const thought = getThought(ndb, thoughtId);
   if (thought === null) {
     throw new EtnError(
@@ -807,14 +808,14 @@ export function runViewForThought(
   // Резолвер оставляет на выходе объект, потому что на входе был объект
   // (валидация отвергла бы не-объект), — cast для согласования типов.
   const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
-  const query: Parameters<typeof queryThoughts>[2] = structureRequestToQuery({
+  const query: ThoughtQueryRequest = structureRequestToQuery({
     ...filter,
     sort,
     order,
     limit,
     offset,
   });
-  const result = queryThoughts(ndb, userId, query, {
+  const result = await queryThoughtsAsync(ndb, userId, query, {
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
   });

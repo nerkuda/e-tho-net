@@ -40,6 +40,7 @@ const TEST_CONFIG: ServerConfig = {
   tls: null,
   logLevel: 'silent',
   mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
+  readerPool: { size: 1, taskTimeoutMs: 30000 },
 };
 
 /** Seed user + key material. */

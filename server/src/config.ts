@@ -12,6 +12,7 @@
  */
 
 import path from 'node:path';
+import { availableParallelism } from 'node:os';
 
 /** TLS material pair (both fields required when TLS is enabled). */
 export interface TlsConfig {
@@ -64,6 +65,19 @@ export interface ServerConfig {
    * `ETN_MCP_SESSION_IDLE_TTL_MS`).
    */
   mcp: McpConfig;
+  /**
+   * Пул reader-воркеров тяжёлых чтений (`ETN_READER_POOL_SIZE`,
+   * `ETN_READER_TASK_TIMEOUT_MS`; ADR bec191e6).
+   */
+  readerPool: ReaderPoolConfig;
+}
+
+/** Настройки пула reader-воркеров (ADR bec191e6, тех.проект e29c0f00 этап 2). */
+export interface ReaderPoolConfig {
+  /** Число воркеров пула (1..16). */
+  size: number;
+  /** Тайм-аут одной задачи пула, мс. */
+  taskTimeoutMs: number;
 }
 
 /**
@@ -106,6 +120,21 @@ const MCP_SESSION_IDLE_TTL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 /** pino log levels accepted by `ETN_LOG_LEVEL`. */
 const VALID_LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'] as const;
 type LogLevel = (typeof VALID_LOG_LEVELS)[number];
+
+/**
+ * Дефолтный размер пула reader-воркеров (ADR bec191e6): по одному на свободное
+ * ядро, но не больше 4 — пул обслуживает тяжёлые чтения, а не заменяет
+ * планировщик; больше воркеров не ускоряет отдельную выборку, но множит
+ * соединения и кэш страниц.
+ */
+const DEFAULT_READER_POOL_SIZE = Math.max(1, Math.min(4, availableParallelism() - 1));
+/** Дефолтный тайм-аут задачи пула (30 с) — согласован с дефолтом `ReaderPool`. */
+const DEFAULT_READER_TASK_TIMEOUT_MS = 30_000;
+/** Границы размера пула и тайм-аута (защита от опечаток в окружении). */
+const READER_POOL_SIZE_MIN = 1;
+const READER_POOL_SIZE_MAX = 16;
+const READER_TASK_TIMEOUT_MIN_MS = 1_000;
+const READER_TASK_TIMEOUT_MAX_MS = 600_000;
 
 /** Type guard: is `value` one of the accepted pino levels? */
 function isLogLevel(value: string): value is LogLevel {
@@ -194,6 +223,42 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     mcpSessionIdleTtlMs = parsed;
   }
 
+  // --- ETN_READER_POOL_SIZE / ETN_READER_TASK_TIMEOUT_MS (ADR bec191e6) ----
+  let readerPoolSize = DEFAULT_READER_POOL_SIZE;
+  const readerPoolSizeRaw = env.ETN_READER_POOL_SIZE?.trim();
+  if (readerPoolSizeRaw !== undefined && readerPoolSizeRaw !== '') {
+    const parsed = Number.parseInt(readerPoolSizeRaw, 10);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < READER_POOL_SIZE_MIN ||
+      parsed > READER_POOL_SIZE_MAX
+    ) {
+      throw new ConfigError(
+        `ETN_READER_POOL_SIZE must be an integer in [${READER_POOL_SIZE_MIN}, ${READER_POOL_SIZE_MAX}], ` +
+          `got: ${JSON.stringify(readerPoolSizeRaw)}`,
+      );
+    }
+    readerPoolSize = parsed;
+  }
+
+  let readerTaskTimeoutMs = DEFAULT_READER_TASK_TIMEOUT_MS;
+  const readerTimeoutRaw = env.ETN_READER_TASK_TIMEOUT_MS?.trim();
+  if (readerTimeoutRaw !== undefined && readerTimeoutRaw !== '') {
+    const parsed = Number.parseInt(readerTimeoutRaw, 10);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < READER_TASK_TIMEOUT_MIN_MS ||
+      parsed > READER_TASK_TIMEOUT_MAX_MS
+    ) {
+      throw new ConfigError(
+        `ETN_READER_TASK_TIMEOUT_MS must be an integer number of milliseconds in ` +
+          `[${READER_TASK_TIMEOUT_MIN_MS}, ${READER_TASK_TIMEOUT_MAX_MS}], ` +
+          `got: ${JSON.stringify(readerTimeoutRaw)}`,
+      );
+    }
+    readerTaskTimeoutMs = parsed;
+  }
+
   return {
     dataDir,
     host,
@@ -201,5 +266,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     tls,
     logLevel,
     mcp: { enabled: mcpEnabled, port: mcpPort, sessionIdleTtlMs: mcpSessionIdleTtlMs },
+    readerPool: { size: readerPoolSize, taskTimeoutMs: readerTaskTimeoutMs },
   };
 }

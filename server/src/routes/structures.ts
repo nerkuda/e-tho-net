@@ -60,11 +60,8 @@ import {
   parseStructureFilter,
   updateSavedFilter,
 } from '../domain/structure-service.js';
-import {
-  queryThoughtIds,
-  queryThoughts,
-  structureRequestToQuery,
-} from '../domain/query-service.js';
+import { structureRequestToQuery } from '../domain/query-service.js';
+import { queryThoughtIdsAsync, queryThoughtsAsync } from '../domain/heavy-read.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
 import { getEdgesAmong, toFocusEdge } from '../domain/link-service.js';
 import {
@@ -184,7 +181,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           // те же правила резолва имён типов/свойств, что и в обычном пути.
           // `queryThoughts` принимает уже канонический `ThoughtQueryRequest`.
           const canon = structureRequestToQuery(query);
-          const result = fanOutQuery(access, {
+          const result = await fanOutQuery(access, {
             networkIds: accessibleIds,
             query: canon,
             limit: canon.limit ?? 50,
@@ -219,14 +216,14 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         // ids_only (L22): bare ids for the bulk filter commands — the same
         // candidate set and ordering, a higher limit ceiling, no meta flags.
         if (query.ids_only === true) {
-          const result = queryThoughtIds(ndb, req.auth!.user.id, structureRequestToQuery(query), {
+          const result = await queryThoughtIdsAsync(ndb, req.auth!.user.id, structureRequestToQuery(query), {
             maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
           });
           sendSuccess(reply, { ids: result.ids, total: result.total } satisfies StructureIdsQueryResponse);
           return;
         }
-        const result: StructureQueryResponse = queryThoughts(
+        const result: StructureQueryResponse = await queryThoughtsAsync(
           ndb,
           req.auth!.user.id,
           structureRequestToQuery(query),
