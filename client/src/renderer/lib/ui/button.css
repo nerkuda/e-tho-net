@@ -7,6 +7,10 @@
  * преемственность): те же отступы, рамки, радиусы и токены ETN. Обе темы
  * работают через токены — отдельного блока для `[data-theme='dark']` нет.
  *
+ * Редакция 0.9.1 (требование 0dddd939): числа переведены на шкалы токенов
+ * (`--space-*`, `--font-size-*`, `--control-*`, `--line-height-*`); текст
+ * primary-кнопки берёт `--accent-fg` вместо литерала `#fff`.
+ *
  * Роли: `--primary`, `--secondary`, `--danger`, `--ghost`.
  * Плотность: `--s` (компактная), `--m` (обычная).
  * Состояния: `:disabled`, `:hover`, `--active`, `--icon`.
@@ -17,7 +21,7 @@
  */
 
 .ui-btn {
-  padding: 6px 14px;
+  padding: var(--space-3) var(--space-7);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -40,7 +44,7 @@
 .ui-btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .ui-btn--primary:hover {
@@ -61,8 +65,8 @@
 .ui-btn--ghost {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: var(--space-3);
+  padding: var(--control-pad-y) var(--space-5);
   border: 0;
   background: transparent;
 }
@@ -74,8 +78,8 @@
 /* --- плотность ----------------------------------------------------------- */
 
 .ui-btn--s {
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--font-size-xs);
 }
 
 /* --- иконочная кнопка ---------------------------------------------------- */
@@ -85,18 +89,18 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  font-size: 16px;
-  line-height: 1;
+  font-size: var(--font-size-l);
+  line-height: var(--line-height-none);
 }
 
 .ui-btn--icon.ui-btn--m {
-  width: 30px;
-  height: 30px;
+  width: var(--control-w-m);
+  height: var(--control-w-m);
 }
 
 .ui-btn--icon.ui-btn--s {
-  width: 28px;
-  height: 28px;
+  width: var(--control-w-s);
+  height: var(--control-w-s);
 }
 
 /* Иконочная кнопка подсвечивает рамку при наведении — узнаваемая
@@ -118,10 +122,10 @@
 .ui-btn--ghost.ui-btn--icon {
   width: auto;
   height: auto;
-  padding: 5px 8px;
+  padding: var(--control-pad-y) var(--space-4);
 }
 
 .ui-btn--ghost.ui-btn--icon.ui-btn--s {
-  padding: 2px 8px;
+  padding: var(--space-1) var(--space-4);
   color: var(--text-dim);
 }

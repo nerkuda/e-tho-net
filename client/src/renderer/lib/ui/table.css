@@ -14,6 +14,9 @@
  * именами `ui-table*` не пересекается со старыми `admin-table`/`table-list`,
  * а прикладные модификаторы поверх словаря поднимают по специфичности в
  * `styles.css` (см. грабли).
+ *
+ * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--focus-ring-width`,
+ * `--space-*`, `--font-size-*`).
  */
 
 .ui-table {
@@ -34,7 +37,7 @@
 /* Фокус клавиатуры: таблица — единый фокусный «виджет», кольцо по токену
    акцента, как у прочих контролов ETN. */
 .ui-table:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent);
   border-radius: var(--radius-sm);
 }
 
@@ -46,9 +49,9 @@
 }
 
 .ui-table-empty {
-  padding: 12px 8px;
+  padding: var(--space-6) var(--space-4);
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: var(--font-size-s);
 }
 
 .ui-table-cell-empty {
@@ -66,11 +69,11 @@
 }
 
 .ui-table-cell-current {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
 .ui-table-focusable-current {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--accent);
   outline-offset: 1px;
 }

@@ -3,13 +3,17 @@
  *
  * Виды: `pill` (метка-облачко, тона) и `quiet` (приглушённый счётчик).
  * Заменяет `.role-badge`, `.group-count`, `.st-count` из `styles.css`.
+ *
+ * Размеры — только по токенам-шкалам из `styles.css` (требование 0dddd939):
+ * редакция 0.9.1 перевела плотность бейджа на `--font-size-*`/`--space-*`;
+ * значения те же (визуальная преемственность).
  */
 
 .ui-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
+  padding: 1px var(--space-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
 }
 
 .ui-badge--pill.ui-badge--neutral {
@@ -41,13 +45,13 @@
 .ui-badge--quiet {
   padding: 0;
   border-radius: 0;
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
   color: var(--text-faint);
 }
 
 /* Блочный счётчик под заголовком (бывший `.st-count`). */
 .ui-badge--block {
   display: block;
-  font-size: 12px;
-  margin-top: 4px;
+  font-size: var(--font-size-xs);
+  margin-top: var(--space-2);
 }

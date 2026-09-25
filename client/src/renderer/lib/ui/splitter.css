@@ -5,7 +5,9 @@
  * Специфичность: правила ниже — одиночный класс (0,1,0), модификаторы
  * владельцев поверх них поднимать по специфичности, а не полагаться на
  * порядок в бандле (грабли 36889dd6). Свойства здесь с владельческими не
- * пересекаются, поэтому база ничего не перебивает. */
+ * пересекаются, поэтому база ничего не перебивает.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): размеры — по шкалам токенов. */
 
 .ui-splitter {
   touch-action: none;
@@ -18,8 +20,8 @@
   align-items: center;
   justify-content: center;
   color: var(--text-faint);
-  font-size: 10px;
-  letter-spacing: 2px;
+  font-size: var(--font-size-3xs);
+  letter-spacing: var(--letter-spacing-wide);
   user-select: none;
   border-radius: var(--radius-sm);
 }

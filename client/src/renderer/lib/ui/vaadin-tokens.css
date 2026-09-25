@@ -39,27 +39,27 @@
 
   /* Акцент (фокусное кольцо). */
   --vaadin-focus-ring-color: var(--accent);
-  --vaadin-focus-ring-width: 2px;
+  --vaadin-focus-ring-width: var(--focus-ring-width);
 
   /* Радиусы — как у прочих контролов ETN. */
-  --vaadin-radius-s: 6px;
+  --vaadin-radius-s: var(--radius-s);
   --vaadin-radius-m: var(--radius-sm);
   --vaadin-radius-l: var(--radius);
 
   /* Плотность: компактная десктопная (Vaadin по умолчанию
-     6/8 px — ETN плотнее). */
-  --vaadin-padding-xs: 4px;
-  --vaadin-padding-s: 6px;
-  --vaadin-padding-m: 8px;
-  --vaadin-padding-l: 12px;
-  --vaadin-padding-xl: 16px;
-  --vaadin-padding-block-container: 4px;
-  --vaadin-padding-inline-container: 8px;
-  --vaadin-gap-xs: 4px;
-  --vaadin-gap-s: 6px;
-  --vaadin-gap-m: 8px;
-  --vaadin-gap-l: 12px;
-  --vaadin-gap-xl: 16px;
+     6/8 px — ETN плотнее). Значения — из шкалы отступов ETN. */
+  --vaadin-padding-xs: var(--space-2);
+  --vaadin-padding-s: var(--space-3);
+  --vaadin-padding-m: var(--space-4);
+  --vaadin-padding-l: var(--space-6);
+  --vaadin-padding-xl: var(--space-8);
+  --vaadin-padding-block-container: var(--space-2);
+  --vaadin-padding-inline-container: var(--space-4);
+  --vaadin-gap-xs: var(--space-2);
+  --vaadin-gap-s: var(--space-3);
+  --vaadin-gap-m: var(--space-4);
+  --vaadin-gap-l: var(--space-6);
+  --vaadin-gap-xl: var(--space-8);
 
   /* Поля ввода (текстовый фильтр колонок): подсказка и ошибка. */
   --vaadin-input-field-placeholder-color: var(--text-faint);
@@ -69,13 +69,13 @@
   --vaadin-grid-background: var(--surface);
   --vaadin-grid-border-color: var(--border);
   --vaadin-grid-border-radius: var(--radius-sm);
-  --vaadin-grid-cell-padding: 4px 8px;
+  --vaadin-grid-cell-padding: var(--space-2) var(--space-4);
   --vaadin-grid-row-background-color: var(--surface);
   --vaadin-grid-row-odd-background-color: var(--surface-2);
   --vaadin-grid-row-hover-background-color: var(--bg-hover);
   --vaadin-grid-row-selected-background-color: var(--accent-soft);
   --vaadin-grid-row-highlight-background-color: var(--accent-soft);
   --vaadin-grid-header-text-color: var(--text-dim);
-  --vaadin-grid-header-font-size: 12px;
-  --vaadin-grid-header-font-weight: 600;
+  --vaadin-grid-header-font-size: var(--font-size-xs);
+  --vaadin-grid-header-font-weight: var(--font-weight-semibold);
 }

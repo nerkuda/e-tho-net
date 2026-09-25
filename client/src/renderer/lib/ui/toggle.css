@@ -6,6 +6,9 @@
  * и адресует состояние селектором `[aria-pressed='true']`. Фасад владеет
  * поведением и ARIA. Вид `glyph` (переключатели шрифта стиля мысли) объявлен
  * здесь — заменяет удалённые `.font-toggles`/`.font-toggle`.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): размеры — по токенам
+ * (`--control-*`, `--space-*`, `--font-*`).
  */
 
 .ui-toggle {
@@ -14,22 +17,22 @@
 
 .ui-toggle-group {
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .ui-toggle--glyph {
-  width: 30px;
-  height: 26px;
+  width: var(--control-w-m);
+  height: var(--control-h);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .ui-toggle--glyph[aria-pressed='true'] {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
 }

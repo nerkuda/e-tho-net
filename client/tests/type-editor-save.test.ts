@@ -311,19 +311,18 @@ describe('type-manager — вкладки несохранённого типа:
   });
 
   it('CSS: primary-роль словаря залита акцентом и белым текстом', () => {
-    const cssPath = resolve(
-      import.meta.dirname,
-      '..',
-      'src',
-      'renderer',
-      'lib',
-      'ui',
-      'button.css',
-    );
-    const css = readFileSync(cssPath, 'utf8');
+    const renderer = resolve(import.meta.dirname, '..', 'src', 'renderer');
+    const css = readFileSync(resolve(renderer, 'lib', 'ui', 'button.css'), 'utf8');
     assert.ok(/\.ui-btn--primary\s*\{/.test(css), '.ui-btn--primary не объявлен в lib/ui/button.css');
     assert.ok(/background:\s*var\(--accent\)/.test(css), 'primary-роль должна иметь фон var(--accent)');
-    assert.ok(/color:\s*#fff/.test(css), 'primary-роль должна иметь белый текст (#fff)');
+    // Редакция 0.9.1 (требование 0dddd939): белый текст primary-роли — через
+    // токен --accent-fg (был литерал #fff).
+    assert.ok(
+      /color:\s*var\(--accent-fg\)/.test(css),
+      'primary-роль должна брать цвет текста из var(--accent-fg)',
+    );
+    const styles = readFileSync(resolve(renderer, 'styles.css'), 'utf8');
+    assert.ok(/--accent-fg:\s*#ffffff/.test(styles), '--accent-fg должен быть белым (#ffffff)');
   });
 
   it('регрессия 74d9b4ed: ключ дедупликации нового типа не сломан', () => {

@@ -28,6 +28,10 @@
   /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
   --accent-strong: #245cc9;
   --accent-soft: #e4ecfd;
+  /* Текст и иконки НА акцентной заливке (primary-кнопка, активная вкладка).
+     От темы не зависит: акцент обеих тем — насыщенный синий, на нём читается
+     светлый текст. */
+  --accent-fg: #ffffff;
   /* Фон текстового выделения (::selection и .cm-selectionBackground) —
      акцент с альфой: текст выделенного фрагмента сохраняет свой цвет
      (обычный, код, ссылки) и остаётся контрастным. Оба режима markdown-поля
@@ -58,17 +62,92 @@
      and the fade distance towards the canvas top/bottom edges. */
   --focus-band-color: #1e62be;
   --focus-band-fade: 180px;
-  /* Shadow colours, composed into the shadow tokens below. */
+  /* Шкала теней: цвета-основы (--shadow-c — крупная, --shadow-sm-c — мелкая),
+     из которых собираются готовые токены. Тёмная тема переопределяет основы
+     и усиленные тени ниже. */
   --shadow-c: rgba(24, 32, 48, 0.16);
   --shadow-sm-c: rgba(24, 32, 48, 0.08);
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 2px 10px var(--shadow-c);
   --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
-  --radius: 10px;
-  --radius-sm: 8px;
-  /* Cloud cards are rounder than chrome panels (L11). */
-  --radius-cloud: 14px;
+
+  /* --- Дизайн-токены 0.9.1: шкалы оформления (требование 0dddd939) ------------
+     Единый язык размеров для словаря `lib/ui` и переведённых модулей. Компоненты
+     ссылаются только на эти токены: числовые `px`/`em`/`rem` и прямые hex-цвета
+     в правилах `lib/ui` запрещены (сторож `guard-ui-tokens.test.ts`). Шкалы от
+     темы не зависят — тему меняют цветовые токены в `[data-theme='dark']`. */
+
+  /* Шкала размеров шрифта. */
+  --font-size-3xs: 10px;
+  --font-size-2xs: 11px;
+  --font-size-xs: 12px;
+  --font-size-s: 13px;
+  --font-size-m: 14px;
+  --font-size-l: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 20px;
+
+  /* Шкала насыщенности шрифта. */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Шкала межстрочных интервалов. */
+  --line-height-none: 1;
+  --line-height-tight: 1.25;
+  --line-height-snug: 1.4;
+  --line-height-normal: 1.5;
+
+  /* Шкала отступов: шаг 2px (компактная десктопная плотность ETN), --space-N = N × 2px. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+
+  /* Вертикальный паддинг компактного контрола (поле ввода, ghost-кнопка): 5px
+     не ложится на шаг шкалы отступов, но это устойчивый размер плотности ETN. */
+  --control-pad-y: 5px;
+
+  /* Шкала радиусов. */
+  --radius-s: 6px; /* мелкие элементы: чипы, svg-свотчи */
+  --radius-m: 8px; /* обычные контролы и панели */
+  --radius-l: 10px; /* крупные панели */
+  --radius-xl: 14px; /* карточки-облака (L11) */
+  --radius-pill: 999px; /* метки-«пилюли» (бейджи) */
+  /* Семантические псевдонимы шкалы — исторические имена `styles.css`. */
+  --radius-sm: var(--radius-m);
+  --radius: var(--radius-l);
+  --radius-cloud: var(--radius-xl);
+
+  /* Толщина линий и смещения. */
+  --border-thick: 2px;
+  --focus-ring-width: 2px;
+  --underline-offset: 2px;
+  --letter-spacing-wide: 2px;
+
+  /* Геометрия контролов словаря `lib/ui` (размеры вне шкалы отступов):
+     высоты/ширины конкретных контролов. */
+  --control-h: 26px; /* высота компактного контрола (глиф-тумблер, свотч цвета) */
+  --control-w-m: 30px; /* сторона контрола плотности m (иконочная кнопка, глиф-тумблер) */
+  --control-w-s: 28px; /* сторона иконочной кнопки плотности s */
+  --field-textarea-min-h: 72px; /* минимальная высота многострочного поля */
+  --field-clearable-pad-right: 22px; /* резерв под угловой крестик очистки поля */
+  --field-color-swatch-w: 34px; /* ширина свотча цвета */
+  --field-color-hex-w: 90px; /* ширина поля hex-кода цвета */
+  --chip-list-min-h: 22px; /* строка чипов (резерв высоты под чип) */
+  --tree-caret-w: 14px; /* колонка каретки раскрытия дерева */
+  --popover-min-w: 220px;
+  --popover-max-w: 420px;
+  --popover-max-h: 420px;
+  --popover-arrow: 12px; /* сторона хвостика-стрелки панели */
+  --popover-arrow-offset: 20px; /* отступ хвостика от левого края по умолчанию */
+  --popover-arrow-overlap: -6px; /* заглубление хвостика под рамку панели */
 
   /* chrome */
   --toolbar-h: 46px;
@@ -81,12 +160,12 @@
      (требование 0086037c, ошибка 6925ffa0 — дисбаланс размеров чекбокса и
      иконки в списках типов). Шаг отступа ветви дерева — --tree-indent. */
   --hit-area: 18px;
-  --tree-indent: 16px;
+  --tree-indent: var(--space-8);
 
   /* cloud geometry (L4 defaults, 11-settings-and-state.md §2.4) */
   --cloud-width: 200px;
-  --cloud-gap: 12px;
-  --cloud-font: 13px;
+  --cloud-gap: var(--space-6);
+  --cloud-font: var(--font-size-s);
 
   /* highlight.js palette (M4): токены подсветки fenced-кода в просмотре */
   --hljs-comment: #6e7781;
@@ -106,19 +185,40 @@
   --hljs-deletion: #82071e;
 
   /* базовый размер шрифта markdown-полей; меняется Ctrl+колесом (M9) */
-  --md-font-size: 13px;
+  --md-font-size: var(--font-size-s);
   /* моноширинный шрифт кода — один и для просмотра, и для редактора */
   --md-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    Roboto,
-    'Helvetica Neue',
-    Arial,
+  /* --- Группа пользовательских токенов (`--user-*`, требование e2895c24) ------
+     Аспекты оформления, которые планируется отдать пользователю в настройках:
+     фон холста, цвета, шрифты, стили текста комментариев. Значения группы
+     переопределяются подстановкой на корне документа — без правки компонентов,
+     поэтому компоненты `lib/ui` берут эти аспекты из `--user-*`, а не из
+     литералов (сторож `guard-ui-user-tokens.test.ts`). Сам функционал настроек
+     оформления — отдельный будущий тех.проект; здесь только архитектура.
+     Значение по умолчанию ссылается на базовый токен темы, чтобы обе темы
+     работали без дублирования. */
+
+  /* Шрифты интерфейса и кода. */
+  --user-font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     sans-serif;
-  font-size: 13px;
+  --user-font-mono: var(--md-mono);
+  --user-font-size: var(--font-size-s);
+
+  /* Фон холста: цвет, фоновое изображение (обои) и точечная сетка. */
+  --user-canvas-bg: var(--bg);
+  --user-canvas-image: none;
+  --user-canvas-dot: var(--canvas-dot);
+
+  /* Стили текста комментариев. */
+  --user-comment-font-size: var(--font-size-s);
+  --user-comment-line-height: var(--line-height-normal);
+  --user-comment-bg: var(--surface);
+  --user-comment-color: var(--text);
+  --user-comment-link: var(--accent);
+
+  font-family: var(--user-font-ui);
+  font-size: var(--font-size-s);
 }
 
 /* Dark theme (L10, 08-ui-spec.md §13): swap tokens only. */

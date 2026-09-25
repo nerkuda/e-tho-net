@@ -96,7 +96,7 @@
 
   /* Типографика кода и радиусы: держим плотность и скругления ETN. */
   --wa-font-family-code: var(--md-mono);
-  --wa-border-radius-s: 6px;
+  --wa-border-radius-s: var(--radius-s);
   --wa-border-radius-m: var(--radius-sm);
   --wa-border-radius-l: var(--radius);
 }

@@ -1,7 +1,8 @@
 /* Оболочка комментария `lib/ui/comment.ts` (задача 9cb87c42).
    Единый каркас: шапка (панель действий) → тело (поле markdown / состояние) →
    футер. Раскладку потребителя задаёт модификатор `--fill`/`--scroll`; вид
-   самого поля markdown остаётся за `styles.css` (`.md-field*`). */
+   самого поля markdown остаётся за `styles.css` (`.md-field*`).
+   Редакция 0.9.1 (требование 0dddd939): отступы — по шкале `--space-*`. */
 
 .ui-comment {
   display: flex;
@@ -13,8 +14,8 @@
 .ui-comment__head {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
 /* Пустая панель места не занимает (авторский display перебивает UA `[hidden]`). */
@@ -26,7 +27,7 @@
 .ui-comment__tools {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
 }
 
@@ -37,14 +38,14 @@
 .ui-comment__foot {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
-  margin-top: 6px;
+  margin-top: var(--space-3);
 }
 
 /* Состояние «загрузка / пустота / ошибка». */
 .ui-comment__state {
-  padding: 8px 4px;
+  padding: var(--space-4) var(--space-2);
 }
 
 /* Растянутый комментарий: тело занимает остаток высоты, поле — всё тело

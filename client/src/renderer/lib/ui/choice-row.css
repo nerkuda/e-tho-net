@@ -5,13 +5,15 @@
  * `radio-row` удалены из `styles.css`. Значения перенесены без изменения
  * плотности: те же отступы и выравнивание. Текст подписи кликабелен вместе с
  * контролом (`<label>`-обёртка).
+ *
+ * Редакция 0.9.1 (требование 0dddd939): отступы — по шкале `--space-*`.
  */
 
 .ui-choice-row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
   cursor: pointer;
   user-select: none;
 }
@@ -27,5 +29,5 @@
 
 .ui-choice-group {
   display: flex;
-  gap: 16px;
+  gap: var(--space-8);
 }

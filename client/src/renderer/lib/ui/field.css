@@ -8,6 +8,10 @@
  * те же отступы, рамки, радиусы и токены ETN. Обе темы работают через токены —
  * отдельного блока для `[data-theme='dark']` нет.
  *
+ * Редакция 0.9.1 (требования 0dddd939/e2895c24): числа — по шкалам токенов;
+ * моноширинный шрифт многострочного поля — пользовательский токен
+ * (`--user-font-mono`), а не литеральная гарнитура.
+ *
  * Состояния: `:hover` (не задано — рамка меняется только на фокусе, как
  * раньше), `:focus`, `:disabled`, `[readonly]`. Модификаторы
  * (`--multiline`, `--disabled`) — часть словаря; прикладные классы-владельцы
@@ -17,7 +21,7 @@
 
 .ui-input {
   width: 100%;
-  padding: 5px 8px;
+  padding: var(--control-pad-y) var(--space-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -26,7 +30,7 @@
 
 .ui-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent-soft);
 }
 
 .ui-input:disabled {
@@ -40,25 +44,25 @@
 
 .ui-textarea {
   resize: vertical;
-  min-height: 72px;
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-size: 13px;
+  min-height: var(--field-textarea-min-h);
+  font-family: var(--user-font-mono);
+  font-size: var(--font-size-s);
 }
 
 .ui-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
 }
 
 .ui-field-label {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--text-dim);
 }
 
 .ui-field-hint {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--text-dim);
 }
 
@@ -77,25 +81,25 @@
 
 .ui-clearable .ui-input {
   width: 100%;
-  padding-right: 22px;
+  padding-right: var(--field-clearable-pad-right);
 }
 
 .ui-clearable .st-f-input {
-  padding-right: 22px;
+  padding-right: var(--field-clearable-pad-right);
 }
 
 .ui-clearable-btn {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 18px;
-  height: 18px;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--hit-area);
+  height: var(--hit-area);
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  line-height: 1;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-none);
   color: var(--text-faint);
   background: transparent;
   border: none;
@@ -113,12 +117,12 @@
 .ui-color-field {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .ui-color-input {
-  width: 34px;
-  height: 26px;
+  width: var(--field-color-swatch-w);
+  height: var(--control-h);
   padding: 1px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -127,17 +131,17 @@
 }
 
 .ui-color-hex {
-  width: 90px;
-  padding: 5px 8px;
+  width: var(--field-color-hex-w);
+  padding: var(--control-pad-y) var(--space-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
   outline: none;
-  font-family: var(--md-mono);
+  font-family: var(--user-font-mono);
   text-transform: lowercase;
 }
 
 .ui-color-hex:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent-soft);
 }

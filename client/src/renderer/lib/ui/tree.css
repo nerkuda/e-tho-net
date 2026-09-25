@@ -11,6 +11,9 @@
  * Прикладные модификаторы поверх словарных классов поднимаются по
  * специфичности (`.ui-tree-row.type-tree-root`), а не порядком в бандле
  * (грабли 36889dd6).
+ *
+ * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--space-*`,
+ * `--font-*`, `--tree-caret-w`, `--focus-ring-width`, `--border-thick`).
  */
 
 .ui-tree {
@@ -20,7 +23,7 @@
 }
 
 .ui-tree:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent-soft);
   border-radius: var(--radius-sm);
 }
 
@@ -28,20 +31,20 @@
 .ui-tree-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 4px 4px;
+  gap: var(--space-3);
+  padding: 0 var(--space-2) var(--space-2);
   border-bottom: 1px solid var(--border);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .ui-tree-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-height: var(--hit-area);
-  padding-right: 4px;
-  padding-left: calc(8px + var(--tree-level, 0) * var(--tree-indent));
+  padding-right: var(--space-2);
+  padding-left: calc(var(--space-4) + var(--tree-level, 0) * var(--tree-indent));
   cursor: default;
   user-select: none;
 }
@@ -56,21 +59,21 @@
 
 /* Корневой тип иерархии — отделён и подчёркнут (бывший `.type-tree-root > td`). */
 .ui-tree-row.type-tree-root {
-  border-top: 2px solid var(--border);
-  font-weight: 600;
+  border-top: var(--border-thick) solid var(--border);
+  font-weight: var(--font-weight-semibold);
 }
 
 /* Каретка раскрытия: фиксированная колонка, у листа — невидимая распорка,
    чтобы подписи соседних уровней не разъезжались. */
 .ui-tree-caret {
-  flex: 0 0 14px;
-  width: 14px;
+  flex: 0 0 var(--tree-caret-w);
+  width: var(--tree-caret-w);
   padding: 0;
   border: none;
   background: none;
   color: var(--text-dim);
-  font-size: 10px;
-  line-height: 1;
+  font-size: var(--font-size-3xs);
+  line-height: var(--line-height-none);
   text-align: center;
   cursor: pointer;
 }
@@ -95,7 +98,7 @@
   display: flex;
   flex: 1 1 auto;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -128,7 +131,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -151,7 +154,7 @@
 }
 
 .ui-tree-empty {
-  padding: 8px 4px;
+  padding: var(--space-4) var(--space-2);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
