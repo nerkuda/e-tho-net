@@ -20,7 +20,7 @@
  * the tab mechanism breaks the build before the integration tests run.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

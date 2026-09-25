@@ -186,14 +186,14 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       scheduleChronicleRefresh();
       break;
 
-    case 'thought.reordered':
-    case 'link.created':
-    case 'link.updated':
-    case 'link.deleted':
     // Свойство-СВЯЗЬ меняет рёбра на сервере (структурные «Родители»/
     // «Потомки», типизированные, «Свойства вне типа»), скаляр — нет; набор
     // пересчёта для обоих событий один и тот же — окрестность фокуса
     // (прецедент 270b8454: тот же набор, что у правок типов связи).
+    case 'thought.reordered':
+    case 'link.created':
+    case 'link.updated':
+    case 'link.deleted':
     case 'property-value.set':
     case 'property-value.deleted':
       scheduleNeighbourhoodRepaint();

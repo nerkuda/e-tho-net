@@ -114,7 +114,7 @@ describe('Enter по выбранной строке результатов (з�
 
   it('ни одна строка не выбрана — Enter повторяет поиск', () => {
     const src = readText(SEARCH_TS);
-    const enter = /if \(event\.key === 'Enter'\) \{(?<body>[\s\S]*?)\n    \} else if/.exec(src);
+    const enter = /if \(event\.key === 'Enter'\) \{(?<body>[\s\S]*?)\n {4}\} else if/.exec(src);
     assert.ok(enter?.groups?.['body'] !== undefined, 'ветка Enter найдена');
     const body = enter.groups['body'] ?? '';
     assert.match(body, /row\.activate\(\);/, 'выбранная строка — её действие');

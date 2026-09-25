@@ -47,8 +47,13 @@ let focused: ShimElement | null = null;
 class FocusTrackingElement extends ShimElement {
   override focus(): void {
     super.focus();
-    focused = this;
+    recordFocus(this);
   }
+}
+
+/** Запоминает элемент, получивший фокус (передача `this` без aliasing). */
+function recordFocus(el: ShimElement): void {
+  focused = el;
 }
 
 /** Устанавливает шим document/window (каркас диалогов читает оба). */

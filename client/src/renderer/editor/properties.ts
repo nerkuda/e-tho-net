@@ -31,7 +31,6 @@ import type {
 import { onRealtimeEvent } from '../realtime.js';
 import { inFocusNeighbourhood, scheduleNeighbourhoodRepaint } from '../realtime-ui.js';
 import {
-  button,
   div,
   el,
   errText,

@@ -76,7 +76,6 @@ import { createComment, listComments, updateComment } from './comment-service.js
 import {
   type CrossNetworkRefValue,
   parseCrossNetworkAddress,
-  isCrossNetworkAddress,
 } from '@etn/shared';
 import {
   type CrossNetworkAccessContext,

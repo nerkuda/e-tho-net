@@ -96,7 +96,6 @@ import {
   onModeChange as onStripModeChange,
   renderStrip as renderFilterStrip,
   runActiveViewIfNeeded,
-  takeViewResult,
   type ViewResult,
 } from './focus-filter-strip.js';
 import { openThoughtDeleteDialog } from '../trash.js';
@@ -1278,7 +1277,7 @@ async function appendNextZonePage(
  * page the focus response's `edges` no longer covers the neighbourhood, so the
  * overlay is fed the authoritative set from `POST /thoughts/edges`.
  */
-async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
+async function refreshZoneEdges(_focus: FocusResponse): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const token = zonePagingToken;

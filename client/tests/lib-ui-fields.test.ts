@@ -32,7 +32,7 @@ function shimDom(): void {
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
-    createTextNode: (text: string) => new ShimElement('#text') as any,
+    createTextNode: (_text: string) => new ShimElement('#text') as any,
     body: new ShimElement('body'),
     addEventListener: () => undefined,
     removeEventListener: () => undefined,

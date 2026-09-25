@@ -11,7 +11,7 @@
  * this module only mutates the store.
  */
 
-import type { FocusResponse, Thought } from '@etn/shared';
+import type { Thought } from '@etn/shared';
 
 import { closeDialog, errorDialog } from './lib/dialog.js';
 import { hasTextSelection } from './lib/dom.js';

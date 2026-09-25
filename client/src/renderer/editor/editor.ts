@@ -2181,7 +2181,7 @@ function buildLinkHeader(link: Link): HTMLElement {
         if (ok && focusComment) focusEditorComment();
       });
     },
-    onCreateNew: async (query) => {
+    onCreateNew: async (_query) => {
       // Создание типа связи теперь идёт через единый диалог свойства
       // (требование 09f692ff, задача 09201bd4): пользователь выбирает
       // `value_type = 'link'`, вводит имена сторон, сервер автоматически

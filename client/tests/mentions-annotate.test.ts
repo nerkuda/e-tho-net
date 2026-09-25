@@ -102,7 +102,7 @@ test('chunkTextsForScan: огромный текст без последующи
 
 test('chunkTextsForScan: суммарно > лимита chars делит по границе текста', () => {
   // каждый текст 5000 символов; 5 штук — это 25 000, что больше 20 000.
-  const texts = Array.from({ length: 5 }, (_, i) => 'a'.repeat(5000));
+  const texts = Array.from({ length: 5 }, (_, _i) => 'a'.repeat(5000));
   const batches = chunkTextsForScan(texts);
   // 5000 + 5000 + 5000 + 5000 = 20000 — четвёртый уже не влезает.
   assert.equal(batches.length, 2);

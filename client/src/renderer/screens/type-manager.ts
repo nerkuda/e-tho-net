@@ -69,7 +69,6 @@ import type {
   ThoughtType,
   ThoughtTypeInput,
   ThoughtTypeUpdateInput,
-  LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
 import { t } from '../lib/i18n.js';
@@ -81,7 +80,7 @@ import { requireNetworkId, scheduleRefresh } from '../app.js';
 // мысль, но использует тот же единый канон).
 import { applyThoughtIcon } from '../lib/thought-cloud.js';
 import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogButton } from '../lib/dialog.js';
-import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
+import { div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLine } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/icons.js';
@@ -141,7 +140,7 @@ import { store } from '../state.js';
 import { renderNewTypeHint } from '../lib/type-editor-hints.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
-import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
+import { showThoughtStyleDialog } from '../editor/style-dialog.js';
 import { renderMarkdown } from '@etn/markdown';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
@@ -168,12 +167,6 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
 async function refreshThoughtTypes(): Promise<void> {
   const networkId = requireNetworkId();
   store.update({ thoughtTypes: await etn.types.listThoughtTypes(networkId) });
-}
-
-/** Reloads the link-type catalogue (line labels/colours read it). */
-async function refreshLinkTypes(): Promise<void> {
-  const networkId = requireNetworkId();
-  store.update({ linkTypes: await etn.types.listLinkTypes(networkId) });
 }
 
 /** Applies a type's own colours/font flags to an element (list name cells). */
@@ -2525,18 +2518,6 @@ function buildMetadataRowsFromType(type: ThoughtType): HTMLElement {
   return buildMetadataRows(fields);
 }
 
-/** Преобразует LinkType DTO в плоский набор полей для блока «Метаданные». */
-function buildMetadataRowsFromLinkType(type: LinkType): HTMLElement {
-  const fields: MetadataFields = {
-    id: type.id,
-    createdAtMs: type.created_at_ms ?? type.created_at,
-    createdBy: type.created_by ?? null,
-    updatedAtMs: type.updated_at_ms ?? type.updated_at,
-    updatedBy: type.updated_by ?? null,
-  };
-  return buildMetadataRows(fields);
-}
-
 // ---------------------------------------------------------------------------
 // Reparent confirmation (задача 8ea1ab6a, 0.8.2)
 //
@@ -2581,7 +2562,6 @@ export async function confirmReparentImpactDialog(
   thoughtsCount: number,
 ): Promise<boolean> {
   const noun = thoughtsCount === 1 ? 'мысли' : thoughtsCount < 5 ? 'мыслей' : 'мыслей';
-  const verb = thoughtsCount === 1 ? 'изменится' : 'изменится';
   const message =
     `Смена родителя повлияет на ${thoughtsCount} ${noun}: у ${thoughtsCount === 1 ? 'неё' : 'них'} ` +
     `изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения ` +

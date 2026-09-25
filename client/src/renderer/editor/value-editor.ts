@@ -49,7 +49,6 @@ import type {
   SearchNameHit,
   ThoughtRef,
 } from '@etn/shared';
-import { t } from '../lib/i18n.js';
 import { formatCrossNetworkAddress, parseCrossNetworkAddress } from '@etn/shared';
 
 import { store } from '../state.js';
@@ -1783,7 +1782,7 @@ export function buildLinkValueEditor(opts: {
     // значение как обычную цель строкой (резолвер токенов — на сервере).
     if (opts.extraSuggest !== undefined) sources.push(...opts.extraSuggest);
     sources.push(linkSearchSource(networkId, filterIds));
-    const handle = wireSuggest(addInput, {
+    wireSuggest(addInput, {
       sources,
       onPick: (entry: { value: string }) => {
         const id = entry.value;

@@ -25,7 +25,7 @@ import {
 import { t } from '../../lib/i18n.js';
 
 import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
+import { clear, div, el, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   buildEntityChipField,

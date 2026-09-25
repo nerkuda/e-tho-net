@@ -25,14 +25,14 @@
  */
 
 import { UI_STATE_KEY } from '@etn/shared';
-import type { FocusResponse, ThoughtRef, ThoughtTypeView } from '@etn/shared';
+import type { FocusResponse, ThoughtRef } from '@etn/shared';
 import type { StructureSort, SortOrder } from '@etn/shared';
 
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
 import { openCanvasLinkFilterDialog } from './link-filter-dialog.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
-import { div, span } from '../lib/dom.js';
+import { div } from '../lib/dom.js';
 import { isFilterSort, isSortOrder, sortValueLabel } from '../lib/filter-builder.js';
 import { svgIcon } from '../lib/icons.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
@@ -337,7 +337,7 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
     position?: number;
     version?: number;
   };
-  let views: RawView[] = [];
+  const views: RawView[] = [];
   try {
     const thought = await etn.thoughts.get(networkId, focus.focused.id);
     const metaViews = (thought as unknown as { meta?: { views?: unknown[] } }).meta?.views;

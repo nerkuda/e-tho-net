@@ -101,11 +101,6 @@ function pre043Db(): { db: Database.Database; ndb: NetworkDb } {
   return { db, ndb: new NetworkDb(db, 'mig-043', ':memory:') };
 }
 
-/** Записать миграцию в очередь: сеть «догоняет» схему при следующем открытии. */
-function forgetMigration(db: Database.Database, name: string): void {
-  db.prepare('DELETE FROM _migrations WHERE name = ?').run(name);
-}
-
 /** Идентификатор живой привязки — цель `ON CONFLICT` в доменном коде. */
 const ON_CONFLICT_TARGET = 'owner_type, owner_id, property_id, layer_id';
 

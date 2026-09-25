@@ -266,7 +266,7 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     const T = await treeModule();
     const host = new ShimElement('div');
     const events = { checked: ['a'], activated: [] as string[] };
-    const tree = buildTree(T, events, host);
+    buildTree(T, events, host);
 
     const aRow = rowById(host, 'a');
     const input = byClass(aRow, 'ui-tree-check')[0]!;

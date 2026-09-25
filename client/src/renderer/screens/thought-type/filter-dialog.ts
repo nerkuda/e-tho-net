@@ -36,10 +36,7 @@ import {
   type EffectiveTypeProperty,
   type NetworkProperty,
   type PropertyValueType,
-  type SortOrder,
-  type StructureAuthorOp,
   type StructurePropertyOp,
-  type StructureSort,
   type ThoughtType,
   type ThoughtTypeView,
   type ThoughtTypeViewDefinition,
@@ -48,8 +45,8 @@ import {
 } from '@etn/shared';
 import { t } from '../../lib/i18n.js';
 
-import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { div, el, errText, span } from '../../lib/dom.js';
+import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
+import { div, el, errText } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { fieldError, footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
@@ -61,7 +58,6 @@ import {
   buildExtrasSection,
   buildKeywordsSection,
   buildSortSection,
-  type EntityChipSection,
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
@@ -91,7 +87,6 @@ import {
   type ChainProperties,
   type ComboOption,
   type DialogCriteriaState,
-  type DialogPropertyCondition,
   type ViewToken,
 } from './filter-dialog-pure.js';
 
@@ -162,7 +157,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // добавляются обратные стороны ВСЕХ свойств-связей реестра — в конструкторе
   // условий обе стороны адресуемы (обе стороны каждой связи, не только
   // цепочки редактируемого типа).
-  let baseRegistry = new Map<string, NetworkProperty>();
+  const baseRegistry = new Map<string, NetworkProperty>();
   try {
     const list = await etn.propertyRegistry.list(networkId);
     for (const row of list) baseRegistry.set(row.id, row);

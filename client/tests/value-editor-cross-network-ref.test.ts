@@ -220,7 +220,7 @@ describe('редактор cross_network_ref: поле-чип (9be98ae1)', () =>
   });
 
   it('контекстное меню чипа — три команды значения', async () => {
-    const { root, input } = await buildEditor(FOREIGN_ADDRESS);
+    const { root } = await buildEditor(FOREIGN_ADDRESS);
     const chip = chipEls(root)[0]!;
     chip.dispatchContextMenu();
     await settle();

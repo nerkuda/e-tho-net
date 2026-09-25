@@ -21,7 +21,6 @@ import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
 import {
-  closeMenu,
   MENU_SEPARATOR,
   menuAction,
   menuChoice,
@@ -29,17 +28,16 @@ import {
   type MenuItem,
 } from '../lib/menu.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
-import { div, el, span } from '../lib/dom.js';
+import { div, span } from '../lib/dom.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
-import { svgIcon } from '../lib/icons.js';
 import {
   defaultLayerColors,
   invertThemeColor,
 } from '../lib/layer-colors.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { resyncAfterLayerSwitch } from '../app.js';
-import { store, requireNetworkId, type Theme } from '../state.js';
+import { store, type Theme } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { lineDiff } from '../lib/diff.js';
@@ -319,7 +317,7 @@ function colorPickerRow(label: string, initial: string): {
  * его с сервера отдельным запросом.
  */
 export function openLayerPropsDialog(networkId: string, layerId: string): void {
-  let layer = store.state.layers.find((l) => l.id === layerId);
+  const layer = store.state.layers.find((l) => l.id === layerId);
   if (layer === undefined) {
     void openLayerPropsDialogAsync(networkId, layerId);
     return;

@@ -23,12 +23,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { assembledStylesFile } from './renderer-css.js';
 import { readRendererCss } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
-const STYLES_CSS = assembledStylesFile();
 
 const read = (rel: string): string =>
   rel === 'styles.css'

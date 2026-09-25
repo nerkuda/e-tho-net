@@ -423,7 +423,7 @@ describe(
         });
         assert.equal(ltRes.statusCode, 201, ltRes.body?.toString());
         const ltId = (ltRes.json().data as { config: { link_type_id: string } | null })
-          .config?.link_type_id!;
+          .config?.link_type_id;
         assert.ok(ltId);
 
         const listRes = await ctx.app.inject({
@@ -449,7 +449,8 @@ describe(
         });
         assert.equal(lt2Res.statusCode, 201, lt2Res.body?.toString());
         const lt2Id = (lt2Res.json().data as { config: { link_type_id: string } | null })
-          .config?.link_type_id!;
+          .config?.link_type_id;
+        assert.ok(lt2Id);
 
         const ltListRes = await ctx.app.inject({
           method: 'GET',
@@ -508,7 +509,8 @@ describe(
         });
         assert.equal(ltRes.statusCode, 201, ltRes.body?.toString());
         const ltId = (ltRes.json().data as { config: { link_type_id: string } | null })
-          .config?.link_type_id!;
+          .config?.link_type_id;
+        assert.ok(ltId);
         const ltGetRes = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${nid}/link-types/${ltId}`,
@@ -552,7 +554,6 @@ describe(
       // блокируется `reparent_blocked_by_layer` (защита работает).
       const ctx = await buildRestContext();
       try {
-        const h = authHeaders(ctx);
         const nid = ctx.networkId;
         // Сетевая сессия per-client-id: типы создаются без client-id
         // (базовый слой по умолчанию), а вся работа в слое — под
@@ -736,7 +737,8 @@ describe(
         });
         assert.equal(ltTRes.statusCode, 201, ltTRes.body?.toString());
         const ltTId = (ltTRes.json().data as { config: { link_type_id: string } | null })
-          .config?.link_type_id!;
+          .config?.link_type_id;
+        assert.ok(ltTId);
 
         const ltCRes = await ctx.app.inject({
           method: 'POST',
@@ -752,7 +754,8 @@ describe(
         });
         assert.equal(ltCRes.statusCode, 201, ltCRes.body?.toString());
         const ltCId = (ltCRes.json().data as { config: { link_type_id: string } | null })
-          .config?.link_type_id!;
+          .config?.link_type_id;
+        assert.ok(ltCId);
 
         // Подтверждаем базовый parent_id у ltC в базовом слое — иначе
         // утверждения «parent_id не меняется» не имеют смысла.
@@ -810,7 +813,8 @@ describe(
         });
         assert.equal(ltNRes.statusCode, 201, ltNRes.body?.toString());
         const ltNId = (ltNRes.json().data as { config: { link_type_id: string } | null })
-          .config?.link_type_id!;
+          .config?.link_type_id;
+        assert.ok(ltNId);
 
         // В слое меняем parent_id T → N. Связей с типом T/C нет → нет
         // блокировки, link-type меняются сразу.

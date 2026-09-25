@@ -218,9 +218,7 @@ function handleReleased(data: EditReleasedData): void {
 }
 
 /** Handle `edit.cleared` — drop the row; expose the reason for the editor toast. */
-export interface ClearedEvent extends EditClearedData {
-  /** Surfaced for any subscriber that wants to render a toast. */
-}
+export type ClearedEvent = EditClearedData;
 function handleCleared(data: EditClearedData): LockClearedReason {
   for (const [key, row] of cache.entries()) {
     if (row.id === data.lock_id) {

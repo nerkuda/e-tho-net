@@ -26,7 +26,7 @@
  * регрессией `server/tests/routes-thought-type-version-conflict.test.ts`.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';

@@ -78,8 +78,8 @@ describe('строка сохранённых отборов (задача 2ebe4
     assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка с многоточием «выбрать отбор»');
     assert.match(bar, /root\.append\(nameWrap, saveBtn, deleteBtn, moreBtn\)/, 'порядок элементов строки');
     const icons = readText(ICONS_TS);
-    assert.match(icons, /\n  save:/, 'иконка дискеты объявлена в общем наборе иконок');
-    assert.match(icons, /\n  copy:/, 'иконка копии объявлена в общем наборе иконок');
+    assert.match(icons, /\n {2}save:/, 'иконка дискеты объявлена в общем наборе иконок');
+    assert.match(icons, /\n {2}copy:/, 'иконка копии объявлена в общем наборе иконок');
   });
 
   it('запись: создаёт отбор, при занятом имени — перезаписывает определение', () => {

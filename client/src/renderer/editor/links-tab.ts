@@ -27,7 +27,7 @@ import { requireNetworkId, setFocus } from '../app.js';
 // общая фабрика: значок, цвета, начертание, бледность и единые жесты.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
-import { div, el, renderHtml, setTooltip, span } from '../lib/dom.js';
+import { div, el, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';

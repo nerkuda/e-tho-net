@@ -413,7 +413,7 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
       },
     };
     await strip.renderStrip(focusOf(thought(FOCUS_ID, 'Версия')));
-    let mode = strip.getActiveMode();
+    const mode = strip.getActiveMode();
     assert.equal(mode.kind, 'view');
     assert.equal((mode as any).viewId, 'v-default');
 

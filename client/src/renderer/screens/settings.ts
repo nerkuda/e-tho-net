@@ -46,7 +46,7 @@ import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
 import { uiTabs } from '../lib/ui/tabs.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { availableLocales, getLang, t } from '../lib/i18n.js';
 import { applyLang } from '../lib/lang.js';
@@ -472,7 +472,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       },
     });
     const showInactiveLabel = showInactiveRow.row;
-    const showInactiveCheckbox = showInactiveRow.input;
 
     // «Показывать содержимое корзины» (задача 77923b49) — рядом с неактуальными,
     // тот же механизм (L3 `show_trash`): выключено — помеченные на удаление
@@ -486,7 +485,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       },
     });
     const showTrashLabel = showTrashRow.row;
-    const showTrashCheckbox = showTrashRow.input;
 
     const ownerHint = isOwner
       ? 'Эти поля задаёт владелец сети; изменения сохраняются для всех участников.'

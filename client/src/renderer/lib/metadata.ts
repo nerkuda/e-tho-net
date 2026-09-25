@@ -16,7 +16,7 @@
  * raw id with a faint hint when the cache misses).
  */
 
-import { button, div, el, setTooltip, span } from './dom.js';
+import { div, el, setTooltip } from './dom.js';
 import { notice } from './notice.js';
 import { ensureLoaded, resolve, subscribe } from './users.js';
 import { uiButton } from './ui/button.js';
@@ -95,15 +95,6 @@ function buildIdRow(id: string | null): HTMLElement {
     },
   });
   row.append(label, value, copyBtn);
-  return row;
-}
-
-/** Builds one labelled metadata cell («label» / «value»). */
-function buildFieldRow(label: string, value: string | number | null): HTMLElement {
-  const row = div('metadata-field');
-  row.append(el('span', 'metadata-field-label', label));
-  const text = value === null || value === '' ? '—' : String(value);
-  row.append(el('span', 'metadata-field-value', text));
   return row;
 }
 

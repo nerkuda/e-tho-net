@@ -96,7 +96,7 @@ function publicResponseTypes(source: string): Array<{ name: string; ret: string;
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i]!.match(re);
     if (m === null) continue;
-    let buf: string[] = [];
+    const buf: string[] = [];
     for (let j = i; j < lines.length && j - i <= 30; j++) {
       buf.push(lines[j]!);
       const all = buf.join('\n');

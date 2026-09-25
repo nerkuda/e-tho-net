@@ -24,7 +24,7 @@
 import type { FocusDir, Link } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
-import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { getActiveMode as getStripActiveMode } from './focus-filter-strip.js';
 import { openAddDialog } from './add-dialog.js';
 import {
@@ -35,7 +35,7 @@ import {
 } from './clipboard.js';
 import { getRef, invalidateRef, requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
-import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
+import { errorDialog, promptDialog } from '../lib/dialog.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import {

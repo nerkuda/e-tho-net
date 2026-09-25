@@ -31,7 +31,6 @@ import { readRendererCss } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
-const UI_ROOT = path.join(RENDERER_ROOT, 'lib', 'ui');
 // styles.css — манифест: правила собирает readRendererCss (renderer-css.ts).
 
 /** Строка — комментарий? */

@@ -24,8 +24,6 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { BASE_LAYER_ID, type Layer, type LayerColors } from '@etn/shared';

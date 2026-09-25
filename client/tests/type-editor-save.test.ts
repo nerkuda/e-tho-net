@@ -20,7 +20,7 @@
  * соглашению (см. `type-manager-name-sync.test.ts`, `type-editor-tabs.test.ts`).
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

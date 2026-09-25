@@ -12,7 +12,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
@@ -472,6 +472,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '(счётчики с именами типов связей), ' +
         'полнотекстовый `comment_preview` и `meta.views` — ' +
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
+        'Постоянный комментарий отдаётся ровно один раз — полным текстом в `comment_preview` ' +
+        '(требование d024dbd6); `meta.permanent` намеренно `null` — дубль текста не отдаётся, ' +
+        'и это НЕ признак отсутствия комментария (полную форму `meta.permanent` даёт ' +
+        '`etn.thoughts.get`). ' +
         'Лимит — `maxNodesPerSubgraph`.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],

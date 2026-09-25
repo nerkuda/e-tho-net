@@ -18,7 +18,7 @@ import { type ChronicleFilterDefinition } from '@etn/shared';
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
-import { div, el, span } from '../../lib/dom.js';
+import { div, el } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   filterEntityOptions,
