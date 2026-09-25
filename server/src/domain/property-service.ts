@@ -3044,20 +3044,87 @@ export function updateTypeProperty(
  * stored value in place — it becomes a value outside type, readable with
  * `outside_type: true` and deletable manually (02-data-model.md §3.5a). The
  * pre-0.6.5 cascade (values + overrides deleted with the definition) is gone.
+ *
+ * Снятие привязки со стороны назначения дополнительно синхронизирует legacy
+ * `config.allowed_target_type_ids` — см.
+ * {@link stripLegacyAllowedTargetType} (ошибка 3ac05cff, 0.9.1).
  */
 export function deleteTypeProperty(ndb: NetworkDb, id: string, actorUserId: string): void {
   const current = getTypeProperty(ndb, id);
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
   }
-  // S4 (13-layers.md §5.2): in a working layer the detach materialises a
-  // tombstone over the binding; the base rows stay intact.
-  deleteRowLayered(ndb, 'type_properties', id);
-  // Отключение свойства — это правка настроек типа: обновим авторство
-  // самого типа (требование e6d4165e, приравнивание).
   ndb.transaction(() => {
+    // S4 (13-layers.md §5.2): in a working layer the detach materialises a
+    // tombstone over the binding; the base rows stay intact.
+    deleteRowLayered(ndb, 'type_properties', id);
+    // Привязка назначения, порождённая legacy-ограничением целей, снимается
+    // НАВСЕГДА: из списка целей реестрового свойства её владелец убирается,
+    // иначе эффективный набор снова синтезирует зеркало и «✕» — no-op.
+    if (current.value_type === 'link' && !isStructuralLinkProperty(current.config)) {
+      if (current.side === 'target') {
+        stripLegacyAllowedTargetType(ndb, current.property_id, current.owner_id, actorUserId);
+      }
+    }
+    // Отключение свойства — это правка настроек типа: обновим авторство
+    // самого типа (требование e6d4165e, приравнивание).
     touchType(ndb, current.owner_type, current.owner_id, actorUserId);
   });
+}
+
+/**
+ * Убрать тип из legacy-списка `config.allowed_target_type_ids` свойства-связи
+ * (ошибка 3ac05cff, 0.9.1). Список — исторический механизм МАТЕРИАЛИЗАЦИИ
+ * зеркал (миграция 042, требование e93001ac): из него `createTypeProperty`
+ * создаёт настоящие target-привязки, а `appendMirroredLinkProperties` /
+ * `listThoughtLinkProperties` по-прежнему достраивают обратное свойство у
+ * типов, покрытых списком (нужно для .etnx-архивов, где target-привязок нет).
+ *
+ * Пока снятый владелец остаётся в списке, синтез возвращает свойство — снятие
+ * target-привязки визуально не срабатывает. Поэтому при отвязке target-привязки
+ * тип убирается из списка: в модели 0.8.1 ограничение целей — это сами
+ * target-привязки (`loadBindingTypesBySide`), а список лишь их дублирует.
+ *
+ * Синхронизируется только ТОЧНОЕ совпадение `typeId` со списком. Тип, покрытый
+ * списком через предка (поддерево), собственной привязки не имеет и снять её
+ * нельзя — правится объявление предка.
+ *
+ * Конфиг правится ТОЧЕЧНО, минуя {@link updateNetworkProperty}: его
+ * `validateLinkConfig` перепроверяет весь конфиг, включая посторонние
+ * legacy-записи списка, которые могли протухнуть (тип удалён) — это отвергло бы
+ * законное снятие. Здесь удаляется ровно один элемент, остальное не трогается.
+ */
+function stripLegacyAllowedTargetType(
+  ndb: NetworkDb,
+  propertyId: string,
+  typeId: string,
+  actorUserId: string,
+): void {
+  const prop = getNetworkProperty(ndb, propertyId);
+  if (prop === null || prop.value_type !== 'link' || isStructuralLinkProperty(prop.config)) return;
+  const cfg = prop.config ?? {};
+  const allowed = cfg.allowed_target_type_ids;
+  if (!Array.isArray(allowed) || !allowed.includes(typeId)) return;
+  const nextConfig: PropertyConfig = { ...cfg };
+  const remaining = allowed.filter((entry) => entry !== typeId);
+  if (remaining.length > 0) nextConfig.allowed_target_type_ids = remaining;
+  else delete nextConfig.allowed_target_type_ids;
+  const nowMs = Date.now();
+  // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer.
+  materializeShadow(ndb, 'properties', propertyId);
+  ndb
+    .prepare(
+      `UPDATE properties SET config = ?, updated_at = ?, updated_by = ?, updated_at_ms = ?
+        WHERE id = ? AND layer_id = ?`,
+    )
+    .run(
+      JSON.stringify(nextConfig),
+      new Date(nowMs).toISOString(),
+      actorUserId,
+      nowMs,
+      propertyId,
+      ndb.layerId,
+    );
 }
 
 /**
