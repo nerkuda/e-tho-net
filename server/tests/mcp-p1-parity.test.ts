@@ -178,6 +178,16 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
         // единственный экземпляр — в `comment_preview`.
         assert.equal(card.meta.permanent, null);
         assert.equal(card.comment_preview?.body_md, 'короткий постоянный комментарий');
+
+        // Ошибка 3d1b1ce4: `null` в `meta.permanent` не должен выглядеть как
+        // «комментария нет» — контракт (описание инструмента) обязан явно
+        // называть причину и место единственного экземпляра текста.
+        const tools = await handle.client.listTools();
+        const resolveTool = tools.tools.find((t) => t.name === 'etn.thoughts.resolve');
+        assert.ok(resolveTool, 'etn.thoughts.resolve должен быть в списке инструментов');
+        const description = resolveTool!.description ?? '';
+        assert.match(description, /comment_preview/);
+        assert.match(description, /meta\.permanent`\s*намеренно\s*`null/);
       } finally {
         await handle.close();
       }
