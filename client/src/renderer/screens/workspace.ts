@@ -236,10 +236,16 @@ export function buildWorkspace(): HTMLElement {
   // --- body -------------------------------------------------------------------
   const body = div('workspace-body');
   const selectionHost = div('selection-panel hidden');
-  const canvasHost = div('canvas');
-  const structuresHost = div('structures hidden');
-  const chronicleHost = div('chronicle hidden');
-  const activityHost = div('activity hidden');
+  // Every view hangs its content host off the body next to the editor. The
+  // shared `view-host` marker is the single anchor the dock-order rules
+  // (`styles/layout.css`) key on — the editor position is a global setting and
+  // must move the content the same way on the map, structures, chronicle and
+  // activity views (ошибка 477fd133). A new view host MUST carry the marker,
+  // otherwise the editor's dock order silently stops applying to it.
+  const canvasHost = div('canvas view-host');
+  const structuresHost = div('structures hidden view-host');
+  const chronicleHost = div('chronicle hidden view-host');
+  const activityHost = div('activity hidden view-host');
   const editorHost = div('editor hidden');
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.

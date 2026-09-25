@@ -482,7 +482,7 @@
   order: 2;
 }
 
-.workspace-body[data-editor-pos='left'] > .canvas {
+.workspace-body[data-editor-pos='left'] > .view-host {
   order: 3;
 }
 
@@ -507,8 +507,8 @@
   width: auto;
 }
 
-.workspace-body[data-editor-pos='top'] > .canvas,
-.workspace-body[data-editor-pos='bottom'] > .canvas {
+.workspace-body[data-editor-pos='top'] > .view-host,
+.workspace-body[data-editor-pos='bottom'] > .view-host {
   order: 2;
   min-height: 0;
 }
