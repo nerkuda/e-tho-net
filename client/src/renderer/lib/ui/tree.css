@@ -15,6 +15,12 @@
  * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--space-*`,
  * `--font-*`, `--tree-caret-w`, `--focus-ring-width`, `--border-thick`).
  *
+ * Колонки списков по умолчанию БЕЗ переноса: текст обрезается многоточием
+ * (`white-space: nowrap` + `text-overflow: ellipsis`), полный текст — в
+ * подсказке `title`; подпись строки дерева — класс `.ui-tree-label`
+ * (ошибка d866bc65). Каретка раскрытия — читаемый контрастный глиф
+ * (`--font-size-xs`, цвет `--text`), зона нажатия — не меньше `--hit-area-min`.
+ *
  * Состояния (задача 0af93058, требование 5bbf9e45): строка — покой, `:hover`,
  * `:active`, `:focus-visible` (внутреннее кольцо), недоступность при
  * отключённом флажке (`:has(:disabled)`); каретка раскрытия — нативная кнопка
@@ -36,7 +42,10 @@
   border-radius: var(--radius-sm);
 }
 
-/* Строка заголовков колонок — как шапка списка, но без `<table>`. */
+/* Строка заголовков колонок — как шапка списка, но без `<table>`. Колонки не
+   сжимаются ниже своей ширины (`min-content`): на узком контейнере дерево
+   прокручивается по X у обёртки владельца, а не наезжает колонками
+   (ошибка d866bc65). */
 .ui-tree-head {
   display: flex;
   align-items: center;
@@ -45,12 +54,14 @@
   border-bottom: 1px solid var(--border);
   color: var(--text-dim);
   font-size: var(--font-size-xs);
+  min-width: min-content;
 }
 
 .ui-tree-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: min-content;
   min-height: var(--hit-area);
   padding-right: var(--space-2);
   padding-left: calc(var(--space-4) + var(--tree-level, 0) * var(--tree-indent));
@@ -89,7 +100,9 @@
 }
 
 /* Каретка раскрытия: фиксированная колонка, у листа — невидимая распорка,
-   чтобы подписи соседних уровней не разъезжались. */
+   чтобы подписи соседних уровней не разъезжались. Глиф читаемый (не «точка»)
+   и контрастный: размер — токен шкалы шрифта, цвет — токен основного текста
+   (ошибка d866bc65: мелкие неразличимые треугольники). */
 .ui-tree-caret {
   position: relative;
   flex: 0 0 var(--tree-caret-w);
@@ -97,8 +110,8 @@
   padding: 0;
   border: none;
   background: none;
-  color: var(--text-dim);
-  font-size: var(--font-size-3xs);
+  color: var(--text);
+  font-size: var(--font-size-xs);
   line-height: var(--line-height-none);
   text-align: center;
   cursor: pointer;
@@ -155,13 +168,28 @@
   cursor: pointer;
 }
 
-/* Значок типа/облачко-подпись — единственная содержательная часть строки. */
+/* Значок типа/облачко-подпись — единственная содержательная часть строки.
+   `overflow: hidden` не даёт подписи вылезти за колонку и наехать на соседние
+   (ошибка d866bc65). */
 .ui-tree-content {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  overflow: hidden;
+}
+
+/* Подпись строки дерева — одна строка с обрезанием многоточием (без переноса);
+   полный текст даёт `title` на элементе (ошибка d866bc65). Соседние элементы
+   строки (значок, свотч, облачко) под это правило не попадают — у них свои
+   классы. */
+.ui-tree-content > .ui-tree-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* Значок типа в дереве совпадает размером с флажком и строкой. Селектор по

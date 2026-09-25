@@ -98,7 +98,7 @@ import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHand
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
-import { createTree, type TreeItem } from '../lib/ui/tree.js';
+import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { reloadTypeCatalogues, scheduleTypeRepaint } from '../realtime-ui.js';
 // Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
@@ -2538,7 +2538,11 @@ export function showLinkTypesTreeDialog(): void {
       swatch.style.width = '32px';
       swatch.style.marginRight = '8px';
       swatch.style.verticalAlign = 'middle';
-      return [swatch, span(` ${type.name_forward} / ${type.name_reverse}`)];
+      // Подпись — одна строка с многоточием (ошибка d866bc65); полный текст
+      // в подсказке.
+      const label = span(` ${type.name_forward} / ${type.name_reverse}`, TREE_LABEL_CLASS);
+      label.title = `${type.name_forward} / ${type.name_reverse}`;
+      return [swatch, label];
     },
   });
   tableWrap.append(status, tree.root);
@@ -2607,7 +2611,9 @@ export function showLinkTypesTreeDialog(): void {
   showDialog({
     title: t('linkTypes.title'),
     body,
-    size: 'm',
+    // Роль `l` (требование 13464c39): дерево типов связей единообразно с
+    // деревом типов мыслей — колонки читаются без наезда (ошибка d866bc65).
+    size: 'l',
     // Ошибки списка — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
     buttons: [{ label: t('actions.close'), primary: true }],

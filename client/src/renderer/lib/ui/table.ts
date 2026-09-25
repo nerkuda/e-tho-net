@@ -193,6 +193,13 @@ export interface TableColumn<T> {
   text?: (row: T, index: number) => string;
   /** Пользовательский рендер ячейки (узел или строка). */
   render?: (row: T, context: CellContext<T>) => Node | string | null | undefined;
+  /**
+   * Разрешить перенос текста в ячейке. По умолчанию текст колонки
+   * показывается одной строкой с обрезанием многоточием (полный — в
+   * подсказке `title`), колонки не наезжают друг на друга (ошибка d866bc65).
+   * Ставь `true` там, где перенос осознанно нужен (длинный многострочный текст).
+   */
+  wrap?: boolean;
   /** Текст «пустой» ячейки (нет данных); по умолчанию {@link TABLE_EMPTY_CELL}. */
   empty?: string;
 }
@@ -530,6 +537,27 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     return cell === null ? [] : focusables(cell);
   };
 
+  /**
+   * Текстовая ячейка списка. По умолчанию — одна строка с обрезанием
+   * многоточием и полной подсказкой `title` (ошибка d866bc65); перенос
+   * разрешает колонка (`wrap: true`). Стили инлайновые: ячейки Vaadin Grid
+   * живут в shadow DOM, документный CSS туда не доходит (тот же приём, что у
+   * `cellBox` ленты).
+   */
+  const textCell = (text: string, wrap: boolean): HTMLSpanElement => {
+    const node = span(text);
+    if (wrap) {
+      node.style.whiteSpace = 'normal';
+    } else {
+      node.style.display = 'block';
+      node.style.overflow = 'hidden';
+      node.style.whiteSpace = 'nowrap';
+      node.style.textOverflow = 'ellipsis';
+    }
+    node.title = text;
+    return node;
+  };
+
   const renderCellContent = (column: TableColumn<T>, row: T, index: number): Node => {
     if (column.render !== undefined) {
       const out = column.render(row, {
@@ -541,12 +569,12 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       if (out === null || out === undefined || out === '') {
         return span(column.empty ?? TABLE_EMPTY_CELL, TABLE_CELL_EMPTY_CLASS);
       }
-      return typeof out === 'string' ? span(out) : out;
+      return typeof out === 'string' ? textCell(out, column.wrap === true) : out;
     }
     const text = cellText(column, row, index);
     return text === ''
       ? span(column.empty ?? TABLE_EMPTY_CELL, TABLE_CELL_EMPTY_CLASS)
-      : span(text);
+      : textCell(text, column.wrap === true);
   };
 
   const renderCell = (column: TableColumn<T>, row: T, index: number): Node => {

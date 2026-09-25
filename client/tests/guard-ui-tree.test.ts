@@ -119,4 +119,26 @@ describe('guard: единое дерево списков lib/ui (d1c15a2d)', ()
     assert.match(icon, /inline-size:\s*var\(--hit-area\)/, 'значок типа не равен --hit-area по ширине');
     assert.match(icon, /block-size:\s*var\(--hit-area\)/, 'значок типа не равен --hit-area по высоте');
   });
+
+  // Ошибка d866bc65: колонки списков не переносят текст (обрезают многоточием),
+  // каретка раскрытия — читаемый контрастный глиф, подпись строки даёт `title`.
+  it('колонки дерева по умолчанию без переноса, каретка читаема', () => {
+    const css = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'tree.css'), 'utf8');
+
+    const cell = cssRule(css, '.ui-tree-cell');
+    assert.match(cell, /white-space:\s*nowrap/, 'ячейка колонки обязана быть без переноса');
+    assert.match(cell, /text-overflow:\s*ellipsis/, 'ячейка колонки обязана обрезать текст');
+
+    const label = cssRule(css, '.ui-tree-content > .ui-tree-label');
+    assert.match(label, /white-space:\s*nowrap/, 'подпись строки обязана быть без переноса');
+    assert.match(label, /text-overflow:\s*ellipsis/, 'подпись строки обязана обрезать текст');
+
+    const caret = cssRule(css, '.ui-tree-caret');
+    assert.match(
+      caret,
+      /font-size:\s*var\(--font-size-/,
+      'размер глифа каретки — токен шкалы шрифта (не магия)',
+    );
+    assert.match(caret, /color:\s*var\(--text\)/, 'цвет каретки — контрастный токен --text');
+  });
 });

@@ -235,6 +235,7 @@ describe('lib/ui/tree: фильтр и колонки', () => {
     );
     const cell = byClass(rowById(root, 'root'), 'ui-tree-cell--count')[0]!;
     assert.equal(cell.textContent, 'root');
+    assert.equal(cell.title, 'root', 'строка-значение колонки несёт полный текст в title');
     assert.ok(cell.classList.contains('ui-tree-cell--end'), 'колонка выровнена по концу');
   });
 });

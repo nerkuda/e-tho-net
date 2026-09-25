@@ -56,6 +56,9 @@ export const TREE_CHECK_CLASS = 'ui-tree-check';
 /** Класс контейнера содержимого (значок + облачко/подпись). */
 export const TREE_CONTENT_CLASS = 'ui-tree-content';
 
+/** Класс текстовой подписи строки (одна строка с многоточием, `title` — полный текст). */
+export const TREE_LABEL_CLASS = 'ui-tree-label';
+
 /** Класс дополнительной колонки строки. */
 export const TREE_CELL_CLASS = 'ui-tree-cell';
 
@@ -475,8 +478,14 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       if (column.align === 'end') cell.classList.add(`${TREE_CELL_CLASS}--end`);
       else if (column.align === 'center') cell.classList.add(`${TREE_CELL_CLASS}--center`);
       const value = column.render(item);
-      if (typeof value === 'string') cell.textContent = value;
-      else cell.append(value);
+      if (typeof value === 'string') {
+        cell.textContent = value;
+        // Колонки обрезаются многоточием (ошибка d866bc65) — полный текст
+        // всегда доступен подсказкой.
+        cell.title = value;
+      } else {
+        cell.append(value);
+      }
       row.append(cell);
     }
 

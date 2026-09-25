@@ -153,7 +153,7 @@
   --field-color-swatch-w: 34px; /* ширина свотча цвета */
   --field-color-hex-w: 90px; /* ширина поля hex-кода цвета */
   --chip-list-min-h: 22px; /* строка чипов (резерв высоты под чип) */
-  --tree-caret-w: 14px; /* колонка каретки раскрытия дерева */
+  --tree-caret-w: 16px; /* колонка каретки раскрытия дерева (читаемый глиф) */
   --popover-min-w: 220px;
   --popover-max-w: 420px;
   --popover-max-h: 420px;

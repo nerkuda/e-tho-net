@@ -98,7 +98,7 @@ import {
   typeDepth,
   subtreeHeight,
 } from '../lib/type-tree.js';
-import { createTree, type TreeItem } from '../lib/ui/tree.js';
+import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 // Локальные уведомления открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
@@ -447,7 +447,9 @@ export function showThoughtTypesDialog(): void {
         key: 'comment',
         header: t('thoughtTypes.col.comment'),
         width: '280px',
-        render: (item) => (item.type.description ?? '').slice(0, 120),
+        // Полный текст отдаём подписи-ячейке: визуально строка обрезается
+        // многоточием, полный — в подсказке `title` (ошибка d866bc65).
+        render: (item) => item.type.description ?? '',
       },
       {
         key: 'count',
@@ -481,7 +483,8 @@ export function showThoughtTypesDialog(): void {
       const visual = resolveThoughtTypeVisual(currentTypes, item.type.id);
       const icon = span('', 'mini-icon');
       applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: null });
-      const name = span(item.type.name, 'type-list-name');
+      const name = span(item.type.name, `type-list-name ${TREE_LABEL_CLASS}`);
+      name.title = item.type.name;
       applyTypeStyle(name, {
         fg_color: visual.fg_color,
         bg_color: visual.bg_color,
@@ -587,7 +590,10 @@ export function showThoughtTypesDialog(): void {
   showDialog({
     title: t('thoughtTypes.title'),
     body,
-    size: 'm',
+    // Роль `l` (требование 13464c39): три колонки списка (тип, комментарий,
+    // количество) читаются без наезда; на узком контейнере — прокрутка
+    // (ошибка d866bc65).
+    size: 'l',
     // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
     buttons: [{ label: t('actions.close'), primary: true }],
