@@ -365,15 +365,21 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     bgRow = colorPickerRow('Фон холста', initialBg);
     const hint = div('layer-hint');
     hint.textContent = `Цвета для ${themeLabel} темы; второй вариант вычисляется инверсией светлоты.`;
+    // Парные цветовые поля — на одной строке (ошибка 57e05439): в столбик они
+    // съедали высоту и выталкивали содержимое за роль размера.
+    const colorsRow = div('form-row two-col-row layer-colors-row');
+    colorsRow.append(stripeRow.root, bgRow.root);
     const colorsBlock = div('form-stack layer-colors-block');
-    colorsBlock.append(hint, stripeRow.root, bgRow.root);
+    colorsBlock.append(hint, colorsRow);
     body.append(colorsBlock);
   }
 
   showDialog({
     title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
     body,
-    size: 's',
+    // Роль `m` (требование 13464c39): имя, комментарий и парные цветовые поля
+    // (в одну строку) помещаются без прокрутки (ошибка 57e05439).
+    size: 'm',
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
       {
@@ -446,7 +452,9 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
   showDialog({
     title: 'Новый слой изменений',
     body,
-    size: 's',
+    // Роль `m` (требование 13464c39): подсказки, имя, комментарий и ветка
+    // помещаются без прокрутки (ошибка 57e05439).
+    size: 'm',
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
       {
