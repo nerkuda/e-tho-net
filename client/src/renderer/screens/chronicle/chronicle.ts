@@ -46,7 +46,7 @@ import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../../lib/metadata.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
-import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
+import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { addToSelection, toggleSelection } from '../../selection/selection.js';
 import { store } from '../../state.js';
@@ -903,24 +903,18 @@ async function removeComment(existing: Comment): Promise<void> {
 
 function showRowMenu(x: number, y: number, rowId: string): void {
   const items: MenuItem[] = [
-    {
-      label: 'Добавить',
-      onClick: () => void startNewFromFilter(),
-    },
-    {
-      label: 'Копировать',
-      onClick: () => void copyComment(rowId),
-    },
+    menuAction(t('chrono.menu.add'), () => void startNewFromFilter()),
+    menuAction(t('chrono.menu.copy'), () => void copyComment(rowId)),
     MENU_SEPARATOR,
-    {
-      label: t('actions.delete'),
-      danger: true,
-      onClick: () =>
+    menuAction(
+      t('actions.delete'),
+      () =>
         void (async () => {
           const fresh = await etn.comments.get(requireNetworkId(), rowId);
           await removeComment(fresh);
         })(),
-    },
+      { danger: true },
+    ),
   ];
   showMenuAt(x, y, items);
 }
@@ -988,36 +982,21 @@ function showTargetMenu(
   ownerId: string,
 ): void {
   const items: MenuItem[] = [
-    {
-      label: 'Открыть',
-      onClick: () => {
-        if (ownerType === 'thought') void openChronicleThought(ownerId);
-        else void openChronicleLinkById(ownerId);
-      },
-    },
+    menuAction(t('chrono.menu.open'), () => {
+      if (ownerType === 'thought') void openChronicleThought(ownerId);
+      else void openChronicleLinkById(ownerId);
+    }),
   ];
   if (ownerType === 'thought') {
     items.push(
-      {
-        label: 'Добавить к выделению',
-        onClick: () => addToSelection([ownerId]),
-      },
-      {
-        label: 'Убрать из выделенных',
-        onClick: () => toggleSelection([ownerId]),
-      },
+      menuAction(t('selection.add'), () => addToSelection([ownerId])),
+      menuAction(t('selection.remove'), () => toggleSelection([ownerId])),
     );
   }
   items.push(
     MENU_SEPARATOR,
-    {
-      label: 'Отвязать',
-      onClick: () => void detachTarget(rowId, ownerType, ownerId),
-    },
-    {
-      label: 'Связать с…',
-      onClick: () => void attachPickedThought(rowId),
-    },
+    menuAction(t('chrono.menu.detach'), () => void detachTarget(rowId, ownerType, ownerId)),
+    menuAction(t('chrono.menu.attach'), () => void attachPickedThought(rowId)),
   );
   showMenuAt(x, y, items);
 }
@@ -1027,82 +1006,69 @@ function showEditorTargetMenu(x: number, y: number, target: CommentTarget): void
   const s = editorState;
   if (s === null || s.commentId === null) return;
   const items: MenuItem[] = [
-    {
-      label: 'Открыть',
-      onClick: () => {
-        if (target.owner_type === 'thought') void openChronicleThought(target.owner_id);
-        else void openChronicleLinkById(target.owner_id);
-      },
-    },
+    menuAction(t('chrono.menu.open'), () => {
+      if (target.owner_type === 'thought') void openChronicleThought(target.owner_id);
+      else void openChronicleLinkById(target.owner_id);
+    }),
   ];
   if (target.owner_type === 'thought') {
     items.push(
-      {
-        label: 'Добавить к выделению',
-        onClick: () => addToSelection([target.owner_id]),
-      },
-      {
-        label: 'Убрать из выделенных',
-        onClick: () => toggleSelection([target.owner_id]),
-      },
+      menuAction(t('selection.add'), () => addToSelection([target.owner_id])),
+      menuAction(t('selection.remove'), () => toggleSelection([target.owner_id])),
     );
   }
   items.push(
     MENU_SEPARATOR,
-    {
-      label: 'Отвязать',
-      onClick: () =>
-        void (async () => {
+    menuAction(t('chrono.menu.detach'), () =>
+      void (async () => {
+        try {
+          const updated = await etn.comments.removeTarget(
+            requireNetworkId(),
+            s.commentId!,
+            target.owner_type,
+            target.owner_id,
+            s.version,
+          );
+          s.version = updated.version;
+          s.targets = updated.targets;
+          repaintEditorTargets();
+          scheduleChronicleRefresh();
+        } catch (err) {
+          notice(`Не удалось отвязать: ${errText(err)}`, 'error');
+        }
+      })(),
+    ),
+    menuAction(t('chrono.menu.attach'), () =>
+      void (async () => {
+        const result = await pickThoughtsDialog({
+          networkId: requireNetworkId(),
+          allowCreate: false,
+          allowLinkType: false,
+        });
+        if (result === null || s.commentId === null) return;
+        let attached = 0;
+        for (const id of pickedThoughtIds(result)) {
+          if (s.targets.some((t) => t.owner_type === 'thought' && t.owner_id === id)) continue;
           try {
-            const updated = await etn.comments.removeTarget(
+            const updated = await etn.comments.addTarget(
               requireNetworkId(),
-              s.commentId!,
-              target.owner_type,
-              target.owner_id,
+              s.commentId,
+              'thought',
+              id,
               s.version,
             );
             s.version = updated.version;
             s.targets = updated.targets;
-            repaintEditorTargets();
-            scheduleChronicleRefresh();
+            attached++;
           } catch (err) {
-            notice(`Не удалось отвязать: ${errText(err)}`, 'error');
+            notice(`Не удалось привязать: ${errText(err)}`, 'error');
           }
-        })(),
-    },
-    {
-      label: 'Связать с…',
-      onClick: () =>
-        void (async () => {
-          const result = await pickThoughtsDialog({
-            networkId: requireNetworkId(),
-            allowCreate: false,
-            allowLinkType: false,
-          });
-          if (result === null || s.commentId === null) return;
-          let attached = 0;
-          for (const id of pickedThoughtIds(result)) {
-            if (s.targets.some((t) => t.owner_type === 'thought' && t.owner_id === id)) continue;
-            try {
-              const updated = await etn.comments.addTarget(
-                requireNetworkId(),
-                s.commentId,
-                'thought',
-                id,
-                s.version,
-              );
-              s.version = updated.version;
-              s.targets = updated.targets;
-              attached++;
-            } catch (err) {
-              notice(`Не удалось привязать: ${errText(err)}`, 'error');
-            }
-          }
-          if (attached === 0) notice('Мысли уже привязаны к этой записи.', 'info');
-          repaintEditorTargets();
-          scheduleChronicleRefresh();
-        })(),
-    },
+        }
+        if (attached === 0) notice('Мысли уже привязаны к этой записи.', 'info');
+        repaintEditorTargets();
+        scheduleChronicleRefresh();
+      })(),
+    ),
   );
   showMenuAt(x, y, items);
 }

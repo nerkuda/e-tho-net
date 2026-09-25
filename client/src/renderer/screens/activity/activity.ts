@@ -253,13 +253,13 @@ export function mountActivity(hostEl: HTMLElement): void {
   const toolbar = div('activity-toolbar');
   toolbar.append(
     uiButton({
-      label: 'Свернуть до даты…',
+      label: t('activity.toolbar.rollup'),
       role: 'secondary',
       size: 's',
       onClick: () => void rollupDialog(),
     }),
     uiButton({
-      label: 'Обрезать до даты…',
+      label: t('activity.toolbar.truncate'),
       role: 'danger',
       size: 's',
       onClick: () => void truncateDialog(),
@@ -568,12 +568,12 @@ function dropTable(): void {
 function repaintPager(): void {
   if (pagerLabel === null) return;
   if (total === 0) {
-    pagerLabel.textContent = 'Нет событий';
+    pagerLabel.textContent = t('activity.pager.empty');
     return;
   }
   const from = offset + 1;
   const to = Math.min(offset + rows.length, total);
-  pagerLabel.textContent = `Записи ${from}–${to} из ${total}`;
+  pagerLabel.textContent = t('activity.pager.range', [from, to, total]);
 }
 
 /** Строит единую таблицу ленты (фасад `lib/ui/table.ts`). */

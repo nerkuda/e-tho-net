@@ -20,7 +20,14 @@ import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerDiffResult, type
 import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
-import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
+import {
+  closeMenu,
+  MENU_SEPARATOR,
+  menuAction,
+  menuChoice,
+  showMenuAt,
+  type MenuItem,
+} from '../lib/menu.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
 import { div, el, span } from '../lib/dom.js';
 import { colorField } from '../lib/ui/color-field.js';
@@ -125,37 +132,43 @@ export function buildLayerMenuItems(networkId: string, layers: Layer[]): MenuIte
     .sort((a, b) => a.depth - b.depth || a.created_at.localeCompare(b.created_at));
   for (const l of selectable) {
     const indent = l.is_base ? '' : '\u00A0\u00A0'.repeat(l.depth - 1);
-    items.push({
-      label: `${indent}${l.is_base ? 'Основа' : l.title}`,
-      checked: l.current,
-      onClick: () => void selectLayerForTab(networkId, l.id),
-    });
+    items.push(
+      menuChoice(
+        `${indent}${l.is_base ? t('layers.menu.base') : l.title}`,
+        l.current,
+        () => void selectLayerForTab(networkId, l.id),
+      ),
+    );
   }
   items.push(MENU_SEPARATOR);
-  items.push({ label: 'Создать новый слой…', onClick: () => void openCreateLayerDialog(networkId) });
+  items.push(menuAction(t('layers.menu.create'), () => void openCreateLayerDialog(networkId)));
   if (current !== undefined) {
-    items.push({
-      label: current.is_base ? 'Свойства основы…' : 'Свойства слоя…',
-      onClick: () => void openLayerPropsDialog(networkId, current.id),
-    });
+    items.push(
+      menuAction(
+        current.is_base ? t('layers.menu.propsBase') : t('layers.menu.propsLayer'),
+        () => void openLayerPropsDialog(networkId, current.id),
+      ),
+    );
   }
   if (current !== undefined && !current.is_base) {
     const targetTitle =
-      layers.find((l) => l.id === current.parent_id)?.title ?? 'Основу';
+      layers.find((l) => l.id === current.parent_id)?.title ?? t('layers.menu.baseTo');
     items.push(MENU_SEPARATOR);
-    items.push({
-      label: `Отличия от «${targetTitle}»…`,
-      onClick: () => void openDiffDialog(networkId, current.id),
-    });
-    items.push({
-      label: `Слить «${current.title}» в «${targetTitle}»…`,
-      onClick: () => void openMergeLayerDialog(networkId, current.id),
-    });
-    items.push({
-      label: `Удалить «${current.title}»…`,
-      danger: true,
-      onClick: () => void openDeleteLayerDialog(networkId, current.id),
-    });
+    items.push(
+      menuAction(t('layers.menu.diff', targetTitle), () =>
+        void openDiffDialog(networkId, current.id),
+      ),
+    );
+    items.push(
+      menuAction(t('layers.menu.merge', [current.title, targetTitle]), () =>
+        void openMergeLayerDialog(networkId, current.id),
+      ),
+    );
+    items.push(
+      menuAction(t('layers.menu.delete', current.title), () => void openDeleteLayerDialog(networkId, current.id), {
+        danger: true,
+      }),
+    );
   }
   return items;
 }

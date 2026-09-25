@@ -33,12 +33,12 @@ export function openAdminPanel(): void {
   };
 
   showDialog({
-    title: 'Администрирование',
+    title: t('userMenu.admin'),
     size: 'l',
     tabs: [
-      { id: 'users', label: 'Пользователи', content: pane((h) => void renderUsers(h)) },
-      { id: 'networks', label: 'Сети', content: pane((h) => void renderNetworks(h)) },
-      { id: 'audit', label: 'Аудит', content: pane((h) => void renderAudit(h)) },
+      { id: 'users', label: t('admin.tab.users'), content: pane((h) => void renderUsers(h)) },
+      { id: 'networks', label: t('admin.tab.networks'), content: pane((h) => void renderNetworks(h)) },
+      { id: 'audit', label: t('admin.tab.audit'), content: pane((h) => void renderAudit(h)) },
     ],
   });
 }

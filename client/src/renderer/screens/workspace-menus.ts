@@ -31,7 +31,7 @@ import { footerErrorLine } from '../lib/ui/messages.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
+import { MENU_SEPARATOR, menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { toggleEditorVisibility } from '../editor/editor.js';
 import type { WorkspaceHandles } from './workspace.js';
@@ -77,30 +77,19 @@ export function buildNetMenuItems(trashCount = 0): MenuItem[] {
   const meId = store.state.me?.id ?? null;
   const isOwner = net !== null && net.owner_id === meId;
   return [
-    { label: 'Участники сети', disabled: !isOwner, onClick: () => void membersDialog() },
-    {
-      label: 'Выйти из сети',
-      disabled: isOwner,
-      danger: true,
-      onClick: () => void leaveNetwork(),
-    },
+    menuAction(t('netMenu.members'), () => void membersDialog(), { disabled: !isOwner }),
+    menuAction(t('netMenu.leave'), () => void leaveNetwork(), { disabled: isOwner, danger: true }),
     MENU_SEPARATOR,
-    { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
-    { label: 'Типы связей', onClick: () => showLinkTypesTreeDialog() },
-    { label: 'Свойства', onClick: () => showPropertyManagerDialog() },
+    menuAction(t('thoughtTypes.title'), () => showThoughtTypesDialog()),
+    menuAction(t('netMenu.linkTypes'), () => showLinkTypesTreeDialog()),
+    menuAction(t('netMenu.properties'), () => showPropertyManagerDialog()),
     MENU_SEPARATOR,
-    {
-      label: `Корзина (${trashCount})`,
-      onClick: () => {
-        const networkId = store.state.networkId;
-        if (networkId !== null) void openTrashDialog(networkId);
-      },
-    },
+    menuAction(t('netMenu.trash', trashCount), () => {
+      const networkId = store.state.networkId;
+      if (networkId !== null) void openTrashDialog(networkId);
+    }),
     MENU_SEPARATOR,
-    {
-      label: 'Настройки мыслесети',
-      onClick: () => showSettingsDialog('network'),
-    },
+    menuAction(t('netMenu.settings'), () => showSettingsDialog('network')),
   ];
 }
 
@@ -380,23 +369,16 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
  */
 export function buildUserMenuItems(): MenuItem[] {
   const items: MenuItem[] = [
-    { label: 'Открыть сеть (список)', onClick: () => backToNetworks() },
-    { label: 'Создать сеть', onClick: () => void showCreateNetworkDialog() },
+    menuAction(t('userMenu.openNetwork'), () => backToNetworks()),
+    menuAction(t('userMenu.createNetwork'), () => void showCreateNetworkDialog()),
   ];
   if (store.state.me?.is_admin === true) {
-    items.push(MENU_SEPARATOR, {
-      label: 'Администрирование',
-      onClick: () => openAdminPanel(),
-    });
+    items.push(MENU_SEPARATOR, menuAction(t('userMenu.admin'), () => openAdminPanel()));
   }
   items.push(
     MENU_SEPARATOR,
-    { label: 'О программе', onClick: () => showAboutDialog() },
-    {
-      label: 'Отключиться',
-      danger: true,
-      onClick: () => void disconnect(),
-    },
+    menuAction(t('userMenu.about'), () => showAboutDialog()),
+    menuAction(t('userMenu.disconnect'), () => void disconnect(), { danger: true }),
   );
   return items;
 }
@@ -425,15 +407,11 @@ export function buildViewMenuItems(): MenuItem[] {
   // textContent-escaping would otherwise turn the markup into literal text.
   const gear = svgIcon('settings', 14);
   return [
-    {
-      label: hidden ? 'Показать редактор' : 'Скрыть редактор',
-      onClick: () => void toggleEditorVisibility(),
-    },
+    menuAction(
+      hidden ? t('viewMenu.showEditor') : t('viewMenu.hideEditor'),
+      () => void toggleEditorVisibility(),
+    ),
     MENU_SEPARATOR,
-    {
-      label: 'Все настройки',
-      icon: gear,
-      onClick: () => showSettingsDialog(),
-    },
+    menuAction(t('viewMenu.allSettings'), () => showSettingsDialog(), { icon: gear }),
   ];
 }

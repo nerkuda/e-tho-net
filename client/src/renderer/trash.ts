@@ -515,17 +515,17 @@ export async function openThoughtGroupDeleteDialog(
   // Mass-toggle toolbar («Переключить: …») — above the table, so the footer
   // stays reserved for the dialog-level actions only (§5a.2).
   const toolbar = div('group-delete-toolbar');
-  toolbar.append(span('Переключить:', 'group-delete-toolbar-label'));
+  toolbar.append(span(t('trash.group.toggle'), 'group-delete-toolbar-label'));
   toolbar.append(
     uiButton({
-      label: 'все в корзину',
+      label: t('trash.group.allToTrash'),
       role: 'secondary',
       size: 's',
       title: 'Все строки — «В корзину»',
       onClick: () => massToggle('all-trash'),
     }),
     uiButton({
-      label: 'удалять возможное',
+      label: t('trash.group.deletePossible'),
       role: 'secondary',
       size: 's',
       title: 'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
@@ -593,9 +593,12 @@ export async function openThoughtGroupDeleteDialog(
       if (trashRadio.checked) choice.set(id, false);
     });
     const purgeLabel = el('label', 'group-delete-option');
-    purgeLabel.append(purgeRadio, span(blocked ? 'Удалить (недост.)' : t('actions.delete')));
+    purgeLabel.append(
+      purgeRadio,
+      span(blocked ? t('trash.group.purgeBlocked') : t('actions.delete')),
+    );
     const trashLabel = el('label', 'group-delete-option');
-    trashLabel.append(trashRadio, span('В корзину'));
+    trashLabel.append(trashRadio, span(t('trash.group.toTrash')));
     toggle.append(purgeLabel, trashLabel);
     radiosById.set(id, { purge: purgeRadio, trash: trashRadio });
     return toggle;
@@ -762,7 +765,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     onDelete: () => Promise<void>,
   ): HTMLElement => {
     const cell = div('trash-actions');
-    cell.append(actionButton('undo', 'Восстановить', false, () => void onRestore()));
+    cell.append(actionButton('undo', t('trash.action.restore'), false, () => void onRestore()));
     const delBtn = actionButton(
       'trash',
       blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : t('actions.deleteForever'),

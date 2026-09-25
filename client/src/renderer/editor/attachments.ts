@@ -29,7 +29,7 @@ import { filePathField } from '../lib/ui/file-path-field.js';
 import { errorLine as panelErrorLine, footerErrorLine, operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
-import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
@@ -699,30 +699,22 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       (attachment.kind === 'file' && attachment.file_path !== null) ||
       (attachment.kind === 'url' && attachment.url !== null);
     if (hasTarget) {
-      items.push({
-        label: 'Открыть в программе по умолчанию',
-        onClick: () => void openDefault(attachment),
-      });
+      items.push(
+        menuAction(t('attachments.menu.openDefault'), () => void openDefault(attachment)),
+      );
     }
     if (ctx.ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
-      items.push({
-        label: 'Назначить иконкой мысли',
-        onClick: () => void assignAsThoughtIcon(attachment),
-      });
+      items.push(
+        menuAction(t('attachments.menu.assignIcon'), () => void assignAsThoughtIcon(attachment)),
+      );
     }
-    items.push({
-      label: 'Перенести в мысль…',
-      onClick: () => void moveToThought(attachment),
-    });
-    items.push({
-      label: 'Скопировать в мысли…',
-      onClick: () => void copyToThoughts(attachment),
-    });
-    items.push({
-      label: 'Удалить…',
-      danger: true,
-      onClick: () => void removeAttachment(attachment),
-    });
+    items.push(
+      menuAction(t('attachments.menu.move'), () => void moveToThought(attachment)),
+      menuAction(t('attachments.menu.copy'), () => void copyToThoughts(attachment)),
+      menuAction(t('attachments.menu.delete'), () => void removeAttachment(attachment), {
+        danger: true,
+      }),
+    );
     showMenuAt(event.clientX, event.clientY, items);
   }
 
