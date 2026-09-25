@@ -416,6 +416,18 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
   if (options.ariaLabel !== undefined) root.setAttribute('aria-label', options.ariaLabel);
   if (options.checkbox === true) root.setAttribute('aria-multiselectable', 'true');
 
+  // Клик мышью по дереву/строке переводит клавиатурный фокус на корень дерева:
+  // стрелочная навигация работает сразу, а каркас диалога возвращает фокус сюда
+  // после закрытия открытого над списком редактора (ошибка 28d69bc6). Клик по
+  // флажку/каретке (кнопке) фокус не перехватывает — у них своё поведение.
+  root.addEventListener('mousedown', (event) => {
+    const target = event.target as HTMLElement | null;
+    if (target !== null && typeof target.closest === 'function' && target.closest('input, button') !== null) {
+      return;
+    }
+    root.focus();
+  });
+
   /** Раскрыть всё дерево: все узлы с потомками. */
   function collectExpandable(): string[] {
     const items = itemsOf();

@@ -300,6 +300,14 @@ function navigateToError(address: ErrorAddress, tabs: TabsHandle | null): void {
  * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */
 export function showDialog(opts: DialogOptions): () => void {
+  // Элемент, владевший фокусом до открытия диалога (обычно обёртка списка,
+  // из которого диалог открыли). Возвращаем ему фокус при закрытии, иначе
+  // клавиатурная навигация списка (стрелки) не работает без повторного клика
+  // (ошибка 28d69bc6, правило 10 требования 11ddd910).
+  const previouslyFocused = document.activeElement as
+    | (Element & { focus?: () => void })
+    | null
+    | undefined;
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
   // Роль размера (требование 13464c39): класс несёт ширину и ФИКСИРОВАННУЮ
@@ -470,6 +478,18 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
     backdrop.removeEventListener('click', onBackdropClick);
+    // Возврат фокуса вызывающему элементу (списку): стрелочная навигация
+    // продолжается без повторного клика (ошибка 28d69bc6). Фокус ставим до
+    // `onClose` — обработчик может открыть следующий диалог, который снимет
+    // фокус себе сам.
+    if (
+      previouslyFocused !== null &&
+      previouslyFocused !== undefined &&
+      previouslyFocused.isConnected !== false &&
+      typeof previouslyFocused.focus === 'function'
+    ) {
+      previouslyFocused.focus();
+    }
     opts.onClose?.();
   });
   opts.onMount?.(close, box);
