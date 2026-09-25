@@ -299,5 +299,9 @@ export {
 } from './empty-state.js';
 export type { StateAction, EmptyStateOptions } from './empty-state.js';
 
+// Якорь возврата клавиатурного фокуса — общий атрибут обоих фасадов списков
+// (дерева и таблицы) для правила 10 требования 11ddd910 (ошибка 28d69bc6).
+export { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './focus-anchor.js';
+
 
 

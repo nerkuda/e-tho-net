@@ -57,6 +57,7 @@ import { showMenuAt, type MenuItem } from '../menu.js';
 import { badge } from './badge.js';
 import { choiceControl } from './choice-row.js';
 import { emptyState, type StateAction } from './empty-state.js';
+import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
 
 /** Корневой класс дерева (роль `tree`). */
 export const TREE_CLASS = 'ui-tree';
@@ -66,9 +67,11 @@ export const TREE_CLASS = 'ui-tree';
  * каркас диалога возвращает фокус после закрытия открытого над списком
  * редактора (ошибка 28d69bc6, правило 10 требования 11ddd910). Корень дерева —
  * устойчивый якорь: он переживает перерисовку строк (`render` заменяет только
- * детей), хранит текущую строку и владеет `keydown`-навигацией.
+ * детей), хранит текущую строку и владеет `keydown`-навигацией. Имя атрибута —
+ * общее для всех списков (`./focus-anchor.ts`); псевдоним оставлен для
+ * потребителей/тестов дерева.
  */
-export const TREE_FOCUS_ANCHOR_ATTR = 'data-focus-anchor';
+export const TREE_FOCUS_ANCHOR_ATTR = FOCUS_ANCHOR_ATTR;
 
 /** Класс строки дерева (роль `treeitem`). */
 export const TREE_ROW_CLASS = 'ui-tree-row';
@@ -430,7 +433,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       : TREE_CLASS,
   );
   root.setAttribute('role', 'tree');
-  root.setAttribute(TREE_FOCUS_ANCHOR_ATTR, '');
+  root.setAttribute(FOCUS_ANCHOR_ATTR, '');
   root.tabIndex = 0;
   if (options.ariaLabel !== undefined) root.setAttribute('aria-label', options.ariaLabel);
   if (options.checkbox === true) root.setAttribute('aria-multiselectable', 'true');

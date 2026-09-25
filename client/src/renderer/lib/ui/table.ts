@@ -71,6 +71,7 @@ import { div, span } from '../dom.js';
 import { t } from '../i18n.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
 import { emptyState, type EmptyStateOptions, type StateAction } from './empty-state.js';
+import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
 import { select, type StateSelector } from './state.js';
 import {
   vaadinGridAdapter,
@@ -465,6 +466,12 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
 
   const wrapper = div(TABLE_CLASS);
   wrapper.tabIndex = 0;
+  // Якорь возврата клавиатурного фокуса (правило 10 требования 11ddd910,
+  // ошибка 28d69bc6): каркас диалога возвращает фокус сюда после закрытия
+  // открытого над списком редактора, поэтому стрелочная навигация продолжается
+  // без повторного клика. Обёртка — устойчивый контейнер: переживает
+  // перерисовку строк, владеет `keydown`-навигацией и имеет `tabIndex`.
+  wrapper.setAttribute(FOCUS_ANCHOR_ATTR, '');
   if (spec.ariaLabel !== undefined) wrapper.setAttribute('aria-label', spec.ariaLabel);
 
   const adapter = spec.adapter ?? vaadinGridAdapter();

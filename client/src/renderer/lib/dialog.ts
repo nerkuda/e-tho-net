@@ -22,7 +22,7 @@ import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
-import { TREE_FOCUS_ANCHOR_ATTR } from './ui/tree.js';
+import { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './ui/focus-anchor.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -308,8 +308,8 @@ function navigateToError(address: ErrorAddress, tabs: TabsHandle | null): void {
 /** Element that owned focus before a dialog opened (checks `isConnected` + `focus`). */
 type FocusableElement = Element & { focus?: () => void };
 
-/** Селектор якоря фокуса — контейнер клавиатурной навигации списка/дерева. */
-const FOCUS_ANCHOR_SELECTOR = `[${TREE_FOCUS_ANCHOR_ATTR}]`;
+/** Селектор якоря фокуса — контейнер клавиатурной навигации списка/дерева/таблицы. */
+const FOCUS_ANCHOR_QUERY = FOCUS_ANCHOR_SELECTOR;
 
 /** Теги полей ввода: возврат фокуса в них якорь списка не перебивает. */
 const TEXT_ENTRY_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
@@ -330,7 +330,7 @@ function parentElementOf(node: Element): Element | null {
 
 /**
  * Якорь возврата фокуса — устойчивый контейнер клавиатурной навигации
- * ({@link TREE_FOCUS_ANCHOR_ATTR}): сам владелец фокуса или его предок; а если
+ * ({@link FOCUS_ANCHOR_ATTR}): сам владелец фокуса или его предок; а если
  * диалог открыли кнопкой тулбара или пунктом контекстного меню — якорь диалога,
  * НАД которым открывается новый. Диалог-редактор открывают над диалогом-списком,
  * поэтому якорь живого списка лежит в верхнем открытом диалоге. `null` — якоря
@@ -340,12 +340,12 @@ function parentElementOf(node: Element): Element | null {
 function resolveFocusAnchor(from: FocusableElement | null | undefined): HTMLElement | null {
   let node: Element | null = from ?? null;
   while (node !== null) {
-    if (node.hasAttribute(TREE_FOCUS_ANCHOR_ATTR)) return node as HTMLElement;
+    if (node.hasAttribute(FOCUS_ANCHOR_ATTR)) return node as HTMLElement;
     node = parentElementOf(node);
   }
   const below = stack[stack.length - 1];
   if (below !== undefined) {
-    const host = below.querySelector<HTMLElement>(FOCUS_ANCHOR_SELECTOR);
+    const host = below.querySelector<HTMLElement>(FOCUS_ANCHOR_QUERY);
     if (host !== null) return host;
   }
   return null;

@@ -229,6 +229,22 @@ describe('lib/ui/table: чистые функции', () => {
 });
 
 describe('lib/ui/table: фасад на стабе адаптера', () => {
+  it('корень таблицы несёт якорь возврата фокуса (правило 10, 28d69bc6)', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+    });
+    assert.ok(
+      (t.element as unknown as ShimElement).hasAttribute('data-focus-anchor'),
+      'обёртка таблицы — якорь возврата фокуса; без него закрытие редактора ' +
+        'не оживляет стрелочную навигацию списка (правило 10 требования 11ddd910)',
+    );
+  });
+
   it('отдаёт колонки и строки адаптеру, пустое состояние скрыто', async () => {
     const { table } = await load();
     const stub = new StubAdapter();
