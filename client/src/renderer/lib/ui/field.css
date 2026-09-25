@@ -153,6 +153,18 @@
   cursor: not-allowed;
 }
 
+/* Невидимая зона нажатия углового крестика — не меньше тач-таргета
+   (требование 5677bc3d): сам крестик остаётся `--hit-area`. */
+.ui-clearable-btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
+}
+
 /* --- поле цвета (ColorField) -------------------------------------------- */
 
 .ui-color-field {

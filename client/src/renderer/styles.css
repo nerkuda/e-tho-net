@@ -172,6 +172,13 @@
      (требование 0086037c, ошибка 6925ffa0 — дисбаланс размеров чекбокса и
      иконки в списках типов). Шаг отступа ветви дерева — --tree-indent. */
   --hit-area: 18px;
+  /* Минимальная эффективная ЗОНА НАЖАТИЯ (WCAG 2.5.8) — невидимый тач-таргет
+     компактных контролов (крестики, каретки). Визуальный размер остаётся
+     плотным (`--hit-area`/`--tree-caret-w`), зона расширяется псевдоэлементом;
+     поднимать сам `--hit-area` до 24 нельзя — он задаёт высоту строки, размер
+     флажка и значка дерева, и нарушит согласованный баланс требования 0086037c
+     (ошибка 6925ffa0). */
+  --hit-area-min: 24px;
   --tree-indent: var(--space-8);
 
   /* cloud geometry (L4 defaults, 11-settings-and-state.md §2.4) */
@@ -688,6 +695,7 @@ textarea {
 }
 
 .tab-close {
+  position: relative;
   flex: 0 0 auto;
   border: none;
   background: transparent;
@@ -699,6 +707,18 @@ textarea {
 
 .tab-close:hover {
   background: rgba(0, 0, 0, 0.08);
+}
+
+/* Крестик вкладки — невидимая зона нажатия не меньше тач-таргета
+   (требование 5677bc3d). */
+.tab-close::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
 }
 
 .tab-plus {

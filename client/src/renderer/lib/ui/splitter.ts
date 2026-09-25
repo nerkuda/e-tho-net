@@ -24,6 +24,14 @@
  * задаётся `plan.round` (по умолчанию — до целых пикселей; зоны холста
  * округляют долю до трёх знаков).
  *
+ * **Клавиатурный контракт (задача e45ca252, усиление из находки A2).** Гриф
+ * фокусируем (`tabindex=0`) и ведёт тот же драг с клавиатуры: стрелки по оси
+ * драга сдвигают разделитель на `step` (по умолчанию {@link KEYBOARD_STEP}),
+ * `Home`/`End` — в нижнюю/верхнюю границу, `Enter` — завершение (коммит),
+ * `Esc` — отмена (возврат к стартовой метрике). Метрика применяется живьём
+ * через `apply`; `commit` получает `moved=true` только при реальном сдвиге.
+ * Доступное имя (`aria-label`) даёт владелец строкой локализации.
+ *
  * Строк компонент не содержит: подсказку и доступное имя передаёт владелец
  * (из словаря локализации через `t`). Гриф — {@link GRIP_GLYPH} без глифа у
  * тонких шовных разделителей (`grip: null`); его вид — `./splitter.css`.
@@ -72,14 +80,18 @@ export interface SplitterPlan {
 export interface SplitterDragOptions {
   /** Нативная подсказка (строка словаря у владельца). */
   title?: string;
-  /** Доступное имя (`aria-label`). */
+  /** Доступное имя (`aria-label`, строка словаря у владельца). */
   ariaLabel?: string;
+  /** Шаг клавиатурного сдвига, px (по умолчанию {@link KEYBOARD_STEP}). */
+  step?: number;
+  /** Делать ли гриф фокусируемым (`tabindex=0`); по умолчанию — да. */
+  focusable?: boolean;
   /** Геометрия драга; `null` — драг не начинается. */
   plan: () => SplitterPlan | null;
   /** Запрошенная метрика по позиции указателя (по умолчанию старт + знак × смещение). */
   resolve?: (event: PointerEvent, plan: SplitterPlan) => number;
-  /** Живое применение зажатой метрики. */
-  apply: (value: number, plan: SplitterPlan, event: PointerEvent) => void;
+  /** Живое применение метрики (указателем или клавиатурой). */
+  apply: (value: number, plan: SplitterPlan, event: PointerEvent | KeyboardEvent) => void;
   /** Отпускание указателя; `moved` — был ли сдвиг. */
   commit?: (value: number, plan: SplitterPlan, moved: boolean) => void;
   /** Дополнительный класс на время драга (например, курсор на всё тело). */
@@ -98,6 +110,30 @@ export interface SplitterOptions extends SplitterDragOptions {
 
 /** Класс, отмечающий разделитель в момент драга. */
 const DRAGGING_CLASS = 'dragging';
+
+/** Шаг клавиатурного сдвига по умолчанию, px (стрелки разделителя). */
+export const KEYBOARD_STEP = 8;
+
+/** Прижимает метрику к границам плана и округляет (общее для мыши и клавиатуры). */
+function clampToPlan(raw: number, plan: SplitterPlan): number {
+  const round = plan.round ?? Math.round;
+  const min = limitOf(plan.min, Number.NEGATIVE_INFINITY);
+  const max = limitOf(plan.max, Number.POSITIVE_INFINITY);
+  // Нечисловая метрика (битый замер) прижимается к нижней границе — как
+  // `clampFilterPanelSize`; без нижней границы считается нулём.
+  if (!Number.isFinite(raw)) return round(Number.isFinite(min) ? min : 0);
+  return round(Math.min(max, Math.max(min, raw)));
+}
+
+/** Активная клавиатурная сессия разделителя (между первым нажатием и Enter/Esc). */
+interface KeyboardSession {
+  plan: SplitterPlan;
+  sign: SplitterSign;
+  min: number;
+  max: number;
+  value: number;
+  moved: boolean;
+}
 
 /** Элемент-аргумент: сам узел, геттер или `fallback`. */
 function hostOf(
@@ -132,13 +168,101 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
   element.classList.add(SPLITTER_CLASS);
   if (options.title !== undefined) element.title = options.title;
   if (options.ariaLabel !== undefined) element.setAttribute('aria-label', options.ariaLabel);
+  // Роль «оконного» разделителя: элемент фокусируем и управляется стрелками.
+  element.setAttribute('role', 'separator');
+
+  // Гриф достигается клавиатурой: без фокуса стрелочный контракт недоступен.
+  if (options.focusable !== false && !element.hasAttribute('tabindex')) {
+    element.setAttribute('tabindex', '0');
+  }
+
+  const step = options.step ?? KEYBOARD_STEP;
+  let keyboard: KeyboardSession | null = null;
+
+  /** Начинает клавиатурную сессию: геометрия — как у pointerdown. */
+  const startKeyboard = (): KeyboardSession | null => {
+    const plan = options.plan();
+    if (plan === null) return null;
+    return {
+      plan,
+      sign: plan.sign ?? 1,
+      min: limitOf(plan.min, Number.NEGATIVE_INFINITY),
+      max: limitOf(plan.max, Number.POSITIVE_INFINITY),
+      value: plan.start,
+      moved: false,
+    };
+  };
+
+  /** Завершает сессию: `commit` вызывается с признаком реального сдвига. */
+  const finishKeyboard = (session: KeyboardSession): void => {
+    options.commit?.(session.value, session.plan, session.moved);
+  };
+
+  element.addEventListener('keydown', (event: KeyboardEvent) => {
+    const key = event.key;
+    if (key === 'Enter' || key === 'Escape') {
+      if (keyboard === null) return;
+      event.preventDefault();
+      const session = keyboard;
+      keyboard = null;
+      if (key === 'Enter') {
+        finishKeyboard(session);
+      } else {
+        // Отмена: метрика возвращается к стартовой, сдвига не было — владелец
+        // не сохраняет «отменённый» размер.
+        options.apply(session.plan.start, session.plan, event);
+        options.commit?.(session.plan.start, session.plan, false);
+      }
+      return;
+    }
+    const isArrow =
+      key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown';
+    if (!isArrow && key !== 'Home' && key !== 'End') return;
+    if (keyboard === null) {
+      const started = startKeyboard();
+      if (started === null) return;
+      keyboard = started;
+    }
+    const session = keyboard;
+    const alongAxis =
+      session.plan.axis === 'x'
+        ? key === 'ArrowLeft'
+          ? -1
+          : key === 'ArrowRight'
+            ? 1
+            : 0
+        : key === 'ArrowUp'
+          ? -1
+          : key === 'ArrowDown'
+            ? 1
+            : 0;
+
+    let target: number;
+    if (key === 'Home') target = session.min;
+    else if (key === 'End') target = session.max;
+    else if (alongAxis !== 0) target = session.value + alongAxis * step * session.sign;
+    else return; // стрелка поперёк оси драга — не наша
+
+    if (!Number.isFinite(target)) return; // край без границы не достижим
+    event.preventDefault();
+    session.value = clampToPlan(target, session.plan);
+    session.moved = true;
+    options.apply(session.value, session.plan, event);
+  });
+
+  // Потеря фокуса завершает сессию: размер, выставленный клавиатурой, коммитится.
+  element.addEventListener('blur', () => {
+    if (keyboard === null) return;
+    const session = keyboard;
+    keyboard = null;
+    finishKeyboard(session);
+  });
 
   element.addEventListener('pointerdown', (event: PointerEvent) => {
     if (event.button !== 0) return;
     const plan = options.plan();
     if (plan === null) return;
     const sign: SplitterSign = plan.sign ?? 1;
-    const round = plan.round ?? Math.round;
     event.preventDefault();
 
     const stateHost = hostOf(options.stateHost, null);
@@ -153,15 +277,6 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
     let value = plan.start;
     let moved = false;
 
-    const clampValue = (raw: number): number => {
-      const min = limitOf(plan.min, Number.NEGATIVE_INFINITY);
-      const max = limitOf(plan.max, Number.POSITIVE_INFINITY);
-      // Нечисловая метрика (битый замер) прижимается к нижней границе — как
-      // `clampFilterPanelSize`; без нижней границы считается нулём.
-      if (!Number.isFinite(raw)) return round(Number.isFinite(min) ? min : 0);
-      return round(Math.min(max, Math.max(min, raw)));
-    };
-
     const requested = (ev: PointerEvent): number => {
       if (options.resolve !== undefined) return options.resolve(ev, plan);
       const delta = plan.axis === 'x' ? ev.clientX - startX : ev.clientY - startY;
@@ -170,7 +285,7 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
 
     const onMove = (ev: PointerEvent): void => {
       moved = true;
-      value = clampValue(requested(ev));
+      value = clampToPlan(requested(ev), plan);
       options.apply(value, plan, ev);
     };
     const onUp = (ev: PointerEvent): void => {

@@ -48,6 +48,7 @@
 }
 
 .ui-chip-remove {
+  position: relative;
   border: none;
   background: transparent;
   color: var(--text-dim);
@@ -78,6 +79,20 @@
 .ui-chip-remove:disabled {
   opacity: var(--state-disabled-opacity);
   cursor: not-allowed;
+}
+
+/* Невидимая зона нажатия крестика — не меньше токена тач-таргета
+   (требование 5677bc3d): визуальный «×» остаётся компактным, попадать по нему
+   можно с запасом. Псевдоэлемент принадлежит кнопке — клик по зоне её и
+   нажимает. */
+.ui-chip-remove::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
 }
 
 .ui-chip-list-add {

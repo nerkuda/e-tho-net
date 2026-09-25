@@ -83,6 +83,7 @@ export function rowSplitter(
   return uiSplitter({
     extraClass: 'row-splitter',
     title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaVertical'),
     plan: () => {
       resizeEl = getResizeEl();
       if (resizeEl === null) return null;

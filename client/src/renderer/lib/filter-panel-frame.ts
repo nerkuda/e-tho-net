@@ -28,6 +28,7 @@
 import { store } from '../state.js';
 import { el, setTooltip } from './dom.js';
 import { etn } from './etn.js';
+import { t } from './i18n.js';
 import { svgIcon } from './icons.js';
 import {
   DEFAULT_FILTER_PANEL_STATE,
@@ -152,6 +153,15 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
     splitter.classList.toggle('fp-side', !state.hidden && placement === 'side');
     splitter.classList.toggle('fp-top', !state.hidden && placement === 'top');
     splitter.hidden = state.hidden;
+    // Доступное имя и подсказка — по оси панели (положение меняется на ходу):
+    // разделитель фокусируем и управляется стрелками (lib/ui/splitter).
+    splitter.title = t('splitter.resizeHint');
+    splitter.setAttribute(
+      'aria-label',
+      placement === 'top'
+        ? t('splitter.resizeAriaVertical')
+        : t('splitter.resizeAriaHorizontal'),
+    );
 
     const size = sizeFor(placement);
     if (size === null) {

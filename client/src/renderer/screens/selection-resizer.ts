@@ -11,6 +11,7 @@
  */
 
 import { SELECTION_W_MAX, SELECTION_W_MIN } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 import { wireSplitter } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
 import { scheduleLayoutPersist } from './editor-resizer.js';
@@ -27,6 +28,8 @@ export function mountSelectionResizer(resizer: HTMLElement, body: HTMLElement): 
   wireSplitter(resizer, {
     stateHost: () => body,
     stateClass: 'resizing',
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaHorizontal'),
     plan: () => {
       // Keep at least `MIN_CANVAS_W` for the canvas; never below the panel min.
       const max = Math.min(

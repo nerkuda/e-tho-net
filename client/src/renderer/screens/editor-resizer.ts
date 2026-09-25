@@ -13,6 +13,7 @@
 
 import { EDITOR_H_MAX, EDITOR_H_MIN, EDITOR_W_MAX, EDITOR_W_MIN, UI_STATE_KEY } from '@etn/shared';
 import { etn } from '../lib/etn.js';
+import { t } from '../lib/i18n.js';
 import { wireSplitter, type SplitterPlan } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
 
@@ -69,6 +70,12 @@ export function mountEditorResizer(resizer: HTMLElement, body: HTMLElement): voi
       if (pos === 'hidden') return null;
 
       horizontal = pos === 'left' || pos === 'right';
+      // Доступное имя — по текущей оси дока (док меняется на ходу).
+      resizer.title = t('splitter.resizeHint');
+      resizer.setAttribute(
+        'aria-label',
+        horizontal ? t('splitter.resizeAriaHorizontal') : t('splitter.resizeAriaVertical'),
+      );
       const startSize = horizontal ? store.state.editorW : store.state.editorH;
       const bodySize = horizontal ? body.clientWidth : body.clientHeight;
       const canvasMin = horizontal ? MIN_CANVAS_W : MIN_CANVAS_H;

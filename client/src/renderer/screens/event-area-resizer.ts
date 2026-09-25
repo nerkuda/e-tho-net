@@ -20,6 +20,7 @@
 
 import { EVENT_AREA_W_MAX_RATIO, EVENT_AREA_W_MIN } from '@etn/shared';
 
+import { t } from '../lib/i18n.js';
 import { wireSplitter } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
 import { scheduleLayoutPersist } from './editor-resizer.js';
@@ -41,6 +42,8 @@ export function mountEventAreaResizer(resizer: HTMLElement, statusbar: HTMLEleme
   wireSplitter(resizer, {
     stateHost: () => statusbar,
     stateClass: 'resizing',
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaHorizontal'),
     plan: () => {
       startBarWidth = statusbar.clientWidth;
       const ratioCap = Math.floor(
