@@ -79,7 +79,7 @@ import type {
   SearchResponse,
   StructureQueryRequest,
   StructureQueryResponse,
-  StructureIdsQueryResponse,
+  StructureIdsQueryResult,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -131,6 +131,21 @@ export interface IpcInvokePayload {
   method: string;
   /** Positional arguments forwarded to the matching handler. */
   args: unknown[];
+  /**
+   * Необязательный идентификатор вызова для отмены (требование ebed4980):
+   * renderer шлёт его вместе с запросом, а при отмене — `etn:cancel { id }`.
+   * Без него вызов неотменяем (обычные вызовы сигнала не несут).
+   */
+  requestId?: string;
+}
+
+/**
+ * Контекст исполнения IPC-вызова, который видит обработчик: сигнал отмены,
+ * зажигаемый сообщением `etn:cancel` по `requestId` (требование ebed4980).
+ * Обработчики, которым отмена не нужна, контекст игнорируют.
+ */
+export interface IpcCallContext {
+  signal: AbortSignal;
 }
 
 /** Current connection state surfaced to the renderer (server domain). */
@@ -428,19 +443,25 @@ export interface EtnApi {
     setFocusOrder(networkId: string, focusId: string, input: FocusOrderInput): Promise<void>;
   };
   structures: {
-    /** `POST /thoughts/query` — filter thoughts of the structures view (L15). */
+    /**
+     * `POST /thoughts/query` — filter thoughts of the structures view (L15).
+     * `options.signal` отменяет устаревший запрос (требование ebed4980).
+     */
     query(
       networkId: string,
       request: StructureQueryRequest,
+      options?: { signal?: AbortSignal },
     ): Promise<StructureQueryResponse>;
     /**
      * `POST /thoughts/query` with `ids_only: true` — bare ids of the whole
      * filter result, for the bulk filter commands (L22).
+     * `options.signal` отменяет устаревший запрос (требование ebed4980).
      */
     queryIds(
       networkId: string,
       request: StructureQueryRequest,
-    ): Promise<StructureIdsQueryResponse>;
+      options?: { signal?: AbortSignal },
+    ): Promise<StructureIdsQueryResult>;
     /**
      * `GET /thoughts/{id}/hierarchy` — one-level parents/children with
      * per-branch dedup via `excludeIds`. `linkFilter` — фильтр обхода по

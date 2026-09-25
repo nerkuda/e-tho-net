@@ -121,6 +121,13 @@ let networkIdSeen: string | null = null;
 /** Loading guard so the tree does not flicker with stale data. */
 let querySeq = 0;
 /**
+ * Отмена последнего запроса выборки (требование ebed4980, ADR b32aa57f):
+ * быстрая смена фильтра гасит предыдущий запрос, а не оставляет его висеть
+ * конкурентом за состояние. Серийный сторож `querySeq` остаётся — он ловит
+ * уже доставленный, но устаревший ответ.
+ */
+let inflightQuery: AbortController | null = null;
+/**
  * The last APPLIED filter (criteria + sort/order) — what the results tree
  * shows. The bulk «Команды» menu (L22, §15.3) runs against this, not against
  * the panel draft: a command must touch exactly what the user applied.
@@ -303,19 +310,28 @@ async function applyQuery(reset: boolean): Promise<void> {
   if (networkId === null) return;
   const state = getFilterState();
   const seq = ++querySeq;
+  // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
+  // его fetch в main прерывается, ответ не приходит вовсе.
+  inflightQuery?.abort();
+  const controller = new AbortController();
+  inflightQuery = controller;
   const offset = reset ? 0 : resultIds.length;
   // A fresh application re-anchors the bulk commands to the new result (L22).
   if (reset) {
     appliedQuery = { filter: buildFilter(), sort: state.sort, order: state.order };
   }
   try {
-    const result = await etn.structures.query(networkId, {
-      ...buildFilter(),
-      sort: state.sort,
-      order: state.order,
-      limit: STRUCTURES_PAGE_SIZE,
-      offset,
-    });
+    const result = await etn.structures.query(
+      networkId,
+      {
+        ...buildFilter(),
+        sort: state.sort,
+        order: state.order,
+        limit: STRUCTURES_PAGE_SIZE,
+        offset,
+      },
+      { signal: controller.signal },
+    );
     if (seq !== querySeq) return; // a newer query won the race
     if (reset) {
       resultIds = result.items.map((r) => r.id);
@@ -336,7 +352,12 @@ async function applyQuery(reset: boolean): Promise<void> {
     for (const [id, flags] of Object.entries(result.directions)) directions.set(id, flags);
     renderTree();
   } catch (err) {
+    // Отменённый запрос — не ошибка: его сменил более новый (требование
+    // ebed4980). Ничего не показываем.
+    if (controller.signal.aborted) return;
     notice(`Ошибка отбора: ${errText(err)}`, 'error');
+  } finally {
+    if (inflightQuery === controller) inflightQuery = null;
   }
 }
 

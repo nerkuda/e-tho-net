@@ -17,12 +17,41 @@ import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
 function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
-  const payload: IpcInvokePayload = { method, args };
+  return dispatch<T>({ method, args });
+}
+
+/** Send one payload over `etn:invoke`, cleaning the Electron error wrapper. */
+function dispatch<T>(payload: IpcInvokePayload): Promise<T> {
   return ipcRenderer.invoke('etn:invoke', payload).catch((err: unknown) => {
     // Drop Electron's `Error invoking remote method …: EtnError: …` wrapper —
     // the UI shows the server's message verbatim.
     throw cleanIpcError(err);
   }) as Promise<T>;
+}
+
+/**
+ * Invoke an aborted-able handler (требование ebed4980): assigns a `requestId`
+ * and forwards `AbortSignal` as an `etn:cancel` message, so main aborts the
+ * in-flight fetch. The renderer's own promise rejects as usual; the caller
+ * checks `signal.aborted` to ignore the cancelled result quietly.
+ */
+function invokeCancellable<T>(
+  method: string,
+  signal: AbortSignal | undefined,
+  ...args: unknown[]
+): Promise<T> {
+  if (signal === undefined) return invoke<T>(method, ...args);
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+  }
+  const payload: IpcInvokePayload = { method, args, requestId: crypto.randomUUID() };
+  const onAbort = (): void => {
+    ipcRenderer.send('etn:cancel', payload.requestId);
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+  return dispatch<T>(payload).finally(() => {
+    signal.removeEventListener('abort', onAbort);
+  });
 }
 
 /** Build the typed `window.etn` object from the `EtnApi` contract. */
@@ -102,8 +131,14 @@ function buildApi(): EtnApi {
         invoke('thoughts.setFocusOrder', networkId, focusId, input),
     },
     structures: {
-      query: (networkId, request) => invoke('structures.query', networkId, request),
-      queryIds: (networkId, request) => invoke('structures.queryIds', networkId, request),
+      query: (networkId, request, options) =>
+        options?.signal === undefined
+          ? invoke('structures.query', networkId, request)
+          : invokeCancellable('structures.query', options.signal, networkId, request),
+      queryIds: (networkId, request, options) =>
+        options?.signal === undefined
+          ? invoke('structures.queryIds', networkId, request)
+          : invokeCancellable('structures.queryIds', options.signal, networkId, request),
       hierarchy: (networkId, thoughtId, query) =>
         invoke('structures.hierarchy', networkId, thoughtId, query),
       edges: (networkId, ids, showInactive) =>

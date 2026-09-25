@@ -772,3 +772,55 @@ describe('RestClient — thought-type views (0.7.3, баг 5467fb19)', () => {
     assert.equal(resp.meta.unresolved?.[0]?.reason, 'unknown_property');
   });
 });
+
+/**
+ * Этап 4 тех.проекта e29c0f00: COUNT запрашивается явно (требование 5adebf61),
+ * курсор следующей страницы читается из `meta.next_cursor` (3f2fdc41), а
+ * `signal` отменяет устаревший запрос (ebed4980).
+ */
+describe('RestClient — structures query: COUNT, курсор и отмена', () => {
+  /** Список-конверт с заданными `meta`. */
+  function listMeta(meta: Record<string, unknown>): { status: number; body: unknown } {
+    return {
+      status: 200,
+      body: { data: [], meta: { offset: 0, limit: 100, directions: {}, ...meta } },
+    };
+  }
+
+  it('queryStructureThoughts запрашивает COUNT явно и прокидывает signal', async () => {
+    const { fetch, calls } = makeFetch([listMeta({ total: 3, has_more: true, next_cursor: 'cur-1' })]);
+    const client = makeClient(fetch);
+    const request = { sort: 'alpha', order: 'asc', limit: 100, offset: 0 } as Parameters<
+      RestClient['queryStructureThoughts']
+    >[1];
+    const controller = new AbortController();
+
+    const res = await client.queryStructureThoughts('net1', request, { signal: controller.signal });
+
+    assert.equal(res.total, 3);
+    assert.equal(res.next_cursor, 'cur-1');
+    const body = JSON.parse(String(calls[0]!.init.body)) as { count?: boolean };
+    assert.equal(body.count, true, 'транспорт просит COUNT явно — экрану нужен счётчик');
+    assert.ok(calls[0]!.init.signal instanceof AbortSignal, 'signal обязан дойти до fetch');
+    assert.equal(calls[0]!.init.signal?.aborted, false);
+  });
+
+  it('явный count: false не перетирается транспортом', async () => {
+    const { fetch, calls } = makeFetch([listMeta({ total: null, has_more: false, next_cursor: null })]);
+    const client = makeClient(fetch);
+    const request = {
+      sort: 'alpha',
+      order: 'asc',
+      limit: 100,
+      offset: 0,
+      count: false,
+    } as Parameters<RestClient['queryStructureThoughts']>[1];
+
+    const res = await client.queryStructureThoughts('net1', request);
+
+    const body = JSON.parse(String(calls[0]!.init.body)) as { count?: boolean };
+    assert.equal(body.count, false);
+    // Сервер COUNT не считал — транспорт подставляет длину страницы.
+    assert.equal(res.total, 0);
+  });
+});

@@ -64,6 +64,11 @@ const CLIENT_COMPOSED_RESULTS = new Set([
   // `sendList` (`data` + `meta{total,limit,offset}`), клиент сводит их в одну
   // форму `NeighborPage`; единого серверного объекта с таким именем нет.
   'NeighborPage',
+  // ids-only выборка (этап 4, требование 5adebf61): сервер отдаёт
+  // `StructureIdsQueryResponse` с `total: number | null` (COUNT только по
+  // флагу), а клиент нормализует `total` до числа, запрашивая `count: true`
+  // явно, — единого серверного объекта с именем `StructureIdsQueryResult` нет.
+  'StructureIdsQueryResult',
 ]);
 
 /** Собрать все `.ts` под каталогом (рекурсивно). */

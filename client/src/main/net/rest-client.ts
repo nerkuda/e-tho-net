@@ -2162,11 +2162,11 @@ export class RestClient {
     const items = await this.request<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: { ...request, network_ids: networkIds } },
+      { body: { ...request, count: request.count ?? true, network_ids: networkIds } },
     );
     const meta = this.lastMeta as
       | {
-          total?: number;
+          total?: number | null;
           directions?: import('@etn/shared').StructureDirectionFlags;
           networks?: import('@etn/shared').NetworksCatalog;
         }
@@ -2186,40 +2186,68 @@ export class RestClient {
 
   /**
    * `POST /networks/{nid}/thoughts/query` — filter thoughts for the structures
-   * view. Returns the page items, the unrestricted `total` and the direction
-   * flags of the page from the list envelope meta (read via {@link lastMeta},
-   * same call).
+   * view. Returns the page items, the unrestricted `total`, the direction flags
+   * of the page and the keyset cursor of the next page from the list envelope
+   * meta (read via {@link lastMeta}, same call).
+   *
+   * COUNT запрашивается явно (`count: true` по умолчанию): экрану «Структуры»
+   * нужен счётчик «показано N из M» (требование 5adebf61 — сервер считает
+   * COUNT только по флагу). `request.count` остаётся за вызывающим.
+   * `options.signal` отменяет устаревший запрос (требование ebed4980).
    */
   public async queryStructureThoughts(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
+    options?: { signal?: AbortSignal },
   ): Promise<import('@etn/shared').StructureQueryResponse> {
     const items = await this.request<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: request },
+      { body: { ...request, count: request.count ?? true }, ...(options?.signal !== undefined ? { signal: options.signal } : {}) },
     );
     const meta = this.lastMeta as
-      | { total?: number; directions?: import('@etn/shared').StructureDirectionFlags }
+      | {
+          total?: number | null;
+          directions?: import('@etn/shared').StructureDirectionFlags;
+          next_cursor?: string | null;
+        }
       | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : items.length;
-    return { items, total, directions: meta?.directions ?? {} };
+    return {
+      items,
+      total,
+      directions: meta?.directions ?? {},
+      next_cursor: meta?.next_cursor ?? null,
+    };
   }
 
   /**
    * `POST /networks/{nid}/thoughts/query` with `ids_only: true` — bare ids of
    * the whole filter result for the bulk structures commands (L22,
    * 03-server-api.md §6.10). The limit ceiling is higher than the paged tree.
+   *
+   * `count` запрашивается явно по умолчанию: bulk-командам нужен полный объём
+   * (`ids.length < total`) для добора следующих страниц. `options.signal`
+   * отменяет устаревший запрос (требование ebed4980).
    */
   public async queryStructureThoughtIds(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
-  ): Promise<import('@etn/shared').StructureIdsQueryResponse> {
-    return this.request(
+    options?: { signal?: AbortSignal },
+  ): Promise<import('@etn/shared').StructureIdsQueryResult> {
+    const body = await this.request<import('@etn/shared').StructureIdsQueryResponse>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: { ...request, ids_only: true } },
+      {
+        body: { ...request, ids_only: true, count: request.count ?? true },
+        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      },
     );
+    return {
+      ids: body.ids,
+      total: typeof body.total === 'number' ? body.total : body.ids.length,
+      next_cursor: body.next_cursor ?? null,
+    };
   }
 
   /**
