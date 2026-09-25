@@ -71,6 +71,13 @@
   background-color: var(--table-header-bg);
 }
 
+/* Текущая строка списка — единственная подсвеченная (требование 11ddd910,
+   ошибка 4f27f85c): фасад помечает её ячейки `part(row-current)`, здесь токен
+   подсветки включается только для них. */
+.ui-table .ui-table-grid::part(row-current) {
+  --vaadin-grid-row-highlight-background-color: var(--accent-soft);
+}
+
 /* Пустое состояние рисует общий компонент `lib/ui/empty-state.ts` (свой вид
    в `empty-state.css`) — обёртке `.ui-table-empty` собственных размеров не
    нужно, она лишь держит узел состояния в раскладке таблицы. */

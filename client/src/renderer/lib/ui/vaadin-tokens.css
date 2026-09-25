@@ -75,7 +75,10 @@
   --vaadin-grid-row-odd-background-color: var(--surface-2);
   --vaadin-grid-row-hover-background-color: var(--bg-hover);
   --vaadin-grid-row-selected-background-color: var(--accent-soft);
-  --vaadin-grid-row-highlight-background-color: var(--accent-soft);
+  /* Подсветка ТЕКУЩЕЙ строки задаётся НЕ здесь: глобальное значение этого
+     токена красило бы все строки (ошибка 4f27f85c). По умолчанию — прозрачно,
+     а `part(row-current)` текущей строки переопределяет токен в `./table.css`. */
+  --vaadin-grid-row-highlight-background-color: transparent;
   --vaadin-grid-header-text-color: var(--text-dim);
   --vaadin-grid-header-font-size: var(--font-size-xs);
   --vaadin-grid-header-font-weight: var(--font-weight-semibold);

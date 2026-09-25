@@ -83,6 +83,14 @@ interface VaadinGridElement extends HTMLElement {
   items: unknown[] | undefined;
   activeItem: unknown;
   selectedItems: unknown[] | undefined;
+  /**
+   * Генератор `part`-имён ячеек (Vaadin StylingMixin). Фасад помечает им ячейки
+   * ТЕКУЩЕЙ строки (`row-current`) — единственная строка с подсветкой
+   * (ошибка 4f27f85c: подсветка всех строк).
+   */
+  cellPartNameGenerator:
+    | ((column: unknown, model: { item: unknown; index: number }) => string | null)
+    | null;
   clearCache(): void;
   scrollToIndex(index: number): void;
   getEventContext(event: Event): { index?: number; item?: unknown } | null;
@@ -129,6 +137,17 @@ export function vaadinGridAdapter(): GridTableAdapter {
   const grid = document.createElement('vaadin-grid') as unknown as VaadinGridElement;
   grid.className = 'ui-table-grid';
 
+  /**
+   * Текущая строка (для `cellPartNameGenerator`). Подсветка — НЕ глобальным
+   * токеном `--vaadin-grid-row-highlight-background-color` (он красил бы все
+   * строки), а `part`-именем `row-current` только у ячеек текущей строки
+   * (ошибка 4f27f85c). Смена активной строки заставляет сетку перегенерировать
+   * части ячеек через {@link VaadinGridElement.clearCache}.
+   */
+  let activeRow: unknown = null;
+  grid.cellPartNameGenerator = (_column, model): string | null =>
+    activeRow !== null && model.item === activeRow ? 'row-current' : null;
+
   let sortCb: ((key: string) => void) | null = null;
   let clickCb: ((index: number, at: GridPoint) => void) | null = null;
   let dblCb: ((index: number) => void) | null = null;
@@ -172,7 +191,11 @@ export function vaadinGridAdapter(): GridTableAdapter {
       grid.clearCache();
     },
     setActive(row: unknown | null): void {
+      activeRow = row;
       grid.activeItem = row;
+      // Перерисовать видимые строки — перегенерировать part-имена ячеек под
+      // новую текущую строку (иначе подсветка осталась бы на прежней).
+      grid.clearCache();
     },
     setSelected(rows: readonly unknown[]): void {
       grid.selectedItems = [...rows];
