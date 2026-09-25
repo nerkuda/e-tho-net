@@ -366,6 +366,28 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     assert.deepEqual(activated, ['c']);
   });
 
+  it('onDblActivate: двойной клик зовёт его вместо onActivate, клик — только текущая', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const activated: string[] = [];
+    const edited: string[] = [];
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      onActivate: (row) => activated.push(row.id),
+      onDblActivate: (row) => edited.push(row.id),
+    });
+    stub.emitClick(1);
+    assert.equal(t.getCurrent()?.key, 'b', 'клик делает строку текущей');
+    assert.deepEqual(activated, [], 'клик не активирует строку (правило 6)');
+    stub.emitDblClick(2);
+    assert.equal(t.getCurrent()?.key, 'c');
+    assert.deepEqual(edited, ['c'], 'двойной клик открывает редактор (onDblActivate)');
+    assert.deepEqual(activated, [], 'onActivate при заданном onDblActivate двойным кликом не зовётся');
+  });
+
   it('контекстное меню строки строится вызывающим и показывается на координатах', async () => {
     const { table } = await load();
     const stub = new StubAdapter();

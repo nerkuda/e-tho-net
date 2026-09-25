@@ -3,8 +3,11 @@
  *
  * Контракт: в самом низу панели отбора — строка «имя отбора» + дискета
  * (записать) + крестик (удалить) + «…» (выбрать); список сохранённых отборов
- * открывается диалогом с поиском по именам, навигацией ↑/↓, выбором
- * кликом/Enter и контекстным меню строки «Переименовать» / «Скопировать»
+ * открывается диалогом: поиск по именам сверху (правило 1 требования
+ * 11ddd910), строка управления «Изменить/Копировать/Удалить» над текущей
+ * строкой (правило 2), навигация ↑/↓, клик делает строку текущей,
+ * Enter/«Выбрать» применяют, двойной клик открывает редактор, и контекстное
+ * меню строки «Переименовать» / «Скопировать»
  * (копия с « (копия)») / «Удалить». «Хроника» работает так же, как «Структуры».
  *
  * Клиентские тесты идут без jsdom (конвенция соседних тестов), поэтому чистая
@@ -119,7 +122,11 @@ describe('диалог выбора сохранённого отбора (за�
     assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка «…» открывает диалог');
     assert.match(bar, /title: t\('savedFilters\.title'\)/, 'заголовок диалога — из словаря');
     assert.match(bar, /search\.placeholder = t\('actions\.search'\)/, 'единый плейсхолдер поиска — вверху списка');
-    assert.match(bar, /body\.append\(search, listHost\)/, 'поиск стоит перед списком');
+    assert.match(
+      bar,
+      /body\.append\(search, toolbar, listHost\)/,
+      'порядок правила 1–2: поиск, строка управления, список',
+    );
     assert.match(bar, /onMount: \(\) => search\.focus\(\)/, 'фокус — в поле поиска');
   });
 
@@ -127,8 +134,12 @@ describe('диалог выбора сохранённого отбора (за�
     const bar = readText(BAR_TS);
     assert.match(bar, /createTable<SavedFilterEntry>\(\{/, 'список собирает фасад lib/ui/table.ts');
     assert.match(bar, /rowKey: \(entry\) => entry\.id/, 'строка адресуется стабильным id');
-    assert.match(bar, /onRowClick: \(entry\) => pick\(entry\)/, 'клик по строке выбирает отбор');
-    assert.match(bar, /onActivate: \(entry\) => pick\(entry\)/, 'Enter/двойной клик выбирают строку');
+    assert.match(bar, /onActivate: \(entry\) => pick\(entry\)/, 'Enter применяет текущую строку (решение)');
+    assert.match(
+      bar,
+      /onDblActivate: \(entry\) => void opts\.onRename\(entry\)\.then\(render\)/,
+      'двойной клик открывает редактор строки (переименование), правило 6',
+    );
     // Клавиатура — от фасада: стрелки/Enter из поля поиска перенаправляются
     // таблице, чтобы текущая строка была видна.
     assert.match(
@@ -137,6 +148,29 @@ describe('диалог выбора сохранённого отбора (за�
       'клавиатура поля поиска перенаправляется таблице',
     );
     assert.match(bar, /table\.setRows\(visible\)/, 'перерисовка списка по фильтру');
+  });
+
+  it('строка управления над списком: изменить / копировать / удалить текущей', () => {
+    const bar = readText(BAR_TS);
+    assert.match(bar, /type-list-toolbar sfd-toolbar/, 'под поиском — строка управления');
+    assert.ok(bar.includes("t('listActions.edit')"), 'кнопка «Изменить» действует на текущую строку');
+    assert.ok(bar.includes("t('listActions.copy')"), 'кнопка «Копировать»');
+    assert.match(
+      bar,
+      /editBtn\.disabled = !has/,
+      'кнопки управления гаснут без текущей строки (правило 2)',
+    );
+    assert.match(
+      bar,
+      /pendingCurrentId = id/,
+      'после копии список позиционируется на новой записи (правило 7)',
+    );
+  });
+
+  it('футер — решение: «Выбрать» + «Отмена»', () => {
+    const bar = readText(BAR_TS);
+    assert.match(bar, /label: t\('actions\.select'\)/, 'решение — «Выбрать»');
+    assert.match(bar, /label: t\('actions\.cancel'\)/, 'отмена закрывает без выбора');
   });
 
   it('контекстное меню строки: переименовать / скопировать / удалить', () => {
@@ -156,7 +190,7 @@ describe('диалог выбора сохранённого отбора (за�
   it('после переименования/копии/удаления диалог перерисовывается на месте', () => {
     const bar = readText(BAR_TS);
     assert.match(bar, /opts\.onRename\(entry\)\.then\(render\)/, 'переименование обновляет список');
-    assert.match(bar, /opts\.onCopy\(entry\)\.then\(render\)/, 'копия обновляет список');
+    assert.match(bar, /opts\.onCopy\(entry\)\.then\(\(id\) =>/, 'копия обновляет список и позиционируется');
     assert.match(bar, /opts\.onDelete\(entry\)\.then\(opts\.onRefresh\)\.then\(render\)/, 'удаление обновляет список');
   });
 });

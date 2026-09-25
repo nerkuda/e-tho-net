@@ -240,8 +240,15 @@ export interface TableSpec<T> {
   defaultSort?: SortState;
   /** Смена текущей строки (клавиатура, клик, внешняя установка). */
   onCurrentChange?: (key: string | null, row: T | null, index: number) => void;
-  /** Активация строки: Enter или двойной клик. */
+  /** Активация строки: Enter или двойной клик (если нет {@link onDblActivate}). */
   onActivate?: (row: T, index: number) => void;
+  /**
+   * Двойной клик по строке. Задан — фасад зовёт его вместо {@link onActivate}
+   * (правило 6 требования 11ddd910: у диалога-списка одиночный клик делает
+   * строку текущей, двойной открывает редактор, Enter активирует); не задан —
+   * двойной клик равен Enter (`onActivate`), прежнее поведение фасада.
+   */
+  onDblActivate?: (row: T, index: number) => void;
   /** Одиночный клик по строке. */
   onRowClick?: (row: T, index: number) => void;
   /** Пункты контекстного меню строки (пусто — меню не показывается). */
@@ -797,9 +804,14 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
   });
   adapter.onRowDblClick((index): void => {
     const data = ordered();
-    if (data[index] === undefined) return;
+    const row = data[index];
+    if (row === undefined) return;
     applyCurrent(index, true);
-    activate(index);
+    // Правило 6 требования 11ddd910: заданный `onDblActivate` — редактор строки
+    // (одиночный клик при этом лишь делает её текущей); без него двойной клик
+    // равен Enter.
+    if (spec.onDblActivate !== undefined) spec.onDblActivate(row, index);
+    else activate(index);
   });
   adapter.onRowContextMenu((index: number, at: GridPoint): void => {
     const data = ordered();

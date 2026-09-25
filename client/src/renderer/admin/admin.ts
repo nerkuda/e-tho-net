@@ -41,7 +41,28 @@ export function openAdminPanel(): void {
       { id: 'networks', label: t('admin.tab.networks'), content: pane((h) => void renderNetworks(h)) },
       { id: 'audit', label: t('admin.tab.audit'), content: pane((h) => void renderAudit(h)) },
     ],
+    // Правило 3 требования 11ddd910: под списком — кнопка решения. Панель
+    // информационная, решение одно — «Закрыть».
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
+}
+
+/**
+ * Строка горячего поиска над таблицей вкладки (правило 1 требования 11ddd910):
+ * первая строка над списком, плейсхолдер — из словаря.
+ */
+function adminSearchRow(): { row: HTMLElement; input: HTMLInputElement } {
+  const row = div('form-row type-list-search');
+  const input = fieldInput({ extraClass: 'admin-search' }) as HTMLInputElement;
+  input.type = 'text';
+  input.placeholder = t('actions.search');
+  row.append(input);
+  return { row, input };
+}
+
+/** Строка управления над таблицей вкладки (правило 2 требования 11ddd910). */
+function adminToolbar(): HTMLElement {
+  return div('form-row type-list-toolbar admin-toolbar');
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +79,9 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     content.replaceChildren(operationError(err));
     return;
   }
+
+  // Правило 1 требования 11ddd910: поиск — первая строка над списком.
+  const { row: searchRow, input: searchInput } = adminSearchRow();
 
   const wrap = div('admin-table-wrap');
   // Определённая высота обёртки — сетке нужен ограниченный контейнер.
@@ -127,13 +151,91 @@ async function renderUsers(content: HTMLElement): Promise<void> {
         },
       },
     ],
-    rows: users,
+    rows: [],
     rowKey: (user) => user.id,
     emptyText: t('admin.users.empty'),
     emptyHint: t('admin.users.emptyHint'),
+    // Правило 5: строка управления действует на текущую строку.
+    onCurrentChange: () => updateButtons(),
   });
   wrap.append(table.element);
-  content.replaceChildren(wrap, addUserRow());
+
+  // Правило 2 требования 11ddd910: строка управления НАД списком — действия
+  // над ТЕКУЩЕЙ строкой (те же, что и ссылки в ячейке «Действия»; ячейки
+  // оставлены, чтобы привычные действия были под рукой).
+  const toolbar = adminToolbar();
+  const keyBtn = uiButton({
+    label: t('admin.user.key'),
+    role: 'secondary',
+    size: 's',
+    title: 'Сгенерировать API-key текущему пользователю',
+    disabled: true,
+    onClick: () => {
+      const user = currentUser();
+      if (user !== null) void generateKey(user);
+    },
+  });
+  const toggleBtn = uiButton({
+    label: t('admin.user.disable'),
+    role: 'secondary',
+    size: 's',
+    title: 'Включить/отключить текущую учётную запись',
+    disabled: true,
+    onClick: () => {
+      const user = currentUser();
+      if (user !== null) void toggleDisabled(user);
+    },
+  });
+  const deleteBtn = uiButton({
+    label: t('actions.delete'),
+    role: 'secondary',
+    size: 's',
+    title: 'Удалить текущего пользователя',
+    disabled: true,
+    onClick: () => {
+      const user = currentUser();
+      if (user !== null) void removeUserRow(user, content);
+    },
+  });
+  toolbar.append(keyBtn, toggleBtn, deleteBtn);
+
+  /** Текущая строка списка (правило 5). */
+  function currentUser(): User | null {
+    return table.getCurrent()?.row ?? null;
+  }
+
+  /** Гасит кнопки без текущей строки; надпись переключателя — по её статусу. */
+  function updateButtons(): void {
+    const user = currentUser();
+    keyBtn.disabled = user === null;
+    toggleBtn.disabled = user === null;
+    deleteBtn.disabled = user === null;
+    toggleBtn.textContent = user !== null && user.disabled
+      ? t('admin.user.enable')
+      : t('admin.user.disable');
+  }
+
+  /** Клиентский фильтр по имени пользователя (правило 1). */
+  function applyFilter(): void {
+    const query = searchInput.value.trim().toLowerCase();
+    const visible =
+      query === ''
+        ? users
+        : users.filter((user) =>
+            `${user.display_name ?? ''} ${user.username}`.toLowerCase().includes(query),
+          );
+    table.setEmpty(
+      users.length === 0
+        ? { title: t('admin.users.empty'), hint: t('admin.users.emptyHint') }
+        : { title: t('list.emptySearch'), hint: t('list.emptySearchHint') },
+    );
+    table.setRows(visible);
+    updateButtons();
+  }
+  searchInput.addEventListener('input', () => applyFilter());
+
+  content.replaceChildren(searchRow, toolbar, wrap, addUserRow());
+  applyFilter();
 }
 
 /** The add-user form under the table. */
@@ -316,6 +418,9 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     content.replaceChildren(operationError(err));
     return;
   }
+  // Правило 1 требования 11ddd910: поиск — первая строка над списком.
+  const { row: searchRow, input: searchInput } = adminSearchRow();
+
   const wrap = div('admin-table-wrap');
   wrap.style.height = '400px';
   const table = createTable<Network>({
@@ -350,39 +455,75 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
         header: t('admin.col.actions'),
         width: '140px',
         render: (network) =>
-          button(
-            'удалить сеть',
-            () => {
-              void (async () => {
-                if (
-                  !(await confirmDialog(
-                    'Удалить сеть',
-                    `Удалить сеть «${network.display_name}»?`,
-                    true,
-                  ))
-                ) {
-                  return;
-                }
-                try {
-                  await etn.admin.removeNetwork(network.id);
-                  notice('Сеть удалена.');
-                  void renderNetworks(content);
-                } catch (err) {
-                  errorDialog('Удалить сеть', err);
-                }
-              })();
-            },
-            'link-btn',
-          ),
+          button('удалить сеть', () => void removeNetworkRow(network, content), 'link-btn'),
       },
     ],
-    rows: networks,
+    rows: [],
     rowKey: (network) => network.id,
     emptyText: t('admin.networks.empty'),
     emptyHint: t('admin.networks.emptyHint'),
+    onCurrentChange: () => updateButtons(),
   });
   wrap.append(table.element);
-  content.replaceChildren(wrap);
+
+  // Правило 2 требования 11ddd910: управление НАД списком — «Удалить сеть»
+  // действует на текущую строку (ссылка в ячейке «Действия» тоже остаётся).
+  const toolbar = adminToolbar();
+  const deleteBtn = uiButton({
+    label: t('admin.network.delete'),
+    role: 'secondary',
+    size: 's',
+    title: 'Удалить текущую сеть',
+    disabled: true,
+    onClick: () => {
+      const network = table.getCurrent()?.row ?? null;
+      if (network !== null) void removeNetworkRow(network, content);
+    },
+  });
+  toolbar.append(deleteBtn);
+
+  /** Гасит «Удалить сеть» без текущей строки (правило 2). */
+  function updateButtons(): void {
+    deleteBtn.disabled = table.getCurrent() === null;
+  }
+
+  /** Клиентский фильтр по имени сети и владельцу (правило 1). */
+  function applyFilter(): void {
+    const query = searchInput.value.trim().toLowerCase();
+    const visible =
+      query === ''
+        ? networks
+        : networks.filter((network) =>
+            `${network.display_name} ${network.owner_id}`.toLowerCase().includes(query),
+          );
+    table.setEmpty(
+      networks.length === 0
+        ? { title: t('admin.networks.empty'), hint: t('admin.networks.emptyHint') }
+        : { title: t('list.emptySearch'), hint: t('list.emptySearchHint') },
+    );
+    table.setRows(visible);
+    updateButtons();
+  }
+  searchInput.addEventListener('input', () => applyFilter());
+
+  content.replaceChildren(searchRow, toolbar, wrap);
+  applyFilter();
+}
+
+/** Удаляет сеть после подтверждения и перерисовывает список. */
+async function removeNetworkRow(network: Network, content: HTMLElement): Promise<void> {
+  if (
+    !(await confirmDialog('Удалить сеть', `Удалить сеть «${network.display_name}»?`, true))
+  ) {
+    return;
+  }
+  try {
+    await etn.admin.removeNetwork(network.id);
+    notice('Сеть удалена.');
+    void renderNetworks(content);
+  } catch (err) {
+    errorDialog('Удалить сеть', err);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +532,9 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
 
 /** Renders the audit tab with filters. */
 function renderAudit(content: HTMLElement): void {
+  // Правило 1 требования 11ddd910: поиск — первая строка над списком.
+  const { row: searchRow, input: searchInput } = adminSearchRow();
+
   const filterRow = div('form-row');
   filterRow.style.marginBottom = '8px';
   const categorySelect = el('select', 'select-input');
@@ -423,7 +567,95 @@ function renderAudit(content: HTMLElement): void {
   );
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.height = '400px';
-  content.append(filterRow, tableWrap);
+  // Строки управления над списком у журнала нет: он только для чтения —
+  // над текущей строкой нечего производить (правила 2 и 5 к нему не применимы).
+  content.append(searchRow, filterRow, tableWrap);
+
+  /** Загруженные записи журнала — источник клиентского фильтра поиска. */
+  let loaded: AuditLogEntry[] = [];
+
+  /** Строка-кандидат поиска: все текстовые поля записи. */
+  const auditHaystack = (entry: AuditLogEntry): string =>
+    [
+      fmtDateTime(entry.ts),
+      entry.actor_user_id ?? '',
+      entry.network_id ?? '',
+      entry.category,
+      entry.action,
+      entry.target_type ?? '',
+      entry.target_id ?? '',
+    ]
+      .join(' ')
+      .toLowerCase();
+
+  /** Показывает записи с учётом клиентского поиска (правило 1). */
+  function paint(): void {
+    const query = searchInput.value.trim().toLowerCase();
+    const rows =
+      query === '' ? loaded : loaded.filter((entry) => auditHaystack(entry).includes(query));
+    const table = createTable<AuditLogEntry>({
+      ariaLabel: t('admin.audit.aria'),
+      columns: [
+        {
+          key: 'ts',
+          header: t('admin.col.time'),
+          sortable: true,
+          sortValue: (entry) => entry.ts,
+          text: (entry) => fmtDateTime(entry.ts),
+          render: (entry) => span(fmtDateTime(entry.ts)),
+        },
+        {
+          key: 'actor',
+          header: t('admin.col.who'),
+          sortable: true,
+          sortValue: (entry) => entry.actor_user_id ?? '',
+          text: (entry) => entry.actor_user_id ?? '—',
+          render: (entry) => span(entry.actor_user_id ?? '—'),
+        },
+        {
+          key: 'network',
+          header: t('admin.col.network'),
+          sortable: true,
+          sortValue: (entry) => entry.network_id ?? '',
+          text: (entry) => entry.network_id ?? '—',
+          render: (entry) => span(entry.network_id ?? '—'),
+        },
+        {
+          key: 'category',
+          header: t('admin.col.category'),
+          sortable: true,
+          sortValue: (entry) => entry.category,
+          text: (entry) => entry.category,
+          render: (entry) => span(entry.category),
+        },
+        {
+          key: 'action',
+          header: t('admin.col.action'),
+          sortable: true,
+          sortValue: (entry) => entry.action,
+          text: (entry) => entry.action,
+          render: (entry) => span(entry.action),
+        },
+        {
+          key: 'target',
+          header: t('admin.col.target'),
+          text: (entry) =>
+            `${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—',
+          render: (entry) =>
+            span(`${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—'),
+        },
+      ],
+      rows,
+      rowKey: (entry) => String(entry.id),
+      emptyText: t('admin.audit.empty'),
+      emptyHint: t('admin.audit.emptyHint'),
+    });
+    tableWrap.replaceChildren(
+      table.element,
+      el('p', 'faint', `Всего записей: ${loaded.length}`),
+    );
+  }
+  searchInput.addEventListener('input', () => paint());
 
   async function loadAudit(): Promise<void> {
     tableWrap.replaceChildren(loadingState());
@@ -434,64 +666,8 @@ function renderAudit(content: HTMLElement): void {
         to: toInput.value === '' ? undefined : toInput.value,
         limit: 100,
       })) as { entries: AuditLogEntry[]; total: number };
-      const table = createTable<AuditLogEntry>({
-        ariaLabel: t('admin.audit.aria'),
-        columns: [
-          {
-            key: 'ts',
-            header: t('admin.col.time'),
-            sortable: true,
-            sortValue: (entry) => entry.ts,
-            text: (entry) => fmtDateTime(entry.ts),
-            render: (entry) => span(fmtDateTime(entry.ts)),
-          },
-          {
-            key: 'actor',
-            header: t('admin.col.who'),
-            sortable: true,
-            sortValue: (entry) => entry.actor_user_id ?? '',
-            text: (entry) => entry.actor_user_id ?? '—',
-            render: (entry) => span(entry.actor_user_id ?? '—'),
-          },
-          {
-            key: 'network',
-            header: t('admin.col.network'),
-            sortable: true,
-            sortValue: (entry) => entry.network_id ?? '',
-            text: (entry) => entry.network_id ?? '—',
-            render: (entry) => span(entry.network_id ?? '—'),
-          },
-          {
-            key: 'category',
-            header: t('admin.col.category'),
-            sortable: true,
-            sortValue: (entry) => entry.category,
-            text: (entry) => entry.category,
-            render: (entry) => span(entry.category),
-          },
-          {
-            key: 'action',
-            header: t('admin.col.action'),
-            sortable: true,
-            sortValue: (entry) => entry.action,
-            text: (entry) => entry.action,
-            render: (entry) => span(entry.action),
-          },
-          {
-            key: 'target',
-            header: t('admin.col.target'),
-            text: (entry) =>
-              `${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—',
-            render: (entry) =>
-              span(`${entry.target_type ?? ''} ${entry.target_id ?? ''}`.trim() || '—'),
-          },
-        ],
-        rows: result.entries,
-        rowKey: (entry) => String(entry.id),
-        emptyText: t('admin.audit.empty'),
-        emptyHint: t('admin.audit.emptyHint'),
-      });
-      tableWrap.replaceChildren(table.element, el('p', 'faint', `Всего записей: ${result.total}`));
+      loaded = result.entries;
+      paint();
     } catch (err) {
       tableWrap.replaceChildren(operationError(err));
     }

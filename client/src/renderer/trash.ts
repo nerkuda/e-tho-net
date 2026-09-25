@@ -33,7 +33,9 @@ import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
 // `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
 // со всеми остальными списками клиента.
 import { createThoughtCloud } from './lib/thought-cloud.js';
-import { reflectThoughtUpdate } from './editor/editor.js';
+// Правило 6 требования 11ddd910: двойной клик по строке корзины открывает
+// сущность в редакторе (мысль — редактором мысли, связь — редактором связи).
+import { openLinkInEditor, openThoughtInEditor, reflectThoughtUpdate } from './editor/editor.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
 import { refreshSelectionPanel } from './selection/selection.js';
@@ -46,6 +48,7 @@ import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { iconButton, uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
+import { fieldInput } from './lib/ui/field.js';
 import { createTable } from './lib/ui/table.js';
 
 /**
@@ -740,7 +743,14 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   // Определённая высота оболочки — сетке нужен ограниченный контейнер.
   listHost.style.height = 'min(60vh, 440px)';
   listHost.style.maxHeight = 'none';
-  body.append(listHost);
+
+  // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
+  // диалога, над строкой управления и списком; плейсхолдер — из словаря.
+  const searchRow = div('form-row type-list-search');
+  const searchInput = fieldInput({ extraClass: 'trash-search' }) as HTMLInputElement;
+  searchInput.type = 'text';
+  searchInput.placeholder = t('actions.search');
+  searchRow.append(searchInput);
 
   /** Кнопка-иконка действия строки — как в остальном UI: svg + тултип. */
   const actionButton = (
@@ -793,6 +803,8 @@ export async function openTrashDialog(networkId: string): Promise<void> {
 
   // Единая таблица корзины (задача ae76b75e, требование 93115633): текущая
   // строка, клавиатура, копирование; строки — из словаря локализации.
+  // Правило 6 требования 11ddd910 (список, не выбор): клик делает строку
+  // текущей, двойной клик открывает сущность в редакторе.
   const table = createTable<TrashDialogRow>({
     ariaLabel: t('trash.aria'),
     columns: [
@@ -822,8 +834,104 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     rowKey: (row) => row.id,
     emptyText: t('trash.empty'),
     emptyHint: t('trash.emptyHint'),
+    onCurrentChange: () => updateButtons(),
+    onDblActivate: (row) => openRowInEditor(row),
   });
   listHost.append(table.element);
+
+  // Правило 2 требования 11ddd910: строка управления НАД списком. «Вернуть из
+  // корзины» и «Удалить совсем» действуют на ТЕКУЩУЮ строку и гаснут без неё
+  // (`updateButtons`); «Удалить всё, что возможно» — массовое действие над
+  // списком (прежде стояло в футере, который правило 3 оставляет решению).
+  const toolbar = div('form-row type-list-toolbar trash-toolbar');
+  const restoreBtn = uiButton({
+    label: t('trash.action.restore'),
+    role: 'secondary',
+    size: 's',
+    title: 'Вернуть текущую строку из корзины',
+    disabled: true,
+    onClick: () => void currentRow()?.onRestore(),
+  });
+  const deleteBtn = uiButton({
+    label: t('actions.deleteForever'),
+    role: 'secondary',
+    size: 's',
+    title: 'Удалить текущую строку совсем',
+    disabled: true,
+    onClick: () => void currentRow()?.onDelete(),
+  });
+  const purgeAllBtn = uiButton({
+    label: 'Удалить всё, что возможно',
+    role: 'danger',
+    size: 's',
+    title: 'Физически удалить все незаблокированные строки корзины',
+    onClick: () => void purgeAll(),
+  });
+  toolbar.append(restoreBtn, deleteBtn, purgeAllBtn);
+
+  // Правила 1–2: поиск (первая строка), под ним управление, затем список.
+  body.append(searchRow, toolbar, listHost);
+
+  /** Строки всей корзины до фильтра поиска (правило 1, клиентский фильтр). */
+  let allRows: TrashDialogRow[] = [];
+
+  /** Закрытие диалога; присваивается сразу после `showDialog`. */
+  let closeDialog: () => void = () => undefined;
+
+  /** Текущая строка списка — на неё действует строка управления (правило 2). */
+  function currentRow(): TrashDialogRow | null {
+    return table.getCurrent()?.row ?? null;
+  }
+
+  /** Гасит кнопки текущей строки без неё (и «Удалить совсем» — у заблокированной). */
+  function updateButtons(): void {
+    const row = currentRow();
+    restoreBtn.disabled = row === null;
+    deleteBtn.disabled = row === null || row.blocked;
+  }
+
+  /** Правило 6: двойной клик по строке открывает сущность в редакторе. */
+  function openRowInEditor(row: TrashDialogRow): void {
+    if (row.kind === 'thought') {
+      closeDialog();
+      openThoughtInEditor(row.id);
+      return;
+    }
+    void etn.links
+      .get(networkId, row.id)
+      .then((link) => {
+        closeDialog();
+        openLinkInEditor(link);
+      })
+      .catch(() => undefined);
+  }
+
+  /** Клиентский фильтр по подписи строки; пустой запрос — вся корзина. */
+  function applyFilter(): void {
+    const query = searchInput.value.trim().toLowerCase();
+    const visible =
+      query === '' ? allRows : allRows.filter((row) => row.label.toLowerCase().includes(query));
+    table.setEmpty(
+      allRows.length === 0
+        ? { title: t('trash.empty'), hint: t('trash.emptyHint') }
+        : { title: t('trash.emptySearch'), hint: t('trash.emptySearchHint') },
+    );
+    table.setRows(visible);
+    updateButtons();
+  }
+  searchInput.addEventListener('input', () => applyFilter());
+
+  /** Полная физическая очистка корзины (массовое управление над списком). */
+  async function purgeAll(): Promise<void> {
+    try {
+      const { purged, skipped } = await etn.trash.purge(networkId);
+      scheduleRefresh();
+      notice(`Удалено ${purged}, осталось заблокировано ${skipped}.`);
+      await render();
+    } catch (err) {
+      errorDialog('Очистить корзину', err);
+    }
+  }
 
   const render = async (): Promise<void> => {
     let trash: TrashListResult;
@@ -831,11 +939,6 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       trash = await etn.trash.list(networkId);
     } catch (err) {
       errorDialog('Корзина', err);
-      return;
-    }
-
-    if (trash.thoughts.length === 0 && trash.links.length === 0) {
-      table.setRows([]);
       return;
     }
 
@@ -883,7 +986,8 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         onDelete: () => deleteLinkFromTrash(networkId, l.id),
       });
     }
-    table.setRows(out);
+    allRows = out;
+    applyFilter();
   };
 
   const restoreThought = async (networkId: string, id: string): Promise<void> => {
@@ -938,28 +1042,13 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     }
   };
 
-  showDialog({
+  // Правило 3 требования 11ddd910: футер — только кнопка решения. Массовое
+  // «Удалить всё, что возможно» ушло в строку управления над списком.
+  closeDialog = showDialog({
     title: 'Корзина',
     size: 'xl',
     body,
-    buttons: [
-      {
-        label: 'Удалить всё, что возможно',
-        danger: true,
-        keepOpen: true,
-        onClick: async () => {
-          try {
-            const { purged, skipped } = await etn.trash.purge(networkId);
-            scheduleRefresh();
-            notice(`Удалено ${purged}, осталось заблокировано ${skipped}.`);
-            await render();
-          } catch (err) {
-            errorDialog('Очистить корзину', err);
-          }
-        },
-      },
-      { label: t('actions.close'), primary: true },
-    ],
+    buttons: [{ label: t('actions.close'), primary: true }],
     onMount: () => void render(),
     onClose: () => table.destroy(),
   });
