@@ -141,4 +141,28 @@ describe('guard: единое дерево списков lib/ui (d1c15a2d)', ()
     );
     assert.match(caret, /color:\s*var\(--text\)/, 'цвет каретки — контрастный токен --text');
   });
+
+  // Ошибка aada462a: строки дерева одной ширины (ширина контейнера), иначе
+  // колонки «Комментарий»/«Количество» встают с разных позиций. `min-content`
+  // у строки раздувает её по ПОЛНОЙ ширине nowrap-текста (имя/комментарий),
+  // и строка с длинным текстом уводит свои колонки вправо.
+  it('строки дерева одной ширины: без min-width: min-content', () => {
+    const css = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'tree.css'), 'utf8');
+
+    const row = cssRule(css, '.ui-tree-row');
+    assert.match(row, /min-width:\s*0;/, 'строка дерева обязана иметь min-width: 0');
+    assert.doesNotMatch(
+      row,
+      /min-width:\s*min-content/,
+      'min-width: min-content у строки распускает её по полной ширине текста и ' +
+        'разъезжаются колонки (ошибка aada462a)',
+    );
+
+    const head = cssRule(css, '.ui-tree-head');
+    assert.doesNotMatch(
+      head,
+      /min-width:\s*min-content/,
+      'шапка колонок шириной как строки — иначе заголовки встают не над данными',
+    );
+  });
 });
