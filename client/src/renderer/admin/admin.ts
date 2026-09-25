@@ -15,6 +15,7 @@ import { t } from '../lib/i18n.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { menuAction, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
@@ -28,7 +29,7 @@ export function openAdminPanel(): void {
   // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
   // строятся лениво при первом показе, переключение не пересобирает узел.
   const pane = (render: (host: HTMLElement) => void): (() => HTMLElement) => () => {
-    const host = div('admin-content');
+    const host = div('admin-content list-dialog-body');
     render(host);
     return host;
   };
@@ -84,11 +85,13 @@ async function renderUsers(content: HTMLElement): Promise<void> {
   const { row: searchRow, input: searchInput } = adminSearchRow();
 
   const wrap = div('admin-table-wrap');
-  // Определённая высота обёртки — сетке нужен ограниченный контейнер.
-  wrap.style.height = '400px';
   // Список участников — единая таблица фасада `lib/ui/table.ts` (задача
   // ae76b75e, требование 93115633): колонки с сортировкой, текущая строка,
-  // клавиатура, копирование Ctrl+C. Строки — из словаря локализации.
+  // клавиатура, копирование Ctrl+C, якорь возврата фокуса. Строки — из словаря.
+  // Высота области списка — по раскладке диалога-списка (`.list-dialog-body`):
+  // список тянется на свободное место роли и не схлопывается по содержимому
+  // (правило 9 требования 11ddd910). Инлайновая высота 400px задавала размер
+  // вне роли и «дёргала» раскладку (исправлено в ревизии 0.9.1).
   const table = createTable<User>({
     ariaLabel: t('admin.users.aria'),
     columns: [
@@ -157,6 +160,15 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     emptyHint: t('admin.users.emptyHint'),
     // Правило 5: строка управления действует на текущую строку.
     onCurrentChange: () => updateButtons(),
+    // Правило 8 требования 11ddd910: команды над строкой доступны и из
+    // контекстного меню самой строки (те же, что у кнопок над списком).
+    rowMenu: (user): MenuItem[] => [
+      menuAction(t('admin.user.key'), () => void generateKey(user)),
+      menuAction(user.disabled ? t('admin.user.enable') : t('admin.user.disable'), () =>
+        void toggleDisabled(user),
+      ),
+      menuAction(t('actions.delete'), () => void removeUserRow(user, content), { danger: true }),
+    ],
   });
   wrap.append(table.element);
 
@@ -422,7 +434,6 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
   const { row: searchRow, input: searchInput } = adminSearchRow();
 
   const wrap = div('admin-table-wrap');
-  wrap.style.height = '400px';
   const table = createTable<Network>({
     ariaLabel: t('admin.networks.aria'),
     columns: [
@@ -463,6 +474,12 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     emptyText: t('admin.networks.empty'),
     emptyHint: t('admin.networks.emptyHint'),
     onCurrentChange: () => updateButtons(),
+    // Правило 8 требования 11ddd910: команда над строкой — в меню самой строки.
+    rowMenu: (network): MenuItem[] => [
+      menuAction(t('admin.network.delete'), () => void removeNetworkRow(network, content), {
+        danger: true,
+      }),
+    ],
   });
   wrap.append(table.element);
 
@@ -566,9 +583,10 @@ function renderAudit(content: HTMLElement): void {
     }),
   );
   const tableWrap = div('admin-table-wrap');
-  tableWrap.style.height = '400px';
   // Строки управления над списком у журнала нет: он только для чтения —
   // над текущей строкой нечего производить (правила 2 и 5 к нему не применимы).
+  // Высота области списка — по раскладке `.list-dialog-body`, а не инлайном
+  // (правило 9 требования 11ddd910).
   content.append(searchRow, filterRow, tableWrap);
 
   /** Загруженные записи журнала — источник клиентского фильтра поиска. */
