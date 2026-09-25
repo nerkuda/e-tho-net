@@ -26,14 +26,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
-const CSS_PATH = resolve(
-  import.meta.dirname,
-  '..',
-  'src',
-  'renderer',
-  'styles.css',
-);
+const CSS_PATH = assembledStylesFile();
 
 const TABS_CSS_PATH = resolve(
   import.meta.dirname,

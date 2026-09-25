@@ -1,0 +1,60 @@
+/* ---------------------------------------------------------------------------
+ * Micro-interactions (L10, 08-ui-spec.md §13)
+ * ------------------------------------------------------------------------- */
+
+/* Gentle colour transitions for hover/active states of interactive elements.
+ * Transform is deliberately NOT transitioned: cloud transforms belong to the
+ * FLIP focus choreography (§2.8), and hover shifts would fight it. */
+.ui-btn,
+.menu-item,
+.history-cloud,
+.history-more,
+.editor-tab,
+.ui-tab,
+.emoji-cell,
+.link-group-item,
+.selection-item,
+.search-hit,
+.search-group-header,
+.group-header,
+.attachment-item,
+.mention-item,
+.type-combo-item,
+.ui-toggle,
+.editor-icon-box,
+.row-splitter,
+.profile-item,
+.network-item {
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn,
+  .menu-item,
+  .history-cloud,
+  .history-more,
+  .editor-tab,
+  .ui-tab,
+  .emoji-cell,
+  .link-group-item,
+  .selection-item,
+  .search-hit,
+  .search-group-header,
+  .group-header,
+  .attachment-item,
+  .mention-item,
+  .type-combo-item,
+  .ui-toggle,
+  .editor-icon-box,
+  .row-splitter,
+  .profile-item,
+  .network-item,
+  .cloud .ellipse {
+    transition: none;
+  }
+}
+

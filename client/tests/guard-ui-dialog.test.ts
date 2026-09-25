@@ -33,6 +33,7 @@ import {
   type GuardRule,
   type GuardViolation,
 } from './guard-helpers.js';
+import { readRendererCss } from './renderer-css.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -75,9 +76,7 @@ function findDialogsWithoutSize(root: string): GuardViolation[] {
 
 /** Правило 5 (функциональное): `.dialog-box` не получает авто-высоту. */
 function findDialogAutoHeight(root: string): GuardViolation[] {
-  const cssPath = path.join(root, 'styles.css');
-  if (!fs.existsSync(cssPath)) return [];
-  const css = fs.readFileSync(cssPath, 'utf8');
+  const css = readRendererCss(root);
   const re = /\.dialog-box[^{}]*\{[^}]*height:\s*auto/;
   const match = re.exec(css);
   if (match === null) return [];

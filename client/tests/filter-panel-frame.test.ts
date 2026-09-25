@@ -20,13 +20,14 @@ import {
   parseFilterPanelState,
   serializeFilterPanelState,
 } from '../src/renderer/lib/pure.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const FRAME_TS = resolve(RENDERER, 'lib', 'filter-panel-frame.ts');
 const STRUCTURES_TS = resolve(RENDERER, 'screens', 'structures', 'structures.ts');
 const CHRONICLE_TS = resolve(RENDERER, 'screens', 'chronicle', 'chronicle.ts');
 const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
-const STYLES_CSS = resolve(RENDERER, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 const CONSTANTS_TS = resolve(import.meta.dirname, '..', '..', 'shared', 'src', 'constants.ts');
 
 function readText(path: string): string {

@@ -1,0 +1,76 @@
+/* ---------------------------------------------------------------------------
+ * Selection panel (H16)
+ * ------------------------------------------------------------------------- */
+
+.selection-panel {
+  flex: 0 0 var(--selection-w, 210px);
+  /* Without min-width: 0 the flex item's automatic minimum size (content
+   * width of the list rows) would floor the panel, so the resizer strip could
+   * be dragged inside it. Hidden overflow keeps the panel exactly its basis. */
+  min-width: 0;
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.selection-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.selection-title {
+  font-weight: 700;
+  flex: 1;
+}
+
+.selection-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.selection-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.selection-item:hover {
+  background: var(--surface-2);
+}
+
+/* Top menu bar of the selection panel (Выделение / Действия / Свойства).
+ * Wraps when the panel is dragged narrower than the buttons. */
+.selection-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.selection-menu-btn {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.selection-menu-btn:hover {
+  background: var(--surface);
+}
+

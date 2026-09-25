@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { assembledStylesFile } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -129,7 +130,7 @@ describe('guard: состояния контролов lib/ui', () => {
   });
 
   it('микроанимации идут через --transition-hover и гасятся при reduce-motion', () => {
-    const styles = fs.readFileSync(path.join(RENDERER_ROOT, 'styles.css'), 'utf8');
+    const styles = fs.readFileSync(assembledStylesFile(), 'utf8');
     if (!/--transition-hover\s*:/.test(styles)) {
       throw new Error('Токен --transition-hover не объявлен в styles.css');
     }
@@ -159,7 +160,7 @@ describe('guard: состояния контролов lib/ui', () => {
   });
 
   it('приглушение недоступных контролов — через --state-disabled-opacity', () => {
-    const styles = fs.readFileSync(path.join(RENDERER_ROOT, 'styles.css'), 'utf8');
+    const styles = fs.readFileSync(assembledStylesFile(), 'utf8');
     if (!/--state-disabled-opacity\s*:/.test(styles)) {
       throw new Error('Токен --state-disabled-opacity не объявлен в styles.css');
     }

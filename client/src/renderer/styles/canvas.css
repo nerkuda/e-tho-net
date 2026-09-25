@@ -1,0 +1,1011 @@
+/* ---------------------------------------------------------------------------
+ * Canvas: zones, clouds, links (H4–H6)
+ * ------------------------------------------------------------------------- */
+
+.canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Dot-grid backdrop (L10, 08-ui-spec.md §13): a faint 24px point lattice
+     over the base colour gives the canvas a sense of space and a visual cue
+     for the zoom level. The zones themselves stay transparent.
+     --layer-bg (0.6.4, 13-layers.md §2.2a) recolours the canvas while a
+     non-base layer with explicit colours is active; absent — theme default. */
+  background:
+    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
+    var(--layer-bg, var(--bg));
+}
+
+/* The host is focusable (§2.9 keyboard navigation, kbd-nav.ts) — the keyboard
+ * cursor frame marks the current cloud, so the host itself draws nothing. */
+.canvas:focus {
+  outline: none;
+}
+
+/* Focus band (L12, 08-ui-spec.md §2.1): a horizontal stripe of
+ * --focus-band-color across the focus row, fading out over --focus-band-fade
+ * towards the top and bottom edges. The renderer anchors it via
+ * --focus-band-top/--focus-band-bottom on the host (updateFocusBand in
+ * canvas.ts); the off-screen defaults keep it invisible until then. Painted
+ * as ::before it sits under the zones, clouds and all link layers.
+ * --layer-focus-stripe (0.6.4, 13-layers.md §2.2a) recolours the band while
+ * a non-base layer with explicit colours is active; absent — theme default. */
+.canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 180px)),
+    var(--layer-focus-stripe, var(--focus-band-color)) var(--focus-band-top, 9999px),
+    var(--layer-focus-stripe, var(--focus-band-color)) var(--focus-band-bottom, 0px),
+    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 180px))
+  );
+}
+
+/* Layer-name stripe (0.6.4, 13-layers.md §2.2a): the name of the active
+ * non-base layer as HORIZONTAL text at the LEFT edge of the focus zone
+ * (anchored by updateLayerLabel in canvas.ts via top/height). Big font — up
+ * to 30% of the zone height, set inline, never shrunk for the name: a name
+ * longer than the stripe is simply clipped by `overflow: hidden`. The text
+ * is auto-contrast black/white against the focus band colour; the opacity is
+ * applied inline from LABEL_OPACITY (layer-colors.ts) — a single tuning
+ * knob. Never interactive, never wider than 10% of the canvas width. */
+.layer-label {
+  position: absolute;
+  left: 0;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  justify-content: flex-start;
+  max-width: 10%;
+  padding-left: 6px;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.layer-label-text {
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.canvas-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.canvas-top {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.zone {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.zone-parents {
+  flex: 0 0 calc(100% * var(--zone-top-split, 0.5));
+}
+
+/* The siblings zone takes the rest of the top strip. */
+
+.zone-children {
+  flex: 0 0 calc(100% * var(--zone-children-share, 0.34));
+  min-height: 96px;
+}
+
+/* Draggable splitters between canvas zones (08-ui-spec §2.1, L12): a 4px
+ * transparent grab strip with a 1px hint line, layered UNDER the link
+ * overlays (hit=5, top=6) — lines pass visually over the strip and a line
+ * hover wins the pointer where they cross. */
+.zone-splitter {
+  position: relative;
+  flex: 0 0 4px;
+  z-index: 1;
+  background: transparent;
+  user-select: none;
+  touch-action: none;
+}
+
+.zone-splitter::after {
+  content: '';
+  position: absolute;
+  /* Semi-transparent hint: a crossing link line stays readable through it. */
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+  transition: background 0.12s ease;
+}
+
+.zone-splitter:hover::after,
+.zone-splitter.dragging::after {
+  background: var(--accent);
+}
+
+.zone-splitter:hover,
+.zone-splitter.dragging {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.zone-splitter-v {
+  cursor: col-resize;
+}
+
+.zone-splitter-v::after {
+  left: 1.5px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.zone-splitter-h {
+  cursor: row-resize;
+}
+
+.zone-splitter-h::after {
+  top: 1.5px;
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+/* While dragging a zone splitter: no text selection and a split cursor. */
+body.resizing-v {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing-h {
+  cursor: row-resize;
+  user-select: none;
+}
+
+.zone.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.zone.drop-forbidden {
+  cursor: not-allowed;
+  outline: 2px dashed var(--danger);
+  outline-offset: -6px;
+}
+
+.zone-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* Floating per-zone count (задача c8fa74ba): overlay on the canvas host,
+ * pinned to the zone's top-right corner by inline `top`/`left` (canvas-space)
+ * + `translateX(-100%)`. Text colour is set inline to stay contrast against
+ * the theme backdrop; the faint pill keeps it legible over clouds. */
+.zone-count {
+  position: absolute;
+  transform: translateX(-100%);
+  z-index: 4;
+  pointer-events: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+.zone-count.hidden {
+  display: none;
+}
+
+.zone-spacer {
+  position: relative;
+}
+
+.zone-grid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  gap: var(--cloud-gap);
+  /* The inline virtualization `translateY` makes this grid a stacking
+   * context — without its own z-index the clouds would flatten into the
+   * z=0 band and the link hit overlay (later in the DOM) would sit ABOVE
+   * them again. z=1 lifts the whole context above the hit layer; the grid
+   * box itself ignores the pointer so link stretches visible between clouds
+   * stay clickable — clouds re-enable it (pointer-events on .cloud). */
+  z-index: 1;
+  pointer-events: none;
+}
+
+.canvas-focus-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  position: relative;
+  z-index: 1;
+  /* The row box spans the whole canvas width — it must not shield the link
+   * hit layer around the focus cloud; the cloud itself re-enables events. */
+  pointer-events: none;
+}
+
+/* Focus filter strip (task 02ba2ae7, spec 9984aa98). Sits between the focus
+ * row and the horizontal splitter; the buttons themselves enable pointer
+ * events (the row is none, the strip re-enables them).
+ *
+ * `position: relative` + `z-index: 1` (баг 5467fb19, баг 4): without an own
+ * stacking context a static block ALWAYS paints below any positioned
+ * descendant of the shared canvas host — DOM order does not matter between
+ * the two categories. `links-overlay-hit` (`initLinksOverlay`, links.ts) is
+ * `position: absolute; z-index: 0` and, despite living earlier in `host`'s
+ * children *before* this strip's DOM insertion point, still painted on top
+ * of it, so a click meant for a strip button hit the invisible wide link
+ * line (`pointer-events: stroke` on `.link-hit`) instead. `z-index: 1`
+ * matches `.canvas-focus-row`/`.zone-grid` — the same fix those two already
+ * carry for the same reason. */
+.canvas-filter-strip {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 0 14px 8px;
+  position: relative;
+  z-index: 1;
+  /* Полоса перекрывает линии связи от фокуса к потомкам по всей своей
+   * ширине: левая/правая части padding-а и gap между кнопками не должны
+   * перехватывать события, иначе курсор и клик по линии вне кнопок
+   * отбора не доходят до hit-слоя (баг 2bfd3e6d). Сами кнопки
+   * включают `pointer-events: auto` на `.canvas-filter-strip-btn`. */
+  pointer-events: none;
+}
+
+.canvas-filter-strip.hidden {
+  display: none;
+}
+
+.canvas-filter-strip-buttons {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.canvas-filter-strip-btn {
+  /* Опирается на тон ghost-роли словаря кнопок (`lib/ui/button.css`) для
+   * единых hover/active-состояний; полоса — единственный элемент холста,
+   * который его несёт. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  /* Родительская полоса отключает pointer-events, чтобы линии связи
+   * проходили сквозь padding и gap между кнопками (баг 2bfd3e6d);
+   * сами кнопки снова включают перехват событий. */
+  pointer-events: auto;
+}
+
+.canvas-filter-strip-btn:hover {
+  background: var(--surface-2);
+}
+
+.canvas-filter-strip-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.canvas-filter-strip-btn.inherited {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.canvas-filter-strip-btn.canvas-filter-strip-overflow,
+.canvas-filter-strip-btn.canvas-filter-strip-add {
+  padding: 4px 8px;
+  font-weight: 600;
+}
+
+/* Кнопка-воронка фильтра типов связей (0.8.1) — только иконка, тот же
+ * компактный паддинг, что у «+» и «⋯». */
+.canvas-filter-strip-btn.canvas-filter-strip-filter {
+  padding: 4px 8px;
+}
+
+.canvas-filter-strip-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  background: var(--surface);
+}
+
+.canvas-filter-strip-btn.hidden {
+  display: none;
+}
+
+/* Three link layers:
+ *   .links-overlay       — visual curves, UNDER the clouds, never interactive;
+ *   .links-overlay-hit   — transparent wide hit curves, also UNDER the clouds:
+ *                          only the visible stretches of a line catch the
+ *                          pointer, so a cloud always receives its own
+ *                          hover/click and links never "surface" through it;
+ *   .links-overlay-top   — the hovered/selected line redrawn (with its label)
+ *                          on top of everything.
+ */
+.links-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.links-overlay-hit {
+  position: absolute;
+  inset: 0;
+  /* Same layer as the visual overlay (both z=0); the hit layer comes later
+   * in the DOM, so it paints above the curves but below the clouds (z=1). */
+  z-index: 0;
+  pointer-events: none;
+}
+.links-overlay-top {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+/* Pending-link layer: above the top overlay, never cleared by link redraws. */
+.links-overlay-drag {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+
+/* Pending-link preview (canvas ellipse drag): the dashed line of the future
+   link, from the dragged ellipse to the cursor. */
+.drag-link-line {
+  stroke: var(--accent);
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+  stroke-linecap: round;
+}
+
+/* Wide invisible hit target for a line. */
+.links-overlay-hit .link-hit {
+  pointer-events: stroke;
+  cursor: pointer;
+  stroke: transparent;
+  fill: none;
+}
+/* The highlighted copy on the top overlay never captures pointer events. */
+.link-line-active {
+  pointer-events: none;
+}
+
+/* Endpoint ellipses of the hovered/selected link. */
+/* Endpoint ellipses of the hovered/selected link: orange outline (does not
+   override `.filled`, which marks that a link direction exists at all). */
+.ellipse.link-end {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 2px var(--warn-glow);
+}
+
+/* Popover for the hovered/selected link: type name + comment/attachment counts.
+   Interactive on purpose (the "tooltip running away from the cursor" fix):
+   `pointer-events: auto` lets the cursor enter it, so the Ctrl-hover preview
+   engine works on the 📝/📅/📎 indicators inside; links.ts freezes the
+   position while it stays open for the same bundle and hides it 0.3 s after
+   the cursor left both the hit line and the popover. Kept BELOW the preview
+   windows (z-index 1950) so they open on top of it. */
+.link-popover {
+  position: fixed;
+  z-index: 1100;
+  pointer-events: auto;
+  transform: translate(-50%, calc(-100% - 10px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.link-popover-types {
+  font-weight: 600;
+}
+
+.link-label-text {
+  font-size: var(--link-label-font, 11px);
+  fill: var(--text-dim);
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+/* --- cloud (L11/L12 visual refresh) ---------------------------------------- */
+
+.cloud {
+  position: relative;
+  z-index: 1;
+  width: var(--cloud-width);
+  /* The cloud sizes itself to its content (1–3 title lines); a grid cell
+   * never stretches it to the row height (§2.2.1 dynamic height). */
+  height: max-content;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-cloud);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  user-select: none;
+  /* Re-enables the pointer inside the pointer-transparent zone grids and
+   * focus row (the clouds must keep their own hover/click/drag). */
+  pointer-events: auto;
+  /* NB: no overflow clip — the on-frame ellipses stick half-outside (L12). */
+  transition:
+    box-shadow 0.12s ease,
+    border-color 0.12s ease;
+}
+
+/* Ширина облачка по контейнеру — опция `width: 'container'` общей фабрики
+   (`lib/thought-cloud.ts`, класс `cloud-width-container`). Снимает заданный
+   предел ширины (холстовую `--cloud-width` у `.cloud`, пилюлю у
+   `.prop-ref-cloud`) и растягивает облачко по контейнеру; имя обрезается
+   многоточием по нему (у однострочных профилей — `.cloud-title` /
+   `.prc-title` с `nowrap` + `text-overflow`). ЕДИНСТВЕННЫЙ способ задать
+   ширину «по контейнеру»: контекстные переопределения (`.link-endpoint
+   .cloud`, `.search-hit… > .cloud`, `.st-row .st-cloud.cloud`) закрыты —
+   ширину места объявляет вызов фабрики, а не селектор в стилях.
+   Снимать предел без своего `max-width` контекстом запрещено (сторож
+   `guard-thought-cloud`). */
+.cloud-width-container {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
+.cloud-ghosts {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.cloud:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-hover);
+}
+
+/* Clouds picked into the selection panel (§5): a teal outline, clearly
+ * distinct from the editor halo of the opened thought (.cloud.halo below). */
+.cloud.selected {
+  outline: 2px solid var(--selection);
+  outline-offset: 1px;
+}
+
+/* Halo (§2.2.4): the thought is open in the editor — single click, Enter or a
+ * pick from another view. A soft accent ring plus glow around the cloud.
+ * While a layer with explicit colours is active the ring takes the layer's
+ * focus-stripe colour (0.6.4, 13-layers.md §2.2a) — the border of the edited
+ * thought is part of the layer indication. */
+.cloud.halo {
+  border-color: var(--layer-focus-stripe, var(--accent));
+  box-shadow:
+    0 0 0 1px var(--layer-focus-stripe, var(--accent)),
+    0 0 0 5px var(--accent-soft),
+    var(--shadow-focus);
+}
+
+/* Keyboard cursor frame (§2.9): the cloud the arrow navigation points at.
+ * Dashed and offset further than the selection outline so both stay visible
+ * when they combine. */
+.cloud.kbd-cursor {
+  outline: 2px dashed var(--warn-strong);
+  outline-offset: 3px;
+}
+
+.cloud.dim {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+/* Link-direction ellipses lie ON the cloud frame (L12, 08-ui-spec.md §2.2):
+ * centered on the frame line, half of the 4px thickening outside the card.
+ * Compact by request: 4px tall, a quarter of the cloud width wide, centered
+ * horizontally on the cloud (the inside halves feed the cloudHeight()
+ * formula in pure.ts). */
+.cloud .ellipse {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: 25%;
+  height: calc(4px * var(--cloud-zoom, 1));
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  cursor: grab;
+  /* The hover growth animates like the other hover transitions (L10). */
+  transition:
+    height 0.12s ease,
+    top 0.12s ease,
+    bottom 0.12s ease,
+    border-width 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.cloud .ellipse-top {
+  top: calc(-2px * var(--cloud-zoom, 1));
+}
+
+.cloud .ellipse-bottom {
+  bottom: calc(-2px * var(--cloud-zoom, 1));
+}
+
+.cloud .ellipse.filled {
+  background: var(--ellipse-fill);
+  border-color: var(--ellipse-fill-border);
+}
+
+/* Hovering an ellipse (or a link's highlighted endpoint) grows it to double
+ * height — the center stays on the frame line — and thickens the orange
+ * outline by 1px (the link overlay lights up the ellipse's links via
+ * setEllipseHover, 08-ui-spec.md §2.4). */
+.cloud .ellipse:hover,
+.cloud .ellipse.link-end {
+  height: calc(8px * var(--cloud-zoom, 1));
+  border-width: 2px;
+}
+
+.cloud .ellipse:hover {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.cloud .ellipse-top:hover,
+.cloud .ellipse-top.link-end {
+  top: calc(-4px * var(--cloud-zoom, 1));
+}
+
+.cloud .ellipse-bottom:hover,
+.cloud .ellipse-bottom.link-end {
+  bottom: calc(-4px * var(--cloud-zoom, 1));
+}
+
+.cloud .ellipse.drag-source {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The dragged cloud (drag-cloud.ts): dimmed in place while its ghost follows
+   the cursor; the ghost clone itself is a `.cloud` too. */
+.cloud.drag-source {
+  opacity: 0.45;
+}
+
+.cloud.drag-ghost {
+  opacity: 0.95;
+  box-shadow:
+    var(--shadow),
+    0 0 0 2px var(--accent-soft);
+  cursor: grabbing;
+}
+
+/* Reorder preview (Ctrl+Shift drag, drag-cloud.ts): the gap where the dragged
+   thought will land — the following clouds shift aside around it. The gap must
+   catch the pointer (the zone grid is pointer-transparent), so a drop released
+   over it still resolves the insertion point. */
+.cloud-drop-placeholder {
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-cloud);
+  background: var(--accent-soft);
+  pointer-events: auto;
+}
+
+.cloud.drop-target,
+.pinned-chip.drop-target,
+.history-cloud.drop-target,
+.menu-item.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Cloud drag-n-drop targets (drag-cloud.ts): link onto a cloud / its top
+   ellipse, or move/reorder into a zone. */
+.cloud.drop-target-link {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.ellipse.drop-target-link {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.zone.drop-target-move {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+/* Ctrl+Shift reorder target: the hovered cloud lights up green — distinct
+   from the blue link/reparent highlight above. */
+.cloud.drop-target-move {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+}
+
+/* Thought list panels as drop targets (drag-cloud.ts §5.5/§11.1, §16): the
+   selection list takes the dragged thought into the selection, the history
+   bar (including the history dropdown rows) opens it, the pinned panel pins
+   it at the drop position. The frame is applied only while a drag hovers the
+   target and is removed on drop/cancel. */
+.selection-list.drop-target-add,
+.history-bar.drop-target-add,
+.pinned-bar.drop-target-add,
+.menu-item.drop-target-add {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* A dragged list entry (selection row, history chip, dropdown row) follows the
+   cursor as a ghost. Cloud ghosts are styled above (.cloud.drag-ghost); these
+   rules only dress the non-cloud clones. */
+.selection-item.drag-ghost,
+.history-cloud.drag-ghost,
+.pinned-chip.drag-ghost,
+.menu-item.drag-ghost {
+  background: var(--surface);
+  box-shadow:
+    var(--shadow),
+    0 0 0 2px var(--accent-soft);
+  opacity: 0.95;
+  cursor: grabbing;
+}
+/* A menu row cloned outside its `.menu` loses the inherited 13px font. */
+.menu-item.drag-ghost {
+  font-size: 13px;
+}
+
+/* Ellipse link-drag gesture (canvas.ts): a link cursor over the whole window —
+   including elements that carry their own cursor — so the drag is always
+   visible; the pressed ellipse also lights up (.drag-source above). */
+body.dragging,
+body.dragging * {
+  cursor: crosshair !important;
+}
+
+/* Cloud drag (drag-cloud.ts): a grabbing cursor over the whole window while
+   the dragged cloud's ghost follows the pointer — unlike the ellipse gesture
+   (a link is being drawn there), here the cloud itself is being carried. */
+body.cloud-dragging,
+body.cloud-dragging * {
+  cursor: grabbing !important;
+}
+
+/* Icon spine: a full-height band on the left, the glyph centered in it (L12). */
+.cloud-icon {
+  flex: 0 0 auto;
+  width: calc(var(--cloud-font) * 2.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cloud-font) * 1.45);
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+  border-radius: calc(var(--radius-cloud) - 1px) 0 0 calc(var(--radius-cloud) - 1px);
+  overflow: hidden;
+}
+
+.cloud-icon img {
+  /* Definite height (not %) — during intrinsic sizing the box height is
+   * content-driven, so a `max-height: 100%` never clamps and a large PNG
+   * blew the cloud up to its natural size. Keep the image within the emoji
+   * glyph size; wide images clamp to the box width without distortion. */
+  height: calc(var(--cloud-font) * 1.45);
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+/* Compact thought icon for lists (history bar, link rows, search hits,
+   selection panel): image icons fill the fixed box exactly like the cloud
+   icons do — never their natural size. */
+.mini-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+}
+
+.mini-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Right column: title on top, indicators underneath aligned to its left
+ * edge (L12). Vertical paddings scale with the canvas zoom (L9) and match
+ * the cloudHeight() formula in pure.ts (CLOUD_PAD). */
+.cloud-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: calc(3px * var(--cloud-zoom, 1)) 10px calc(3px * var(--cloud-zoom, 1));
+}
+
+.cloud-title {
+  min-width: 0;
+  font-size: var(--cloud-font);
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.cloud-ind {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 1px 0 0;
+  font-size: calc(var(--cloud-font) * 0.8);
+  line-height: 1.25;
+  /* Same colour as the title (inherited from .cloud): theme accents could be
+     invisible on a user-picked dark cloud background. */
+  color: inherit;
+}
+
+.cloud-ind .ind {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cloud-ind .ind.dim {
+  opacity: 0.55;
+}
+
+.cloud-ind .ind.active {
+  opacity: 1;
+  font-weight: 600;
+}
+
+.cloud-ind .ind:hover {
+  text-decoration: underline;
+}
+
+/* Manual-order position indicator (08-ui-spec.md §2.2). Small black badge
+   in the right-bottom corner of a zone cloud. The 16×16 circle's centre
+   coincides with the cloud's right-bottom corner (right: -8px, bottom: -8px
+   for a 16×16 box), so the badge slightly overlaps the corner. Shown only
+   when the zone is sorted `manual` and the thought has an actual entry in
+   `user_focus_order` (manual_position !== null). pointer-events: none keeps
+   the cloud's click/dblclick/contextmenu handlers intact. */
+.cloud-pos {
+  position: absolute;
+  right: -8px;
+  bottom: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #000;
+  color: #d0d0d0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cloud-font) * 0.75);
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  z-index: 2;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.cloud-pos[hidden] {
+  display: none;
+}
+
+/* Mark-for-deletion badge (S13, 08-ui-spec.md §2.2): top-left corner, always
+   visible regardless of the `trashed` search/query filter. Clickable — opens
+   the single-delete dialog for this thought. The circle is 70% larger than
+   the position badge (27.2px vs 16px) so the bright-red trash glyph inside
+   stays readable at a glance; the circle centre still coincides with the
+   cloud's top-left corner (left/top = -size/2). */
+.cloud-trash-badge {
+  position: absolute;
+  left: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+/* The trash glyph (lucide «trash», lib/icons.ts) is drawn bright red on the
+   black circle — well readable on both light and dark themes. */
+.cloud-trash-badge svg {
+  color: #e53935;
+}
+
+/* Метка «мысль чужой сети» облачка (кросс-сетевая ссылка, ошибка 9be98ae1):
+   зеркало метки корзины по назначению, но у правого верхнего угла — метки
+   корзины (слева) и сети (справа) на одном облачке не конфликтуют. */
+.cloud-network-badge {
+  position: absolute;
+  right: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+/* Глиф «сеть» (lucide «network», lib/icons.ts) — акцентный голубой на чёрном
+   круге, читаемый на обеих темах и отличимый от красной корзины. */
+.cloud-network-badge svg {
+  color: #4a9eff;
+}
+
+/* Object-lock badge (task 4f141756, UI element 8e3703ee): small 🔒 chip
+   anchored at the cloud's top-right corner so it never overlaps the
+   indicator row (📝/📅/📎) along the right edge. «own» variant keeps the
+   same shape but is tinted in the active theme colour instead of red so
+   the user sees their own edit at a glance without alarm. */
+.cloud-lock-badge {
+  position: absolute;
+  right: -8px;
+  top: -6px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #ffd54f;
+  user-select: none;
+  pointer-events: auto;
+  z-index: 4;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.cloud-lock-badge.own {
+  background: rgba(33, 150, 243, 0.85);
+  color: #fff;
+}
+
+/* A locked-by-other cloud wears a soft red outline; a locked-by-self cloud
+   wears a soft blue one — visually distinct from the trash dim and the
+   layer-override dashed outline so the three states never collide. */
+.cloud.locked-by-other {
+  outline: 2px solid rgba(229, 57, 53, 0.55);
+  outline-offset: 1px;
+}
+.cloud.locked-by-self {
+  outline: 2px solid rgba(33, 150, 243, 0.45);
+  outline-offset: 1px;
+}
+
+/* SVG link overlay (canvas/links.ts): lock emphasis on the curve. Other
+   people's locks get a violet dashed stroke that does not collide with the
+   S11 layer-override style (which is also violet but solid) — adding a
+   slight dash gap distinguishes the two without giving up readability. */
+.link-line.link-locked-other {
+  stroke-dasharray: 6 4;
+  filter: drop-shadow(0 0 1.5px rgba(229, 57, 53, 0.5));
+}
+.link-line.link-locked-own {
+  stroke-dasharray: 4 2;
+  filter: drop-shadow(0 0 1.5px rgba(33, 150, 243, 0.4));
+}
+
+.cloud.font-bold .cloud-title {
+  font-weight: 700;
+}
+
+.cloud.font-italic .cloud-title {
+  font-style: italic;
+}
+
+.cloud.font-underline .cloud-title {
+  text-decoration-line: underline;
+}
+
+.cloud.font-strike .cloud-title {
+  text-decoration-line: line-through;
+}
+
+/* Оба начертания сразу: `text-decoration-line` принимает список значений —
+   без объединённого правила более позднее из двух одиночных перекрывало бы
+   первое, и «подчёркнутый + зачёркнутый» терял бы одно начертание (a6055d05). */
+.cloud.font-underline.font-strike .cloud-title {
+  text-decoration-line: underline line-through;
+}
+
+/* --- focus cloud (H5) ----------------------------------------------------- */
+
+.cloud.focus-cloud {
+  width: auto;
+  /* Min width scales with the canvas zoom (L9). */
+  min-width: calc(200px * var(--cloud-zoom, 1));
+  /* The focused thought never eats the whole canvas (0.6.4): the middle zone
+   * keeps 22% of the width for the surrounding context — and the layer-name
+   * stripe at the left edge stays clear of the focus cloud. */
+  max-width: min(78%, calc(100% - 28px));
+  border-color: var(--accent);
+  border-width: 2px;
+  box-shadow: var(--shadow-focus);
+  cursor: default;
+}
+
+.cloud.focus-cloud .cloud-title {
+  -webkit-line-clamp: 3;
+  font-size: calc(var(--cloud-font) * 1.3);
+}
+
+.cloud.focus-cloud .cloud-icon {
+  width: calc(var(--cloud-font) * 2.9);
+  font-size: calc(var(--cloud-font) * 1.9);
+}
+
+.cloud.focus-cloud .ellipse {
+  cursor: grab;
+}
+
+.cloud.focus-cloud .ellipse.filled {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+}
+

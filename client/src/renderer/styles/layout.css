@@ -1,0 +1,750 @@
+/* ---------------------------------------------------------------------------
+ * Workspace: toolbar / body / statusbar (H1)
+ * ------------------------------------------------------------------------- */
+
+.workspace {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  flex: 0 0 var(--toolbar-h);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.tb-label {
+  font-weight: 600;
+}
+
+.tb-caret {
+  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+/* ----- top row (Q3, 08-ui-spec.md §1) ------------------------------------- */
+
+.top-row {
+  flex: 0 0 var(--top-row-h);
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.top-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ----- tab strip (08-ui-spec.md §1.1) ----------------------------------- */
+
+.tab-strip-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.tab-strip {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab {
+  /* Ширина — только из раскладки: `recomputeOverflow` (режим fixed) ставит
+     `style.width` от 180px до 120px. CSS ширину не фиксирует — числовой
+     `flex-basis` перебивал inline-ширину, сжатие не работало и кнопки
+     уезжали под `overflow: hidden` полосы (ошибка 1786ff94). */
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Тот же баг, что у `.editor-tab[hidden]` выше: `.tab { display: inline-flex }`
+   (author normal) перебивает браузерное `[hidden] { display: none }`
+   (user-agent normal) независимо от специфичности — без этого правила
+   `recomputeOverflow` (tab-overflow.ts) выставляет `hidden=true` не
+   поместившимся вкладкам воркспейса, но они остаются видимыми. */
+.tab[hidden] {
+  display: none;
+}
+
+.tab:hover {
+  background: var(--surface-3, var(--surface));
+}
+
+.tab.tab-active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.tab.tab-inaccessible {
+  opacity: 0.5;
+}
+
+.tab.tab-dirty .tab-marker {
+  font-weight: 700;
+}
+
+.tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close {
+  position: relative;
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: var(--radius-sm);
+}
+
+.tab-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+/* Крестик вкладки — невидимая зона нажатия не меньше тач-таргета
+   (требование 5677bc3d). */
+.tab-close::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
+}
+
+.tab-plus {
+  flex: 0 0 28px;
+  justify-content: center;
+  padding: 4px;
+}
+
+.tab-overflow {
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tab-overflow[hidden] {
+  display: none;
+}
+
+.tab-overflow-dropdown {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 220px;
+  padding: 4px;
+  z-index: 1000;
+}
+
+.tab-overflow-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.tab-overflow-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.tab-ghost {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 13px;
+  opacity: 0.85;
+  z-index: 1000;
+}
+
+.tab-dragging {
+  opacity: 0.5;
+}
+
+/* ----- inaccessible tab placeholder (Q5, 08-ui-spec.md §1.1) --------------- */
+
+.workspace-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--surface);
+  z-index: 50;
+  text-align: center;
+  padding: 24px;
+}
+
+.workspace-placeholder.hidden {
+  display: none;
+}
+
+.placeholder-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.placeholder-hint {
+  font-size: 13px;
+  color: var(--text-faint);
+  max-width: 420px;
+  line-height: 1.4;
+}
+
+/* ----- network picker overlay (Q-bugfix) ----------------------------------
+   The «+» tab opens this overlay inside the workspace body. The top-row (with
+   the tab strip) stays visible above it so the user can cancel by clicking
+   any other tab. */
+
+.workspace-picker {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 24px;
+  background: var(--surface);
+  z-index: 60;
+  overflow: auto;
+}
+
+.workspace-picker.hidden {
+  display: none;
+}
+
+.workspace-picker .picker-card {
+  width: 560px;
+  max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-picker .picker-title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+}
+
+.workspace-picker .picker-sub {
+  margin: -8px 0 0;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.workspace-picker .picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.workspace-picker .picker-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Search row of the map view (L18): the search input lives under the top bar
+   and belongs to the map; the structures view hides the whole row. The old
+   options gear moved into the drop panel as the funnel toggle (задача
+   a3247f84). */
+.search-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.search-row .search-input {
+  flex: 1;
+}
+
+/* Pinned-thoughts panel in the toolbar (L18, 08-ui-spec.md §16): chips in one
+   row; those that don't fit move into the «▾ N» dropdown. The panel spans the
+   whole free toolbar width — it is one big drop target; the dashed frame
+   appears only while a drag hovers it. */
+.pinned-bar {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  overflow: hidden;
+}
+
+/* Чип закреплённой мысли — фабричное мини-облачко (профиль `chip`, класс
+   `.prop-ref-cloud`) плюс модификатор раскладки панели: несжимаемый, с
+   пределом ширины 260px; таргетинг дропа ищет `.pinned-chip[data-id]`.
+   Остальное — пилюля, hover, начертание и бледность — общие правила
+   `.prop-ref-cloud` (чистка дублей, a6055d05). */
+.prop-ref-cloud.pinned-chip {
+  flex: 0 0 auto;
+  max-width: 260px;
+}
+
+.pinned-more {
+  flex: 0 0 auto;
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.pinned-more:hover {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.pinned-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+  /* The empty panel has only this placeholder inside it; an empty chip must
+     still receive pointer events so a drop into the empty pinned area is
+     resolved correctly (L18 fix). */
+  pointer-events: auto;
+}
+
+/* Drop-position marker: a thin accent bar shown between the chips while a
+   drag hovers the panel — makes the insertion point visible (L18). */
+.pin-insert-marker {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.search-input {
+  flex: 0 1 420px;
+  min-width: 140px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.status-dot {
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 2px;
+}
+
+/* Connection status light (L13): a CSS dot coloured by state class
+   (ok/warn/bad) with a soft glow — replaces the emoji indicator. */
+.status-light {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--text-faint);
+}
+
+.status-light.ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent);
+}
+
+.status-light.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+
+.status-light.bad {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+/* Inline SVG chrome icons (L13, lib/icons.ts): colour follows the host text
+   colour (currentColor); layout-neutral sizing. */
+.icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Chevron caret of collapsible groups: rotated when collapsed (L13). */
+.group-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  transition: transform 0.12s ease;
+}
+
+.group-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.workspace-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.workspace-body[data-editor-pos='right'] > .editor {
+  order: 3;
+}
+
+.workspace-body[data-editor-pos='left'] {
+  flex-direction: row;
+}
+
+.workspace-body[data-editor-pos='left'] > .editor {
+  order: 1;
+}
+
+.workspace-body[data-editor-pos='left'] > .selection-panel {
+  order: 2;
+}
+
+.workspace-body[data-editor-pos='left'] > .canvas {
+  order: 3;
+}
+
+.workspace-body[data-editor-pos='top'],
+.workspace-body[data-editor-pos='bottom'] {
+  flex-direction: column;
+}
+
+.workspace-body[data-editor-pos='top'] > .editor {
+  order: 1;
+  flex: 0 0 var(--editor-h);
+  border-bottom: 1px solid var(--border);
+  border-right: none;
+  width: auto;
+}
+
+.workspace-body[data-editor-pos='bottom'] > .editor {
+  order: 3;
+  flex: 0 0 var(--editor-h);
+  border-top: 1px solid var(--border);
+  border-right: none;
+  width: auto;
+}
+
+.workspace-body[data-editor-pos='top'] > .canvas,
+.workspace-body[data-editor-pos='bottom'] > .canvas {
+  order: 2;
+  min-height: 0;
+}
+
+.workspace-body[data-editor-pos='top'] > .selection-panel {
+  order: 1;
+}
+
+/* --- editor resizer: draggable splitter between canvas and editor (08-ui-spec
+   §6.1). Absolutely positioned on the canvas/editor seam; its coordinate is
+   expressed through the same --editor-w / --editor-h variables that size the
+   editor, so it tracks the panel live during a drag. ------------------------- */
+
+.editor-resizer {
+  position: absolute;
+  z-index: 5;
+  background: var(--border);
+  transition: background 0.12s ease;
+  touch-action: none;
+}
+.editor-resizer:hover,
+.editor-resizer.dragging {
+  background: var(--accent);
+}
+
+/* While dragging: no text selection and a split cursor over the whole body. */
+.workspace-body.resizing {
+  user-select: none;
+}
+.workspace-body.resizing[data-editor-pos='left'],
+.workspace-body.resizing[data-editor-pos='right'] {
+  cursor: col-resize;
+}
+.workspace-body.resizing[data-editor-pos='top'],
+.workspace-body.resizing[data-editor-pos='bottom'] {
+  cursor: row-resize;
+}
+
+/* Vertical splitter (editor docked left/right). */
+.workspace-body[data-editor-pos='right'] > .editor-resizer {
+  top: 0;
+  bottom: 0;
+  right: calc(var(--editor-w) - 3px);
+  width: 6px;
+  cursor: col-resize;
+}
+.workspace-body[data-editor-pos='left'] > .editor-resizer {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--editor-w) - 3px);
+  width: 6px;
+  cursor: col-resize;
+}
+
+/* Horizontal splitter (editor docked top/bottom). */
+.workspace-body[data-editor-pos='top'] > .editor-resizer {
+  left: 0;
+  right: 0;
+  top: calc(var(--editor-h) - 3px);
+  height: 6px;
+  cursor: row-resize;
+}
+.workspace-body[data-editor-pos='bottom'] > .editor-resizer {
+  left: 0;
+  right: 0;
+  bottom: calc(var(--editor-h) - 3px);
+  height: 6px;
+  cursor: row-resize;
+}
+
+/* --- selection resizer: draggable splitter between the selection panel and
+   the canvas (08-ui-spec.md §5). Absolutely positioned on the panel's right
+   seam via the --selection-w variable; when the editor docks left the panel
+   starts after it, hence the extra --editor-w offset. ---------------------- */
+
+.workspace-body > .selection-resizer {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--selection-w) - 3px);
+  width: 6px;
+  background: var(--border);
+  transition: background 0.12s ease;
+  touch-action: none;
+  cursor: col-resize;
+}
+.workspace-body > .selection-resizer:hover,
+.workspace-body > .selection-resizer.dragging {
+  background: var(--accent);
+}
+/* With the editor docked left the panel sits between it and the canvas. */
+.workspace-body[data-editor-pos='left'] > .selection-resizer {
+  left: calc(var(--editor-w) + var(--selection-w) - 3px);
+}
+/* The panel is a horizontal strip in the top/bottom docks — no width resizer. */
+.workspace-body[data-editor-pos='top'] > .selection-resizer,
+.workspace-body[data-editor-pos='bottom'] > .selection-resizer {
+  display: none;
+}
+
+.statusbar {
+  flex: 0 0 var(--statusbar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sb-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.sb-event {
+  color: var(--accent);
+  font-style: italic;
+}
+
+/* Status-bar event area (08-ui-spec §11): right-most fixed-width region of
+ * the status bar. Holds the thought counts and the last realtime event text;
+ * its width is driven by `--event-area-w` (set from `store.eventAreaW` on
+ * every `refresh` tick and clamped against the window-relative upper bound).
+ * Lives OUTSIDE the history strip so a new event text does NOT trigger a
+ * reflow of the history chips (bug de07e690-…: «Дергание нижней строки
+ * клиента»). */
+.event-area {
+  flex: 0 0 var(--event-area-w, 200px);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.event-area .sb-item {
+  max-width: 100%;
+}
+
+.event-area .sb-event {
+  flex: 1 1 auto;
+  text-align: right;
+  font-style: italic;
+}
+
+/* Drag-resize splitter on the seam between the history strip and the event
+ * area. The 6 px hit area is centred on the 1 px hairline; cursor: col-resize
+ * advertises the affordance without JS on every render. */
+.event-area-resizer {
+  flex: 0 0 6px;
+  align-self: stretch;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  touch-action: none;
+}
+
+.event-area-resizer::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border-strong);
+  opacity: 0.6;
+}
+
+.event-area-resizer:hover::before,
+.event-area-resizer.dragging::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.statusbar.resizing,
+.statusbar.resizing * {
+  cursor: col-resize !important;
+}
+
+.sb-conflict {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* --- focus history (H7) --------------------------------------------------- */
+
+.history-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  /* The bar lives in the status bar between the connection indicator and the
+   * spacer; we let it claim the whole free width now that the current-thought
+   * title is no longer rendered next to it (08-ui-spec.md §11, fix bug:
+   * «Ошибки в панели истории на Карте мыслей»). */
+}
+
+/* Чип истории — фабричное мини-облачко (профиль `chip`, класс
+   `.prop-ref-cloud`) плюс модификатор раскладки полосы: чип не сжимается
+   (план видимого набора считает реальные ширины, history-bar.ts::layoutChips,
+   регрессии 3ccacc1c-… и a1c7c8dc-…) и не растягивается шире 170px.
+   Остальное — пилюля, hover, начертание и бледность — общие правила
+   `.prop-ref-cloud` (чистка дублей, a6055d05). */
+.prop-ref-cloud.history-cloud {
+  flex: 0 0 auto;
+  max-width: 170px;
+}
+
+.history-more {
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.history-more:hover {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.history-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+

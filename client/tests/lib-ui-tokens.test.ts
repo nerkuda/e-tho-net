@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { readRendererCss } from './renderer-css.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -25,10 +26,7 @@ const RENDERER_ROOT = path.resolve(
   'renderer',
 );
 
-const STYLES_CSS = fs.readFileSync(
-  path.join(RENDERER_ROOT, 'styles.css'),
-  'utf8',
-);
+const STYLES_CSS = readRendererCss(RENDERER_ROOT);
 const TOKENS_CSS = fs.readFileSync(
   path.join(RENDERER_ROOT, 'lib', 'ui', 'tokens.css'),
   'utf8',

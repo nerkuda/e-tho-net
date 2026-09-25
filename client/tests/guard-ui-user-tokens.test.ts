@@ -26,10 +26,11 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean, type GuardRule } from './guard-helpers.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
-const STYLES_CSS = path.join(RENDERER_ROOT, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 
 /** Минимум объявлений группы `--user-*` (шрифты, холст, комментарии). */
 const MIN_USER_TOKENS = 5;

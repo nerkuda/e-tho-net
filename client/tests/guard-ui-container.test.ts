@@ -27,11 +27,12 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean, collectViolations, type GuardRule } from './guard-helpers.js';
+import { readRendererCss } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 const UI_ROOT = path.join(RENDERER_ROOT, 'lib', 'ui');
-const STYLES_CSS = path.join(RENDERER_ROOT, 'styles.css');
+// styles.css — манифест: правила собирает readRendererCss (renderer-css.ts).
 
 /** Строка — комментарий? */
 function isComment(line: string): boolean {
@@ -97,7 +98,10 @@ const CONTAINERS: ContainerDecl[] = [
   { file: 'styles.css', selector: '.fp-host > .fp-panel', name: 'filter-panel' },
 ];
 
-const read = (rel: string): string => fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
+const read = (rel: string): string =>
+  rel === 'styles.css'
+    ? readRendererCss(RENDERER_ROOT)
+    : fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
 
 const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

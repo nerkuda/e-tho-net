@@ -1,0 +1,291 @@
+/* ---------------------------------------------------------------------------
+   Change layers (S11, 13-layers.md §10.3; 08-ui-spec.md §8.2)
+   --------------------------------------------------------------------------- */
+
+/* A cloud whose thought is overridden by the current layer: dashed outline —
+   the card shows the RESOLVED state, the mark says «this one travels with a
+   merge». */
+.cloud.overridden {
+  outline: 2px dashed var(--accent, #6a7dff);
+  outline-offset: 2px;
+}
+
+/* Layer badge — same corner language as the trash badge, but violet: the
+   layer icon on a dark circle, tooltip explains the semantics. */
+.cloud-layer-badge {
+  position: absolute;
+  /* Right-top corner: the trash badge occupies the left-top one — same round
+     format, opposite corners keeps them distinguishable at a glance. */
+  right: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.cloud-layer-badge svg {
+  color: #8c9eff;
+}
+
+/* A link overridden by the current layer: dashed, slightly thicker stroke
+   with a violet tint so layer-edited links stand out on the canvas. */
+.link-line.link-overridden {
+  stroke: #8c9eff;
+  stroke-dasharray: 5 4;
+  stroke-opacity: 0.95;
+}
+
+/* A link marked for deletion (trash, error 355319d4): the line stays visible
+   but reads as «in the trash» — the dimmed dashed stroke is set in
+   canvas/links.ts; the class is the hook for tests and further styling.
+   A marked link is never hidden: symmetry with a marked thought cloud. */
+.link-line.link-trashed {
+  stroke-linecap: round;
+}
+
+/* Trash badge on a trashed line — the same language as the marked cloud's badge
+   (black circle, bright red lucide trash icon). Clickable: opens the link
+   delete/restore dialog. Lives in the hit overlay so it stays interactive. */
+.link-trash-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.link-trash-badge svg {
+  color: #e53935;
+}
+
+/* Layer dialogs: the explaining one-liner and the safe-delete note. */
+.layer-hint {
+  font-size: 12px;
+  color: var(--text-dim, #777);
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+}
+
+.layer-hint-safe {
+  color: var(--text, #222);
+}
+
+.layer-report-line {
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+/* Layer colours editor (0.6.4, 13-layers.md §2.2a): two picker rows of the
+ * «Свойства слоя» dialog. Native colour input (the same .color-input the
+ * thought/link style dialogs use) + a hex field for exact values. */
+.layer-colors-block {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.layer-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Diff dialog (S11): вкладки «Связи»/«Содержание» — общий механизм
+   `lib/ui/tabs.ts` (задача a57e7998). */
+.diff-content {
+  max-height: 55vh;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-family: var(--mono, Consolas, monospace);
+}
+
+.diff-group-title {
+  margin-top: 8px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--text, #222);
+}
+
+.diff-group-line {
+  padding: 1px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 4px;
+}
+
+.diff-add {
+  background: rgba(46, 160, 67, 0.14);
+  color: #2ea043;
+}
+
+.diff-del {
+  background: rgba(248, 81, 73, 0.12);
+  color: #e5484d;
+}
+
+.diff-same {
+  color: var(--text-dim, #777);
+}
+
+/* --- Метаданные (задача 04cd9794) --------------------------------------- */
+
+.metadata-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  margin-top: 8px;
+}
+
+.metadata-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.metadata-field-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metadata-field-value {
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.metadata-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.metadata-id-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metadata-id-value {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  cursor: text;
+  user-select: all;
+  word-break: break-all;
+  max-width: 100%;
+}
+
+.metadata-id-hint {
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Inline form inside dialogs (типы мыслей / связей / свойства). */
+.metadata-rows {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-rows .metadata-field {
+  flex-direction: row;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.metadata-rows .metadata-field-label {
+  min-width: 160px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.metadata-rows .metadata-field-value {
+  font-size: 13px;
+}
+
+/* Compact author + last-editor badge used in chrono rows / headers. */
+.author-pair {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.author-primary {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.author-edited {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+/* Author column in the chrono table — narrow enough to fit the chip stack. */
+.chrono-table .author-cell,
+.chron-table .author-cell {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.chrono-table .date-cell,
+.chron-table .date-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+

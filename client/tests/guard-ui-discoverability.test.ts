@@ -33,6 +33,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { assembledStylesFile } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -101,7 +102,7 @@ describe('guard: обнаружимость действий (e45ca252, стан
   it('нет hover-only показа действий в CSS lib/ui и styles.css', () => {
     const files = [
       ...fs.readdirSync(UI_ROOT).filter((f) => f.endsWith('.css')).map((f) => path.join(UI_ROOT, f)),
-      path.join(RENDERER_ROOT, 'styles.css'),
+      assembledStylesFile(),
     ];
     const problems: string[] = [];
     for (const file of files) {

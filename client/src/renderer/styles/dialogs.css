@@ -1,0 +1,804 @@
+/* ---------------------------------------------------------------------------
+ * Dialogs (lib/dialog.ts)
+ * ------------------------------------------------------------------------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-box {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  /* Роль размера задаёт ширину и ПРЕДЕЛ высоты (требование 13464c39
+     «Стабильные размеры диалога: роли S/M/L/XL, высота не зависит от
+     вкладки»). Диалог с вкладками фиксирует высоту по роли ниже — длинное
+     содержимое прокручивается внутри тела и переключение вкладок высоту не
+     меняет; диалог без вкладок не выше предела. */
+  width: var(--dialog-w, 560px);
+  max-width: calc(100vw - 40px);
+  max-height: min(var(--dialog-h, 560px), calc(100vh - 60px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Контейнер диалога (требование a08c2c4a): перестроение — по ширине САМОГО
+     диалога, а не окна. Ширина задана ролью размера, поэтому inline-size
+     containment не влияет на неё; узкий диалог (роль s или маленькое окно)
+     сжимает футер и шапку (запрос ниже), а не выдавливает их за границу. */
+  container-type: inline-size;
+  container-name: dialog;
+  /* Dialog content is one step larger than the app base (13px) — the base
+     font is too small for modal forms (add-thought dialog report). */
+  font-size: 14px;
+}
+
+/* Вкладочный диалог: высота ФИКСИРОВАНА ролью — переключение вкладок и
+   раскрытие групп её не меняют. */
+.dialog-box[data-dialog-tabs='true'] {
+  height: var(--dialog-h, 560px);
+}
+
+/* Диалог с переменным содержимым без вкладок (настройки): высота также
+   ФИКСИРОВАНА ролью, тело прокручивается внутри — окно не «дёргается» при
+   переключении разделов (требование 13464c39, ошибка 0ab63eac). Предел по
+   высоте экрана сохраняется, чтобы диалог помещался на маленьком мониторе. */
+.dialog-box[data-dialog-fixed-height='true'] {
+  height: min(var(--dialog-h, 560px), calc(100vh - 60px));
+}
+
+/* Роли размера: s / m / l / xl (lib/dialog.ts, DialogSize). */
+.dialog-box[data-dialog-size='s'] {
+  --dialog-w: 460px;
+  --dialog-h: 320px;
+}
+
+.dialog-box[data-dialog-size='m'] {
+  --dialog-w: 560px;
+  --dialog-h: 560px;
+}
+
+.dialog-box[data-dialog-size='l'] {
+  --dialog-w: 900px;
+  --dialog-h: 680px;
+}
+
+.dialog-box[data-dialog-size='xl'] {
+  --dialog-w: 1240px;
+  --dialog-h: 820px;
+}
+
+/* Узкий диалог: шапка и футер переносят содержимое по строкам, кнопки не
+   выдавливаются за границу. Селекторы с элементом диалога перебивают
+   словарные классы по специфичности независимо от порядка в бандле
+   (грабли 36889dd6). Порог — структурная константа раскладки. */
+@container dialog (max-width: 520px) {
+  .dialog-header {
+    flex-wrap: wrap;
+  }
+
+  .dialog-footer {
+    flex-wrap: wrap;
+  }
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Повторное открытие редактора той же сущности поднимает уже открытый диалог
+   (lib/dialog.ts, raiseOpenDialog — ошибка c2d243bb). Подсветка показывает,
+   куда «прилетел» повторный клик: диалог и так на месте, второй не нужен. */
+@keyframes dialog-raise-flash {
+  from {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 3px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
+.dialog-backdrop.dialog-raised .dialog-box {
+  animation: dialog-raise-flash 600ms ease-out;
+}
+
+.dialog-title {
+  font-weight: 700;
+  font-size: 15px;
+  flex: 1;
+}
+
+.dialog-body {
+  padding: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Хост вкладок диалога: полоса вкладок фиксирована, панели занимают
+   оставшуюся высоту и прокручиваются внутри — высота диалога от выбранной
+   вкладки не зависит (требование 13464c39). */
+.dialog-tabs-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-tabs-host > .ui-tabs {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dialog-tabs-host .ui-tabpanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.dialog-body .ui-field-label {
+  font-size: 13px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* Строка ошибки в панели кнопок диалога с вкладками (ошибка add8d09d):
+ * футер виден на любой вкладке, поэтому глобальное сообщение о неудачной
+ * записи живёт здесь, а не в теле вкладки. Ошибка — слева, кнопки — справа. */
+.dialog-footer-with-error {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog-footer-with-error > .error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 12px;
+  text-align: left;
+}
+
+.dialog-text {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Подпись связи «<источник> → <назначение> · <тип связи>» в диалоге её
+ * удаления (ошибка ce687b37) — первая строка тела, слегка выделена, чтобы
+ * диалог сразу называл, о какой связи спрашивает. */
+.link-caption {
+  font-weight: 600;
+}
+
+.dialog-text-error {
+  color: var(--danger);
+}
+
+.dialog-subhead {
+  margin: 14px 0 8px;
+  padding-bottom: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+/* --- Групповое удаление (S13, 08-ui-spec.md §5a.2) ------------------------- */
+
+/* Ширина и высота диалога задаются ролью размера (lib/dialog.ts, требование
+ * 13464c39); прежний точечный `group-delete-box` с clamp-шириной упразднён. */
+
+/* Таблица: две колонки — мини-облачко мысли и переключатель «Удалить /
+ * В корзину». Высота строки фиксирована (однострочный заголовок с
+ * многоточием), поэтому лимит «10 строк + шапка» стабилен; дальше — прокрутка. */
+.group-delete {
+  --gd-row-h: 42px;
+  --gd-head-h: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Панель массового переключения НАД таблицей: «Переключить: [все в корзину]
+ * [удалять возможное]» — переключатели строк живут здесь, нижний колонтитул
+ * остаётся только для действий всего диалога (§5a.2). */
+.group-delete-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.group-delete-toolbar-label {
+  color: var(--text-dim);
+}
+
+/* Таблицу группового удаления собирает единый фасад `lib/ui/table.ts` (Z5):
+ * прежние `.group-delete-table`/`-row`/`-head*` удалены вместе с ручной
+ * таблицей; высоту сетки задаёт вызывающий инлайном. */
+
+/* Первая колонка — фабричное мини-облачко мысли (профиль `chip`, класс
+ * `.prop-ref-cloud`) с модификатором строки таблицы: отступ в ячейке, лёгкая
+ * рамка и скругление как у облачка карты. Цвета, начертание, бледность и
+ * метка корзины — общие правила `.prop-ref-cloud` (§2.2, S13; чистка
+ * дублей, a6055d05). */
+.prop-ref-cloud.group-delete-cloud {
+  gap: 6px;
+  min-width: 0;
+  margin: 4px 6px;
+  padding: 3px 10px;
+  border-color: var(--border);
+  border-radius: var(--radius-cloud);
+}
+
+/* Вторая колонка — переключатель строки, визуально отделён от облачка
+ * разделителем и отбита от него отступом (жалоба тестировщика: переключатель
+ * «прилеплен» к названию). */
+.group-delete-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 4px 12px 4px 16px;
+  border-left: 1px solid var(--border);
+}
+
+.group-delete-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.group-delete-option input[type='radio'] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.group-delete-option:has(input:disabled) {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.group-delete-option:has(input:disabled) input[type='radio'] {
+  cursor: default;
+}
+
+/* Красная метка-корзина в списочных строках (S13): уменьшенный аналог бейджа
+ * облачка (§2.2) — тот же ярко-красный цвет на любой теме. Используется
+ * строками панели выделения, мини-облачками истории, закреплёнными чипами и
+ * таблицей группового удаления. */
+.list-trash-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #e53935;
+}
+
+/* Компактная метка «мысль чужой сети» в списочных строках/чипах — зеркало
+   метки корзины: акцентный голубой глиф «сеть» вместо красной корзины
+   (кросс-сетевая ссылка значения, ошибка 9be98ae1). */
+.list-network-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #4a9eff;
+}
+
+.group-delete-warning {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+/* --- Корзина (S13, 08-ui-spec.md §5a.4; ошибка 009784ad) ------------------- */
+
+/* Ширина и высота — ролью размера (lib/dialog.ts, требование 13464c39);
+ * прежний точечный `trash-box` с clamp-шириной упразднён. */
+
+.trash {
+  --tr-row-h: 40px;
+  --tr-head-h: 30px;
+}
+
+/* Оболочка таблицы «что в корзине | ссылок | действия»: высоту задаёт
+ * вызывающий инлайном (фасад `lib/ui/table.ts` — владелец прокрутки), здесь
+ * только рамка. Прежние `.trash-row*`/`.trash-head*` удалены вместе с
+ * самодельной таблицей (Z5). */
+.trash-table {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* Первая колонка: название мысли или подпись связи — одна строка с
+ * многоточием (полный текст — в подсказке), чтобы строки не переносились. */
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 12px;
+}
+
+.trash-item-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.trash-item-lock {
+  flex: 0 0 auto;
+}
+
+/* Вторая колонка: число мест использования. */
+.trash-count {
+  padding: 4px 12px;
+  border-left: 1px solid var(--border);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* Третья колонка: кнопки-иконки «Восстановить» и «Удалить». */
+.trash-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 12px 4px 16px;
+  border-left: 1px solid var(--border);
+}
+
+button.ui-btn--icon.trash-act {
+  width: 26px;
+  height: 26px;
+}
+
+.trash-act-danger {
+  color: var(--danger);
+}
+
+.trash-act-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+/* --- «О программе» dialog (08-ui-spec.md §8.2) ----------------------------- */
+
+.about-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 6px 4px 2px;
+}
+
+.about-logo {
+  /* Размер и пропорции логотипа в диалоге «О программе»: фиксированная
+     ширина в пределах доступной ширины тела диалога (≈420 − 28 − 8 ≈ 384 px)
+     и `height: auto`, чтобы логотип пропорционально масштабировался по
+     `viewBox` 1015×536 SVG-файла (`public/logo.svg`). Без `height: auto` и
+     при `width: 56px; height: 56px;` (как было) SVG растягивался по обеим
+     осям `object-fit: fill` по умолчанию, и при смещённом влево дизайне
+     внутри старого `logo.svg` (translate(0, …)) содержимое оказывалось
+     прижатым к левому краю. */
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 8px;
+}
+
+.about-title {
+  margin: 0;
+  font-size: 20px;
+}
+
+.about-tagline {
+  margin: 0;
+}
+
+.about-version {
+  margin: 10px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.about-meta {
+  margin: 0;
+}
+
+.about-links {
+  display: flex;
+  gap: 14px;
+  margin: 10px 0 2px;
+}
+
+.about-tech {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.about-server {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+/* Раздел сторонних компонентов (задача 35b9cc05): краткий перечень библиотек
+   из общего каталога `lib/third-party.ts`. Слева, в отличие от остального
+   центрированного тела диалога. */
+.about-third {
+  align-self: stretch;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  text-align: left;
+}
+
+.about-third-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.about-third-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.about-third-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.about-third-name {
+  flex: 0 1 auto;
+}
+
+.about-third-license {
+  flex: 1 1 auto;
+}
+
+.about-third-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+
+/* --- unified settings dialog (H18+, 08-ui-spec.md §9) --------------------- */
+
+/* Высота диалога и прокрутка тела заданы ролью размера и каркасом
+ * (lib/dialog.ts): прежний `dialog-box-tall` для кастомного футера упразднён —
+ * теперь высоту фиксирует роль, а диалог настроек включает это флагом
+ * `fixedHeight` (требование 13464c39, ошибка 0ab63eac). */
+
+.settings-body {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 168px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+}
+
+.settings-nav-item {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settings-nav-item:hover:not(.active):not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.settings-nav-item.active {
+  background: var(--bg-active);
+  border-color: var(--border);
+  font-weight: 600;
+}
+
+.settings-nav-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.settings-section-title-spaced {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Task O5: tab strip + live preview for the four network markdown fields.
+ * Полоса вкладок — общий механизм `lib/ui/tabs.ts` (задача a57e7998); частные
+ * `.settings-md-tabs`/`-tab` упразднены. */
+.settings-md-panel {
+  padding-top: 8px;
+}
+.settings-md-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-md-hint {
+  margin: 0;
+  font-size: 11px;
+  white-space: pre-line;
+}
+/* Read-only network markdown field: non-owners see the rendered text without
+   the text-cursor hint that says "double-click to edit". */
+.settings-md-field .md-field-readonly .md-field-view {
+  cursor: default;
+}
+
+/* Task 92b89e6f: «Логирование» section — client/server journal controls. */
+.settings-logs-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.settings-logs-block-spaced {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-log-path {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-log-files td {
+  font-size: var(--font-size-xs);
+}
+
+.settings-log-file-name {
+  overflow-wrap: anywhere;
+}
+
+.settings-error {
+  /* Строка ошибки в sticky-футере диалога (ошибка add8d09d): видна на любом
+   * разделе/вкладке настроек, даже когда содержимое прокручено. */
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  background: var(--bg);
+}
+
+.settings-footer-hint {
+  color: var(--muted);
+  font-size: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-footer-buttons {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.settings-footer-buttons .ui-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- add-thought dialog (H14) -------------------------------------------- */
+
+.add-types-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.add-types-row .ui-field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.add-mode-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.add-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 150px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+/* Header of the accumulated list: counter + the «Очистить» button (L20). */
+.add-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.add-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.add-list-item .al-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Список найденных кандидатов диалога добавления (08-ui-spec.md §4.2):
+   строки рисует общая сборка строки выпадашки (`lib/suggest-dropdown.ts`),
+   здесь — только раскладка списка в теле диалога и «телесный» вид строки
+   (рамка/фон вместо наведения летящей выпадашки). Классы `dup-*` упразднены
+   (требование d1cd2095). */
+.add-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 170px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.add-candidates .type-combo-item {
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.add-candidates .type-combo-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.add-candidates .type-combo-item:hover {
+  background: var(--surface-2);
+}
+
+/* Метка-уточнение акцентным цветом — имя сети в кросс-сетевом режиме
+   (ошибка defcd811), чтобы не путать с приглушённым именем родителя. */
+.type-combo-note--accent {
+  color: var(--accent);
+}
+
+/* --- admin panel (H17) ----------------------------------------------------- */
+
+.admin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 320px;
+}
+
+/* Полоса вкладок админ-панели — общий механизм `lib/ui/tabs.ts`
+ * (задача a57e7998); частные `.admin-tabs`/`-tab` упразднены. */
+.admin-table-wrap {
+  overflow: auto;
+  max-height: 380px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.api-key-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.api-key-box code {
+  flex: 1;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+  user-select: all;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.badge.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn-strong);
+}
+

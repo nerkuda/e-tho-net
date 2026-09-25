@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const CHRONICLE_TS = resolve(RENDERER, 'screens', 'chronicle', 'chronicle.ts');
@@ -28,7 +29,7 @@ const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
 const STRUCTURES_TS = resolve(RENDERER, 'screens', 'structures', 'structures.ts');
 const LIST_HEIGHTS_TS = resolve(RENDERER, 'editor', 'list-heights.ts');
 const FRAME_TS = resolve(RENDERER, 'lib', 'filter-panel-frame.ts');
-const STYLES_CSS = resolve(RENDERER, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');

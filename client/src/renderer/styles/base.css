@@ -1,0 +1,74 @@
+/* ---------------------------------------------------------------------------
+ * Shared controls
+ * ------------------------------------------------------------------------- */
+
+.select-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+}
+
+.select-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* Кнопки-действия переехали в словарь `lib/ui` — стили ролей, плотностей
+   и состояний лежат в `lib/ui/button.css` (задача 56f1dcb2). Здесь остаётся
+   только прикладной модификатор ссылки-кнопки. */
+.link-btn {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.form-stack {
+  padding: 2px 0;
+}
+
+.form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Двухколоночный grid единого редактора свойства/связи
+ * (`property-manager.ts` — секции «Скалярное свойство» и «Свойство связь»).
+ * По умолчанию `.form-row` центрирует колонки по вертикали — при разной
+ * высоте (одна колонка содержит длинный список типов, другая — несколько
+ * чекбоксов) группы «прыгают». `flex-start` фиксирует выравнивание по
+ * верхнему краю. */
+.two-col-row {
+  align-items: flex-start;
+}
+
+/* Text input with a side action button (add-attachment dialog, §6.5). */
+.input-with-btn {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.input-with-btn .ui-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+.faint {
+  color: var(--text-faint);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+

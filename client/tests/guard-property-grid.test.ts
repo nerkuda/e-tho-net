@@ -30,6 +30,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean } from './guard-helpers.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -37,7 +38,7 @@ const RENDERER_ROOT = path.resolve(
   'src',
   'renderer',
 );
-const STYLES_CSS = path.join(RENDERER_ROOT, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 const PROPERTIES_TS = path.join(RENDERER_ROOT, 'editor', 'properties.ts');
 
 /**

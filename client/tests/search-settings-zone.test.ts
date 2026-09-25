@@ -30,11 +30,12 @@ import {
   isSearchSettingsOpenStored,
   searchSettingsPlacement,
 } from '../src/renderer/lib/pure.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const SEARCH_TS = resolve(RENDERER, 'search', 'search.ts');
 const WORKSPACE_TS = resolve(RENDERER, 'screens', 'workspace.ts');
-const STYLES_CSS = resolve(RENDERER, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 const CONSTANTS_TS = resolve(
   import.meta.dirname,
   '..',

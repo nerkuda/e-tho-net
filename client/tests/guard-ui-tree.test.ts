@@ -27,6 +27,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean, collectViolations, type GuardRule } from './guard-helpers.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -103,7 +104,7 @@ describe('guard: единое дерево списков lib/ui (d1c15a2d)', ()
   });
 
   it('размеры строки дерева согласованы токеном --hit-area', () => {
-    const tokens = fs.readFileSync(path.join(RENDERER_ROOT, 'styles.css'), 'utf8');
+    const tokens = fs.readFileSync(assembledStylesFile(), 'utf8');
     assert.match(tokens, /--hit-area:\s*\d+px/, 'в токенах темы нет --hit-area');
 
     const css = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'tree.css'), 'utf8');

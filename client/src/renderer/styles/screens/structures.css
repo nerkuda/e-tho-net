@@ -1,0 +1,159 @@
+/* ---------------------------------------------------------------------------
+ * Structures view (L15, 08-ui-spec.md §15)
+ * ------------------------------------------------------------------------- */
+
+.structures {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Left: панель отбора «Структур мыслей» (§15.2). Положение (слева/вверху) и
+ * размер (ширина слева, высота вверху) задаёт общий каркас панели отбора
+ * (`.fp-host`, задача 2ebe4206) — здесь только вид самой панели. */
+.st-filter {
+  overflow: hidden;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+/* Scrollable criteria groups; the sticky footer (below) never scrolls away
+ * (§15.3 «приклеенная» панель кнопок/сохранённых отборов). */
+.st-f-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 2px;
+}
+
+.st-f-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.st-f-btnrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.st-f-btnrow .st-f-clear {
+  align-self: auto;
+}
+
+/* «Команды ▾» — bulk commands over the whole applied filter (L22, §15.3).
+ * Same quiet look as «Очистить»; wraps onto its own row on a narrow panel. */
+.st-f-commands {
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.st-f-commands:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Compact row: an input/chip-field with an inline «×» clear button. */
+.st-f-fieldrow {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.st-f-fieldrow .st-f-chipfield {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-f-clear-inline {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.st-f-clear-inline:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Comma-field: displays selected thoughts/types as styled chips; click opens
+ * the picker dialog (§15.3). */
+.st-f-chipfield {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 0;
+  font-size: 13px;
+}
+
+.st-f-chipfield:hover,
+.st-f-chipfield:focus {
+  outline: 1px solid var(--accent);
+}
+
+.st-f-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.st-f-chip-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.st-f-chip-icon img,
+.st-f-chip-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.st-f-chip-label {
+  white-space: nowrap;
+}
+
+.st-f-chip-sep {
+  color: var(--text-faint);
+}
+
+.st-f-chip-empty {
+  color: var(--text-faint);
+}
+

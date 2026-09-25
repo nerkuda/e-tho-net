@@ -1,0 +1,1590 @@
+/* ---------------------------------------------------------------------------
+ * Editor (H8–H12)
+ * ------------------------------------------------------------------------- */
+
+.editor {
+  flex: 0 0 var(--editor-w);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.workspace-body[data-editor-pos='right'] > .editor {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.editor-title {
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Trash marker in the editor panel header (S13, 08-ui-spec.md §6.2): shown
+   next to the word «Мысль» when the edited thought is in the trash — same
+   bright-red trash glyph as the canvas badge. Кликабельная (задача ff991fb2):
+   открывает диалог восстановления/удаления, поэтому сброшены стили кнопки. */
+.editor-title .editor-trash-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  color: #e53935;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* The title field of a trashed thought (S13, 08-ui-spec.md §6.2.1): shown
+   struck-through while staying editable — the text is typed/edited normally,
+   only its rendering is crossed out. */
+.editor-title-input.title-strike {
+  text-decoration: line-through;
+}
+
+.editor-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-empty {
+  padding: 16px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* --- Editor tabs (L7, 08-ui-spec.md §6.3) --------------------------------- */
+
+/* Soft fade on a real editor content swap (different thought/link) — the
+   header form and tab bar are freshly created DOM nodes on every full
+   `render()`, so a plain opacity keyframe on them plays automatically without
+   any JS class toggling. Keeps the DOM-replace rebuild but takes the harsh
+   instant "jump" edge off it (08-ui-spec.md §6, "дергание редактора"). */
+@keyframes editor-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The header form keeps its own padding: the scroll box itself has none so
+   the sticky tab bar can hug the top edge. */
+.editor-fields {
+  padding: 10px 10px 0;
+  animation: editor-fade-in 120ms ease-out;
+}
+
+.editor-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  animation: editor-fade-in 120ms ease-out;
+  display: flex;
+  gap: 2px;
+  padding: 8px 10px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  /* Высота полосы не зависит от длины содержимого панели: `.editor-scroll` —
+     column-flex, и при длинном комментарии суммарная высота детей превышает
+     контейнер; flex-shrink (по умолчанию 1) сжимал полосу до 1px — кнопки
+     вкладок пропадали (`overflow: hidden` обнуляет автоматический минимум).
+     Ошибка 79193e82. */
+  flex: 0 0 auto;
+  /* `min-width: 0` — стандартный фикс flexbox для row-flex внутри column-flex
+     родителя: без него flex-item растягивается по min-content (сумма
+     фиксированных кнопок вкладок), его clientWidth раздувается,
+     `recomputeOverflow` думает, что всё помещается, и оставляет строку
+     вкладок длиннее родителя — панель вылезает за пределы редактора.
+     `overflow: hidden` страхует на случай, если даже после пересчёта видимый
+     набор + кнопка `▾N` всё равно не влезают (например, окно очень узкое). */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.editor-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  /* Ширина кнопки — по заголовку: не сжимается (`flex: 0 0 auto`) и текст не
+     переносится, поэтому «Комментарий» (имя после переименования «Основного»)
+     целиком помещается в свою кнопку. Не влезающие вкладки уходят в `[▾N]`
+     (`recomputeOverflow`, режим `content`) — раньше ширина была фиксированной
+     (110 → 80 при нехватке места), и длинный заголовок вылезал за кнопку. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Настоящая причина того, что overflow-меню не работало визуально несмотря
+   на 4 предыдущих попытки: `recomputeOverflow` (tab-overflow.ts) прячет не
+   поместившиеся вкладки атрибутом `button.hidden = true`, но браузерное
+   `[hidden] { display: none }` — правило user-agent normal-приоритета, а
+   `.editor-tab { display: inline-flex }` — author normal-приоритета; author
+   ВСЕГДА перебивает user-agent при равном/любом приоритете важности,
+   независимо от специфичности. Раньше исправляли только оверфлоу-кнопку
+   (`.tab-overflow[hidden]`, ниже), а сами кнопки вкладок оставались видимыми
+   при hidden=true — они просто вылезали за `.editor-tabs { overflow: hidden }`
+   и обрезались, дропдаун не появлялся. */
+.editor-tab[hidden] {
+  display: none;
+}
+
+.editor-tab:hover {
+  background: var(--surface-2);
+}
+
+.editor-tab.active {
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.editor-tab-count {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.tab-pane-root {
+  flex: 1 1 auto;
+  /* Keep a floor so a very short editor panel scrolls the tab instead of
+     collapsing the fixed panes to zero height. */
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+}
+
+/* «Комментарий» flows naturally (the editor panel scrolls); the other tabs are
+   fixed flex columns whose inner areas scroll on their own. */
+.tab-pane {
+  width: 100%;
+}
+
+.tab-pane.fixed {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Horizontal splitter between stacked tab areas (L7) ------------------- */
+
+/* Раскладка шва: размер, курсор. Вид грипа (глиф, наведение) — общий, в
+ * `lib/ui/splitter.css` (`.ui-splitter--grip`, задача 50f57b82). */
+.row-splitter {
+  flex: 0 0 14px;
+  height: 14px;
+  cursor: row-resize;
+}
+
+/* --- Compact sub-groups (link types, usage properties, L7) ---------------- */
+
+.group.compact {
+  margin-bottom: 6px;
+}
+
+.group.compact > .group-header {
+  padding: 4px 8px;
+}
+
+.group.compact > .group-body {
+  padding: 4px 8px;
+}
+
+.group.compact > .group-header > .group-title {
+  font-size: 12px;
+}
+
+/* --- Tab «Комментарий» (L7, §6.3.1): table sections on top, the view/edit
+   section fills the rest of the tab; the splitter redistributes. ---------- */
+
+/* Top areas never grow or shrink on their own — only the splitter sizes them
+   (max-height of the scrollable table inside). */
+.tab-top {
+  flex: 0 0 auto;
+}
+
+.main-bottom {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-bottom > .group {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-bottom > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The comment grows with its area; the group body provides the scroll. */
+.main-bottom .comment-view,
+.chrono-editor .comment-view,
+.attachment-view-frame .comment-view {
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* --- Tab «Вложения» (L7, 08-ui-spec.md §6.5) ------------------------------- */
+
+.attachments-tab {
+  /* The module root must fill the tab pane itself — otherwise the viewer
+     area below the splitter only gets its content height. */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.attachments-top {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.attachments-top .attachments-drop {
+  padding: 8px;
+  margin-bottom: 6px;
+}
+
+/* Fixed list height: five rows by default, then it scrolls (§6.5). */
+.attachments-list {
+  overflow-y: auto;
+  /* Height is always fixed (bug 6b757336: was max-height, so a shorter list
+     collapsed the area before growing back — visible "jitter"). Manual
+     splitter drags persist as the list's height (ee745368): the value lives
+     in --clamp-attachments on the editor scroll box (list-heights.ts), the
+     fallback is the spec default — five rows (§6.5). */
+  height: var(--clamp-attachments, 260px);
+  /* Потолок снят явно: высота списка задана точно и не должна обрезаться
+     ни одним унаследованным max-height (ошибка 78562781). */
+  max-height: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+}
+
+.attachments-actions {
+  margin-top: 6px;
+  display: flex;
+}
+
+.attachment-viewer-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.attachment-view-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attachment-view-frame .attachment-viewer-img {
+  align-self: center;
+}
+
+.attachment-viewer-hint {
+  color: var(--text-faint);
+  text-align: center;
+  padding: 16px 0;
+}
+
+/* --- Tab «Связи» (L7, 08-ui-spec.md §6.7) ---------------------------------- */
+
+.links-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Groups are direct children of the tab. An expanded group (one that has a
+   body) flex-fills the tab together with the other expanded ones — content
+   occupies the whole remaining height (§6.3); a collapsed group is
+   header-only and does not grow. A splitter clamps the group above it via
+   max-height; unclamped groups absorb the freed space. The compact
+   sub-groups inside the bodies are nested deeper and keep natural height. */
+.links-tab > .group {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.links-tab > .group:has(> .group-body) {
+  flex-grow: 1;
+}
+
+.links-tab > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* --- Вкладка «Мысли» редактора связи (задача 95775cfd, 08-ui-spec.md §6.3) --
+   Два блока фиксированной высоты по содержимому: подпись-роль и под ней
+   облачко мысли. Сворачиваемых групп и сплиттеров на вкладке нет. */
+.link-thoughts-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 4px;
+  overflow-y: auto;
+}
+
+.link-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-endpoint-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Облачко внутри вкладки растягивается по ширине панели: ширину объявляет
+   вызов фабрики (`width: 'container'`), а не селектор этого контекста. */
+
+/* Mention snippets carry server-side <mark> highlights (same look as the
+   search panel). */
+.mention-snippet {
+  font-size: 11px;
+}
+
+.mention-item mark {
+  background: var(--mark-bg);
+  color: var(--text);
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* --- Tab «Хроника» (L7, 08-ui-spec.md §6.6) -------------------------------- */
+
+.chrono-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chrono-top {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chrono-toolbar {
+  display: flex;
+  margin-bottom: 6px;
+}
+
+/* Fixed table height: five rows by default, then it scrolls (§6.6). */
+/* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
+   (same specificity, later source order); `max-height: none` is required next
+   to the `height` — otherwise the 380px cap of the base rule silently clipped
+   a height dragged past it (bug 78562781). */
+.admin-table-wrap.chrono-table {
+  /* Height is always fixed (bug 6b757336: was max-height, so a shorter table
+     collapsed the area before growing back — visible "jitter"). Saved manual
+     height (ee745368, list-heights.ts); default — five rows. */
+  height: var(--clamp-chrono, 190px);
+  max-height: none;
+}
+
+/* Pin the header row while the body scrolls — the editor's «Хроника» tab. The
+   chronicle workspace table gets its pinned header from the vendor grid
+   (lib/ui/table.ts) instead. */
+.chrono-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+}
+
+.chrono-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chrono-meta-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chrono-meta-row .chrono-meta-input:first-child {
+  flex: 1 1 140px;
+}
+
+.chrono-meta-input {
+  max-width: 170px;
+}
+
+/* The markdown field fills the attachment view area (description editor). */
+.attachment-view-frame .md-field {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.attachment-view-frame .md-field-view {
+  flex: 1 1 auto;
+}
+
+.table-list tr.selected td {
+  background: var(--accent-soft);
+}
+
+/* --- Properties table: headerless, five rows by default (L7, §6.3.1) ------- */
+
+/* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
+   (same specificity, later source order); `max-height: none` is required next
+   to the `height` — otherwise the 380px cap of the base rule silently clipped
+   a height dragged past it (bug 78562781). */
+.admin-table-wrap.prop-wrap {
+  /* Height is always fixed (bug 6b757336: was max-height, so editing a
+     thought_ref property collapsed the area to the "Загрузка…" placeholder
+     before growing back — visible "jitter"). Saved manual height (ee745368,
+     list-heights.ts); default — five rows. */
+  height: var(--clamp-props, 190px);
+  max-height: none;
+}
+
+.editor-field {
+  margin-bottom: 12px;
+}
+
+.editor-field .ui-field-label {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 12px;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.editor-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Thought id in the header row: pinned right, click copies it. */
+.thought-id-label {
+  margin-left: auto;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thought-id-label:hover {
+  color: var(--text-dim);
+  background: var(--surface-2);
+}
+
+.editor-header-row .icon-input {
+  width: 56px;
+}
+
+.editor-header-row .ui-color-input {
+  width: 34px;
+  height: 26px;
+  padding: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+/* Thought header: icon box + large multiline title (08-ui-spec.md §6.2.1). */
+.editor-top-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.editor-icon-box {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0;
+  overflow: hidden;
+}
+
+.editor-icon-box:hover {
+  border-color: var(--accent);
+}
+
+.editor-icon-box img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Editor preloader (0.5.6, bug 9d1d27c9). The icon slot of a freshly-targeted
+   thought becomes a small spinning gear while the entity is in flight —
+   long loads on heavy thoughts stay visibly "in progress" instead of showing
+   the previous thought's icon. The same class is reused for the link header
+   placeholder text. The animation runs in CSS only, no JS timer; the @media
+   query honours `prefers-reduced-motion`. */
+.editor-icon-loading {
+  cursor: default;
+  border-style: dashed;
+  border-color: var(--accent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-icon-loading svg {
+  animation: editor-icon-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes editor-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-icon-loading svg { animation: none; }
+}
+
+.editor-title-input {
+  flex: 1 1 auto;
+  font-size: 1.5em;
+  font-weight: 700;
+  line-height: 1.25;
+  resize: none;
+  overflow: hidden;
+  /* Cap the visible height at ~5 lines of the large font. */
+  max-height: calc(1.5em * 1.25 * 5 + 8px);
+  min-height: calc(1.5em * 1.25);
+  font-family: inherit;
+}
+
+.synonyms-input {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+/* Settings dialog (08-ui-spec.md §6.9). */
+.style-colors {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.style-color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.style-color-caption {
+  font-size: 12px;
+  color: var(--text-muted, var(--text));
+}
+
+/* Icon picker dialog (08-ui-spec.md §6.8). Полоса вкладок — общий механизм
+ * `lib/ui/tabs.ts` (задача a57e7998); частные `.icon-tabs`/`-tab` упразднены. */
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* Full emoji set grouped by category (§6.8, L17): сворачиваемые группы через
+   общий компонент `lib/ui/collapsible.ts` (задача a57e7998), прежде — <details>. */
+.emoji-groups {
+  max-height: 330px;
+  overflow-y: auto;
+}
+
+.emoji-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  background: var(--surface);
+}
+
+.emoji-group-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.emoji-group-title:hover {
+  color: var(--text);
+}
+
+.emoji-group .emoji-grid {
+  padding: 0 4px 4px;
+  max-height: 220px;
+}
+
+.icon-section-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.icon-type-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.icon-type-cell {
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.icon-type-cell img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.icon-type-cell:hover {
+  background: var(--accent-soft);
+}
+
+.icon-pick-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.emoji-cell {
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+}
+
+.emoji-cell:hover {
+  background: var(--accent-soft);
+}
+
+.icon-source-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.icon-source-row .ui-input {
+  flex: 1 1 auto;
+}
+
+.icon-preview {
+  width: 96px;
+  height: 96px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.icon-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.icon-preview-error {
+  border-color: var(--danger);
+}
+
+.icon-preview-bad {
+  font-size: 28px;
+  color: var(--danger);
+}
+
+.group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  background: var(--surface);
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-header:hover {
+  background: var(--surface-2);
+}
+
+.group-title {
+  font-weight: 600;
+}
+
+.group-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.group-body {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.comment-view {
+  max-height: 420px;
+  overflow-y: auto;
+  /* Размер через переменную: Ctrl+колесо (M9) масштабирует и виджеты
+     редактора, у которых тот же класс. */
+  font-size: var(--md-font-size);
+  line-height: 1.55;
+  overflow-wrap: break-word;
+}
+
+/* Выделение текста в markdown-полях (06b18f19): акцентный полупрозрачный
+   фон из темы. Класс .comment-view покрывает режим просмотра (постоянный
+   комментарий, хронология, вложения) и виджеты live preview в редакторе;
+   выделение строк самого редактора рисует CodeMirror (.cm-selectionBackground)
+   той же переменной — цвета в обоих режимах одинаковые.
+   Фон с альфой не перекрашивает текст: обычный текст, код, цитаты и ссылки
+   сохраняют свои цвета и остаются контрастными. */
+.comment-view ::selection,
+.comment-view::selection {
+  background-color: var(--selection-bg);
+}
+
+/* Слой выделения CodeMirror (e8146cdc). Встроенный baseTheme CM задаёт
+   светло-серые фоны (#d9d9d9 без фокуса, #d7d4f0 в фокусе): тема mdTheme
+   не помечена тёмной, поэтому CM держит редактор в ветке &light в обеих
+   темах приложения, а его селекторы (.cm-baseTheme.cm-light.cm-focused > …)
+   специфичнее правила из md-editor.ts — предыдущий фикс (06b18f19) слой не
+   перекрывал, и на тёмной теме светлый текст ложился на светло-серый фон.
+   !important здесь перекрывает оба встроенных правила, а --selection-bg из
+   темы приложения контрастен тексту в светлой и тёмной темах. */
+.cm-editor .cm-selectionBackground {
+  background: var(--selection-bg) !important;
+}
+
+/* Виджеты live preview лежат внутри .cm-line, где drawSelection CodeMirror
+   прячет нативное выделение (`background: transparent !important`); больший
+   вес селектора возвращает фон при нативном drag-выделении внутри виджета. */
+.cm-editor .cm-line .md-widget ::selection,
+.cm-editor .cm-line .md-widget::selection {
+  background-color: var(--selection-bg) !important;
+}
+
+/* Плашка inline-кода (e8146cdc): её фон (--surface-2) непрозрачен и лежит
+   ПОВЕРХ слоя .cm-selectionLayer — прямоугольники выделения под плашкой не
+   видны. Нативное выделение внутри плашки возвращаем тем же приёмом, что
+   и в виджетах: фон поверх плашки рисует сам браузер. */
+.cm-editor .cm-line .cm-md-inline-code ::selection,
+.cm-editor .cm-line .cm-md-inline-code::selection {
+  background-color: var(--selection-bg) !important;
+}
+
+.comment-view img {
+  /* Scale proportionally to the comment field width (08-ui-spec.md §6.4). */
+  max-width: 100%;
+  height: auto;
+}
+
+/* Ссылки — единый вид с wiki-ссылками и редактором: акцент, без
+   подчёркивания (появляется на hover). */
+.comment-view a,
+.comment-view a:visited {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.comment-view a:hover {
+  text-decoration: underline;
+}
+
+.comment-view table {
+  border-collapse: collapse;
+}
+
+.comment-view td,
+.comment-view th {
+  border: 1px solid var(--border-strong);
+  padding: 3px 8px;
+}
+
+.comment-view code,
+.comment-view pre {
+  /* Тот же моно-стек, что и в редакторе (HighlightStyle tags.monospace). */
+  font-family: var(--md-mono);
+}
+
+.comment-view code {
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.comment-view pre {
+  background: var(--surface-2);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  /* Длинные строки кода переносятся по ширине поля (08-ui-spec.md §6.4):
+     без переноса строка растягивает pre виджета, .cm-content CodeMirror
+     расширяется — lineWrapping начинает считать ширину по растянутому
+     контенту, и в редакторе перестают переноситься все строки. */
+  white-space: pre-wrap;
+}
+
+.comment-view hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 6px 0;
+}
+
+.comment-view blockquote {
+  margin: 6px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-dim);
+}
+
+/* Wiki-ссылки [[имя|алиас]] (M3): вид — как внутренние ссылки, клик — фокус мысли. */
+.wiki-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.wiki-link:hover {
+  text-decoration: underline;
+}
+
+/* ID-based wiki-link token (фаза R, R6): в edit-mode `#<id>` заменяется на
+   спан с актуальным именем мысли. Цветом показываем «это единый объект»,
+   атомарность обеспечивается Decoration.mark({ atomic: true }) — Backspace /
+   Delete удаляют токен целиком. */
+.cm-wiki-id {
+  color: var(--accent-strong, var(--accent));
+  font-weight: 500;
+}
+
+.cm-wiki-id-edit {
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Удалённая мысль в любом режиме — серый курсив без плейсхолдера. */
+.wiki-link-deleted {
+  color: var(--muted, #888);
+  font-style: italic;
+}
+
+/* Авто-упоминания мыслей в тексте комментариев (L24, 08-ui-spec.md §6.4):
+   пунктирное подчёркивание отличает их от явных wiki-ссылок. */
+.thought-mention {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-decoration-color: currentColor;
+}
+
+.thought-mention:hover {
+  text-decoration-style: solid;
+}
+
+/* Хотя бы одна из мыслей группы неактивна — бледное начертание (как у
+   неактивных владельцев в «Упоминаниях», §6.7). */
+.thought-mention-inactive {
+  opacity: 0.6;
+}
+
+/* Виджеты live preview (M6): блоки в редакторе отображаются как в просмотре.
+   Вертикальный отступ — padding, не margin: getBoundingClientRect() не
+   включает margin, и карта высот CodeMirror расходилась бы с раскладкой
+   (md-editor.ts, стрелки вверх/вниз прыгали бы через строки). */
+.cm-editor .md-widget {
+  padding: 2px 0;
+}
+
+.cm-editor .md-widget.md-hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 6px 0;
+}
+
+.cm-editor .md-widget.wiki-link {
+  cursor: pointer;
+}
+
+.cm-editor .md-widget img {
+  max-width: 100%;
+}
+
+/* Mermaid (M7): отрендеренная диаграмма внутри блока кода. */
+.comment-view pre.mermaid.mermaid-rendered {
+  background: var(--surface);
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.comment-view pre.mermaid.mermaid-rendered svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Подсветка fenced-кода в просмотре (M4): токены highlight.js из единого
+   рендерера; фон блока задаёт `.comment-view pre`. */
+.comment-view code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
+.comment-view .hljs-comment {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.comment-view .hljs-keyword,
+.comment-view .hljs-selector-tag,
+.comment-view .hljs-doctag {
+  color: var(--hljs-keyword);
+}
+
+.comment-view .hljs-string,
+.comment-view .hljs-regexp,
+.comment-view .hljs-quote,
+.comment-view .hljs-addition {
+  color: var(--hljs-string);
+}
+
+.comment-view .hljs-number,
+.comment-view .hljs-literal,
+.comment-view .hljs-meta,
+.comment-view .hljs-section {
+  color: var(--hljs-number);
+}
+
+.comment-view .hljs-title,
+.comment-view .hljs-symbol,
+.comment-view .hljs-function .hljs-title {
+  color: var(--hljs-title);
+}
+
+.comment-view .hljs-built_in,
+.comment-view .hljs-attr,
+.comment-view .hljs-attribute {
+  color: var(--hljs-builtin);
+}
+
+.comment-view .hljs-type,
+.comment-view .hljs-tag,
+.comment-view .hljs-name {
+  color: var(--hljs-type);
+}
+
+.comment-view .hljs-deletion {
+  color: var(--hljs-deletion);
+}
+
+.comment-view .hljs-emphasis {
+  font-style: italic;
+}
+
+.comment-view .hljs-strong {
+  font-weight: 700;
+}
+
+/* Markdown view/edit field (08-ui-spec.md §6.4): height follows the content
+   (min 5 lines); the editor panel itself provides scrolling. Font size rides
+   the global --md-font-size variable (M9 zoom). */
+.md-field-view {
+  min-height: calc(1.55em * 5);
+  max-height: none;
+  overflow: visible;
+  cursor: text;
+  font-size: var(--md-font-size);
+}
+
+.md-field-area {
+  width: 100%;
+  min-height: calc(1.55em * 5);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Единый вид форм-гридов редакторов (задача 0a1a2414, требование 0dddd939):
+ * таблицы-ФОРМЫ ввода (привязки свойств и типов, значения выделения, списки
+ * вкладок редактора) остаются `<table>()`, но выглядят одним семейством с
+ * табличным фасадом `lib/ui/table.ts` — шапка, плотность строк, границы и
+ * состояния по токенам. Роли/структуру формы вид не меняет. */
+.table-list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-xs);
+}
+
+.table-list th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: var(--font-weight-semibold);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.table-list td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Строки: покой, наведение указателя и текущая (клавиатурная) — те же
+   состояния и токены, что у строк табличного фасада. */
+.table-list tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.table-list tr.current td {
+  background: var(--accent-soft);
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.attachment-item:last-child {
+  border-bottom: none;
+}
+
+.attachment-item:hover {
+  background: var(--bg-hover);
+}
+
+/* Текущая (выделенная клавиатурой) строка списка вложений — тем же токеном,
+   что строки `.ui-table`/форм-гридов. */
+.attachment-item.selected {
+  background: var(--accent-soft);
+}
+
+.attachment-item .att-title {
+  font-weight: var(--font-weight-semibold);
+}
+
+.attachment-item .att-meta {
+  color: var(--text-faint);
+  font-size: var(--font-size-2xs);
+}
+
+/* «Добавить вложение» — вкладки (workplan L25). */
+.att-tab-panel.hidden {
+  display: none;
+}
+
+.att-search-results {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.att-search-results .att-search-hint {
+  padding: var(--space-4) var(--space-5);
+}
+
+.att-search-result {
+  cursor: pointer;
+}
+
+.att-search-result:hover {
+  background: var(--surface-2);
+}
+
+/* Attachment rows open the context menu on right-click (08-ui-spec §6.5). */
+.attachment-item {
+  cursor: context-menu;
+}
+
+.attachment-item:hover {
+  background: var(--surface-2);
+}
+
+.attachment-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.attachments-drop {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.attachments-drop.dragover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Ctrl-hover image magnifier (08-ui-spec.md §13, L2). */
+.image-zoom-popup {
+  position: fixed;
+  z-index: 2000;
+  max-width: 70vw;
+  max-height: 70vh;
+  object-fit: contain;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+/* Ctrl-hover content preview (task «Предпросмотр содержимого с зажатым
+   Ctrl», stage 1/3, lib/hover-preview.ts). База панели — вид, хвостик-
+   стрелка, заголовок и прокручиваемое тело — перенесена в общий компонент
+   `lib/ui/popover.css` (`.ui-popover*`, задача dd1f47d4): панель
+   интерактивна (`pointer-events: auto`, курсор заходит внутрь) и лежит ниже
+   лупы изображений (`.image-zoom-popup`, z-index 2000) намеренно — картинка
+   внутри предпросмотра увеличивается поверх него. Здесь остаётся только то,
+   что специфично для КОНТЕНТА предпросмотра. */
+
+/* The permanent-comment preview reuses `.comment-view` (editor markdown
+   rendering, incl. its own 420px max-height/scroll) — cap it a bit lower
+   here so it never doubles up with `.ui-popover-body`'s own scroll area.
+   The body is wrapped in the comment shell (`lib/ui/comment.ts`, задача
+   9cb87c42), so the cap sits on the shell root and the inner view scrolls
+   with it (single scrollbar). */
+.ui-popover-body > .ui-comment {
+  max-height: min(400px, 55vh);
+  overflow-y: auto;
+}
+.ui-popover-body > .ui-comment .comment-view {
+  max-height: none;
+}
+
+.hp-chrono-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hp-chrono-item {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.hp-chrono-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.hp-chrono-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+.hp-chrono-dates {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.hp-chrono-text {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.hp-attachments-list {
+  display: flex;
+  flex-direction: column;
+}
+/* Read-only rows — no context-menu affordance unlike the editable tab list. */
+.ui-popover .hp-attachment-item {
+  cursor: default;
+}
+.ui-popover .hp-attachment-item:hover {
+  background: none;
+}
+
+/* Ctrl-hover preview of links inside comment text (stage 2/3, lib/hover-
+   preview.ts's wireCommentLinksInDom): cross-network wiki-link badge, plain
+   URL text and file previews (image / text / name-only fallback). */
+.hp-network-badge {
+  padding: 2px 0;
+}
+.hp-network-name {
+  font-size: 13px;
+}
+.hp-url-body {
+  padding: 2px 0;
+}
+.hp-url-text {
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--text-faint);
+}
+.hp-file-preview {
+  display: flex;
+}
+.hp-file-image {
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  display: block;
+}
+.hp-file-text {
+  max-height: 360px;
+  overflow-y: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  width: 100%;
+}
+.hp-file-fallback {
+  padding: 2px 0;
+}
+.hp-file-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+/* Built-in attachment viewer (images / text, 08-ui-spec §6.5). */
+.attachment-viewer {
+  max-height: 60vh;
+  overflow: auto;
+  text-align: center;
+}
+
+.attachment-viewer-img {
+  max-width: 100%;
+  max-height: 55vh;
+  object-fit: contain;
+}
+
+.attachment-viewer-text {
+  display: block;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+}
+
+.prop-table td .prop-editor {
+  width: 100%;
+}
+
+/* Колонка «Значение по умолчанию» таблиц привязок (0.8.2): редактор значения
+ * без режимов — заполнено = дефолт привязки, пусто = общее значение стороны
+ * (подсказка «—» с тултипом рядом с редактором). Общая для диалога
+ * «Свойство / связь» и вкладки «Свойства» редактора типа. */
+.prop-default-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.prop-default-cell .prop-default-hint {
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* --- Outside-type values group (0.6.5) -------------------------------------- */
+
+/* A second, read-only table under the main properties table — values whose
+ * property is no longer attached to the owner's type. Hidden entirely when
+ * empty; otherwise renders as a headerless table like the main one, with the
+ * same chip / cloud / text visuals but without any editor widget. The only
+ * action is the row's «×» removing the value (with confirmation). */
+.prop-outside-wrap {
+  margin-top: var(--space-3);
+}
+
+.prop-outside-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.prop-outside-title {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
+  color: var(--text);
+}
+
+.prop-outside-hint {
+  font-size: var(--font-size-2xs);
+}
+
+.prop-outside-table {
+  width: 100%;
+}
+
+.prop-outside-table td {
+  vertical-align: top;
+  padding: var(--space-2) var(--space-3);
+}
+
+.prop-outside-table td:first-child {
+  color: var(--text-dim);
+  word-break: break-word;
+}
+
+.prop-outside-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.prop-outside-cell .form-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.prop-outside-text {
+  word-break: break-all;
+  color: var(--text);
+}
+
+.prop-outside-multi-url {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+}
+
+.prop-outside-remove {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+/* The chip field has no pointer affordance when readonly — the cursor stays
+ * default; only the chip itself stays clickable (open the thought). */
+.prop-outside-chipfield {
+  cursor: default;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* --- thought_ref values: the thought's mini cloud (§6.3.1) ------------------ */
+
+/* A stored single thought_ref value: a self-contained mini cloud of the
+ * referenced thought — icon + title in its own colours/font (inline styles
+ * from applyCloudStyle), click opens the thought on the map, the inline «×»
+ * clears the value. Styled after the history-bar chips (§11.1). */
+.prop-ref-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 2px 1px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.prop-ref-cloud:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.prop-ref-cloud .prc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Начертание мысли — тот же набор классов, что у облачка холста. */
+.prop-ref-cloud.font-bold .prc-title {
+  font-weight: 700;
+}
+
+.prop-ref-cloud.font-italic .prc-title {
+  font-style: italic;
+}
+
+.prop-ref-cloud.font-underline .prc-title {
+  text-decoration-line: underline;
+}
+
+.prop-ref-cloud.font-strike .prc-title {
+  text-decoration-line: line-through;
+}
+
+/* Оба начертания сразу (см. `.cloud.font-underline.font-strike`). */
+.prop-ref-cloud.font-underline.font-strike .prc-title {
+  text-decoration-line: underline line-through;
+}
+
+.prop-ref-cloud.dim {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* The «×» inside the cloud: smaller than the filter-panel inline clear so it
+ * fits the pill shape (still a comfortable click target). */
+.prop-ref-cloud .st-f-clear-inline {
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  border: none;
+  border-radius: 999px;
+}
+
+/* A marked-for-deletion or inactive thought in the multi-value chip list
+ * (st-f-chip) reads dimmed like everywhere else. */
+.st-f-chip.dim {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.link-group-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.link-group-item:hover {
+  background: var(--surface-2);
+}
+
+.mention-item {
+  padding: 4px 2px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.mention-item:hover {
+  background: var(--surface-2);
+}
+
+/* Inactive thoughts/links in the editor «Связи» lists — dimmed like the map
+ * clouds (08-ui-spec.md §2.2), shown only while `show_inactive` is on. */
+.link-group-item.dim,
+.mention-item.dim {
+  opacity: 0.5;
+  font-style: italic;
+}
+

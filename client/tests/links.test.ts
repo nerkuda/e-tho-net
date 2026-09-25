@@ -14,9 +14,10 @@ import { describe, it } from 'node:test';
 import type { FocusEdge } from '@etn/shared';
 
 import { linksInternals } from '../src/renderer/canvas/links.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const LINKS_SRC = resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'links.ts');
-const STYLES_SRC = resolve(import.meta.dirname, '..', 'src', 'renderer', 'styles.css');
+const STYLES_SRC = assembledStylesFile();
 
 const { groupBundles, bundleTrashed, rectFitsInside, edgeGeometry, edgePointAt } =
   linksInternals;

@@ -1,0 +1,395 @@
+/* ---------------------------------------------------------------------------
+ * Type combobox (L6): searchable type picker
+ * ------------------------------------------------------------------------- */
+
+.type-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.type-combo-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.type-combo-caret {
+  color: var(--text-faint);
+  pointer-events: none;
+  flex: none;
+}
+
+.type-combo-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  flex: none;
+  overflow: hidden;
+}
+
+.type-combo-icon img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Body-mounted (fixed) so the host dialog never clips it. */
+.type-combo-list {
+  position: fixed;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+  z-index: 950; /* above the dialog stack (dialog-backdrop sits at 900) */
+}
+
+.type-combo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.type-combo-item:hover,
+.type-combo-item.active {
+  background: var(--accent-soft);
+}
+
+/* L21: строки деревьев типов рисует единый компонент lib/ui/tree.ts
+ * (`.ui-tree*`, задача d1c15a2d) — прежние `type-tree-toggle`/`type-tree-name`/
+ * `.type-tree-root > td` упразднены. Модификатор корня остаётся на строке
+ * компонента (`.ui-tree-row.type-tree-root`, вид — в tree.css). */
+
+.type-combo-toggle {
+  flex: none;
+  width: 12px;
+  font-size: 10px;
+  color: var(--muted, #8a93a5);
+  text-align: center;
+  cursor: pointer;
+}
+
+.type-combo-toggle-leaf {
+  cursor: default;
+}
+
+.type-combo-item.disabled {
+  cursor: default;
+  color: var(--muted, #8a93a5);
+}
+
+.type-combo-item.disabled:hover,
+.type-combo-item.disabled.active {
+  background: transparent;
+}
+
+.type-combo-swatch {
+  width: 22px;
+  border-top: 2px solid var(--link-default);
+  flex: none;
+}
+
+.type-combo-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Уточнение строки выпадашки (пара имён типа связи в скобках «(прямое -> обратное)»)
+   — серым справа от имени, обрезается многоточием (общий комбо-пикер
+   lib/entity-picker.ts, четвёртый источник «свойство связи»; требование cdb6b52f). */
+.type-combo-note {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted, #8a93a5);
+  font-size: 0.85em;
+}
+
+.type-combo-empty {
+  margin: 4px 8px;
+}
+
+/* Строка модального пикера для варианта-свойства-связи: подпись именем стороны
+   и парная подпись серым (у варианта нет облачка мысли). */
+.entity-pick-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entity-pick-note {
+  flex: none;
+  color: var(--muted, #8a93a5);
+  font-size: 0.85em;
+}
+
+/* «Создать новый „<имя>“» row — quick type creation from the type picker. */
+.type-combo-create {
+  color: var(--accent);
+}
+
+.type-combo-create .type-combo-icon {
+  color: var(--accent);
+}
+
+.type-combo-create-name {
+  font-weight: 600;
+}
+
+/* Общий пикер сущностей (0.8.2): поле ОДИНОЧНОГО выбора сущности.
+ * Пусто — строка живого поиска с кареткой; заполнено — облачко значения
+ * лежит прямо в поле, ввод и каретка скрыты, крестик на облачке очищает,
+ * «…» открывает диалог выбора единственного значения (ошибка ba2f57d3). */
+.entity-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.entity-combo-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Однострочное поле (в отличие от многострочного чип-поля значений
+   * свойства-связи): ввод и облачко значения не переносятся. */
+  flex-wrap: nowrap;
+  /* Полоса под кнопку «…» в правом углу поля. */
+  padding-right: 28px;
+}
+
+.entity-combo-value {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.entity-combo-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Поле ввода живёт ВНУТРИ рамки `.st-f-chipfield` — собственной рамки и
+   * фона не рисует. */
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.entity-combo-input:focus {
+  outline: none;
+}
+
+.entity-combo-caret {
+  color: var(--text-faint);
+  flex: none;
+}
+
+/* «…» — диалог выбора единственного значения (как угловая кнопка поля
+ * значения свойства-связи): компактная, в правом углу поля, ширину не
+ * отъедает. */
+button.entity-combo-pick {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  line-height: 1;
+  cursor: pointer;
+}
+
+button.entity-combo-pick:hover {
+  background: rgba(127, 127, 127, 0.18);
+  color: var(--text);
+}
+
+button.entity-combo-pick:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Модальный чек-лист пикера: чипы выбранных мыслей. */
+.entity-pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.entity-pick-chips .muted {
+  font-size: 12px;
+}
+
+/* Inline tree-checkbox type picker (0.6.5: thought_ref `allowed_type_ids`
+ * filter in the property editor) — search on top, tree rows with icons and
+ * inherited styles below, same visual shape as the combobox dropdown. */
+.type-check-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.type-check-search {
+  gap: 6px;
+}
+
+.type-check-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.type-check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.type-check-row:hover {
+  background: var(--accent-soft);
+}
+
+.type-check-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.type-check-empty {
+  margin: 4px 8px;
+}
+
+/* Pick-list rows in dialogs («Добавить свойство»): the highlighted pickable
+ * row and the visibly blocked ones (already attached / inherited). */
+.row-selected > td {
+  background: var(--accent-soft);
+}
+
+.row-disabled {
+  cursor: default;
+}
+
+.row-disabled > td {
+  color: var(--muted, #8a93a5);
+  opacity: 0.7;
+}
+
+/* Scrollable thought-type checklist — thought_ref property type filter (L6). */
+/* Link-type line swatch in list dialogs (L6). */
+.link-type-swatch {
+  display: inline-block;
+  width: 26px;
+  border-top: 2px solid var(--link-default);
+  flex: none;
+}
+
+/* --- Общий список свойств (задача 6ebde54e, 0.8.2) -------------------------
+   Компонент `lib/property-list.ts`: менеджер свойств и пикер «Добавить
+   свойство…». Раскладка колонок — ФИКСИРОВАННАЯ: однострочные имена и подписи
+   концов связи (`связь (имя - имя)`) с nowrap дают min-content, который в
+   auto-таблице распирает диалог (грабли f2a047ee / ошибка 2012f46b). Поэтому
+   ширины задаёт сама таблица, а ячейки обрезаются многоточием. */
+.property-list-wrap {
+  max-height: 340px;
+}
+
+.property-list-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.property-list-table > thead > tr > th:nth-child(1) {
+  width: 45%;
+}
+
+.property-list-table > thead > tr > th:nth-child(2) {
+  width: 40%;
+}
+
+.property-list-table > thead > tr > th:nth-child(3) {
+  width: 15%;
+  text-align: right;
+}
+
+.property-list-row {
+  cursor: pointer;
+}
+
+.property-list-name-cell,
+.property-list-type-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.property-list-count-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Иконка вида значения перед именем скаляра. */
+.property-list-icon {
+  vertical-align: middle;
+  margin-right: 6px;
+  color: var(--muted, #8a93a5);
+}
+
+/* Единый значок конца связи: короткая вертикальная линия с приделанной к её
+   концу стрелкой. Цвет/стиль/толщина — эффективные настройки свойства-связи
+   (наследование от родительского типа связи); направление задаётся координатами
+   в `lib/property-list.ts` (исходящая — вниз, входящая — вверх, задача 88def930),
+   поэтому значок один на источник и назначение. */
+.property-list-link-icon {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+  color: var(--link-default, #9aa3b2);
+}
+
+/* Type editors (L6): disabled settings/icon buttons and a stretching name. */
+.editor-top-row .ui-input,
+.type-editor-row .ui-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-icon-box:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-icon-box:disabled:hover {
+  border-color: var(--border-strong);
+}
+
