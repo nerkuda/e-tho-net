@@ -53,6 +53,7 @@ import {
   SINGLE_CLICK_DELAY_MS,
 } from '../lib/thought-cloud.js';
 import {
+  anchorOffset,
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
   cloudHeight,
@@ -62,6 +63,7 @@ import {
   neighborsPreviewHeading,
   shortenCompoundName,
   sortRefsByTitle,
+  ZONE_ANCHOR_BY_DIR,
 } from '../lib/pure.js';
 import {
   createZonePaging,
@@ -125,6 +127,10 @@ export interface IndicatorInfo {
 
 /** Overlap rows rendered beyond the visible window (virtualization). */
 const OVERSCAN_ROWS = 2;
+/** Padding of a `.zone` in px (matches the CSS `padding: 12px`); the grid is
+ *  anchored inside the zone's CONTENT box, so the padding is discounted on both
+ *  axes when the anchor offset is computed. */
+const ZONE_PADDING_PX = 12;
 /** How many indicator fetches may run concurrently. */
 const INDICATOR_CONCURRENCY = 3;
 /** Minimum mouse travel before a press becomes a drag, px. */
@@ -1575,15 +1581,18 @@ const zoneCountEls: Record<'parents' | 'siblings' | 'children', HTMLElement | nu
 function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
   cols: number;
   rows: number;
+  /** Width of the zone's content box (padding discounted) — the container the
+   *  grid is anchored in (task f45ffc8a). */
+  avail: number;
 } | null {
   const zone = zones?.[dir];
   if (zone === null || zone === undefined) return null;
   const entries = zoneData.get(dir) ?? [];
   const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
   const cellW = geom.width + geom.gap;
-  const avail = Math.max(80, zone.clientWidth - 24);
+  const avail = Math.max(80, zone.clientWidth - 2 * ZONE_PADDING_PX);
   const cols = Math.max(1, Math.floor(avail / cellW));
-  return { cols, rows: Math.ceil(entries.length / cols) };
+  return { cols, rows: Math.ceil(entries.length / cols), avail };
 }
 
 /**
@@ -1689,7 +1698,21 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   endRow = Math.min(rows, endRow + OVERSCAN_ROWS);
 
   spacer.style.height = `${prefix[rows]!}px`;
-  grid.style.transform = `translateY(${prefix[startRow]!}px)`;
+  // Anchor the whole grid inside the zone's content box (task f45ffc8a): the
+  // zones pull towards the focus row (parents/siblings — bottom edge, children
+  // — top edge), so the clouds read as one cluster instead of scattered
+  // corners. The offset moves ONLY the grid's origin: the row-major order,
+  // gaps, virtualization window and (hence) all hit-testing/index math stay
+  // exactly as before. The grid width is the columns' width plus the inner
+  // gaps; the content height excludes the trailing gap the spacer carries.
+  const gridWidth = cols * geom.width + (cols - 1) * geom.gap;
+  const contentHeight = Math.max(0, prefix[rows]! - geom.gap);
+  const origin = anchorOffset(
+    { width: gridInfo.avail, height: Math.max(0, zone.clientHeight - 2 * ZONE_PADDING_PX) },
+    { width: gridWidth, height: contentHeight },
+    ZONE_ANCHOR_BY_DIR[dir],
+  );
+  grid.style.transform = `translate(${origin.x}px, ${origin.y + prefix[startRow]!}px)`;
 
   clear(grid);
   // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order

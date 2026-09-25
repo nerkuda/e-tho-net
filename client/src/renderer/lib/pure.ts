@@ -156,6 +156,72 @@ export function cloudGeom(width: number, gap: number, zoom = 1): CloudGeom {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Anchoring of a zone's cloud grid to the focus thought (task f45ffc8a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Anchor of a canvas zone's cloud grid inside the zone box. The zones are
+ * absolute JS grids (`renderZoneContent` in `canvas/canvas.ts`), so the whole
+ * grid is shifted by `(zone size − content size) × anchor fraction` on each
+ * axis. The user order of the clouds (row-major) never changes — only the
+ * grid's origin moves.
+ */
+export type ZoneAnchor = 'right-bottom' | 'left-bottom' | 'center-top';
+
+/** An anchor as fractions of the free space: 0 — start, 0.5 — centre, 1 — end. */
+export interface ZoneAnchorFractions {
+  x: number;
+  y: number;
+}
+
+/** Fractions of an anchor, per axis. */
+export function anchorFractions(anchor: ZoneAnchor): ZoneAnchorFractions {
+  switch (anchor) {
+    case 'right-bottom':
+      return { x: 1, y: 1 };
+    case 'left-bottom':
+      return { x: 0, y: 1 };
+    case 'center-top':
+      return { x: 0.5, y: 0 };
+  }
+}
+
+/**
+ * Per-zone anchor (task f45ffc8a): the zones pull towards the focus row so the
+ * map reads as one cluster instead of scattered corners.
+ * - top-left (`parents`, above the focus on the left) — right-bottom: its last
+ *   row hugs the bottom edge (the focus row) and the rows right-align towards
+ *   the canvas centre;
+ * - top-right (`siblings`) — left-bottom: bottom edge to the focus row, rows
+ *   left-align towards the canvas centre;
+ * - bottom (`children`, below the focus) — center-top: its first row starts at
+ *   the top edge (the focus row), rows centred.
+ */
+export const ZONE_ANCHOR_BY_DIR: Record<'parents' | 'siblings' | 'children', ZoneAnchor> = {
+  parents: 'right-bottom',
+  siblings: 'left-bottom',
+  children: 'center-top',
+};
+
+/**
+ * Grid origin inside its zone box: `(container − content) × anchor fractions`
+ * on each axis, never negative (content larger than the container is anchored
+ * to the start — the rest is reached by scrolling, never by a negative
+ * offset). Pure so the renderer and its tests share one formula.
+ */
+export function anchorOffset(
+  container: { width: number; height: number },
+  content: { width: number; height: number },
+  anchor: ZoneAnchor,
+): { x: number; y: number } {
+  const fractions = anchorFractions(anchor);
+  return {
+    x: Math.max(0, container.width - content.width) * fractions.x,
+    y: Math.max(0, container.height - content.height) * fractions.y,
+  };
+}
+
 /** Parses an L4 `cloud_width` value, clipped to the system constants. */
 export function parseCloudWidth(raw: string | null): number {
   const num = raw === null ? Number.NaN : Number(raw);
