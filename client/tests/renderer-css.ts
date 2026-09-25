@@ -56,9 +56,19 @@ export function readRendererCss(rendererRoot: string = RENDERER_ROOT): string {
  * Путь к временному файлу с {@link readRendererCss}. Нужен тестам, читающим
  * CSS по пути (`readFileSync(path, 'utf8')`); содержимое идентично модулям в
  * порядке импорта.
+ *
+ * Имя уникально для процесса и вызова: `node --test` запускает ФАЙЛЫ тестов
+ * параллельно отдельными процессами, и общий фиксированный путь давал гонку —
+ * один процесс усекал файл, пока другой его читал (случайные падения
+ * CSS-сторожей вида «в токенах темы нет --hit-area»). Уникальное имя
+ * (pid + счётчик) снимает гонку.
  */
+let assembledSeq = 0;
 export function assembledStylesFile(): string {
-  const out = path.join(os.tmpdir(), 'etn-renderer-assembled-styles.css');
+  const out = path.join(
+    os.tmpdir(),
+    `etn-renderer-assembled-styles-${process.pid}-${assembledSeq++}.css`,
+  );
   fs.writeFileSync(out, readRendererCss(), 'utf8');
   return out;
 }
