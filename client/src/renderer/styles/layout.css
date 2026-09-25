@@ -579,6 +579,33 @@
   cursor: row-resize;
 }
 
+/* Тач-зона шва (требование 5677bc3d, ошибка 4417a2bb). Видимый шов намеренно
+   тонкий (6px) ради точности перетаскивания, поэтому зона нажатия расширяется
+   НЕВИДИМЫМ псевдоэлементом поперёк шва до `--hit-area`; вдоль шва он занимает
+   всю длину. Псевдоэлемент принадлежит самому разделителю и потому принимает
+   клик. Расширение симметрично (±6px на 18px) — соседний контент перехватывается
+   лишь в узкой полосе у самого шва. */
+.workspace-body[data-editor-pos='right'] > .editor-resizer::after,
+.workspace-body[data-editor-pos='left'] > .editor-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area));
+  transform: translateX(-50%);
+}
+.workspace-body[data-editor-pos='top'] > .editor-resizer::after,
+.workspace-body[data-editor-pos='bottom'] > .editor-resizer::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  block-size: max(100%, var(--hit-area));
+  transform: translateY(-50%);
+}
+
 /* --- selection resizer: draggable splitter between the selection panel and
    the canvas (08-ui-spec.md §5). Absolutely positioned on the panel's right
    seam via the --selection-w variable; when the editor docks left the panel
@@ -608,6 +635,18 @@
 .workspace-body[data-editor-pos='top'] > .selection-resizer,
 .workspace-body[data-editor-pos='bottom'] > .selection-resizer {
   display: none;
+}
+
+/* Тач-зона шва (требование 5677bc3d, ошибка 4417a2bb): шов тонкий (6px),
+   невидимый псевдоэлемент расширяет зону нажатия до `--hit-area` поперёк. */
+.workspace-body > .selection-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area));
+  transform: translateX(-50%);
 }
 
 .statusbar {
@@ -691,6 +730,19 @@
 .event-area-resizer.dragging::before {
   background: var(--accent);
   opacity: 1;
+}
+
+/* Тач-зона шва (требование 5677bc3d, ошибка 4417a2bb): видимая риска — 1px
+   (`::before`), сам шов — 6px; невидимый `::after` доводит зону нажатия до
+   `--hit-area` поперёк, вдоль — на всю высоту строки состояния. */
+.event-area-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area));
+  transform: translateX(-50%);
 }
 
 .statusbar.resizing,

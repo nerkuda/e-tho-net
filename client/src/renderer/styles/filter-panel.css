@@ -71,12 +71,36 @@
  * Селектор с `>` перебивает per-экранные `.st-splitter`/`.chron-splitter`/
  * `.activity-splitter` (они объявлены ниже по файлу). */
 .fp-host > .fp-splitter {
+  position: relative;
   flex: 0 0 4px;
   background: var(--border);
   border-radius: 2px;
   transition: background 0.15s;
   /* Прежний гриф «⣿» строкового сплиттера каркасу не нужен. */
   font-size: 0;
+}
+
+/* Тач-зона шва (требование 5677bc3d, ошибка 4417a2bb): шов тонкий (4px),
+   видимый шов не расширяем — невидимый псевдоэлемент доводит зону нажатия до
+   `--hit-area` поперёк шва, вдоль — на всю длину. */
+.fp-host > .fp-splitter.fp-side::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area));
+  transform: translateX(-50%);
+}
+
+.fp-host > .fp-splitter.fp-top::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  block-size: max(100%, var(--hit-area));
+  transform: translateY(-50%);
 }
 
 .fp-host > .fp-splitter.fp-side {

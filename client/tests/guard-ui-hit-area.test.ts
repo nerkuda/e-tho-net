@@ -52,6 +52,22 @@ const COMPACT_CONTROLS: Array<{ file: string; selector: string }> = [
 ];
 
 /**
+ * Тонкие швы разделителей (4–6px, ошибка 4417a2bb). Шов намеренно узкий ради
+ * точности перетаскивания, поэтому зона нажатия расширяется невидимым
+ * псевдоэлементом поперёк до `--hit-area` (18px — минимум требования 5677bc3d;
+ * `--hit-area-min` здесь не нужен: шов не задаёт геометрию строки). Селекторы
+ * совпадают с текстом правил в `styles/layout.css` и `styles/filter-panel.css`
+ * (сборка модулей через манифест — `read('styles.css')`).
+ */
+const THIN_SEAMS: Array<{ file: string; selector: string }> = [
+  { file: 'styles.css', selector: '.editor-resizer' },
+  { file: 'styles.css', selector: '.selection-resizer' },
+  { file: 'styles.css', selector: '.event-area-resizer' },
+  { file: 'styles.css', selector: '.fp-splitter.fp-side' },
+  { file: 'styles.css', selector: '.fp-splitter.fp-top' },
+];
+
+/**
  * Объявлено ли у контрола расширение зоны нажатия: псевдоэлемент
  * (`::after`/`::before`) с размером от токена тач-таргета.
  */
@@ -89,6 +105,23 @@ describe('guard: тач-зоны lib/ui (e45ca252, требование 5677bc3d
           `${problems.join('\n')}\n\n` +
           'Добавь `::after` с `inline-size/block-size: max(100%, var(--hit-area-min))` ' +
           '(требование 5677bc3d) либо обоснуй исключение в COMPACT_CONTROLS/шапке сторожа.',
+      );
+    }
+  });
+
+  it('тонкие швы разделителей расширяют зону нажатия псевдоэлементом (4417a2bb)', () => {
+    const problems: string[] = [];
+    for (const { file, selector } of THIN_SEAMS) {
+      if (!hasHitAreaExpansion(read(file), selector)) {
+        problems.push(`  • ${file} «${selector}» — нет псевдоэлемента с var(--hit-area)`);
+      }
+    }
+    if (problems.length > 0) {
+      throw new Error(
+        `Тонкие швы без расширенной зоны нажатия (${problems.length}):\n` +
+          `${problems.join('\n')}\n\n` +
+          'Добавь `::after` с `inline-size/block-size: max(100%, var(--hit-area))` ' +
+          'поперёк шва (требование 5677bc3d, ошибка 4417a2bb).',
       );
     }
   });
