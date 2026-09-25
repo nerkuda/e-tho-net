@@ -46,6 +46,7 @@ import {
 } from '../../lib/filter-form.js';
 import { div, el, span, setTooltip } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
+import { loadingState } from '../../lib/ui/empty-state.js';
 import { createTable, type TableHandle } from '../../lib/ui/table.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
@@ -548,7 +549,7 @@ async function gotoPage(next: number): Promise<void> {
 function renderLoading(): void {
   if (tableWrap === null) return;
   dropTable();
-  tableWrap.replaceChildren(el('span', 'muted', t('common.loading')));
+  tableWrap.replaceChildren(loadingState());
 }
 
 function renderError(err: unknown): void {
@@ -637,6 +638,7 @@ function buildActivityTable(): TableHandle<ActivityRow> {
     rows: [],
     rowKey: (row) => row.id,
     emptyText: t('activity.empty'),
+    emptyHint: t('activity.emptyHint'),
     // Клик/Enter открывают сущность строки (удалённая — снимок), §18.
     // Текущую строку фасад ставит сам до вызова обработчика.
     onRowClick: (row) => void openEntity(row),

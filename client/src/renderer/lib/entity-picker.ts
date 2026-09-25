@@ -716,6 +716,7 @@ export async function pickEntitiesModal(
       // показывал всё дерево), тоггл сворачивает ветку.
       expandedIds: expanded,
       emptyText: t('tree.empty'),
+      emptyHint: t('tree.emptyHint'),
       showChildCount: true,
       filterText: (opt) => `${opt.title} ${opt.searchText ?? ''}`,
       isChecked: (opt) => checked.has(opt.id),

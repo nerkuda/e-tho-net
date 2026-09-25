@@ -290,6 +290,7 @@ export function buildUserMultiSelectWidget(opts: {
     },
     addPlaceholder: t('userMulti.addPlaceholder'),
     emptyText: t('chipList.empty'),
+    emptyHint: t('chipList.emptyHint'),
     removeTitle: t('chipList.remove'),
   });
 

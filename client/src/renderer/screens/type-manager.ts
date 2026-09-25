@@ -83,6 +83,7 @@ import { applyThoughtIcon } from '../lib/thought-cloud.js';
 import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLine } from '../lib/ui/messages.js';
+import { loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
@@ -445,6 +446,7 @@ export function showThoughtTypesDialog(): void {
     ariaLabel: t('thoughtTypes.title'),
     treeColumnHeader: t('thoughtTypes.col.name'),
     emptyText: t('thoughtTypes.empty'),
+    emptyHint: t('thoughtTypes.emptyHint'),
     rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
     onActivate: (item) => showThoughtTypeEditor(item.type, onChanged),
     columns: [
@@ -1402,7 +1404,7 @@ function buildStagedPropertySection(opts: {
   tableWrap.style.maxHeight = '220px';
   // The first load often starts before the dialog mounts this box — show the
   // placeholder up front instead of a blank gap.
-  tableWrap.append(el('span', 'muted', 'Загрузка…'));
+  tableWrap.append(loadingState());
   // Заголовка «Свойства» над таблицей нет (ошибка 3c7213ec): вкладка уже
   // называется «Свойства», подпись только дублировала её. Подзаголовок
   // «Свойства типа» остаётся — он отличает собственную таблицу от

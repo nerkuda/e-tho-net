@@ -33,8 +33,11 @@
  *
  * **Строки.** Заголовки колонок и тексты (в т.ч. пустого состояния и ячеек)
  * задаёт вызывающий уже локализованными (`t('…')` из `lib/i18n.ts`): словарь
- * ключей расширяется вызывающим, фасад ключей не придумывает. Значение по
- * умолчанию для пустого состояния — `t('table.empty')`.
+ * ключей расширяется вызывающим, фасад ключей не придумывает. Пустое
+ * состояние рисует общий компонент `./empty-state.js` (заголовок `emptyText` +
+ * подсказка `emptyHint` + необязательное действие `emptyAction`, задача
+ * d7b7c367): значение по умолчанию для заголовка — `t('table.empty')`,
+ * для подсказки — `t('table.emptyHint')`.
  *
  * **Навигация (`nav`).** По умолчанию `'row'` — стрелки ↑/↓ двигают текущую
  * строку (поведение всех потребителей Z4/Z5 неизменно). Режим `'cell'` (для
@@ -64,9 +67,10 @@
  * это делает Excel при копировании.
  */
 
-import { div, el, span } from '../dom.js';
+import { div, span } from '../dom.js';
 import { t } from '../i18n.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
+import { emptyState, type EmptyStateOptions, type StateAction } from './empty-state.js';
 import { select, type StateSelector } from './state.js';
 import {
   vaadinGridAdapter,
@@ -78,7 +82,7 @@ import {
 /** Корневой класс обёртки таблицы. */
 export const TABLE_CLASS = 'ui-table';
 
-/** Класс элемента пустого состояния. */
+/** Класс обёртки пустого состояния таблицы (внутри — общий `emptyState`). */
 export const TABLE_EMPTY_CLASS = 'ui-table-empty';
 
 /** Класс ячейки с «пустым» значением (нет данных у строки). */
@@ -206,6 +210,14 @@ export interface TableSpec<T> {
   rowKey: (row: T, index: number) => string;
   /** Текст пустого состояния (локализован); по умолчанию `t('table.empty')`. */
   emptyText?: string;
+  /**
+   * Подсказка пустого состояния — что сделать, чтобы строки появились
+   * (локализована). По умолчанию `t('table.emptyHint')`; для списков с
+   * поиском владелец меняет состояние через {@link TableHandle.setEmpty}.
+   */
+  emptyHint?: string;
+  /** Точка входа к действию из пустого состояния (необязательна). */
+  emptyAction?: StateAction;
   /** ARIA-подпись таблицы. */
   ariaLabel?: string;
   /** Начальная текущая строка (ключ). */
@@ -265,6 +277,11 @@ export interface TableHandle<T> {
   setSelection(keys: readonly string[]): void;
   /** Ключи выделенных строк. */
   getSelection(): string[];
+  /**
+   * Заменяет пустое состояние (заголовок/подсказка/действие) — для списков,
+   * чей текст зависит от фильтра (например, «ничего не найдено»).
+   */
+  setEmpty(options: EmptyStateOptions): void;
   /** Текст копирования текущего выделения/строки (TSV с заголовками). */
   buildCopyText(): string;
   /** Перерисовывает колонки и строки (например, после смены языка). */
@@ -410,14 +427,6 @@ export function rowsToTsv<T>(
   return [header, ...body].join('\r\n');
 }
 
-/** Элемент пустого состояния (`role="status"`). Текст локализует вызывающий. */
-export function emptyState(text: string): HTMLDivElement {
-  const box = el('div', TABLE_EMPTY_CLASS);
-  box.setAttribute('role', 'status');
-  box.append(span(text));
-  return box;
-}
-
 // --- Фасад -----------------------------------------------------------------
 
 /**
@@ -433,13 +442,24 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
   const nav: NavMode = spec.nav ?? 'row';
   const sortMode: SortMode = spec.sortMode ?? 'cycle';
 
+  let emptyOptions: EmptyStateOptions = {
+    title: emptyText,
+    hint: spec.emptyHint ?? t('table.emptyHint'),
+    ...(spec.emptyAction !== undefined ? { action: spec.emptyAction } : {}),
+  };
+
   const wrapper = div(TABLE_CLASS);
   wrapper.tabIndex = 0;
   if (spec.ariaLabel !== undefined) wrapper.setAttribute('aria-label', spec.ariaLabel);
 
   const adapter = spec.adapter ?? vaadinGridAdapter();
-  const emptyEl = emptyState(emptyText);
+  const emptyEl = div(TABLE_EMPTY_CLASS);
   emptyEl.hidden = true;
+  /** Перерисовывает содержимое пустого состояния (общий компонент `lib/ui`). */
+  const renderEmpty = (): void => {
+    emptyEl.replaceChildren(emptyState(emptyOptions));
+  };
+  renderEmpty();
   wrapper.append(adapter.element, emptyEl);
   if (spec.ariaLabel !== undefined) adapter.element.setAttribute('aria-label', spec.ariaLabel);
   if (multi) adapter.element.setAttribute('aria-multiselectable', 'true');
@@ -828,6 +848,10 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     },
     getSelection(): string[] {
       return [...selected];
+    },
+    setEmpty(options: EmptyStateOptions): void {
+      emptyOptions = options;
+      renderEmpty();
     },
     buildCopyText(): string {
       const data = ordered();

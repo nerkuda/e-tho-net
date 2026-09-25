@@ -1,0 +1,49 @@
+/* Вид состояний списков, таблиц и панелей `lib/ui` (`.ui-empty*`,
+ * `.ui-state-loading`, `.ui-state-error`; задача d7b7c367, требование
+ * e514768f). Единое пустое состояние с подсказкой и точкой входа к действию,
+ * а также различимые состояния загрузки и ошибки.
+ *
+ * Все размеры, отступы и цвета — токенами `styles.css` (требование 0dddd939,
+ * сторож `guard-ui-tokens`): прямых hex и магических px здесь нет.
+ *
+ * Грабли 36889dd6: вид даёт специфичность, а не порядок в бандле. Классы
+ * `ui-empty*`/`ui-state-*` не пересекаются с прикладными, поэтому не спорят с
+ * ними. */
+
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+}
+
+.ui-empty__title {
+  font-weight: var(--font-weight-semibold);
+}
+
+.ui-empty__hint {
+  color: var(--text-faint);
+  font-size: var(--font-size-xs);
+  max-width: 48ch;
+}
+
+.ui-empty__action {
+  margin-top: var(--space-2);
+}
+
+.ui-state-loading {
+  padding: var(--space-4);
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+}
+
+.ui-state-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}

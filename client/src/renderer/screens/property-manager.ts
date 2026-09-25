@@ -89,6 +89,7 @@ import {
 } from '../lib/dialog.js';
 import { div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { footerErrorLine, operationError, operationErrorText } from '../lib/ui/messages.js';
+import { loadingState } from '../lib/ui/empty-state.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { showLinkStyleDialog } from '../editor/style-dialog.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
@@ -2281,7 +2282,7 @@ function buildUsagePanel(
 
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '180px';
-  tableWrap.append(el('span', 'muted', 'Загрузка…'));
+  tableWrap.append(loadingState());
   host.append(tableWrap);
 
   const counts = span('', 'muted');
@@ -2484,6 +2485,7 @@ export function showLinkTypesTreeDialog(): void {
     ariaLabel: t('linkTypes.title'),
     treeColumnHeader: t('linkTypes.col.name'),
     emptyText: t('linkTypes.empty'),
+    emptyHint: t('linkTypes.emptyHint'),
     rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
     onActivate: (item) => {
       if (item.prop !== undefined) openPropertyManagerEditor(item.prop, onChanged);

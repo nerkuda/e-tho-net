@@ -369,6 +369,7 @@ function buildTable(): TableHandle<ChronicleRow> {
     rows: [],
     rowKey: (row) => row.id,
     emptyText: t('chrono.empty'),
+    emptyHint: t('chrono.emptyHint'),
     ariaLabel: t('chrono.aria'),
     // Клавиатура §17: строки (↑/↓) + колонки и чипы (←/→, Tab), Enter — чип.
     nav: 'cell',

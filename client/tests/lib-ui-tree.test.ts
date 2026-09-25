@@ -185,10 +185,14 @@ describe('lib/ui/tree: рендер строк и раскрытие', () => {
     const tree = createTree<Item>({
       items: [],
       emptyText: 'Пусто',
+      emptyHint: 'Добавьте узел',
       renderContent: () => textNode('x'),
     });
-    assert.equal(byClass(tree.root as unknown as ShimElement, 'ui-tree-empty').length, 1);
-    assert.equal(byClass(tree.root as unknown as ShimElement, 'ui-tree-empty')[0]!.textContent, 'Пусто');
+    const empty = byClass(tree.root as unknown as ShimElement, 'ui-tree-empty');
+    assert.equal(empty.length, 1, 'пустое состояние — с хуком ui-tree-empty');
+    // Текст — заголовок и подсказка общего компонента `lib/ui/empty-state.ts`.
+    assert.ok(empty[0]!.flatText().includes('Пусто'), 'виден заголовок из опции');
+    assert.ok(empty[0]!.flatText().includes('Добавьте узел'), 'видна подсказка из опции');
   });
 });
 

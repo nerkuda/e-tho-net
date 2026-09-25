@@ -218,7 +218,6 @@ export {
   escapeTsvCell,
   cellText,
   rowsToTsv,
-  emptyState,
   createTable,
 } from './table.js';
 export type {
@@ -282,6 +281,23 @@ export {
   chipList,
 } from './chip-list.js';
 export type { ChipListOption, ChipListOptions, ChipListHandle } from './chip-list.js';
+
+// Состояния списков и панелей — пустое состояние с подсказкой и точкой входа
+// к действию, загрузка и ошибка (задача d7b7c367, требование e514768f).
+// Единственный разрешённый способ показать «пусто/грузлю/ошибка» в списках,
+// таблицах и панелях (сторож guard-ui-empty-state).
+export {
+  EMPTY_STATE_CLASS,
+  EMPTY_STATE_TITLE_CLASS,
+  EMPTY_STATE_HINT_CLASS,
+  EMPTY_STATE_ACTION_CLASS,
+  LOADING_STATE_CLASS,
+  ERROR_STATE_CLASS,
+  emptyState,
+  loadingState,
+  errorState,
+} from './empty-state.js';
+export type { StateAction, EmptyStateOptions } from './empty-state.js';
 
 
 

@@ -51,7 +51,7 @@ import { etn } from './etn.js';
 import { store } from '../state.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
-import { createTable, TABLE_EMPTY_CLASS } from './ui/table.js';
+import { createTable } from './ui/table.js';
 
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
@@ -501,6 +501,7 @@ export function buildPropertyList(opts: {
   callbacks: PropertyListCallbacks;
   searchPlaceholder?: string;
   emptyText?: string;
+  emptyHint?: string;
 }): PropertyListHandle {
   const { mode, callbacks } = opts;
 
@@ -657,6 +658,7 @@ export function buildPropertyList(opts: {
     rows: [],
     rowKey: (row) => row.id,
     emptyText: opts.emptyText ?? t('propertyList.empty'),
+    emptyHint: opts.emptyHint ?? t('propertyList.emptyHint'),
     onActivate: (row) => activate(row),
     onCurrentChange: (key) => {
       selectedId = key;
@@ -666,14 +668,21 @@ export function buildPropertyList(opts: {
   wrap.append(table.element);
 
   /** Пустое состояние зависит от поиска: без совпадений — «Ничего не
-   *  найдено.», иначе текст потребителя. Текст живёт в узле фасада. */
-  const emptySpan = table.element.querySelector<HTMLElement>(`.${TABLE_EMPTY_CLASS} span`);
+   *  найдено» с подсказкой изменить запрос, иначе текст потребителя с
+   *  подсказкой «что добавить». Состояние рисует общий компонент
+   *  `lib/ui/empty-state.ts` через `table.setEmpty`. */
   function syncEmptyText(): void {
-    if (emptySpan === null) return;
-    emptySpan.textContent =
+    table.setEmpty(
       query.trim() !== ''
-        ? t('propertyList.emptySearch')
-        : opts.emptyText ?? t('propertyList.empty');
+        ? {
+            title: t('propertyList.emptySearch'),
+            hint: t('propertyList.emptySearchHint'),
+          }
+        : {
+            title: opts.emptyText ?? t('propertyList.empty'),
+            hint: opts.emptyHint ?? t('propertyList.emptyHint'),
+          },
+    );
   }
 
   /** Перерисовывает строки по текущему фильтру/сортировке. */

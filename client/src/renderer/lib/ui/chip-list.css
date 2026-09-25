@@ -31,9 +31,10 @@
   min-height: var(--chip-list-min-h);
 }
 
+/* Пустое состояние чип-листа рисует общий компонент `lib/ui/empty-state.ts`
+   (вид в `empty-state.css`); `.ui-chip-list-empty` остаётся хук-классом. */
 .ui-chip-list-empty {
-  color: var(--text-dim);
-  font-size: var(--font-size-xs);
+  padding: var(--space-2) 0;
 }
 
 .ui-chip {

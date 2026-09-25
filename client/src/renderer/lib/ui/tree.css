@@ -215,10 +215,11 @@
   flex: 0 0 auto;
 }
 
+/* Пустое состояние дерева рисует общий компонент `lib/ui/empty-state.ts`
+   (вид в `empty-state.css`); `.ui-tree-empty` — лишь хук-класс для
+   потребителей тестов и прикладных стилей. */
 .ui-tree-empty {
-  padding: var(--space-4) var(--space-2);
-  color: var(--text-dim);
-  font-size: var(--font-size-xs);
+  align-self: stretch;
 }
 
 /* Узкое дерево: шаг ветви и зазоры строки уменьшаются, чтобы подпись

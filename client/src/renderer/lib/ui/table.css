@@ -63,10 +63,11 @@
   min-height: 0;
 }
 
-.ui-table-empty {
-  padding: var(--space-6) var(--space-4);
-  color: var(--text-dim);
-  font-size: var(--font-size-s);
+/* Пустое состояние рисует общий компонент `lib/ui/empty-state.ts` (свой вид
+   в `empty-state.css`) — обёртке `.ui-table-empty` собственных размеров не
+   нужно, она лишь держит узел состояния в раскладке таблицы. */
+.ui-table-empty[hidden] {
+  display: none;
 }
 
 .ui-table-cell-empty {

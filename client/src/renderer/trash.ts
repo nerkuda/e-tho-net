@@ -821,6 +821,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     rows: [],
     rowKey: (row) => row.id,
     emptyText: t('trash.empty'),
+    emptyHint: t('trash.emptyHint'),
   });
   listHost.append(table.element);
 

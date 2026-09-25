@@ -66,7 +66,11 @@ describe('lib/ui/chip-list', () => {
   it('пустой набор показывает текст пустого состояния', () => {
     const { handle } = build([]);
     const root = handle.root as unknown as ShimElement;
-    assert.equal(root.querySelector('.ui-chip-list-empty')?.textContent, 'пусто');
+    // Текст пустого состояния — заголовок (+ подсказка) общего компонента
+    // `lib/ui/empty-state.ts` внутри хука `.ui-chip-list-empty`.
+    const empty = root.querySelector('.ui-chip-list-empty')!;
+    assert.ok(empty.flatText().includes('пусто'), 'виден заголовок пустого состояния');
+    assert.ok(empty.querySelector('.ui-empty__title') !== null, 'заголовок — общий компонент');
     assert.equal(chips(root).length, 0);
   });
 

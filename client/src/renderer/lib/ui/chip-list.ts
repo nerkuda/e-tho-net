@@ -21,6 +21,7 @@
  */
 
 import { div, el, span } from '../dom.js';
+import { emptyState } from './empty-state.js';
 
 /** Базовый класс корня чип-листа. */
 export const CHIP_LIST_CLASS = 'ui-chip-list';
@@ -55,6 +56,8 @@ export interface ChipListOptions {
   addPlaceholder?: string;
   /** Текст пустого состояния (нет ни одного значения). */
   emptyText?: string;
+  /** Подсказка пустого состояния — что сделать, чтобы добавить значение. */
+  emptyHint?: string;
   /** Подсказка кнопки снятия чипа. */
   removeTitle?: string;
 }
@@ -81,7 +84,12 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
     const values = opts.getValues();
     if (values.length === 0) {
       if (opts.emptyText !== undefined) {
-        chipsBox.append(span(opts.emptyText, CHIP_LIST_EMPTY_CLASS));
+        const empty = emptyState({
+          title: opts.emptyText,
+          ...(opts.emptyHint !== undefined ? { hint: opts.emptyHint } : {}),
+        });
+        empty.classList.add(CHIP_LIST_EMPTY_CLASS);
+        chipsBox.append(empty);
       }
     } else {
       for (const value of values) {

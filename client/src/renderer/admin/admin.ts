@@ -20,6 +20,7 @@ import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { operationError } from '../lib/ui/messages.js';
+import { loadingState } from '../lib/ui/empty-state.js';
 import { createTable } from '../lib/ui/table.js';
 
 /** Opens the admin panel modal. */
@@ -49,7 +50,7 @@ export function openAdminPanel(): void {
 
 /** Renders the users tab. */
 async function renderUsers(content: HTMLElement): Promise<void> {
-  content.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  content.replaceChildren(loadingState());
   let users: User[];
   try {
     users = await etn.admin.listUsers();
@@ -128,6 +129,8 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     ],
     rows: users,
     rowKey: (user) => user.id,
+    emptyText: t('admin.users.empty'),
+    emptyHint: t('admin.users.emptyHint'),
   });
   wrap.append(table.element);
   content.replaceChildren(wrap, addUserRow());
@@ -305,7 +308,7 @@ async function removeUserRow(user: User, content: HTMLElement): Promise<void> {
 
 /** Renders the networks tab. */
 async function renderNetworks(content: HTMLElement): Promise<void> {
-  content.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  content.replaceChildren(loadingState());
   let networks: Network[];
   try {
     networks = await etn.admin.listNetworks();
@@ -375,6 +378,8 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     ],
     rows: networks,
     rowKey: (network) => network.id,
+    emptyText: t('admin.networks.empty'),
+    emptyHint: t('admin.networks.emptyHint'),
   });
   wrap.append(table.element);
   content.replaceChildren(wrap);
@@ -421,7 +426,7 @@ function renderAudit(content: HTMLElement): void {
   content.append(filterRow, tableWrap);
 
   async function loadAudit(): Promise<void> {
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    tableWrap.replaceChildren(loadingState());
     try {
       const result = (await etn.admin.listAudit({
         category: categorySelect.value === '' ? undefined : categorySelect.value,
@@ -483,6 +488,8 @@ function renderAudit(content: HTMLElement): void {
         ],
         rows: result.entries,
         rowKey: (entry) => String(entry.id),
+        emptyText: t('admin.audit.empty'),
+        emptyHint: t('admin.audit.emptyHint'),
       });
       tableWrap.replaceChildren(table.element, el('p', 'faint', `Всего записей: ${result.total}`));
     } catch (err) {

@@ -36,6 +36,7 @@ import { div, el, span } from '../dom.js';
 import { t } from '../i18n.js';
 import { badge } from './badge.js';
 import { choiceControl } from './choice-row.js';
+import { emptyState, type StateAction } from './empty-state.js';
 
 /** Корневой класс дерева (роль `tree`). */
 export const TREE_CLASS = 'ui-tree';
@@ -123,6 +124,13 @@ export interface TreeOptions<T extends TreeItem> {
   treeColumnHeader?: string;
   /** Локализованный текст пустого состояния; по умолчанию — `t('tree.empty')`. */
   emptyText?: string;
+  /**
+   * Подсказка пустого состояния — что сделать, чтобы строки появились
+   * (локализована); по умолчанию `t('tree.emptyHint')`.
+   */
+  emptyHint?: string;
+  /** Точка входа к действию из пустого состояния (необязательна). */
+  emptyAction?: StateAction;
   /** ARIA-подпись дерева. */
   ariaLabel?: string;
   /** Множественный выбор: флажок в каждой строке. */
@@ -520,7 +528,13 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     const head = buildHead();
     if (head !== null) nodes.push(head);
     if (ids.length === 0) {
-      nodes.push(el('div', TREE_EMPTY_CLASS, options.emptyText ?? t('tree.empty')));
+      const empty = emptyState({
+        title: options.emptyText ?? t('tree.empty'),
+        hint: options.emptyHint ?? t('tree.emptyHint'),
+        ...(options.emptyAction !== undefined ? { action: options.emptyAction } : {}),
+      });
+      empty.classList.add(TREE_EMPTY_CLASS);
+      nodes.push(empty);
     } else {
       for (const id of ids) {
         const item = byId.get(id);

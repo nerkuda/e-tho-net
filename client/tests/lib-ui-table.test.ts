@@ -257,11 +257,18 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
       rows: [],
       rowKey: (r) => r.id,
       emptyText: 'Ничего нет',
+      emptyHint: 'Добавьте строку',
       adapter: stub,
     });
     const emptyEl = (t.element as unknown as ShimElement).findAll(table.TABLE_EMPTY_CLASS)[0];
     assert.equal(emptyEl?.hidden, false);
-    assert.equal(emptyEl?.flatText(), 'Ничего нет');
+    // Заголовок и подсказку рисует общий компонент `lib/ui/empty-state.ts`.
+    assert.ok(emptyEl?.flatText().includes('Ничего нет'), 'виден заголовок из опции');
+    assert.ok(emptyEl?.flatText().includes('Добавьте строку'), 'видна подсказка из опции');
+
+    // Смена состояния списком с фильтром — через setEmpty.
+    t.setEmpty({ title: 'Не найдено', hint: 'Измените запрос' });
+    assert.ok(emptyEl?.flatText().includes('Не найдено'), 'setEmpty меняет текст состояния');
   });
 
   it('клик по заголовку сортирует, цикл asc/desc/нет идёт через фасад', async () => {

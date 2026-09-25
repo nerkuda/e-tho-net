@@ -39,6 +39,7 @@ import { t } from './i18n.js';
 
 import { buildValueEditor } from '../editor/value-editor.js';
 import { wrapClearable } from './ui/field.js';
+import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
 import { buildEntityChipField, type EntityOption } from './entity-picker.js';
 import { collapsibleSection } from './ui/collapsible.js';
@@ -379,7 +380,9 @@ export function buildConditionsSection(
     clear(box);
     const state = ctx.getState();
     if (state.properties.length === 0) {
-      box.append(el('div', 'st-f-empty', 'Условий нет'));
+      // Условий пока нет — общее пустое состояние с подсказкой, что сделать
+      // (задача d7b7c367): «Добавьте условие отбора».
+      box.append(emptyState({ title: t('filterForm.empty'), hint: t('filterForm.emptyHint') }));
       return;
     }
     state.properties.forEach((cond, index) => {

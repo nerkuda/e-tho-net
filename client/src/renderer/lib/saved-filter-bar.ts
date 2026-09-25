@@ -29,7 +29,7 @@ import { svgIcon } from './icons.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton } from './ui/button.js';
-import { TABLE_EMPTY_CLASS, createTable } from './ui/table.js';
+import { createTable } from './ui/table.js';
 import { duplicateFilterName, filterSavedByName } from './pure.js';
 
 /** Запись сохранённого отбора. `definition` — непрозрачное определение вида. */
@@ -306,6 +306,7 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     rows: [],
     rowKey: (entry) => entry.id,
     emptyText: t('savedFilters.empty'),
+    emptyHint: t('savedFilters.emptyHint'),
     onRowClick: (entry) => pick(entry),
     onActivate: (entry) => pick(entry),
     rowMenu: (entry) => rowMenu(entry),
@@ -330,13 +331,14 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
 
   const render = (): void => {
     visible = filterSavedByName(opts.entries(), search.value);
-    // Пустое состояние зависит от поиска: без сохранённых — свой текст, без
-    // совпадений — «Ничего не найдено» (текст живёт в узле фасада).
-    const emptySpan = table.element.querySelector<HTMLElement>(`.${TABLE_EMPTY_CLASS} span`);
-    if (emptySpan !== null) {
-      emptySpan.textContent =
-        opts.entries().length === 0 ? t('savedFilters.empty') : t('savedFilters.emptySearch');
-    }
+    // Пустое состояние зависит от поиска: без сохранённых — свой текст с
+    // подсказкой, без совпадений — «Ничего не найдено». Рисует общий компонент
+    // `lib/ui/empty-state.ts` через `table.setEmpty`.
+    table.setEmpty(
+      opts.entries().length === 0
+        ? { title: t('savedFilters.empty'), hint: t('savedFilters.emptyHint') }
+        : { title: t('savedFilters.emptySearch'), hint: t('savedFilters.emptySearchHint') },
+    );
     table.setRows(visible);
     const selected = opts.selectedId();
     table.setCurrent(
