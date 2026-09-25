@@ -10,9 +10,10 @@
  *
  * **Только чтение.** Воркер не применяет миграции, не чистит `object_locks` и
  * вообще не пишет в `main`: соединение открывается `readonly: true`, а состав
- * операций ограничен выборками. Единственный писатель сети — главный поток
- * (ADR 162d8e7a); второй писатель запрещён ADR bec191e6. Сторож
- * `guard-reader-pool.test.ts` не даёт появиться здесь записывающему SQL.
+ * операций ограничен выборками (движок отбора, поиск, обход подграфа).
+ * Единственный писатель сети — главный поток (ADR 162d8e7a); второй писатель
+ * запрещён ADR bec191e6. Сторож `guard-reader-pool.test.ts` не даёт появиться
+ * здесь записывающему SQL.
  *
  * Инвалидация состояния между задачами (запрет ADR «изменяемое состояние без
  * явной инвалидации»): контекст слоя переустанавливается на соединении каждой
@@ -36,6 +37,7 @@ import type {
 } from '../contracts.js';
 import { queryThoughts, queryThoughtIds } from '../domain/query-service.js';
 import { search } from '../domain/search-service.js';
+import { subgraph } from '../domain/graph-traversal.js';
 import { NetworkDb } from './network-db.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
@@ -124,6 +126,11 @@ function execute(task: ReaderTask): ReaderTaskResponse {
       return {
         ok: true,
         result: search(ndb, task.payload.request, task.payload.showInactiveDefault),
+      };
+    case 'graph.subgraph':
+      return {
+        ok: true,
+        result: subgraph(ndb, task.payload.seedIds, task.payload.radius, task.payload.bounds),
       };
     default: {
       // Исчерпывающий разбор: новый op обязан появиться выше и в контракте.

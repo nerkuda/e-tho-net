@@ -22,7 +22,7 @@ import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolv
 import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery } from '../../domain/query-service.js';
-import { queryThoughtsAsync, searchAsync } from '../../domain/heavy-read.js';
+import { queryThoughtsAsync, searchAsync, subgraphAsync } from '../../domain/heavy-read.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
@@ -32,7 +32,7 @@ import {
   projectThoughtRows,
   stripStructuralLinkProperties,
 } from '../../domain/response-projection.js';
-import { subgraph, traverse } from '../../domain/graph-traversal.js';
+import { traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
 import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
@@ -706,7 +706,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           args.max_nodes ?? rt.limits.maxNodesPerSubgraph,
           rt.limits.maxNodesPerSubgraph,
         );
-        const result = subgraph(ndb, args.seed_ids, args.radius, {
+        const result = await subgraphAsync(ndb, args.seed_ids, args.radius, {
           maxNodes: effectiveMax,
           linkFilter: args.link_filter,
         });

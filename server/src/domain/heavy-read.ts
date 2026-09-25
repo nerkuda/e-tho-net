@@ -6,8 +6,8 @@
  *
  *   * в пул уходят выборки, которые могут исполняться долго и потому заморозить
  *     цикл событий сервера, — единый движок отбора `queryThoughts`/
- *     `queryThoughtIds` (он же исполняет BFS-обход поддерева, `walkSubtree`) и
- *     полнотекстовый `search`;
+ *     `queryThoughtIds` (он же исполняет BFS-обход поддерева, `walkSubtree`),
+ *     полнотекстовый `search` и обход подграфа `subgraph`;
  *   * в главном потоке остаются точечные чтения (карточка, соседи, комментарии,
  *     мета) и всё, где корректность важнее латентности, — например захват
  *     блокировок `object_locks`, исполняемый в тех же соединениях записи.
@@ -26,7 +26,13 @@
 
 import { type SearchRequest, type SearchResponse } from '@etn/shared';
 
-import type { ReaderTask, ReaderTaskContext, ReaderThoughtsQueryResult, ReaderThoughtsQueryIdsResult } from '../contracts.js';
+import type {
+  ReaderSubgraphResult,
+  ReaderTask,
+  ReaderTaskContext,
+  ReaderThoughtsQueryResult,
+  ReaderThoughtsQueryIdsResult,
+} from '../contracts.js';
 import type { NetworkDb } from '../db/network-db.js';
 import { getReaderPool, type ReaderPool } from '../db/reader-pool.js';
 import {
@@ -37,6 +43,8 @@ import {
   type ThoughtQueryResult,
 } from './query-service.js';
 import { search } from './search-service.js';
+import { subgraph, type TraversalBounds } from './graph-traversal.js';
+import type { SubgraphEdge } from '@etn/shared';
 
 /**
  * Контекст воркера из соединения главного потока, либо `null`, если операцию
@@ -126,4 +134,23 @@ export async function searchAsync(
     payload: { request, showInactiveDefault },
   };
   return (await pool.run(task)) as SearchResponse;
+}
+
+/**
+ * Радиус-ограниченный подграф вокруг семян (см. {@link subgraph}) через пул.
+ * Обход BFS по рёбрам — тяжёлое чтение, поэтому тоже уходит в reader-воркер.
+ */
+export async function subgraphAsync(
+  ndb: NetworkDb,
+  seedIds: string[],
+  radius: number,
+  bounds: TraversalBounds = {},
+): Promise<{ nodes: string[]; edges: SubgraphEdge[]; truncated: boolean }> {
+  const pool = getReaderPool();
+  const context = contextFor(ndb, pool);
+  if (pool === null || context === null) {
+    return subgraph(ndb, seedIds, radius, bounds);
+  }
+  const task: ReaderTask = { context, op: 'graph.subgraph', payload: { seedIds, radius, bounds } };
+  return (await pool.run(task)) as ReaderSubgraphResult;
 }

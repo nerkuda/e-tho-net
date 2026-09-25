@@ -38,7 +38,8 @@ import {
 } from '../src/db/reader-pool.js';
 import { queryThoughts, type ThoughtQueryRequest } from '../src/domain/query-service.js';
 import { search } from '../src/domain/search-service.js';
-import { queryThoughtIdsAsync, queryThoughtsAsync, searchAsync } from '../src/domain/heavy-read.js';
+import { subgraph } from '../src/domain/graph-traversal.js';
+import { queryThoughtIdsAsync, queryThoughtsAsync, searchAsync, subgraphAsync } from '../src/domain/heavy-read.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -103,12 +104,14 @@ describe(
     let emptyRequest: ThoughtQueryRequest;
     let parentRequest: ThoughtQueryRequest;
     let existsRequest: ThoughtQueryRequest;
+    let parentId!: string;
 
     before(() => {
       dataDir = mkdtempSync(path.join(tmpdir(), 'etn-reader-pool-'));
       configureReaderPool({ size: 1, taskTimeoutMs: 60_000 });
       ndb = openNetworkDb(dataDir, NETWORK_ID);
-      const { homeId, parentId } = seedStand(ndb);
+      const { homeId, parentId: pid } = seedStand(ndb);
+      parentId = pid;
       emptyRequest = { sort: 'alpha', order: 'asc', limit: 50, offset: 0 };
       parentRequest = {
         ...emptyRequest,
@@ -158,6 +161,13 @@ describe(
       const syncSearch = search(ndb, { q: 'Мысль 42' });
       const viaPoolSearch = await searchAsync(ndb, { q: 'Мысль 42' });
       assert.deepEqual(viaPoolSearch, syncSearch);
+    });
+
+    it('подграф через пул совпадает с синхронным обходом', async () => {
+      const sync = subgraph(ndb, [parentId], 2, { maxNodes: 50 });
+      const viaPool = await subgraphAsync(ndb, [parentId], 2, { maxNodes: 50 });
+      assert.ok(viaPool.nodes.length > 0, 'обход подграфа вернул узлы');
+      assert.deepEqual(viaPool, sync);
     });
 
     it('тяжёлый запрос не блокирует главный поток (параллельный ping успевает)', async () => {

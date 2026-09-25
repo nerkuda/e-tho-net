@@ -63,10 +63,12 @@ import {
   type SearchRequest,
   type SearchResponse,
   type StructureDirectionFlags,
+  type SubgraphEdge,
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
 import { validateLayerColors } from './domain/layer-service.js';
+import type { TraversalBounds } from './domain/graph-traversal.js';
 import type {
   ThoughtQueryOptions,
   ThoughtQueryRequest,
@@ -3520,7 +3522,7 @@ export interface ReaderTaskContext {
 }
 
 /** Имена операций, исполняемых reader-воркером. Только чтение. */
-export type ReaderOp = 'thoughts.query' | 'thoughts.queryIds' | 'search.query';
+export type ReaderOp = 'thoughts.query' | 'thoughts.queryIds' | 'search.query' | 'graph.subgraph';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
 export interface ReaderThoughtsQueryPayload {
@@ -3535,11 +3537,26 @@ export interface ReaderSearchPayload {
   showInactiveDefault: boolean;
 }
 
+/** Payload `graph.subgraph` — радиус-ограниченный подграф вокруг семян. */
+export interface ReaderSubgraphPayload {
+  seedIds: string[];
+  radius: number;
+  bounds: TraversalBounds;
+}
+
+/** Результат `graph.subgraph`. */
+export interface ReaderSubgraphResult {
+  nodes: string[];
+  edges: SubgraphEdge[];
+  truncated: boolean;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
 export type ReaderTask = { context: ReaderTaskContext } & (
   | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
   | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
   | { op: 'search.query'; payload: ReaderSearchPayload }
+  | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
 );
 
 /** `depths` в плоском виде (Map не переживает structured clone). */

@@ -99,7 +99,8 @@ import {
 import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../domain/layer-diff-service.js';
 import { mergeLayer } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
-import { findPath, subgraph } from '../../domain/graph-traversal.js';
+import { findPath } from '../../domain/graph-traversal.js';
+import { subgraphAsync } from '../../domain/heavy-read.js';
 import { getHomeThoughtId, getThoughtOrThrow, resolveThoughts, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
 import { getLink, updateLink } from '../../domain/link-service.js';
 import { findMentions } from '../../domain/search-service.js';
@@ -1016,7 +1017,7 @@ const HANDLERS: Record<string, OpHandler> = {
     return runTool(async () => {
       const ndb = openMemberNetwork(rt, a.network_id);
       const format: ExportFormat = a.format ?? 'markdown';
-      const result = subgraph(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
+      const result = await subgraphAsync(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
       if (format === 'markdown') {
         return { format, truncated: result.truncated, content: exportToMarkdown(ndb, result.nodes) };
       }
