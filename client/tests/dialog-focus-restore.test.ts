@@ -130,4 +130,81 @@ describe('возврат фокуса списку после закрытия �
       'диалог закрылся без ошибок',
     );
   });
+
+  // Ошибка 28d69bc6 (переоткрыта): редактор открывают кнопкой тулбара или
+  // пунктом меню — `document.activeElement` в этот момент кнопка, а после
+  // закрытия меню вообще `body`. Возврат фокуса туда не оживляет стрелки.
+  // Фокус обязан уходить ЯКОРЮ списка (`data-focus-anchor`) — корню дерева,
+  // который переживает перерисовку строк.
+  it('редактор над диалогом-списком: фокус уходит дереву, стрелки двигают строку', async () => {
+    installShim();
+    const { createTree } = await import('../src/renderer/lib/ui/tree.js');
+    type Node_ = { id: string; parentId?: string | null };
+    const items: Node_[] = [
+      { id: 'one', parentId: null },
+      { id: 'two', parentId: null },
+    ];
+    const host = new ShimElement('div');
+    const tree = createTree<Node_>({
+      items,
+      renderContent: () => new ShimElement('span') as unknown as HTMLElement,
+    });
+    const root = tree.root as unknown as ShimElement;
+    const editBtn = new ShimElement('button');
+    const listBody = new ShimElement('div');
+    listBody.append(editBtn, root);
+    host.append(listBody);
+
+    // Диалог-список «Типы мыслей».
+    showDialog({ title: 'Типы мыслей', body: listBody as unknown as HTMLElement });
+    // Пользователь нажал кнопку тулбара — фокус у неё (как в браузере).
+    doc().activeElement = editBtn;
+    // Редактор типа открывается НАД диалогом-списком.
+    openDialog('Редактор типа', editBtn);
+    // Список перерисован (тип записан): узлы строк пересозданы, корень — тот же.
+    tree.render();
+    editBtn.focused = false;
+    root.focused = false;
+
+    closeDialog();
+    assert.equal(root.focused, true, 'фокус вернулся якорю дерева, а не кнопке');
+    assert.equal(editBtn.focused, false, 'кнопка фокус не удерживает');
+
+    const before = tree.getCurrentId();
+    root.emit('keydown', { key: 'ArrowDown', preventDefault: () => undefined });
+    assert.notEqual(tree.getCurrentId(), before, 'стрелка двигает текущую строку без клика');
+
+    closeDialog(); // закрыть диалог-список — стек пуст для следующих тестов
+    assert.equal(
+      body().children.filter((c) => c.classList.contains('dialog-backdrop')).length,
+      0,
+      'оба диалога закрыты',
+    );
+  });
+
+  it('владелец фокуса отвязан (меню закрыто): фокус уходит живому якорю дерева', async () => {
+    installShim();
+    const { createTree } = await import('../src/renderer/lib/ui/tree.js');
+    const tree = createTree<{ id: string }>({
+      items: [{ id: 'only' }],
+      renderContent: () => new ShimElement('span') as unknown as HTMLElement,
+    });
+    const root = tree.root as unknown as ShimElement;
+    const listBody = new ShimElement('div');
+    listBody.append(root);
+    showDialog({ title: 'Типы мыслей', body: listBody as unknown as HTMLElement });
+
+    // Пункт контекстного меню: к моменту открытия редактора меню уже удалено,
+    // `document.activeElement` — отвязанный узел.
+    const menuItem = new ShimElement('button');
+    menuItem.isConnected = false;
+    doc().activeElement = menuItem;
+    openDialog('Редактор типа', menuItem);
+
+    closeDialog();
+    assert.equal(root.focused, true, 'фокус ушёл живому контейнеру списка');
+    assert.equal(menuItem.focused, false, 'отвязанному узлу фокус не навязываем');
+
+    closeDialog();
+  });
 });

@@ -22,6 +22,7 @@ import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
+import { TREE_FOCUS_ANCHOR_ATTR } from './ui/tree.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -304,19 +305,88 @@ function navigateToError(address: ErrorAddress, tabs: TabsHandle | null): void {
   if (typeof field.scrollIntoView === 'function') field.scrollIntoView({ block: 'nearest' });
 }
 
+/** Element that owned focus before a dialog opened (checks `isConnected` + `focus`). */
+type FocusableElement = Element & { focus?: () => void };
+
+/** Селектор якоря фокуса — контейнер клавиатурной навигации списка/дерева. */
+const FOCUS_ANCHOR_SELECTOR = `[${TREE_FOCUS_ANCHOR_ATTR}]`;
+
+/** Теги полей ввода: возврат фокуса в них якорь списка не перебивает. */
+const TEXT_ENTRY_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+/** Пользователь печатал в это поле (ввод/select/contenteditable). */
+function isTextEntry(element: FocusableElement | null | undefined): boolean {
+  if (element === null || element === undefined) return false;
+  const tagName = (element as { tagName?: string }).tagName?.toUpperCase() ?? '';
+  if (TEXT_ENTRY_TAGS.has(tagName)) return true;
+  return (element as { isContentEditable?: boolean }).isContentEditable === true;
+}
+
+/** Родитель-элемент: `parentElement` в DOM, `parent` — в тестовом DOM-шиме. */
+function parentElementOf(node: Element): Element | null {
+  const carrier = node as Element & { parentElement?: Element | null; parent?: Element | null };
+  return carrier.parentElement ?? carrier.parent ?? null;
+}
+
+/**
+ * Якорь возврата фокуса — устойчивый контейнер клавиатурной навигации
+ * ({@link TREE_FOCUS_ANCHOR_ATTR}): сам владелец фокуса или его предок; а если
+ * диалог открыли кнопкой тулбара или пунктом контекстного меню — якорь диалога,
+ * НАД которым открывается новый. Диалог-редактор открывают над диалогом-списком,
+ * поэтому якорь живого списка лежит в верхнем открытом диалоге. `null` — якоря
+ * нет, фокус вернём прежнему владельцу (ошибка 28d69bc6, правило 10 требования
+ * 11ddd910).
+ */
+function resolveFocusAnchor(from: FocusableElement | null | undefined): HTMLElement | null {
+  let node: Element | null = from ?? null;
+  while (node !== null) {
+    if (node.hasAttribute(TREE_FOCUS_ANCHOR_ATTR)) return node as HTMLElement;
+    node = parentElementOf(node);
+  }
+  const below = stack[stack.length - 1];
+  if (below !== undefined) {
+    const host = below.querySelector<HTMLElement>(FOCUS_ANCHOR_SELECTOR);
+    if (host !== null) return host;
+  }
+  return null;
+}
+
+/**
+ * Возврат фокуса после закрытия диалога. Устойчивый якорь списка/дерева
+ * предпочтительнее прежнего владельца фокуса: редактор открывают кнопкой
+ * тулбара или пунктом меню, и `document.activeElement` в этот момент — кнопка
+ * (а после закрытия контекстного меню — вообще `body`); возврат фокуса туда не
+ * оживляет стрелочную навигацию списка (ошибка 28d69bc6). Исключение — поле
+ * ввода: если пользователь печатал в нём, фокус возвращаем полю.
+ */
+function restoreFocus(
+  previouslyFocused: FocusableElement | null | undefined,
+  focusAnchor: HTMLElement | null,
+): void {
+  const order: Array<FocusableElement | HTMLElement | null | undefined> = isTextEntry(previouslyFocused)
+    ? [previouslyFocused, focusAnchor]
+    : [focusAnchor, previouslyFocused];
+  for (const candidate of order) {
+    if (candidate === null || candidate === undefined) continue;
+    if (candidate.isConnected === false) continue;
+    if (typeof candidate.focus !== 'function') continue;
+    candidate.focus();
+    return;
+  }
+}
+
 /**
  * Shows a modal dialog. Returns its close function. Opening while another
  * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */
 export function showDialog(opts: DialogOptions): () => void {
   // Элемент, владевший фокусом до открытия диалога (обычно обёртка списка,
-  // из которого диалог открыли). Возвращаем ему фокус при закрытии, иначе
-  // клавиатурная навигация списка (стрелки) не работает без повторного клика
+  // из которого диалог открыли). Фокуса возвращаем ЯКОРЮ навигации — устойчивому
+  // контейнеру списка/дерева, переживающему перерисовку строк; прежний владелец —
+  // запасной вариант. Иначе стрелки списка не работают без повторного клика
   // (ошибка 28d69bc6, правило 10 требования 11ddd910).
-  const previouslyFocused = document.activeElement as
-    | (Element & { focus?: () => void })
-    | null
-    | undefined;
+  const previouslyFocused = document.activeElement as FocusableElement | null | undefined;
+  const focusAnchor = resolveFocusAnchor(previouslyFocused);
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
   // Роль размера (требование 13464c39): класс несёт ширину и ФИКСИРОВАННУЮ
@@ -495,18 +565,10 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
     backdrop.removeEventListener('click', onBackdropClick);
-    // Возврат фокуса вызывающему элементу (списку): стрелочная навигация
-    // продолжается без повторного клика (ошибка 28d69bc6). Фокус ставим до
-    // `onClose` — обработчик может открыть следующий диалог, который снимет
-    // фокус себе сам.
-    if (
-      previouslyFocused !== null &&
-      previouslyFocused !== undefined &&
-      previouslyFocused.isConnected !== false &&
-      typeof previouslyFocused.focus === 'function'
-    ) {
-      previouslyFocused.focus();
-    }
+    // Возврат фокуса владельцу списка (ошибка 28d69bc6): стрелочная навигация
+    // продолжается без повторного клика. Фокус ставим до `onClose` — обработчик
+    // может открыть следующий диалог, который снимет фокус себе сам.
+    restoreFocus(previouslyFocused, focusAnchor);
     opts.onClose?.();
   });
   opts.onMount?.(close, box);
