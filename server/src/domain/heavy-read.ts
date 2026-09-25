@@ -38,6 +38,7 @@ import { getReaderPool, type ReaderPool } from '../db/reader-pool.js';
 import {
   queryThoughts,
   queryThoughtIds,
+  type ThoughtIdsQueryResult,
   type ThoughtQueryOptions,
   type ThoughtQueryRequest,
   type ThoughtQueryResult,
@@ -66,6 +67,8 @@ function toThoughtQueryResult(flat: ReaderThoughtsQueryResult): ThoughtQueryResu
   return {
     items: flat.items,
     total: flat.total,
+    has_more: flat.has_more,
+    next_cursor: flat.next_cursor,
     directions: flat.directions,
     depths: flat.depths === null ? null : new Map(flat.depths.map((e) => [e.id, e.depth])),
     truncated: flat.truncated,
@@ -103,7 +106,7 @@ export async function queryThoughtIdsAsync(
   userId: string,
   request: ThoughtQueryRequest,
   options: ThoughtQueryOptions = {},
-): Promise<{ ids: string[]; total: number }> {
+): Promise<ThoughtIdsQueryResult> {
   const pool = getReaderPool();
   const context = contextFor(ndb, pool);
   if (pool === null || context === null) {

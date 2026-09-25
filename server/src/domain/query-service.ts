@@ -70,6 +70,7 @@ import {
   linkPropertyLinkTypeId,
   resolveConditionPropertyRef,
 } from './property-service.js';
+import { nameTrigramMatch } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
 
@@ -167,6 +168,18 @@ export interface ThoughtQueryRequest {
   order: SortOrder;
   limit: number;
   offset: number;
+  /**
+   * Явно запросить полное число совпадений (требование 5adebf61): без флага
+   * COUNT не выполняется, `total` = `null`, хвост сообщает `has_more`.
+   */
+  count?: boolean;
+  /**
+   * Keyset-курсор следующей страницы (требование 3f2fdc41, ADR 5f6cb775):
+   * непрозрачная строка из `next_cursor` предыдущего ответа. Передан — вместо
+   * OFFSET применяется предикат по ключу сортировки + `id`; обязан
+   * соответствовать `sort`/`order`/режиму пустого фильтра запроса.
+   */
+  cursor?: string;
 }
 
 /** Параметры исполнения, которые задаёт фасад (не критерий выборки). */
@@ -194,8 +207,15 @@ export interface ThoughtQueryOptions {
 export interface ThoughtQueryResult {
   /** Страница мыслей (REST отдаёт как есть, MCP проецирует в hits). */
   items: ThoughtRef[];
-  /** Полное число совпадений без пагинации. */
-  total: number;
+  /**
+   * Полное число совпадений без пагинации; `null`, когда COUNT не запрошен
+   * явным флагом (`count: true`), — требование 5adebf61.
+   */
+  total: number | null;
+  /** true — за текущей страницей есть ещё строки (без полного COUNT). */
+  has_more: boolean;
+  /** Keyset-курсор следующей страницы; `null` — страниц больше нет. */
+  next_cursor: string | null;
   /** Флаги направлений связей страницы (пусто при `includeDirections: false`). */
   directions: StructureDirectionFlags;
   /** depth каждого id из {@link items} (null — поддерева не было; MCP hits). */
@@ -204,6 +224,17 @@ export interface ThoughtQueryResult {
   truncated: boolean;
   /** Причина обрезки (`max_nodes`) или null. */
   reason: 'max_nodes' | null;
+}
+
+/** Результат id-only выборки ({@link queryThoughtIds}). */
+export interface ThoughtIdsQueryResult {
+  ids: string[];
+  /** Полное число совпадений; `null` — COUNT не запрашивался. */
+  total: number | null;
+  /** true — за текущей страницей есть ещё строки. */
+  has_more: boolean;
+  /** Keyset-курсор следующей страницы; `null` — страниц больше нет. */
+  next_cursor: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +297,8 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
     order: req.order,
     limit: req.limit,
     offset: req.offset,
+    count: req.count,
+    cursor: req.cursor,
   };
 }
 
@@ -327,6 +360,8 @@ export function mcpRequestToQuery(
     order: req.order ?? 'asc',
     limit: Math.min(Math.max(req.limit ?? 50, 1), 200),
     offset: Math.max(req.offset ?? 0, 0),
+    count: req.count,
+    cursor: req.cursor,
   };
 }
 
@@ -431,6 +466,39 @@ function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; p
   return { sql: `(${parts.join(' OR ')})`, paramCount: parts.length };
 }
 
+/**
+ * Индексный сужатель отбора по `keywords` — `JOIN` на существующий FTS5-индекс
+ * `fts_thought_names` (требование 314cbb8d, ADR 5f6cb775).
+ *
+ * Индекс построен по триграммам названий и синонимов, поэтому FTS-условие
+ * «слово встречается как подстрока» совпадает по смыслу с LIKE-клаузой, но
+ * исполняется индексом. Точную семантику мини-языка §6.10 (`*`, `-слово`,
+ * экранирование) по-прежнему гарантирует {@link buildKeywordClause}: FTS —
+ * обязательный конъюнкт, LIKE — остаточный фильтр, поэтому расхождение
+ * (например, слово, найденное только в комментарии) исключить нельзя, и
+ * сужатель ставится лишь когда область поиска — только название/синонимы.
+ *
+ * Видимость слоя: `fts_thought_names` синхронизируется триггерами по физическим
+ * строкам, джойн идёт по `rowid` победившей версии из представления
+ * `thoughts_v` (`t.rowid`) — ровно как в `search-service`. Строки проигравших
+ * версий в выборку не попадают.
+ *
+ * @returns `null`, когда сужатель неприменим (нет include-слов с индексным
+ *   представлением или в области есть комментарий).
+ */
+function buildKeywordFtsJoin(
+  include: string[],
+  scope: Set<StructureKeywordScope>,
+): Clause | null {
+  if (include.length === 0 || scope.has('comment')) return null;
+  const match = nameTrigramMatch(include);
+  if (match === null) return null;
+  return {
+    sql: `JOIN (SELECT rowid FROM fts_thought_names WHERE fts_thought_names MATCH ?) __kw ON __kw.rowid = t.rowid`,
+    params: [match],
+  };
+}
+
 /** Результат обхода поддерева: depth каждого узла (включая/исключая корни по
  * {@link ThoughtQuerySubtree.include_roots}) + диагностика обрезки. */
 interface WalkResult {
@@ -497,28 +565,49 @@ export function directionsOf(
 }
 
 /**
- * Sort columns of the requested sort plus the per-user `thought_views` join it
- * needs. `viewed` — по метке просмотра текущего пользователя, NULL — последними
- * при `asc` (03-server-api.md §6.10).
+ * Одна ключевая часть детерминированного порядка: SQL-выражение и направление.
+ * Порядок строится из них + уникального `id` (ADR 5f6cb775: сортировка обязана
+ * иметь уникальный добор ключа, иначе keyset теряет и дублирует строки).
  */
-function sortClause(
+interface SortKey {
+  expr: string;
+  dir: 'ASC' | 'DESC';
+}
+
+/**
+ * Ключи сортировки запроса плюс `thought_views`-джойн для `viewed`.
+ *
+ * `homeFirst` (пустой REST-фильтр) добавляет ведущий ключ «HOME — первой»;
+ * `viewed` — два ключа: флаг NULL-метки (NULL последними при `asc`, как в
+ * §6.10) и сама метка. Значения ключей совпадают с прежним `ORDER BY`, но
+ * теперь дополняются `t.id` в {@link orderClause} — порядок детерминирован.
+ */
+function sortKeysFor(
   userId: string,
   req: ThoughtQueryRequest,
-): { sortSql: string; joinSql: string; joinParams: unknown[] } {
-  const dirKeyword = req.order === 'desc' ? 'DESC' : 'ASC';
-  const nullsLast = req.order === 'desc' ? 'DESC' : 'ASC';
+  homeFirst: boolean,
+): { keys: SortKey[]; joinSql: string; joinParams: unknown[] } {
+  const dir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
+  const keys: SortKey[] = [];
+  if (homeFirst) keys.push({ expr: '(t.is_root = 1)', dir: 'DESC' });
   switch (req.sort) {
     case 'alpha':
-      return { sortSql: `t.title COLLATE NOCASE ${dirKeyword}`, joinSql: '', joinParams: [] };
+      keys.push({ expr: 't.title COLLATE NOCASE', dir });
+      return { keys, joinSql: '', joinParams: [] };
     case 'created':
-      return { sortSql: `t.created_at ${dirKeyword}`, joinSql: '', joinParams: [] };
+      keys.push({ expr: 't.created_at', dir });
+      return { keys, joinSql: '', joinParams: [] };
     case 'updated':
       // ISO-8601 текстовая колонка — лексикографический порядок совпадает с
       // хронологическим (ошибка 4dd14aa3, 0.8.2).
-      return { sortSql: `t.updated_at ${dirKeyword}`, joinSql: '', joinParams: [] };
+      keys.push({ expr: 't.updated_at', dir });
+      return { keys, joinSql: '', joinParams: [] };
     case 'viewed':
+      // NULL-метка: последними при `asc` (прежний `nullsLast`).
+      keys.push({ expr: '(tv.last_viewed_at IS NULL)', dir });
+      keys.push({ expr: 'tv.last_viewed_at', dir });
       return {
-        sortSql: `(tv.last_viewed_at IS NULL) ${nullsLast}, tv.last_viewed_at ${dirKeyword}`,
+        keys,
         joinSql: 'LEFT JOIN thought_views tv ON tv.user_id = ? AND tv.thought_id = t.id',
         joinParams: [userId],
       };
@@ -1028,12 +1117,147 @@ interface FilterQuerySql {
   baseSql: string;
   /** JOIN parameters, bound before the WHERE parameters. */
   joinParams: unknown[];
-  /** WHERE parameters. */
+  /** WHERE parameters (без keyset-параметров). */
   params: unknown[];
-  /** ORDER BY columns without the keyword. */
-  sortSql: string;
+  /** Детерминированный порядок: ключи сортировки + завершающий `t.id`. */
+  keys: SortKey[];
+  /** Направление завершающего ключа `t.id` (совпадает с направлением сортировки). */
+  idDir: 'ASC' | 'DESC';
+  /** Предикат продолжения страницы по курсору (`null` — пагинация по OFFSET). */
+  keyset: Clause | null;
   /** Empty filter pins HOME first with an extra leading sort key. */
   homeFirst: boolean;
+}
+
+const CURSOR_VERSION = 1;
+
+/** Разобранный keyset-курсор: ключ сортировки последней строки страницы. */
+interface QueryCursor {
+  v: number;
+  s: StructureSort;
+  o: SortOrder;
+  /** `1` — режим «пустой фильтр» (HOME первой); иначе `0`. */
+  h: 0 | 1;
+  /** Значения ключей сортировки последней строки (в порядке {@link SortKey}). */
+  k: Array<string | number | null>;
+  /** id последней строки (уникальный добор ключа, ADR 5f6cb775). */
+  id: string;
+}
+
+/** Кодировать курсор в непрозрачную строку (base64url JSON). */
+function encodeCursor(cursor: QueryCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+/**
+ * Разобрать и провалидировать курсор. Курсор обязан соответствовать
+ * `sort`/`order`/режиму пустого фильтра текущего запроса — иначе продолжение
+ * страницы читалось бы по чужому порядку (потеря/дубли строк).
+ */
+function decodeCursor(
+  raw: string,
+  req: ThoughtQueryRequest,
+  homeFirst: boolean,
+  requestId?: string,
+): QueryCursor {
+  const invalid = (details: Record<string, unknown> = {}): never => {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Некорректный keyset-курсор: продолжение страницы невозможно.',
+      { field: 'cursor', ...details },
+      requestId,
+    );
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    return invalid();
+  }
+  if (typeof parsed !== 'object' || parsed === null) return invalid();
+  const c = parsed as Partial<QueryCursor>;
+  if (c.v !== CURSOR_VERSION) return invalid({ reason: 'version' });
+  if (c.s !== req.sort || c.o !== req.order) return invalid({ reason: 'sort' });
+  if (c.h !== (homeFirst ? 1 : 0)) return invalid({ reason: 'mode' });
+  if (!Array.isArray(c.k) || typeof c.id !== 'string' || c.id === '') return invalid({ reason: 'shape' });
+  if (c.k.some((v) => v !== null && typeof v !== 'string' && typeof v !== 'number')) {
+    return invalid({ reason: 'value' });
+  }
+  return c as QueryCursor;
+}
+
+/**
+ * Предикат «строка идёт после курсорной» по ключам `keys` + `t.id`.
+ *
+ * Лексикографическое сравнение раскрывается в дизъюнкцию: для каждой позиции —
+ * «все предыдущие ключи равны, текущий строго больше», плюс финальная ветка
+ * «все ключи равны, `id` строго больше». Значение `null` в ключе сравнимо
+ * только по равенству (`IS NULL`): NULL-значение возможно лишь у последнего
+ * ключа `viewed`, и он изолирован флагом NULL-метки (внутри флага значения
+ * либо все NULL, либо все не-NULL), поэтому ветка «строго больше» для него
+ * невозможна и пропускается — иначе строки бы дублировались/терялись.
+ */
+function keysetClause(
+  keys: SortKey[],
+  idDir: 'ASC' | 'DESC',
+  values: Array<string | number | null>,
+  id: string,
+): Clause {
+  const params: unknown[] = [];
+  const branches: string[] = [];
+  /** Собрать одну ветку; `null` — ветку пропустить (её параметры не копим). */
+  const buildBranch = (build: (push: (value: string | number) => string) => string): void => {
+    const branchParams: unknown[] = [];
+    const push = (value: string | number): string => {
+      branchParams.push(value);
+      return '?';
+    };
+    const sql = build(push);
+    branches.push(sql);
+    params.push(...branchParams);
+  };
+  const eq = (push: (v: string | number) => string, key: SortKey, value: string | number | null): string =>
+    value === null ? `${key.expr} IS NULL` : `${key.expr} = ${push(value)}`;
+  const gt = (push: (v: string | number) => string, key: SortKey, value: string | number | null): string | null =>
+    value === null ? null : `${key.expr} ${key.dir === 'ASC' ? '>' : '<'} ${push(value)}`;
+
+  for (let i = 0; i < keys.length; i += 1) {
+    const gtSql = gt(() => '?', keys[i]!, values[i] ?? null);
+    if (gtSql === null) continue; // нет строк «строго после» по этому ключу
+    buildBranch((push) => {
+      const conds: string[] = [];
+      for (let j = 0; j < i; j += 1) conds.push(eq(push, keys[j]!, values[j] ?? null));
+      conds.push(gt(push, keys[i]!, values[i] ?? null) as string);
+      return `(${conds.join(' AND ')})`;
+    });
+  }
+  buildBranch((push) => {
+    const conds: string[] = [];
+    for (let j = 0; j < keys.length; j += 1) conds.push(eq(push, keys[j]!, values[j] ?? null));
+    conds.push(`t.id ${idDir === 'ASC' ? '>' : '<'} ${push(id)}`);
+    return `(${conds.join(' AND ')})`;
+  });
+  return { sql: `(${branches.join(' OR ')})`, params };
+}
+
+/**
+ * WHERE страницы: базовый фильтр плюс (при курсоре) keyset-предикат.
+ * COUNT/полный обход считаются по базовому фильтру без keyset — `total` обязан
+ * быть полным числом совпадений, а не остатком от курсора.
+ */
+function pageWhere(sql: FilterQuerySql): { sql: string; params: unknown[] } {
+  if (sql.keyset === null) return { sql: sql.baseSql, params: sql.params };
+  return { sql: `${sql.baseSql} AND ${sql.keyset.sql}`, params: [...sql.params, ...sql.keyset.params] };
+}
+
+/** ORDER BY: ключи сортировки + уникальный добор `t.id` (ADR 5f6cb775). */
+function orderClause(sql: FilterQuerySql): string {
+  return `${sql.keys.map((k) => `${k.expr} ${k.dir}`).join(', ')}, t.id ${sql.idDir}`;
+}
+
+/** SELECT-хвост вытаскивает значения ключей сортировки для сборки курсора. */
+function cursorKeyColumns(keys: SortKey[]): string {
+  return keys.map((k, i) => `, ${k.expr} AS __k${i}`).join('');
 }
 
 function buildFilterQuerySql(
@@ -1044,9 +1268,17 @@ function buildFilterQuerySql(
   emptyFilterMode: 'home_orphans' | 'all',
   requestId?: string,
 ): FilterQuerySql {
-  if (emptyFilterMode === 'home_orphans' && isFilterEmpty(req)) {
+  const homeFirst = emptyFilterMode === 'home_orphans' && isFilterEmpty(req);
+  const { keys, joinSql, joinParams } = sortKeysFor(userId, req, homeFirst);
+  const idDir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
+  const cursor =
+    typeof req.cursor === 'string' && req.cursor.trim() !== ''
+      ? decodeCursor(req.cursor.trim(), req, homeFirst, requestId)
+      : null;
+  const keyset = cursor === null ? null : keysetClause(keys, idDir, cursor.k, cursor.id);
+
+  if (homeFirst) {
     const showInactive = req.active === 'any' ? 1 : 0;
-    const { sortSql, joinSql, joinParams } = sortClause(userId, req);
     return {
       baseSql: `FROM thoughts_v t ${joinSql}
        WHERE t.is_root = 1 OR (
@@ -1054,7 +1286,9 @@ function buildFilterQuerySql(
            SELECT 1 FROM links_v l WHERE l.target_id = t.id AND l.active = 1))`,
       joinParams,
       params: [showInactive],
-      sortSql,
+      keys,
+      idDir,
+      keyset,
       homeFirst: true,
     };
   }
@@ -1115,6 +1349,12 @@ function buildFilterQuerySql(
   const keywords = parseFilterKeywords(req.keywords ?? '');
   const keywordScope = resolveKeywordScope(req.keyword_scope);
   const keywordClause = buildKeywordClause(keywordScope);
+  // FTS-сужатель (требование 314cbb8d): `fts_thought_names` джойнится по rowid
+  // победившей версии из представления (`t.rowid`), LIKE остаётся остаточным
+  // фильтром и хранит семантику мини-языка §6.10.
+  const keywordFts = buildKeywordFtsJoin(keywords.include, keywordScope);
+  const fromJoinSql = keywordFts === null ? joinSql : `${joinSql} ${keywordFts.sql}`;
+  const fromJoinParams = keywordFts === null ? joinParams : [...joinParams, ...keywordFts.params];
   for (const word of keywords.include) {
     const pattern = buildLikePattern(word.toLowerCase());
     where.push(keywordClause.sql);
@@ -1153,28 +1393,24 @@ function buildFilterQuerySql(
     }
   }
 
-  const { sortSql, joinSql, joinParams } = sortClause(userId, req);
   return {
-    baseSql: `FROM thoughts_v t ${joinSql} WHERE ${where.length > 0 ? where.join(' AND ') : '1=1'}`,
-    joinParams,
+    baseSql: `FROM thoughts_v t ${fromJoinSql} WHERE ${where.length > 0 ? where.join(' AND ') : '1=1'}`,
+    joinParams: fromJoinParams,
     params,
-    sortSql,
+    keys,
+    idDir,
+    keyset,
     homeFirst: false,
   };
 }
 
-/** Count the unrestricted matches of a built filter query. */
+/** Count the unrestricted matches of a built filter query (без keyset). */
 function countFilterMatches(ndb: NetworkDb, sql: FilterQuerySql): number {
   return (
     ndb.prepare(`SELECT COUNT(*) AS c ${sql.baseSql}`).get(...sql.joinParams, ...sql.params) as {
       c: number;
     }
   ).c;
-}
-
-/** ORDER BY clause of a built filter query (empty filter pins HOME first). */
-function orderClause(sql: FilterQuerySql): string {
-  return sql.homeFirst ? `(t.is_root = 1) DESC, ${sql.sortSql}` : sql.sortSql;
 }
 
 /** Построенный запрос вместе с диагностикой обхода поддерева (MCP truncated/reason). */
@@ -1198,6 +1434,11 @@ function buildQuery(
 /**
  * Единый движок выборки мыслей по критериям — одна реализация операции для
  * REST и MCP (задача c5265deb). См. описание модуля.
+ *
+ * Пагинация (требование 3f2fdc41): страница читается с запасом `limit + 1`,
+ * чтобы `has_more` и `next_cursor` считались без полного COUNT; при переданном
+ * курсоре вместо OFFSET применяется keyset-предикат. `total` считается только
+ * по явному флагу `count` (требование 5adebf61).
  */
 export function queryThoughts(
   ndb: NetworkDb,
@@ -1209,27 +1450,67 @@ export function queryThoughts(
   const built = buildQuery(ndb, userId, req, emptyFilterMode);
   const sql = built.sql;
   const walk = built.walk;
-  const total = countFilterMatches(ndb, sql);
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
   const limit = Math.min(Math.max(req.limit, 1), maxLimit);
   const offset = Math.max(req.offset, 0);
+  const where = pageWhere(sql);
+  const useCursor = sql.keyset !== null;
   const rows = ndb
     .prepare(
-      `SELECT ${REF_COLUMNS} ${sql.baseSql}
+      `SELECT ${REF_COLUMNS}${cursorKeyColumns(sql.keys)} ${where.sql}
        ORDER BY ${orderClause(sql)}
-       LIMIT ? OFFSET ?`,
+       LIMIT ?${useCursor ? '' : ' OFFSET ?'}`,
     )
-    .all(...sql.joinParams, ...sql.params, limit, offset) as Array<ThoughtRefRow>;
-  const items = rows.map(rowToThoughtRef);
+    .all(
+      ...sql.joinParams,
+      ...where.params,
+      limit + 1,
+      ...(useCursor ? [] : [offset]),
+    ) as Array<ThoughtRefRow & Record<string, unknown>>;
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const items = pageRows.map(rowToThoughtRef);
+  // Курсор отдаётся только когда за страницей есть строки: иначе клиент ходил
+  // бы за пустым хвостом (требование 3f2fdc41).
+  const nextCursor = hasMore ? buildNextCursor(sql, req, pageRows) : null;
   const directions = opts.includeDirections === true ? directionsOf(ndb, items.map((i) => i.id), req.link_filter, opts.showTrash !== false) : {};
   return {
     items,
-    total,
+    total: req.count === true ? countFilterMatches(ndb, sql) : null,
+    has_more: hasMore,
+    next_cursor: nextCursor,
     directions,
     depths: walk === null ? null : new Map(items.map((i) => [i.id, walk.depths.get(i.id)]).filter((e): e is [string, number] => e[1] !== undefined)),
     truncated: walk?.truncated ?? false,
     reason: walk?.reason ?? null,
   };
+}
+
+/**
+ * Собрать курсор следующей страницы из последней строки текущей: значения
+ * ключей сортировки (`__k<i>`) плюс уникальный `id`. `null`, когда страница
+ * пуста или это последняя страница (`has_more` = false) — курсор не выдаётся
+ * впустую.
+ */
+function buildNextCursor<T extends Record<string, unknown>>(
+  sql: FilterQuerySql,
+  req: ThoughtQueryRequest,
+  pageRows: T[],
+): string | null {
+  const last = pageRows[pageRows.length - 1];
+  if (last === undefined) return null;
+  const keys = sql.keys.map((_, i) => {
+    const value = last[`__k${i}`];
+    return value === undefined ? null : (value as string | number | null);
+  });
+  return encodeCursor({
+    v: CURSOR_VERSION,
+    s: req.sort,
+    o: req.order,
+    h: sql.homeFirst ? 1 : 0,
+    k: keys,
+    id: String(last['id']),
+  });
 }
 
 /**
@@ -1241,15 +1522,32 @@ export function queryThoughtIds(
   userId: string,
   req: ThoughtQueryRequest,
   opts: ThoughtQueryOptions = {},
-): { ids: string[]; total: number } {
+): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const sql = buildQuery(ndb, userId, req, emptyFilterMode).sql;
-  const total = countFilterMatches(ndb, sql);
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
   const limit = Math.min(Math.max(req.limit, 1), maxLimit);
   const offset = Math.max(req.offset, 0);
+  const where = pageWhere(sql);
+  const useCursor = sql.keyset !== null;
   const rows = ndb
-    .prepare(`SELECT t.id ${sql.baseSql} ORDER BY ${orderClause(sql)} LIMIT ? OFFSET ?`)
-    .all(...sql.joinParams, ...sql.params, limit, offset) as Array<{ id: string }>;
-  return { ids: rows.map((r) => r.id), total };
+    .prepare(
+      `SELECT t.id${cursorKeyColumns(sql.keys)} ${where.sql}
+       ORDER BY ${orderClause(sql)}
+       LIMIT ?${useCursor ? '' : ' OFFSET ?'}`,
+    )
+    .all(
+      ...sql.joinParams,
+      ...where.params,
+      limit + 1,
+      ...(useCursor ? [] : [offset]),
+    ) as Array<{ id: string } & Record<string, unknown>>;
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  return {
+    ids: pageRows.map((r) => r.id),
+    total: req.count === true ? countFilterMatches(ndb, sql) : null,
+    has_more: hasMore,
+    next_cursor: hasMore ? buildNextCursor(sql, req, pageRows) : null,
+  };
 }

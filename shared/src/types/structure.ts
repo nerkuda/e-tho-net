@@ -156,6 +156,21 @@ export interface StructureQueryRequest extends StructureFilter {
    * ceiling is `STRUCTURES_QUERY_IDS_MAX_LIMIT` instead of 100.
    */
   ids_only?: boolean;
+  /**
+   * Явно запросить полное число совпадений (`meta.total`) — требование
+   * 5adebf61. По умолчанию COUNT не выполняется: `meta.total` = `null`, а
+   * наличие хвоста сообщает `meta.has_more`. Клиенты, которым нужен счётчик
+   * («показано N из M»), обязаны передать `count: true`.
+   */
+  count?: boolean;
+  /**
+   * Keyset-курсор следующей страницы (требование 3f2fdc41, ADR 5f6cb775) —
+   * берётся из `meta.next_cursor` предыдущего ответа. Передан — страница
+   * читается по ключу сортировки (`ORDER BY` + уникальный `id`), `offset`
+   * игнорируется (глубокие страницы не деградируют). Курсор обязан
+   * соответствовать `sort`/`order` запроса, иначе `VALIDATION_ERROR`.
+   */
+  cursor?: string;
 }
 
 /**
@@ -165,19 +180,40 @@ export interface StructureQueryRequest extends StructureFilter {
  */
 export type StructureDirectionFlags = Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
 
-/** Result of `POST /thoughts/query` as consumed by the client (§6.10). */
+/**
+ * Result of `POST /thoughts/query` as consumed by the client (§6.10).
+ *
+ * `total` нормализован на границе клиента: сервер отдаёт `null`, пока не
+ * запрошен COUNT явным флагом, а `RestClient` подставляет длину страницы —
+ * транспортный DTO остаётся числовым, как и до 0.9.1.
+ */
 export interface StructureQueryResponse {
   items: ThoughtRef[];
   total: number;
   /** Direction flags of every returned item (rides in the list envelope `meta`). */
   directions: StructureDirectionFlags;
+  /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
+  next_cursor?: string | null;
 }
 
 /** Result of `POST /thoughts/query` with `ids_only: true` (§6.10, L22). */
 export interface StructureIdsQueryResponse {
   ids: string[];
-  total: number;
+  /** Полное число совпадений; `null` — COUNT не запрашивался (`count: false`). */
+  total: number | null;
+  /** true — за текущей страницей есть ещё id. */
+  has_more?: boolean;
+  /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
+  next_cursor?: string | null;
 }
+
+/**
+ * Ответ ids-only выборки, каким его видит клиент: транспорт запрашивает COUNT
+ * явно (`count: true` по умолчанию, требование 5adebf61), поэтому `total`
+ * здесь нормализован до числа — bulk-команды (L22) сравнивают `ids.length` с
+ * полным объёмом.
+ */
+export type StructureIdsQueryResult = Omit<StructureIdsQueryResponse, 'total'> & { total: number };
 
 /** Response of `GET /thoughts/{id}/hierarchy` (03-server-api.md §6.11). */
 export interface HierarchyResponse {

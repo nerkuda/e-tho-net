@@ -753,6 +753,10 @@ const QueryFields = z
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
+    // Требование 5adebf61: COUNT только по явному флагу (по умолчанию total=null).
+    count: z.boolean().optional(),
+    // Требование 3f2fdc41: keyset-курсор продолжения страницы.
+    cursor: z.string().min(1).optional(),
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
@@ -3388,6 +3392,10 @@ export const RestStructureQueryBody = defineContract(
       ids_only: z.boolean().optional(),
       limit: z.number().int().optional(),
       offset: z.number().int().optional(),
+      // Требование 5adebf61: COUNT только по явному флагу; требование
+      // 3f2fdc41: keyset-курсор продолжения страницы.
+      count: z.boolean().optional(),
+      cursor: z.string().min(1).optional(),
       // Задача eb1a3f43, требование c98d5d19: веерный режим — массив
       // дополнительных сетей для fan-out. Опциональный — если передан,
       // `:networkId` в пути интерпретируется как одна из сетей, а не как
@@ -3405,6 +3413,8 @@ export const RestStructureQueryBody = defineContract(
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
+    count: { from: { kind: 'body' } },
+    cursor: { from: { kind: 'body' } },
     network_ids: { from: { kind: 'body' }, t: z.array(NetworkId).min(1).optional() },
   },
 );
@@ -3568,7 +3578,10 @@ export interface ReaderDepthsEntry {
 /** Сериализованный результат `thoughts.query` (плоский `ThoughtQueryResult`). */
 export interface ReaderThoughtsQueryResult {
   items: ThoughtRef[];
-  total: number;
+  /** `null` — COUNT не запрашивался явным флагом (требование 5adebf61). */
+  total: number | null;
+  has_more: boolean;
+  next_cursor: string | null;
   directions: StructureDirectionFlags;
   depths: ReaderDepthsEntry[] | null;
   truncated: boolean;
@@ -3578,7 +3591,9 @@ export interface ReaderThoughtsQueryResult {
 /** Результат `thoughts.queryIds`. */
 export interface ReaderThoughtsQueryIdsResult {
   ids: string[];
-  total: number;
+  total: number | null;
+  has_more: boolean;
+  next_cursor: string | null;
 }
 
 /** Успешный ответ воркера. `result` конкретизируется по `op` на стороне пула. */

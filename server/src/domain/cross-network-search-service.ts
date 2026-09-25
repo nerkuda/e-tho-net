@@ -278,7 +278,15 @@ export async function fanOutQuery(
       access.userId,
       // per-сеть лимит — тот же приём, что в fanOutSearch: не занижаем до
       // `cap`, чтобы обрезку можно было отличить от «ровно в потолок».
-      { ...args.query, limit: args.limit * Math.max(accessible.length, 1), offset: 0 },
+      // `count: true` — вееру нужен полный счёт по каждой сети для `total`
+      // объединённой выдачи (требование 5adebf61: COUNT только по явному флагу).
+      {
+        ...args.query,
+        count: true,
+        cursor: undefined,
+        limit: args.limit * Math.max(accessible.length, 1),
+        offset: 0,
+      },
       { maxLimit: 200, emptyFilterMode: 'all' },
     );
     for (const item of acceptWithBudget(budget, result.items)) {
@@ -291,7 +299,7 @@ export async function fanOutQuery(
         depth: result.depths === null ? null : (result.depths.get(item.id) ?? null),
       });
     }
-    total += result.total;
+    total += result.total ?? 0;
     if (result.truncated) {
       truncated = true;
       reason = result.reason;
@@ -317,6 +325,11 @@ export async function fanOutQuery(
     response: {
       total,
       hits: page,
+      // Кросс-сетевая выдача собирается в памяти и пагинируется slice'ом по
+      // объединённому списку — keyset-курсор к ней неприменим (требование
+      // 3f2fdc41 адресует однoсетевые выборки).
+      has_more: args.offset + page.length < hits.length,
+      next_cursor: null,
       truncated,
       reason,
     },

@@ -210,12 +210,20 @@ describe(
         const parentMs = measure(() => {
           queryThoughts(ndb, STAND_USER, parentRequest, { emptyFilterMode: 'all' });
         });
+        // Этап 4 (требование 5adebf61): тот же EXISTS-отбор с явным COUNT —
+        // ровно то, что стенд мерил до перехода на «COUNT по флагу». Числа
+        // «по умолчанию» и «со счётчиком» печатаются рядом, чтобы эффект этапа
+        // и сохранённая сопоставимость с замерами этапа 1 были видны.
+        const existsCountedMs = measure(() => {
+          queryThoughts(ndb, STAND_USER, { ...existsRequest, count: true }, { emptyFilterMode: 'all' });
+        });
 
         // Диагностика в вывод теста: сырые медианы против целей тех.проекта.
         console.log(
           `[perf-stand] медианы мс: пустой=${emptyMs.toFixed(1)} (цель ${PERF_TARGET_MS.empty}), ` +
             `EXISTS=${existsMs.toFixed(2)} (цель ${PERF_TARGET_MS.exists}), ` +
             `родитель=${parentMs.toFixed(1)} (цель ${PERF_TARGET_MS.parent}); ` +
+            `EXISTS со COUNT=${existsCountedMs.toFixed(2)}; ` +
             `потолок = цель × ${PERF_CI_TOLERANCE}`,
         );
 
@@ -227,6 +235,10 @@ describe(
         assert.ok(
           existsMs <= ceiling(PERF_TARGET_MS.exists),
           `EXISTS-условие ${existsMs.toFixed(2)} мс > потолка ${ceiling(PERF_TARGET_MS.exists)} мс`,
+        );
+        assert.ok(
+          existsCountedMs <= ceiling(PERF_TARGET_MS.exists),
+          `EXISTS-условие со COUNT ${existsCountedMs.toFixed(2)} мс > потолка ${ceiling(PERF_TARGET_MS.exists)} мс`,
         );
         assert.ok(
           parentMs <= ceiling(PERF_TARGET_MS.parent),

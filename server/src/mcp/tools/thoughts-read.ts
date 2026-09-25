@@ -381,6 +381,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         return {
           total: result.total,
           hits,
+          has_more: result.has_more,
+          next_cursor: result.next_cursor,
           truncated: result.truncated,
           reason: result.reason,
           thought_types: thoughtTypeCatalog(ndb, result.items.map((h) => h.type_id)),

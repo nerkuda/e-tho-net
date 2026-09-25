@@ -814,6 +814,9 @@ export async function runViewForThought(
     order,
     limit,
     offset,
+    // Отбор типа отвечает полным числом совпадений — COUNT запрашивается
+    // явно (требование 5adebf61: по умолчанию подсчёта нет).
+    count: true,
   });
   const result = await queryThoughtsAsync(ndb, userId, query, {
     emptyFilterMode: 'home_orphans',
@@ -824,7 +827,7 @@ export async function runViewForThought(
   // `StructureQueryRequest` пока не несёт `exclude_ids` — фильтруем после
   // запроса. Это редкая операция (лимит 100), цена невелика.
   const items = result.items.filter((i) => i.id !== thoughtId);
-  const total = Math.max(0, result.total - (result.items.length > items.length ? 1 : 0));
+  const total = Math.max(0, (result.total ?? 0) - (result.items.length > items.length ? 1 : 0));
   return {
     items,
     total,

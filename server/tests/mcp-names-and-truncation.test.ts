@@ -61,7 +61,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         }>(
           await handle.client.callTool({
             name: 'etn.thoughts.query',
-            arguments: { network_id: ctx.networkId, type: ['задача'] },
+            arguments: { network_id: ctx.networkId, count: true, type: ['задача'] },
           }),
         );
         assert.equal(oneName.total, 1, 'должна найтись ровно одна мысль типа «задача»');
@@ -73,7 +73,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         const upper = toolJson<{ total: number }>(
           await handle.client.callTool({
             name: 'etn.thoughts.query',
-            arguments: { network_id: ctx.networkId, type: ['ЗАДАЧА'] },
+            arguments: { network_id: ctx.networkId, count: true, type: ['ЗАДАЧА'] },
           }),
         );
         assert.equal(upper.total, 1);
@@ -86,7 +86,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         }>(
           await handle.client.callTool({
             name: 'etn.thoughts.query',
-            arguments: { network_id: ctx.networkId, type: ['задача', 'ошибка'] },
+            arguments: { network_id: ctx.networkId, count: true, type: ['задача', 'ошибка'] },
           }),
         );
         assert.equal(twoNames.total, 2);
@@ -182,6 +182,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
             name: 'etn.thoughts.query',
             arguments: {
               network_id: ctx.networkId,
+              count: true,
               type: ['задача'],
               properties: [{ property: 'статус', operator: 'eq', value: 'в реализации' }],
             },
@@ -199,6 +200,7 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
             name: 'etn.thoughts.query',
             arguments: {
               network_id: ctx.networkId,
+              count: true,
               type: ['задача'],
               properties: [{ property: 'СТАТУС', operator: 'eq', value: 'готово' }],
             },

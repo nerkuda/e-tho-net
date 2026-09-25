@@ -66,7 +66,9 @@ function queryThoughts(
   filter: ThoughtQueryRequest,
   bounds: { maxNodes: number },
 ) {
-  return domainQueryThoughts(ndb, USER, mcpRequestToQuery(filter, bounds), {
+  // `count: true` — проверки ниже утверждают `total`; по умолчанию COUNT не
+  // считается (требование 5adebf61).
+  return domainQueryThoughts(ndb, USER, mcpRequestToQuery({ count: true, ...filter }, bounds), {
     emptyFilterMode: 'all',
     maxLimit: 200,
   });
@@ -245,7 +247,7 @@ describe(
         const elapsed = Date.now() - t0;
 
         assert.notEqual(thought, null);
-        assert.ok(found.total >= 1);
+        assert.ok((found.total ?? 0) >= 1);
         assert.ok(sg.nodes.length >= 1);
         // Smoke bound: the anti-join views must not degrade to full scans —
         // a full per-row pass would blow well past this on CI too.

@@ -26,7 +26,6 @@ import {
   type SavedFilterView,
   type StructureIdsQueryResponse,
   type StructureQueryRequest,
-  type StructureQueryResponse,
   type StructureSort,
   type SortOrder,
 } from '@etn/shared';
@@ -120,6 +119,8 @@ function parseQueryBody(
     limit,
     offset,
     ...(idsOnly ? { ids_only: true } : {}),
+    ...(out.count === true ? { count: true } : {}),
+    ...(typeof out.cursor === 'string' && out.cursor !== '' ? { cursor: out.cursor } : {}),
     ...(typeof out.show_trash === 'boolean' ? { show_trash: out.show_trash } : {}),
   };
 }
@@ -220,10 +221,15 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
           });
-          sendSuccess(reply, { ids: result.ids, total: result.total } satisfies StructureIdsQueryResponse);
+          sendSuccess(reply, {
+            ids: result.ids,
+            total: result.total,
+            has_more: result.has_more,
+            next_cursor: result.next_cursor,
+          } satisfies StructureIdsQueryResponse);
           return;
         }
-        const result: StructureQueryResponse = await queryThoughtsAsync(
+        const result = await queryThoughtsAsync(
           ndb,
           req.auth!.user.id,
           structureRequestToQuery(query),
@@ -246,6 +252,8 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         );
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,
+          has_more: result.has_more,
+          next_cursor: result.next_cursor,
         });
       },
     );

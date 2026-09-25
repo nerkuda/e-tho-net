@@ -874,7 +874,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // query and path: thought_types catalogue present and resolved.
         const q = await handle.client.callTool({
           name: 'etn.thoughts.query',
-          arguments: { network_id: ctx.networkId, type_id: [thoughtTypeId] },
+          arguments: { network_id: ctx.networkId, count: true, type_id: [thoughtTypeId] },
         });
         const qr = toolJson<{ total: number; thought_types: Record<string, { name: string }> }>(q);
         assert.equal(qr.total, 1);

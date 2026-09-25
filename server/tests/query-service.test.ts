@@ -16,6 +16,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import {
   mcpRequestToQuery,
   queryThoughts,
+  type ThoughtQueryRequest as CanonicalQueryRequest,
   type ThoughtQueryResult,
 } from '../src/domain/query-service.js';
 import { EtnError, type ThoughtQueryRequest, typeNameKey } from '@etn/shared';
@@ -178,10 +179,16 @@ function toMcpResponse(result: ThoughtQueryResult) {
   };
 }
 
-/** Прогнать MCP-запрос через единый движок и вернуть MCP-форму ответа. */
+/**
+ * Прогнать MCP-запрос через единый движок и вернуть MCP-форму ответа.
+ *
+ * `count: true` подставляется явно: большинство проверок ниже утверждают
+ * полное число совпадений, а COUNT по умолчанию не считается (требование
+ * 5adebf61). Поведение «без флага» закреплено отдельным тестом.
+ */
 function run(ndb: NetworkDb, request: ThoughtQueryRequest, maxNodes: number = BOUNDS_MAX_NODES) {
   return toMcpResponse(
-    queryThoughts(ndb, 'u', mcpRequestToQuery(request, { maxNodes }), {
+    queryThoughts(ndb, 'u', mcpRequestToQuery({ count: true, ...request }, { maxNodes }), {
       emptyFilterMode: 'all',
       maxLimit: 200,
     }),
@@ -517,7 +524,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     const res = run(ndb, { in_subtree_of: root }, 3);
     assert.equal(res.truncated, true);
     assert.equal(res.reason, 'max_nodes');
-    assert.ok(res.total <= 3);
+    assert.ok((res.total ?? 0) <= 3);
   });
 
   // ===========================================================================
@@ -816,3 +823,120 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     });
   });
 });
+
+/**
+ * Этап 4 тех.проекта e29c0f00: keyset-пагинация вместо OFFSET (требование
+ * 3f2fdc41, ADR 5f6cb775), COUNT только по явному флагу (5adebf61) и поиск
+ * keywords через индекс `fts_thought_names` (314cbb8d).
+ */
+describe(
+  'query service: keyset, COUNT по флагу, FTS-префикс (этап 4)',
+  { skip: !nativeAvailable() },
+  () => {
+    /** Канонический запрос движка (не MCP-форма): сортировка/пагинация явно. */
+    function canon(over: Partial<CanonicalQueryRequest> = {}): CanonicalQueryRequest {
+      return { sort: 'alpha', order: 'asc', limit: 2, offset: 0, ...over };
+    }
+
+    it('COUNT считается только по явному флагу; хвост сообщает has_more', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        for (const title of ['Alpha', 'Beta', 'Gamma']) seedThought(ndb, title);
+
+        const plain = queryThoughts(ndb, 'u', canon({ limit: 2 }));
+        assert.equal(plain.total, null, 'без флага COUNT не считается');
+        assert.equal(plain.has_more, true);
+        assert.equal(plain.items.length, 2);
+
+        const counted = queryThoughts(ndb, 'u', canon({ limit: 2, count: true }));
+        assert.equal(counted.total, 3);
+        assert.equal(counted.has_more, true);
+
+        const lastPage = queryThoughts(ndb, 'u', canon({ limit: 10, count: true }));
+        assert.equal(lastPage.total, 3);
+        assert.equal(lastPage.has_more, false);
+        assert.equal(lastPage.next_cursor, null, 'последняя страница курсора не отдаёт');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keyset-курсор: обход страниц не теряет и не дублирует строки', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const titles = Array.from({ length: 7 }, (_, i) => `Мысль ${i}`);
+        // Одинаковые ключи сортировки — порядок держится только добором `id`.
+        for (const title of titles) seedThought(ndb, title, { created_at: '2024-01-01T00:00:00Z' });
+
+        for (const sort of ['created', 'alpha', 'viewed'] as const) {
+          const expected = queryThoughts(ndb, 'u', canon({ sort, limit: 50, count: true })).items.map(
+            (i) => i.title,
+          );
+          const seen: string[] = [];
+          let cursor: string | undefined;
+          for (let guard = 0; guard < 20; guard += 1) {
+            const page = queryThoughts(ndb, 'u', canon({ sort, limit: 2, cursor }));
+            seen.push(...page.items.map((i) => i.title));
+            if (!page.has_more) {
+              assert.equal(page.next_cursor, null);
+              break;
+            }
+            assert.equal(typeof page.next_cursor, 'string');
+            cursor = page.next_cursor as string;
+          }
+          assert.deepEqual(seen, expected, `обход по ${sort} совпадает со сплошной страницей`);
+          assert.equal(new Set(seen).size, titles.length, `обход по ${sort} не дублирует строки`);
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('ключ сортировки в курсоре обязан совпадать с запросом', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        for (const title of ['Alpha', 'Beta', 'Gamma']) seedThought(ndb, title);
+        const page = queryThoughts(ndb, 'u', canon({ limit: 2 }));
+        assert.throws(
+          () => queryThoughts(ndb, 'u', canon({ limit: 2, cursor: page.next_cursor as string, order: 'desc' })),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        assert.throws(
+          () => queryThoughts(ndb, 'u', canon({ limit: 2, cursor: 'not-a-cursor' })),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keywords использует индекс fts_thought_names в плане запроса', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Счётчик электричества');
+        seedThought(ndb, 'Смета');
+
+        const captured: string[] = [];
+        const orig = ndb.prepare.bind(ndb) as (sql: string) => unknown;
+        (ndb as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+          captured.push(sql);
+          return orig(sql);
+        };
+        try {
+          queryThoughts(ndb, 'u', canon({ keywords: 'счет*', count: true }));
+        } finally {
+          (ndb as unknown as { prepare: (sql: string) => unknown }).prepare = orig;
+        }
+
+        const sql = captured.find((s) => s.includes('fts_thought_names MATCH'));
+        assert.ok(sql, 'движок обязан строить FTS-сужатель для include-слова');
+        // Планирование не исполняет запрос — параметры можно заменить NULL.
+        const rows = ndb.prepare(`EXPLAIN QUERY PLAN ${(sql as string).replace(/\?/g, 'NULL')}`).all() as Array<{ detail: string }>;
+        const details = rows.map((r) => r.detail).join(' | ');
+        assert.ok(details.includes('fts_thought_names'), `план обязан брать FTS-индекс: ${details}`);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);

@@ -242,14 +242,16 @@ function query(filter: Partial<Parameters<typeof queryThoughts>[2]> = {}) {
  * (пустой фильтр → HOME+сироты, `meta.directions`, потолок лимита).
  */
 function queryThoughts(ndb: NetworkDb, userId: string, req: StructureQueryRequest) {
-  return domainQueryThoughts(ndb, userId, structureRequestToQuery(req), {
+  // `count: true` — REST-обёртки проверяют `total`; по умолчанию движок COUNT
+  // не считает (требование 5adebf61). Транспорт клиента делает то же самое.
+  return domainQueryThoughts(ndb, userId, structureRequestToQuery({ count: true, ...req }), {
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
   });
 }
 
 function queryThoughtIds(ndb: NetworkDb, userId: string, req: StructureQueryRequest) {
-  return domainQueryThoughtIds(ndb, userId, structureRequestToQuery(req), {
+  return domainQueryThoughtIds(ndb, userId, structureRequestToQuery({ count: true, ...req }), {
     emptyFilterMode: 'home_orphans',
     maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
   });

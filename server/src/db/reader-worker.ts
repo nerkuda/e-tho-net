@@ -110,6 +110,8 @@ function execute(task: ReaderTask): ReaderTaskResponse {
       const flat: ReaderThoughtsQueryResult = {
         items: result.items,
         total: result.total,
+        has_more: result.has_more,
+        next_cursor: result.next_cursor,
         directions: result.directions,
         depths: result.depths === null ? null : [...result.depths].map(([id, depth]) => ({ id, depth })),
         truncated: result.truncated,
@@ -119,7 +121,12 @@ function execute(task: ReaderTask): ReaderTaskResponse {
     }
     case 'thoughts.queryIds': {
       const result = queryThoughtIds(ndb, task.payload.userId, task.payload.request, task.payload.options);
-      const flat: ReaderThoughtsQueryIdsResult = { ids: result.ids, total: result.total };
+      const flat: ReaderThoughtsQueryIdsResult = {
+        ids: result.ids,
+        total: result.total,
+        has_more: result.has_more,
+        next_cursor: result.next_cursor,
+      };
       return { ok: true, result: flat };
     }
     case 'search.query':
