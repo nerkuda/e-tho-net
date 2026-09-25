@@ -1397,7 +1397,7 @@ const HANDLERS: Record<string, OpHandler> = {
         if (existing === null) {
           throw new Error(`ETN error [NOT_FOUND]: comment ${a.comment_id} not found`);
         }
-        deleteComment(ndb, a.comment_id, a.expected_version);
+        deleteComment(ndb, a.comment_id, a.expected_version, rt.deps.auth.userId);
         return {
           result: undefined,
           events: [
@@ -1672,10 +1672,9 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Справочник редких операций',
       description:
         'Справочник MCP (прогрессивное раскрытие). Без параметров — реестр ' +
-        '«действие/тема → когда нужно» (одна строка на запись). С `topic` — полная инструкция: ' +
-        'для редких операций — состав `params`, обязательность `confirm`, эффекты, коды ошибок; ' +
-        'для частых — снятые из их `description` детали (секции батча, справочник фильтров). ' +
-        'Исполнитель редких операций — `etn.ops`; не вызывай его мимо гайда.',
+        '«действие/тема → когда нужно». С `topic` — полная инструкция: для редких операций — ' +
+        'состав `params`, `confirm`, эффекты, коды ошибок; для частых — детали из их `description`. ' +
+        'Исполнитель редких операций — `etn.ops`.',
       inputSchema: Guide.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.guide'],
     },
@@ -1688,7 +1687,13 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (entry !== undefined) {
           return { content: [{ type: 'text', text: renderTopic(entry) }] };
         }
-        const topic = GUIDE_TOPICS_BY_NAME.get(args.topic);
+        // Тема может быть названа как без префикса (`how_to_write_batch`),
+        // так и полным именем промпта (`etn.how_to_write_batch`) — описание
+        // `etn.thoughts.write` ссылается именно на вторую форму. Нормализуем
+        // префикс `etn.`, чтобы обе формы находили тему (ошибка e05d4688).
+        const topic =
+          GUIDE_TOPICS_BY_NAME.get(args.topic) ??
+          GUIDE_TOPICS_BY_NAME.get(args.topic.replace(/^etn\./, ''));
         if (topic !== undefined) {
           return { content: [{ type: 'text', text: topic.body_md }] };
         }
@@ -1707,12 +1712,10 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Исполнитель редких операций',
       description:
-        'Исполнитель редких (низкочастотных) операций, снятых из постоянного набора ' +
-        '(прогрессивное раскрытие). `action` — имя из справочника `etn.guide`; ' +
-        '`params` — плоский объект, состав по инструкции гайда; `confirm: true` — обязателен ' +
-        'для деструктивных (delete/purge/truncate/import/layers.delete/merge), без него ' +
-        'VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — там состав params и ' +
-        'эффекты. Семантика каждой операции перенесена без изменений.',
+        'Исполнитель редких операций, снятых из постоянного набора (прогрессивное раскрытие). ' +
+        '`action` — имя из справочника `etn.guide`; `params` — плоский объект; `confirm: true` ' +
+        'обязателен для деструктивных (delete/purge/truncate/import/layers.delete/merge), ' +
+        'без него VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — состав params и эффекты.',
       inputSchema: Ops.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ops'],
     },

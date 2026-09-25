@@ -313,8 +313,13 @@ export function upsertThoughtBundle(
     // (own or inherited via L21) before assuming the bundle is "done".
     const warnings = computeThoughtCardWarnings(ndb, thought.id);
 
+    // Части бандла пишутся ПОСЛЕ мысли и могли сдвинуть её `updated_at`
+    // (комментарии/хроника — ошибка 228df7a4; значения свойств — требование
+    // e6d4165e). Возвращаем свежую форму, чтобы DTO не отставал от карточки.
+    const freshThought = getThoughtOrThrow(ndb, thought.id);
+
     return {
-      thought,
+      thought: freshThought,
       thought_action: action,
       matched_on: matchedOn,
       comment,

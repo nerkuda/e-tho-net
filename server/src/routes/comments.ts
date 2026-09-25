@@ -205,9 +205,10 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestCommentById, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+        const fx = restWriteFx(deps, req, input.network_id);
+        runWrite(ndb, fx, () => {
           const existing = getComment(ndb, input.comment_id);
-          deleteComment(ndb, input.comment_id, input.expected_version);
+          deleteComment(ndb, input.comment_id, input.expected_version, fx.userId);
           return {
             result: undefined,
             ...(existing === null

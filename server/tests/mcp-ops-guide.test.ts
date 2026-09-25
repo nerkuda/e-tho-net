@@ -98,6 +98,24 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.equal(queryTopic.isError, undefined, toolText(queryTopic));
         assert.match(toolText(queryTopic), /any_of/);
 
+        // Ошибка e05d4688: описание `etn.thoughts.write` ссылается на
+        // `etn.how_to_write_batch` — тема обязана находиться в обеих формах.
+        const writeTopic = await handle.client.callTool({
+          name: 'etn.guide',
+          arguments: { topic: 'how_to_write_batch' },
+        });
+        assert.equal(writeTopic.isError, undefined, toolText(writeTopic));
+        assert.match(toolText(writeTopic), /target_ref/);
+        assert.match(toolText(writeTopic), /on_duplicate/);
+        assert.match(toolText(writeTopic), /MCP_MAX_THOUGHTS_PER_WRITE/);
+
+        const writeTopicEtn = await handle.client.callTool({
+          name: 'etn.guide',
+          arguments: { topic: 'etn.how_to_write_batch' },
+        });
+        assert.equal(writeTopicEtn.isError, undefined, toolText(writeTopicEtn));
+        assert.equal(toolText(writeTopicEtn), toolText(writeTopic));
+
         const bad = await handle.client.callTool({
           name: 'etn.guide',
           arguments: { topic: 'no.such.action' },

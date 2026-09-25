@@ -360,8 +360,38 @@ describe(
       try {
         const t = seedThought(ndb);
         const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'x' }, USER);
-        deleteComment(ndb, c.id, c.version);
+        deleteComment(ndb, c.id, c.version, USER);
         assert.equal(listComments(ndb, 'thought', t).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('comment activity bumps the owner updated_at, not its version (ошибка 228df7a4)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const read = (): { updated_at: string; updated_by: string; updated_at_ms: number; version: number } =>
+          ndb
+            .prepare('SELECT updated_at, updated_by, updated_at_ms, version FROM thoughts_v WHERE id = ?')
+            .get(t) as { updated_at: string; updated_by: string; updated_at_ms: number; version: number };
+        const before = read();
+        assert.equal(before.updated_at, '2024-01-01T00:00:00Z');
+
+        // Создание хроно-записи двигает активность владельца.
+        const c = createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'x' }, USER);
+        const afterCreate = read();
+        assert.notEqual(afterCreate.updated_at, before.updated_at);
+        assert.equal(afterCreate.updated_by, USER);
+        // Версия владельца (optimistic concurrency) не меняется от комментария.
+        assert.equal(afterCreate.version, before.version);
+
+        // Правка и удаление тоже двигают активность (не откатывают её назад).
+        updateComment(ndb, c.id, { body_md: 'y' }, undefined, USER);
+        assert.ok(read().updated_at_ms >= afterCreate.updated_at_ms);
+        deleteComment(ndb, c.id, undefined, USER);
+        assert.ok(read().updated_at_ms >= afterCreate.updated_at_ms);
+        assert.equal(read().version, before.version);
       } finally {
         ndb.close();
       }
