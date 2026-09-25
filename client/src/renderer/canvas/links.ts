@@ -2,15 +2,22 @@
  * SVG link overlay (H6, 08-ui-spec.md §2.4):
  *
  * Draws every link among the visible thoughts (focus + parents + children +
- * siblings), sourced from `focus.edges`. Only pairs whose both clouds are
- * visible get a line — a cloud fully scrolled out of its zone's window (the
- * virtualized overscan, §2.5) carries no line, while a cloud merely PARTLY
- * clipped by the zone edge keeps its line and its hit curve (ошибка 16a77453).
- * Each
- * directed pair (source→target) is one cubic Bézier curve from the source's
- * bottom ellipse to the target's top ellipse, stroked with a source→target
- * colour gradient (L14); several links of the same pair render as a thicker
- * curve with a count badge.
+ * siblings), sourced from `focus.edges`. A pair gets a line when each of its
+ * two clouds is at least partly inside its own zone's visible window — a cloud
+ * fully scrolled out of its zone (the virtualized overscan, §2.5) carries no
+ * line, while a cloud merely clipped by the zone edge keeps its line and its
+ * hit curve. Each directed pair (source→target) is one cubic Bézier curve
+ * from the source's bottom ellipse to the target's top ellipse, stroked with a
+ * source→target colour gradient (L14); several links of the same pair render
+ * as a thicker curve with a count badge.
+ *
+ * Zone borders do NOT clip a line: all overlay layers are children of the
+ * CANVAS HOST, never of a zone (`initLinksOverlay`), so a pair whose clouds sit
+ * in different zones is one continuous curve across the border, and its hit
+ * curve is hoverable along the whole stretch between the clouds (ошибка
+ * 16a77453). {@link syncOverlayViewport} keeps the matching viewport invariant:
+ * every layer's viewport is exactly the host's pixel box, so a path is never
+ * cut by the SVG root at some height inside a zone.
  *
  * Layering: the base overlay sits **under** the clouds; the wide transparent
  * hit curves sit under the clouds too — only the visible stretch of a line
@@ -186,37 +193,48 @@ let highlightedEllipses: HTMLElement[] = [];
 /**
  * Mounts the link overlay onto a canvas host. Returns the redraw trigger;
  * `mountCanvas` calls it and hands the created SVG elements to {@link draw}.
+ *
+ * All four layers are children of the CANVAS HOST — never of a zone. That is
+ * what makes a line between clouds of different zones a single continuous
+ * curve: zone scrollers clip their own descendants (`overflow-y: auto`), so an
+ * overlay living inside a zone would cut every cross-zone line at the zone
+ * edge (the mechanism suspected in ошибка 16a77453). One host-level overlay is
+ * therefore the architectural invariant of this module — see
+ * {@link syncOverlayViewport} for the matching viewport invariant.
  */
 export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   hostEl = host;
   svg = document.createElementNS(SVG_NS, 'svg');
   svg.classList.add('links-overlay');
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', '100%');
   svgHit = document.createElementNS(SVG_NS, 'svg');
   svgHit.classList.add('links-overlay-hit');
-  svgHit.setAttribute('width', '100%');
-  svgHit.setAttribute('height', '100%');
   svgTop = document.createElementNS(SVG_NS, 'svg');
   svgTop.classList.add('links-overlay-top');
-  svgTop.setAttribute('width', '100%');
-  svgTop.setAttribute('height', '100%');
   // The pending-link preview layer lives ABOVE the top overlay and is never
   // cleared by the redraws (draw/drawActive rebuild svgTop) — an ellipse drag
   // keeps its line no matter what repaints in between.
   svgDrag = document.createElementNS(SVG_NS, 'svg');
   svgDrag.classList.add('links-overlay-drag');
-  svgDrag.setAttribute('width', '100%');
-  svgDrag.setAttribute('height', '100%');
   // DOM order is the source of truth for layering: visual overlay FIRST (under
   // the clouds), then hit + top overlays LAST. The hit layer shares z=0 with
   // the visual one and relies on DOM order to sit above the curves — both stay
   // BELOW the clouds (z=1), keeping every cloud hover/click-able (§2.4).
   host.prepend(svg);
   host.append(svgHit, svgTop, svgDrag);
+  syncOverlayViewport();
 
-  new ResizeObserver(() => requestDraw()).observe(host);
-  host.addEventListener('scroll', () => requestDraw(), true);
+  new ResizeObserver(() => {
+    syncOverlayViewport();
+    requestDraw();
+  }).observe(host);
+  host.addEventListener(
+    'scroll',
+    () => {
+      syncOverlayViewport();
+      requestDraw();
+    },
+    true,
+  );
 
   // Lock-cache transitions (task 4f141756) carry `lock-locked-*` classes on
   // the path; re-draw so a freshly-acquired lock and a freshly-released one
@@ -227,6 +245,36 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   });
 
   return { redraw: requestDraw };
+}
+
+/**
+ * Sizes every overlay layer to the canvas host's pixel box and pins its
+ * `viewBox` to the same box, so the SVG coordinate space is exactly the
+ * host's pixel space (1:1, `preserveAspectRatio="none"`).
+ *
+ * Invariant: the overlay viewport can never be smaller than the rectangle the
+ * lines are drawn into. The lines are laid out in host-relative pixels from
+ * `getBoundingClientRect`, so any viewport shorter than the host would clip
+ * paths mid-canvas on the SVG root's own `overflow: hidden` — cutting a line
+ * at an arbitrary height inside a zone rather than at a zone edge (the second
+ * half of ошибка 16a77453). Re-synced on host resize, on scroll and before
+ * every draw, so a stale viewport can never outlive a layout change.
+ */
+function syncOverlayViewport(): void {
+  if (hostEl === null) return;
+  const rect = hostEl.getBoundingClientRect();
+  // Exact (unrounded) values: the attributes and the viewBox describe the same
+  // box, so with `preserveAspectRatio="none"` the coordinate space maps 1:1 to
+  // the host's pixels — nothing is scaled or shifted.
+  const w = Math.max(1, rect.width);
+  const h = Math.max(1, rect.height);
+  for (const layer of [svg, svgHit, svgTop, svgDrag]) {
+    if (layer === null) continue;
+    layer.setAttribute('width', String(w));
+    layer.setAttribute('height', String(h));
+    layer.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    layer.setAttribute('preserveAspectRatio', 'none');
+  }
 }
 
 /** Registers the link editor opener (editor module, H8). */
@@ -284,6 +332,9 @@ function draw(): void {
   }
   const hostRect = hostEl.getBoundingClientRect();
   if (hostRect.width === 0) return;
+  // Keep the SVG viewport exactly the host box before laying out paths in it
+  // (resize/scroll may have changed the box since the last draw).
+  syncOverlayViewport();
 
   // `edges` is populated by a current server; fall back to deriving the
   // focus↔neighbour edges from parents/children so the overlay still draws
@@ -294,9 +345,6 @@ function draw(): void {
     const src = findCloudAnywhere(bundle.sourceId);
     const tgt = findCloudAnywhere(bundle.targetId);
     if (src === null || tgt === null) continue;
-    // Virtualized zones also render overscan rows clipped outside the scroll
-    // window (08-ui-spec.md §2.5) — a line ending at such a cloud floats over
-    // other zones and misleads. Draw only between fully visible clouds.
     if (!isCloudVisible(src) || !isCloudVisible(tgt)) continue;
     const from = ellipsePoint(src, 'bottom', hostRect);
     const to = ellipsePoint(tgt, 'top', hostRect);
@@ -340,7 +388,8 @@ function drawActive(): void {
       if (!matches) continue;
       const src = findCloudAnywhere(bundle.sourceId);
       const tgt = findCloudAnywhere(bundle.targetId);
-      if (src === null || tgt === null || !isCloudVisible(src) || !isCloudVisible(tgt)) continue;
+      if (src === null || tgt === null) continue;
+      if (!isCloudVisible(src) || !isCloudVisible(tgt)) continue;
       const from = ellipsePoint(src, 'bottom', hostRect);
       const to = ellipsePoint(tgt, 'top', hostRect);
       drawTopLine(bundle, from, to);
@@ -377,15 +426,18 @@ function clearSvg(): void {
 
 /**
  * True when the cloud is at least partly inside its zone's visible (clipped)
- * scroll window. Clouds rendered into the overscan rows are fully clipped
- * outside that window (08-ui-spec.md §2.5) — a line ending at such a cloud
- * would float over other zones and mislead, so they carry no line. A cloud
- * that is only PARTLY scrolled past the zone edge is still on screen: its line
- * must exist and stay a hover target on any height of the map (ошибка
- * 16a77453). Requiring FULL containment used to drop the line — and with it
- * the hit curve, killing hover — the moment a cloud was clipped by a single
- * pixel at the top of a scrolled zone. Clouds outside any zone (the focus row)
- * are always visible.
+ * scroll window — the spec's draw condition for a link end (08-ui-spec.md
+ * §2.4, элемент «Линия связи на холсте»): intersection of the cloud's rect
+ * with the zone's scroll window must exceed {@link VISIBILITY_EPSILON_PX}. A
+ * cloud rendered into the overscan rows and fully clipped outside that window
+ * carries no line; a cloud only PARTLY scrolled past the zone edge keeps its
+ * line and its hit curve (ошибка 16a77453 — requiring FULL containment used to
+ * drop the line and kill hover the moment a cloud was clipped by a pixel).
+ * Clouds outside any zone (the focus row) are always visible.
+ *
+ * Zone borders still do not cut the drawn curve: the overlay lives on the
+ * canvas host, so the line of a pair spanning two zones stays continuous — this
+ * function only decides whether the pair is drawn at all.
  */
 function isCloudVisible(cloud: HTMLElement): boolean {
   const zone = cloud.closest('.zone');
