@@ -72,6 +72,13 @@
  * `.activity-splitter` (они объявлены ниже по файлу). */
 .fp-host > .fp-splitter {
   position: relative;
+  /* Шов поднят над соседними панелями (ошибка ec02c553): иначе
+     позиционированный сосед (`.st-results { position: relative }`) рисуется
+     ПОВЕРХ псевдоэлемента хит-зоны и перехватывает её внешнюю половину —
+     эффективная зона нажатия падала до ~11px вместо 18px. Замер
+     `elementFromPoint` в Chromium: без `z-index` у `.st-splitter` зона 11px,
+     с ним — 18px. */
+  z-index: 1;
   flex: 0 0 4px;
   background: var(--border);
   border-radius: 2px;

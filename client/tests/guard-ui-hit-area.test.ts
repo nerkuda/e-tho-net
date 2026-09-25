@@ -15,6 +15,14 @@
  * 24 раздул бы строки и сместил детали. Тач-зона получает собственный минимум
  * (WCAG 2.5.8), не трогая плотность; `min ≥ --hit-area` — инвариант сторожа.
  *
+ * **Ловушка перекрытия (ошибка ec02c553).** Шов каркаса панели отбора
+ * (`.fp-splitter`) раскрывает хит-зону псевдоэлементом, но у «Структур мыслей»
+ * позиционированный сосед `.st-results { position: relative }` рисуется ПОВЕРХ
+ * этого псевдоэлемента и перехватывает его внешнюю половину: замер
+ * `elementFromPoint` в Chromium давал у `.st-splitter` зону 11px вместо 18px.
+ * Один `z-index` у шва возвращает полные 18px. Поэтому общей строки в
+ * `THIN_SEAMS` мало — у швов каркаса проверяется ещё и подъём над соседями.
+ *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
 
@@ -66,6 +74,28 @@ const THIN_SEAMS: Array<{ file: string; selector: string }> = [
   { file: 'styles.css', selector: '.fp-splitter.fp-side' },
   { file: 'styles.css', selector: '.fp-splitter.fp-top' },
 ];
+
+/**
+ * Швы каркаса панели отбора на экранах (ошибка ec02c553). Класс-имя шва задаёт
+ * экран (`.st-splitter`/`.activity-splitter`/`.chron-splitter`), а хит-зону и
+ * подъём над соседями — ОБЩЕЕ правило каркаса `.fp-host > .fp-splitter`
+ * (каркас вешает на элемент `fp-splitter`, см. `mountFilterPanelFrame`).
+ * Список фиксирует, что эти селекторы остаются швами каркаса: если экран
+ * перестанет отдавать свой шов каркасу, покрытие молча пропадёт, а строки
+ * `THIN_SEAMS` по `.fp-splitter.*` этого не заметят.
+ */
+const FRAME_SEAMS: Array<{ screen: string; file: string; seamClass: string }> = [
+  { screen: 'Структуры мыслей', file: 'screens/structures/structures.ts', seamClass: 'st-splitter' },
+  { screen: 'Активность', file: 'screens/activity/activity.ts', seamClass: 'activity-splitter' },
+  { screen: 'Хроника', file: 'screens/chronicle/chronicle.ts', seamClass: 'chron-splitter' },
+];
+
+/** Тело первого правила `selector { … }` (комментарии сняты). */
+function declarationBlock(css: string, selector: string): string | null {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const m = new RegExp(`${escapeRe(selector)}\\s*\\{([^{}]*)\\}`).exec(code);
+  return m === null ? null : m[1] ?? null;
+}
 
 /**
  * Объявлено ли у контрола расширение зоны нажатия: псевдоэлемент
@@ -122,6 +152,47 @@ describe('guard: тач-зоны lib/ui (e45ca252, требование 5677bc3d
           `${problems.join('\n')}\n\n` +
           'Добавь `::after` с `inline-size/block-size: max(100%, var(--hit-area))` ' +
           'поперёк шва (требование 5677bc3d, ошибка 4417a2bb).',
+      );
+    }
+  });
+
+  it('швы каркаса панели отбора подняты над соседними панелями (ec02c553)', () => {
+    const css = read('styles.css');
+    const block = declarationBlock(css, '.fp-host > .fp-splitter');
+    assert.ok(block !== null, 'правило `.fp-host > .fp-splitter` найдено в CSS каркаса');
+    assert.match(
+      block!,
+      /\bposition\s*:\s*relative/,
+      'шов каркаса позиционирован (position: relative) — без этого псевдоэлемент хит-зоны не привязан к шву',
+    );
+    assert.match(
+      block!,
+      /\bz-index\s*:\s*\d+/,
+      'шов каркаса обязан быть поднят над соседними панелями (z-index): иначе ' +
+        'позиционированный сосед (`.st-results { position: relative }`) перекрывает ' +
+        'внешнюю половину хит-зоны — у `.st-splitter` эффективная зона падала до 11px (ошибка ec02c553)',
+    );
+
+    const problems: string[] = [];
+    for (const { screen, file, seamClass } of FRAME_SEAMS) {
+      const src = read(file);
+      if (!new RegExp(`splitterElement\\('${escapeRe(seamClass)}'\\)`).test(src)) {
+        problems.push(`  • ${screen}: нет splitterElement('${seamClass}') в ${file}`);
+      }
+      if (!/mountFilterPanelFrame\(/.test(src)) {
+        problems.push(
+          `  • ${screen}: шов «${seamClass}» не отдан каркасу (mountFilterPanelFrame) — ` +
+            'общее правило хит-зоны к нему не применится',
+        );
+      }
+    }
+    if (problems.length > 0) {
+      throw new Error(
+        `Швы каркаса панели отбора без покрытия (${problems.length}):\n` +
+          `${problems.join('\n')}\n\n` +
+          'Экранные швы (`.st-splitter`/`.activity-splitter`/`.chron-splitter`) получают хит-зону ' +
+          'и z-index от общего правила `.fp-host > .fp-splitter`; отдай шов каркасу ' +
+          '`mountFilterPanelFrame` (ошибка ec02c553).',
       );
     }
   });
