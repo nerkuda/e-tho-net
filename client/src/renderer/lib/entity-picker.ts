@@ -549,7 +549,7 @@ export async function pickEntitiesModal(
     // показывал всё дерево), тоггл сворачивает ветку.
     const expanded = new Set<string>(options.filter((o) => o.hasChildren === true).map((o) => o.id));
 
-    const body = div('st-f-picker');
+    const body = div('st-f-picker list-dialog-body');
 
     // --- Режим «мысли»: поиск с выпадашкой + чипы выбранного --------------
     if (opts.kind === 'thoughts') {
@@ -688,6 +688,10 @@ export async function pickEntitiesModal(
         title: opts.title,
         body,
         size: 's',
+        // Правило 9 требования 11ddd910: размер диалога-списка задан ролью и
+        // стабилен — список занимает свободное место роли (`.list-dialog-body`),
+        // а не схлопывается по содержимому при наборе поиска.
+        fixedHeight: true,
         buttons,
         onMount: () => searchInput.focus(),
         // Любое закрытие каркаса — «Отмена», Esc, ×, программный
@@ -848,6 +852,10 @@ export async function pickEntitiesModal(
       title: opts.title,
       body,
       size: 's',
+      // Правило 9 требования 11ddd910: роль задаёт фиксированную высоту, тело
+      // прокручивается внутри, а область списка (`.list-dialog-body`) тянется на
+      // свободное место — размер не «дёргается» от поиска и числа строк.
+      fixedHeight: true,
       buttons,
       onMount: () => {
         renderList();
