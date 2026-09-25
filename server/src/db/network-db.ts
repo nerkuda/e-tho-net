@@ -34,7 +34,7 @@ import { BASE_LAYER_ID } from '@etn/shared';
 import type { Logger } from '../logger.js';
 import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
 import { runMigrations } from './migrator.js';
-import { setupLayerContext } from './layer-chain.js';
+import { rebuildLayerSnapshot, setupLayerContext, type LayerContext } from './layer-chain.js';
 import { propertyValueId } from './property-value-id.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
@@ -92,17 +92,29 @@ export class NetworkDb {
    * go to the base layer until materialisation lands (S4+).
    */
   layerId: string;
-  /** Absolute path of the underlying `data.db` file (`:memory:` for tests). */
+  /** Абсолютный путь underlying `data.db` (`:memory:` for tests). */
   readonly dbPath: string;
   private readonly db: Database.Database;
   private closed = false;
+  /**
+   * Установленный контекст слоя (см. `layer-chain.ts`): цепочка предков, её
+   * подпись и признак «чтения идут по снапшоту видимости».
+   */
+  private layerContext: LayerContext;
+  /** Сигнал соединения на момент сборки снапшота (см. {@link readSignal}). */
+  private layerSignal = '';
+  /** Снапшот собран внутри транзакции соединения — на её исход он не опирается. */
+  private snapshotTxnScoped = false;
+  /** Кэш `SELECT total_changes()` — сигнальная проверка идёт на каждом чтении. */
+  private signalStmt: Database.Statement | null = null;
 
   constructor(db: Database.Database, networkId: string, dbPath: string, layerId: string = BASE_LAYER_ID) {
     this.db = db;
     this.networkId = networkId;
     this.dbPath = dbPath;
     this.layerId = layerId;
-    setupLayerContext(db, layerId);
+    this.layerContext = setupLayerContext(db, layerId);
+    this.layerSignal = this.readSignal();
   }
 
   /**
@@ -115,27 +127,115 @@ export class NetworkDb {
    */
   useLayer(layerId: string): void {
     this.assertOpen();
-    setupLayerContext(this.db, layerId);
+    this.layerContext = setupLayerContext(this.db, layerId, this.layerContext.key);
+    // Подпись та же — снапшот не пересобирался, и сигнал остаётся прежним:
+    // если данные с тех пор изменились, читатель пересоберёт снапшот сам.
+    if (this.layerContext.rebuilt) {
+      this.layerSignal = this.readSignal();
+      this.snapshotTxnScoped = false;
+    }
     this.layerId = layerId;
   }
 
   /**
-   * Compile a SQL string into a reusable {@link Database.Statement}. Domain
-   * services call this per-operation; `better-sqlite3` compilation is cheap and
-   * statements are safely GC-able once dropped.
+   * Compile a SQL string into a reusable {@link Database.Statement}.
+   *
+   * In a layer context, statements that return rows (SELECT…) additionally
+   * guard the layer visibility snapshot: before a read runs,
+   * {@link refreshLayerSnapshot} rebuilds the snapshot if the connection's write
+   * signal moved. This is the single choke point for reads, so no domain call
+   * site has to remember to invalidate; writes need no hook at all — the signal
+   * (`total_changes()` of this connection plus `PRAGMA data_version`, which
+   * catches commits of other connections) covers both own writes and foreign
+   * commits. In the base context there is no snapshot, so nothing is guarded.
    */
   prepare(sql: string): Database.Statement {
-    return this.db.prepare(sql);
+    const stmt = this.db.prepare(sql);
+    return stmt.reader && this.layerContext.usesSnapshot ? this.guardSnapshotRead(stmt) : stmt;
+  }
+
+  /**
+   * Signal of the connection's data state: row changes made by this connection
+   * (`total_changes()`, catches own writes including raw SQL and RETURNING)
+   * plus `data_version` (bumped by commits of OTHER connections — the WAL
+   * reader must not serve a stale layer snapshot after a foreign commit).
+   *
+   * Both parts are cheap scalars; the `total_changes` statement is cached.
+   */
+  private readSignal(): string {
+    this.signalStmt ??= this.db.prepare('SELECT total_changes() AS c');
+    const changes = (this.signalStmt.get() as { c: number }).c;
+    const dataVersion = this.db.pragma('data_version', { simple: true }) as number;
+    return `${dataVersion}:${changes}`;
+  }
+
+  /**
+   * Rebuild the layer visibility snapshot when the data state moved since it was
+   * built (ADR 6582c287: инвалидация при смене слоя и при изменении версий
+   * слоя в рамках соединения). The signal is re-read AFTER the rebuild because
+   * the rebuild itself writes to the temp snapshot tables and moves
+   * `total_changes()`.
+   *
+   * A rebuild that happened inside a transaction is transaction-scoped: SQLite
+   * rolls it back with the transaction, while the signal is a plain field and
+   * would not follow. Such a rebuild is remembered ({@link snapshotTxnScoped})
+   * and the signal is dropped on leaving the outermost transaction, so a
+   * rolled-back domain write cannot leave a snapshot of its intent behind.
+   */
+  private refreshLayerSnapshot(): void {
+    if (this.closed) return;
+    if (this.layerSignal !== '' && this.readSignal() === this.layerSignal) return;
+    rebuildLayerSnapshot(this.db);
+    this.layerSignal = this.readSignal();
+    this.snapshotTxnScoped = this.db.inTransaction;
+  }
+
+  /**
+   * Wrap a row-returning statement so every execution first refreshes the
+   * snapshot. Only `get`/`all`/`iterate` are intercepted; everything else is
+   * forwarded (getters like `reader` run with the real statement as `this`).
+   */
+  private guardSnapshotRead(stmt: Database.Statement): Database.Statement {
+    const db = this;
+    return new Proxy(stmt, {
+      get(target, prop) {
+        if (prop === 'get' || prop === 'all' || prop === 'iterate') {
+          const method = (target as unknown as Record<string, (...args: unknown[]) => unknown>)[
+            prop as string
+          ]!;
+          return (...args: unknown[]): unknown => {
+            db.refreshLayerSnapshot();
+            return method.apply(target, args);
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    }) as unknown as Database.Statement;
   }
 
   /**
    * Run `fn` inside a single SQLite transaction with automatic rollback on
-   * throw. Use to keep multi-statement domain operations atomic (e.g. creating
+   * throw. Use to keep multi-statement domain operations atomic (e.g., creating
    * a thought together with its link and synonyms).
+   *
+   * The layer snapshot is a transactional temp object: a rollback of this
+   * transaction also reverts a rebuild that happened inside it. Leaving the
+   * outermost transaction therefore marks the snapshot signal unknown when it
+   * was rebuilt in-transaction — the next read rebuilds from the committed
+   * state, so a rejected write cannot leave a snapshot of its rolled-back
+   * intent behind (see {@link refreshLayerSnapshot}).
    */
   transaction<T>(fn: () => T): T {
     const wrapped = this.db.transaction(fn);
-    return wrapped();
+    try {
+      return wrapped();
+    } finally {
+      if (this.snapshotTxnScoped && !this.db.inTransaction) {
+        this.snapshotTxnScoped = false;
+        this.layerSignal = '';
+      }
+    }
   }
 
   /** Execute raw SQL (multiple statements allowed). Used by migrations/tests. */

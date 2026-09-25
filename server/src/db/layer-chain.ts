@@ -1,34 +1,70 @@
 /**
- * Контекст слоя соединения: temp-таблица `layer_chain` и temp-представления
- * `*_v` (фаза S, задача S3, docs/13-layers.md §4.2).
+ * Контекст слоя соединения (фаза S, задача S3, docs/13-layers.md §4.2; этап 3
+ * тех.проекта e29c0f00, ADR 6582c287).
  *
  * Правило разрешения (13-layers.md §4.1): для логического `id` в контексте
  * слоя `L` побеждает строка из ближайшего слоя цепочки
  * `L → parent(L) → … → base`; если победившая строка — надгробие
  * (`deleted = 1`), сущность не видна.
  *
- * Механизм. `layer_chain(layer_id, depth)` живёт в temp-зоне конкретного
- * соединения: depth = 0 у текущего слоя, растёт к основе. Каждое
- * представление `<таблица>_v` джойнит физическую таблицу с `layer_chain` и
- * оставляет строку минимальной глубины (эквивалент оконной функции
- * `ROW_NUMBER() OVER (PARTITION BY id ORDER BY depth ASC)` — почему не она
- * сама, см. {@link ensureLayerViews}), затем отбрасывает надгробия.
+ * Механизм — **temp-снапшот видимости на соединение**:
+ *   * `layer_chain(layer_id, depth)` — цепочка предков слоя (depth = 0 у
+ *     текущего слоя, растёт к основе), per-connection;
+ *   * `<таблица>_snap(src_rowid, id)` — материализованный набор строк-
+ *     победителей: один проход по цепочке (`rebuildLayerSnapshot`) записывает
+ *     `rowid` живой ближайшей версии каждого логического `id`;
+ *   * `<таблица>_v` — тонкое представление `main.<таблица> t JOIN
+ *     temp.<таблица>_snap s ON s.src_rowid = t.rowid AND s.id = t.id WHERE
+ *     t.deleted = 0`: строка читается из живой таблицы (значения всегда
+ *     актуальны), а отбор победителя — поиск по `INTEGER PRIMARY KEY`, а не
+ *     анти-джойн на каждую строку и каждый коррелированный подзапрос.
  *
- * Почему temp, а не view в схеме `data.db`: SQLite запрещает представлению из
- * `main` ссылаться на объекты `temp` (проверено: «view … cannot reference
- * objects in database temp»), а `layer_chain` обязана быть per-connection —
- * пул держит по соединению на пару (сеть, слой), и цепочки у них разные.
- * Поэтому представления создаются на каждом соединении (`ensureLayerViews`)
- * с явными квалификаторами `main.<таблица>` / `temp.layer_chain`. Состав
- * столбцов берётся из `PRAGMA table_info`, так что представления не могут
- * рассинхронизироваться со схемой.
+ * **Контекст основы — без снапшота.** Если в цепочке только основа (самый
+ * частый случай: работа на «степной» базе, массовые импорты), конкурирующих
+ * версий нет, и представление читает живую таблицу напрямую с предикатом
+ * `t.layer_id = <основа>` (`ensureLayerViews`). Это не только корректно, но и
+ * снимает стоимость снапшота там, где он не нужен: запись в основу не требует
+ * пересборки, а bulk-сценарии не платят сигнальную проверку на каждом чтении.
+ * Смена режима (выбор слоя) пересоздаёт представления.
+ *
+ * Чем это снимает исходную проблему. Раньше `<таблица>_v` содержала анти-джойн
+ * «нет более близкой версии» и вычисляла его при каждом обращении — включая
+ * коррелированные проверки концов связи, — то есть O(строк × версий) на запрос
+ * (исследование 603a8bcb). Теперь разрешение выполняется один раз при сборке
+ * снапшота, а чтения идут по снапшоту.
+ *
+ * Контракт `rowid` (на него джойнятся FTS-индексы, §9): снапшот хранит
+ * физический `rowid` победившей строки, а представление экспонирует
+ * `t.rowid AS rowid` — то есть ровно тот же `rowid`, что и до снапшота
+ * (`comments_v.rowid = fts_thought_texts.rowid` продолжает работать, в т.ч.
+ * при перекрытии записи тенью слоя). Джойн снапшота проверяет и `rowid`, и
+ * логический `id` — см. {@link ensureLayerViews}.
+ *
+ * Актуальность снапшота. Снапшот пересобирается (а) при установке контекста
+ * слоя (`setupLayerContext`) и (б) перед чтением, если изменился сигнал
+ * соединения — число изменённых строк (`total_changes()`) плюс
+ * `PRAGMA data_version` (ловят и свои записи, и коммиты других соединений).
+ * Сигнальная проверка живёт в {@link NetworkDb.prepare} на пути чтения; запись
+ * отдельной точки инвалидации не требует — см. комментарий там же.
+ *
+ * Почему temp, а не объекты в схеме `data.db`: (1) SQLite запрещает
+ * представлению из `main` ссылаться на объекты `temp` («view … cannot
+ * reference objects in database temp»), а контекст обязан быть per-connection —
+ * пул держит по соединению на пару (сеть, слой), и цепочки у них разные;
+ * (2) служебная глобальная live-таблица видимости отклонена ADR 6582c287.
+ * Поэтому и `layer_chain`, и снапшот, и представления создаются на каждом
+ * соединении. Состав столбцов берётся из `PRAGMA table_info`, так что
+ * представления не могут рассинхронизироваться со схемой.
  *
  * Репозитории читают только из `*_v` (линт-тест layers-s3 это требует);
  * запись идёт в физические таблицы с материализацией теневых строк/надгробий
- * текущего слоя (S4, db/layer-write.ts) — представления её немедленно видят.
+ * текущего слоя (S4, db/layer-write.ts) — снапшот обновится на ближайшем
+ * чтении по сигналу соединения.
  */
 
 import type Database from 'better-sqlite3';
+
+import { BASE_LAYER_ID } from '@etn/shared';
 
 /**
  * Ветвимые таблицы (закрытый список, docs/13-layers.md §3 — расширение только
@@ -56,54 +92,112 @@ export function layerViewName(table: string): string {
   return `${table}_v`;
 }
 
+/** Имя temp-снапшота видимости ветвимой таблицы. */
+export function layerSnapshotName(table: string): string {
+  return `${table}_snap`;
+}
+
 /** Guard against corrupt parent cycles: цепочка не длиннее 5 уровней (§2.1). */
 const MAX_CHAIN_DEPTH = 16;
 
 /**
- * Предикат видимости конца связи: мысль `t.<col>` разрешается по той же
- * цепочке (§4.1) и обязана быть живой. Связь, у которой хотя бы один конец
- * скрыт надгробием в цепочке текущего слоя, невидима — иначе чтения начнут
- * отдавать висячие рёбра (13-layers.md §5.2: каскад удаления мысли ставит
- * надгробия её связям, но конец может быть скрыт и независимо от связи).
- * Формулировка — тот же анти-джойн «нет более близкой строки того же id»,
- * что и у самих представлений.
+ * `SELECT` набора строк-победителей ветвимой таблицы: живая ближайшая версия
+ * каждого логического `id` по цепочке соединения (результат: `src_rowid`, `id`).
+ * Один и тот же отбор питает снапшот {@link rebuildLayerSnapshot} и (исторически)
+ * был телом представления — поэтому правило «ближайший слой» остаётся ровно в
+ * одном месте.
  */
-function endpointVisiblePredicate(col: string): string {
+function winnerRowSelect(table: string): string {
+  return `
+    SELECT t.rowid AS src_rowid, t.id AS id
+    FROM main.${table} t
+    JOIN temp.layer_chain lc ON lc.layer_id = t.layer_id
+    WHERE t.deleted = 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM main.${table} t2
+        JOIN temp.layer_chain lc2 ON lc2.layer_id = t2.layer_id
+        WHERE t2.id = t.id AND lc2.depth < lc.depth
+      )`;
+}
+
+/**
+ * Предикат видимости конца связи: логическая мысль `t.<col>` обязана иметь
+ * живую строку-победителя в контексте слоя. Связь, у которой хотя бы один
+ * конец скрыт надгробием в цепочке текущего слоя, невидима — иначе чтения
+ * начнут отдавать висячие рёбра (13-layers.md §5.2: каскад удаления мысли
+ * ставит надгробия её связям, но конец может быть скрыт и независимо от
+ * связи).
+ *
+ * В режиме снапшота проверка идёт по снапшоту мыслей (только живые
+ * победители — один поиск по индексу `id`); в режиме основы (см.
+ * {@link ensureLayerViews}) — по физической строке основы, потому что в
+ * цепочке нет ни одного слоя поверх неё.
+ */
+function endpointVisiblePredicate(col: string, suffix: number, useSnapshot: boolean): string {
+  if (useSnapshot) {
+    const alias = `ts${suffix}`;
+    return `
+     AND EXISTS (
+       SELECT 1 FROM temp.${layerSnapshotName('thoughts')} ${alias}
+       WHERE ${alias}.id = t.${col}
+     )`;
+  }
   return `
      AND EXISTS (
        SELECT 1 FROM main.thoughts e
-       JOIN temp.layer_chain elc ON elc.layer_id = e.layer_id
-       WHERE e.id = t.${col} AND e.deleted = 0
-         AND NOT EXISTS (
-           SELECT 1 FROM main.thoughts e2
-           JOIN temp.layer_chain elc2 ON elc2.layer_id = e2.layer_id
-           WHERE e2.id = e.id AND elc2.depth < elc.depth
-         )
+       WHERE e.id = t.${col} AND e.layer_id = '${BASE_LAYER_ID}' AND e.deleted = 0
      )`;
 }
 
 /**
- * Создать temp-представления всех ветвимых таблиц (идемпотентно).
+ * Создать temp-снапшоты всех ветвимых таблиц (идемпотентно): таблица
+ * `(src_rowid, id)` с `UNIQUE(id)` — победитель один на логический `id`, а
+ * индекс по `id` обслуживает проверки концов связи.
+ */
+export function ensureLayerSnapshots(db: Database.Database): void {
+  for (const table of BRANCHABLE_TABLES) {
+    db.exec(
+      `CREATE TEMP TABLE IF NOT EXISTS ${layerSnapshotName(table)} (
+         src_rowid INTEGER PRIMARY KEY,
+         id        TEXT NOT NULL UNIQUE
+       )`,
+    );
+  }
+}
+
+/**
+ * Создать temp-представления всех ветвимых таблиц в нужном режиме (идемпотентно).
+ *
+ * Режимы:
+ *   * `useSnapshot = true` — цепочка содержит слои поверх основы: строка
+ *     выбирается джойном со снапшотом видимости (`s.src_rowid = t.rowid AND
+ *     s.id = t.id`), см. {@link rebuildLayerSnapshot};
+ *   * `useSnapshot = false` — контекст основы (в цепочке только она): снапшот
+ *     не нужен, представление читает живую таблицу напрямую с предикатом
+ *     `layer_id = <основа>`. Это и корректно (в цепочке нет конкурирующих
+ *     версий), и снимает со «степной» основы стоимость снапшота: запись в
+ *     основу не требует пересборки, а bulk-сценарии (10k мыслей) не платят за
+ *     сигнальную проверку вообще.
+ *
+ * Представления пересоздаются при смене режима (смена слоя меняет и форму
+ * представления), поэтому `DROP VIEW` + `CREATE VIEW`, а не `IF NOT EXISTS`.
  *
  * Столбцы каждого представления повторяют физические плюс `rowid` (rowid
- * физической строки — на него джойнятся FTS-индексы:
- * `comments_v.rowid = fts_thought_texts.rowid`), кроме `deleted` (после
- * фильтра она всегда 0). Победившая строка перекрытого id — другая
- * физическая строка, чем в основе, и её rowid совпадает с FTS-строкой
- * записи этого слоя (§9).
+ * физической строки — на него джойнятся FTS-индексы: `comments_v.rowid =
+ * fts_thought_texts.rowid`), кроме `deleted` (после фильтра она всегда 0).
+ * Строка берётся из живой таблицы (`t`), поэтому значения всегда актуальны;
+ * снапшот отвечает только за состав видимых строк.
  *
- * Правило «ближайший слой» выражено `NOT EXISTS` строки того же id из более
- * близкого слоя цепочки, а не оконной `ROW_NUMBER()` из §4.2: при
- * `UNIQUE (id, layer_id)` обе формулировки эквивалентны (на логический id
- * максимум одна строка на слой, победитель — минимальная глубина), но
- * оконная функция не даёт SQLite протолкнуть предикат вызова (`WHERE id = ?`)
- * к индексу физической таблицы — каждый точечный lookup превращался в
- * полный проход с сортировкой (квадрат на bulk-записи, perf-smoke). NOT
- * EXISTS проталкивается: точечный lookup остаётся поиском по индексу.
- * Надгробия учитываются перекрытием как в §4.1: ближнее надгробие скрывает
- * дальнюю строку тем, что для неё EXISTS более близкая версия.
+ * Джойн снапшота проверяет и `rowid`, и логический `id`: это страховка
+ * целостности «снапшот ↔ живая строка» и одновременно условие плана — без
+ * ссылки на `id` запрос со связанным предикатом (`WHERE l.target_id = t.id`)
+ * целиком покрывался бы индексом `idx_links_source_live`, и планировщик
+ * предпочитал бы его полный скан поиску по `idx_links_target_live` — возврат
+ * O(мысли × рёбра) (проверено на perf-стенде). В режиме основы тот же эффект
+ * даёт константный предикат `t.layer_id = <основа>`.
  */
-export function ensureLayerViews(db: Database.Database): void {
+export function ensureLayerViews(db: Database.Database, useSnapshot: boolean): void {
   for (const table of BRANCHABLE_TABLES) {
     const info = db.pragma(`table_info(${table})`) as Array<{ name: string }>;
     if (info.length === 0) {
@@ -115,25 +209,49 @@ export function ensureLayerViews(db: Database.Database): void {
       .map((name) => `t.${name}`)
       .join(', ');
     // Связи дополнительно фильтруются по видимости концов (см. выше).
-    const endpoints = table === 'links' ? `${endpointVisiblePredicate('source_id')}${endpointVisiblePredicate('target_id')}` : '';
+    const endpoints =
+      table === 'links'
+        ? `${endpointVisiblePredicate('source_id', 1, useSnapshot)}${endpointVisiblePredicate('target_id', 2, useSnapshot)}`
+        : '';
+    const source = useSnapshot
+      ? `main.${table} t
+       JOIN temp.${layerSnapshotName(table)} s
+         ON s.src_rowid = t.rowid AND s.id = t.id
+       WHERE t.deleted = 0${endpoints}`
+      : `main.${table} t
+       WHERE t.deleted = 0 AND t.layer_id = '${BASE_LAYER_ID}'${endpoints}`;
     db.exec(
-      `CREATE TEMP VIEW IF NOT EXISTS ${layerViewName(table)} AS
+      `DROP VIEW IF EXISTS temp.${layerViewName(table)};
+       CREATE TEMP VIEW ${layerViewName(table)} AS
        SELECT ${cols}, t.rowid AS rowid
-       FROM main.${table} t
-       JOIN temp.layer_chain lc ON lc.layer_id = t.layer_id
-       WHERE t.deleted = 0${endpoints}
-         AND NOT EXISTS (
-           SELECT 1
-           FROM main.${table} t2
-           JOIN temp.layer_chain lc2 ON lc2.layer_id = t2.layer_id
-           WHERE t2.id = t.id AND lc2.depth < lc.depth
-         )`,
+       FROM ${source}`,
     );
   }
 }
 
 /**
- * (Пере)заполнить `layer_chain` цепочкой предков `layerId` до основы.
+ * Пересобрать снапшот видимости: по одному проходу на ветвимую таблицу
+ * (см. {@link winnerRowSelect}). Вызывается при установке контекста слоя и по
+ * сигналу соединения перед чтением (ADR 6582c287: инвалидация при смене слоя
+ * и при изменении версий слоя в рамках соединения).
+ *
+ * Идёт через `db.exec` (не через `NetworkDb.prepare`) — снапшот обслуживает
+ * сам себя и не должен попадать под сигнальную проверку пути чтения.
+ */
+export function rebuildLayerSnapshot(db: Database.Database): void {
+  for (const table of BRANCHABLE_TABLES) {
+    db.exec(
+      `DELETE FROM temp.${layerSnapshotName(table)};
+       INSERT INTO temp.${layerSnapshotName(table)} (src_rowid, id)
+       ${winnerRowSelect(table)}`,
+    );
+  }
+}
+
+/**
+ * (Пере)заполнить `layer_chain` цепочкой предков `layerId` до основы и вернуть
+ * её (от текущего слоя к основе), чтобы вызывающий мог понять, изменилась ли
+ * цепочка.
  *
  * Таблица создаётся при первом вызове и очищается перед заполнением, так что
  * повторный вызов атомарно меняет контекст слоя соединения.
@@ -141,7 +259,7 @@ export function ensureLayerViews(db: Database.Database): void {
  * @throws Error если слоя с таким id нет в сети (в том числе когда миграции
  *   ещё не создали `layers`) или цепочка циклична.
  */
-export function setupLayerChain(db: Database.Database, layerId: string): void {
+export function setupLayerChain(db: Database.Database, layerId: string): string[] {
   db.exec(
     `CREATE TEMP TABLE IF NOT EXISTS layer_chain (
        layer_id TEXT PRIMARY KEY,
@@ -155,6 +273,7 @@ export function setupLayerChain(db: Database.Database, layerId: string): void {
 
   let current: string | null = layerId;
   let depth = 0;
+  const chain: string[] = [];
   const seen = new Set<string>();
   while (current !== null) {
     if (depth > MAX_CHAIN_DEPTH || seen.has(current)) {
@@ -166,17 +285,55 @@ export function setupLayerChain(db: Database.Database, layerId: string): void {
       throw new Error(`layer ${current} not found in layers`);
     }
     insert.run(row.id, depth);
+    chain.push(row.id);
     current = row.parent_id;
     depth += 1;
   }
+  return chain;
+}
+
+/** Установленный контекст слоя соединения. */
+export interface LayerContext {
+  /** Подпись контекста (режим + цепочка) — для пропуска повторной установки. */
+  readonly key: string;
+  /** Цепочка предков от текущего слоя к основе. */
+  readonly chain: readonly string[];
+  /** Чтения идут по снапшоту видимости (в цепочке есть слои поверх основы). */
+  readonly usesSnapshot: boolean;
+  /** Снапшот пересобран этим вызовом. */
+  readonly rebuilt: boolean;
 }
 
 /**
- * Полная установка контекста слоя на соединении: temp-представления (один
- * раз) + цепочка предков `layerId`. Вызывается при открытии соединения
- * (`NetworkDb`) и при смене контекста (`useLayer`).
+ * Полная установка контекста слоя на соединении: цепочка предков `layerId`,
+ * представления и (при необходимости) снапшот видимости. Вызывается при
+ * открытии соединения (`NetworkDb`) и при смене контекста (`useLayer`).
+ *
+ * `knownKey` — подпись уже установленного контекста. Если она совпала
+ * (например, reader-воркер переустанавливает тот же слой на каждой задаче),
+ * ничего не пересобирается: свежесть данных сторожит сигнал соединения на
+ * пути чтения (`NetworkDb.prepare`), который и пересоберёт снапшот, если
+ * коммит другого соединения или своя запись того потребуют. Смена слоя,
+ * перевешивание слоя или переход «основа ↔ слой» меняют подпись — контекст
+ * переустанавливается безусловно.
  */
-export function setupLayerContext(db: Database.Database, layerId: string): void {
-  setupLayerChain(db, layerId);
-  ensureLayerViews(db);
+export function setupLayerContext(
+  db: Database.Database,
+  layerId: string,
+  knownKey?: string,
+): LayerContext {
+  const chain = setupLayerChain(db, layerId);
+  const usesSnapshot = chain.length > 1;
+  const key = `${usesSnapshot ? 'snapshot' : 'base'}\u0000${chain.join('>')}`;
+  if (key === knownKey) {
+    return { key, chain, usesSnapshot, rebuilt: false };
+  }
+  if (usesSnapshot) {
+    ensureLayerSnapshots(db);
+  }
+  ensureLayerViews(db, usesSnapshot);
+  if (usesSnapshot) {
+    rebuildLayerSnapshot(db);
+  }
+  return { key, chain, usesSnapshot, rebuilt: true };
 }
