@@ -72,6 +72,7 @@ import type {
   TypeOwnerType,
 } from '@etn/shared';
 import { t } from '../lib/i18n.js';
+import { menuAction, type MenuItem } from '../lib/menu.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import { typeNameKey, EtnError } from '@etn/shared';
 
@@ -485,6 +486,34 @@ export function showThoughtTypesDialog(): void {
   // отступ, флажок-колонки и клавиатура — его; экран задаёт данные, визуал
   // типа и действия строки. Строки — из словаря локализации.
   let currentItems: TypeTreeItem[] = [];
+
+  /** Пункты контекстного меню строки дерева типов (правило 8 требования
+   *  11ddd910): «Изменить», «Копировать», «Удалить» (кроме корня) и
+   *  «Развернуть/Свернуть» у ветви. Строятся из общего словаря `lib/menu.ts`. */
+  function rowMenuItems(item: TypeTreeItem): MenuItem[] {
+    const items: MenuItem[] = [
+      menuAction(t('listActions.edit'), () => showThoughtTypeEditor(item.type, onChanged)),
+      menuAction(t('listActions.copy'), () => {
+        tree.setCurrentId(item.id);
+        tree.copyCurrent();
+      }),
+    ];
+    if (!item.type.is_root) {
+      items.push(
+        menuAction(t('actions.delete'), () => void removeRow(item.type), { danger: true }),
+      );
+    }
+    if (item.hasChildren ?? false) {
+      const open = tree.isExpanded(item.id);
+      items.push(
+        menuAction(open ? t('listActions.collapse') : t('listActions.expand'), () => {
+          tree.setExpanded(item.id, !open);
+        }),
+      );
+    }
+    return items;
+  }
+
   const tree = createTree<TypeTreeItem>({
     items: () => currentItems,
     ariaLabel: t('thoughtTypes.title'),
@@ -506,6 +535,9 @@ export function showThoughtTypesDialog(): void {
       [item.type.name, item.type.description ?? '', String(currentAggregated[item.id] ?? 0)].join(
         '\t',
       ),
+    // Правило 8 требования 11ddd910: команды над строкой доступны из её
+    // контекстного меню (построчного крестика удаления в строке больше нет).
+    rowMenu: (item) => rowMenuItems(item),
     columns: [
       {
         key: 'comment',
@@ -521,24 +553,6 @@ export function showThoughtTypesDialog(): void {
         width: '6rem',
         align: 'end',
         render: (item) => String(currentAggregated[item.id] ?? 0),
-      },
-      {
-        key: 'actions',
-        render: (item) => {
-          const box = span('', 'type-row-actions');
-          if (!item.type.is_root) {
-            box.append(
-              uiButton({
-                label: '✕',
-                role: 'secondary',
-                size: 's',
-                title: t('thoughtTypes.delete'),
-                onClick: () => void removeRow(item.type),
-              }),
-            );
-          }
-          return box;
-        },
       },
     ],
     renderContent: (item) => {

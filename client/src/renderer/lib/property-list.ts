@@ -616,11 +616,16 @@ export function buildPropertyList(opts: {
   }
 
   /** Контекстное меню строки из общего словаря пунктов (`lib/menu.ts`):
-   *  «Изменить» всем неструктурным, «Удалить» — только менеджеру. */
+   *  «Изменить» и «Копировать» всем неструктурным, «Удалить» — только
+   *  менеджеру (правило 8 требования 11ddd910). */
   function rowMenu(row: PropertyListRow): MenuItem[] {
     if (row.structural) return [];
     const items: MenuItem[] = [
       menuAction(t('propertyList.menu.edit'), () => callbacks.onEdit(row)),
+      menuAction(t('listActions.copy'), () => {
+        table.setCurrent(row.id);
+        copyCurrent();
+      }),
     ];
     if (mode === 'manager' && callbacks.onDelete !== undefined) {
       items.push(

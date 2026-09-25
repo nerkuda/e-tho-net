@@ -331,4 +331,29 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     rowById(host, 'b').click();
     assert.deepEqual(activated, ['b']);
   });
+
+  it('контекстное меню строки делает её текущей и строится из rowMenu (правило 8)', async () => {
+    const T = await treeModule();
+    const M = await import('../src/renderer/lib/menu.js');
+    const win = (globalThis as any).window;
+    win.innerWidth = 1200;
+    win.innerHeight = 800;
+    const host = new ShimElement('div');
+    const asked: string[] = [];
+    const tree = T.createTree<Item>({
+      items: ITEMS,
+      expandedIds: ['root', 'a'],
+      renderContent: () => textNode('x'),
+      rowMenu: (item) => {
+        asked.push(item.id);
+        return [M.menuAction('Изменить', () => undefined)];
+      },
+    });
+    host.append(tree.root as unknown as ShimElement);
+    const row = rowById(host, 'b');
+    row.emit('contextmenu', { preventDefault: () => undefined, clientX: 10, clientY: 10 });
+    assert.deepEqual(asked, ['b'], 'меню запрошено для строки под курсором');
+    assert.equal(tree.getCurrentId(), 'b', 'строка под курсором стала текущей');
+    M.closeMenu();
+  });
 });

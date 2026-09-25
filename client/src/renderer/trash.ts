@@ -21,6 +21,7 @@ import {
   type TrashListResult,
 } from '@etn/shared';
 import { t } from './lib/i18n.js';
+import { menuAction, type MenuItem } from './lib/menu.js';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
@@ -42,11 +43,10 @@ import { refreshSelectionPanel } from './selection/selection.js';
 import { patchFocusEdge, store } from './state.js';
 import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
 import { div, el, setTooltip, span } from './lib/dom.js';
-import { svgIcon } from './lib/icons.js';
 import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
-import { iconButton, uiButton } from './lib/ui/button.js';
+import { uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
 import { fieldInput } from './lib/ui/field.js';
 import { createTable } from './lib/ui/table.js';
@@ -751,41 +751,6 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   searchInput.placeholder = t('actions.search');
   searchRow.append(searchInput);
 
-  /** Кнопка-иконка действия строки — как в остальном UI: svg + тултип. */
-  const actionButton = (
-    icon: 'undo' | 'trash',
-    label: string,
-    danger: boolean,
-    onClick: () => void,
-  ): HTMLButtonElement => {
-    return iconButton({
-      icon: svgIcon(icon, 15),
-      title: label,
-      class: danger ? 'trash-act trash-act-danger' : 'trash-act',
-      onClick,
-    });
-  };
-
-  /** Колонка действий строки: «Восстановить» всегда, «Удалить» — по блокировке. */
-  const buildActions = (
-    blocked: boolean,
-    reason: string,
-    onRestore: () => Promise<void>,
-    onDelete: () => Promise<void>,
-  ): HTMLElement => {
-    const cell = div('trash-actions');
-    cell.append(actionButton('undo', t('trash.action.restore'), false, () => void onRestore()));
-    const delBtn = actionButton(
-      'trash',
-      blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : t('actions.deleteForever'),
-      true,
-      () => void onDelete(),
-    );
-    delBtn.disabled = blocked;
-    cell.append(delBtn);
-    return cell;
-  };
-
   /** Ячейка «что в корзине»: подпись строки и метка блокировки (§5a.4). */
   const buildItemCell = (row: TrashDialogRow): HTMLElement => {
     const item = div('trash-item');
@@ -799,6 +764,19 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     setTooltip(item, row.label);
     return item;
   };
+
+  /** Пункты контекстного меню строки корзины (правило 8 требования 11ddd910):
+   *  «Вернуть из корзины» и «Удалить совсем»; у заблокированной строки
+   *  удаление погашено. Словарь подписей — `lib/i18n.ts`. */
+  function trashRowMenu(row: TrashDialogRow): MenuItem[] {
+    return [
+      menuAction(t('actions.restore'), () => void row.onRestore()),
+      menuAction(t('actions.deleteForever'), () => void row.onDelete(), {
+        danger: true,
+        disabled: row.blocked,
+      }),
+    ];
+  }
 
   // Единая таблица корзины (задача ae76b75e, требование 93115633): текущая
   // строка, клавиатура, копирование; строки — из словаря локализации.
@@ -821,13 +799,6 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         text: (row) => referencesText(row.count),
         render: (row) => span(referencesText(row.count), 'trash-count'),
       },
-      {
-        key: 'actions',
-        header: t('trash.col.actions'),
-        width: '120px',
-        text: () => '',
-        render: (row) => buildActions(row.blocked, row.reason, row.onRestore, row.onDelete),
-      },
     ],
     rows: [],
     rowKey: (row) => row.id,
@@ -835,6 +806,9 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     emptyHint: t('trash.emptyHint'),
     onCurrentChange: () => updateButtons(),
     onDblActivate: (row) => openRowInEditor(row),
+    // Правило 8 требования 11ddd910: команды над строкой — в её контекстном
+    // меню (построчных крестиков «Восстановить»/«Удалить» в строках нет).
+    rowMenu: (row) => trashRowMenu(row),
   });
   listHost.append(table.element);
 

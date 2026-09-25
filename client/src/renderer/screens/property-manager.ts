@@ -79,6 +79,7 @@ import type {
   PropertyValueType,
 } from '@etn/shared';
 import { t } from '../lib/i18n.js';
+import { menuAction, type MenuItem } from '../lib/menu.js';
 
 import { requireNetworkId } from '../app.js';
 import {
@@ -2571,6 +2572,33 @@ export function showLinkTypesTreeDialog(): void {
     },
     // Кнопка «Копировать» и Ctrl+C: пара имён сторон текущего типа связи.
     copyText: (item) => `${item.type.name_forward} / ${item.type.name_reverse}`,
+    // Правило 8 требования 11ddd910: команды над строкой — в её контекстном
+    // меню. Удаления в этом диалоге нет (путь лежит через список «Свойства»,
+    // требование 09f692ff).
+    rowMenu: (item) => {
+      const items: MenuItem[] = [];
+      const prop = item.prop;
+      if (prop !== undefined) {
+        items.push(
+          menuAction(t('listActions.edit'), () => openPropertyManagerEditor(prop, onChanged)),
+        );
+      }
+      items.push(
+        menuAction(t('listActions.copy'), () => {
+          tree.setCurrentId(item.id);
+          tree.copyCurrent();
+        }),
+      );
+      if (item.hasChildren ?? false) {
+        const open = tree.isExpanded(item.id);
+        items.push(
+          menuAction(open ? t('listActions.collapse') : t('listActions.expand'), () => {
+            tree.setExpanded(item.id, !open);
+          }),
+        );
+      }
+      return items;
+    },
     columns: [
       {
         key: 'connected',

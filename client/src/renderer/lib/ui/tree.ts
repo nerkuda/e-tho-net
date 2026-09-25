@@ -53,6 +53,7 @@
 
 import { div, el, span } from '../dom.js';
 import { t } from '../i18n.js';
+import { showMenuAt, type MenuItem } from '../menu.js';
 import { badge } from './badge.js';
 import { choiceControl } from './choice-row.js';
 import { emptyState, type StateAction } from './empty-state.js';
@@ -176,6 +177,13 @@ export interface TreeOptions<T extends TreeItem> {
   onCurrentChange?: (id: string | null) => void;
   /** Текст текущей строки для копирования; не задан — копирования нет. */
   copyText?: (item: T) => string;
+  /**
+   * Пункты контекстного меню строки (общий словарь `../menu.ts`). Каждая
+   * строка списка-диалога получает меню действий над собой (требование
+   * 11ddd910, правило 8): «Изменить», «Удалить», «Копировать», «Развернуть/
+   * Свернуть» — в зависимости от допустимости. Пусто — меню не показывается.
+   */
+  rowMenu?: (item: T) => MenuItem[];
   /** Запись в буфер обмена; по умолчанию `navigator.clipboard.writeText`. */
   clipboard?: (text: string) => void;
   /** Вызывается после формирования текста копирования (для тестов/логов). */
@@ -636,6 +644,21 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     // обычными кликами, редактор поверх — дополнительным событием.
     row.addEventListener('dblclick', () => {
       options.onDblActivate?.(item);
+    });
+    // Контекстное меню строки (правило 8 требования 11ddd910): строка сначала
+    // становится текущей, затем показывается её меню — команды действуют на ту
+    // строку, из которой меню вызвано.
+    row.addEventListener('contextmenu', (event) => {
+      const items = options.rowMenu?.(item) ?? [];
+      if (items.length === 0) return;
+      event.preventDefault();
+      if (currentId !== item.id) {
+        currentId = item.id;
+        paintCurrent();
+        notifyCurrent();
+      }
+      const mouse = event as MouseEvent;
+      showMenuAt(mouse.clientX ?? 0, mouse.clientY ?? 0, items);
     });
 
     return row;

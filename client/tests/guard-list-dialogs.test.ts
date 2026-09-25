@@ -268,6 +268,65 @@ describe('guard: единые правила диалогов-списков (11
     );
   });
 
+  it('R8: команды над строкой — в контекстном меню строки, без построчных крестиков', () => {
+    // Каркас дерева умеет контекстное меню строки (правило 8 требования).
+    const treeSrc = source('lib/ui/tree.ts');
+    assert.ok(treeSrc.includes('rowMenu'), 'lib/ui/tree: нет пунктов меню строки (rowMenu)');
+    assert.ok(
+      treeSrc.includes("addEventListener('contextmenu'"),
+      'lib/ui/tree: строки без контекстного меню',
+    );
+
+    // «Типы мыслей»: построчная колонка действий с крестиком удалена, меню есть.
+    const tt = thoughtTypesDialog();
+    assert.ok(!tt.includes('type-row-actions'), 'Типы мыслей: в строке остался крестик удаления');
+    assert.ok(!/label:\s*'✕'/.test(tt), 'Типы мыслей: построчная кнопка удаления в строке');
+    assert.ok(tt.includes('rowMenu:'), 'Типы мыслей: строки без контекстного меню');
+    assert.ok(tt.includes("t('listActions.copy')"), 'Типы мыслей: в меню строки нет «Копировать»');
+
+    // «Типы связей»: меню строки есть; удаления в диалоге нет (требование 09f692ff).
+    const lt = linkTypesDialog();
+    assert.ok(lt.includes('rowMenu:'), 'Типы связей: строки без контекстного меню');
+
+    // Корзина: колонка действий удалена, меню строки есть.
+    const trash = trashDialog();
+    assert.ok(!trash.includes('trash-actions'), 'Корзина: в строке остались построчные кнопки');
+    assert.ok(!trash.includes('buildActions'), 'Корзина: построчная колонка действий не удалена');
+    assert.ok(trash.includes('rowMenu:'), 'Корзина: строки без контекстного меню');
+
+    // Список «Свойства»: меню строки с «Копировать».
+    const pl = propertyList();
+    assert.ok(pl.includes('rowMenu:'), 'Свойства: строки без контекстного меню');
+    assert.ok(pl.includes("t('listActions.copy')"), 'Свойства: в меню строки нет «Копировать»');
+  });
+
+  it('R9: размер диалога-списка задан ролью и стабилен (fixedHeight)', () => {
+    for (const [name, src] of [
+      ['Типы мыслей', thoughtTypesDialog()],
+      ['Типы связей', linkTypesDialog()],
+      ['Свойства', propertyList()],
+      ['Корзина', trashDialog()],
+      ['Сохранённые отборы', savedFilterDialog()],
+    ] as const) {
+      assert.ok(
+        src.includes("list-dialog-body"),
+        `${name}: тело диалога-списка без раскладки .list-dialog-body`,
+      );
+    }
+    const css = source('styles/dialogs.css');
+    assert.match(css, /\.list-dialog-body\s*\{[^}]*display:\s*flex/s, 'нет раскладки .list-dialog-body');
+    assert.match(
+      css,
+      /\.list-dialog-body\s*\{[^}]*gap:\s*var\(--space-\d\)/s,
+      'нет отступов между шапкой и списком (правило 8)',
+    );
+    assert.match(
+      css,
+      /\.list-dialog-body\s+\.admin-table-wrap[^{]*\{[^}]*flex:\s*1 1 auto/s,
+      'область списка не тянется на высоту тела (правило 9)',
+    );
+  });
+
   it('правило о плейсхолдере краснеет на умышленной копии', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-list-dialogs-'));
     try {
