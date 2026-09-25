@@ -36,6 +36,7 @@ import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '.
 import { runMigrations } from './migrator.js';
 import { setupLayerContext } from './layer-chain.js';
 import { propertyValueId } from './property-value-id.js';
+import { applyConnectionPragmas } from './pragmas.js';
 
 /**
  * Process-wide registry of opened network databases, keyed by
@@ -159,9 +160,33 @@ export class NetworkDb {
     }
   }
 
-  /** Close the underlying connection. Idempotent. */
+  /**
+   * Выполнить `PRAGMA optimize` перед закрытием соединения (требование
+   * 1119cbec, ADR 0fac2771): SQLite сам решает, для каких изменившихся таблиц
+   * обновить статистику. С SQLite 3.46+ объём анализа ограничивается
+   * автоматически (`analysis_limit` не нужен).
+   *
+   * Вынесено отдельным методом — точка наблюдаемости в тесте жизненного цикла
+   * соединения (`NetworkDb.close` обязан вызвать её ровно один раз).
+   */
+  protected optimizeStatisticsBeforeClose(): void {
+    this.db.pragma('optimize');
+  }
+
+  /**
+   * Close the underlying connection. Idempotent.
+   *
+   * Перед `close` вызывается {@link optimizeStatisticsBeforeClose}. Ошибку
+   * оптимизации проглатываем: закрытие соединения не должно падать из-за
+   * вспомогательной статистики.
+   */
   close(): void {
     if (this.closed) return;
+    try {
+      this.optimizeStatisticsBeforeClose();
+    } catch {
+      // Статистика — вспомогательная; закрытие важнее.
+    }
     this.db.close();
     this.closed = true;
   }
@@ -300,9 +325,22 @@ export function openNetworkDb(
   const db = new DatabaseConstructor(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // Единый профиль прагм соединения сети (ADR ff2ee606, требование bc312576):
+  // кэш, mmap, temp_store, synchronous, busy_timeout — в одной точке открытия.
+  applyConnectionPragmas(db);
   registerMigrationHelpers(db, { firstUserId: readFirstUserId(dataDir) });
 
-  runMigrations(db, networkMigrationsDir(), log);
+  const migrationResult = runMigrations(db, networkMigrationsDir(), log);
+
+  // Статистика планировщика — в конце применения миграций сети (требование
+  // 239be851, ADR 0fac2771): без неё планировщик строит O(мысли × рёбра) план
+  // (исследование 603a8bcb). Запускаем только когда миграции реально меняли
+  // схему/данные — на «степном» открытии статистика уже собрана, а полный
+  // ANALYZE на каждом старте не нужен. Любая правка схемы/индексов обязана
+  // заканчиваться ANALYZE, поэтому изменение гарантирует его выполнение.
+  if (migrationResult.applied.length > 0) {
+    db.exec('ANALYZE');
+  }
 
   // Object locks are session-only state — захваты не переживают рестарт
   // сервера (задача 2031df5e, требование 9ac48831 «сброс захватов — старт»).
@@ -393,7 +431,12 @@ export function closeAll(): void {
 export function createInMemoryNetworkDb(layerId: string = BASE_LAYER_ID): NetworkDb {
   const db = new DatabaseConstructor(':memory:');
   db.pragma('foreign_keys = ON');
+  applyConnectionPragmas(db);
   registerMigrationHelpers(db);
-  runMigrations(db, networkMigrationsDir());
+  const migrationResult = runMigrations(db, networkMigrationsDir());
+  // Тот же контракт, что и у файлового открытия: миграции оставили статистику.
+  if (migrationResult.applied.length > 0) {
+    db.exec('ANALYZE');
+  }
   return new NetworkDb(db, 'in-memory', ':memory:', layerId);
 }

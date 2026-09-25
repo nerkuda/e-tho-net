@@ -52,7 +52,11 @@ const MIGRATION = '043_type_properties_canonical_unique.sql';
  *  (cross_network_ref, задача 7849008a). pre043Db оставляет «после 042» в
  *  состоянии «до 043», и тесты должны явно забывать и 043, и всех его
  *  последователей, чтобы прогон `runMigrations` не натыкался на 044. */
-const MIGRATIONS_AFTER_043: readonly string[] = [MIGRATION, '044_cross_network_ref.sql'];
+const MIGRATIONS_AFTER_043: readonly string[] = [
+  MIGRATION,
+  '044_cross_network_ref.sql',
+  '045_links_covering_indexes.sql',
+];
 
 /** Забыть регистрацию MIGRATIONS_AFTER_043 — чтобы `runMigrations` применил
  *  их заново, как если бы тест шёл от состояния «после 042». */
