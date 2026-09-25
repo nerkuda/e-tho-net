@@ -64,6 +64,7 @@ import {
   shortenCompoundName,
   sortRefsByTitle,
   ZONE_ANCHOR_BY_DIR,
+  zoneContentWidth,
 } from '../lib/pure.js';
 import {
   createZonePaging,
@@ -1698,18 +1699,27 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   endRow = Math.min(rows, endRow + OVERSCAN_ROWS);
 
   spacer.style.height = `${prefix[rows]!}px`;
-  // Anchor the whole grid inside the zone's content box (task f45ffc8a): the
-  // zones pull towards the focus row (parents/siblings — bottom edge, children
-  // — top edge), so the clouds read as one cluster instead of scattered
-  // corners. The offset moves ONLY the grid's origin: the row-major order,
-  // gaps, virtualization window and (hence) all hit-testing/index math stay
-  // exactly as before. The grid width is the columns' width plus the inner
-  // gaps; the content height excludes the trailing gap the spacer carries.
-  const gridWidth = cols * geom.width + (cols - 1) * geom.gap;
+  // Anchor the grid inside the zone's content box (task f45ffc8a): the zones
+  // pull towards the focus row (parents/siblings — bottom edge, children — top
+  // edge), so the clouds read as one cluster instead of scattered corners. The
+  // offset moves ONLY the grid's origin: the row-major order, gaps,
+  // virtualization window and (hence) all hit-testing/index math stay exactly
+  // as before.
+  //
+  // The anchor container is the zone's content box; the CONTENT width is the
+  // widest ROW of clouds, not the grid BOX. `gridTemplateColumns` pins all
+  // `cols` columns, so a row with fewer clouds leaves the trailing columns
+  // EMPTY and the box still spans almost the whole zone — anchoring by the box
+  // made `(avail − content) ≈ 0`, so the horizontal offset vanished and the
+  // children zone's single partial row stayed left instead of centring
+  // (приёмочный дефект f45ffc8a). Row-major fill means only the LAST row can
+  // be partial, and only when `entries.length < cols` is the grid a single
+  // partial row; otherwise the widest row holds all `cols` clouds.
+  const contentWidth = zoneContentWidth(cols, entries.length, geom.width, geom.gap);
   const contentHeight = Math.max(0, prefix[rows]! - geom.gap);
   const origin = anchorOffset(
     { width: gridInfo.avail, height: Math.max(0, zone.clientHeight - 2 * ZONE_PADDING_PX) },
-    { width: gridWidth, height: contentHeight },
+    { width: contentWidth, height: contentHeight },
     ZONE_ANCHOR_BY_DIR[dir],
   );
   grid.style.transform = `translate(${origin.x}px, ${origin.y + prefix[startRow]!}px)`;

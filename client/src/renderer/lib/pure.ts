@@ -205,6 +205,27 @@ export const ZONE_ANCHOR_BY_DIR: Record<'parents' | 'siblings' | 'children', Zon
 };
 
 /**
+ * Width of a zone grid's VISIBLE content: the widest row of clouds. The grid
+ * box cannot be used — `gridTemplateColumns` pins all `cols` columns, so a row
+ * with fewer clouds leaves the trailing columns empty while the box still
+ * spans almost the whole zone; anchoring by the box makes the horizontal
+ * offset vanish (приёмочный дефект f45ffc8a: the children zone's single
+ * partial row stayed left instead of centring). Row-major fill means only the
+ * last row can be partial, so the widest row holds `min(cols, count)` clouds.
+ * `count ≤ 0` (defensive) yields 0.
+ */
+export function zoneContentWidth(
+  cols: number,
+  count: number,
+  cloudWidth: number,
+  gap: number,
+): number {
+  const filled = Math.max(0, Math.min(Math.max(0, cols), count));
+  if (filled === 0) return 0;
+  return filled * cloudWidth + (filled - 1) * gap;
+}
+
+/**
  * Grid origin inside its zone box: `(container − content) × anchor fractions`
  * on each axis, never negative (content larger than the container is anchored
  * to the start — the rest is reached by scrolling, never by a negative

@@ -20,6 +20,7 @@ import {
   anchorFractions,
   anchorOffset,
   ZONE_ANCHOR_BY_DIR,
+  zoneContentWidth,
   type ZoneAnchor,
 } from '../src/renderer/lib/pure.js';
 
@@ -83,6 +84,68 @@ describe('anchorOffset', () => {
     // Center: the free space is split evenly.
     const center = anchorOffset(container, content, 'center-top');
     assert.equal(center.x, (container.width - content.width) / 2);
+  });
+});
+
+describe('zoneContentWidth — the widest ROW, not the grid box (приёмочный дефект f45ffc8a)', () => {
+  const width = 210;
+  const gap = 10;
+
+  it('a full grid (count ≥ cols) spans every column', () => {
+    assert.equal(zoneContentWidth(4, 4, width, gap), 4 * width + 3 * gap);
+    assert.equal(zoneContentWidth(4, 9, width, gap), 4 * width + 3 * gap);
+  });
+
+  it('a partial single row (count < cols) spans only its own clouds', () => {
+    assert.equal(zoneContentWidth(8, 2, width, gap), 2 * width + gap);
+    assert.equal(zoneContentWidth(8, 1, width, gap), width);
+  });
+
+  it('is zero for an empty zone', () => {
+    assert.equal(zoneContentWidth(8, 0, width, gap), 0);
+  });
+});
+
+describe('horizontal anchor regression (приёмочный дефект f45ffc8a)', () => {
+  const width = 210;
+  const gap = 10;
+
+  it('children / center: a partial row is wider than empty — offsetX is positive', () => {
+    const container = { width: 1200, height: 300 };
+    const cols = 8;
+    const count = 2;
+    const content = {
+      width: zoneContentWidth(cols, count, width, gap), // 430
+      height: 70,
+    };
+    // The old bug anchored by the full grid box (8 columns ≈ 1750), so the
+    // difference was ≤ 0 and the offset collapsed to 0 — the row stayed left.
+    const origin = anchorOffset(container, content, ZONE_ANCHOR_BY_DIR.children);
+    assert.equal(origin.x, (1200 - 430) / 2);
+    assert.ok(origin.x > 0);
+    assert.equal(origin.y, 0); // top anchor unchanged
+  });
+
+  it('children / center: content exactly filling the container → offsetX = 0', () => {
+    const container = { width: 4 * width + 3 * gap, height: 200 };
+    const origin = anchorOffset(container, { ...container }, ZONE_ANCHOR_BY_DIR.children);
+    assert.equal(origin.x, 0);
+  });
+
+  it('parents / right-bottom: full shift to the right edge (symmetric to left)', () => {
+    const container = { width: 1000, height: 400 };
+    const content = { width: 400, height: 100 };
+    const right = anchorOffset(container, content, ZONE_ANCHOR_BY_DIR.parents);
+    assert.equal(right.x, 600); // full free space
+    assert.equal(right.y, 300);
+  });
+
+  it('siblings / left-bottom: no horizontal shift (rows keep the left edge)', () => {
+    const container = { width: 1000, height: 400 };
+    const content = { width: 400, height: 100 };
+    const left = anchorOffset(container, content, ZONE_ANCHOR_BY_DIR.siblings);
+    assert.equal(left.x, 0);
+    assert.equal(left.y, 300);
   });
 });
 
