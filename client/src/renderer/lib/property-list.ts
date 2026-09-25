@@ -570,10 +570,10 @@ export function buildPropertyList(opts: {
   }
 
   const wrap = div('admin-table-wrap property-list-wrap');
-  // Определённая высота обёртки — сетке нужен ограниченный по высоте
-  // контейнер, иначе вендорская виртуализация/прокрутка не работают.
-  wrap.style.height = '340px';
-  const root = div('form-stack property-list');
+  // Высоту обёртки задаёт раскладка диалога-списка (`.list-dialog-body`,
+  // правило 9 требования 11ddd910): область списка тянется на свободную
+  // высоту и не схлопывается при пустом поиске (ошибка f68bb43c).
+  const root = div('form-stack property-list list-dialog-body');
   root.append(searchRow, ...(mode === 'manager' ? [toolbar] : []), wrap);
 
   let allRows: readonly PropertyListRow[] = [];

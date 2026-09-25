@@ -368,8 +368,7 @@ export function showThoughtTypesDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '340px';
-  const body = div('form-stack');
+  const body = div('form-stack list-dialog-body');
 
   // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
   // диалога, над списком и строкой управления; плейсхолдер — из словаря.
@@ -661,6 +660,9 @@ export function showThoughtTypesDialog(): void {
     // количество) читаются без наезда; на узком контейнере — прокрутка
     // (ошибка d866bc65).
     size: 'l',
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
     // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
     buttons: [{ label: t('actions.close'), primary: true }],
@@ -2285,13 +2287,16 @@ async function openAttachDialog(opts: {
       }
     }
 
-    const body = div('form-stack');
+    const body = div('form-stack list-dialog-body');
     body.append(list.root);
 
     const close = showDialog({
       title: 'Добавить свойство',
       body,
       size: 'l',
+      // Высота стабильна: задана ролью, не содержимым списка (правило 9
+      // требования 11ddd910, ошибка f68bb43c).
+      fixedHeight: true,
       // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
       footerError: errorLine,
       buttons: [

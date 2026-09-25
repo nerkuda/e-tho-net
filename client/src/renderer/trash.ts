@@ -738,11 +738,10 @@ interface TrashDialogRow {
 }
 
 export async function openTrashDialog(networkId: string): Promise<void> {
-  const body = div('trash');
+  const body = div('trash list-dialog-body');
   const listHost = div('trash-table');
-  // Определённая высота оболочки — сетке нужен ограниченный контейнер.
-  listHost.style.height = 'min(60vh, 440px)';
-  listHost.style.maxHeight = 'none';
+  // Высоту области списка задаёт раскладка диалога-списка (`.list-dialog-body`,
+  // правило 9 требования 11ddd910) — она тянется на свободную высоту роли.
 
   // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
   // диалога, над строкой управления и списком; плейсхолдер — из словаря.
@@ -1048,6 +1047,9 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     title: 'Корзина',
     size: 'xl',
     body,
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
     buttons: [{ label: t('actions.close'), primary: true }],
     onMount: () => void render(),
     onClose: () => table.destroy(),

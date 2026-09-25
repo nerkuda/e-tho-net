@@ -349,6 +349,9 @@ export function showPropertyManagerDialog(): void {
     title: 'Свойства',
     body,
     size: 'l',
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
     // Ошибки реестра — в панели кнопок диалога (требование 397c5a56).
     footerError: errorLine,
     buttons: [{ label: t('actions.close'), primary: true }],
@@ -2453,8 +2456,7 @@ export function showLinkTypesTreeDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '340px';
-  const body = div('form-stack');
+  const body = div('form-stack list-dialog-body');
 
   // Правило 1 требования 11ddd910: поле горячего поиска — первая строка
   // диалога; правило 2 — строка управления под ним, над списком.
@@ -2706,6 +2708,9 @@ export function showLinkTypesTreeDialog(): void {
     // Роль `l` (требование 13464c39): дерево типов связей единообразно с
     // деревом типов мыслей — колонки читаются без наезда (ошибка d866bc65).
     size: 'l',
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
     // Ошибки списка — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
     buttons: [{ label: t('actions.close'), primary: true }],

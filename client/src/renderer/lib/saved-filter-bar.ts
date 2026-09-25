@@ -279,7 +279,7 @@ interface SavedFilterDialogOptions {
  * переименования/копирования/удаления — список перерисовывается на месте.
  */
 export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
-  const body = div('sfd');
+  const body = div('sfd list-dialog-body');
 
   // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
   // диалога, над строкой управления и списком.
@@ -336,9 +336,9 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   toolbar.append(editBtn, copyBtn, deleteBtn);
 
   const listHost = div('sfd-list');
-  // Определённая высота обёртки — сетке нужен ограниченный по высоте
-  // контейнер, иначе вендорская виртуализация/прокрутка не работают.
-  listHost.style.height = '260px';
+  // Высоту области списка задаёт раскладка диалога-списка (`.list-dialog-body`,
+  // правило 9 требования 11ddd910): она тянется на свободную высоту роли и не
+  // схлопывается при пустом поиске (ошибка f68bb43c).
   // Правила 1–2 требования 11ddd910: поиск, под ним управление, затем список.
   body.append(search, toolbar, listHost);
 
@@ -453,6 +453,9 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     title: t('savedFilters.title'),
     body,
     size: 's',
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
     // Правило 3: футер — кнопки решения. «Выбрать» применяет текущую строку,
     // «Отмена» закрывает без выбора.
     buttons: [
