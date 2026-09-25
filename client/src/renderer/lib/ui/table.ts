@@ -244,9 +244,10 @@ export interface TableSpec<T> {
   onActivate?: (row: T, index: number) => void;
   /**
    * Двойной клик по строке. Задан — фасад зовёт его вместо {@link onActivate}
-   * (правило 6 требования 11ddd910: у диалога-списка одиночный клик делает
-   * строку текущей, двойной открывает редактор, Enter активирует); не задан —
-   * двойной клик равен Enter (`onActivate`), прежнее поведение фасада.
+   * (правило 6 требования 11ddd910: у списка одиночный клик делает строку
+   * текущей, двойной и Enter открывают редактор). Не задан — список считается
+   * пикером: двойной клик и Enter подтверждают выбор (`onActivate`, эквивалент
+   * кнопки «Выбрать»), ошибка d1a009fa.
    */
   onDblActivate?: (row: T, index: number) => void;
   /** Одиночный клик по строке. */
@@ -809,7 +810,8 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     applyCurrent(index, true);
     // Правило 6 требования 11ddd910: заданный `onDblActivate` — редактор строки
     // (одиночный клик при этом лишь делает её текущей); без него двойной клик
-    // равен Enter.
+    // подтверждает выбор в пикере (`onActivate`), эквивалент Enter и «Выбрать»
+    // (ошибка d1a009fa).
     if (spec.onDblActivate !== undefined) spec.onDblActivate(row, index);
     else activate(index);
   });

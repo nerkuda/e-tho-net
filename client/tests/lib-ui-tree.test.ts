@@ -317,7 +317,7 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     assert.equal(tree.getCurrentId(), 'b', '→ у раскрытой ветви идёт к потомку');
   });
 
-  it('без флажка клик по строке активирует (одиночный выбор)', async () => {
+  it('без флажка клик по строке делает её текущей, двойной клик активирует (пикер)', async () => {
     const T = await treeModule();
     const host = new ShimElement('div');
     const activated: string[] = [];
@@ -329,7 +329,10 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     });
     host.append(tree.root as unknown as ShimElement);
     rowById(host, 'b').click();
-    assert.deepEqual(activated, ['b']);
+    assert.equal(tree.getCurrentId(), 'b', 'клик только делает строку текущей');
+    assert.deepEqual(activated, [], 'клик не подтверждает выбор (правило 6)');
+    rowById(host, 'b').emit('dblclick');
+    assert.deepEqual(activated, ['b'], 'двойной клик подтверждает выбор');
   });
 
   it('контекстное меню строки делает её текущей и строится из rowMenu (правило 8)', async () => {

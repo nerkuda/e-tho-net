@@ -300,6 +300,26 @@ describe('guard: единые правила диалогов-списков (11
     assert.ok(pl.includes("t('listActions.copy')"), 'Свойства: в меню строки нет «Копировать»');
   });
 
+  it('R6b: пикер подтверждает выбор двойным кликом и Enter через общий фасад', () => {
+    // Фасад дерева: без `onDblActivate` список — пикер, и двойной клик
+    // подтверждает выбор (`onActivate`), как Enter (ошибка d1a009fa).
+    assert.ok(
+      source('lib/ui/tree.ts').includes('(options.onDblActivate ?? options.onActivate)'),
+      'lib/ui/tree: двойной клик пикера не подтверждает выбор (нет фолбэка на onActivate)',
+    );
+    // Фасад таблицы: без `onDblActivate` двойной клик равен Enter (`activate`).
+    assert.ok(
+      source('lib/ui/table.ts').includes('spec.onDblActivate !== undefined'),
+      'lib/ui/table: потерян фолбэк двойного клика на onActivate',
+    );
+    // Одиночный пикер сущностей: подтверждение кнопкой «Выбрать».
+    const picker = source('lib/entity-picker.ts');
+    assert.ok(
+      picker.includes("t('actions.select')") && picker.includes('tree.getCurrentId()'),
+      'entity-picker: у одиночного пикера нет кнопки «Выбрать» (правило 6)',
+    );
+  });
+
   it('R9: размер диалога-списка задан ролью и стабилен (fixedHeight)', () => {
     for (const [name, src] of [
       ['Типы мыслей', thoughtTypesDialog()],

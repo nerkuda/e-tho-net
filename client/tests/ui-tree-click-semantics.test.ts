@@ -6,7 +6,8 @@
  * Проверяется на DOM-шиме (`./dom-shim.js`, jsdom в проекте нет):
  *  - список (не выбор): клик — только текущая строка, двойной клик — редактор,
  *    Enter — активация;
- *  - одиночный выбор (пикер): клик активирует строку (прежний контракт);
+ *  - одиночный выбор (пикер): клик только делает строку текущей, двойной клик
+ *    и Enter подтверждают выбор (правило 6, ошибка d1a009fa);
  *  - выбор нескольких: клик переключает флажок, двойной клик — редактор;
  *  - revealRow раскрывает предков и делает строку текущей (правило 7);
  *  - copyCurrent пишет текст текущей строки (правило 2).
@@ -105,7 +106,7 @@ describe('lib/ui/tree: семантика клика (правило 6, треб
     assert.deepEqual(events.activated, ['b'], 'Enter активирует строку');
   });
 
-  it('одиночный выбор (пикер): клик активирует строку — прежний контракт', async () => {
+  it('одиночный выбор (пикер): клик ставит текущую, двойной клик и Enter подтверждают', async () => {
     const T = await treeModule();
     const host = new ShimElement('div');
     const activated: string[] = [];
@@ -117,8 +118,16 @@ describe('lib/ui/tree: семантика клика (правило 6, треб
     });
     host.append(tree.root as unknown as ShimElement);
     rowById(host, 'b').click();
-    assert.deepEqual(activated, ['b'], 'без onDblActivate клик активирует строку');
-    assert.equal(tree.getCurrentId(), 'b');
+    assert.equal(tree.getCurrentId(), 'b', 'клик делает строку текущей');
+    assert.deepEqual(activated, [], 'одиночный клик НЕ подтверждает выбор (правило 6)');
+
+    // Двойной клик в пикере (без onDblActivate) — подтверждение выбора.
+    rowById(host, 'c').emit('dblclick');
+    assert.deepEqual(activated, ['c'], 'двойной клик подтверждает выбор');
+
+    // Enter — то же подтверждение текущей строки.
+    (tree.root as unknown as ShimElement).emit('keydown', key('Enter'));
+    assert.deepEqual(activated, ['c', 'c'], 'Enter подтверждает выбор текущей строки');
   });
 
   it('выбор нескольких: клик переключает флажок и ставит текущую строку, двойной клик — редактор', async () => {

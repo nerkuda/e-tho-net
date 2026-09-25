@@ -334,6 +334,15 @@ function findAllByClass(root: ShimElement, cls: string): ShimElement[] {
   return out;
 }
 
+/** Кнопка «Выбрать» футера одиночного пикера (правило 6, ошибка d1a009fa). */
+function pickSelectButton(root: ShimElement): ShimElement {
+  const btn = findAllByClass(root, 'ui-btn')
+    .filter((b) => !b.classList.contains('ui-btn--icon'))
+    .find((b) => b.textContent === 'Выбрать');
+  assert.ok(btn !== undefined, 'в футере одиночного пикера есть «Выбрать»');
+  return btn!;
+}
+
 /** Части поля одиночного выбора. */
 function parts(combo: { root: HTMLElement }): {
   input: ShimElement;
@@ -575,6 +584,8 @@ describe('entity-picker: поле одиночного выбора — запо
     const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
     assert.ok(target !== undefined, 'в диалоге есть строка типа c');
     target!.click();
+    assert.deepEqual(changes, [], 'клик только делает строку текущей (правило 6)');
+    pickSelectButton(body).click();
     await flush();
     assert.deepEqual(changes, ['c'], 'диалог применил выбранный единственный тип');
     assert.equal(combo.value(), 'c');
@@ -709,6 +720,7 @@ describe('entity-picker: выбор из списка не роняет клав
     // Модальный пикер закрылся, фокус остался на <body> — поле забирает его себе.
     loseFocusToBody(body);
     target!.click();
+    pickSelectButton(body).click();
     await flush();
     assert.equal(combo.value(), 'c', 'значение применено');
     assert.equal(pick.focused, true, 'фокус вернулся на живой узел поля, а не остался на <body>');
@@ -874,9 +886,11 @@ describe('entity-picker: завершение модального чек-лис
     { id: 'tb', title: 'Задача', selectable: true, cloud: { id: 'tb', title: 'Задача' } },
   ];
 
-  it('одиночный выбор: клик по строке возвращает выбор И закрывает диалог', async () => {
-    // Регрессия c9bd04ed: клик по строке резолвил промис, но диалог оставался
-    // поверх всего — закрывали его только кнопки футера.
+  it('одиночный выбор: клик ставит текущую, «Выбрать» возвращает выбор и закрывает диалог', async () => {
+    // Регрессия c9bd04ed: выбор резолвил промис, но диалог оставался поверх
+    // всего — закрывали его только кнопки футера. Правило 6 требования
+    // 11ddd910 (ошибка d1a009fa): клик только делает строку текущей, выбор
+    // подтверждают «Выбрать», двойной клик иEnter.
     const { body } = installShim();
     let result: string[] | null | undefined;
     const done = pickEntitiesModal({
@@ -889,15 +903,42 @@ describe('entity-picker: завершение модального чек-лис
       result = ids;
     });
     assert.equal(body.children.length, 1, 'диалог открыт');
-    const rows = findAllByClass(body.children[0]!, 'ui-tree-row');
+    const backdrop = body.children[0]!;
+    const rows = findAllByClass(backdrop, 'ui-tree-row');
     assert.equal(rows.length, 2, 'каталог показан целиком');
     rows[0]!.click();
+    assert.equal(body.children.length, 1, 'клик по строке не закрывает диалог (только текущая)');
+    assert.equal(result, undefined, 'до подтверждения результат не отдан');
+    const select = findAllByClass(backdrop, 'ui-btn')
+      .filter((b) => !b.classList.contains('ui-btn--icon'))
+      .find((b) => b.textContent === 'Выбрать');
+    assert.ok(select, 'в футере есть «Выбрать»');
+    select!.click();
     await done;
     assert.deepEqual(result, ['ta'], 'одиночный выбор вернул выбранный id');
-    assert.equal(body.children.length, 0, 'диалог закрыт сразу после выбора');
+    assert.equal(body.children.length, 0, 'диалог закрыт после подтверждения');
   });
 
-  it('одиночный выбор: в футере только «Отмена» (применения нет)', () => {
+  it('одиночный выбор: двойной клик по строке тоже подтверждает и закрывает', async () => {
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Выбрать тип мысли',
+      catalogue: CATALOGUE,
+      single: true,
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0]!;
+    findAllByClass(backdrop, 'ui-tree-row')[1]!.emit('dblclick');
+    await done;
+    assert.deepEqual(result, ['tb'], 'двойной клик подтвердил выбор');
+    assert.equal(body.children.length, 0, 'диалог закрыт');
+  });
+
+  it('одиночный выбор: в футере «Отмена» и «Выбрать»', () => {
     const { body } = installShim();
     void pickEntitiesModal({
       networkId: 'n',
@@ -910,8 +951,8 @@ describe('entity-picker: завершение модального чек-лис
     assert.ok(backdrop, 'диалог смонтирован');
     assert.deepEqual(
       findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).map((b) => b.textContent),
-      ['Отмена'],
-      'одиночный режим завершается выбором строки, а не кнопкой применения',
+      ['Отмена', 'Выбрать'],
+      'одиночный пикер подтверждается «Выбрать» (правило 6 требования 11ddd910)',
     );
   });
 
@@ -1106,6 +1147,7 @@ describe('entity-picker: отмена модального чек-листа (12
     const row = findAllByClass(backdrop, 'ui-tree-row')[0];
     assert.ok(row !== undefined, 'каталог показан');
     row!.click();
+    pickSelectButton(body).click();
     await flush();
     assert.deepEqual(calls, ['c'], 'выбор строки задал значение');
     assert.equal(combo.value(), 'c', 'значение в поле обновилось');
@@ -1300,6 +1342,7 @@ describe('entity-picker: комбо свойства-связи как поле 
     const target = rows.find((r) => findByClass(r, 'entity-pick-label')?.textContent === LP_REVERSE);
     assert.ok(target !== undefined, 'в диалоге есть строка обратной стороны');
     target!.click();
+    pickSelectButton(body).click();
     await flush();
     assert.deepEqual(
       entities.at(-1)?.linkProperty,

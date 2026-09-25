@@ -732,9 +732,12 @@ export async function pickEntitiesModal(
         else checked.delete(opt.id);
         updateButtons();
       },
+      // Правило 6 требования 11ddd910: одиночный пикер подтверждает выбор
+      // двойным кликом или Enter (`onActivate`; клик только делает строку
+      // текущей, кнопка «Выбрать» — ниже), множественный — двойной клик
+      // открывает редактор строки, если вызывающий его задал, а клик
+      // переключает флажок (ошибка d1a009fa).
       onActivate: single ? (opt) => finish([opt.id]) : undefined,
-      // Правило 6 требования 11ddd910 (выбор нескольких): двойной клик —
-      // редактор строки, если вызывающий его задал; клик переключает флажок.
       onDblActivate: !single ? opts.onEdit : undefined,
       renderContent: (opt) => {
         const nodes: Node[] = [];
@@ -812,7 +815,22 @@ export async function pickEntitiesModal(
       // (ошибка 12dfb87e), поэтому она работает и для Esc, и для ×.
       { label: t('actions.cancel') },
       ...(single
-        ? []
+        ? [
+            // Одиночный пикер (правило 6 требования 11ddd910, ошибка
+            // d1a009fa): клик по строке только делает её текущей; выбор
+            // подтверждают кнопка «Выбрать», двойной клик или Enter.
+            {
+              label: t('actions.select'),
+              primary: true,
+              keepOpen: true,
+              onClick: () => {
+                const id = tree.getCurrentId();
+                if (id === null) return;
+                finish([id]);
+                closeSelf?.();
+              },
+            },
+          ]
         : [
             {
               label: opts.applyLabel ?? t('actions.apply'),

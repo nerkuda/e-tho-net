@@ -8,7 +8,8 @@
  *  • отдать ему готовое описание колонок и массив строк;
  *  • подсветить текущую (`activeItem`) и выделенные (`selectedItems`) строки;
  *  • прокрутить к строке (`scrollToIndex`);
- *  • перевести DOM-события сетки в индексы строк (`getEventContext`);
+ *  • перевести DOM-события сетки в индексы строк (`getEventContext`), собрав
+ *    двойной клик из счётчика нажатий `click` (см. {@link GridTableAdapter.onRowDblClick});
  *  • попросить фасад пересчитать сортировку (`sort-changed`).
  *
  * Вся логика (цикл сортировки, порядок строк, навигационная математика, TSV,
@@ -70,7 +71,12 @@ export interface GridTableAdapter {
   onSortRequest(cb: (key: string) => void): void;
   /** Подписка на клик по строке (индекс в текущем порядке + координаты). */
   onRowClick(cb: (index: number, at: GridPoint) => void): void;
-  /** Подписка на двойной клик по строке. */
+  /**
+   * Подписка на двойной клик по строке. Адаптер собирает его из второго
+   * `click` (`MouseEvent.detail >= 2`), а не из нативного `dblclick`: смена
+   * текущей строки перерисовывает ячейки, и нативный `dblclick` теряется
+   * (ошибка d1a009fa).
+   */
   onRowDblClick(cb: (index: number) => void): void;
   /** Подписка на контекстное меню строки (индекс + координаты). */
   onRowContextMenu(cb: (index: number, at: GridPoint) => void): void;
@@ -168,11 +174,15 @@ export function vaadinGridAdapter(): GridTableAdapter {
   });
   grid.addEventListener('click', (event: MouseEvent) => {
     const index = indexOfEvent(event);
-    if (index !== null) clickCb?.(index, { x: event.clientX, y: event.clientY });
-  });
-  grid.addEventListener('dblclick', (event: MouseEvent) => {
-    const index = indexOfEvent(event);
-    if (index !== null) dblCb?.(index);
+    if (index === null) return;
+    clickCb?.(index, { x: event.clientX, y: event.clientY });
+    // Двойной клик распознаём по счётчику нажатий (`MouseEvent.detail`), а не
+    // нативным `dblclick`: фасад на смене текущей строки перерисовывает ячейки
+    // (`setActive` → `clearCache`), узел строки между двумя кликами заменяется,
+    // и браузер `dblclick` не присылает — выбор в пикере не подтверждался
+    // двойным кликом (ошибка d1a009fa). `detail` ведёт браузер по времени и
+    // месту, а не по узлу, поэтому двойной клик доходит всегда.
+    if (event.detail >= 2) dblCb?.(index);
   });
   grid.addEventListener('contextmenu', (event: MouseEvent) => {
     const index = indexOfEvent(event);
