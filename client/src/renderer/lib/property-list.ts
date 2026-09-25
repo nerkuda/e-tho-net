@@ -32,8 +32,12 @@
  * PgUp/PgDn, Enter), контекстное меню строки, сортировка по колонкам,
  * копирование Ctrl+C. Кнопки-крестика удаления в строках нет. Активация
  * строки — Enter или двойной клик (одна функция `activate`); одиночный клик
- * ставит текущую строку. В пикере уже подключённые имена этой стороны
- * заблокированы и помечены, второе имя той же связи остаётся доступным.
+ * ставит текущую строку (правило 6 требования 11ddd910: список — не выбор).
+ * В режиме менеджера над списком стоят строка поиска (правило 1) и строка
+ * управления (правило 2): «Добавить», «Изменить», «Удалить», «Копировать» —
+ * последние три действуют на текущую строку и погасают без неё. В пикере уже
+ * подключённые имена этой стороны заблокированы и помечены, второе имя той же
+ * связи остаётся доступным.
  *
  * Модуль самодостаточен: модель строк, форматирование ячеек, фильтр и поиск
  * живут здесь — параллельных списков свойств в экранах нет (сторож
@@ -483,6 +487,9 @@ export interface PropertyListHandle {
   selectRow: (id: string) => void;
   /** Ставит клавиатурный фокус на таблицу (клавиатура — от фасада). */
   focus: () => void;
+  /** Копирует текущую строку в буфер обмена (кнопка «Копировать», правило 2
+   *  требования 11ddd910). */
+  copyCurrent: () => void;
 }
 
 /**
@@ -505,13 +512,22 @@ export function buildPropertyList(opts: {
 }): PropertyListHandle {
   const { mode, callbacks } = opts;
 
-  const toolbar = div('form-row type-list-toolbar property-list-toolbar');
+  // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка,
+  // плейсхолдер из словаря.
+  const searchRow = div('form-row type-list-search');
   const searchInput = fieldInput({ extraClass: 'property-list-search' }) as HTMLInputElement;
   searchInput.type = 'text';
   searchInput.placeholder = opts.searchPlaceholder ?? t('actions.search');
-  // Верхняя строка: сначала поиск, затем «Добавить» (требование 7).
-  toolbar.append(searchInput);
-  if (mode === 'manager' && callbacks.onAdd !== undefined) {
+  searchRow.append(searchInput);
+
+  // Правило 2: строка управления НАД списком (под поиском) — только режиму
+  // менеджера. «Изменить»/«Удалить» действуют на ТЕКУЩУЮ строку и погасают
+  // без неё (и для системной структурной строки, см. `updateButtons`).
+  const toolbar = div('form-row type-list-toolbar property-list-toolbar');
+  let editBtn: HTMLButtonElement | null = null;
+  let deleteBtn: HTMLButtonElement | null = null;
+  let copyBtn: HTMLButtonElement | null = null;
+  if (mode === 'manager') {
     toolbar.append(
       uiButton({
         label: t('propertyList.add'),
@@ -520,6 +536,36 @@ export function buildPropertyList(opts: {
         title: t('propertyList.addHint'),
         onClick: () => callbacks.onAdd?.(),
       }),
+      (editBtn = uiButton({
+        label: t('listActions.edit'),
+        role: 'secondary',
+        size: 's',
+        title: t('listActions.editHint'),
+        disabled: true,
+        onClick: () => {
+          const row = selected();
+          if (row !== null && !row.structural) callbacks.onEdit(row);
+        },
+      })),
+      (deleteBtn = uiButton({
+        label: t('actions.delete'),
+        role: 'secondary',
+        size: 's',
+        title: t('listActions.deleteHint'),
+        disabled: true,
+        onClick: () => {
+          const row = selected();
+          if (row !== null && !row.structural) callbacks.onDelete?.(row);
+        },
+      })),
+      (copyBtn = uiButton({
+        label: t('listActions.copy'),
+        role: 'secondary',
+        size: 's',
+        title: t('listActions.copyHint'),
+        disabled: true,
+        onClick: () => copyCurrent(),
+      })),
     );
   }
 
@@ -528,7 +574,7 @@ export function buildPropertyList(opts: {
   // контейнер, иначе вендорская виртуализация/прокрутка не работают.
   wrap.style.height = '340px';
   const root = div('form-stack property-list');
-  root.append(toolbar, wrap);
+  root.append(searchRow, ...(mode === 'manager' ? [toolbar] : []), wrap);
 
   let allRows: readonly PropertyListRow[] = [];
   let query = '';
@@ -539,6 +585,27 @@ export function buildPropertyList(opts: {
 
   const visibleRows = (): PropertyListRow[] =>
     filterPropertyListRows(sortPropertyListRows(allRows), query);
+
+  /** Текущая строка списка (правило 5 требования 11ddd910). */
+  function selected(): PropertyListRow | null {
+    return selectedId === null ? null : allRows.find((r) => r.id === selectedId) ?? null;
+  }
+
+  /** Копирует текущую строку в буфер обмена (TSV фасада `lib/ui/table`). */
+  function copyCurrent(): void {
+    const text = table.buildCopyText();
+    if (text.trim() === '') return;
+    void navigator.clipboard?.writeText(text);
+  }
+
+  /** Гасит кнопки текущей строки, когда строки нет или она системная. */
+  function updateButtons(): void {
+    const row = selected();
+    const actionable = row !== null && !row.structural;
+    if (editBtn !== null) editBtn.disabled = !actionable;
+    if (deleteBtn !== null) deleteBtn.disabled = !actionable;
+    if (copyBtn !== null) copyBtn.disabled = row === null;
+  }
 
   /** Одна функция активации на Enter и двойной клик: менеджер — редактор
    *  свойства, пикер — выбор строки. Заблокированные и структурные строки не
@@ -662,6 +729,7 @@ export function buildPropertyList(opts: {
     onActivate: (row) => activate(row),
     onCurrentChange: (key) => {
       selectedId = key;
+      updateButtons();
     },
     rowMenu: (row) => rowMenu(row),
   });
@@ -705,15 +773,17 @@ export function buildPropertyList(opts: {
         table.setCurrent(null);
       }
       refresh();
+      updateButtons();
     },
-    selected: () =>
-      selectedId === null ? null : allRows.find((r) => r.id === selectedId) ?? null,
+    selected,
     selectRow: (id: string) => {
       const row = allRows.find((r) => r.id === id) ?? null;
       if (row === null || row.structural || blockReason(row) !== null) return;
       selectedId = id;
       table.setCurrent(id);
+      updateButtons();
     },
     focus: () => table.focus(),
+    copyCurrent,
   };
 }

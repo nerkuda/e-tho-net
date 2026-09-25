@@ -175,12 +175,18 @@ export function showPropertyManagerDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = footerErrorLine();
   let cachedRows: RegistryRow[] | null = null;
+  // Свойство, созданное в открытом отсюда редакторе: после перезагрузки его
+  // строка становится текущей (правило 7 требования 11ddd910).
+  let pendingSelectId: string | null = null;
 
   const list = buildPropertyList({
     mode: 'manager',
     searchPlaceholder: t('actions.search'),
     callbacks: {
-      onAdd: () => openPropertyManagerEditor(null, onChanged),
+      onAdd: () =>
+        openPropertyManagerEditor(null, onChanged, (created) => {
+          pendingSelectId = created.id;
+        }),
       onActivate: (row) => openPropertyManagerEditor(row.registry, onChanged),
       onEdit: (row) => openPropertyManagerEditor(row.registry, onChanged),
       onDelete: (row) => void removeRow(row.registry),
@@ -212,6 +218,14 @@ export function showPropertyManagerDialog(): void {
     // связей — догружаем недостающие до сборки строк.
     await ensurePropertyLinkTypes(networkId, rows);
     list.setRows(buildPropertyListRows(rows, store.state.linkTypes));
+    // Правило 7 требования 11ddd910: список позиционируется на только что
+    // созданной строке.
+    if (pendingSelectId !== null) {
+      const id = pendingSelectId;
+      pendingSelectId = null;
+      list.selectRow(id);
+      list.selectRow(`${id}:source`);
+    }
   }
 
   /**
@@ -2442,27 +2456,80 @@ export function showLinkTypesTreeDialog(): void {
   tableWrap.style.maxHeight = '340px';
   const body = div('form-stack');
 
-  const toolbar = div('form-row type-list-toolbar');
+  // Правило 1 требования 11ddd910: поле горячего поиска — первая строка
+  // диалога; правило 2 — строка управления под ним, над списком.
+  const searchRow = div('form-row type-list-search');
   const searchInput = fieldInput() as HTMLInputElement;
   searchInput.type = 'text';
   searchInput.placeholder = t('actions.search');
-  toolbar.append(
+  searchRow.append(searchInput);
+
+  // Правило 2: только допустимые для списка кнопки. «Удалить» в этом диалоге
+  // нет — путь удаления лежит через плоский список «Свойства» (требование
+  // 09f692ff: видно `links_becoming_structural` и подтверждение по рёбрам).
+  const toolbar = div('form-row type-list-toolbar');
+  const addBtn = uiButton({
+    label: t('linkTypes.add'),
+    role: 'secondary',
+    size: 's',
+    title: t('linkTypes.addHint'),
     // «Добавить» создаёт свойство-связь. `value_type` пользователь выбирает
-    // в форме; пары `name_forward`/`name_reverse` заполняет там же.
-    uiButton({
-      label: 'Добавить',
-      role: 'secondary',
-      size: 's',
-      title: 'Создать свойство-связь',
-      onClick: () => openPropertyManagerEditor(null, onChanged),
+    // в форме; пары `name_forward`/`name_reverse` заполняет там же. Созданное
+    // свойство становится текущей строкой дерева (правило 7 — см.
+    // `pendingCurrentPropertyId`).
+    onClick: () => openPropertyManagerEditor(null, onChanged, (created) => {
+      pendingCurrentPropertyId = created.id;
     }),
-    searchInput,
-  );
+  });
+  const editBtn = uiButton({
+    label: t('listActions.edit'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.editHint'),
+    disabled: true,
+    onClick: () => {
+      const item = currentItem();
+      // У «голого» типа связи свойства нет — редактировать нечего.
+      if (item !== undefined && item.prop !== undefined) {
+        openPropertyManagerEditor(item.prop, onChanged);
+      }
+    },
+  });
+  const copyBtn = uiButton({
+    label: t('listActions.copy'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.copyHint'),
+    disabled: true,
+    onClick: () => {
+      tree.copyCurrent();
+    },
+  });
+  toolbar.append(addBtn, editBtn, copyBtn);
+
+  // Id созданного в этом диалоге свойства: после перезагрузки его строка
+  // становится текущей (правило 7 требования 11ddd910).
+  let pendingCurrentPropertyId: string | null = null;
+
+  /** Текущий элемент дерева — на него действуют «Изменить» и «Копировать». */
+  function currentItem(): LinkTypeTreeItem | undefined {
+    return currentItems.find((item) => item.id === currentRowId);
+  }
+
+  /** Гасит кнопки текущей строки, когда её нет (или свойства у типа нет). */
+  function updateButtons(): void {
+    const item = currentItem();
+    editBtn.disabled = item === undefined || item.prop === undefined;
+    copyBtn.disabled = item === undefined;
+  }
 
   // Состояние загрузки/ошибки живёт рядом с деревом: сам список рисует общий
   // компонент `lib/ui/tree.ts`, статус скрывает его на время запроса.
   const status = div('muted hidden');
   let searchQuery = '';
+  // «Текущая строка» списка: тип, чьё свойство создано или отредактировано
+  // в открытом отсюда редакторе (правило 5/7 требования 11ddd910).
+  let currentRowId: string | null = null;
   let cachedTypes: LinkType[] | null = null;
   let cachedRows: RegistryRow[] | null = null;
   let cachedCounts: Record<string, number> | null = null;
@@ -2487,9 +2554,21 @@ export function showLinkTypesTreeDialog(): void {
     emptyText: t('linkTypes.empty'),
     emptyHint: t('linkTypes.emptyHint'),
     rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
+    // Правило 6 требования 11ddd910 (список, не выбор): клик только ставит
+    // строку текущей, редактор свойства открывают двойной клик и Enter.
+    onDblActivate: (item) => {
+      if (item.prop !== undefined) openPropertyManagerEditor(item.prop, onChanged);
+    },
     onActivate: (item) => {
       if (item.prop !== undefined) openPropertyManagerEditor(item.prop, onChanged);
     },
+    // Текущая строка правит состояние кнопок управления (правило 2).
+    onCurrentChange: (id) => {
+      currentRowId = id;
+      updateButtons();
+    },
+    // Кнопка «Копировать» и Ctrl+C: пара имён сторон текущего типа связи.
+    copyText: (item) => `${item.type.name_forward} / ${item.type.name_reverse}`,
     columns: [
       {
         key: 'connected',
@@ -2546,7 +2625,9 @@ export function showLinkTypesTreeDialog(): void {
     },
   });
   tableWrap.append(status, tree.root);
-  body.append(toolbar, tableWrap);
+  // Правила 1–2 требования 11ddd910: поиск (первая строка), под ним
+  // управление, затем список.
+  body.append(searchRow, toolbar, tableWrap);
 
   async function reload(useCache = false): Promise<void> {
     const scrollTop = tableWrap.scrollTop;
@@ -2599,6 +2680,17 @@ export function showLinkTypesTreeDialog(): void {
     tree.root.classList.remove('hidden');
     tree.setFilter(searchQuery);
     tree.setItems(currentItems);
+    // Правило 7 требования 11ddd910: после записи (создания) списка
+    // позиционируется на новой строке — revealRow раскрывает предков,
+    // подсвечивает и прокручивает.
+    if (pendingCurrentPropertyId !== null) {
+      const created = currentItems.find((item) => item.prop?.id === pendingCurrentPropertyId);
+      pendingCurrentPropertyId = null;
+      if (created !== undefined) tree.revealRow(created.id);
+    } else if (currentRowId !== null && currentItems.some((item) => item.id === currentRowId)) {
+      tree.revealRow(currentRowId);
+    }
+    updateButtons();
     tableWrap.scrollTop = scrollTop;
   }
 

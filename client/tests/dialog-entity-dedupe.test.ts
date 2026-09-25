@@ -384,7 +384,10 @@ describe('регрессии списка типов (c2d243bb)', () => {
   it('понятие текущей строки и запись списка не затронуты защитой', () => {
     const src = source(TYPE_MANAGER_SOURCE);
     assert.ok(src.includes('currentRowId'), 'нет понятия текущей строки');
-    assert.ok(src.includes('tree.setCurrentId(currentRowId)'), 'текущая строка не подсвечивается');
+    assert.ok(
+      src.includes('tree.revealRow(currentRowId)'),
+      'текущая строка не подсвечивается (revealRow общего дерева: предки, подсветка, прокрутка)',
+    );
     assert.ok(src.includes('onChanged(current.id)'), 'список не получает id записанного типа');
     assert.ok(
       src.includes('if (appliedTypeId !== undefined) currentRowId = appliedTypeId;'),

@@ -483,6 +483,13 @@ export interface EntityPickerModalOptions {
   commands?: (ctx: EntityPickerDialogCtx) => EntityPickerCommand[];
   /** Подпись кнопки применения (по умолчанию «Применить»). */
   applyLabel?: string;
+  /**
+   * Двойной клик по строке каталога — редактор варианта (правило 6 требования
+   * 11ddd910, режим множественного выбора; в одиночном диалог закрывается
+   * первым кликом). Пикер сам редакторов не открывает — механику задаёт
+   * вызывающий; клик по строке при этом по-прежнему переключает флажок.
+   */
+  onEdit?: (opt: EntityOption) => void;
 }
 
 /**
@@ -726,6 +733,9 @@ export async function pickEntitiesModal(
         updateButtons();
       },
       onActivate: single ? (opt) => finish([opt.id]) : undefined,
+      // Правило 6 требования 11ddd910 (выбор нескольких): двойной клик —
+      // редактор строки, если вызывающий его задал; клик переключает флажок.
+      onDblActivate: !single ? opts.onEdit : undefined,
       renderContent: (opt) => {
         const nodes: Node[] = [];
         if (opt.line != null) {

@@ -271,7 +271,11 @@ describe('якоря потребителей (требование 1, 10)', () 
     assert.match(src, /mode: 'manager'/);
     assert.match(src, /title: 'Свойства'/, 'команда/диалог «Свойства»');
     assert.match(src, /size: 'l'/, 'диалог «Свойства» — роль l (900px, шире прежних 720px)');
-    assert.match(src, /onAdd: \(\) => openPropertyManagerEditor\(null/, '«Добавить» открывает редактор на создании');
+    assert.match(
+      src,
+      /onAdd:\s*\(\) =>\s*openPropertyManagerEditor\(null,\s*onChanged,\s*\(created\) =>\s*\{\s*pendingSelectId = created\.id;/,
+      '«Добавить» открывает редактор на создании; созданное свойство становится текущей строкой (правило 7, 11ddd910)',
+    );
     assert.match(src, /onDelete: \(row\) => void removeRow\(row\.registry\)/, 'удаление — подтверждение менеджера');
   });
 

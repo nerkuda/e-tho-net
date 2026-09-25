@@ -216,14 +216,9 @@ describe('type-manager — кнопка записи без закрытия (б
     const src = source();
     assert.ok(src.includes('currentRowId'), 'нет понятия текущей строки');
     assert.ok(
-      src.includes('tree.setCurrentId(currentRowId)'),
-      'текущая строка не подсвечивается общим деревом (lib/ui/tree)',
+      src.includes('tree.revealRow(currentRowId)'),
+      'список не позиционируется на текущей строке общим деревом (lib/ui/tree: revealRow — раскрытие предков, подсветка, прокрутка; правило 7 требования 11ddd910)',
     );
-    assert.ok(
-      src.includes('typeRowRevealIds(types, currentRowId)'),
-      'цепочка предков текущей строки не разворачивается',
-    );
-    assert.ok(src.includes('tree.expand('), 'цепочка предков не передаётся дереву для раскрытия');
   });
 });
 

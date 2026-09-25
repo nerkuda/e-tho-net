@@ -25,6 +25,25 @@
  * `guard-ui-i18n` (в `lib/ui/*` кириллических литералов нет). Заголовки
  * колонок и тексты пустых состояний вызывающий передаёт уже локализованными.
  *
+ * **Семантика клика (требование 11ddd910 «Единые правила диалогов-списков»,
+ * правило 6).** Клик всегда делает строку текущей (правило 5 — подсветка
+ * `--row--current`); дальше — по режиму списка:
+ *  • список сам по себе (не выбор): вызывающий передаёт {@link TreeOptions.onDblActivate}
+ *    — клик ТОЛЬКО ставит текущую строку (уведомляя {@link TreeOptions.onCurrentChange}),
+ *    двойной клик и Enter открывают редактор ({@link TreeOptions.onActivate});
+ *  • выбор одиночного значения (пикер): `onDblActivate` не задан — клик
+ *    активирует строку по прежнему контракту {@link TreeOptions.onActivate}
+ *    (пикер закрывает диалог), двойной клик недостижим;
+ *  • выбор нескольких: {@link TreeOptions.checkbox} — клик переключает флажок
+ *    (и ставит текущую строку), двойной клик — {@link TreeOptions.onDblActivate}.
+ *
+ * **Позиционирование и копирование (правила 7 и 2 того же требования).**
+ * {@link TreeHandle.revealRow} раскрывает цепочку предков, делает строку
+ * текущей и прокручивает к ней — кнопка «Добавить» после записи обязана
+ * вызывать её для новой записи. {@link TreeHandle.copyCurrent} (Ctrl+C и
+ * кнопка «Копировать») пишет текст текущей строки — его задаёт
+ * {@link TreeOptions.copyText}.
+ *
  * **Разметка, а не вендорский `wa-tree`.** По той же причине, что у
  * `choice-row.ts`/`tabs.ts`: тестируемость на общем DOM-шиме (custom elements
  * вендора в нём не исполняются) и полный контроль над клавиатурой/ARIA.
@@ -144,6 +163,23 @@ export interface TreeOptions<T extends TreeItem> {
   onCheck?: (item: T, checked: boolean) => void;
   /** Активация строки (клик без флажка или Enter). */
   onActivate?: (item: T) => void;
+  /**
+   * Двойной клик по строке — редактор (правило 6 требования 11ddd910).
+   * Задан — клик по строке БЕЗ флажка только ставит её текущей
+   * ({@link TreeOptions.onCurrentChange}), редактор открывают двойной клик
+   * и Enter ({@link TreeOptions.onActivate}); в режиме флажка клик по-прежнему
+   * переключает флажок, двойной клик открывает редактор. Не задан — прежний
+   * контракт: клик активирует строку (одиночный выбор пикера).
+   */
+  onDblActivate?: (item: T) => void;
+  /** Текущая строка сменилась (клик, клавиатура, `setCurrentId`/`revealRow`). */
+  onCurrentChange?: (id: string | null) => void;
+  /** Текст текущей строки для копирования; не задан — копирования нет. */
+  copyText?: (item: T) => string;
+  /** Запись в буфер обмена; по умолчанию `navigator.clipboard.writeText`. */
+  clipboard?: (text: string) => void;
+  /** Вызывается после формирования текста копирования (для тестов/логов). */
+  onCopy?: (text: string) => void;
   /** Начальный набор раскрытых узлов. */
   expandedIds?: Iterable<string>;
   /** Раскрыть всё дерево при создании. */
@@ -184,6 +220,19 @@ export interface TreeHandle<T extends TreeItem> {
   isExpanded(id: string): boolean;
   /** Раскрыть/свернуть узел. */
   setExpanded(id: string, open: boolean): void;
+  /**
+   * Позиционирует список на строке (правило 7 требования 11ddd910): раскрывает
+   * цепочку её предков, делает строку текущей и прокручивает к ней. После
+   * записи нового элемента («Добавить» → редактор → «Применить») вызывающий
+   * обязан вызвать её для новой записи.
+   */
+  revealRow(id: string): void;
+  /**
+   * Копирует текст текущей строки ({@link TreeOptions.copyText}) в буфер —
+   * кнопка «Копировать» строки управления и Ctrl+C. `false` — строки нет или
+   * копирование не задано.
+   */
+  copyCurrent(): boolean;
   /** Раскрыть перечисленные узлы (цепочка предков) и перерисовать один раз. */
   expand(ids: Iterable<string>): void;
   /** Раскрыть всё дерево. */
@@ -239,6 +288,28 @@ export function treeDepthOf<T extends TreeItem>(items: readonly T[], id: string)
     current = parentItem;
   }
   return depth;
+}
+
+/**
+ * Цепочка предков узла от родителя к корню (сам узел не входит). Циклы и
+ * неизвестные родители обрывают путь. Чистая — юнит-тест; на ней стоит
+ * {@link TreeHandle.revealRow} (правило 7 требования 11ddd910).
+ */
+export function treeAncestorIds<T extends TreeItem>(items: readonly T[], id: string): string[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const chain: string[] = [];
+  const seen = new Set<string>([id]);
+  let current = byId.get(id);
+  while (current !== undefined) {
+    const parent: string | null = current.parentId ?? null;
+    if (parent === null || parent === current.id || seen.has(parent)) break;
+    const parentItem = byId.get(parent);
+    if (parentItem === undefined) break;
+    chain.push(parent);
+    seen.add(parent);
+    current = parentItem;
+  }
+  return chain;
 }
 
 /**
@@ -375,6 +446,29 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     if (currentId === null || !ids.includes(currentId)) currentId = ids[0] ?? null;
   }
 
+  /** Уведомить владельца о смене текущей строки (клавиатура, клик, reveal). */
+  function notifyCurrent(): void {
+    options.onCurrentChange?.(currentId);
+  }
+
+  /**
+   * Перекрашивает подсветку текущей строки БЕЗ пересборки дерева. Клик по
+   * строке обязан НЕ заменять элементы: иначе второй клик двойного клика
+   * попадает в пересозданный узел и браузер не присылает `dblclick`
+   * (правило 6 требования 11ddd910 — двойной клик открывает редактор).
+   */
+  function paintCurrent(): void {
+    const currentRow =
+      currentId === null ? null : root.querySelector(`#${cssId(currentId)}`);
+    for (const row of root.querySelectorAll<HTMLElement>('.' + TREE_ROW_CLASS)) {
+      const isCurrent = row === currentRow;
+      row.classList.toggle(TREE_ROW_CURRENT_CLASS, isCurrent);
+      row.setAttribute('aria-selected', String(isCurrent));
+    }
+    if (currentId !== null) root.setAttribute('aria-activedescendant', cssId(currentId));
+    else root.removeAttribute('aria-activedescendant');
+  }
+
   function moveCurrent(delta: number): void {
     const ids = visible();
     if (ids.length === 0) return;
@@ -383,6 +477,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     currentId = ids[next] ?? currentId;
     render();
     scrollCurrentIntoView();
+    notifyCurrent();
   }
 
   function scrollCurrentIntoView(): void {
@@ -493,15 +588,42 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     row.addEventListener('click', (event) => {
       const target = event.target as HTMLElement | null;
       if (target !== null && typeof target.closest === 'function' && target.closest('button') !== null) return;
+      const wasCurrent = currentId === item.id;
       currentId = item.id;
       if (checkboxInput !== null) {
-        if (target === checkboxInput) return; // нативный change флажка уже сработал
+        if (target === checkboxInput) {
+          if (!wasCurrent) {
+            paintCurrent();
+            notifyCurrent();
+          }
+          return; // нативный change флажка уже сработал
+        }
+        // Флажок и `aria-checked` синхронизирует toggleCheck; строка НЕ
+        // пересобирается — иначе второй клик двойного клика придёт в новый
+        // узел и `dblclick` (редактор, правило 6) не сработает.
         toggleCheck(item, checkboxInput, !checkboxInput.checked, row);
-        render();
+        if (!wasCurrent) {
+          paintCurrent();
+          notifyCurrent();
+        }
         return;
       }
-      render();
+      // Правило 6 требования 11ddd910: с редактором по двойному клику клик
+      // только ставит текущую строку; без него — прежний контракт пикера
+      // (одиночный выбор: клик активирует строку).
+      if (options.onDblActivate !== undefined) {
+        if (!wasCurrent) {
+          paintCurrent();
+          notifyCurrent();
+        }
+        return;
+      }
       options.onActivate?.(item);
+    });
+    // Двойной клик — редактор строки (правило 6); флажковый режим переключается
+    // обычными кликами, редактор поверх — дополнительным событием.
+    row.addEventListener('dblclick', () => {
+      options.onDblActivate?.(item);
     });
 
     return row;
@@ -556,6 +678,14 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
   }
 
   root.addEventListener('keydown', (event) => {
+    const keyEvent = event as KeyboardEvent;
+    // Копирование текущей строки — Ctrl+C (правило 2 требования 11ddd910,
+    // кнопка «Копировать» строки управления).
+    if ((keyEvent.ctrlKey === true || keyEvent.metaKey === true) && (keyEvent.key === 'c' || keyEvent.key === 'C')) {
+      keyEvent.preventDefault();
+      copyCurrent();
+      return;
+    }
     const items = itemsOf();
     const byId = new Map(items.map((item) => [item.id, item]));
     const ids = visible();
@@ -573,12 +703,14 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
         currentId = ids[0] ?? null;
         render();
         scrollCurrentIntoView();
+        notifyCurrent();
         return;
       case 'End':
         event.preventDefault();
         currentId = ids[ids.length - 1] ?? null;
         render();
         scrollCurrentIntoView();
+        notifyCurrent();
         return;
       case 'ArrowRight': {
         event.preventDefault();
@@ -591,6 +723,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
             currentId = child;
             render();
             scrollCurrentIntoView();
+            notifyCurrent();
           }
         } else {
           applyExpand(currentId, true, item);
@@ -612,6 +745,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
             currentId = parent;
             render();
             scrollCurrentIntoView();
+            notifyCurrent();
           }
         }
         return;
@@ -639,6 +773,18 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     }
   });
 
+  /** Копирует текст текущей строки (см. {@link TreeHandle.copyCurrent}). */
+  function copyCurrent(): boolean {
+    if (currentId === null || options.copyText === undefined) return false;
+    const item = itemsOf().find((candidate) => candidate.id === currentId);
+    if (item === undefined) return false;
+    const text = options.copyText(item);
+    options.onCopy?.(text);
+    if (options.clipboard !== undefined) options.clipboard(text);
+    else void navigator.clipboard?.writeText(text);
+    return true;
+  }
+
   const handle: TreeHandle<T> = {
     root,
     render,
@@ -661,6 +807,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       currentId = id;
       render();
       scrollCurrentIntoView();
+      notifyCurrent();
     },
     isExpanded(id) {
       return expanded.has(id);
@@ -669,6 +816,17 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       applyExpand(id, open, itemsOf().find((item) => item.id === id));
       render();
     },
+    revealRow(id) {
+      // Правило 7 требования 11ddd910: после записи нового элемента список
+      // позиционируется на нём — раскрываем цепочку предков, ставим текущей,
+      // прокручиваем.
+      for (const ancestor of treeAncestorIds(itemsOf(), id)) expanded.add(ancestor);
+      currentId = id;
+      render();
+      scrollCurrentIntoView();
+      notifyCurrent();
+    },
+    copyCurrent,
     expand(ids) {
       for (const id of ids) expanded.add(id);
       render();

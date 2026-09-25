@@ -371,36 +371,75 @@ export function showThoughtTypesDialog(): void {
   tableWrap.style.maxHeight = '340px';
   const body = div('form-stack');
 
-  // Toolbar (top of the list, task «Улучшить диалог…»): «Добавить»,
-  // «Свернуть все»/«Развернуть все» and the name-search box.
-  const toolbar = div('form-row type-list-toolbar');
+  // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
+  // диалога, над списком и строкой управления; плейсхолдер — из словаря.
+  const searchRow = div('form-row type-list-search');
   const searchInput = fieldInput() as HTMLInputElement;
   searchInput.type = 'text';
   searchInput.placeholder = t('actions.search');
-  toolbar.append(
-    uiButton({
-      label: t('thoughtTypes.add'),
-      role: 'secondary',
-      size: 's',
-      title: t('thoughtTypes.addHint'),
-      onClick: () => showThoughtTypeEditor(null, onChanged),
-    }),
-    uiButton({
-      label: t('thoughtTypes.collapseAll'),
-      role: 'secondary',
-      size: 's',
-      title: t('thoughtTypes.collapseAll'),
-      onClick: () => collapseAll(),
-    }),
-    uiButton({
-      label: t('thoughtTypes.expandAll'),
-      role: 'secondary',
-      size: 's',
-      title: t('thoughtTypes.expandAll'),
-      onClick: () => expandAll(),
-    }),
-    searchInput,
-  );
+  searchRow.append(searchInput);
+
+  // Правило 2 требования 11ddd910: строка управления НАД списком (под
+  // поиском) — только допустимые для списка кнопки. «Изменить», «Удалить» и
+  // «Копировать» действуют на ТЕКУЩУЮ строку и погасают без неё (см.
+  // `updateButtons`); «Свернуть все»/«Развернуть все» управляют видом дерева,
+  // а не элементами списка, поэтому стоят в конце ряда.
+  const toolbar = div('form-row type-list-toolbar');
+  const addBtn = uiButton({
+    label: t('thoughtTypes.add'),
+    role: 'secondary',
+    size: 's',
+    title: t('thoughtTypes.addHint'),
+    onClick: () => showThoughtTypeEditor(null, onChanged),
+  });
+  const editBtn = uiButton({
+    label: t('listActions.edit'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.editHint'),
+    disabled: true,
+    onClick: () => {
+      const item = currentItem();
+      if (item !== undefined) showThoughtTypeEditor(item.type, onChanged);
+    },
+  });
+  const deleteBtn = uiButton({
+    label: t('actions.delete'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.deleteHint'),
+    disabled: true,
+    onClick: () => {
+      const item = currentItem();
+      // Корневой тип неудалим (сервер отвергает) — кнопка для него погашена.
+      if (item !== undefined && !item.type.is_root) void removeRow(item.type);
+    },
+  });
+  const copyBtn = uiButton({
+    label: t('listActions.copy'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.copyHint'),
+    disabled: true,
+    onClick: () => {
+      tree.copyCurrent();
+    },
+  });
+  const collapseBtn = uiButton({
+    label: t('thoughtTypes.collapseAll'),
+    role: 'secondary',
+    size: 's',
+    title: t('thoughtTypes.collapseAll'),
+    onClick: () => collapseAll(),
+  });
+  const expandBtn = uiButton({
+    label: t('thoughtTypes.expandAll'),
+    role: 'secondary',
+    size: 's',
+    title: t('thoughtTypes.expandAll'),
+    onClick: () => expandAll(),
+  });
+  toolbar.append(addBtn, editBtn, deleteBtn, copyBtn, collapseBtn, expandBtn);
 
   // Состояние загрузки/ошибки живёт рядом с деревом: сам список рисует общий
   // компонент `lib/ui/tree.ts`, а статус его скрывает на время запроса.
@@ -430,6 +469,19 @@ export function showThoughtTypesDialog(): void {
     void reload();
   };
 
+  /** Текущий элемент дерева — на него действуют «Изменить»/«Удалить»/«Копировать». */
+  function currentItem(): TypeTreeItem | undefined {
+    return currentItems.find((item) => item.id === currentRowId);
+  }
+
+  /** Гасит кнопки текущей строки, когда строки нет (или это неудалимый корень). */
+  function updateButtons(): void {
+    const item = currentItem();
+    editBtn.disabled = item === undefined;
+    deleteBtn.disabled = item === undefined || item.type.is_root;
+    copyBtn.disabled = item === undefined;
+  }
+
   // Единое дерево списков (задача d1c15a2d, требование 0086037c): каретка,
   // отступ, флажок-колонки и клавиатура — его; экран задаёт данные, визуал
   // типа и действия строки. Строки — из словаря локализации.
@@ -441,7 +493,20 @@ export function showThoughtTypesDialog(): void {
     emptyText: t('thoughtTypes.empty'),
     emptyHint: t('thoughtTypes.emptyHint'),
     rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
+    // Правило 6 требования 11ddd910 (список, не выбор): клик только ставит
+    // строку текущей, редактор открывают двойной клик и Enter (onActivate).
+    onDblActivate: (item) => showThoughtTypeEditor(item.type, onChanged),
     onActivate: (item) => showThoughtTypeEditor(item.type, onChanged),
+    // Текущая строка правит состояние кнопок управления (правило 2).
+    onCurrentChange: (id) => {
+      currentRowId = id;
+      updateButtons();
+    },
+    // Кнопка «Копировать» и Ctrl+C: текущая строка в буфер обмена.
+    copyText: (item) =>
+      [item.type.name, item.type.description ?? '', String(currentAggregated[item.id] ?? 0)].join(
+        '\t',
+      ),
     columns: [
       {
         key: 'comment',
@@ -497,7 +562,9 @@ export function showThoughtTypesDialog(): void {
     },
   });
   tableWrap.append(status, tree.root);
-  body.append(toolbar, tableWrap);
+  // Правила 1–2 требования 11ddd910: поиск (первая строка), под ним
+  // управление, затем список.
+  body.append(searchRow, toolbar, tableWrap);
 
   async function reload(useCache = false): Promise<void> {
     const scrollTop = tableWrap.scrollTop;
@@ -536,15 +603,14 @@ export function showThoughtTypesDialog(): void {
     // совпадения с цепочкой предков, автораскрытие ветвей.
     tree.setFilter(searchQuery);
     tree.setItems(currentItems);
-    // Текущая строка обязана быть видна: если её цепочка родителей свёрнута,
-    // разворачиваем её (при поиске ветви и так раскрыты). Иначе после создания
-    // типа с нестандартным родителем строку пришлось бы искать вручную.
-    // Прокрутку к текущей строке делает компонент (setCurrentId).
-    if (currentRowId !== null && !tree.getVisibleIds().includes(currentRowId)) {
-      tree.expand(typeRowRevealIds(types, currentRowId));
-    }
-    if (currentRowId !== null) tree.setCurrentId(currentRowId);
-    tableWrap.scrollTop = scrollTop;
+    // Правило 7 требования 11ddd910: текущая строка (только что записанный
+    // тип) обязана быть видна и список позиционируется на ней — цепочка
+    // родителей раскрывается, прокрутку делает фасад (revealRow). Иначе после
+    // создания типа с нестандартным родителем строку пришлось бы искать
+    // вручную (ошибка 51732f9b).
+    if (currentRowId !== null) tree.revealRow(currentRowId);
+    else tableWrap.scrollTop = scrollTop;
+    updateButtons();
   }
 
   /** «Развернуть все»: opens every branch of the hierarchy. */
@@ -581,6 +647,7 @@ export function showThoughtTypesDialog(): void {
       notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: type.id }));
       // Удалённый тип не может остаться текущей строкой.
       if (currentRowId === type.id) currentRowId = null;
+      updateButtons();
       onChanged();
     } catch (err) {
       errorDialog(t('thoughtTypes.delete'), err);
