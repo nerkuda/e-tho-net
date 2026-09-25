@@ -12,7 +12,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
@@ -396,10 +396,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
         'значения свойств (`outside_type: true` — свойство не на цепочке типа владельца, карточка не ' +
         'пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
-        '`meta.permanent` — полный текст постоянного комментария (у других выборок превью 2000 ' +
-        'символов; полностью — `etn.comments.get`). `meta.link_stats` — счётчики активных связей по ' +
-        '`(link_type_id, direction)` с именами типа; помеченные на удаление рёбра не считаются. ' +
-        '`meta.views` — эффективные отборы мысли (имя, описание, тип-владелец), исполняются через ' +
+        '`meta.permanent` — полный текст постоянного комментария (полностью — `etn.comments.get`). ' +
+        '`meta.link_stats` — счётчики активных связей по `(link_type_id, direction)` с именами типа. ' +
+        '`meta.views` — эффективные отборы мысли (имя, описание); исполняются через ' +
         '`etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
@@ -472,6 +471,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '(счётчики с именами типов связей), ' +
         'полнотекстовый `comment_preview` и `meta.views` — ' +
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
+        'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
+        '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
         'Лимит — `maxNodesPerSubgraph`.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
