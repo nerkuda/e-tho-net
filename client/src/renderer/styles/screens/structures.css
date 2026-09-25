@@ -104,9 +104,14 @@
 }
 
 /* Comma-field: displays selected thoughts/types as styled chips; click opens
- * the picker dialog (§15.3). */
+ * the picker dialog (§15.3). Композитное ОДНОСТРОЧНОЕ поле: высоту одной
+ * строки несёт сама рамка по токену `--field-h` (требование b0e0e5a4);
+ * многострочным становится только когда значения-облачка не помещаются в
+ * строку (растёт по содержимому — `min-height`, не `height`). Вложенное поле
+ * добавления собственной высоты не задаёт: иначе его 30px из общего правила
+ * (styles/base.css) раздували рамку до ~40px (ошибка c9ef88e7). */
 .st-f-chipfield {
-  min-height: 26px;
+  min-height: var(--field-h);
   padding: 3px 8px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -117,6 +122,11 @@
   align-items: center;
   gap: 2px 0;
   font-size: 13px;
+}
+
+.st-f-chipfield input,
+.st-f-chipfield select {
+  height: auto;
 }
 
 .st-f-chipfield:hover,
