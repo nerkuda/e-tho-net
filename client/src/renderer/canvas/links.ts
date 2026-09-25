@@ -2,9 +2,11 @@
  * SVG link overlay (H6, 08-ui-spec.md §2.4):
  *
  * Draws every link among the visible thoughts (focus + parents + children +
- * siblings), sourced from `focus.edges`. Only pairs whose both clouds fully
- * fit their zone's visible scroll window get a line — clouds clipped by the
- * virtualized overscan carry no lines until scrolled into view (§2.5). Each
+ * siblings), sourced from `focus.edges`. Only pairs whose both clouds are
+ * visible get a line — a cloud fully scrolled out of its zone's window (the
+ * virtualized overscan, §2.5) carries no line, while a cloud merely PARTLY
+ * clipped by the zone edge keeps its line and its hit curve (ошибка 16a77453).
+ * Each
  * directed pair (source→target) is one cubic Bézier curve from the source's
  * bottom ellipse to the target's top ellipse, stroked with a source→target
  * colour gradient (L14); several links of the same pair render as a thicker
@@ -374,35 +376,40 @@ function clearSvg(): void {
 }
 
 /**
- * True when the cloud is fully inside its zone's visible (clipped) scroll
- * window. Clouds rendered into the overscan rows stick out of the clipped
- * zone (08-ui-spec.md §2.5) and must not carry link lines until they fully
- * fit. Clouds outside any zone (the focus row) are always visible.
+ * True when the cloud is at least partly inside its zone's visible (clipped)
+ * scroll window. Clouds rendered into the overscan rows are fully clipped
+ * outside that window (08-ui-spec.md §2.5) — a line ending at such a cloud
+ * would float over other zones and mislead, so they carry no line. A cloud
+ * that is only PARTLY scrolled past the zone edge is still on screen: its line
+ * must exist and stay a hover target on any height of the map (ошибка
+ * 16a77453). Requiring FULL containment used to drop the line — and with it
+ * the hit curve, killing hover — the moment a cloud was clipped by a single
+ * pixel at the top of a scrolled zone. Clouds outside any zone (the focus row)
+ * are always visible.
  */
 function isCloudVisible(cloud: HTMLElement): boolean {
   const zone = cloud.closest('.zone');
   if (zone === null) return true;
-  return rectFitsInside(cloud.getBoundingClientRect(), zone.getBoundingClientRect());
+  return rectsOverlap(cloud.getBoundingClientRect(), zone.getBoundingClientRect());
 }
 
-/** Layout rounding tolerance for the nested-rect check, px. */
+/** Minimum visible overlap of a cloud with its zone window, px — an overlap
+ *  thinner than this is a fully-clipped overscan cloud plus sub-pixel jitter. */
 const VISIBILITY_EPSILON_PX = 1;
 
-/** Pure geometry: `inner` fully inside `outer` (within `epsilon` per side). */
-function rectFitsInside(
-  inner: DOMRectLike,
-  outer: DOMRectLike,
+/** Pure geometry: `a` and `b` overlap by more than `epsilon` on BOTH axes (a
+ *  cloud is visible only when it actually has some area inside the window). */
+function rectsOverlap(
+  a: DOMRectLike,
+  b: DOMRectLike,
   epsilon = VISIBILITY_EPSILON_PX,
 ): boolean {
-  return (
-    inner.left >= outer.left - epsilon &&
-    inner.right <= outer.right + epsilon &&
-    inner.top >= outer.top - epsilon &&
-    inner.bottom <= outer.bottom + epsilon
-  );
+  const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return overlapX > epsilon && overlapY > epsilon;
 }
 
-/** Minimal rect shape for {@link rectFitsInside} (DOMRect in the renderer). */
+/** Minimal rect shape for {@link rectsOverlap} (DOMRect in the renderer). */
 interface DOMRectLike {
   left: number;
   right: number;
@@ -1172,7 +1179,7 @@ export const linksInternals = {
   linkStyle,
   groupBundles,
   bundleTrashed,
-  rectFitsInside,
+  rectsOverlap,
   edgeGeometry,
   edgePointAt,
 };

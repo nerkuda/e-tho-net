@@ -1,8 +1,9 @@
 /**
  * Unit tests for the link-overlay helpers
  * (client/src/renderer/canvas/links.ts): directed-pair bundling that drives
- * the line-per-pair rendering, and the endpoint-visibility geometry that
- * hides lines to clouds clipped outside a zone's scroll window. The DOM/SVG
+ * the line-per-pair rendering, and the endpoint-visibility geometry that drops
+ * lines only to clouds fully scrolled out of a zone's window (a partly clipped
+ * cloud keeps its line — ошибка 16a77453). The DOM/SVG
  * rendering itself is covered by manual/E2E checks.
  */
 
@@ -19,7 +20,7 @@ import { assembledStylesFile } from './renderer-css.js';
 const LINKS_SRC = resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'links.ts');
 const STYLES_SRC = assembledStylesFile();
 
-const { groupBundles, bundleTrashed, rectFitsInside, edgeGeometry, edgePointAt } =
+const { groupBundles, bundleTrashed, rectsOverlap, edgeGeometry, edgePointAt } =
   linksInternals;
 
 function edge(
@@ -183,27 +184,38 @@ describe('edgePointAt (якорь метки корзины, 355319d4)', () => {
   });
 });
 
-describe('rectFitsInside (visibility of link endpoints)', () => {
+describe('rectsOverlap (visibility of link endpoints, 16a77453)', () => {
   const zone = { left: 0, right: 300, top: 0, bottom: 200 };
 
   it('a cloud fully inside the zone scroll window is visible', () => {
-    assert.equal(rectFitsInside({ left: 12, right: 100, top: 10, bottom: 90 }, zone), true);
+    assert.equal(rectsOverlap({ left: 12, right: 100, top: 10, bottom: 90 }, zone), true);
   });
 
-  it('a cloud clipped by the zone edge (overscan row) is not visible', () => {
-    assert.equal(rectFitsInside({ left: 12, right: 100, top: 150, bottom: 260 }, zone), false);
-    assert.equal(rectFitsInside({ left: 12, right: 100, top: -40, bottom: 60 }, zone), false);
-    assert.equal(rectFitsInside({ left: 250, right: 360, top: 10, bottom: 90 }, zone), false);
+  it('a cloud PARTLY clipped by a zone edge keeps its line (верх карты)', () => {
+    // Облачко ушло за верхний край сектора наполовину — линия обязана остаться
+    // (раньше её ронял полноохватный тест containment, а с ней пропадал и hover).
+    assert.equal(rectsOverlap({ left: 12, right: 100, top: -40, bottom: 60 }, zone), true);
+    // То же у нижнего края и у правого.
+    assert.equal(rectsOverlap({ left: 12, right: 100, top: 150, bottom: 260 }, zone), true);
+    assert.equal(rectsOverlap({ left: 250, right: 360, top: 10, bottom: 90 }, zone), true);
   });
 
-  it('tolerates sub-pixel layout rounding but not real overflow', () => {
+  it('a cloud fully clipped outside the window (overscan row) carries no line', () => {
+    assert.equal(rectsOverlap({ left: 12, right: 100, top: -120, bottom: -20 }, zone), false);
+    assert.equal(rectsOverlap({ left: 12, right: 100, top: 210, bottom: 300 }, zone), false);
+    assert.equal(rectsOverlap({ left: -120, right: -20, top: 10, bottom: 90 }, zone), false);
+  });
+
+  it('ignores a sub-pixel graze of the clip edge, counts a real overlap', () => {
+    // Облачко полностью за краем: пересечение по Y всего 0.4px — линии нет.
     assert.equal(
-      rectFitsInside({ left: 0.4, right: 300.6, top: -0.4, bottom: 200.4 }, zone),
-      true,
-    );
-    assert.equal(
-      rectFitsInside({ left: 0.4, right: 300.6, top: -0.4, bottom: 205 }, zone),
+      rectsOverlap({ left: 0.4, right: 300.6, top: -40, bottom: 0.4 }, zone),
       false,
+    );
+    // Заметно видимая часть — линии быть.
+    assert.equal(
+      rectsOverlap({ left: 0.4, right: 300.6, top: -40, bottom: 40 }, zone),
+      true,
     );
   });
 });
