@@ -24,6 +24,13 @@
   outline: none;
 }
 
+/* Атрибут `hidden` (владелец скрывает таблицу на время загрузки/ошибки) не
+   должен проигрывать авторскому `display: flex` — иначе состояние прячется
+   только визуально «между делом» и таблица остаётся видимой. */
+.ui-table[hidden] {
+  display: none;
+}
+
 /* Фокус клавиатуры: таблица — единый фокусный «виджет», кольцо по токену
    акцента, как у прочих контролов ETN. */
 .ui-table:focus-visible {
@@ -46,4 +53,24 @@
 
 .ui-table-cell-empty {
   color: var(--text-faint);
+}
+
+/* Режим `nav: 'cell'` (таблица хроники): обёртка ячейки, подсветка текущей
+   ячейки и выбранного фокусируемого элемента (чипа). Обёртку и элементы
+   подсвечивает фасад классами, стиль — здесь (токен акцента, как у прочих
+   контролов ETN). */
+.ui-table-cell {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ui-table-cell-current {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ui-table-focusable-current {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

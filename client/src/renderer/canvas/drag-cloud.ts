@@ -53,6 +53,7 @@ import {
 } from '../lib/link-ops.js';
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { store } from '../state.js';
+import { TABLE_ROW_KEY_ATTR } from '../lib/ui/table.js';
 import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from './canvas.js';
 
 type OrderableDir = 'parents' | 'children';
@@ -433,9 +434,11 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
   // The chronicle view (L20): drops inside its own DOM. A row attaches the
   // dragged thought to that row's comment; the table head/empty space starts a
   // new comment; the filter panel adds the thought to the «мысли» field.
-  const chronicleRow = el.closest<HTMLElement>('.chron-row[data-row-id]');
+  // The chronicle table is the unit facade `lib/ui/table.ts` in cell mode: its
+  // cell wrapper carries the row key in `data-row-key` (TABLE_ROW_KEY_ATTR).
+  const chronicleRow = el.closest<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}]`);
   if (chronicleRow !== null) {
-    const rowId = chronicleRow.dataset['rowId'];
+    const rowId = chronicleRow.dataset['rowKey'];
     if (rowId !== undefined) {
       return {
         kind: 'chronicle-attach',
@@ -445,7 +448,7 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
       };
     }
   }
-  const chronicleTable = el.closest<HTMLElement>('.chron-table-head, .chron-table-wrap');
+  const chronicleTable = el.closest<HTMLElement>('.chron-table-wrap');
   if (chronicleTable !== null) {
     return {
       kind: 'chronicle-new',

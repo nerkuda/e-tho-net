@@ -2,17 +2,22 @@
  * «Хроника» workspace view (L20, 08-ui-spec.md §17).
  *
  * The third workspace view: a filter panel on top (four rows), the table of
- * chronological comments (С / По / Заголовок / Мысли·связи / Кратко, paged by
- * 50), the bottom view/edit area (same as the editor's «Хроника» tab, plus
- * target chips). Thoughts opened here land in the unified visit history
- * (0.5.5) shared by every screen — the chronicle keeps no history of its own
- * anymore.
+ * chronological comments (С / По / Заголовок / Мысли·связи / Автор / Создан /
+ * Изменён / Кратко, paged by 50), the bottom view/edit area (same as the
+ * editor's «Хроника» tab, plus target chips). Thoughts opened here land in the
+ * unified visit history (0.5.5) shared by every screen — the chronicle keeps no
+ * history of its own anymore.
  *
- * The table is keyboard-navigable: ↑/↓ move between rows, ←/→ between
- * columns (inside the «мысли/связи» column — between chips), Tab skips to the
- * next column, Enter opens the focused chip. Thought chips are drag sources;
- * drops land on a row (attach), on the table head/empty space (new comment)
- * or on the filter panel (add to «мысли»).
+ * The table is the unit facade `lib/ui/table.ts` in cell mode (`nav: 'cell'`):
+ * ↑/↓ move between rows, ←/→ between columns and, inside a column, between its
+ * focusable elements (chips), Tab moves to the next column, Enter activates the
+ * focused chip. Thought chips are drag sources; drops land on a row (attach),
+ * on the table head/empty space (new comment) or on the filter panel (add to
+ * «мысли»). Sorting is controlled by the facade (`defaultSort` +
+ * `sortMode: 'toggle'`: Создан/Изменён cycle desc↔asc with the vendor header
+ * marker). The custom table markup (`<table>`, arrow handlers, cursor repaint,
+ * local sort) was removed with the Z5 translation — the guard
+ * `tests/guard-ui-tables.test.ts` no longer allows this file.
  */
 
 import {
@@ -43,6 +48,12 @@ import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
+import {
+  createTable,
+  TABLE_FOCUSABLE_CLASS,
+  type TableColumn,
+  type TableHandle,
+} from '../../lib/ui/table.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../../lib/metadata.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
@@ -95,11 +106,12 @@ let selectedRowId: string | null = null;
 /** Fresh-comment mode: `null` — show the selected comment; preset targets otherwise. */
 let newTargets: CommentTarget[] | null = null;
 let tableWrap: HTMLElement | null = null;
-let tableBody: HTMLElement | null = null;
+/** Статус таблицы (загрузка/ошибка) — сосед таблицы внутри стабильной обёртки. */
+let tableStatus: HTMLElement | null = null;
 let editorArea: HTMLElement | null = null;
 let pagerLabel: HTMLElement | null = null;
-/** Keyboard cursor: row index + column index + chip index (within the chips cell). */
-let cursor = { row: -1, col: 0, chip: 0 };
+/** Единая таблица записей — фасад `lib/ui/table.ts` в режиме ячеек. */
+let table: TableHandle<ChronicleRow> | null = null;
 /** Loading guard so the table does not flicker with stale data. */
 let querySeq = 0;
 
@@ -124,7 +136,6 @@ export async function ensureChronicleInitialised(): Promise<void> {
   offset = 0;
   selectedRowId = null;
   newTargets = null;
-  cursor = { row: -1, col: 0, chip: 0 };
 
   // Q4: prefer per-tab persisted state, fall back to legacy ui_state.
   try {
@@ -191,6 +202,14 @@ export function mountChronicle(hostEl: HTMLElement): void {
   const top = div('chron-top');
   const wrap = div('admin-table-wrap chron-table-wrap');
   tableWrap = wrap;
+  // Единая таблица строится один раз при монтировании; обновление данных —
+  // `setRows`, поэтому обёртка и сам элемент таблицы не пересобираются
+  // (высота, вытянутая сплиттером, не теряется).
+  tableStatus = div('muted');
+  tableStatus.hidden = true;
+  table = buildTable();
+  table.element.classList.add('chron-table');
+  wrap.append(tableStatus, table.element);
   const pager = div('chron-pager');
   pagerLabel = span('', 'muted');
   pager.append(
@@ -289,7 +308,6 @@ async function applyQuery(reset: boolean): Promise<void> {
       newTargets = null;
       showEmptyEditor();
     }
-    if (cursor.row >= rows.length) cursor = { row: Math.max(0, rows.length - 1), col: 0, chip: 0 };
     renderTable();
   } catch (err) {
     if (seq !== querySeq) return;
@@ -311,13 +329,24 @@ export function invalidateChronicleThought(id: string): void {
 }
 
 function renderLoading(): void {
-  if (tableWrap === null) return;
-  tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  if (tableStatus === null || table === null) return;
+  tableStatus.hidden = false;
+  tableStatus.textContent = t('common.loading');
+  table.element.hidden = true;
 }
 
 function renderError(err: unknown): void {
-  if (tableWrap === null) return;
-  tableWrap.replaceChildren(operationError(err));
+  if (tableStatus === null || table === null) return;
+  tableStatus.hidden = false;
+  tableStatus.replaceChildren(operationError(err));
+  table.element.hidden = true;
+}
+
+/** Показывает таблицу (снимает статус загрузки/ошибки). */
+function showTable(): void {
+  if (tableStatus === null || table === null) return;
+  tableStatus.hidden = true;
+  table.element.hidden = false;
 }
 
 function gotoPage(next: number): void {
@@ -329,143 +358,151 @@ function gotoPage(next: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// Table rendering
+// Table (фасад `lib/ui/table.ts`, режим ячеек)
 // ---------------------------------------------------------------------------
 
-const COLUMNS = ['С', 'По', 'Заголовок', 'Мысли/связи', 'Автор', 'Создан', 'Изменён', 'Кратко'] as const;
-/** Index of the «мысли/связи» column (chip navigation lives there). */
-const CHIPS_COL = 3;
-
-function renderTable(): void {
-  if (tableWrap === null || pagerLabel === null) return;
-  const table = el('table', 'table-list chron-table');
-  const head = el('thead', 'chron-table-head');
-  const headRow = el('tr');
-  headRow.append(
-    el('th', undefined, 'С'),
-    el('th', undefined, 'По'),
-    el('th', undefined, 'Заголовок'),
-    el('th', undefined, 'Мысли/связи'),
-    el('th', undefined, 'Автор'),
-    sortableHeader('Создан', 'created_at'),
-    sortableHeader('Изменён', 'updated_at'),
-    el('th', undefined, 'Кратко'),
-  );
-  head.append(headRow);
-  table.append(head);
-
-  // Дефолтная сортировка — по `created_at_ms` DESC (задача 04cd9794). На
-  // странице сервер уже отсортировал по `valid_from`; клиент применяет
-  // дополнительный порядок только когда задана колонка сортировки через
-  // заголовок (по умолчанию используем «created_at_ms DESC» — самые новые
-  // сверху).
-  const sorted = applyLocalSort(rows);
-  tableBody = el('tbody');
-  if (sorted.length === 0) {
-    const row = el('tr');
-    const cell = el('td', 'muted', 'Хронологических комментариев нет.');
-    cell.colSpan = COLUMNS.length;
-    row.append(cell);
-    tableBody.append(row);
-  } else {
-    sorted.forEach((row) => tableBody!.append(buildRow(row)));
-  }
-  table.append(tableBody);
-  tableWrap.replaceChildren(table);
-  repaintPager();
-
-  table.addEventListener('click', (event) => {
-    const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>('.chron-row');
-    if (tr?.dataset['rowId'] !== undefined) {
-      const index = sorted.findIndex((r) => r.id === tr.dataset['rowId']);
-      if (index >= 0) {
-        cursor = { row: index, col: 0, chip: 0 };
-        selectRow(sorted[index]!);
-        repaintCursor();
-      }
-    }
+/** Единая таблица записей: колонки §17, сортировка по датам, DnD чипов. */
+function buildTable(): TableHandle<ChronicleRow> {
+  table?.destroy();
+  return createTable<ChronicleRow>({
+    columns: chronicleColumns(),
+    rows: [],
+    rowKey: (row) => row.id,
+    emptyText: t('chrono.empty'),
+    ariaLabel: t('chrono.aria'),
+    // Клавиатура §17: строки (↑/↓) + колонки и чипы (←/→, Tab), Enter — чип.
+    nav: 'cell',
+    // Сортировка §17: Создан/Изменён, цикл desc↔asc, по умолчанию Создан DESC.
+    sortMode: 'toggle',
+    defaultSort: { key: 'created_at', dir: 'desc' },
+    current: selectedRowId,
+    // Текущую строку подсвечивает фасад; смена текущей строки грузит запись в
+    // нижнюю область (замена собственного обработчика стрелок из §17).
+    onCurrentChange: (_key, row) => {
+      if (row !== null) selectRow(row);
+    },
+    rowMenu: (row) => rowMenuItems(row.id),
   });
-  table.addEventListener('contextmenu', (event) => {
-    const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>('.chron-row');
-    if (tr?.dataset['rowId'] === undefined) return;
-    event.preventDefault();
-    const row = sorted.find((r) => r.id === tr.dataset['rowId']);
-    if (row !== undefined) showRowMenu(event.clientX, event.clientY, row.id);
-  });
-  table.addEventListener('keydown', onTableKeydown);
-
-  /** Clickable header that toggles sort by the matching timestamp column. */
-  function sortableHeader(label: string, key: 'created_at' | 'updated_at'): HTMLTableCellElement {
-    const th = el('th', 'sortable') as HTMLTableCellElement;
-    th.append(el('span', undefined, label));
-    if (sortKey === key) {
-      th.append(el('span', 'sort-marker', sortDir === 'desc' ? ' ▼' : ' ▲'));
-    }
-    th.addEventListener('click', () => {
-      if (sortKey === key) {
-        sortDir = sortDir === 'desc' ? 'asc' : 'desc';
-      } else {
-        sortKey = key;
-        sortDir = 'desc';
-      }
-      renderTable();
-    });
-    return th;
-  }
 }
 
-/** Active chrono sort column and direction (задача 04cd9794). */
-type SortKey = 'created_at' | 'updated_at';
-type SortDir = 'asc' | 'desc';
-let sortKey: SortKey = 'created_at';
-let sortDir: SortDir = 'desc';
+/** Колонки таблицы хроники (§17 + авторы и даты, требование 9ef6d037). */
+function chronicleColumns(): TableColumn<ChronicleRow>[] {
+  return [
+    {
+      key: 'valid_from',
+      header: t('chrono.col.from'),
+      width: '7rem',
+      text: (row) => fmtDate(row.valid_from),
+      render: (row) => dateCell(fmtDate(row.valid_from), beyondFrom(row)),
+    },
+    {
+      key: 'valid_to',
+      header: t('chrono.col.to'),
+      width: '7rem',
+      text: (row) => (row.valid_to === null ? '…' : fmtDate(row.valid_to)),
+      render: (row) => dateCell(row.valid_to === null ? '…' : fmtDate(row.valid_to), beyondTo(row)),
+    },
+    {
+      key: 'title',
+      header: t('chrono.col.title'),
+      width: '14rem',
+      text: (row) => row.title ?? '—',
+      render: (row) => box('chron-title', span(row.title ?? '—')),
+    },
+    {
+      key: 'targets',
+      header: t('chrono.col.targets'),
+      text: (row) => targetsText(row.targets),
+      render: (row) => targetsCell(row),
+    },
+    {
+      key: 'author',
+      header: t('chrono.col.author'),
+      width: '10rem',
+      text: (row) => row.created_by,
+      render: (row) =>
+        box(
+          'author-cell',
+          renderAuthorPair(row.created_by, row.updated_by, row.updated_at, row.created_at),
+        ),
+    },
+    {
+      key: 'created_at',
+      header: t('chrono.col.created'),
+      width: '11rem',
+      sortable: true,
+      defaultSortDir: 'desc',
+      sortValue: (row) => parseTime(row.created_at),
+      text: (row) => formatDateTime(row.created_at),
+      render: (row) => box('date-cell', span(formatDateTime(row.created_at))),
+    },
+    {
+      key: 'updated_at',
+      header: t('chrono.col.updated'),
+      width: '11rem',
+      sortable: true,
+      defaultSortDir: 'desc',
+      sortValue: (row) => parseTime(row.updated_at),
+      text: (row) => formatDateTime(row.updated_at),
+      render: (row) => box('date-cell', span(formatDateTime(row.updated_at))),
+    },
+    {
+      key: 'snippet',
+      header: t('chrono.col.snippet'),
+      text: (row) => row.snippet,
+      render: (row) => {
+        const cell = div('chron-snippet');
+        renderHtml(cell, row.snippet);
+        return cell;
+      },
+    },
+  ];
+}
 
-/** Сортирует ленту по выбранной колонке. Дефолт — `created_at` DESC. */
-function applyLocalSort(list: ChronicleRow[]): ChronicleRow[] {
-  const parse = (v: string): number => {
-    const t = Date.parse(v);
-    return Number.isNaN(t) ? 0 : t;
-  };
-  const keyValue = (r: ChronicleRow): number =>
-    sortKey === 'updated_at' ? parse(r.updated_at) : parse(r.created_at);
-  return list.slice().sort((a, b) => {
-    const diff = keyValue(a) - keyValue(b);
-    return sortDir === 'desc' ? -diff : diff;
-  });
+/** Дата с приглушением, если она за пределами периода отбора (§17). */
+function dateCell(text: string, muted: boolean): HTMLElement {
+  const cell = div(muted ? 'chron-date muted' : 'chron-date');
+  cell.append(span(text));
+  return cell;
+}
+
+function box(cls: string, content: Node): HTMLElement {
+  const cell = div(cls);
+  cell.append(content);
+  return cell;
+}
+
+/** «с» серым, если начало за пределами периода. */
+function beyondFrom(row: ChronicleRow): boolean {
+  const filter = getFilterState();
+  return filter.dateFrom !== '' && row.valid_from < filter.dateFrom;
+}
+
+/** «по» серым, если конец за пределами периода или запись открыта. */
+function beyondTo(row: ChronicleRow): boolean {
+  const filter = getFilterState();
+  return filter.dateTo !== '' && (row.valid_to === null || row.valid_to > filter.dateTo);
+}
+
+/** Миллисекундная метка даты (для сортировки ленты, требование 9ef6d037). */
+function parseTime(value: string): number {
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function renderTable(): void {
+  if (table === null || pagerLabel === null) return;
+  showTable();
+  table.setRows(rows);
+  table.setCurrent(selectedRowId);
+  repaintPager();
 }
 
 function repaintPager(): void {
   if (pagerLabel === null) return;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + rows.length, total);
-  pagerLabel.textContent = `Записи ${from}–${to} из ${total}`;
-}
-
-/** One table row. */
-function buildRow(row: ChronicleRow): HTMLElement {
-  const tr = el('tr', 'chron-row');
-  tr.dataset['rowId'] = row.id;
-  tr.tabIndex = 0;
-  if (row.id === selectedRowId) tr.classList.add('selected');
-
-  const filter = getFilterState();
-  const fromCell = el('td', 'chron-date', fmtDate(row.valid_from));
-  if (filter.dateFrom !== '' && row.valid_from < filter.dateFrom) fromCell.classList.add('muted');
-  const toCell = el('td', 'chron-date', row.valid_to === null ? '…' : fmtDate(row.valid_to));
-  if (filter.dateTo !== '' && (row.valid_to === null || row.valid_to > filter.dateTo)) {
-    toCell.classList.add('muted');
-  }
-  const titleCell = el('td', 'chron-title', row.title ?? '—');
-  const targetsCell = el('td', 'chron-targets');
-  for (const chip of buildTargetChips(row.targets, row.id)) targetsCell.append(chip);
-  const authorCell = el('td', 'author-cell');
-  authorCell.append(renderAuthorPair(row.created_by, row.updated_by, row.updated_at, row.created_at));
-  const createdAtCell = el('td', 'date-cell', formatDateTime(row.created_at));
-  const updatedAtCell = el('td', 'date-cell', formatDateTime(row.updated_at));
-  const snippetCell = el('td', 'chron-snippet');
-  renderHtml(snippetCell, row.snippet);
-  tr.append(fromCell, toCell, titleCell, targetsCell, authorCell, createdAtCell, updatedAtCell, snippetCell);
-  return tr;
+  pagerLabel.textContent = t('chrono.pager.range', [from, to, total]);
 }
 
 /** The «source — тип — target» heading used for link previews (a link has no
@@ -477,12 +514,36 @@ function linkChipTitle(sourceTitle: string, typeForward: string | null, targetTi
     : `${sourceTitle} — ${typeForward} — ${targetTitle}`;
 }
 
+/** Текст привязок колонки для копирования (TSV). */
+function targetsText(targets: ChronicleTarget[]): string {
+  return targets
+    .map((target) =>
+      target.kind === 'thought'
+        ? target.thought.title
+        : linkChipTitle(
+            target.link.source.title,
+            target.link.type_name_forward,
+            target.link.target.title,
+          ),
+    )
+    .join(', ');
+}
+
+/** Ячейка «мысли/связи»: чипы привязок (фокусируемые элементы ячейки). */
+function targetsCell(row: ChronicleRow): HTMLElement {
+  const cell = div('chron-targets');
+  for (const chip of buildTargetChips(row.targets, row.id)) cell.append(chip);
+  return cell;
+}
+
 /** Builds the chip list of the «мысли/связи» column. */
 function buildTargetChips(targets: ChronicleTarget[], rowId: string): HTMLElement[] {
   return targets.map((target) => {
     if (target.kind === 'thought') {
       const chip = thoughtChip(target.thought);
-      chip.classList.add('chron-chip');
+      // Фокусируемый элемент ячейки: фасад ходит по нему ←/→ и активирует Enter,
+      // проставляя подсветку (режим `nav: 'cell'`).
+      chip.classList.add(TABLE_FOCUSABLE_CLASS);
       chip.addEventListener('click', (e) => {
         e.stopPropagation();
         void openChronicleThought(target.thought.id);
@@ -496,6 +557,7 @@ function buildTargetChips(targets: ChronicleTarget[], rowId: string): HTMLElemen
       return chip;
     }
     const chip = el('span', 'chron-chip link');
+    chip.classList.add(TABLE_FOCUSABLE_CLASS);
     const title = linkChipTitle(
       target.link.source.title,
       target.link.type_name_forward,
@@ -531,96 +593,13 @@ export function thoughtChip(ref: ThoughtRef): HTMLElement {
   // Мини-облачко собирает общая фабрика: разметка, значок (своя иконка, иначе
   // типовая по цепочке, иначе 💭), цвета и начертание, бледность неактуальной,
   // метка корзины у помеченной; обрезка названия — раскладкой с подсказкой.
-  // Класс `chron-chip thought` сохраняет навигацию таблицы (repaintCursor
-  // ищет `.chron-chip`) и стиль строки-чипа.
+  // Класс `chron-chip thought` — стиль строки-чипа (навигацию ведёт фасад по
+  // `ui-table-focusable`).
   const chip = createThoughtCloud(ref, { profile: 'chip' });
   chip.classList.add('chron-chip', 'thought');
   // Ctrl+hover on a thought chip shows its permanent comment (preview stage 3).
   markThoughtCommentPreview(chip, ref.id, ref.title);
   return chip;
-}
-
-/** Repaints the keyboard cursor highlight over the current table. */
-function repaintCursor(): void {
-  if (tableBody === null) return;
-  const trs = Array.from(tableBody.querySelectorAll<HTMLElement>('.chron-row'));
-  for (let i = 0; i < trs.length; i++) {
-    const tr = trs[i];
-    if (tr === undefined) continue;
-    tr.querySelectorAll('.cell-selected').forEach((c) => c.classList.remove('cell-selected'));
-    tr.querySelectorAll('.chip-selected').forEach((c) => c.classList.remove('chip-selected'));
-    if (i !== cursor.row) continue;
-    const cells = Array.from(tr.children).filter((c): c is HTMLElement => c instanceof HTMLElement);
-    const cell = cells[Math.min(cursor.col, cells.length - 1)];
-    cell?.classList.add('cell-selected');
-    if (cursor.col === CHIPS_COL) {
-      const chips = Array.from(cell?.querySelectorAll<HTMLElement>('.chron-chip') ?? []);
-      chips[Math.min(cursor.chip, chips.length - 1)]?.classList.add('chip-selected');
-    }
-  }
-}
-
-/** Arrow-key navigation inside the table (rows, columns, chips; Tab; Enter). */
-function onTableKeydown(event: KeyboardEvent): void {
-  if (rows.length === 0) return;
-  const clampRow = (n: number): number => Math.max(0, Math.min(n, rows.length - 1));
-  const chipsCount = (): number => {
-    const tr = tableBody?.querySelectorAll<HTMLElement>('.chron-row')[cursor.row];
-    if (tr === undefined) return 0;
-    const cells = Array.from(tr.children).filter((c): c is HTMLElement => c instanceof HTMLElement);
-    return cells[CHIPS_COL]?.querySelectorAll<HTMLElement>('.chron-chip').length ?? 0;
-  };
-  switch (event.key) {
-    case 'ArrowDown':
-      event.preventDefault();
-      cursor = { row: clampRow(cursor.row + 1), col: cursor.col, chip: 0 };
-      selectRow(rows[cursor.row]!);
-      repaintCursor();
-      break;
-    case 'ArrowUp':
-      event.preventDefault();
-      cursor = { row: clampRow(cursor.row - 1), col: cursor.col, chip: 0 };
-      selectRow(rows[cursor.row]!);
-      repaintCursor();
-      break;
-    case 'ArrowRight':
-      event.preventDefault();
-      if (cursor.col === CHIPS_COL && cursor.chip < chipsCount() - 1) {
-        cursor = { ...cursor, chip: cursor.chip + 1 };
-      } else {
-        cursor = { ...cursor, col: Math.min(COLUMNS.length - 1, cursor.col + 1), chip: 0 };
-      }
-      repaintCursor();
-      break;
-    case 'ArrowLeft':
-      event.preventDefault();
-      if (cursor.col === CHIPS_COL && cursor.chip > 0) {
-        cursor = { ...cursor, chip: cursor.chip - 1 };
-      } else {
-        cursor = { ...cursor, col: Math.max(0, cursor.col - 1), chip: 0 };
-      }
-      repaintCursor();
-      break;
-    case 'Tab':
-      event.preventDefault();
-      cursor = { ...cursor, col: Math.min(COLUMNS.length - 1, cursor.col + 1), chip: 0 };
-      repaintCursor();
-      break;
-    case 'Enter': {
-      event.preventDefault();
-      const tr = tableBody?.querySelectorAll<HTMLElement>('.chron-row')[cursor.row];
-      const selectedChip = tr?.querySelector<HTMLElement>('.chip-selected');
-      if (selectedChip === undefined) return;
-      const row = rows[cursor.row];
-      const chip = row?.targets[Math.min(cursor.chip, (row?.targets.length ?? 1) - 1)];
-      if (chip === undefined) return;
-      if (chip.kind === 'thought') void openChronicleThought(chip.thought.id);
-      else void openChronicleLinkById(chip.link.id);
-      break;
-    }
-    default:
-      break;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -647,6 +626,7 @@ function showEmptyEditor(): void {
   if (editorArea === null) return;
   selectedRowId = null;
   newTargets = null;
+  table?.setCurrent(null);
   const shell = commentShell({
     variant: 'fill',
     state: { kind: 'empty', text: 'Выберите запись из таблицы или добавьте новую.' },
@@ -901,8 +881,9 @@ async function removeComment(existing: Comment): Promise<void> {
 // Row context menu (Добавить / Копировать / Удалить)
 // ---------------------------------------------------------------------------
 
-function showRowMenu(x: number, y: number, rowId: string): void {
-  const items: MenuItem[] = [
+/** Пункты контекстного меню строки (Добавить / Копировать / Удалить). */
+function rowMenuItems(rowId: string): MenuItem[] {
+  return [
     menuAction(t('chrono.menu.add'), () => void startNewFromFilter()),
     menuAction(t('chrono.menu.copy'), () => void copyComment(rowId)),
     MENU_SEPARATOR,
@@ -916,7 +897,6 @@ function showRowMenu(x: number, y: number, rowId: string): void {
       { danger: true },
     ),
   ];
-  showMenuAt(x, y, items);
 }
 
 /** Starts a fresh comment whose attachments default to the filter's «мысли». */
@@ -936,8 +916,7 @@ async function startNewFromFilter(): Promise<void> {
 function startNew(targets: CommentTarget[]): void {
   selectedRowId = null;
   newTargets = targets;
-  cursor = { row: -1, col: 0, chip: 0 };
-  repaintTableSelection();
+  table?.setCurrent(null);
   buildEditor(null, true);
 }
 
@@ -960,13 +939,6 @@ async function copyComment(id: string): Promise<void> {
   } catch (err) {
     notice(`Не удалось скопировать: ${errText(err)}`, 'error');
   }
-}
-
-function repaintTableSelection(): void {
-  if (tableBody === null) return;
-  tableBody.querySelectorAll<HTMLElement>('.chron-row').forEach((tr) => {
-    tr.classList.toggle('selected', tr.dataset['rowId'] === selectedRowId);
-  });
 }
 
 // ---------------------------------------------------------------------------

@@ -471,3 +471,222 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     assert.equal(stub.columnSets.length, before + 1, 'refresh пересобирает колонки');
   });
 });
+
+// --- Расширение фасада: управляемая сортировка и режим ячеек (задача 20ac6917)
+
+describe('lib/ui/table: управляемая сортировка (задача 20ac6917)', () => {
+  it('cycleSort toggle: desc↔asc без «нет», новая колонка — заданное направление', async () => {
+    const { table } = await load();
+    const first = table.cycleSort(table.NO_SORT, 'created_at', { mode: 'toggle', dir: 'desc' });
+    assert.deepEqual(first, { key: 'created_at', dir: 'desc' });
+    const flipped = table.cycleSort(first, 'created_at', { mode: 'toggle' });
+    assert.deepEqual(flipped, { key: 'created_at', dir: 'asc' });
+    const back = table.cycleSort(flipped, 'created_at', { mode: 'toggle' });
+    assert.deepEqual(back, { key: 'created_at', dir: 'desc' }, 'никогда не сбрасывается в «нет»');
+    // Другая колонка — своё направление (без него — desc).
+    assert.deepEqual(table.cycleSort(back, 'updated_at', { mode: 'toggle' }), {
+      key: 'updated_at',
+      dir: 'desc',
+    });
+    assert.deepEqual(
+      table.cycleSort(back, 'updated_at', { mode: 'toggle', dir: 'asc' }),
+      { key: 'updated_at', dir: 'asc' },
+    );
+  });
+
+  it('фасад: defaultSort, defaultSortDir, цикл toggle и внешний setSort', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      sortMode: 'toggle',
+      defaultSort: { key: 'size', dir: 'desc' },
+    });
+    assert.deepEqual(t.getSort(), { key: 'size', dir: 'desc' }, 'начальная сортировка — из defaultSort');
+    assert.deepEqual(
+      (stub.items as Row[]).map((r) => r.id),
+      ['a', 'c', 'b'],
+      'строки сразу в порядке defaultSort',
+    );
+
+    stub.emitSort('size');
+    assert.deepEqual(t.getSort(), { key: 'size', dir: 'asc' }, 'та же колонка → asc');
+    stub.emitSort('size');
+    assert.deepEqual(t.getSort(), { key: 'size', dir: 'desc' }, 'и обратно → desc');
+
+    stub.emitSort('name');
+    assert.deepEqual(
+      t.getSort(),
+      { key: 'name', dir: 'desc' },
+      'новая колонка — направление по умолчанию (desc), а не asc',
+    );
+
+    t.setSort({ key: 'size', dir: 'asc' });
+    assert.deepEqual(t.getSort(), { key: 'size', dir: 'asc' }, 'внешний setSort');
+    assert.deepEqual(
+      (stub.items as Row[]).map((r) => r.id),
+      ['b', 'c', 'a'],
+      'setSort пересчитал порядок строк',
+    );
+  });
+
+  it('defaultSortDir колонки задаёт направление первого клика при toggle', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const cols: TableColumn<Row>[] = [
+      { key: 'name', header: 'Имя', sortable: true, defaultSortDir: 'asc' },
+      { key: 'size', header: 'Размер', sortable: true, defaultSortDir: 'desc' },
+    ];
+    const t = table.createTable<Row>({
+      columns: cols,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      sortMode: 'toggle',
+    });
+    t.requestSort('name');
+    assert.deepEqual(t.getSort(), { key: 'name', dir: 'asc' });
+    t.requestSort('size');
+    assert.deepEqual(t.getSort(), { key: 'size', dir: 'desc' });
+  });
+});
+
+describe('lib/ui/table: режим ячеек nav: cell (задача 20ac6917)', () => {
+  /** Ячейка с `count` чипами-фокусируемыми элементами (клик пишет метку). */
+  function chipCell(
+    table: TableModule,
+    count: number,
+    clicks: string[],
+    label: string,
+  ): Node {
+    const cell = new ShimElement('span');
+    for (let i = 0; i < count; i++) {
+      const chip = new ShimElement('span', table.TABLE_FOCUSABLE_CLASS);
+      chip.addEventListener('click', () => clicks.push(`${label}-${i}`));
+      cell.append(chip);
+    }
+    return cell as unknown as Node;
+  }
+
+  it('стрелки движут по колонкам/чипам, Enter активирует чип, ячейка подсвечена', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const clicks: string[] = [];
+    const cols: TableColumn<Row>[] = [
+      { key: 'name', header: 'Имя', render: () => chipCell(table, 2, clicks, 'name') },
+      { key: 'size', header: 'Размер', render: () => chipCell(table, 1, clicks, 'size') },
+    ];
+    const t = table.createTable<Row>({
+      columns: cols,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      nav: 'cell',
+    });
+    const wrapper = t.element as unknown as ShimElement;
+    // Отрисовываем ячейки строки 0 так, как это делает вендорская сетка.
+    for (const column of stub.columns) {
+      wrapper.append(column.render(ROWS[0], 0) as unknown as ShimElement);
+    }
+    assert.equal(t.getCellCursor()?.row, -1, 'до выбора строки курсора строки нет');
+
+    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    assert.equal(t.getCellCursor()?.row, 0, '↓ встаёт на первую строку');
+    assert.equal(t.getCurrent()?.key, 'a');
+    // Текущая ячейка/элемент подсвечены.
+    const currentCell = wrapper.findAll(table.TABLE_CELL_CURRENT_CLASS)[0];
+    assert.ok(currentCell !== undefined, 'текущая ячейка подсвечена');
+    assert.equal(
+      currentCell?.findAll(table.TABLE_FOCUSABLE_CURRENT_CLASS).length,
+      1,
+      'подсвечен ровно один чип',
+    );
+
+    wrapper.emit('keydown', keyEvent('ArrowRight'));
+    assert.deepEqual(t.getCellCursor(), { row: 0, col: 0, item: 1 }, '→ по чипам колонки');
+    wrapper.emit('keydown', keyEvent('ArrowRight'));
+    assert.deepEqual(t.getCellCursor(), { row: 0, col: 1, item: 0 }, '→ на краю — в соседнюю колонку');
+    wrapper.emit('keydown', keyEvent('ArrowLeft'));
+    assert.deepEqual(t.getCellCursor(), { row: 0, col: 0, item: 0 }, '← возвращает в колонку');
+    wrapper.emit('keydown', keyEvent('Tab'));
+    assert.deepEqual(t.getCellCursor(), { row: 0, col: 1, item: 0 }, 'Tab — следующая колонка');
+
+    // Enter активирует выбранный чип (клик по нему).
+    wrapper.emit('keydown', keyEvent('Enter'));
+    assert.deepEqual(clicks, ['size-0'], 'Enter кликнул выбранный чип');
+  });
+
+  it('↑/↓ двигают строки, сохраняя колонку и сбрасывая элемент', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const cols: TableColumn<Row>[] = [
+      { key: 'name', header: 'Имя', render: () => chipCell(table, 2, [], 'name') },
+    ];
+    const changes: Array<string | null> = [];
+    const t = table.createTable<Row>({
+      columns: cols,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      nav: 'cell',
+      onCurrentChange: (key) => changes.push(key),
+    });
+    const wrapper = t.element as unknown as ShimElement;
+    for (let index = 0; index < ROWS.length; index++) {
+      const row = ROWS[index] as Row;
+      wrapper.append(stub.columns[0]!.render(row, index) as unknown as ShimElement);
+    }
+    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    wrapper.emit('keydown', keyEvent('ArrowRight'));
+    assert.deepEqual(t.getCellCursor(), { row: 0, col: 0, item: 1 });
+    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    assert.deepEqual(
+      t.getCellCursor(),
+      { row: 1, col: 0, item: 0 },
+      '↓ следующая строка, элемент сброшен',
+    );
+    assert.deepEqual(changes, ['a', 'b'], 'смена строки уведомляет onCurrentChange');
+    wrapper.emit('keydown', keyEvent('ArrowUp'));
+    assert.equal(t.getCellCursor()?.row, 0);
+  });
+
+  it('без фокусируемых элементов ячейки Enter активирует строку', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const activated: string[] = [];
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      nav: 'cell',
+      onActivate: (row) => activated.push(row.id),
+    });
+    const wrapper = t.element as unknown as ShimElement;
+    // Ячейки без `ui-table-focusable`: рисуем их через стаб.
+    for (const column of stub.columns) {
+      wrapper.append(column.render(ROWS[0], 0) as unknown as ShimElement);
+    }
+    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    wrapper.emit('keydown', keyEvent('Enter'));
+    assert.deepEqual(activated, ['a'], 'Enter на ячейке без чипов активирует строку');
+  });
+
+  it('режим row (по умолчанию) курсора ячеек не создаёт', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+    });
+    assert.equal(t.getCellCursor(), null);
+    const wrapper = t.element as unknown as ShimElement;
+    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    assert.equal(t.getCurrent()?.key, 'a', 'построчная навигация не изменилась');
+  });
+});

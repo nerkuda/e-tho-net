@@ -36,6 +36,25 @@
  * ключей расширяется вызывающим, фасад ключей не придумывает. Значение по
  * умолчанию для пустого состояния — `t('table.empty')`.
  *
+ * **Навигация (`nav`).** По умолчанию `'row'` — стрелки ↑/↓ двигают текущую
+ * строку (поведение всех потребителей Z4/Z5 неизменно). Режим `'cell'` (для
+ * «Хроники», §17) добавляет уровень ячейки: ←/→ и Tab ходят по колонкам, а
+ * внутри колонки — по её фокусируемым элементам (`.ui-table-focusable`,
+ * например чипы), ↑/↓ по строкам, Enter активирует выбранный элемент (клик)
+ * или, если элементов нет, строку (`onActivate`). Текущая ячейка и элемент
+ * подсвечиваются классами {@link TABLE_CELL_CURRENT_CLASS}/
+ * {@link TABLE_FOCUSABLE_CURRENT_CLASS}; каждая ячейка обёрнута в
+ * {@link TABLE_CELL_CLASS} с ключом строки в `data-row-key` (по нему DnD
+ * находит строку). Состав ячеек читается из DOM — вендорская виртуализация
+ * отрисовывает видимые строки, текущая строка всегда видима.
+ *
+ * **Управляемая сортировка.** Колонка задаёт `sortValue` и (при
+ * `sortMode: 'toggle'`) `defaultSortDir` — направление, с которого колонка
+ * начинает сортировку. `sortMode` по умолчанию `'cycle'` (asc → desc → нет,
+ * как было); `'toggle'` — двунаправленный цикл desc↔asc без «нет», как в
+ * таблице хроники. `defaultSort` задаёт начальное состояние, `setSort`/
+ * `getSort` — внешнее управление (например, подписка на изменение отбора).
+ *
  * **Копирование (Ctrl+C).** Формат — TSV (значения, разделённые табуляцией):
  * первая строка — заголовки колонок, далее строки. Это машинно-читаемый и
  * «вставляемый» формат по умолчанию для табличных процессоров (Excel,
@@ -65,6 +84,27 @@ export const TABLE_EMPTY_CLASS = 'ui-table-empty';
 /** Класс ячейки с «пустым» значением (нет данных у строки). */
 export const TABLE_CELL_EMPTY_CLASS = 'ui-table-cell-empty';
 
+/** Обёртка ячейки в режиме `nav: 'cell'` (несёт `data-row-key`/`data-col-key`). */
+export const TABLE_CELL_CLASS = 'ui-table-cell';
+
+/** Класс текущей (подсвеченной клавиатурой) ячейки в режиме `nav: 'cell'`. */
+export const TABLE_CELL_CURRENT_CLASS = 'ui-table-cell-current';
+
+/**
+ * Класс фокусируемого элемента ячейки (чип и т. п.). Ячейка задаёт его сама
+ * в `render`; фасад по нему ходит ←/→ и активирует Enter.
+ */
+export const TABLE_FOCUSABLE_CLASS = 'ui-table-focusable';
+
+/** Класс выбранного (подсвеченного клавиатурой) фокусируемого элемента ячейки. */
+export const TABLE_FOCUSABLE_CURRENT_CLASS = 'ui-table-focusable-current';
+
+/**
+ * Атрибут обёртки ячейки с ключом строки (`rowKey`). По нему DnD находит
+ * строку под курсором (canvas/drag-cloud.ts, §17).
+ */
+export const TABLE_ROW_KEY_ATTR = 'data-row-key';
+
 /** Значение ячейки по умолчанию, когда данных нет. */
 export const TABLE_EMPTY_CELL = '—';
 
@@ -81,6 +121,22 @@ export interface SortState {
 
 /** Исходное состояние: данные в порядке источника. */
 export const NO_SORT: SortState = { key: null, dir: null };
+
+/** Режим навигации: по строкам (`row`, по умолчанию) или по ячейкам (`cell`). */
+export type NavMode = 'row' | 'cell';
+
+/** Цикл сортировки по клику заголовка: трёхсостоянийный или двунаправленный. */
+export type SortMode = 'cycle' | 'toggle';
+
+/** Курсор режима `nav: 'cell'`: строка (индекс отображения), колонка, элемент ячейки. */
+export interface CellCursor {
+  /** Индекс строки в текущем порядке отображения; `-1` — строка не выбрана. */
+  row: number;
+  /** Индекс колонки. */
+  col: number;
+  /** Индекс фокусируемого элемента внутри ячейки (0 — если их нет). */
+  item: number;
+}
 
 /** Клавиша навигации, обрабатываемая таблицей. */
 export type NavKey = 'ArrowUp' | 'ArrowDown' | 'Home' | 'End' | 'PageUp' | 'PageDown';
@@ -101,6 +157,8 @@ export function isNavKey(key: string): key is NavKey {
 export interface CellContext<T> {
   /** Индекс строки в текущем порядке отображения. */
   index: number;
+  /** Стабильный ключ строки (`rowKey`) — для разметки, адресующей строку (DnD). */
+  key: string;
   /** Колонка. */
   column: TableColumn<T>;
   /** Ячейка принадлежит текущей строке. */
@@ -121,6 +179,12 @@ export interface TableColumn<T> {
   sortable?: boolean;
   /** Значение для сортировки; по умолчанию — поле `row[key]`. */
   sortValue?: (row: T, index: number) => string | number | boolean | null | undefined;
+  /**
+   * Направление, с которого колонка начинает сортировку при `sortMode:
+   * 'toggle'` (по умолчанию `'desc'`). На цикл `'cycle'` не влияет — там
+   * первая сортировка всегда `asc`.
+   */
+  defaultSortDir?: SortDir;
   /** Значение для копирования (TSV); по умолчанию — текстовое представление `sortValue`/поля. */
   text?: (row: T, index: number) => string;
   /** Пользовательский рендер ячейки (узел или строка). */
@@ -146,6 +210,15 @@ export interface TableSpec<T> {
   ariaLabel?: string;
   /** Начальная текущая строка (ключ). */
   current?: string | null;
+  /** Режим навигации: `row` (по умолчанию) или `cell` (по ячейкам/чипам). */
+  nav?: NavMode;
+  /**
+   * Цикл сортировки: `cycle` (по умолчанию, asc → desc → нет) или `toggle`
+   * (desc↔asc без «нет» — таблица хроники).
+   */
+  sortMode?: SortMode;
+  /** Начальное состояние сортировки (иначе — порядок источника). */
+  defaultSort?: SortState;
   /** Смена текущей строки (клавиатура, клик, внешняя установка). */
   onCurrentChange?: (key: string | null, row: T | null, index: number) => void;
   /** Активация строки: Enter или двойной клик. */
@@ -184,6 +257,10 @@ export interface TableHandle<T> {
   requestSort(key: string): void;
   /** Текущее состояние сортировки. */
   getSort(): SortState;
+  /** Устанавливает сортировку извне (без уведомления). */
+  setSort(state: SortState): void;
+  /** Курсор режима `nav: 'cell'` (в режиме `row` — `null`). */
+  getCellCursor(): CellCursor | null;
   /** Заменяет выделение (в режиме `multi`). */
   setSelection(keys: readonly string[]): void;
   /** Ключи выделенных строк. */
@@ -201,11 +278,25 @@ export interface TableHandle<T> {
 // --- Чистые функции: сортировка, навигация, копирование -------------------
 
 /**
- * Цикл сортировки по клику заголовка: другая колонка → `asc`; та же →
- * `asc` → `desc` → нет сортировки.
+ * Цикл сортировки по клику заголовка.
+ *
+ * `mode: 'cycle'` (по умолчанию) — другая колонка → `asc`; та же →
+ * `asc` → `desc` → нет сортировки. `mode: 'toggle'` (таблица хроники) —
+ * двунаправленный цикл без «нет»: другая колонка → направление `opts.dir`
+ * (по умолчанию `desc`), та же → `desc↔asc`.
  */
-export function cycleSort(current: SortState, key: string): SortState {
-  if (current.key !== key) return { key, dir: 'asc' };
+export function cycleSort(
+  current: SortState,
+  key: string,
+  opts?: { mode?: SortMode; dir?: SortDir },
+): SortState {
+  const mode = opts?.mode ?? 'cycle';
+  if (current.key !== key) {
+    return { key, dir: mode === 'toggle' ? opts?.dir ?? 'desc' : 'asc' };
+  }
+  if (mode === 'toggle') {
+    return { key, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  }
   if (current.dir === 'asc') return { key, dir: 'desc' };
   return { key: null, dir: null };
 }
@@ -339,6 +430,8 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
   const pageStep = spec.pageStep ?? 10;
   const copyEnabled = spec.copy !== false;
   const emptyText = spec.emptyText ?? t('table.empty');
+  const nav: NavMode = spec.nav ?? 'row';
+  const sortMode: SortMode = spec.sortMode ?? 'cycle';
 
   const wrapper = div(TABLE_CLASS);
   wrapper.tabIndex = 0;
@@ -352,8 +445,9 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
   if (multi) adapter.element.setAttribute('aria-multiselectable', 'true');
 
   let rows: readonly T[] = [];
-  let sort: SortState = NO_SORT;
+  let sort: SortState = spec.defaultSort ?? NO_SORT;
   let currentKey: string | null = spec.current ?? null;
+  let cellCursor: CellCursor = { row: -1, col: 0, item: 0 };
   const selected = new Set<string>();
   let unsubscribe: (() => void) | null = null;
 
@@ -368,9 +462,62 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
   const isCurrentRow = (row: T, index: number): boolean =>
     currentKey !== null && spec.rowKey(row, index) === currentKey;
 
-  const renderCell = (column: TableColumn<T>, row: T, index: number): Node => {
+  // --- Ячейки (режим nav: 'cell') -----------------------------------------
+  // Состав ячеек читается из DOM вендорской сетки: наши обёртки
+  // `.ui-table-cell` лежат в её light-DOM. Виртуализация отрисовывает видимые
+  // строки, а текущая строка всегда видима, поэтому её ячейки доступны.
+  const allCells = (): HTMLElement[] =>
+    Array.from(wrapper.querySelectorAll<HTMLElement>('.' + TABLE_CELL_CLASS));
+
+  const focusables = (cell: HTMLElement): HTMLElement[] =>
+    Array.from(cell.querySelectorAll<HTMLElement>('.' + TABLE_FOCUSABLE_CLASS));
+
+  /** Обёртка ячейки строки `row` и колонки `col` (по `data-row-key`/`data-col-key`). */
+  const cellAt = (row: number, col: number): HTMLElement | null => {
+    const data = ordered();
+    const dataRow = data[row];
+    const column = columns[col];
+    if (dataRow === undefined || column === undefined) return null;
+    const rowKey = spec.rowKey(dataRow, row);
+    const cell = allCells().find(
+      (candidate) =>
+        candidate.dataset['rowKey'] === rowKey && candidate.dataset['colKey'] === column.key,
+    );
+    return cell ?? null;
+  };
+
+  /** Снимает подсветку ячейки/элемента и ставит её по `cellCursor`. */
+  const repaintCell = (): void => {
+    if (nav !== 'cell') return;
+    for (const cell of allCells()) {
+      cell.classList.remove(TABLE_CELL_CURRENT_CLASS);
+      for (const item of focusables(cell)) {
+        item.classList.remove(TABLE_FOCUSABLE_CURRENT_CLASS);
+      }
+    }
+    const current = cellAt(cellCursor.row, cellCursor.col);
+    if (current === null) return;
+    current.classList.add(TABLE_CELL_CURRENT_CLASS);
+    const items = focusables(current);
+    items[Math.min(cellCursor.item, items.length - 1)]?.classList.add(
+      TABLE_FOCUSABLE_CURRENT_CLASS,
+    );
+  };
+
+  /** Есть ли у ячейки `(row, col)` фокусируемые элементы. */
+  const itemsAt = (row: number, col: number): HTMLElement[] => {
+    const cell = cellAt(row, col);
+    return cell === null ? [] : focusables(cell);
+  };
+
+  const renderCellContent = (column: TableColumn<T>, row: T, index: number): Node => {
     if (column.render !== undefined) {
-      const out = column.render(row, { index, column, isCurrent: isCurrentRow(row, index) });
+      const out = column.render(row, {
+        index,
+        key: spec.rowKey(row, index),
+        column,
+        isCurrent: isCurrentRow(row, index),
+      });
       if (out === null || out === undefined || out === '') {
         return span(column.empty ?? TABLE_EMPTY_CELL, TABLE_CELL_EMPTY_CLASS);
       }
@@ -380,6 +527,23 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     return text === ''
       ? span(column.empty ?? TABLE_EMPTY_CELL, TABLE_CELL_EMPTY_CLASS)
       : span(text);
+  };
+
+  const renderCell = (column: TableColumn<T>, row: T, index: number): Node => {
+    const content = renderCellContent(column, row, index);
+    if (nav !== 'cell') return content;
+    const box = div(TABLE_CELL_CLASS);
+    box.dataset['rowKey'] = spec.rowKey(row, index);
+    box.dataset['colKey'] = column.key;
+    box.append(content);
+    if (cellCursor.row === index && columns[cellCursor.col]?.key === column.key) {
+      box.classList.add(TABLE_CELL_CURRENT_CLASS);
+      const items = focusables(box);
+      items[Math.min(cellCursor.item, items.length - 1)]?.classList.add(
+        TABLE_FOCUSABLE_CURRENT_CLASS,
+      );
+    }
+    return box;
   };
 
   // Пользовательский рендер может зависеть от «текущая ли строка»: тогда после
@@ -412,6 +576,12 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     if (multi) {
       adapter.setSelected(data.filter((row, index) => selected.has(spec.rowKey(row, index))));
     }
+    if (nav === 'cell') {
+      if (cellCursor.row >= data.length) {
+        cellCursor = { row: Math.max(0, data.length - 1), col: cellCursor.col, item: 0 };
+      }
+      repaintCell();
+    }
   };
 
   const applyCurrent = (index: number, notify: boolean): void => {
@@ -419,9 +589,11 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     const row = data[index];
     if (row === undefined) return;
     currentKey = spec.rowKey(row, index);
+    if (nav === 'cell') cellCursor = { row: index, col: cellCursor.col, item: 0 };
     adapter.setActive(row);
     adapter.scrollToRow(row);
     if (hasCustomRender) adapter.setItems(data); // освежить рендер «текущей» ячейки
+    if (nav === 'cell') repaintCell();
     if (notify) spec.onCurrentChange?.(currentKey, row, index);
   };
 
@@ -429,6 +601,45 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     const data = ordered();
     const row = data[index];
     if (row !== undefined) spec.onActivate?.(row, index);
+  };
+
+  /**
+   * Сдвиг курсора ячейки по горизонтали: внутри колонки — по фокусируемым
+   * элементам, на краю — в соседнюю колонку (первый элемент). `Tab` — всегда
+   * следующая колонка.
+   */
+  const moveCell = (step: -1 | 1 | 'tab'): void => {
+    if (step === 'tab') {
+      cellCursor = {
+        row: cellCursor.row,
+        col: Math.min(columns.length - 1, cellCursor.col + 1),
+        item: 0,
+      };
+      repaintCell();
+      return;
+    }
+    const items = itemsAt(cellCursor.row, cellCursor.col);
+    if (step === 1 && cellCursor.item < items.length - 1) {
+      cellCursor = { ...cellCursor, item: cellCursor.item + 1 };
+    } else if (step === -1 && cellCursor.item > 0) {
+      cellCursor = { ...cellCursor, item: cellCursor.item - 1 };
+    } else {
+      const col = Math.max(0, Math.min(columns.length - 1, cellCursor.col + step));
+      cellCursor = { ...cellCursor, col, item: 0 };
+    }
+    repaintCell();
+  };
+
+  /** Enter в режиме ячеек: клик по выбранному элементу, иначе активация строки. */
+  const activateCell = (): void => {
+    const items = itemsAt(cellCursor.row, cellCursor.col);
+    if (items.length > 0) {
+      items[Math.min(cellCursor.item, items.length - 1)]?.click();
+      return;
+    }
+    if (cellCursor.row < 0) return;
+    repaintCell();
+    activate(cellCursor.row);
   };
 
   const copy = (): void => {
@@ -472,15 +683,25 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       }
       return; // прочие Ctrl-сочетания — глобальным обработчикам
     }
+    if (nav === 'cell' && (key.key === 'ArrowRight' || key.key === 'ArrowLeft' || key.key === 'Tab')) {
+      key.preventDefault();
+      moveCell(key.key === 'ArrowRight' ? 1 : key.key === 'ArrowLeft' ? -1 : 'tab');
+      return;
+    }
     if (isNavKey(key.key)) {
       key.preventDefault();
       const data = ordered();
-      const target = nextRowIndex(key.key, currentIndexOf(data), data.length, pageStep);
+      const from = nav === 'cell' ? cellCursor.row : currentIndexOf(data);
+      const target = nextRowIndex(key.key, from, data.length, pageStep);
       if (target >= 0) applyCurrent(target, true);
       return;
     }
     if (key.key === 'Enter') {
       key.preventDefault();
+      if (nav === 'cell') {
+        activateCell();
+        return;
+      }
       activate(currentIndexOf(ordered()));
       return;
     }
@@ -498,12 +719,24 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
   });
 
   // --- Сортировка ---
+  /** Пересчёт сортировки: режим `cycle` (asc→desc→нет) или `toggle` (desc↔asc). */
   const requestSort = (key: string): void => {
     const column = columns.find((c) => c.key === key);
     if (column === undefined || column.sortable !== true) return;
-    sort = cycleSort(sort, key);
+    sort =
+      sortMode === 'toggle'
+        ? cycleSort(sort, key, {
+            mode: 'toggle',
+            // Первый клик по новой колонке — её направление по умолчанию.
+            dir: sort.key === key ? undefined : column.defaultSortDir ?? 'desc',
+          })
+        : cycleSort(sort, key);
     renderColumns();
     renderItems();
+    if (nav === 'cell') {
+      cellCursor = { row: currentIndexOf(ordered()), col: cellCursor.col, item: 0 };
+      repaintCell();
+    }
   };
 
   // --- Адаптер: события строк ---
@@ -561,6 +794,10 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       adapter.setActive(index >= 0 ? data[index] : null);
       if (index >= 0) adapter.scrollToRow(data[index] as T);
       if (hasCustomRender) adapter.setItems(data);
+      if (nav === 'cell') {
+        cellCursor = { row: index, col: cellCursor.col, item: 0 };
+        repaintCell();
+      }
     },
     getCurrent(): { key: string; row: T; index: number } | null {
       const data = ordered();
@@ -571,6 +808,18 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     requestSort,
     getSort(): SortState {
       return { ...sort };
+    },
+    setSort(state: SortState): void {
+      sort = { ...state };
+      renderColumns();
+      renderItems();
+      if (nav === 'cell') {
+        cellCursor = { row: currentIndexOf(ordered()), col: cellCursor.col, item: 0 };
+        repaintCell();
+      }
+    },
+    getCellCursor(): CellCursor | null {
+      return nav === 'cell' ? { ...cellCursor } : null;
     },
     setSelection(keys: readonly string[]): void {
       selected.clear();

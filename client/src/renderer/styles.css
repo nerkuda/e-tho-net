@@ -2624,8 +2624,9 @@ body.cloud-dragging * {
   max-height: none;
 }
 
-/* Pin the header row while the body scrolls — the same pattern as the
-   chronicle screen table (table.chron-table thead th, below). */
+/* Pin the header row while the body scrolls — the editor's «Хроника» tab. The
+   chronicle workspace table gets its pinned header from the vendor grid
+   (lib/ui/table.ts) instead. */
 .chrono-table thead th {
   position: sticky;
   top: 0;
@@ -6558,38 +6559,9 @@ button.entity-combo-pick:disabled {
   border-top: 1px solid var(--border);
 }
 
-/* Table rows: keyboard-navigable, the selected row is highlighted. The header
- * is pinned while the body scrolls; every row is always one line high (chips
- * of the «мысли/связи» column never wrap — the rest is reachable by arrows). */
-table.chron-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-table.chron-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--surface-2);
-}
-
-.chron-row {
-  cursor: pointer;
-}
-
-.chron-row td {
-  overflow: hidden;
-}
-
-.chron-row.selected {
-  background: var(--accent-soft);
-}
-
-.chron-row .cell-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
+/* Table rows: keyboard-navigable via the unit table facade (lib/ui/table.ts,
+ * nav: 'cell'); the current row/cell highlight and the cell wrapper classes
+ * live there (.ui-table*). Here only chronicle-specific cell content. */
 .chron-date {
   white-space: nowrap;
 }
@@ -6655,11 +6627,6 @@ table.chron-table thead th {
 
 .chron-chip:hover {
   border-color: var(--accent);
-}
-
-.chron-chip.chip-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .chron-chip .chip-icon {
