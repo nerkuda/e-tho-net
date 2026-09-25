@@ -183,6 +183,42 @@ describe('guard: фасады lib/ui (35b9cc05, ADR 03eb2c61)', () => {
       },
     ]);
   });
+
+  it('каждый CSS-модуль lib/ui подключён (нет осиротевших стилей)', () => {
+    const orphan = findOrphanUiStyles(UI_ROOT);
+    assert.deepEqual(
+      orphan,
+      [],
+      `CSS-модули lib/ui без импорта: ${orphan.join(', ')}. Осиротевший стиль ` +
+        'молча не попадает в бандл — вид компонента ломается без ошибки ' +
+        '(ADR 03eb2c61): подключи его из `lib/ui/register.ts`.',
+    );
+  });
+
+  it('реэкспорты index.ts не ссылаются на несуществующие модули', () => {
+    const stale = findStaleBarrelImports(UI_ROOT);
+    assert.deepEqual(
+      stale,
+      [],
+      `lib/ui/index.ts реэкспортирует отсутствующие модули: ${stale.join(', ')}`,
+    );
+  });
+
+  it('правила подключения CSS и реэкспорта краснеют на умышленном нарушении', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-ui-modules-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'index.ts'), "export {} from './ghost.js';\n", 'utf8');
+      fs.writeFileSync(path.join(dir, 'real.ts'), 'export const a = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(dir, 'orphan.css'), '.orphan { color: red; }\n', 'utf8');
+      fs.writeFileSync(path.join(dir, 'wired.css'), '.wired { color: red; }\n', 'utf8');
+      fs.writeFileSync(path.join(dir, 'wired.ts'), "import './wired.css';\n", 'utf8');
+
+      assert.deepEqual(findOrphanUiStyles(dir), ['orphan.css']);
+      assert.deepEqual(findStaleBarrelImports(dir), ['ghost.js']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 /**
@@ -199,4 +235,37 @@ function findMissingBarrelExports(uiDir: string): string[] {
       return !new RegExp(`['"]\\./${base}\\.js['"]`).test(index);
     })
     .sort();
+}
+
+/**
+ * CSS-модули `lib/ui/*.css`, не подключённые ни одним `.ts` того же каталога.
+ * Осиротевший стиль не попадает в бандл и ломает вид компонента молча.
+ */
+function findOrphanUiStyles(uiDir: string): string[] {
+  const ts = fs
+    .readdirSync(uiDir)
+    .filter((name) => name.endsWith('.ts'))
+    .map((name) => fs.readFileSync(path.join(uiDir, name), 'utf8'))
+    .join('\n');
+  return fs
+    .readdirSync(uiDir)
+    .filter((name) => name.endsWith('.css'))
+    .filter((name) => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return !new RegExp(`['"]\\./${escaped}['"]`).test(ts);
+    })
+    .sort();
+}
+
+/**
+ * Реэкспорты `'./<имя>.js'` из `index.ts`, для которых нет `<имя>.ts`.
+ * Мёртвая ссылка в barrel — ошибка сборки или потерянный модуль.
+ */
+function findStaleBarrelImports(uiDir: string): string[] {
+  const index = fs.readFileSync(path.join(uiDir, 'index.ts'), 'utf8');
+  const stale = new Set<string>();
+  for (const m of index.matchAll(/['"]\.\/([\w.-]+)\.js['"]/g)) {
+    if (m[1] && !fs.existsSync(path.join(uiDir, `${m[1]}.ts`))) stale.add(`${m[1]}.js`);
+  }
+  return [...stale].sort();
 }

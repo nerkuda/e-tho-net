@@ -4,7 +4,8 @@
  * Единственное место, где токены ETN связываются с Vaadin Grid (задача
  * cf4f8f70; ADR «Основа lib/ui: готовые Web Components за фасадами»,
  * компонент lib/ui). Токены ETN объявлены в
- * `client/src/renderer/styles.css`:
+ * `client/src/renderer/styles/tokens.css` (манифест стилей —
+ * `client/src/renderer/styles.css`):
  *   • светлая тема — блок `:root`;
  *   • тёмная тема  — блок `[data-theme='dark']`.
  *

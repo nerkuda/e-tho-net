@@ -3,7 +3,8 @@
  *
  * Единственное место, где токены ETN связываются с вендорской дизайн-системой
  * (ADR «Основа lib/ui: готовые Web Components за фасадами», компонент lib/ui).
- * Токены ETN объявлены в `client/src/renderer/styles.css`:
+ * Токены ETN объявлены в `client/src/renderer/styles/tokens.css` (манифест
+ * стилей — `client/src/renderer/styles.css`):
  *   • светлая тема — блок `:root`;
  *   • тёмная тема  — блок `[data-theme='dark']`.
  *
