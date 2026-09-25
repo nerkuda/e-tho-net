@@ -19,6 +19,10 @@
   /* Hover/active backgrounds for chrome controls (menu items, list rows). */
   --bg-hover: #e3e6ec;
   --bg-active: #d8dde5;
+  /* Фон строки заголовков колонок списков/таблиц/деревьев: отличается от
+     строк данных и надписей, обе темы — через --surface-2 (требование
+     11ddd910, ошибка 96b62874). */
+  --table-header-bg: var(--surface-2);
   --border: #d7dbe3;
   --border-strong: #b9c1cf;
   --text: #20242d;

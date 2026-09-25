@@ -225,7 +225,11 @@ describe('guard: единые правила диалогов-списков (11
     assert.ok(start >= 0, 'в tree.css нет правила .ui-tree-head');
     const body = css.slice(css.indexOf('{', start), css.indexOf('}', start));
     assert.match(body, /position:\s*sticky/, 'заголовок дерева не закреплён (правило 4)');
-    assert.match(body, /background:\s*var\(--surface\)/, 'под закреплённым заголовком просвечивают строки');
+    assert.match(
+      body,
+      /background:\s*var\(--table-header-bg\)/,
+      'под закреплённым заголовком просвечивают строки / фон шапки не из токена',
+    );
     // Список «Свойства» рисует табличный фасад (сторож guard-ui-tables
     // запрещает самодельные таблицы) — заголовок грида закрепляет вендор.
     assert.ok(
