@@ -200,6 +200,37 @@ describe('reflectThoughtUpdate — «Назначить иконкой мысл�
     );
   });
 
+  it('evicting a rendered neighbour ref breaks the canvas fast-path key (ошибка 1ea2d05a)', async () => {
+    shimDom();
+    const { reflectThoughtUpdate } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    const { canvasInternals, invalidateRef } = await import(
+      '../src/renderer/canvas/canvas.js'
+    );
+
+    // The focus response carries no icon of a neighbour, so the scheduled
+    // re-fetch is content-identical: without the eviction signal the canvas
+    // fast path skipped the repaint and the cloud kept the stale icon.
+    store.update({ focus: makeFocus(makeThought('f'), ['t1']), editorTarget: null });
+    canvasInternals.refCache.set('t1', makeRef('t1'));
+    const before = canvasInternals.canvasRenderKey();
+
+    reflectThoughtUpdate(makeThought('t1', { icon: '💥', version: 2 }));
+    assert.notEqual(
+      canvasInternals.canvasRenderKey(),
+      before,
+      'invalidating a rendered ref must break the content-addressed canvas key',
+    );
+
+    const after = canvasInternals.canvasRenderKey();
+    invalidateRef('never-rendered');
+    assert.equal(
+      canvasInternals.canvasRenderKey(),
+      after,
+      'an id that is not on the canvas must not force a repaint',
+    );
+  });
+
   it('leaves a thought that is neither focused nor a neighbour untouched in the store', async () => {
     shimDom();
     const { reflectThoughtUpdate } = await import('../src/renderer/editor/editor.js');

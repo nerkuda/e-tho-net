@@ -211,6 +211,13 @@ export function setSelectionClickHooks(next: SelectionClickHooks | null): void {
 
 /** Resolved metadata cache (id → ThoughtRef), persistent across focuses. */
 const refCache = new Map<string, ThoughtRef>();
+/**
+ * Counter of evicted rendered refs. `invalidateRef`/`invalidateAllRefs` bump
+ * it when they drop an entry the canvas may be showing, so a content-identical
+ * focus re-fetch still triggers a repaint ({@link canvasRenderKey}); without it
+ * a neighbour's new icon never reached its cloud (ошибка 1ea2d05a).
+ */
+let refEpoch = 0;
 /** Indicator cache (id → counts), invalidated on comment/attachment events. */
 const indicatorCache = new Map<string, IndicatorInfo>();
 const indicatorQueue: string[] = [];
@@ -374,10 +381,17 @@ export function getRef(id: string): ThoughtRef | null {
 
 /**
  * Drops the cached metadata for a thought so the next render re-resolves it
- * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`.
+ * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`
+ * and by local producers (`reflectThoughtUpdate`) that got no realtime echo.
+ *
+ * Evicting a ref that IS rendered bumps {@link refEpoch}: the focus response
+ * carries no icon/colors of a neighbour, so a re-fetch of the same focus is
+ * content-identical and the content-addressed {@link canvasRenderKey} would
+ * otherwise skip the repaint — the stale icon of the thought while it is not
+ * the focus persisted until the next focus switch (ошибка 1ea2d05a).
  */
 export function invalidateRef(id: string): void {
-  refCache.delete(id);
+  if (refCache.delete(id)) refEpoch++;
 }
 
 /**
@@ -387,6 +401,7 @@ export function invalidateRef(id: string): void {
  * survive the switch until the thought is re-read by some other path.
  */
 export function invalidateAllRefs(): void {
+  if (refCache.size > 0) refEpoch++;
   refCache.clear();
 }
 
@@ -488,6 +503,12 @@ function canvasRenderKey(): string {
     // refresh hit the selection-only fast path and the badge only appeared
     // after the next focus/layer change repainted the canvas.
     layerOverrides: s.layerOverrides,
+    // Evicted rendered refs (ошибка 1ea2d05a): a neighbour's icon/colors live
+    // only in `refCache` (the focus response does not carry them), so an
+    // invalidation of a shown ref must break the content-addressed fast path
+    // and force `render()` to re-resolve it — otherwise the cloud kept the
+    // stale icon until the next focus switch.
+    refEpoch,
     zoneAnimationPending,
   });
 }
