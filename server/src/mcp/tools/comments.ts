@@ -119,7 +119,8 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
   // Задача d28abe04 (0.7.2): секционная правка комментария ops-ами одной
   // транзакцией. Поддерживает append / prepend / replace_section /
   // delete_section; адресация секций — по тексту markdown-заголовка
-  // (виртуальная первая строка для текстов без `#`).
+  // (виртуальная первая строка для текстов без `#`; непустой вводный абзац
+  // перед первым `#`-заголовком — тоже виртуальная секция, ошибка a39046d9).
   mcp.registerTool(
     'etn.comments.edit',
     {
@@ -129,7 +130,8 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         '`delete_section` ops applied sequentially in one transaction ' +
         '(failure rolls back the call). Addressing by markdown heading ' +
         'text; for heading-less text the first non-empty line is a virtual ' +
-        'heading. `comment_id` XOR `thought_id`. Returns ' +
+        'heading, and a leading paragraph before the first heading is too. ' +
+        '`comment_id` XOR `thought_id`. Returns ' +
         '`{ id, version, sections[], chars_total }`.',
       inputSchema: CommentsEdit.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.edit'],
