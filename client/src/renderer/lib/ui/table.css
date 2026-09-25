@@ -32,6 +32,14 @@
   min-height: 0;
   height: 100%;
   outline: none;
+  /* Контейнер таблицы (требование a08c2c4a): перестроение — по ширине обёртки,
+     не окна. `overflow-x` обёртки даёт горизонтальную прокрутку, когда сетка
+     шире контейнера; на узком контейнере колонки уплотняются (запрос ниже).
+     `container-type: inline-size` гасит влияние ширины содержимого на ширину
+     самой обёртки — сетка не распирает её, а прокручивается внутри. */
+  container-type: inline-size;
+  container-name: ui-table;
+  overflow-x: auto;
 }
 
 /* Атрибут `hidden` (владелец скрывает таблицу на время загрузки/ошибки) не
@@ -83,4 +91,16 @@
 .ui-table-focusable-current {
   outline: var(--focus-ring-width) solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Узкая обёртка: ячейки уплотняются (меньше боковой и вертикальный паддинг),
+   чтобы больше колонок оставалось читаемыми; не поместившееся прокручивается
+   по X самой обёрткой. Селектор `.ui-table .ui-table-grid` по специфичности
+   перебивает карту `:root vaadin-tokens.css` независимо от порядка в бандле
+   (грабли 36889dd6). Порог — структурная константа раскладки (guard-ui-tokens:
+   условие запроса). */
+@container ui-table (max-width: 480px) {
+  .ui-table .ui-table-grid {
+    --vaadin-grid-cell-padding: var(--space-1) var(--space-2);
+  }
 }

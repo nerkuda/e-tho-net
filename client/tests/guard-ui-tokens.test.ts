@@ -16,6 +16,13 @@
  * (включая `--font-size`, отступы, радиусы, размеры контролов) обязано быть
  * токеном. Строки-комментарии правилами не считаются.
  *
+ * **Второй allow — пороги в условиях запросов (задача ca9f5e70).** В строке
+ * условия `@container … (max-width: 340px)` / `@media (…)` числовой px —
+ * структурная константа раскладки (точка перестроения), а не размер шкалы:
+ * CSS не допускает `var()` в условиях контейнерных запросов, поэтому порог
+ * задаётся литералом. Разрешены только строки, начинающиеся с `@container`/
+ * `@media`; размеры ВНУТРИ запроса по-прежнему обязаны быть токенами.
+ *
  * Дополнительно сторож подтверждает, что сами шкалы объявлены в `:root`
  * `styles.css` — иначе запрет на магию нечем заменить.
  *
@@ -44,6 +51,12 @@ function inLibUi(rel: string): boolean {
   return rel.startsWith('lib/ui/');
 }
 
+/** Строка — условие `@container`/`@media`? (порог раскладки, не размер шкалы). */
+function isQueryCondition(line: string): boolean {
+  const t = line.trimStart();
+  return t.startsWith('@container') || t.startsWith('@media');
+}
+
 function rules(): GuardRule[] {
   return [
     {
@@ -63,7 +76,7 @@ function rules(): GuardRule[] {
       // `1px` — единственный разрешённый литерал (волосяная линия).
       pattern: /(?<![\w.-])(?!1px\b)(?:\d*\.)?\d+(?:px|rem|em)\b/,
       include: inLibUi,
-      allow: (_rel, line) => isComment(line),
+      allow: (_rel, line) => isComment(line) || isQueryCondition(line),
     },
   ];
 }

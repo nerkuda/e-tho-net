@@ -17,6 +17,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  /* Контейнер чип-листа: перестроение — по его ширине (требование a08c2c4a).
+     Чипы переносятся по строкам (flex-wrap ниже); на узком контейнере длинный
+     чип обрезается многоточием, а не растягивает список. */
+  container-type: inline-size;
+  container-name: ui-chip-list;
 }
 
 .ui-chip-list-chips {
@@ -77,4 +82,18 @@
 
 .ui-chip-list-add {
   width: 100%;
+}
+
+/* Узкий чип-лист: чип не шире контейнера, длинная подпись — многоточием.
+   Порог — структурная константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-chip-list (max-width: 200px) {
+  .ui-chip {
+    max-inline-size: 100%;
+  }
+
+  .ui-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }

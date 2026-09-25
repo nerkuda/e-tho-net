@@ -4843,6 +4843,11 @@ body.cloud-dragging * {
 
 .fp-host {
   position: relative;
+  /* Контейнеры каркаса панели отбора (требование a08c2c4a): положение панели
+     решает JS по ширине полотна, а внутренняя раскладка панели адаптируется к
+     СВОЕЙ ширине контейнерными запросами, а не к окну. */
+  container-type: inline-size;
+  container-name: filter-frame;
 }
 
 /* Положение панели: слева от результатов — строка, сверху — колонка. */
@@ -4864,6 +4869,10 @@ body.cloud-dragging * {
   min-height: 0;
   max-height: none;
   padding-top: 34px;
+  /* Ширину панели задаёт каркас (`flex-basis`), поэтому inline-size
+     containment не влияет на размер; запросы ниже адаптируют содержимое. */
+  container-type: inline-size;
+  container-name: filter-panel;
 }
 
 .fp-host.fp-side > .fp-panel {
@@ -4881,6 +4890,17 @@ body.cloud-dragging * {
 .fp-host.fp-hidden > .fp-panel,
 .fp-host.fp-hidden > .fp-splitter {
   display: none;
+}
+
+/* Узкая панель отбора: поля не выходят за её границу, строки фильтра
+   переносятся. Порог — структурная константа раскладки. */
+@container filter-panel (max-width: 260px) {
+  .fp-panel input,
+  .fp-panel select,
+  .fp-panel textarea {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
 }
 
 /* Разделитель размера: направление перетаскивания — по положению панели.
@@ -5315,6 +5335,12 @@ body.cloud-dragging * {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Контейнер диалога (требование a08c2c4a): перестроение — по ширине САМОГО
+     диалога, а не окна. Ширина задана ролью размера, поэтому inline-size
+     containment не влияет на неё; узкий диалог (роль s или маленькое окно)
+     сжимает футер и шапку (запрос ниже), а не выдавливает их за границу. */
+  container-type: inline-size;
+  container-name: dialog;
   /* Dialog content is one step larger than the app base (13px) — the base
      font is too small for modal forms (add-thought dialog report). */
   font-size: 14px;
@@ -5353,6 +5379,20 @@ body.cloud-dragging * {
 .dialog-box[data-dialog-size='xl'] {
   --dialog-w: 1240px;
   --dialog-h: 820px;
+}
+
+/* Узкий диалог: шапка и футер переносят содержимое по строкам, кнопки не
+   выдавливаются за границу. Селекторы с элементом диалога перебивают
+   словарные классы по специфичности независимо от порядка в бандле
+   (грабли 36889dd6). Порог — структурная константа раскладки. */
+@container dialog (max-width: 520px) {
+  .dialog-header {
+    flex-wrap: wrap;
+  }
+
+  .dialog-footer {
+    flex-wrap: wrap;
+  }
 }
 
 .dialog-header {

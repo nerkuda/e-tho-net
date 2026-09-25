@@ -71,6 +71,12 @@
   flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-5);
+  /* Контейнер строки поля: перестроение — по её ширине (требование a08c2c4a).
+     Подпись и подсказка всегда идут над контролом (колонка ниже), поэтому на
+     узком контейнере перекладка подписи не нужна — ужимаются служебные
+     обёртки (свотч цвета, строка hex). */
+  container-type: inline-size;
+  container-name: ui-field;
 }
 
 .ui-field-label {
@@ -215,4 +221,23 @@
 .ui-color-hex:disabled {
   opacity: var(--state-disabled-opacity);
   cursor: not-allowed;
+}
+
+/* Узкая строка поля: свотч цвета и hex переносятся в столбик (hex — во всю
+   ширину), а не выдавливают друг друга за границу контейнера. Порог —
+   структурная константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-field (max-width: 220px) {
+  .ui-color-field {
+    flex-wrap: wrap;
+  }
+
+  .ui-color-hex {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+
+  .ui-clearable {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
 }

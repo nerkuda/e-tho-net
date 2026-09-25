@@ -18,6 +18,11 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Контейнер вкладок: перестроение — по ширине СВОЕЙ полосы, а не окна
+     (требование a08c2c4a). Узкий хост (диалог роли s, боковая панель)
+     сжимает вкладки, не выталкивая их за границу. */
+  container-type: inline-size;
+  container-name: ui-tabs;
 }
 
 .ui-tablist {
@@ -83,4 +88,16 @@
 
 .ui-tabpanel[hidden] {
   display: none;
+}
+
+/* Узкая полоса вкладок: подписи остаются в одну строку, вкладки компактнее.
+   Порог — структурная константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-tabs (max-width: 340px) {
+  .ui-tab {
+    padding: var(--space-2) var(--space-4);
+  }
+
+  .ui-tablist {
+    gap: 0;
+  }
 }

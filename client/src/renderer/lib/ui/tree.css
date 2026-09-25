@@ -25,6 +25,10 @@
   display: flex;
   flex-direction: column;
   outline: none;
+  /* Контейнер дерева: перестроение — по ширине дерева, не окна
+     (требование a08c2c4a). */
+  container-type: inline-size;
+  container-name: ui-tree;
 }
 
 .ui-tree:focus-visible {
@@ -200,4 +204,14 @@
   padding: var(--space-4) var(--space-2);
   color: var(--text-dim);
   font-size: var(--font-size-xs);
+}
+
+/* Узкое дерево: шаг ветви и зазоры строки уменьшаются, чтобы подпись
+   получила максимум места, а не уезжала за границу. Порог — структурная
+   константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-tree (max-width: 320px) {
+  .ui-tree-row {
+    gap: var(--space-2);
+    padding-left: calc(var(--space-2) + var(--tree-level, 0) * var(--tree-indent));
+  }
 }
