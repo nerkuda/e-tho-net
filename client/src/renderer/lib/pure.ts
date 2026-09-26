@@ -1290,3 +1290,170 @@ export function countVisibleProperties(
 ): number {
   return rows.filter((row) => row.config?.structural !== true).length;
 }
+
+// ---------------------------------------------------------------------------
+// Focus-change animation plan (спека «FLIP-анимация холста», задача e9f0af94)
+// ---------------------------------------------------------------------------
+
+/** Rect subset used by {@link flipTransform} (viewport coordinates, px). */
+export interface RectLike {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * FLIP delta: the transform a cloud must START from so that, animating to
+ * `transform: none`, it lands exactly at `after`. `sx`/`sy` scale a zone cloud
+ * up into the larger focus cloud (and back). A zero-size target must not divide
+ * by zero (`max(1, …)`).
+ */
+export function flipTransform(
+  before: RectLike,
+  after: RectLike,
+): { dx: number; dy: number; sx: number; sy: number } {
+  return {
+    dx: before.left - after.left,
+    dy: before.top - after.top,
+    sx: before.width / Math.max(1, after.width),
+    sy: before.height / Math.max(1, after.height),
+  };
+}
+
+/** Zone a rendered cloud belongs to in the animation plan (`focus` — the focus row). */
+export type TransitionZone = 'focus' | 'parents' | 'siblings' | 'children';
+
+/** One node of a rendered layout, reduced to what the animation plan needs. */
+export interface TransitionNode {
+  id: string;
+  zone: TransitionZone;
+}
+
+/**
+ * Pure choreography plan for a focus change (спека «FLIP-анимация холста»):
+ * given the clouds rendered before and after the re-render, it classifies every
+ * id into the phase that must play it. The DOM orchestrator
+ * (`canvas/transition.ts`) owns the actual measurements, clones and timings —
+ * this function is the truth table behind them, unit-tested without a browser.
+ *
+ * Roles:
+ *  * `flyingId` — the selected thought: a clone of its new focus cloud flies
+ *    from its old zone slot into the centre (null when the focus did not change);
+ *  * `releasedFocus` — the former focus: it HOLDS the centre with its old
+ *    content until the flyer lands (своп содержимого только после приземления),
+ *    then leaves to its new zone (or fades);
+ *  * `leaving` — gone with the new focus, fade out during the flight;
+ *  * `entering` — new with the focus, fade in after the flight;
+ *  * `moving` — survivors that changed zone, glide to the new zone during flight;
+ *  * `settling` — survivors that only change slot inside their zone, they keep
+ *    the old position during the flight and settle into the new order after it.
+ */
+export interface TransitionPlan {
+  focusBefore: string | null;
+  focusAfter: string | null;
+  focusChanged: boolean;
+  flyingId: string | null;
+  releasedFocus: string | null;
+  leaving: string[];
+  entering: string[];
+  moving: string[];
+  settling: string[];
+  /** Anything worth animating at all (empty layouts and no-op re-renders are not). */
+  hasChanges: boolean;
+}
+
+/** Empty plan — nothing rendered on one of the sides, so nothing to animate. */
+function emptyTransitionPlan(
+  focusBefore: string | null,
+  focusAfter: string | null,
+): TransitionPlan {
+  return {
+    focusBefore,
+    focusAfter,
+    focusChanged: false,
+    flyingId: null,
+    releasedFocus: null,
+    leaving: [],
+    entering: [],
+    moving: [],
+    settling: [],
+    hasChanges: false,
+  };
+}
+
+/** Zone of a node by id, or null. */
+function zoneOf(nodes: readonly TransitionNode[], id: string): TransitionZone | null {
+  return nodes.find((node) => node.id === id)?.zone ?? null;
+}
+
+/**
+ * Builds the {@link TransitionPlan} for the pair of rendered layouts. First
+ * mounts (either side empty) plan nothing — there is no old layout to glide
+ * from.
+ */
+export function planFocusTransition(
+  before: readonly TransitionNode[],
+  after: readonly TransitionNode[],
+): TransitionPlan {
+  const focusBefore = before.find((node) => node.zone === 'focus')?.id ?? null;
+  const focusAfter = after.find((node) => node.zone === 'focus')?.id ?? null;
+  if (before.length === 0 || after.length === 0) {
+    return emptyTransitionPlan(focusBefore, focusAfter);
+  }
+
+  const focusChanged = focusBefore !== null && focusAfter !== null && focusBefore !== focusAfter;
+  const flyingId = focusChanged ? focusAfter : null;
+  // The old focus is handled by the held-content overlay; the new focus by the
+  // flyer. Their ids must not double as generic leavers/movers/settlers.
+  const special = new Set<string>();
+  if (focusChanged) {
+    special.add(focusBefore as string);
+    special.add(focusAfter as string);
+  }
+
+  const beforeIds = new Set(before.map((node) => node.id));
+  const afterById = new Map(after.map((node) => [node.id, node]));
+
+  const leaving: string[] = [];
+  for (const node of before) {
+    if (special.has(node.id)) continue;
+    if (!afterById.has(node.id)) leaving.push(node.id);
+  }
+
+  const entering: string[] = [];
+  for (const node of after) {
+    if (special.has(node.id)) continue;
+    if (!beforeIds.has(node.id)) entering.push(node.id);
+  }
+
+  const moving: string[] = [];
+  const settling: string[] = [];
+  for (const node of after) {
+    if (special.has(node.id)) continue;
+    if (!beforeIds.has(node.id)) continue;
+    if (zoneOf(before, node.id) !== node.zone) moving.push(node.id);
+    else settling.push(node.id);
+  }
+
+  // `settling` alone is NOT a change: the plan sees zones, not rects, so an
+  // untouched survivor is indistinguishable from one reordered inside its zone.
+  // The orchestrator compares real rects and decides whether such a slot move
+  // is visible (manual reorder, link change) — here only the unambiguous
+  // structural differences count.
+  const hasChanges =
+    focusChanged || leaving.length > 0 || entering.length > 0 || moving.length > 0;
+
+  return {
+    focusBefore,
+    focusAfter,
+    focusChanged,
+    flyingId,
+    releasedFocus: focusChanged ? focusBefore : null,
+    leaving,
+    entering,
+    moving,
+    settling,
+    hasChanges,
+  };
+}

@@ -503,6 +503,24 @@ body.resizing-h {
   pointer-events: none;
 }
 
+/* Layer of the focus-change choreography (спека «FLIP-анимация холста», задача
+   e9f0af94): the held old-focus overlay and the flying clone of the selected
+   thought live here, above the live clouds. The layer ignores the pointer, and
+   the `.cloud { pointer-events: auto }` rule is explicitly switched back off
+   for its clones — otherwise a vanishing cloud's clone would swallow the clicks
+   meant for the clouds beneath it. */
+.focus-anim-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.focus-anim-layer .cloud,
+.cloud-ghosts .cloud {
+  pointer-events: none;
+}
+
 .cloud:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-hover);

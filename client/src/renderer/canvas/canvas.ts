@@ -85,7 +85,12 @@ import {
   setSupplementalEdges,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
-import { captureClouds, playFocusTransition, prefersReducedMotion } from './transition.js';
+import {
+  captureClouds,
+  finishFocusTransition,
+  playFocusTransition,
+  prefersReducedMotion,
+} from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
@@ -233,6 +238,9 @@ let indicatorRunning = 0;
  */
 export function mountCanvas(canvasHost: HTMLElement): void {
   host = canvasHost;
+  // A remount (layer/view switch) may find a transition still running against
+  // the previous host — drop its layers/timers before the DOM is wiped.
+  finishFocusTransition();
   host.replaceChildren();
   clear(host);
   // Wire the lock-badge refresh once — `store.subscribe` is a cheap
@@ -546,6 +554,11 @@ function paintHalo(): void {
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
   if (host === null || zones === null || focusRow === null) return;
+  // A real data update arriving mid-flight wins: snap any running transition to
+  // its final state (release the held focus, drop the clones/layers) BEFORE the
+  // old layout is captured and rebuilt. The rebuild below then starts from the
+  // settled positions, so animations never run against dead coordinates.
+  finishFocusTransition();
   applyCanvasScaleVars(host);
   const focus = store.state.focus;
   if (focus === null) {

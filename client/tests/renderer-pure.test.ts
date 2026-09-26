@@ -66,12 +66,13 @@ import {
   splitRatioFromPx,
   formDirty,
   countVisibleProperties,
+  flipTransform,
+  planFocusTransition,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
-import { flipTransform } from '../src/renderer/canvas/transition.js';
 import { zoomable } from '../src/renderer/lib/image-zoom.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../src/renderer/state.js';
 
@@ -1033,6 +1034,84 @@ describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
       flipTransform({ left: 10, top: 10, width: 44, height: 44 }, { left: 0, top: 0, width: 0, height: 0 }),
       { dx: 10, dy: 10, sx: 44, sy: 44 },
     );
+  });
+});
+
+describe('planFocusTransition (focus-change choreography, задача e9f0af94)', () => {
+  const n = (id: string, zone: 'focus' | 'parents' | 'siblings' | 'children') => ({ id, zone });
+
+  it('a focus change flies the selected cloud and holds the old focus', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'children'), n('b', 'children')],
+      [n('a', 'focus'), n('f', 'children'), n('b', 'children'), n('d', 'children')],
+    );
+    assert.equal(plan.focusChanged, true);
+    assert.equal(plan.flyingId, 'a');
+    assert.equal(plan.releasedFocus, 'f');
+    assert.equal(plan.hasChanges, true);
+    // The old focus is handled by the held overlay, not as a generic leaver —
+    // and it is the flyer's origin, not a survivor to glide.
+    assert.deepEqual(plan.leaving, []);
+    assert.deepEqual(plan.moving, []);
+    assert.deepEqual(plan.settling, ['b']);
+    assert.deepEqual(plan.entering, ['d']);
+  });
+
+  it('a survivor that changed zone moves during the flight; the old focus stays special', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'children'), n('b', 'parents')],
+      [n('a', 'focus'), n('f', 'parents'), n('b', 'children')],
+    );
+    assert.deepEqual(plan.moving, ['b']);
+    assert.deepEqual(plan.settling, []);
+    // The old focus left the focus row for a zone — it is the held overlay's
+    // hand-off, never a plain mover.
+    assert.equal(plan.releasedFocus, 'f');
+  });
+
+  it('the old focus leaving the neighbourhood is neither ghosted nor entered', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'siblings'), n('b', 'siblings')],
+      [n('a', 'focus'), n('b', 'siblings')],
+    );
+    assert.deepEqual(plan.leaving, []);
+    assert.deepEqual(plan.entering, []);
+    assert.deepEqual(plan.settling, ['b']);
+  });
+
+  it('a same-focus refresh (zone animation) treats the focus cloud as ordinary', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'siblings')],
+      [n('f', 'focus'), n('a', 'parents')],
+    );
+    assert.equal(plan.focusChanged, false);
+    assert.equal(plan.flyingId, null);
+    assert.equal(plan.releasedFocus, null);
+    assert.deepEqual(plan.moving, ['a']);
+  });
+
+  it('plain appearance and disappearance are classified', () => {
+    const gone = planFocusTransition(
+      [n('f', 'focus'), n('a', 'siblings'), n('b', 'siblings')],
+      [n('f', 'focus'), n('a', 'siblings')],
+    );
+    assert.deepEqual(gone.leaving, ['b']);
+    assert.equal(gone.hasChanges, true);
+
+    const born = planFocusTransition([n('f', 'focus')], [n('f', 'focus'), n('a', 'children')]);
+    assert.deepEqual(born.entering, ['a']);
+  });
+
+  it('no-ops: an unchanged layout and a first mount plan nothing', () => {
+    const same = planFocusTransition([n('f', 'focus'), n('a', 'parents')], [n('f', 'focus'), n('a', 'parents')]);
+    assert.equal(same.hasChanges, false);
+
+    const firstMount = planFocusTransition([], [n('a', 'focus'), n('b', 'children')]);
+    assert.equal(firstMount.hasChanges, false);
+    assert.equal(firstMount.focusChanged, false);
+
+    const cleared = planFocusTransition([n('f', 'focus')], []);
+    assert.equal(cleared.hasChanges, false);
   });
 });
 

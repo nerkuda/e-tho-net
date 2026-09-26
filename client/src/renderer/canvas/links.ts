@@ -204,17 +204,20 @@ let highlightedEllipses: HTMLElement[] = [];
  */
 export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   hostEl = host;
+  // `links-layer` is the common marker of all four overlays: the focus-change
+  // transition (`canvas/transition.ts`) hides and fades them as one group while
+  // the clouds fly. The per-layer classes below stay the styling/behaviour hooks.
   svg = document.createElementNS(SVG_NS, 'svg');
-  svg.classList.add('links-overlay');
+  svg.classList.add('links-overlay', 'links-layer');
   svgHit = document.createElementNS(SVG_NS, 'svg');
-  svgHit.classList.add('links-overlay-hit');
+  svgHit.classList.add('links-overlay-hit', 'links-layer');
   svgTop = document.createElementNS(SVG_NS, 'svg');
-  svgTop.classList.add('links-overlay-top');
+  svgTop.classList.add('links-overlay-top', 'links-layer');
   // The pending-link preview layer lives ABOVE the top overlay and is never
   // cleared by the redraws (draw/drawActive rebuild svgTop) — an ellipse drag
   // keeps its line no matter what repaints in between.
   svgDrag = document.createElementNS(SVG_NS, 'svg');
-  svgDrag.classList.add('links-overlay-drag');
+  svgDrag.classList.add('links-overlay-drag', 'links-layer');
   // DOM order is the source of truth for layering: visual overlay FIRST (under
   // the clouds), then hit + top overlays LAST. The hit layer shares z=0 with
   // the visual one and relies on DOM order to sit above the curves — both stay
