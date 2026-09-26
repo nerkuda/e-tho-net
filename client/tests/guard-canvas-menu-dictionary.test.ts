@@ -62,9 +62,9 @@ const MENU_FUNCTIONS: Array<{ file: string; functions: string[]; requires: strin
   },
   {
     file: 'screens/chronicle/chronicle.ts',
-    // Меню строки хроники — `rowMenuItems` (фасад таблицы сам показывает его
-    // по правому клику, задача 20ac6917; прежде — `showRowMenu`).
-    functions: ['rowMenuItems', 'showTargetMenu', 'showEditorTargetMenu'],
+    // Меню записи дневника — `recordMenuItems` (0.10.1, задача T6; прежде меню
+    // строки таблицы «Хроники» — `rowMenuItems`).
+    functions: ['recordMenuItems'],
     requires: ['menuAction', 'MENU_SEPARATOR'],
   },
   {

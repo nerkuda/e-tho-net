@@ -52,8 +52,19 @@ describe('toDefinition / fromDefinition', () => {
     assert.deepEqual(fromDefinition(definition), state);
   });
 
-  it('omits empty criteria and defaults to asc/both', () => {
-    const definition = toDefinition(DEFAULT_FILTER);
+  it('round-trips the target criteria group (0.10.1, 306f74cc)', () => {
+    const base = defaultFilter();
+    const state: ChronicleFilterState = {
+      ...base,
+      targets: { ...base.targets, keywords: 'цель', typeIds: ['t9'] },
+    };
+    const definition = toDefinition(state);
+    assert.equal(definition.targets?.keywords, 'цель');
+    assert.deepEqual(definition.targets?.type_ids, ['t9']);
+    assert.deepEqual(fromDefinition(definition).targets, state.targets);
+  });
+
+  it('omits empty criteria and defaults to asc/both', () => {    const definition = toDefinition(DEFAULT_FILTER);
     assert.equal(definition.keywords, undefined);
     assert.equal(definition.thought_ids, undefined);
     assert.equal(definition.include_subtree, undefined);
@@ -87,26 +98,26 @@ describe('parseChronicleState', () => {
     const parsed = parseChronicleState(
       JSON.stringify({
         filter: { keywords: 'x', order: 'desc' },
-        offset: 150,
+        month: { year: 2026, month: 9 },
         savedFilterId: 'f1',
       }),
     );
     assert.equal(parsed.filter.keywords, 'x');
     assert.equal(parsed.filter.order, 'desc');
-    assert.equal(parsed.offset, 150);
+    assert.deepEqual(parsed.month, { year: 2026, month: 9 });
     assert.equal(parsed.savedFilterId, 'f1');
   });
 
   it('falls back to empty on garbage or missing fields', () => {
     const garbage = parseChronicleState('not-json{');
-    assert.equal(garbage.offset, 0);
+    assert.equal(garbage.month, null);
     assert.equal(garbage.savedFilterId, null);
     assert.equal(garbage.filter.order, 'asc');
 
-    const partial = parseChronicleState(JSON.stringify({ offset: -5 }));
-    assert.equal(partial.offset, 0, 'negative offsets clamp to zero');
+    const partial = parseChronicleState(JSON.stringify({ savedFilterId: null }));
+    assert.equal(partial.month, null, 'без сохранённого месяца — null');
 
-    const float = parseChronicleState(JSON.stringify({ offset: 7.9 }));
-    assert.equal(float.offset, 7, 'offsets are floored');
+    const badMonth = parseChronicleState(JSON.stringify({ month: { year: 2026, month: 13 } }));
+    assert.equal(badMonth.month, null, 'некорректный номер месяца отбрасывается');
   });
 });
