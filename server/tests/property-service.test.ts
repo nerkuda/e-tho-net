@@ -334,6 +334,48 @@ describe(
       }
     });
 
+    it('findThoughtUsage показывает все link-рёбра, включая неблокирующие (c0a2a2e6)', () => {
+      // Симптом: обычное свойство-связь («затрагивает», без
+      // blocks_target_deletion) не попадало в «Использование» — total: 0.
+      // Теперь usage (просмотр) показывает все формальные link-рёбра реестра,
+      // а проверка удаления/clear остаются blocking-only.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'затрагивает', name_reverse: 'затронут' },
+          USER,
+        );
+        const grabli = createThoughtType(ndb, { name: 'ГраблиU' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентU' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          grabli.id,
+          {
+            key: 'затрагивает',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out' },
+          },
+          USER,
+        );
+        const target = seedTypedThought(ndb, comp.id);
+        const owner = seedTypedThought(ndb, grabli.id);
+        setPropertyValue(ndb, 'thought', owner, 'затрагивает', target, USER);
+
+        const usage = findThoughtUsage(ndb, target);
+        assert.equal(usage.total, 1);
+        assert.equal(usage.groups.length, 1);
+        assert.equal(usage.groups[0]!.key, 'затрагивает');
+        assert.equal(usage.groups[0]!.thoughts[0]!.id, owner);
+
+        // Проверка удаления не расширена: неблокирующее ребро не блокирует.
+        assert.equal(countThoughtRefUsages(ndb, target), 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('учёт блокирующих ссылок берёт сторону привязки: владелец-цель (ошибка 083dcde5)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

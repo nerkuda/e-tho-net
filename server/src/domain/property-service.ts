@@ -3773,9 +3773,10 @@ export function getPropertyValuesResolved(
 
 /**
  * Reverse lookup использования мысли (docs/03-server-api.md §9.1): мысли,
- * ссылающиеся на `thoughtId` через свойства-связи с `blocks_target_deletion`
- * (0.8.1, dbf1e4aa), сгруппированные по свойству реестра. Плечо
- * `thought_ref`-значений исчезло вместе с видом значения (миграция 040):
+ * ссылающиеся на `thoughtId` через ВСЕ формальные свойства-связи реестра
+ * (c0a2a2e6; флаг `blocks_target_deletion` на «Использование» не влияет —
+ * он остаётся про защиту от удаления), сгруппированные по свойству реестра.
+ * Плечо `thought_ref`-значений исчезло вместе с видом значения (миграция 040):
  * все ссылки — рёбра. Groups are ordered by property name, items by the
  * owner's normalized title.
  */
@@ -3831,9 +3832,11 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     group.thoughts.push(rowToThoughtRef(row));
   }
 
-  // Использование через свойства-связи с blocks_target_deletion — рёбра,
-  // у которых мысль является целью ссылки.
-  for (const bp of listBlockingLinkProperties(ndb)) {
+  // Использование через свойства-связи — ВСЕ формальные link-рёбра реестра,
+  // у которых мысль является целью ссылки (c0a2a2e6: «кто ссылается на мысль»).
+  // Блокировка удаления (`blocks_target_deletion`) здесь ни при чём — она
+  // остаётся в countThoughtRefUsages/clearThoughtRefUsages.
+  for (const bp of listLinkPropertyEdges(ndb, { onlyBlocking: false })) {
     const refCol = bp.direction === 'out' ? 'source_id' : 'target_id';
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
     const typeClause = bp.link_type_id === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
@@ -3863,34 +3866,46 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
   return { total, groups, holding_layers: [] };
 }
 
-/** Запись учёта блокирующих ссылок: свойство + направление, в котором оно блокирует. */
-interface BlockingLinkProperty {
+/**
+ * Записи учёта ссылок через свойства-связи: свойство + направление ребра у
+ * владельца. Общий тип для двух потребителей — «Использования» мысли
+ * (все свойства-связи, c0a2a2e6) и блокировки удаления (только
+ * `blocks_target_deletion`, dbf1e4aa).
+ */
+interface LinkPropertyEdge {
   property_id: string;
   name: string;
-  /** Направление ребра у ВЛАДЕЛЬЦА: `out` — владелец источник (блокируется цель),
-   *  `in` — владелец цель (блокируется источник). */
+  /** Направление ребра у ВЛАДЕЛЬЦА: `out` — владелец источник (ссылается на
+   *  цель), `in` — владелец цель (на него ссылается источник). */
   direction: LinkPropertyDirection;
   link_type_id: string | null;
 }
 
 /**
- * Свойства-связи, чьё ребро блокирует удаление значения
- * (`config.blocks_target_deletion`), с направлением, РАЗРЕШЁННЫМ ПО ПРИВЯЗКАМ
+ * Свойства-связи реестра с направлением, РАЗРЕШЁННЫМ ПО ПРИВЯЗКАМ
  * (ошибка 083dcde5; класс ошибки c67676f3).
  *
  * Направление свойства-связи живёт в привязке (`type_properties.side`,
  * миграция 042), а не в `config`: одна реестровая строка может быть привязана
  * и источником, и назначением на разные типы владельцев. Поэтому возвращаем по
  * записи на каждую ПАРУ `(property_id, direction)`, а не одну запись на
- * свойство: привязка-источник блокирует цель ребра (`out`), привязка-назначение
- * — источник (`in`). У свойства без привязок сохраняем прежний fallback на
- * `config.direction` (внетиповое заполнение, привязки до миграции 041).
+ * свойство: привязка-источник — `out`, привязка-назначение — `in`. У свойства
+ * без привязок сохраняем прежний fallback на `config.direction` (внетиповое
+ * заполнение, привязки до миграции 041).
  *
  * Симметрично чтению ({@link listThoughtLinkProperties}, `emitExplicit`):
  * направление каждой записи вычисляет {@link linkPropertyDirection} по стороне
  * привязки.
+ *
+ * `onlyBlocking` — `true` для проверки удаления (`blocks_target_deletion`),
+ * `false` для «Использования» мысли (все формальные link-рёбра, c0a2a2e6).
+ * Структурные «Родители»/«Потомки» исключаются всегда: они не формальные
+ * ссылки-свойства.
  */
-function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
+function listLinkPropertyEdges(
+  ndb: NetworkDb,
+  opts: { onlyBlocking: boolean },
+): LinkPropertyEdge[] {
   // Стороны, которыми свойство привязано у типов владельцев. Без привязок
   // свойство остаётся с fallback-направлением из config.
   const bindingSides = new Map<string, Set<LinkPropertySide | null>>();
@@ -3899,8 +3914,9 @@ function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
       `SELECT DISTINCT tp.property_id AS property_id, tp.side AS side
          FROM type_properties_v tp
          JOIN properties_v p ON p.id = tp.property_id
-        WHERE p.value_type = 'link'
-          AND json_extract(p.config, '$.blocks_target_deletion') = 1`,
+        WHERE p.value_type = 'link'${
+          opts.onlyBlocking ? " AND json_extract(p.config, '$.blocks_target_deletion') = 1" : ''
+        }`,
     )
     .all() as Array<{ property_id: string; side: string | null }>;
   for (const row of rows) {
@@ -3912,11 +3928,12 @@ function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
     sides.add(row.side === 'source' || row.side === 'target' ? row.side : null);
   }
 
-  const out: BlockingLinkProperty[] = [];
+  const out: LinkPropertyEdge[] = [];
   for (const prop of listNetworkProperties(ndb)) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
-    if (cfg.blocks_target_deletion !== true) continue;
+    if (isStructuralLinkProperty(cfg)) continue;
+    if (opts.onlyBlocking && cfg.blocks_target_deletion !== true) continue;
     const sides = bindingSides.get(prop.id);
     const directions: LinkPropertyDirection[] =
       sides === undefined || sides.size === 0
@@ -3932,6 +3949,11 @@ function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
     }
   }
   return out;
+}
+
+/** Свойства-связи, блокирующие удаление цели (`blocks_target_deletion`). */
+function listBlockingLinkProperties(ndb: NetworkDb): LinkPropertyEdge[] {
+  return listLinkPropertyEdges(ndb, { onlyBlocking: true });
 }
 
 /**
