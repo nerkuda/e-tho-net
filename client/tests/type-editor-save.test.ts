@@ -259,7 +259,15 @@ describe('type-manager — вкладки несохранённого типа:
     );
     assert.ok(
       helper.includes("role: 'primary'"),
-      'кнопка «Применить» в хелпере должна нести primary-роль словаря lib/ui',
+      'кнопка «Сохранить» в хелпере должна нести primary-роль словаря lib/ui',
+    );
+    assert.ok(
+      helper.includes("t('actions.save')"),
+      'несохранённый тип: подпись кнопки — «Сохранить» (actions.save), а не «Применить» (ошибка cbb1a67f)',
+    );
+    assert.ok(
+      !helper.includes("t('actions.apply')"),
+      'подпись «Применить» (actions.apply) для ещё не записанного типа — регресс ошибки cbb1a67f',
     );
     assert.ok(
       helper.includes("t('typeEditor.saveHint')"),
