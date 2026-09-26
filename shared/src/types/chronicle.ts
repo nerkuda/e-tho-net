@@ -9,7 +9,7 @@
  * requested date range.
  */
 
-import type { ChronicleLinkScope, SavedFilterView, SortOrder } from '../enums.js';
+import type { ChronicleLinkScope, SavedFilterView, SortOrder, StructureKeywordScope } from '../enums.js';
 import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
@@ -22,6 +22,14 @@ export interface ChronicleFilter {
    *  лента записей дня, привязанных только к HOME). Исключающие слова вычитают
    *  запись по её собственному тексту. */
   keywords?: string;
+  /**
+   * Где ищутся `keywords` в МЫСЛЕВОМ пути (путь А): любое подмножество
+   * `title`/`synonyms`/`comment` (постоянный комментарий мысли и комментарии её
+   * связей). Отсутствие или пустой массив — поиск по всем трём областям
+   * (поведение до 0.10.1). Тело/заголовок САМОЙ записи (путь Б, T7) от области
+   * не зависит.
+   */
+  keyword_scope?: StructureKeywordScope[];
   /** Root thoughts of the «мысли» field; empty = all thoughts of the network. */
   thought_ids?: string[];
   /** Include the roots' subordinates up to depth 20 (undirected, deduped). */

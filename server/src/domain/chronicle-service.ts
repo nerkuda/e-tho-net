@@ -39,6 +39,7 @@ import {
   type ChronicleTargetLink,
   type SortOrder,
   type StructureAuthorOp,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
@@ -148,6 +149,25 @@ export function parseChronicleFilter(
       }, requestId);
     }
     if (keywords.trim() !== '') filter.keywords = keywords;
+  }
+
+  // Область поиска ключевых слов (0.10.1, элемент 2f14de06/91f8d8dd): чекбоксы
+  // «наименование/синонимы/комментарий». Пустой набор/отсутствие — поиск по
+  // всем областям (поведение до 0.10.1).
+  const keywordScope = body['keyword_scope'];
+  if (keywordScope !== undefined) {
+    if (
+      !Array.isArray(keywordScope) ||
+      keywordScope.some((v) => v !== 'title' && v !== 'synonyms' && v !== 'comment')
+    ) {
+      throw new EtnError('VALIDATION_ERROR', 'Недопустимый keyword_scope.', {
+        field: 'keyword_scope',
+        allowed: ['title', 'synonyms', 'comment'],
+      }, requestId);
+    }
+    if (keywordScope.length > 0) {
+      filter.keyword_scope = [...new Set(keywordScope)] as StructureKeywordScope[];
+    }
   }
 
   const thoughtIds = body['thought_ids'];
@@ -447,20 +467,41 @@ function collectRootAndSubtreeIds(
  * (единственная цель — HOME) слово в теле выбирало бы корень и возвращало все
  * его записи. Поиск по телам/заголовкам записей делает {@link RECORD_KEYWORD_COND}
  * в фазе 2.
+ *
+ * Область (`keyword_scope`) сужает набор сравнений (0.10.1): `comment` —
+ * постоянный комментарий мысли и комментарии её связей. Отсутствие области —
+ * все сравнения (поведение до 0.10.1).
  */
-const THOUGHT_KEYWORD_COND = `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
+function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
+  sql: string;
+  argCount: number;
+} {
+  const enabled = (name: StructureKeywordScope): boolean =>
+    scope === undefined || scope.length === 0 || scope.includes(name);
+  const parts: string[] = [];
+  if (enabled('title')) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+  if (enabled('synonyms')) {
+    parts.push(`EXISTS (
   SELECT 1 FROM thought_synonyms_v ts
   WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
-) OR EXISTS (
+)`);
+  }
+  if (enabled('comment')) {
+    parts.push(`EXISTS (
   SELECT 1 FROM comments_v c1
   JOIN comment_targets_v ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
   WHERE ct1.owner_id = t.id AND c1.kind = 'permanent' AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
-) OR EXISTS (
+)`);
+    parts.push(`EXISTS (
   SELECT 1 FROM comments_v c2
   JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
   JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
   WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
-))`;
+)`);
+  }
+  if (parts.length === 0) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+  return { sql: `(${parts.join(' OR ')})`, argCount: parts.length };
+}
 
 /**
  * Keywords condition for one word against the RECORD itself (0.10.1, T7):
@@ -480,6 +521,7 @@ function selectThoughts(
   typeIds: string[],
   includeWords: string[],
   excludeWords: string[],
+  scope?: StructureKeywordScope[],
 ): string[] {
   // An empty root set short-circuits: `IN ()` is invalid SQL and there is
   // nothing left to filter anyway.
@@ -498,19 +540,20 @@ function selectThoughts(
       args.push(...expanded);
     }
   }
+  const cond = thoughtKeywordCond(scope);
   for (const word of includeWords) {
     // `toLowerCase()` — LIKE в SQLite регистронезависим только для ASCII, а
     // `title_norm`/`synonym_norm`/`unicode_lower(body_md)` уже в нижнем
     // регистре: без нормализации слова кириллица в другом регистре не
     // матчилась (ошибка 2f27f244). Тот же приём, что в query-service.
     const pattern = buildLikePattern(word.toLowerCase());
-    where.push(THOUGHT_KEYWORD_COND);
-    args.push(pattern, pattern, pattern, pattern);
+    where.push(cond.sql);
+    for (let i = 0; i < cond.argCount; i += 1) args.push(pattern);
   }
   for (const word of excludeWords) {
     const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${THOUGHT_KEYWORD_COND}`);
-    args.push(pattern, pattern, pattern, pattern);
+    where.push(`NOT ${cond.sql}`);
+    for (let i = 0; i < cond.argCount; i += 1) args.push(pattern);
   }
   const sql = `SELECT t.id FROM thoughts_v t ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}`;
   const rows = ndb.prepare(sql).all(...args) as Array<{ id: string }>;
@@ -650,7 +693,10 @@ function buildRowsWhere(
     }
   }
   if (parts.length > 0) {
-    conds.push(parts.join(' OR '));
+    // Скобки обязательны: без них `kind='chronological' AND A OR B` разбирается
+    // как `(kind AND A) OR B`, и путь Б (текст записи) вернул бы в ленту
+    // постоянные комментарии (дефект приёмки 0.10.1).
+    conds.push(`(${parts.join(' OR ')})`);
   } else if (scopeIds.length > 0) {
     conds.push(
       scopeRestricted ? attachmentCond(ndb, scopeIds, request, args) : anyAttachmentCond(),
@@ -830,9 +876,11 @@ export function queryChronicle(
   // комментарий, комментарии связей), минус исключающие слова.
   let keywordIds = scopeIds;
   if (includeWords.length > 0 || excludeWords.length > 0) {
-    keywordIds = selectThoughts(ndb, baseIds, typeIds, includeWords, []);
+    keywordIds = selectThoughts(ndb, baseIds, typeIds, includeWords, [], resolved.keyword_scope);
     if (excludeWords.length > 0) {
-      const excluded = new Set(selectThoughts(ndb, baseIds, typeIds, excludeWords, []));
+      const excluded = new Set(
+        selectThoughts(ndb, baseIds, typeIds, excludeWords, [], resolved.keyword_scope),
+      );
       keywordIds = keywordIds.filter((id) => !excluded.has(id));
     }
   }

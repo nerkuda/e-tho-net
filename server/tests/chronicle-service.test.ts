@@ -602,6 +602,37 @@ describe(
         () => parseChronicleQueryBody({ targets: [] }, 'r'),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
       );
+      // keyword_scope — закрытый словарь областей.
+      assert.throws(
+        () => parseChronicleQueryBody({ keywords: 'x', keyword_scope: ['body'] }, 'r'),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    });
+
+    it('keyword_scope сужает МЫСЛЕВОЙ путь ключевых слов (0.10.1, 91f8d8dd)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME', { home: true });
+        const target = seedThought(ndb, 'Alpha');
+        // Слово есть только в постоянном комментарии мысли-цели.
+        createComment(ndb, 'thought', target, { kind: 'permanent', body_md: 'секрет' }, USER);
+        const rec = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', body_md: 'обычное тело', valid_from: '2024-01-01' },
+          USER,
+        );
+        // По умолчанию область — все: запись находится мыслевым путём.
+        assert.deepEqual(query(ndb, { keywords: 'секрет' }).rows.map((r) => r.id), [rec.id]);
+        // Область «наименование» отсекает комментарий — путь А пуст, тело записи
+        // слова не содержит.
+        assert.deepEqual(
+          query(ndb, { keywords: 'секрет', keyword_scope: ['title'] }).rows.map((r) => r.id),
+          [],
+        );
+      } finally {
+        ndb.close();
+      }
     });
   },
 );
