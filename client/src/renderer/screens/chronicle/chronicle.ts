@@ -22,8 +22,11 @@
  *
  * Правка по месту — оболочка комментария `lib/ui/comment.ts` и общее поле
  * markdown; даты записи и поля периода — общий контрол `lib/period-editor.ts`
- * (своих полей дат у экрана нет, сторож `guard-period-editor`). Состояние
- * (критерии, страница, месяц, выбранный отбор) — L4 `chronicle_state`.
+ * (своих полей дат у экрана нет, сторож `guard-period-editor`). Значения
+ * контрола, уходящие в запись, переводятся в полные UTC-инстансы помощником
+ * `resolvePeriodInstants`: смена только даты сохраняет время суток, `valid_to`
+ * непуст (ADR 994d076a, требование d58aa1a4). Состояние (критерии, страница,
+ * месяц, выбранный отбор) — L4 `chronicle_state`.
  */
 
 import {
@@ -51,7 +54,11 @@ import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-p
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
-import { buildPeriodEditor, type PeriodValue } from '../../lib/period-editor.js';
+import {
+  buildPeriodEditor,
+  resolvePeriodInstants,
+  type PeriodValue,
+} from '../../lib/period-editor.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
@@ -570,7 +577,11 @@ function openDateEditor(card: HTMLElement, row: ChronicleRow): void {
     value: { from: row.valid_from, to: row.valid_to ?? row.valid_from },
     allowTokens: false,
     label: 'Дата записи',
-    onChange: (value: PeriodValue) => void saveRecordDates(row.id, value),
+    onChange: (value: PeriodValue) =>
+      void saveRecordDates(row.id, value, {
+        from: row.valid_from,
+        to: row.valid_to ?? row.valid_from,
+      }),
   });
   const box = div('diary-record-date-editor');
   box.append(
@@ -588,10 +599,20 @@ function openDateEditor(card: HTMLElement, row: ChronicleRow): void {
   }
 }
 
-async function saveRecordDates(id: string, value: PeriodValue): Promise<void> {
-  const from = value.from ?? '';
-  if (from === '') return;
-  const to = value.to ?? from;
+/**
+ * Сохраняет даты записи. Значение контрола переводится в полные UTC-инстансы
+ * общим помощником `resolvePeriodInstants` (ADR 994d076a): смена только даты
+ * сохраняет время суток, незаданный конец равен началу, поэтому `valid_to`
+ * остаётся непустым (требование d58aa1a4). `previous` — исходные инстансы
+ * записи, источник времени суток при «голой дате».
+ */
+async function saveRecordDates(
+  id: string,
+  value: PeriodValue,
+  previous: { from: string; to: string },
+): Promise<void> {
+  if ((value.from ?? '') === '') return;
+  const { from, to } = resolvePeriodInstants(value, previous);
   const networkId = requireNetworkId();
   try {
     const fresh = await etn.comments.get(networkId, id);
@@ -638,12 +659,19 @@ async function copyRecord(id: string): Promise<void> {
   try {
     const source = await etn.comments.get(networkId, id);
     const today = todayLocal();
+    // Даты = сегодня + текущее время; голую дату не шлём (ADR 994d076a,
+    // требование d58aa1a4 — полные UTC-инстансы, `valid_to` непуст).
+    const now = new Date().toISOString();
+    const { from, to } = resolvePeriodInstants(
+      { from: today, to: today },
+      { from: now, to: now },
+    );
     await etn.comments.createMulti(networkId, source.targets, {
       kind: 'chronological',
       title: source.title,
       body_md: source.body_md,
-      valid_from: today,
-      valid_to: today,
+      valid_from: from,
+      valid_to: to,
       use_time: false,
     });
     await reload();
@@ -885,12 +913,21 @@ async function ensureSlot(opts: {
     // Содержание записи держится на любом из: текст, заголовок, чипс
     // (требование 26f0aa52). Сервер допускает пустой `body_md`, пока есть
     // непустой заголовок или привязка вне HOME, поэтому текст шлём как есть.
+    //
+    // Дата записи — псевдо-день + текущее время суток (ADR 994d076a: «при
+    // создании — указанная дата + текущее время»). Голую дату не шлём: она
+    // теряет время суток, а `valid_to` обязан быть непустым (d58aa1a4).
+    const now = new Date().toISOString();
+    const { from: validFrom, to: validTo } = resolvePeriodInstants(
+      { from: state.from, to: state.from },
+      { from: now, to: now },
+    );
     const created = await etn.comments.createMulti(networkId, targets, {
       kind: 'chronological',
       title: title.trim() || null,
       body_md: body,
-      valid_from: state.from,
-      valid_to: state.from,
+      valid_from: validFrom,
+      valid_to: validTo,
       use_time: false,
     });
     slot = null;
