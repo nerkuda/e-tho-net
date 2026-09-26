@@ -269,6 +269,12 @@ export function toolJson<T = unknown>(result: ClientCallToolResult): T {
 export interface WriteThoughtFixture {
   ref?: string;
   thought_id?: string;
+  /** Item-level правка существующей мысли (`thought_id`), взаимоисключима с `thought`. */
+  title?: string;
+  synonyms?: string[];
+  type?: string;
+  type_id?: string | null;
+  active?: boolean;
   thought?: {
     title: string;
     synonyms?: string[];

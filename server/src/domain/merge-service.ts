@@ -49,6 +49,10 @@ import {
   type LayerMergeReport,
   type LayerMergeReorderCollapsed,
   type LayerMergeSkip,
+  type LayerOverrideDiffField,
+  type LayerOverrideRow,
+  type LayerPendingConflictsReport,
+  type LayerResetOverrideReport,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
@@ -257,6 +261,226 @@ function collectMergedRows(
   return merged;
 }
 
+/** A mergeable working layer with the parent it merges into. */
+interface MergeTarget {
+  layer: { id: string; parent_id: string | null; title: string; is_service: number; is_base: number };
+  target: { id: string; title: string };
+  targetIsBase: boolean;
+}
+
+/**
+ * Load the layer to merge/reset from and its target (parent), rejecting the
+ * base and service layers — they have no merge target chain to reconcile
+ * against. Shared by the merge (§8.1) and the override reset (§8.5).
+ */
+function loadMergeTarget(ndb: NetworkDb, layerId: string): MergeTarget {
+  const layer = ndb
+    .prepare('SELECT id, parent_id, title, is_service, is_base FROM layers WHERE id = ? LIMIT 1')
+    .get(layerId) as MergeTarget['layer'] | undefined;
+  if (layer === undefined) {
+    throw new EtnError('NOT_FOUND', `layer ${layerId} not found`, { entity: 'layer', id: layerId });
+  }
+  if (layer.is_base === 1) {
+    throw new EtnError('VALIDATION_ERROR', 'основа не может быть слита: у неё нет родителя.', {
+      layer_id: layerId,
+    });
+  }
+  if (layer.is_service === 1) {
+    throw new EtnError('VALIDATION_ERROR', 'служебный (резервный) слой нельзя слить.', {
+      layer_id: layerId,
+    });
+  }
+  const target = ndb
+    .prepare('SELECT id, title FROM layers WHERE id = ? LIMIT 1')
+    .get(layer.parent_id) as { id: string; title: string };
+  return { layer, target, targetIsBase: target.id === BASE_LAYER_ID };
+}
+
+/**
+ * Phase A of the merge (§8.1): every versioned merged row whose `base_version`
+ * diverges from the current version of the same logical id in the target chain.
+ * Shared with the reset preview (§8.5) — one definition of «предстоящий
+ * конфликт».
+ */
+function detectVersionConflicts(ndb: NetworkDb, merged: MergedRow[]): LayerMergeConflict[] {
+  const conflicts: LayerMergeConflict[] = [];
+  for (const { table, row, winner } of merged) {
+    if (winner === undefined || !layoutOf(ndb, table).hasVersion) continue;
+    // A tombstone that found nothing to delete is a no-op, not a conflict;
+    // every other row with a resolvable winner goes through the check. A
+    // winner that is itself a tombstone (deleted in an intermediate layer)
+    // counts as a changed row — its version carries the deletion bump.
+    const expected = row.base_version as number;
+    const current = winner.version as number;
+    if (expected !== current) {
+      conflicts.push({
+        table,
+        id: row.id as string,
+        expected_base_version: expected,
+        current_version: current,
+      });
+    }
+  }
+  return conflicts;
+}
+
+// ---------------------------------------------------------------------------
+// Override reset (§8.5, задача 7cc34cf4)
+// ---------------------------------------------------------------------------
+
+/** Text values in the override diff are clipped to keep the report bounded. */
+const OVERRIDE_DIFF_VALUE_MAX = 200;
+
+/** Clip one diff value; scalars pass through untouched. */
+function clipDiffValue(value: unknown): string | number | boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  const text = String(value);
+  return text.length > OVERRIDE_DIFF_VALUE_MAX ? `${text.slice(0, OVERRIDE_DIFF_VALUE_MAX)}…` : text;
+}
+
+/** Changed copy columns between the target's row and the layer's shadow —
+ * «было в основе / стало в слое». */
+function overrideRowDiff(
+  ndb: NetworkDb,
+  table: BranchableTable,
+  layerRow: AnyRow,
+  targetRow: AnyRow | undefined,
+): LayerOverrideDiffField[] {
+  const { copyCols } = layoutOf(ndb, table);
+  const diff: LayerOverrideDiffField[] = [];
+  for (const column of copyCols) {
+    const base = targetRow === undefined ? null : (targetRow[column] ?? null);
+    const layer = layerRow[column] ?? null;
+    if (base !== layer) {
+      diff.push({ column, base: clipDiffValue(base), layer: clipDiffValue(layer) });
+    }
+  }
+  return diff;
+}
+
+/** Describe one shadow row against its target-chain winner. */
+function describeOverrideRow(
+  ndb: NetworkDb,
+  table: BranchableTable,
+  row: AnyRow,
+  winner: AnyRow | undefined,
+  versionRaisedTo: number | null,
+): LayerOverrideRow {
+  return {
+    table,
+    id: row.id as string,
+    previous_base_version: row.base_version as number,
+    current_version: winner === undefined ? 0 : (winner.version as number),
+    layer_version: (row.version as number | undefined) ?? 0,
+    version_raised_to: versionRaisedTo,
+    base_deleted: winner !== undefined && winner.deleted === 1,
+    layer_deleted: row.deleted === 1,
+    diff: overrideRowDiff(ndb, table, row, winner),
+  };
+}
+
+/**
+ * Read-only preview of the conflicts that would reject a merge (§8.5): the
+ * layer's versioned shadow rows whose `base_version` no longer matches the
+ * target chain, each with its «было в основе / стало в слое» difference. Lets
+ * an agent learn about a future conflict without attempting the merge (a
+ * trial merge is unsafe: a conflict-free layer would merge early).
+ *
+ * `selection === undefined` inspects the whole layer; a defined selection is
+ * the same closed subset shape the merge takes.
+ */
+export function listPendingMergeConflicts(
+  ndb: NetworkDb,
+  layerId: string,
+  selection?: MergeSelection,
+): LayerPendingConflictsReport {
+  return ndb.transaction(() => {
+    const { layer, target } = loadMergeTarget(ndb, layerId);
+    setupMergeChain(ndb, target.id);
+    const merged = collectMergedRows(ndb, layerId, selection);
+    const conflicts = detectVersionConflicts(ndb, merged);
+    const stale = new Set(conflicts.map((c) => `${c.table}\u0000${c.id}`));
+    return {
+      layer: { id: layer.id, title: layer.title },
+      target_layer: { id: target.id, title: target.title },
+      overridden: merged.length,
+      conflicts: merged
+        .filter((m) => stale.has(`${m.table}\u0000${m.row.id as string}`))
+        .map((m) => describeOverrideRow(ndb, m.table, m.row, m.winner, null)),
+    };
+  });
+}
+
+/**
+ * Reset the override of the selected shadow rows (§8.5): re-pin `base_version`
+ * to the current version of the same logical row in the merge target. The
+ * layer's content is preserved and the target is not touched — the operation
+ * only says «I have seen the ancestor's change and take responsibility for
+ * it», after which the merge conflict check passes. Destructive by nature: the
+ * «ancestor changed» signal is deliberately dropped, so callers are expected
+ * to have inspected the preview ({@link listPendingMergeConflicts}) first.
+ *
+ * A shadow whose `version` lags behind the target is raised to the target's
+ * version: replaying it verbatim (§8.1) must not walk the target's version
+ * backwards.
+ *
+ * Throws `VALIDATION_ERROR` for the base/service layer, an empty selection or
+ * rows the layer does not hold (same `unknown` detail as the merge).
+ */
+export function resetLayerOverride(
+  ndb: NetworkDb,
+  layerId: string,
+  selection: MergeSelection,
+): LayerResetOverrideReport {
+  return ndb.transaction(() => {
+    const { layer, target } = loadMergeTarget(ndb, layerId);
+    setupMergeChain(ndb, target.id);
+    const merged = collectMergedRows(ndb, layerId, selection);
+    if (merged.length === 0) {
+      throw new EtnError('VALIDATION_ERROR', 'набор сброса пуст: укажите хотя бы одну строку слоя.', {
+        field: 'tables',
+      });
+    }
+    const reset: LayerOverrideRow[] = [];
+    const unchanged: LayerResetOverrideReport['unchanged'] = [];
+    for (const { table, row, winner } of merged) {
+      const id = row.id as string;
+      if (!layoutOf(ndb, table).hasVersion) {
+        // Versionless tables carry `base_version = 0` and never conflict
+        // (§8.1) — there is nothing to re-pin.
+        unchanged.push({ table, id, reason: 'not_versioned' });
+        continue;
+      }
+      const previous = row.base_version as number;
+      const current = winner === undefined ? 0 : (winner.version as number);
+      if (previous === current) {
+        unchanged.push({ table, id, reason: 'up_to_date' });
+        continue;
+      }
+      const layerVersion = (row.version as number | undefined) ?? 0;
+      const raiseTo = current > layerVersion ? current : null;
+      ndb
+        .prepare(
+          `UPDATE ${table} SET base_version = ?${raiseTo === null ? '' : ', version = ?'} WHERE rowid = ?`,
+        )
+        .run(...(raiseTo === null ? [current, row.rowid] : [current, raiseTo, row.rowid]));
+      reset.push(describeOverrideRow(ndb, table, row, winner, raiseTo));
+    }
+    if (reset.length > 0) {
+      ndb
+        .prepare('UPDATE layers SET last_activity_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), layerId);
+    }
+    return {
+      layer: { id: layer.id, title: layer.title },
+      target_layer: { id: target.id, title: target.title },
+      reset,
+      unchanged,
+    };
+  });
+}
+
 /** Non-null reference helper for {@link rowReferences}. */
 function ref(table: BranchableTable, id: unknown): { table: BranchableTable; id: string } | null {
   return typeof id === 'string' && id.length > 0 ? { table, id } : null;
@@ -428,51 +652,13 @@ function mergeLayerInner(
   selection: MergeSelection | undefined,
   actorUserId: string,
 ): LayerMergeOutcome {
-  const layer = ndb
-    .prepare('SELECT id, parent_id, title, is_service, is_base FROM layers WHERE id = ? LIMIT 1')
-    .get(layerId) as
-    | { id: string; parent_id: string | null; title: string; is_service: number; is_base: number }
-    | undefined;
-  if (layer === undefined) {
-    throw new EtnError('NOT_FOUND', `layer ${layerId} not found`, { entity: 'layer', id: layerId });
-  }
-  if (layer.is_base === 1) {
-    throw new EtnError('VALIDATION_ERROR', 'основа не может быть слита: у неё нет родителя.', {
-      layer_id: layerId,
-    });
-  }
-  if (layer.is_service === 1) {
-    throw new EtnError('VALIDATION_ERROR', 'служебный (резервный) слой нельзя слить.', {
-      layer_id: layerId,
-    });
-  }
-  const target = ndb
-    .prepare('SELECT id, title FROM layers WHERE id = ? LIMIT 1')
-    .get(layer.parent_id) as { id: string; title: string };
-  const targetIsBase = target.id === BASE_LAYER_ID;
+  const { layer, target, targetIsBase } = loadMergeTarget(ndb, layerId);
 
   setupMergeChain(ndb, target.id);
   const merged = collectMergedRows(ndb, layerId, selection);
 
   // --- Phase A (read-only): conflict detection (§8.1) --------------------
-  const conflicts: LayerMergeConflict[] = [];
-  for (const { table, row, winner } of merged) {
-    if (winner === undefined || !layoutOf(ndb, table).hasVersion) continue;
-    // A tombstone that found nothing to delete is a no-op, not a conflict;
-    // every other row with a resolvable winner goes through the check. A
-    // winner that is itself a tombstone (deleted in an intermediate layer)
-    // counts as a changed row — its version carries the deletion bump.
-    const expected = row.base_version as number;
-    const current = winner.version as number;
-    if (expected !== current) {
-      conflicts.push({
-        table,
-        id: row.id as string,
-        expected_base_version: expected,
-        current_version: current,
-      });
-    }
-  }
+  const conflicts = detectVersionConflicts(ndb, merged);
   if (conflicts.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',

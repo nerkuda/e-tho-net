@@ -17,10 +17,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { Layer, LayerMergeReport } from '@etn/shared';
+import { BASE_LAYER_ID } from '@etn/shared';
 
 import {
   callOp,
-  buildMcpContext, callWrite, closeMcpContext, connectMcpClient, nativeAvailable, toolJson,
+  buildMcpContext, callWrite, closeMcpContext, connectMcpClient, createThoughtViaWrite, nativeAvailable, toolJson, toolText,
 } from './mcp-helpers.js';
 
 describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
@@ -209,6 +210,110 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
             tables: { links: [link.link_id] },
           }, true);
         assert.equal(rejected.isError, true);
+      } finally {
+        await agent.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('agrees recovery path: layers.conflicts preview + layers.reset_override unblock a merge (7cc34cf4)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const agent = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const net = ctx.networkId;
+        const a = (await createThoughtViaWrite(agent.client, net, { title: 'A' })).id;
+        const layer = toolJson<Layer>(
+          await callOp(agent.client, 'layers.create', { network_id: net, title: 'Конфликтный слой' }),
+        );
+        await agent.client.callTool({
+          name: 'etn.layers.select',
+          arguments: { network_id: net, layer_id: layer.id },
+        });
+        // The layer overrides A …
+        await callWrite(agent.client, net, [{ thought_id: a, title: 'A (слой)' }]);
+        // … the base edits the same row afterwards (the merge now conflicts).
+        await agent.client.callTool({
+          name: 'etn.layers.select',
+          arguments: { network_id: net, layer_id: BASE_LAYER_ID },
+        });
+        await callWrite(agent.client, net, [{ thought_id: a, title: 'A (основа)' }]);
+        await agent.client.callTool({
+          name: 'etn.layers.select',
+          arguments: { network_id: net, layer_id: layer.id },
+        });
+
+        assert.equal(
+          (await callOp(agent.client, 'layers.merge', { network_id: net, layer_id: layer.id }, true)).isError,
+          true,
+        );
+
+        // Read-only preview names the row and the side-by-side difference.
+        const preview = toolJson<{
+          overridden: number;
+          conflicts: Array<{
+            table: string;
+            id: string;
+            previous_base_version: number;
+            current_version: number;
+            diff: Array<{ column: string; base: string | null; layer: string | null }>;
+          }>;
+        }>(await callOp(agent.client, 'layers.conflicts', { network_id: net, layer_id: layer.id }));
+        assert.equal(preview.overridden, 1);
+        assert.equal(preview.conflicts.length, 1);
+        assert.equal(preview.conflicts[0]!.id, a);
+        assert.deepEqual(
+          preview.conflicts[0]!.diff.find((d) => d.column === 'title'),
+          { column: 'title', base: 'A (основа)', layer: 'A (слой)' },
+        );
+
+        // Destructive: confirm is required.
+        const refused = await callOp(agent.client, 'layers.reset_override', {
+          network_id: net,
+          layer_id: layer.id,
+          tables: { thoughts: [a] },
+        });
+        assert.equal(refused.isError, true);
+        assert.match(toolText(refused), /confirm/);
+
+        const reset = toolJson<{ reset: unknown[]; unchanged: unknown[] }>(
+          await callOp(
+            agent.client,
+            'layers.reset_override',
+            { network_id: net, layer_id: layer.id, tables: { thoughts: [a] } },
+            true,
+          ),
+        );
+        assert.equal(reset.reset.length, 1);
+        assert.deepEqual(reset.unchanged, []);
+
+        // The merge goes through, and the base carries the layer's content.
+        assert.equal(
+          (await callOp(agent.client, 'layers.merge', { network_id: net, layer_id: layer.id }, true)).isError,
+          undefined,
+        );
+        await agent.client.callTool({
+          name: 'etn.layers.select',
+          arguments: { network_id: net, layer_id: BASE_LAYER_ID },
+        });
+        const merged = toolJson<{ title: string }>(
+          await agent.client.callTool({
+            name: 'etn.thoughts.get',
+            arguments: { network_id: net, thought_id: a },
+          }),
+        );
+        assert.equal(merged.title, 'A (слой)');
+
+        // The guide documents the action (topic reachable from the registry).
+        const guide = await agent.client.callTool({
+          name: 'etn.guide',
+          arguments: { topic: 'layers.reset_override' },
+        });
+        assert.equal(guide.isError, undefined, toolText(guide));
+        assert.match(toolText(guide), /base_version/);
+        assert.match(toolText(guide), /confirm: true/);
       } finally {
         await agent.close();
       }

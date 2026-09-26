@@ -36,7 +36,9 @@ import {
   LayersDelete,
   LayersDiff,
   LayersDiffDoc,
+  LayersConflicts,
   LayersMerge,
+  LayersResetOverride,
   LayersUpdate,
   LinksRestore,
   LocksAcquire,
@@ -415,6 +417,47 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects: 'применяет изменения слоя в родителя; при конфликте — отказ целиком; создаёт резервный слой.',
     errors: '`VALIDATION_ERROR` (`conflicts`/`missing_closure`), `NOT_FOUND`.',
     paramsContract: LayersMerge,
+  },
+  {
+    action: 'layers.conflicts',
+    tool: 'etn.layers.conflicts',
+    group: 'layers',
+    when: 'предстоящие конфликты слияния слоя: строки, чей base_version отстал от основы (read-only предпросмотр)',
+    params: [
+      { name: 'network_id', required: true, desc: 'сеть' },
+      { name: 'layer_id', required: true, desc: 'слой' },
+    ],
+    destructive: false,
+    readOnly: true,
+    effects:
+      'чтение: строки слоя, из-за которых слияние будет отклонено целиком (§8.1), ' +
+      'с расхождением «было в основе / стало в слое» (§8.5). Записи нет; пробное слияние не нужно.',
+    errors: '`VALIDATION_ERROR` (основа/служебный слой), `NOT_FOUND`.',
+    paramsContract: LayersConflicts,
+  },
+  {
+    action: 'layers.reset_override',
+    tool: 'etn.layers.reset_override',
+    group: 'layers',
+    when: 'сбросить перекрытие выбранных строк слоя: перепривязать base_version к актуальной основе, чтобы слияние прошло',
+    params: [
+      { name: 'network_id', required: true, desc: 'сеть' },
+      { name: 'layer_id', required: true, desc: 'слой' },
+      {
+        name: 'tables',
+        required: true,
+        desc: '`{ ветвимая_таблица: [id…] }` — конкретные строки слоя (не слой целиком)',
+      },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'у выбранных теневых строк `base_version` становится текущей версией той же строки в предке; ' +
+      'содержимое слоя сохраняется, основа не меняется. Отставшая версия тени поднимается до версии основы, ' +
+      'чтобы слияние не откатило нумерацию. Журнальная строка `layer.updated`, audit-запись.',
+    errors:
+      '`VALIDATION_ERROR` (строки нет в слое — `details.unknown`, пустой набор, основа/служебный слой), `NOT_FOUND`.',
+    paramsContract: LayersResetOverride,
   },
 
   // ---- thoughts ------------------------------------------------------------

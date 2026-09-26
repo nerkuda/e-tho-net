@@ -47,7 +47,9 @@ import {
   LayersDelete,
   LayersDiff,
   LayersDiffDoc,
+  LayersConflicts,
   LayersMerge,
+  LayersResetOverride,
   LayersUpdate,
   LinksRestore,
   LocksAcquire,
@@ -97,7 +99,7 @@ import {
   updateLayer,
 } from '../../domain/layer-service.js';
 import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../domain/layer-diff-service.js';
-import { mergeLayer } from '../../domain/merge-service.js';
+import { listPendingMergeConflicts, mergeLayer, resetLayerOverride } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
 import { findPath } from '../../domain/graph-traversal.js';
 import { subgraphAsync } from '../../domain/heavy-read.js';
@@ -684,6 +686,69 @@ const HANDLERS: Record<string, OpHandler> = {
         reserve_layer_id: result.reserve_layer_id,
         purged: result.purged,
         activity_rollup: result.activity_rollup,
+        request_id: String(extra.requestId),
+      };
+    });
+  },
+  'layers.conflicts': (rt, p) => {
+    const a = p as unknown as z.infer<typeof LayersConflicts.schema>;
+    return runTool(() => {
+      const ndb = openMemberNetworkBase(rt, a.network_id);
+      const preview = listPendingMergeConflicts(ndb, a.layer_id);
+      return {
+        layer: preview.layer,
+        target_layer: preview.target_layer,
+        overridden: preview.overridden,
+        conflicts: preview.conflicts,
+      };
+    });
+  },
+  'layers.reset_override': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof LayersResetOverride.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      // Та же валидация имён ветвимых таблиц, что и у слияния (§8.1): иначе
+      // опечатка в имени таблицы молча не попала бы в набор.
+      const selection: MergeSelection = {};
+      for (const [table, ids] of Object.entries(a.tables)) {
+        if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
+          throw new EtnError('VALIDATION_ERROR', `неизвестная ветвимая таблица «${table}».`, {
+            field: 'tables',
+            table,
+            allowed: BRANCHABLE_TABLES,
+          });
+        }
+        selection[table as BranchableTable] = ids;
+      }
+      const ndb = openMemberNetworkBase(rt, a.network_id);
+      // Сброс меняет состояние слоя — журнал и слой события приписываем ему.
+      const fx = {
+        ...mcpWriteFx(rt, a.network_id, extra.requestId),
+        layerId: a.layer_id,
+      };
+      const result = runWrite(ndb, fx, () => {
+        const reset = resetLayerOverride(ndb, a.layer_id, selection);
+        return {
+          result: reset,
+          activity: [{ kind: 'layer' as const, action: 'updated' as const, layer: reset.layer }],
+          audit: {
+            action: 'etn.layers.reset_override',
+            targetType: 'layer',
+            targetId: a.layer_id,
+            details: {
+              tables: a.tables,
+              reset: reset.reset.length,
+              unchanged: reset.unchanged.length,
+            },
+          },
+        };
+      });
+      return {
+        layer: result.layer,
+        target_layer: result.target_layer,
+        reset: result.reset,
+        unchanged: result.unchanged,
         request_id: String(extra.requestId),
       };
     });
