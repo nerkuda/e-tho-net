@@ -1,0 +1,120 @@
+/**
+ * Приёмочные регрессы «Дневника» 0.10.1 (задача 98297b02, версия 0.10.1).
+ *
+ * Проверяются шесть замечаний приёмки структурно (по исходникам) и чистыми
+ * помощниками:
+ *  1) компоновка — календарь первым элементом панели, кнопка добавления в
+ *     верхней панели над лентой;
+ *  2) JS-ошибка `data-row-key` на клике по дате — атрибут ставится через
+ *     `setAttribute`, а не `dataset[...]`;
+ *  3) кнопка «Сегодня» в календаре;
+ *  4) псевдо-запись по одному заголовку доходит до ленты (нет обходной меры);
+ *  5) счётчики записей считаются по месяцу, независимо от периода;
+ *  6) панель отбора — состав «Структур» (без «стороны связи» и отдельной
+ *     группы «критерии целей», период без переключателя режимов).
+ */
+
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, it } from 'node:test';
+
+const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
+
+function read(rel: string): string {
+  return readFileSync(resolve(RENDERER, ...rel.split('/')), 'utf8');
+}
+
+const CHRONICLE = read('screens/chronicle/chronicle.ts');
+const CALENDAR = read('screens/chronicle/calendar.ts');
+const PANEL = read('screens/chronicle/filter-panel.ts');
+const BUILDER = read('lib/filter-builder.ts');
+const PERIOD_EDITOR = read('lib/period-editor.ts');
+
+describe('приёмка «Дневника» 0.10.1: компоновка (пункт 1)', () => {
+  it('календарь — header панели отбора (первый элемент)', () => {
+    assert.match(CHRONICLE, /mountChronicleFilterPanel\([\s\S]*header: \[calWrap\]/);
+    assert.match(PANEL, /header: \[\.\.\.headerNodes\]/, 'панель кладёт header перед секциями');
+  });
+
+  it('кнопка добавления — в верхней панели над лентой', () => {
+    assert.match(CHRONICLE, /div\('chron-addbar'\)/);
+    assert.match(CHRONICLE, /main\.append\(addBar, feedWrap\)/);
+    assert.match(CHRONICLE, /diary\.addRecord/);
+  });
+});
+
+describe('приёмка «Дневника» 0.10.1: JS-ошибка data-row-key (пункт 2)', () => {
+  it('ключ строки ставится атрибутом, а не через dataset', () => {
+    assert.match(CHRONICLE, /card\.setAttribute\(TABLE_ROW_KEY_ATTR, row\.id\)/);
+    assert.ok(
+      !/\.dataset\[TABLE_ROW_KEY_ATTR\]/.test(CHRONICLE),
+      'dataset[TABLE_ROW_KEY_ATTR] бросает исключение (имя с дефисом)',
+    );
+  });
+});
+
+describe('приёмка «Дневника» 0.10.1: кнопка «Сегодня» (пункт 3)', () => {
+  it('календарь несёт кнопку и сообщает хосту', () => {
+    assert.match(CALENDAR, /label: 'Сегодня'/);
+    assert.match(CALENDAR, /class: 'cal-today'/);
+    assert.match(CALENDAR, /onClick: \(\) => opts\.onToday\(\)/);
+    assert.match(CHRONICLE, /onToday: \(\) => goToday\(\)/);
+    assert.match(CHRONICLE, /calendar\?\.showDate\(today\)/, 'переход к текущему месяцу');
+  });
+});
+
+describe('приёмка «Дневника» 0.10.1: псевдо-запись по заголовку (пункт 4)', () => {
+  it('blur заголовка создаёт запись без обходной меры-пробела', () => {
+    assert.match(CHRONICLE, /titleInput\.addEventListener\('blur', \(\) => void ensureSlot\(\{\}\)\)/);
+    assert.match(CHRONICLE, /body_md: body\b/, 'пустой текст отправляется как есть');
+    assert.ok(!/\?\s*'\s'\s*:\s*body/.test(CHRONICLE), 'обходная мера «пробел» снята');
+  });
+});
+
+describe('приёмка «Дневника» 0.10.1: счётчики календаря (пункт 5)', () => {
+  it('счётчики считаются отдельным запросом по месяцу, без периода', () => {
+    assert.match(CHRONICLE, /async function refreshCalendarCounts\(\)/);
+    assert.match(CHRONICLE, /date_from: first/, 'границы месяца в запросе счётчиков');
+    assert.match(CHRONICLE, /date_to: last/);
+    assert.ok(
+      !/dayCounts\.set\(day\.day, day\.rows\.length\)/.test(CHRONICLE),
+      'счётчики больше не берутся из периода-фильтрованной ленты',
+    );
+  });
+
+  it('день со счётчиком получает подпись независимо от выделения', () => {
+    assert.match(CALENDAR, /if \(count > 0\)[\s\S]*cal-count/);
+  });
+});
+
+describe('приёмка «Дневника» 0.10.1: состав панели — «Структуры» (пункт 6)', () => {
+  it('период — панельный вариант без переключателя режимов и с пресетами', () => {
+    assert.match(PANEL, /variant: 'panel'/);
+    assert.match(PERIOD_EDITOR, /variant === 'panel'/);
+    assert.match(PERIOD_EDITOR, /pe-presets/, 'выпадашка пресетов панели');
+    assert.match(PERIOD_EDITOR, /export function periodPresets\(\)/);
+  });
+
+  it('секции идут набором «Структур», критерии целей — в targets', () => {
+    for (const title of [
+      'Ключевые слова',
+      'Типы мыслей',
+      'Типы связей',
+      'Родительские мысли',
+      'Дополнительно',
+    ]) {
+      assert.ok(PANEL.includes(`'${title}'`), `секция «${title}» на месте`);
+    }
+    assert.match(PANEL, /showScope: true/, 'чекбоксы области поиска');
+    assert.match(PANEL, /targetsCtx/, 'критерии целей — вложенной моделью targets');
+    assert.match(BUILDER, /out\.targets = buildWireFilter/, 'targets едет общим конвертером');
+  });
+
+  it('убранное не вернулось: сторона связи, отдельная группа целей', () => {
+    assert.ok(!/Сторона связи/.test(PANEL), '«сторона связи» убрана');
+    assert.ok(!/title: 'Критерии целей/.test(PANEL), 'отдельная группа «критерии целей» убрана');
+    assert.ok(!/link_scope/.test(PANEL), 'панель не пишет link_scope');
+    assert.ok(!/title: 'Поиск'/.test(PANEL), 'секция переименована в «Ключевые слова»');
+  });
+});

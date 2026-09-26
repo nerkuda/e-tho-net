@@ -1,10 +1,11 @@
 /**
  * Вид «Дневник» (рабочий стол) — 0.10.1, задача T6 64ca2b48.
  *
- * Экран (L20, был «Хроника»): в левой колонке — календарь месяца и
- * непрокручиваемая sticky-панель с кнопкой «Добавить хроно-запись», в центре —
- * лента дневниковых записей, сгруппированная по локальным дням наблюдателя;
- * панель отбора — общий каркас `lib/filter-form.ts`.
+ * Экран (L20, был «Хроника»): в левой панели отбора первым элементом идёт
+ * календарь месяца (0.10.1, элементы 9b424548/55b07702), в центре —
+ * непрокручиваемая панель с кнопкой «Добавить хроно-запись» и ниже лента
+ * дневниковых записей, сгруппированная по локальным дням наблюдателя; панель
+ * отбора — общий каркас `lib/filter-form.ts` (состав — набор «Структур»).
  *
  * Ключевые поведения заданы элементами спеки и требованиями:
  *  * «Вид «Дневник» (рабочий стол)» 9b424548 — компоновка;
@@ -14,7 +15,7 @@
  *    чипсы привязок с «+»/«✕», правка по месту;
  *  * «Sticky-панель новой записи» a2b993d7 + требование 26f0aa52 — псевдо-запись,
  *    в базу не пишется до первого содержания;
- *  * требование 306f74cc — критерии целей (панель, группа «Критерии целей»);
+ *  * требование 306f74cc — критерии целей (критерии панели едут в `targets`);
  *  * требование c6ddc1ea — порядок ленты (серверный, класс → даты);
  *  * требование e0970b70 — длительная запись видна в каждом дне периода;
  *  * требование c81964c7 — владелец HOME, чипсы — вторичные привязки;
@@ -31,6 +32,7 @@
 
 import {
   CHRONICLE_PAGE_SIZE,
+  CHRONICLE_QUERY_MAX_LIMIT,
   UI_STATE_KEY,
   type ChronicleRow,
   type ChronicleTarget,
@@ -80,8 +82,10 @@ import {
   hasRecordContent,
   isLastChip,
   localDay,
+  periodTokensForRange,
   recordPeriod,
   resolvePeriodDay,
+  rowDays,
   slotDeleteNeedsNetwork,
   todayLocal,
   visibleChips,
@@ -105,6 +109,12 @@ import { parseChronicleState } from './state.js';
  */
 const CHRONICLE_FILTER_MIN_W = 230;
 const CHRONICLE_FILTER_MAX_W = 480;
+
+/**
+ * Потолок страниц запроса счётчиков календаря (страница — `CHRONICLE_QUERY_MAX_LIMIT`):
+ * защита от неограниченного цикла на месяце с очень большим числом записей.
+ */
+const CAL_COUNTS_MAX_PAGES = 20;
 
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}`. */
@@ -242,13 +252,7 @@ export function mountChronicle(hostEl: HTMLElement): void {
     maxSizeTop: 800,
   });
 
-  mountChronicleFilterPanel(filterArea, {
-    apply: () => void applyFilter(),
-    jumpToRecord: (row) => void jumpToRecord(row),
-  });
-
-  // Left column: month calendar + non-scrollable sticky add panel.
-  const side = div('chron-side');
+  // Календарь — первый элемент панели отбора (0.10.1, элемент 9b424548).
   const calWrap = div('chron-cal');
   calendar = buildMonthCalendar({
     today: todayLocal(),
@@ -256,14 +260,27 @@ export function mountChronicle(hostEl: HTMLElement): void {
     counts: (day) => dayCount(day),
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
     onPickWeek: (monday) => void pickPeriod(weekPeriod(monday)),
+    onToday: () => goToday(),
     onMonthChange: (year, monthNo) => {
       month = { year, month: monthNo };
       persistState();
+      void refreshCalendarCounts();
     },
   });
   calWrap.append(calendar.root);
-  const addPanel = div('chron-add');
-  addPanel.append(
+
+  mountChronicleFilterPanel(
+    filterArea,
+    {
+      apply: () => void applyFilter(),
+      jumpToRecord: (row) => void jumpToRecord(row),
+    },
+    { header: [calWrap] },
+  );
+
+  // Верхняя (непрокручиваемая) панель над лентой: кнопка «Добавить хроно-запись».
+  const addBar = div('chron-addbar');
+  addBar.append(
     uiButton({
       label: t('diary.addRecord'),
       role: 'primary',
@@ -271,9 +288,8 @@ export function mountChronicle(hostEl: HTMLElement): void {
       onClick: () => startSlot(),
     }),
   );
-  side.append(calWrap, addPanel);
 
-  // Center: feed, grouped by local days.
+  // Центр: лента, сгруппированная по локальным дням.
   feedWrap = div('admin-table-wrap chron-table-wrap chron-feed-wrap');
   feedList = div('chron-feed');
   statusEl = div('muted chron-feed-status');
@@ -281,7 +297,8 @@ export function mountChronicle(hostEl: HTMLElement): void {
   feedWrap.append(statusEl, feedList);
   feedWrap.addEventListener('scroll', () => maybeLoadMore());
 
-  main.append(side, feedWrap);
+  main.append(addBar, feedWrap);
+  void refreshCalendarCounts();
 
   wireChronicleApplyShortcut(hostEl);
   registerDropActions({
@@ -317,6 +334,7 @@ async function applyFilter(): Promise<void> {
   await getHome().catch(() => undefined);
   await reload();
   syncCalendar();
+  void refreshCalendarCounts();
 }
 
 /** Re-fetches the first page (used after edits and real-time events). */
@@ -379,6 +397,7 @@ export function scheduleChronicleRefresh(): void {
     refreshTimer = null;
     void reload();
     syncCalendar();
+    void refreshCalendarCounts();
   }, 250);
 }
 
@@ -426,9 +445,9 @@ function renderFeed(): void {
 
   const { from, to } = currentFromTo();
   const days = groupByLocalDays(rows, { from, to });
-  // Счётчики календаря — из того же разбора, что и лента.
-  dayCounts.clear();
-  for (const day of days) dayCounts.set(day.day, day.rows.length);
+  // Счётчики календаря приходят из отдельного запроса по месяцу
+  // (`refreshCalendarCounts`) — они не зависят от применённого периода, поэтому
+  // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
   // Слот псевдо-записи всегда виден: его день появляется в ленте, даже если в
   // нём ещё нет записей (элемент «Sticky-панель новой записи»).
   if (slot !== null && !days.some((d) => d.day === slot!.day)) {
@@ -475,7 +494,10 @@ function formatDayLabel(day: string): string {
 
 function buildRecordCard(row: ChronicleRow): HTMLElement {
   const card = div('diary-record');
-  card.dataset[TABLE_ROW_KEY_ATTR] = row.id;
+  // `data-row-key` ставится атрибутом: `dataset['data-row-key']` бросает
+  // исключение (имя свойства dataset не может содержать дефис) — ошибка
+  // 6 сентября (0.10.1, дефект приёмки).
+  card.setAttribute(TABLE_ROW_KEY_ATTR, row.id);
   // Запись, к которой выполнен переход поиска, подсвечена (T7).
   if (row.id === jumpHighlightId) card.classList.add('diary-record-target');
 
@@ -987,12 +1009,24 @@ async function ensureSlot(opts: {
 // Calendar wiring
 // ---------------------------------------------------------------------------
 
-/** Клик календаря = «Применить» с новым периодом (остальные критерии целы). */
+/**
+ * Клик календаря = «Применить» с новым периодом (остальные критерии целы).
+ * Период пишется в поля панели: шаблон (день=сегодня, неделя, месяц)
+ * распознаётся в токены, иначе — точные даты (требование 91f8d8dd).
+ */
 async function pickPeriod(period: { from: string; to: string }): Promise<void> {
-  // Период пишется в поля панели; прочие критерии не трогаются.
-  setFilterState(applyPeriodToFilter(getFilterState(), period));
+  const next = periodTokensForRange(period.from, period.to, todayLocal());
+  setFilterState(applyPeriodToFilter(getFilterState(), next));
   persistState();
   await applyFilter();
+}
+
+/** Кнопка «Сегодня»: показать текущий месяц и выделить текущую дату. */
+function goToday(): void {
+  const today = todayLocal();
+  month = null;
+  calendar?.showDate(today);
+  void pickPeriod(dayPeriod(today));
 }
 
 /** Согласовать выделение календаря с полями периода (поля — источник дат). */
@@ -1001,6 +1035,50 @@ function syncCalendar(): void {
   const filter = getFilterState();
   calendar.setSelection(resolvePeriodDay(filter.dateFrom), resolvePeriodDay(filter.dateTo));
   month = calendar.getMonth();
+}
+
+/**
+ * Счётчики записей по дням ОТОБРАЖАЕМОГО месяца (0.10.1, элемент 55b07702):
+ * отдельный запрос по границам месяца с текущими критериями, БЕЗ периода —
+ * поэтому счётчик виден и на выделенной, и на невыделенной дате. Числа дней
+ * считаются тем же разбором длительности записи, что и лента (`rowDays`).
+ */
+async function refreshCalendarCounts(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null || calendar === null) return;
+  const { year, month: monthNo } = calendar.getMonth();
+  const first = `${year}-${pad2(monthNo)}-01`;
+  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
+  const def = chronicleDefinition();
+  const tally = new Map<string, number>();
+  try {
+    let offset = 0;
+    for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
+      const res = await etn.chronicle.query(networkId, {
+        ...def,
+        date_from: first,
+        date_to: last,
+        limit: CHRONICLE_QUERY_MAX_LIMIT,
+        offset,
+      });
+      for (const row of res.rows) {
+        for (const day of rowDays(row, first, last)) tally.set(day, (tally.get(day) ?? 0) + 1);
+      }
+      offset += res.rows.length;
+      if (res.rows.length === 0 || offset >= res.total) break;
+    }
+  } catch {
+    return; // сеть недоступна — оставляем прежние счётчики
+  }
+  dayCounts.clear();
+  for (const [day, count] of tally) dayCounts.set(day, count);
+  const filter = getFilterState();
+  calendar.setSelection(resolvePeriodDay(filter.dateFrom), resolvePeriodDay(filter.dateTo));
+}
+
+/** Двузначная запись числа. */
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
 }
 
 // ---------------------------------------------------------------------------

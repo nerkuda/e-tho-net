@@ -90,6 +90,8 @@ export interface MonthCalendarOptions {
   onPickDay: (day: string) => void;
   /** Клик по строке недели (аргумент — понедельник недели). */
   onPickWeek: (monday: string) => void;
+  /** Кнопка «Сегодня»: перейти к текущей дате и выделить её. */
+  onToday: () => void;
   /** Первоначально показанный месяц (по умолчанию — из `today`/сегодня). */
   month?: { year: number; month: number };
   /** Смена показанного месяца (стрелки/колесо). */
@@ -130,6 +132,14 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       title: 'Следующий месяц',
       class: 'cal-nav',
       onClick: () => shiftMonth(1),
+    }),
+    uiButton({
+      label: 'Сегодня',
+      role: 'ghost',
+      size: 's',
+      title: 'Перейти к текущей дате',
+      class: 'cal-today',
+      onClick: () => opts.onToday(),
     }),
   );
 

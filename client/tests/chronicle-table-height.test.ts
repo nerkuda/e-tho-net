@@ -69,7 +69,11 @@ describe('лента «Дневника»: высота не теряется (�
   it('лента занимает высоту центра и не несёт стилевого потолка', () => {
     const css = readText(STYLES_CSS);
     const main = bodiesOf(css, '.chron-main').join('\n');
-    assert.match(main, /flex-direction:\s*row/, 'центр «Дневника» — строка: слева календарь, справа лента');
+    assert.match(
+      main,
+      /flex-direction:\s*column/,
+      'центр «Дневника» — колонка: сверху панель добавления, ниже лента',
+    );
 
     const feed = bodiesOf(css, '.chron-feed-wrap').join('\n');
     assert.ok(feed.length > 0, 'правило .chron-feed-wrap на месте');

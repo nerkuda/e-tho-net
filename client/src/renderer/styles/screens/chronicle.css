@@ -37,45 +37,30 @@
   flex: 0 0 auto;
 }
 
-/* Центр экрана: слева календарь + панель записи, справа лента. */
+/* Центр экрана: сверху непрокручиваемая панель добавления, ниже — лента. */
 .chron-main {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   overflow: hidden;
 }
 
 /* ---------------------------------------------------------------------------
- * Левая колонка: календарь месяца + непрокручиваемая sticky-панель записи
+ * Верхняя панель над лентой: кнопка «Добавить хроно-запись» (элемент 9b424548)
  * ------------------------------------------------------------------------- */
 
-.chron-side {
+.chron-addbar {
   flex: 0 0 auto;
-  width: 300px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  overflow: hidden;
-  border-right: 1px solid var(--border);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 
+/* Календарь месяца — первый элемент панели отбора (элемент 9b424548). */
 .chron-cal {
   flex: 0 0 auto;
-  overflow: hidden;
-}
-
-/* Непрокручиваемая sticky-панель: остаётся на месте при прокрутке ленты
- * (элемент «Sticky-панель новой записи» a2b993d7). */
-.chron-add {
-  position: sticky;
-  top: 0;
-  flex: 0 0 auto;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
+  padding: 0 0 8px;
 }
 
 .diary-add-btn {
