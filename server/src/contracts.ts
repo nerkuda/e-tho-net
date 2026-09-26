@@ -1142,6 +1142,16 @@ export const AttachmentsDelete = defineContract(
 // Область: сети (tools/networks.ts)
 // ===========================================================================
 
+/**
+ * REST `GET /networks/:networkId/statistics` — сводка по мыслесети
+ * (задача c69b078d, 0.9.1). Только чтение, MCP-пары нет.
+ */
+export const NetworksStatistics = defineContract(
+  'etn.networks.statistics',
+  z.object({ network_id: NetworkId }),
+  { network_id: { from: { kind: 'param', name: 'networkId' } } },
+);
+
 export const NetworksStructure = defineContract(
   'etn.networks.structure',
   z.object({

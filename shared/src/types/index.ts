@@ -32,3 +32,4 @@ export * from './etnx.js';
 export * from './ontology.js';
 export * from './rest.js';
 export * from './cross-network.js';
+export * from './network-stats.js';
