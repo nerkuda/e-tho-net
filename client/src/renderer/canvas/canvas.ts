@@ -401,6 +401,7 @@ export function getRef(id: string): ThoughtRef | null {
  */
 export function invalidateRef(id: string): void {
   if (refCache.delete(id)) refEpoch++;
+  notifyRefInvalidated(id);
 }
 
 /**
@@ -412,6 +413,29 @@ export function invalidateRef(id: string): void {
 export function invalidateAllRefs(): void {
   if (refCache.size > 0) refEpoch++;
   refCache.clear();
+  notifyRefInvalidated(null);
+}
+
+/**
+ * Подписчики на сброс кэша метаданных мыслей. Панели со СВОИМ кэшем ref-ов
+ * (панель выделенных) обновляют по этому сигналу свои строки точечно, не
+ * подписываясь на весь store: иначе панель перерисовывалась на каждое событие
+ * магазина — в т.ч. на догрузку длинных списков — и мигала (ошибка 3a64e680).
+ * `id` — конкретная мысль, `null` — сброшен весь кэш.
+ */
+const refInvalidationListeners = new Set<(id: string | null) => void>();
+
+/** Регистрирует подписчика на сброс ref-кэша; возвращает отписку. */
+export function onThoughtRefInvalidated(cb: (id: string | null) => void): () => void {
+  refInvalidationListeners.add(cb);
+  return () => {
+    refInvalidationListeners.delete(cb);
+  };
+}
+
+/** Оповещает подписчиков о сбросе ref-кэша (см. {@link onThoughtRefInvalidated}). */
+function notifyRefInvalidated(id: string | null): void {
+  for (const cb of [...refInvalidationListeners]) cb(id);
 }
 
 /** Returns the currently rendered focus cloud (H6 line anchoring). */

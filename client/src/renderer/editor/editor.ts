@@ -46,6 +46,7 @@ import { noteThoughtWillOpen } from '../history.js';
 import { inNeighbourhood, reloadTypeCatalogues } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
+import { invalidateSelectionThought } from '../selection/selection.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import {
   canSave,
@@ -1650,6 +1651,10 @@ export function reflectThoughtUpdate(updated: Thought): void {
     invalidatePinnedBar();
   }
   invalidateHistoryBar();
+  // Панель выделенных держит свой кэш строк и подписана лишь на состав
+  // выделения: переименование/смена оформления выделенной мысли обновляет её
+  // строку точечно (ошибка 3a64e680).
+  invalidateSelectionThought(id);
 }
 
 /**

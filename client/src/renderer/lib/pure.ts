@@ -1556,3 +1556,55 @@ export function truncateLayerMenuLabel(title: string | null | undefined): string
   if (points.length <= LAYER_MENU_LABEL_MAX) return full;
   return `${points.slice(0, LAYER_MENU_LABEL_MAX - 1).join('')}…`;
 }
+
+// ---------------------------------------------------------------------------
+// Панель выделенных: точечное обновление строк (ошибка 3a64e680)
+// ---------------------------------------------------------------------------
+
+/**
+ * План разницы состава выделения для точечного обновления строк панели.
+ *
+ * Панель обязана перерисовываться ТОЛЬКО при изменении состава выделения, а
+ * строки — обновляться по разнице: полная пересборка списка на каждое событие
+ * магазина заставляла панель мигать и терять позицию прокрутки, а на время
+ * асинхронного resolve имена подменялись id (ошибка 3a64e680).
+ */
+export interface SelectionRowsPlan {
+  /** id, чьи строки надо убрать из списка (их больше нет в выделении). */
+  removed: string[];
+  /** Итоговый порядок строк — по нему существующие узлы переставляются. */
+  order: string[];
+}
+
+/**
+ * Считает разницу между прежним и новым составом выделения: какие строки
+ * убрать и в каком порядке расположить оставшиеся/новые. Порядок берётся из
+ * `next` (выделение — упорядоченный список): существующие строки лишь
+ * переставляются, повторно не создаются.
+ */
+export function planSelectionRows(
+  previous: readonly string[],
+  next: readonly string[],
+): SelectionRowsPlan {
+  const nextSet = new Set(next);
+  const removed = previous.filter((id) => !nextSet.has(id));
+  return { removed, order: [...next] };
+}
+
+/**
+ * Подписи строк панели выделенных: имя разрешённой мысли, для неразрешённой —
+ * ПРЕЖНЯЯ подпись, а при её отсутствии пустая строка. Идентификатор мысли в
+ * интерфейсе не показывается никогда (ошибка 3a64e680: пока ref-кэш
+ * переразрешался, панель на несколько секунд подменяла имена их id).
+ */
+export function selectionRowTitles(
+  ids: readonly string[],
+  resolved: ReadonlyMap<string, { title: string }>,
+  previous: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const id of ids) {
+    titles.set(id, resolved.get(id)?.title ?? previous.get(id) ?? '');
+  }
+  return titles;
+}
