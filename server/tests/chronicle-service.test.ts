@@ -219,6 +219,57 @@ describe(
       }
     });
 
+    it('filters records by their own body/title, not only by their target thought (T7)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const home = seedThought(ndb, 'HOME', { home: true });
+        const a = seedThought(ndb, 'A');
+        const hit = createComment(
+          ndb,
+          'thought',
+          home,
+          { kind: 'chronological', body_md: 'привет мир', valid_from: '2024-01-01' },
+          USER,
+        );
+        createComment(
+          ndb,
+          'thought',
+          home,
+          { kind: 'chronological', body_md: 'пока мир', valid_from: '2024-01-02' },
+          USER,
+        );
+        createComment(
+          ndb,
+          'thought',
+          a,
+          { kind: 'chronological', title: 'Отпуск', body_md: 'без слов', valid_from: '2024-01-03' },
+          USER,
+        );
+
+        // Слово в теле записи дня (единственная цель — HOME) сужает ленту:
+        // раньше выбирался HOME и возвращались ВСЕ его записи.
+        const byHit = query(ndb, { keywords: 'привет' });
+        assert.equal(byHit.total, 1, 'совпадение в теле записи дня');
+        assert.equal(byHit.rows[0]!.id, hit.id);
+
+        // Заголовок записи тоже ищется.
+        assert.equal(query(ndb, { keywords: 'отпуск' }).total, 1, 'совпадение в заголовке записи');
+
+        // Исключающее слово вычитает запись по её собственному тексту.
+        assert.equal(query(ndb, { keywords: '-пока' }).total, 2, 'исключение по телу записи');
+        assert.equal(query(ndb, { keywords: 'мир -пока' }).total, 1, 'include + exclude по телу записи');
+
+        // Структурный отбор (thought_ids/type_ids) сужает и путь «по тексту записи».
+        assert.equal(
+          query(ndb, { thought_ids: [home], keywords: 'отпуск' }).total,
+          0,
+          'запись вне области отбора не просачивается',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('excludes thoughts via minus-words and intersects the period', () => {
       const ndb = createInMemoryNetworkDb();
       try {

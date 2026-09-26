@@ -6,11 +6,12 @@
  *      with their undirected subordinates up to {@link TRAVERSAL_DEFAULTS.MAX_DEPTH}
  *      levels, then filtered by thought types and the keywords mini-syntax
  *      (`*`/`-`, searched in titles, synonyms, and the texts of the thoughts'
- *      comments and of their incident links' comments on both sides);
+ *      permanent comments and of their incident links' comments on both sides);
  *   2. list **chronological comments** attached to the selected thoughts or to
- *      their links (link types / link scope filter), intersected with the
- *      requested date range, sorted by record class, `valid_from`, `valid_to`,
- *      `created_at`, `id` and paged.
+ *      their links (link types / link scope filter) OR matching the keywords in
+ *      their OWN body/title (0.10.1, T7 — так сужаются и записи дня на HOME),
+ *      intersected with the requested date range, sorted by record class,
+ *      `valid_from`, `valid_to`, `created_at`, `id` and paged.
  *
  * Row snippets reuse {@link makeSnippet} from the search service (same
  * `<mark>` highlight convention); targets are resolved to `ThoughtRef`s /
@@ -436,21 +437,38 @@ function collectRootAndSubtreeIds(
   return rows.map((r) => r.id);
 }
 
-/** Keywords condition for one word against a thought (titles, synonyms, comment
- *  texts of the thought and of its incident links on both sides). */
+/**
+ * Keywords condition for one word against a thought: the thought's own title,
+ * its synonyms, its **permanent** comment and the comment texts of its incident
+ * links on both sides.
+ *
+ * Хронологические комментарии мысли здесь НЕ ищутся (0.10.1, T7): совпадение в
+ * теле записи должно отбирать саму запись, а не её цель. Иначе для записи дня
+ * (единственная цель — HOME) слово в теле выбирало бы корень и возвращало все
+ * его записи. Поиск по телам/заголовкам записей делает {@link RECORD_KEYWORD_COND}
+ * в фазе 2.
+ */
 const THOUGHT_KEYWORD_COND = `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
   SELECT 1 FROM thought_synonyms_v ts
   WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
 ) OR EXISTS (
   SELECT 1 FROM comments_v c1
   JOIN comment_targets_v ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
-  WHERE ct1.owner_id = t.id AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
+  WHERE ct1.owner_id = t.id AND c1.kind = 'permanent' AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
 ) OR EXISTS (
   SELECT 1 FROM comments_v c2
   JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
   JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
   WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
 ))`;
+
+/**
+ * Keywords condition for one word against the RECORD itself (0.10.1, T7):
+ * тело и заголовок хроно-комментария. Это и есть «поиск фильтрует ленту» —
+ * запись проходит по собственному тексту независимо от того, попала ли в
+ * отбор её мысль-цель (иначе записи дня на HOME не сужались бы).
+ */
+const RECORD_KEYWORD_COND = `(unicode_lower(c.body_md) LIKE ? ESCAPE '\\' OR unicode_lower(IFNULL(c.title, '')) LIKE ? ESCAPE '\\')`;
 
 /**
  * Phase 1 SQL — filter the (possibly subtree-expanded) thought set by type and
@@ -516,35 +534,32 @@ function validToLowerCond(dateFrom: string): [string, string[]] {
   return ['(c.valid_to IS NULL OR c.valid_to >= ?)', [dateFrom]];
 }
 
-/** Phase 2 WHERE shared by the count and the page queries. */
-function buildRowsWhere(
+/**
+ * Attachment condition for a set of selected thought ids: the comment is
+ * attached to one of them, or to a link whose endpoint (per `link_scope`) is.
+ */
+function attachmentCond(
   ndb: NetworkDb,
-  userId: string,
-  selectedIds: string[],
+  ids: string[],
   request: ChronicleQueryRequest,
-): { cond: string; args: unknown[] } {
-  const conds: string[] = ["c.kind = 'chronological'"];
-  const args: unknown[] = [];
-
-  // Attachment to a selected thought…
-  const thoughtConds: string[] = [];
-  thoughtConds.push(
+  args: unknown[],
+): string {
+  const parts: string[] = [
     `EXISTS (SELECT 1 FROM comment_targets_v ct
              WHERE ct.comment_id = c.id AND ct.owner_type = 'thought'
-               AND ct.owner_id IN (${placeholders(selectedIds.length)}))`,
-  );
-  args.push(...selectedIds);
+               AND ct.owner_id IN (${placeholders(ids.length)}))`,
+  ];
+  args.push(...ids);
 
-  // …or to a link whose source/target is selected (per the link scope).
   const scope = request.link_scope ?? 'both';
   const endpointConds: string[] = [];
   if (scope === 'sources' || scope === 'both') {
-    endpointConds.push(`l.source_id IN (${placeholders(selectedIds.length)})`);
-    args.push(...selectedIds);
+    endpointConds.push(`l.source_id IN (${placeholders(ids.length)})`);
+    args.push(...ids);
   }
   if (scope === 'targets' || scope === 'both') {
-    endpointConds.push(`l.target_id IN (${placeholders(selectedIds.length)})`);
-    args.push(...selectedIds);
+    endpointConds.push(`l.target_id IN (${placeholders(ids.length)})`);
+    args.push(...ids);
   }
   let linkCond = `EXISTS (SELECT 1 FROM comment_targets_v ctl
     JOIN links_v l ON l.id = ctl.owner_id AND ctl.owner_type = 'link'
@@ -558,9 +573,91 @@ function buildRowsWhere(
     }
   }
   linkCond += ')';
-  thoughtConds.push(linkCond);
+  parts.push(linkCond);
+  return `(${parts.join(' OR ')})`;
+}
 
-  conds.push(`(${thoughtConds.join(' OR ')})`);
+/**
+ * «У записи есть хоть одна привязка» — дешёвая замена перебора всех id, когда
+ * структурный отбор мыслей не сужен (нет `thought_ids`/`type_ids`): тот же
+ * результат, но без огромного `IN (…)` в списке параметров.
+ */
+function anyAttachmentCond(): string {
+  return `EXISTS (SELECT 1 FROM comment_targets_v cta WHERE cta.comment_id = c.id)`;
+}
+
+/**
+ * Текстовое условие по телу и заголовку САМОЙ записи (0.10.1, T7): каждое
+ * включающее слово обязано встретиться, ни одно исключающее — нет.
+ * `null` — слов нет.
+ */
+function recordTextCond(
+  includeWords: string[],
+  excludeWords: string[],
+  args: unknown[],
+): string | null {
+  const parts: string[] = [];
+  for (const word of includeWords) {
+    const pattern = buildLikePattern(word.toLowerCase());
+    parts.push(RECORD_KEYWORD_COND);
+    args.push(pattern, pattern);
+  }
+  for (const word of excludeWords) {
+    const pattern = buildLikePattern(word.toLowerCase());
+    parts.push(`NOT ${RECORD_KEYWORD_COND}`);
+    args.push(pattern, pattern);
+  }
+  return parts.length > 0 ? parts.join(' AND ') : null;
+}
+
+/**
+ * Phase 2 WHERE shared by the count and the page queries.
+ *
+ * `scopeIds` — мысли структурного отбора (без ключевых слов); `keywordIds` —
+ * мысли, прошедшие мыслевой путь ключевых слов (пусто, если ни одна не
+ * прошла). Записи отбираются как объединение: (путь А, только при включающих
+ * словах) привязанные к `keywordIds`, ИЛИ (путь Б) привязанные к области
+ * отбора И совпавшие по собственному тексту (включающие есть / исключающих
+ * нет). Чисто исключающие слова работают только путём Б — по тексту записи.
+ */
+function buildRowsWhere(
+  ndb: NetworkDb,
+  userId: string,
+  scopeIds: string[],
+  keywordIds: string[],
+  scopeRestricted: boolean,
+  includeWords: string[],
+  excludeWords: string[],
+  request: ChronicleQueryRequest,
+): { cond: string; args: unknown[] } {
+  const conds: string[] = ["c.kind = 'chronological'"];
+  const args: unknown[] = [];
+
+  // Порядок вызовов = порядок `?` в итоговом SQL. Мыслевой путь (А) — только
+  // при включающих словах: чисто исключающие слова работают по тексту записи
+  // (путь Б), иначе прежнее «вычитание мыслей» возвращало бы записи их соседей.
+  const parts: string[] = [];
+  if (includeWords.length > 0 && keywordIds.length > 0) {
+    parts.push(attachmentCond(ndb, keywordIds, request, args));
+  }
+  if (includeWords.length > 0 || excludeWords.length > 0) {
+    const text = recordTextCond(includeWords, excludeWords, args);
+    if (text !== null) {
+      const attach = scopeRestricted
+        ? attachmentCond(ndb, scopeIds, request, args)
+        : anyAttachmentCond();
+      parts.push(`(${text} AND ${attach})`);
+    }
+  }
+  if (parts.length > 0) {
+    conds.push(parts.join(' OR '));
+  } else if (scopeIds.length > 0) {
+    conds.push(
+      scopeRestricted ? attachmentCond(ndb, scopeIds, request, args) : anyAttachmentCond(),
+    );
+  } else {
+    conds.push('0');
+  }
 
   // Критерии целей (0.10.1, требование 306f74cc): запись проходит, если ХОТЯ
   // БЫ ОДНА её привязанная мысль (`comment_targets`, включая вторичные)
@@ -722,20 +819,35 @@ export function queryChronicle(
     resolved.keywords ?? '',
   );
   const baseIds = collectRootAndSubtreeIds(ndb, resolved);
-  let selectedIds = selectThoughts(ndb, baseIds, resolved.type_ids ?? [], includeWords, []);
-  // Excluded words: drop every thought where the word occurs anywhere in the
-  // same searched texts (titles, synonyms, thought/link comments).
-  if (excludeWords.length > 0) {
-    const excluded = new Set(
-      selectThoughts(ndb, baseIds, resolved.type_ids ?? [], excludeWords, []),
-    );
-    selectedIds = selectedIds.filter((id) => !excluded.has(id));
-  }
-  if (selectedIds.length === 0) {
+  const typeIds = resolved.type_ids ?? [];
+  // Область структурного отбора (мысли без ключевых слов) — в неё обязан
+  // попасть путь Б: «запись совпала по своему тексту».
+  const scopeIds = selectThoughts(ndb, baseIds, typeIds, [], []);
+  if (scopeIds.length === 0) {
     return { rows: [], total: 0 };
   }
+  // Путь А: мысли, прошедшие мыслевой поиск (название, синонимы, постоянный
+  // комментарий, комментарии связей), минус исключающие слова.
+  let keywordIds = scopeIds;
+  if (includeWords.length > 0 || excludeWords.length > 0) {
+    keywordIds = selectThoughts(ndb, baseIds, typeIds, includeWords, []);
+    if (excludeWords.length > 0) {
+      const excluded = new Set(selectThoughts(ndb, baseIds, typeIds, excludeWords, []));
+      keywordIds = keywordIds.filter((id) => !excluded.has(id));
+    }
+  }
+  const scopeRestricted = baseIds !== null || typeIds.length > 0;
 
-  const { cond, args } = buildRowsWhere(ndb, userId, selectedIds, resolved);
+  const { cond, args } = buildRowsWhere(
+    ndb,
+    userId,
+    scopeIds,
+    keywordIds,
+    scopeRestricted,
+    includeWords,
+    excludeWords,
+    resolved,
+  );
   const dir = resolved.order === 'desc' ? 'DESC' : 'ASC';
   const totalRow = ndb
     .prepare(`SELECT COUNT(*) AS c FROM comments_v c WHERE ${cond}`)

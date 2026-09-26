@@ -15,8 +15,12 @@ import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */
 export interface ChronicleFilter {
-  /** Keywords mini-syntax (`*`/`-`, AND) — searched in thought titles,
-   *  synonyms, permanent+chronological comment texts of thoughts and links. */
+  /** Keywords mini-syntax (`*`/`-`, AND). Отбирает записи двумя путями:
+   *  (А) по мыслям — слова ищутся в названии, синонимах, постоянном комментарии
+   *  мысли и комментариях её связей, затем возвращаются записи этих мыслей;
+   *  (Б) по тексту самой записи — её тело и заголовок (0.10.1, T7; так сужается
+   *  лента записей дня, привязанных только к HOME). Исключающие слова вычитают
+   *  запись по её собственному тексту. */
   keywords?: string;
   /** Root thoughts of the «мысли» field; empty = all thoughts of the network. */
   thought_ids?: string[];
