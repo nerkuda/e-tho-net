@@ -65,6 +65,7 @@ import {
   parseTypeEditorSplit,
   splitRatioFromPx,
   formDirty,
+  formatFileSize,
   countVisibleProperties,
   flipTransform,
   planFocusTransition,
@@ -1350,3 +1351,25 @@ describe('countVisibleProperties — счётчик «Свойства мысл�
     assert.equal(countVisibleProperties([{ config: { structural: true } }]), 0);
   });
 });
+
+describe('formatFileSize — размер вложений (c69b078d)', () => {
+  it('авто-выбор единиц: байты → КБ → МБ → ГБ', () => {
+    assert.equal(formatFileSize(0), '0 Б');
+    assert.equal(formatFileSize(512), '512 Б');
+    assert.equal(formatFileSize(1023), '1023 Б');
+    assert.equal(formatFileSize(1024), '1 КБ');
+    assert.equal(formatFileSize(1536), '1,5 КБ');
+    assert.equal(formatFileSize(1024 * 1024), '1 МБ');
+    assert.equal(formatFileSize(1.5 * 1024 * 1024), '1,5 МБ');
+    assert.equal(formatFileSize(1024 * 1024 * 1024), '1 ГБ');
+    assert.equal(formatFileSize(2 * 1024 * 1024 * 1024), '2 ГБ');
+  });
+
+  it('некорректное и отрицательное значение трактуется как 0', () => {
+    assert.equal(formatFileSize(-5), '0 Б');
+    assert.equal(formatFileSize(Number.NaN), '0 Б');
+    assert.equal(formatFileSize(Number.POSITIVE_INFINITY), '0 Б');
+    assert.equal(formatFileSize(1024.4), '1 КБ', 'дробные байты округляются вниз до целых');
+  });
+});
+

@@ -218,6 +218,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       requireRest(deps).setPreference(id, key, value as never),
     ),
   );
+  handlers.set(
+    'networks.statistics',
+    bind((id: string) => requireRest(deps).networkStatistics(id)),
+  );
 
   // --- tabs (Q2, 07-client-electron.md §3.6) --------------------------------
   handlers.set(

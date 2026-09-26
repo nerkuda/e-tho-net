@@ -76,6 +76,7 @@ function buildApi(): EtnApi {
       transferOwnership: (id, userId) => invoke('networks.transferOwnership', id, userId),
       getPreferences: (id) => invoke('networks.getPreferences', id),
       setPreference: (id, key, value) => invoke('networks.setPreference', id, key, value),
+      statistics: (id) => invoke('networks.statistics', id),
     },
     thoughts: {
       get: (networkId, id, atLayerId) => invoke('thoughts.get', networkId, id, atLayerId),

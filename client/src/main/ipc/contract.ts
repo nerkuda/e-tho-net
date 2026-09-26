@@ -63,6 +63,7 @@ import type {
   Network,
   NetworkListItem,
   NetworkMember,
+  NetworkStats,
   NetworkProperty,
   NetworkPropertyInput,
   NetworkPropertyUpdateInput,
@@ -322,6 +323,8 @@ export interface EtnApi {
     transferOwnership(id: string, userId: string): Promise<void>;
     getPreferences(id: string): Promise<UserPreferenceEntry[]>;
     setPreference(id: string, key: string, value: unknown): Promise<void>;
+    /** `GET /networks/{id}/statistics` — сводка по мыслесети (сумма по слоям). */
+    statistics(id: string): Promise<NetworkStats>;
   };
   thoughts: {
     /** `atLayerId` (опционально) — открыть мысль в конкретном слое, не переключая сессию. */

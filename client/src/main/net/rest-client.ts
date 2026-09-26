@@ -676,6 +676,14 @@ export class RestClient {
     );
   }
 
+  /**
+   * `GET /networks/{id}/statistics` — сводка по мыслесети (задача c69b078d,
+   * 0.9.1): числа суммируются по всем слоям сети.
+   */
+  public async networkStatistics(id: string): Promise<import('@etn/shared').NetworkStats> {
+    return this.request('GET', `/networks/${encodeURIComponent(id)}/statistics`);
+  }
+
   // -------------------------------------------------------------------------
   // §6 Thoughts
   // -------------------------------------------------------------------------

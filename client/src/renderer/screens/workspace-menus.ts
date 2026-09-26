@@ -38,6 +38,7 @@ import { store } from '../state.js';
 import { toggleEditorVisibility } from '../editor/editor.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
+import { showNetworkStatisticsDialog } from './network-stats.js';
 import { showSettingsDialog } from './settings.js';
 import { showThoughtTypesDialog } from './type-manager.js';
 import { showLinkTypesTreeDialog, showPropertyManagerDialog } from './property-manager.js';
@@ -111,6 +112,7 @@ export function buildNetMenuItems(counts: NetMenuCounts): MenuItem[] {
     }),
     MENU_SEPARATOR,
     menuAction(t('netMenu.settings'), () => showSettingsDialog('network')),
+    menuAction(t('netMenu.statistics'), () => void showNetworkStatisticsDialog()),
     menuAction(t('netMenu.members'), () => void membersDialog(), { disabled: !isOwner }),
     menuAction(t('netMenu.leave'), () => void leaveNetwork(), { disabled: isOwner, danger: true }),
     menuAction(t('netMenu.openNetwork'), () => backToNetworks()),

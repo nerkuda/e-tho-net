@@ -581,6 +581,7 @@ const DIALOG_FILES = new Set([
   'screens/about-dialog.ts',
   'screens/activity/activity.ts',
   'screens/layers.ts',
+  'screens/network-stats.ts',
   'screens/networks.ts',
   'screens/property-manager.ts',
   'screens/settings.ts',

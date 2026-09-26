@@ -1489,3 +1489,31 @@ export function resolveFocusFlightOrigin(
   if (isUsableFlightRect(externalOrigin)) return externalOrigin;
   return isUsableFlightRect(canvasOrigin) ? canvasOrigin : null;
 }
+
+// ---------------------------------------------------------------------------
+// Размер файла в человекочитаемом виде (задача c69b078d, 0.9.1)
+// ---------------------------------------------------------------------------
+
+/** Единицы размера по возрастанию (байты → терабайты). */
+const FILE_SIZE_UNITS = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'] as const;
+
+/**
+ * Форматирует размер в байтах как «<число> <единица>» с авто-выбором
+ * КБ/МБ/ГБ (и ТБ как естественный предел): `0 → «0 Б»`, `1024 → «1 КБ»`,
+ * `1536 → «1,5 КБ»`. Дробная часть — до одного знака, разделитель — запятая
+ * (русская запись), целое — без дробной части. Некорректное или отрицательное
+ * значение трактуется как 0. Чистая функция — покрыта юнит-тестами.
+ */
+export function formatFileSize(bytes: number): string {
+  const safe = Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : 0;
+  if (safe < 1024) return `${safe} ${FILE_SIZE_UNITS[0]}`;
+  let value = safe / 1024;
+  let unit = 1;
+  while (value >= 1024 && unit < FILE_SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = Math.round(value * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
+  return `${text} ${FILE_SIZE_UNITS[unit]}`;
+}
