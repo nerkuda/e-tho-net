@@ -18,7 +18,7 @@ import { type ChronicleFilterDefinition } from '@etn/shared';
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
-import { div, el, span } from '../../lib/dom.js';
+import { div, el } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   filterEntityOptions,
@@ -50,6 +50,7 @@ import {
 } from '../../lib/saved-filter-bar.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
+import { checkboxRow } from '../../lib/ui/choice-row.js';
 
 export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
 
@@ -227,15 +228,14 @@ function buildThoughtsSection(ctx: FilterFormContext): EntityChipSection {
     },
   });
   const subtreeRow = div('st-f-tri-row');
-  const subtreeLabel = el('label', 'checkbox-row') as HTMLLabelElement;
-  const subtreeCheck = el('input') as HTMLInputElement;
-  subtreeCheck.type = 'checkbox';
-  subtreeCheck.checked = filter.includeSubtree;
-  subtreeCheck.addEventListener('change', () => {
-    filter.includeSubtree = subtreeCheck.checked;
-    ctx.touch();
-  });
-  subtreeLabel.append(subtreeCheck, span('+подчинённые мысли'));
+  const subtreeLabel = checkboxRow({
+    label: '+подчинённые мысли',
+    checked: filter.includeSubtree,
+    onChange: (checked) => {
+      filter.includeSubtree = checked;
+      ctx.touch();
+    },
+  }).row;
   subtreeRow.append(el('span', 'st-f-tri-label', 'Подчинённые'), subtreeLabel);
   section.body.append(subtreeRow);
   // Облачка уже выбранных мыслей — догрузка по id.

@@ -50,6 +50,8 @@ import {
 } from '../../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
+import { badge } from '../../lib/ui/badge.js';
+import { splitterElement } from '../../lib/ui/splitter.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
 import {
@@ -63,6 +65,7 @@ import {
 } from './layout.js';
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
 import { openFilterCommandsMenu } from './commands.js';
+import { StructuresPager } from './pagination.js';
 import {
   buildConditions,
   buildExtraFilter,
@@ -90,6 +93,12 @@ let resultsHost: HTMLElement | null = null;
 let resultIds: string[] = [];
 /** Unrestricted match count of the current filter. */
 let total = 0;
+/**
+ * Листание списка результатов (требование 3f2fdc41): продолжение читается по
+ * `next_cursor` предыдущего ответа, `offset` не растёт; смена
+ * фильтра/сортировки сбрасывает пейджер на первую страницу без курсора.
+ */
+const resultPager = new StructuresPager();
 
 /** True when the thought id is among the currently displayed results (M11). */
 export function isThoughtInResults(id: string): boolean {
@@ -118,6 +127,13 @@ let expansion: ExpansionMap = new Map();
 let networkIdSeen: string | null = null;
 /** Loading guard so the tree does not flicker with stale data. */
 let querySeq = 0;
+/**
+ * Отмена последнего запроса выборки (требование ebed4980, ADR b32aa57f):
+ * быстрая смена фильтра гасит предыдущий запрос, а не оставляет его висеть
+ * конкурентом за состояние. Серийный сторож `querySeq` остаётся — он ловит
+ * уже доставленный, но устаревший ответ.
+ */
+let inflightQuery: AbortController | null = null;
 /**
  * The last APPLIED filter (criteria + sort/order) — what the results tree
  * shows. The bulk «Команды» menu (L22, §15.3) runs against this, not against
@@ -156,6 +172,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
   edgesSignature = '';
   expansion = new Map();
   appliedQuery = null;
+  resultPager.reset();
   resetStructuresCursor();
 
   // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
@@ -301,20 +318,34 @@ async function applyQuery(reset: boolean): Promise<void> {
   if (networkId === null) return;
   const state = getFilterState();
   const seq = ++querySeq;
-  const offset = reset ? 0 : resultIds.length;
-  // A fresh application re-anchors the bulk commands to the new result (L22).
+  // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
+  // его fetch в main прерывается, ответ не приходит вовсе.
+  inflightQuery?.abort();
+  const controller = new AbortController();
+  inflightQuery = controller;
+  // A fresh application re-anchors the bulk commands to the new result (L22)
+  // and drops the keyset cursor — next page starts from scratch.
   if (reset) {
     appliedQuery = { filter: buildFilter(), sort: state.sort, order: state.order };
+    resultPager.reset();
   }
+  const page = resultPager.address(reset);
   try {
-    const result = await etn.structures.query(networkId, {
-      ...buildFilter(),
-      sort: state.sort,
-      order: state.order,
-      limit: STRUCTURES_PAGE_SIZE,
-      offset,
-    });
+    const result = await etn.structures.query(
+      networkId,
+      {
+        ...buildFilter(),
+        sort: state.sort,
+        order: state.order,
+        limit: STRUCTURES_PAGE_SIZE,
+        offset: page.offset,
+        ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
+      },
+      { signal: controller.signal },
+    );
     if (seq !== querySeq) return; // a newer query won the race
+    // Continuation rides the cursor of THIS page (requirement 3f2fdc41).
+    resultPager.accept(result.next_cursor);
     if (reset) {
       resultIds = result.items.map((r) => r.id);
       expansion = new Map();
@@ -334,7 +365,12 @@ async function applyQuery(reset: boolean): Promise<void> {
     for (const [id, flags] of Object.entries(result.directions)) directions.set(id, flags);
     renderTree();
   } catch (err) {
+    // Отменённый запрос — не ошибка: его сменил более новый (требование
+    // ebed4980). Ничего не показываем.
+    if (controller.signal.aborted) return;
     notice(`Ошибка отбора: ${errText(err)}`, 'error');
+  } finally {
+    if (inflightQuery === controller) inflightQuery = null;
   }
 }
 
@@ -518,7 +554,7 @@ export function mountStructures(hostEl: HTMLElement): void {
   host.classList.add('hidden');
 
   const panel = div('st-filter');
-  const splitter = div('st-splitter');
+  const splitter = splitterElement('st-splitter');
   const results = div('st-results');
   host.append(panel, splitter, results);
   resultsHost = results;
@@ -657,15 +693,18 @@ function renderTree(): void {
     resultsHost.append(empty);
   }
 
-  // Pagination footer (§15.4).
-  if (resultIds.length < total) {
+  // Pagination footer (§15.4). Continuation is signalled by the keyset cursor
+  // of the last page (`total` feeds only the counter, requirement 3f2fdc41).
+  if (resultPager.hasMore) {
     const more = el('button', 'st-more', 'Показать ещё');
     more.type = 'button';
     more.addEventListener('click', () => void applyQuery(false));
     resultsHost.append(more);
   }
-  const counter = div('st-count');
-  counter.textContent = `Показано ${resultIds.length} из ${total}`;
+  const counter = badge(`Показано ${resultIds.length} из ${total}`, {
+    kind: 'quiet',
+    extraClass: 'ui-badge--block',
+  });
   resultsHost.append(counter);
 
   syncStructuresCursor();

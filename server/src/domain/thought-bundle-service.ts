@@ -43,6 +43,7 @@ function resolveThought(
   ndb: NetworkDb,
   input: ThoughtBundleInput,
   actorUserId: string,
+  defaultLinkIds: string[],
 ): {
   thought: Thought;
   action: ThoughtBundleThoughtAction;
@@ -110,6 +111,8 @@ function resolveThought(
         ...(mergedActive === undefined ? {} : { active: mergedActive }),
       },
       actorUserId,
+      // Рёбра link-дефолтов типа — в результат и события (ошибка 8655842b).
+      defaultLinkIds,
     );
     return { thought, action: 'created', matchedOn: null };
   }
@@ -195,7 +198,11 @@ export function upsertThoughtBundle(
   crossNetworkAccess?: CrossNetworkAccessContext,
 ): ThoughtBundleResult {
   return ndb.transaction(() => {
-    const { thought, action, matchedOn } = resolveThought(ndb, input, actorUserId);
+    // Коллектор рёбер, созданных link-дефолтами типа при создании мысли —
+    // возвращаются в результате, чтобы фасад опубликовал `link.created`
+    // (ошибка 8655842b).
+    const defaultLinkIds: string[] = [];
+    const { thought, action, matchedOn } = resolveThought(ndb, input, actorUserId, defaultLinkIds);
 
     let comment: Comment | undefined;
     let commentAction: 'created' | 'updated' | undefined;
@@ -313,8 +320,13 @@ export function upsertThoughtBundle(
     // (own or inherited via L21) before assuming the bundle is "done".
     const warnings = computeThoughtCardWarnings(ndb, thought.id);
 
+    // Части бандла пишутся ПОСЛЕ мысли и могли сдвинуть её `updated_at`
+    // (комментарии/хроника — ошибка 228df7a4; значения свойств — требование
+    // e6d4165e). Возвращаем свежую форму, чтобы DTO не отставал от карточки.
+    const freshThought = getThoughtOrThrow(ndb, thought.id);
+
     return {
-      thought,
+      thought: freshThought,
       thought_action: action,
       matched_on: matchedOn,
       comment,
@@ -322,6 +334,7 @@ export function upsertThoughtBundle(
       ...(chronicle !== undefined ? { chronicle } : {}),
       properties,
       ...(linkResults !== undefined ? { links: linkResults } : {}),
+      ...(defaultLinkIds.length > 0 ? { default_link_ids: defaultLinkIds } : {}),
       attachments,
       warnings,
     } satisfies ThoughtBundleResult;

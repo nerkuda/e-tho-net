@@ -26,7 +26,6 @@ import type {
   AttachmentSearchQuery,
   AttachmentUpdateInput,
   ChronicleFilterDefinition,
-  ActivityRow,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
   ChronicleSavedFilter,
@@ -35,7 +34,6 @@ import type {
   CommentTarget,
   CurrentUser,
   CrossNetworkDuplicateResponse,
-  CrossNetworkRefValue,
   CrossNetworkStructureQueryResponse,
   PropertyCrossResolveResult,
   DuplicateHit,
@@ -64,8 +62,8 @@ import type {
   MentionsScanResponse,
   Network,
   NetworkListItem,
-  NetworksCatalog,
   NetworkMember,
+  NetworkStats,
   NetworkProperty,
   NetworkPropertyInput,
   NetworkPropertyUpdateInput,
@@ -75,7 +73,6 @@ import type {
   PropertyDefinition,
   PropertyDefinitionUpdateInput,
   PropertyValue,
-  PropertyValueType,
   SavedFilter,
   SavedFilterDefinition,
   PinnedThoughtEntry,
@@ -83,7 +80,7 @@ import type {
   SearchResponse,
   StructureQueryRequest,
   StructureQueryResponse,
-  StructureIdsQueryResponse,
+  StructureIdsQueryResult,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -135,6 +132,21 @@ export interface IpcInvokePayload {
   method: string;
   /** Positional arguments forwarded to the matching handler. */
   args: unknown[];
+  /**
+   * Необязательный идентификатор вызова для отмены (требование ebed4980):
+   * renderer шлёт его вместе с запросом, а при отмене — `etn:cancel { id }`.
+   * Без него вызов неотменяем (обычные вызовы сигнала не несут).
+   */
+  requestId?: string;
+}
+
+/**
+ * Контекст исполнения IPC-вызова, который видит обработчик: сигнал отмены,
+ * зажигаемый сообщением `etn:cancel` по `requestId` (требование ebed4980).
+ * Обработчики, которым отмена не нужна, контекст игнорируют.
+ */
+export interface IpcCallContext {
+  signal: AbortSignal;
 }
 
 /** Current connection state surfaced to the renderer (server domain). */
@@ -311,6 +323,8 @@ export interface EtnApi {
     transferOwnership(id: string, userId: string): Promise<void>;
     getPreferences(id: string): Promise<UserPreferenceEntry[]>;
     setPreference(id: string, key: string, value: unknown): Promise<void>;
+    /** `GET /networks/{id}/statistics` — сводка по мыслесети (сумма по слоям). */
+    statistics(id: string): Promise<NetworkStats>;
   };
   thoughts: {
     /** `atLayerId` (опционально) — открыть мысль в конкретном слое, не переключая сессию. */
@@ -432,19 +446,25 @@ export interface EtnApi {
     setFocusOrder(networkId: string, focusId: string, input: FocusOrderInput): Promise<void>;
   };
   structures: {
-    /** `POST /thoughts/query` — filter thoughts of the structures view (L15). */
+    /**
+     * `POST /thoughts/query` — filter thoughts of the structures view (L15).
+     * `options.signal` отменяет устаревший запрос (требование ebed4980).
+     */
     query(
       networkId: string,
       request: StructureQueryRequest,
+      options?: { signal?: AbortSignal },
     ): Promise<StructureQueryResponse>;
     /**
      * `POST /thoughts/query` with `ids_only: true` — bare ids of the whole
      * filter result, for the bulk filter commands (L22).
+     * `options.signal` отменяет устаревший запрос (требование ebed4980).
      */
     queryIds(
       networkId: string,
       request: StructureQueryRequest,
-    ): Promise<StructureIdsQueryResponse>;
+      options?: { signal?: AbortSignal },
+    ): Promise<StructureIdsQueryResult>;
     /**
      * `GET /thoughts/{id}/hierarchy` — one-level parents/children with
      * per-branch dedup via `excludeIds`. `linkFilter` — фильтр обхода по
@@ -1266,3 +1286,50 @@ export interface EtnApi {
    */
   logEvent(name: string, data?: unknown): void;
 }
+
+/**
+ * Мост-форма отменяемых выборок «Структур» (требование ebed4980, ошибка
+ * b7cbd0e0). Отличается от публичной {@link EtnApi['structures']} только
+ * парой `query`/`queryIds`.
+ *
+ * Почему отдельный тип: `AbortSignal` — host-объект, он НЕ переживает
+ * `contextBridge`-сериализацию аргументов и приезжает в preload пустым
+ * объектом. Поэтому за мост уходит только примитив `requestId`, а слушатель
+ * `abort` живёт в renderer-контексте. Публичную форму (с `{ signal }`)
+ * renderer получает из фасада `renderer/lib/etn.ts`, который приводит её к
+ * этой мост-форме.
+ */
+export type EtnBridgeStructures = Omit<EtnApi['structures'], 'query' | 'queryIds'> & {
+  /**
+   * `POST /thoughts/query` с отменяемым `requestId`: main регистрирует по нему
+   * `AbortController`; сообщение `etn:cancel { requestId }` гасит fetch.
+   * Без `requestId` вызов неотменяем.
+   */
+  query(
+    networkId: string,
+    request: StructureQueryRequest,
+    requestId?: string,
+  ): Promise<StructureQueryResponse>;
+  /** `queryIds` — тот же отменяемый путь, что и {@link EtnBridgeStructures.query}. */
+  queryIds(
+    networkId: string,
+    request: StructureQueryRequest,
+    requestId?: string,
+  ): Promise<StructureIdsQueryResult>;
+};
+
+/**
+ * Сырая поверхность, которую preload выставляет в renderer через
+ * `contextBridge.exposeInMainWorld('etn', …)` — то, чем реально является
+ * `window.etn`. Renderer-код работает с ней через фасад `renderer/lib/etn.ts`,
+ * типизированный публичной {@link EtnApi} (сигнатура с `AbortSignal`).
+ */
+export type EtnBridgeApi = Omit<EtnApi, 'structures'> & {
+  structures: EtnBridgeStructures;
+  /**
+   * Fire-and-forget отмена вызова по `requestId` (требование ebed4980): шлёт
+   * `etn:cancel` в main, ответа не ждёт. Вызывается renderer-фасадом из
+   * слушателя `abort` — сигнал за мост не уходит (ошибка b7cbd0e0).
+   */
+  cancelRequest(requestId: string): void;
+};

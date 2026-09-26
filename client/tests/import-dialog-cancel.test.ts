@@ -94,7 +94,7 @@ function clickBackdrop(backdrop: ShimElement): void {
 
 /** Клик по × в заголовке. */
 function clickClose(backdrop: ShimElement): void {
-  const closeBtn = backdrop.querySelector('.dialog-close');
+  const closeBtn = backdrop.querySelector('.ui-btn--ghost');
   assert.ok(closeBtn !== null, 'в заголовке есть ×');
   closeBtn!.click();
 }

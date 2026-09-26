@@ -5,7 +5,7 @@
  * ┌──────────────────────────────────────────────────────────────────┐
  * │ [Tab1 *][Tab2][Tab3][+] [▾N]                       [👤 User ▾]   │ ← top row (Q3)
  * ├──────────────────────────────────────────────────────────────────┤
- * │ [🌐 Мыслесеть ▾] [🗺][🌳][📜] [📌 закреплённые мысли…]            │ ← toolbar (виды)
+ * │ [🗺][🌳][📜][🕓] [▾ Слой] [📌 закреплённые…]        [🌐 Мыслесеть] │ ← toolbar (виды)
  * ├──────────────────────────────────────────────────────────────────┤
  * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
@@ -24,10 +24,11 @@
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
+import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
-import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
+import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
@@ -35,7 +36,12 @@ import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
 import { mountEventAreaResizer } from './event-area-resizer.js';
 import { mountSelectionResizer } from './selection-resizer.js';
-import { clampEventAreaW } from '../lib/pure.js';
+import {
+  clampEventAreaW,
+  LAYER_MENU_LABEL_FALLBACK,
+  layerMenuTooltip,
+  truncateLayerMenuLabel,
+} from '../lib/pure.js';
 import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 import { mountStructures } from './structures/structures.js';
@@ -45,6 +51,9 @@ import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
 import { mountPicker } from './tabs/picker.js';
 import { mountTabStrip } from './tabs/tabs.js';
+import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
+import { splitterElement } from '../lib/ui/splitter.js';
+import { fieldInput } from '../lib/ui/field.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -56,8 +65,6 @@ export interface WorkspaceHandles {
   layerMenuLabel: HTMLSpanElement;
   userMenuButton: HTMLButtonElement;
   userMenuLabel: HTMLSpanElement;
-  /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
-  viewMenuButton: HTMLButtonElement;
   /** View switcher segment (L15/L20, задача f27809d0): map / structures / chronicle / activity. */
   mapViewButton: HTMLButtonElement;
   structuresViewButton: HTMLButtonElement;
@@ -126,58 +133,74 @@ export function buildWorkspace(): HTMLElement {
   // --- toolbar ---------------------------------------------------------------
   const toolbar = div('toolbar');
 
-  // Network menu (Q3-bugfix, 08-ui-spec.md §8.1): sits in the toolbar to the
-  // left of the view switcher. The label is fixed ("Мыслесеть") — the active
-  // tab is the source of truth for the current network's name.
-  const netMenuButton = el('button', 'tb-btn', '');
-  netMenuButton.type = 'button';
+  // Network menu (Q3-bugfix, 08-ui-spec.md §8.1; задача a0cdd731): прижато к
+  // ПРАВОМУ краю строки меню мыслесети (полоса закреплённых мыслей растягивается
+  // и оттесняет его вправо). Метка фиксирована («Мыслесеть») — имя открытой
+  // мыслесети показывает активная вкладка.
+  const netMenuButton = uiButton({ role: 'ghost', title: 'Меню мыслесети' });
   netMenuButton.append(
     svgIcon('network'),
     span('Мыслесеть', 'tb-label'),
     svgIcon('chevron-down', 12),
   );
-  setTooltip(netMenuButton, 'Меню мыслесети');
 
-  // Layer menu (S11, 08-ui-spec.md §8.2): right after «Мыслесеть». The label
-  // is the session's current layer title — «Основа» by default — which makes
-  // the menu itself the constant «where am I» indicator (§10.3).
-  const layerMenuButton = el('button', 'tb-btn', '');
-  layerMenuButton.type = 'button';
-  const layerMenuLabel = span('Основа', 'tb-label');
+  // Layer menu (S11, 08-ui-spec.md §8.2; задача a0cdd731): идёт сразу после
+  // закладок экранов, сам состав меню не меняется. Метка — заголовок текущего
+  // слоя сессии («Основа» по умолчанию), поэтому меню само служит постоянным
+  // индикатором «где я» (§10.3). Метка обрезается до 32 кодпоинтов, а полное
+  // имя слоя несёт тултип кнопки (задача 4388305f): refresh() ниже выставляет
+  // и то, и другое.
+  const layerMenuButton = uiButton({ role: 'ghost', title: LAYER_MENU_LABEL_FALLBACK });
+  const layerMenuLabel = span(LAYER_MENU_LABEL_FALLBACK, 'tb-label');
   layerMenuButton.append(
     svgIcon('layers'),
     layerMenuLabel,
     svgIcon('chevron-down', 12),
   );
-  setTooltip(layerMenuButton, 'Слои изменений');
 
-  // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
-  // menu. The pressed button marks the active view.
-  const mapViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  mapViewButton.type = 'button';
-  mapViewButton.append(svgIcon('mindmap'));
-  setTooltip(mapViewButton, 'Карта мыслей');
-  mapViewButton.addEventListener('click', () => setActiveView('map'));
+  // View switcher (L15, 08-ui-spec.md §15.1; задача a0cdd731): ПЕРВАЯ группа
+  // строки меню мыслесети — закладки-ярлыки экранов. Класс `view-tab` даёт
+  // «блокнотную» рамку закладок, относительные размеры и разделители
+  // (styles/layout.css): скруглены только верхние углы, активная подсвечена
+  // рамкой цвета выделения и сливается с экраном ниже. Закладки стоят вплотную
+  // (общий `.view-switch` без gap), чтобы вертикальные границы были между ними,
+  // а не в воздухе.
+  const mapViewButton = iconButton({
+    icon: svgIcon('mindmap'),
+    title: 'Карта мыслей',
+    role: 'ghost',
+    class: 'view-tab',
+    onClick: () => setActiveView('map'),
+  });
 
-  const structuresViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  structuresViewButton.type = 'button';
-  structuresViewButton.append(svgIcon('tree'));
-  setTooltip(structuresViewButton, 'Структуры мыслей');
-  structuresViewButton.addEventListener('click', () => setActiveView('structures'));
+  const structuresViewButton = iconButton({
+    icon: svgIcon('tree'),
+    title: 'Структуры мыслей',
+    role: 'ghost',
+    class: 'view-tab',
+    onClick: () => setActiveView('structures'),
+  });
 
-  const chronicleViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  chronicleViewButton.type = 'button';
-  chronicleViewButton.append(svgIcon('history'));
-  setTooltip(chronicleViewButton, 'Хроника');
-  chronicleViewButton.addEventListener('click', () => setActiveView('chronicle'));
+  const chronicleViewButton = iconButton({
+    icon: svgIcon('calendar-month'),
+    title: 'Хроника',
+    role: 'ghost',
+    class: 'view-tab',
+    onClick: () => setActiveView('chronicle'),
+  });
 
   // Activity-feed view button (задача f27809d0 «События»): fourth view
   // showing the network's `activity_log` (lenta from `GET /activity`).
-  const activityViewButton = el('button', 'tb-btn tb-icon view-btn', '');
-  activityViewButton.type = 'button';
-  activityViewButton.append(svgIcon('activity'));
-  setTooltip(activityViewButton, 'События');
-  activityViewButton.addEventListener('click', () => setActiveView('activity'));
+  const activityViewButton = iconButton({
+    icon: svgIcon('activity'),
+    title: 'События',
+    role: 'ghost',
+    class: 'view-tab',
+    onClick: () => setActiveView('activity'),
+  });
+
+  const viewSwitch = div('view-switch');
+  viewSwitch.append(mapViewButton, structuresViewButton, chronicleViewButton, activityViewButton);
 
   // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
   // switcher, visible in both views.
@@ -186,9 +209,8 @@ export function buildWorkspace(): HTMLElement {
   // The search row belongs to the map view (L18): it sits under the top bar
   // and hides in the structures view, which replaces canvas + search with its
   // own space.
-  const searchInput = el('input', 'search-input');
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск… (Ctrl+F)';
+  const searchInput = fieldInput({ extraClass: 'search-input', bare: true });
+  searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+F');
   setTooltip(searchInput, 'Поиск по сети');
 
   // The drop-panel settings gear used to sit here (задача a3247f84, 0.8.2);
@@ -196,39 +218,30 @@ export function buildWorkspace(): HTMLElement {
   const searchRow = div('search-row');
   searchRow.append(searchInput);
 
-  const userMenuButton = el('button', 'tb-btn', '');
-  userMenuButton.type = 'button';
+  const userMenuButton = uiButton({ role: 'ghost', title: 'Меню пользователя' });
   const userMenuLabel = span('—', 'tb-label');
   userMenuButton.append(svgIcon('user'), userMenuLabel, svgIcon('chevron-down', 12));
-  setTooltip(userMenuButton, 'Меню пользователя');
 
-  // Workspace-layout commands menu (replaces the duplicated status dot — the
-  // connection indicator lives in the status bar). First command toggles the
-  // editor panel, which is otherwise unreachable once hidden.
-  const viewMenuButton = el('button', 'tb-btn tb-icon', '');
-  viewMenuButton.type = 'button';
-  viewMenuButton.append(svgIcon('menu'));
-  setTooltip(viewMenuButton, 'Вид');
-
-  // The pinned panel (L18) stretches across the whole free toolbar width —
-  // it is one big drop target between the view switcher and the user menu.
+  // Строка меню мыслесети (задача a0cdd731), слева направо: закладки экранов,
+  // меню слоя, полоса закреплённых мыслей, меню «Мыслесеть» (прижато вправо —
+  // полоса закреплённых растягивается и оттесняет его). Меню «бутерброд» (☰)
+  // упразднено: показ/скрытие редактора переехало в меню «Мыслесеть».
   toolbar.append(
-    netMenuButton,
+    viewSwitch,
     layerMenuButton,
-    mapViewButton,
-    structuresViewButton,
-    chronicleViewButton,
-    activityViewButton,
     pinnedHost,
+    netMenuButton,
   );
 
-  // --- top row (Q3) — tab strip + user/view ----------------------------------
-  // Mounts the tab strip; user/view menus live here. The network menu used to
-  // sit in this row (Q3); it moved into the toolbar (Q3-bugfix).
+  // --- top row (Q3) — tab strip + user menu ----------------------------------
+  // Mounts the tab strip; the user menu lives here. The network menu used to
+  // sit in this row (Q3); it moved into the toolbar (Q3-bugfix). The «Вид»
+  // (☰) menu was removed in задача a0cdd731 — its commands moved to the
+  // «Мыслесеть»/user menus.
   const tabStripHost = div('tab-strip-host');
   const topRow = div('top-row');
   const topRight = div('top-right');
-  topRight.append(userMenuButton, viewMenuButton);
+  topRight.append(userMenuButton);
   topRow.append(tabStripHost, topRight);
   mountTabStrip(tabStripHost);
 
@@ -238,17 +251,25 @@ export function buildWorkspace(): HTMLElement {
   // --- body -------------------------------------------------------------------
   const body = div('workspace-body');
   const selectionHost = div('selection-panel hidden');
-  const canvasHost = div('canvas');
-  const structuresHost = div('structures hidden');
-  const chronicleHost = div('chronicle hidden');
-  const activityHost = div('activity hidden');
+  // Every view hangs its content host off the body next to the editor. The
+  // shared `view-host` marker is the single anchor the dock-order rules
+  // (`styles/layout.css`) key on — the editor position is a global setting and
+  // must move the content the same way on the map, structures, chronicle and
+  // activity views (ошибка 477fd133). A new view host MUST carry the marker,
+  // otherwise the editor's dock order silently stops applying to it.
+  const canvasHost = div('canvas view-host');
+  const structuresHost = div('structures hidden view-host');
+  const chronicleHost = div('chronicle hidden view-host');
+  const activityHost = div('activity hidden view-host');
   const editorHost = div('editor hidden');
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
-  const editorResizer = div('editor-resizer hidden');
+  // The element comes from the shared `lib/ui/splitter` component (задача
+  // 50f57b82); its drag is wired in `editor-resizer.ts`.
+  const editorResizer = splitterElement('editor-resizer hidden');
   // Draggable splitter between the selection panel and the canvas (08-ui-spec.md
   // §5). Positioned on the panel's right seam via the --selection-w variable.
-  const selectionResizer = div('selection-resizer hidden');
+  const selectionResizer = splitterElement('selection-resizer hidden');
   body.append(
     selectionHost,
     canvasHost,
@@ -290,7 +311,7 @@ export function buildWorkspace(): HTMLElement {
   // (counts + last realtime event text) by writing `--event-area-w` on the
   // status bar. Cursor is set by `.event-area-resizer` so the affordance is
   // visible without JS on every render.
-  const eventAreaResizer = div('event-area-resizer');
+  const eventAreaResizer = splitterElement('event-area-resizer');
   setTooltip(eventAreaResizer, 'Изменить ширину области событий');
   // Fixed-width region of the status bar. The history strip and the
   // status-light live OUTSIDE this container so they no longer repaint when
@@ -324,7 +345,6 @@ export function buildWorkspace(): HTMLElement {
     layerMenuLabel,
     userMenuButton,
     userMenuLabel,
-    viewMenuButton,
     mapViewButton,
     structuresViewButton,
     chronicleViewButton,
@@ -355,7 +375,6 @@ export function buildWorkspace(): HTMLElement {
   // moment a layer write happens, not on the next layer/tab switch.
   initLayerOverridesTracking();
   wireUserMenu(handles);
-  wireViewMenu(handles);
   mountCanvas(canvasHost);
   mountHistoryBar(historyHost);
   mountPinnedBar(pinnedHost);
@@ -375,8 +394,11 @@ export function buildWorkspace(): HTMLElement {
     const st = store.state;
     const user = st.me?.display_name ?? st.me?.username ?? '—';
     userMenuLabel.textContent = user;
-    // The layer menu label is the current layer indicator (S11, §10.3).
-    layerMenuLabel.textContent = st.currentLayer?.title ?? 'Основа';
+    // The layer menu label is the current layer indicator (S11, §10.3): capped
+    // to 32 code points (задача 4388305f), while the button's tooltip always
+    // carries the full layer name (even when the label is not truncated).
+    layerMenuLabel.textContent = truncateLayerMenuLabel(st.currentLayer?.title);
+    setTooltip(layerMenuButton, layerMenuTooltip(st.currentLayer?.title));
     const glyph = statusGlyph(st.rtStatus);
     statusLeft.className = `status-light ${glyph.cls}`;
     setTooltip(statusLeft, glyph.text);
@@ -407,10 +429,10 @@ export function buildWorkspace(): HTMLElement {
     const structuresActive = st.activeView === 'structures';
     const chronicleActive = st.activeView === 'chronicle';
     const activityActive = st.activeView === 'activity';
-    mapViewButton.classList.toggle('active', mapActive);
-    structuresViewButton.classList.toggle('active', structuresActive);
-    chronicleViewButton.classList.toggle('active', chronicleActive);
-    activityViewButton.classList.toggle('active', activityActive);
+    setButtonActive(mapViewButton, mapActive);
+    setButtonActive(structuresViewButton, structuresActive);
+    setButtonActive(chronicleViewButton, chronicleActive);
+    setButtonActive(activityViewButton, activityActive);
     canvasHost.classList.toggle('hidden', !mapActive);
     structuresHost.classList.toggle('hidden', !structuresActive);
     chronicleHost.classList.toggle('hidden', !chronicleActive);
@@ -434,8 +456,7 @@ export function buildWorkspace(): HTMLElement {
  * whenever the active tab becomes inaccessible (Q5, 08-ui-spec.md §1.1).
  */
 function mountInaccessiblePlaceholder(host: HTMLElement): void {
-  const closeBtn = el('button', 'btn primary', 'Закрыть таб') as HTMLButtonElement;
-  closeBtn.type = 'button';
+  const closeBtn = uiButton({ label: 'Закрыть таб', role: 'primary' });
   closeBtn.addEventListener('click', () => {
     const id = store.state.activeTabId;
     if (id === null) return;

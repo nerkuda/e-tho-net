@@ -1,0 +1,103 @@
+/**
+ * Вкладки `lib/ui` — единый вид полосы вкладок (задача a57e7998).
+ *
+ * Заменяет частные стили `admin-tabs`, `icon-tabs`, `diff-tabs`,
+ * `type-editor-tabs`, `settings-md-tabs` (инвентаризация 3fc7c54d: шесть
+ * реализаций вкладок с разошедшимся видом и без клавиатуры). Подключается из
+ * `lib/ui/register.ts`; цвета — только токены ETN, чтобы работали обе темы.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--space-*`,
+ * `--font-weight-*`, `--focus-ring-width`, `--border-thick`).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): покой, `:hover`,
+ * `:active` (нажатие), `:focus-visible` (внутреннее кольцо), `:disabled`,
+ * выбранная вкладка — класс `.active`. Переходы — по `--transition-hover`.
+ */
+
+.ui-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Контейнер вкладок: перестроение — по ширине СВОЕЙ полосы, а не окна
+     (требование a08c2c4a). Узкий хост (диалог роли s, боковая панель)
+     сжимает вкладки, не выталкивая их за границу. */
+  container-type: inline-size;
+  container-name: ui-tabs;
+}
+
+.ui-tablist {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.ui-tab {
+  appearance: none;
+  padding: var(--space-3) var(--space-6);
+  border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease,
+    box-shadow var(--transition-hover) ease;
+}
+
+.ui-tab:hover:not(.active):not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.ui-tab:active:not(.active):not(:disabled) {
+  background: var(--bg-active);
+}
+
+.ui-tab.active {
+  color: var(--accent);
+  font-weight: var(--font-weight-bold);
+  box-shadow: inset 0 calc(-1 * var(--border-thick)) 0 var(--accent);
+}
+
+.ui-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-tab:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.ui-tabpanels {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* Панель занимает оставшуюся высоту хоста и прокручивается сама; неактивные
+   панели скрыты атрибутом `hidden` (см. lib/ui/tabs.ts). */
+.ui-tabpanel {
+  min-height: 0;
+}
+
+.ui-tabpanel[hidden] {
+  display: none;
+}
+
+/* Узкая полоса вкладок: подписи остаются в одну строку, вкладки компактнее.
+   Порог — структурная константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-tabs (max-width: 340px) {
+  .ui-tab {
+    padding: var(--space-2) var(--space-4);
+  }
+
+  .ui-tablist {
+    gap: 0;
+  }
+}

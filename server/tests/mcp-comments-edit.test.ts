@@ -443,6 +443,76 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('вводный абзац перед `##`-секциями адресуем как виртуальная секция (ошибка a39046d9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-preamble', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          'Вводный абзац до первого заголовка.\n\n## Раздел\nТекст раздела',
+        );
+        // Вводный абзац виден в `sections[]` — по первой непустой строке.
+        const append = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Хвост' }],
+            },
+          }),
+        );
+        assert.deepEqual(append.sections, ['Вводный абзац до первого заголовка.', 'Раздел']);
+
+        // replace_section по вводному абзацу НЕ трогает реальные секции.
+        const replaced = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Вводный абзац до первого заголовка.',
+                  text: 'Новый вводный абзац.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(replaced.sections, ['Новый вводный абзац.', 'Раздел']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          'Новый вводный абзац.\n\n## Раздел\nТекст раздела\n\nХвост',
+        );
+
+        // delete_section по вводному абзацу оставляет заголовки нетронутыми.
+        const deleted = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'delete_section', section: 'Новый вводный абзац.' }],
+            },
+          }),
+        );
+        assert.deepEqual(deleted.sections, ['Раздел']);
+        assert.equal(readBody(ndb, upserted.id).body_md, '## Раздел\nТекст раздела\n\nХвост');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('транзакционность: [append_ok, replace_section_fail] → откат всего вызова', async () => {
     const ctx = await buildMcpContext();
     try {

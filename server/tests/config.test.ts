@@ -96,6 +96,31 @@ describe('loadConfig', () => {
     assert.equal(cfg.mcp.port, null);
   });
 
+  it('reader pool: sane defaults и разбор ETN_READER_POOL_SIZE / ETN_READER_TASK_TIMEOUT_MS', () => {
+    const defaults = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data' });
+    assert.ok(defaults.readerPool.size >= 1 && defaults.readerPool.size <= 16);
+    assert.equal(defaults.readerPool.taskTimeoutMs, 30_000);
+
+    const cfg = loadConfig({
+      ETN_DATA_DIR: '/tmp/etn-data',
+      ETN_READER_POOL_SIZE: '3',
+      ETN_READER_TASK_TIMEOUT_MS: '5000',
+    });
+    assert.equal(cfg.readerPool.size, 3);
+    assert.equal(cfg.readerPool.taskTimeoutMs, 5000);
+  });
+
+  it('reader pool: отвергает недопустимые размер и тайм-аут', () => {
+    assert.throws(
+      () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_READER_POOL_SIZE: '0' }),
+      (err: unknown) => err instanceof ConfigError && /ETN_READER_POOL_SIZE/.test(err.message),
+    );
+    assert.throws(
+      () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_READER_TASK_TIMEOUT_MS: '10' }),
+      (err: unknown) => err instanceof ConfigError && /ETN_READER_TASK_TIMEOUT_MS/.test(err.message),
+    );
+  });
+
   it('accepts ETN_MCP_ENABLED and ETN_MCP_PORT', () => {
     const cfg = loadConfig({
       ETN_DATA_DIR: '/tmp/etn-data',

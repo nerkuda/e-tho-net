@@ -42,12 +42,14 @@
  */
 
 import { setFocus } from '../app.js';
+import { t } from '../lib/i18n.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import type { ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { openLinkInEditor } from '../editor/editor.js';
-import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
+import { div, el, renderHtml, setTooltip, span } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
@@ -88,6 +90,8 @@ import {
 } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
+import { iconButton } from '../lib/ui/button.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
 
 /**
  * Настройки строки поиска карты (§3.2): критерии — общая модель конструктора
@@ -156,15 +160,17 @@ export function mountSearch(next: SearchChrome): void {
   const { host, input } = next;
   host.replaceChildren();
 
-  const toggle = el('button', 'tb-btn tb-icon search-settings-toggle', '');
-  toggle.type = 'button';
-  toggle.setAttribute('aria-pressed', 'false');
-  toggle.append(svgIcon('filter'));
-  setTooltip(toggle, 'Настройки поиска');
-  toggle.addEventListener('click', () => {
-    setSettingsOpen(!settingsOpen);
-    persistSettingsOpen();
+  const toggle = iconButton({
+    icon: svgIcon('filter'),
+    title: 'Настройки поиска',
+    role: 'ghost',
+    class: 'search-settings-toggle',
+    onClick: () => {
+      setSettingsOpen(!settingsOpen);
+      persistSettingsOpen();
+    },
   });
+  toggle.setAttribute('aria-pressed', 'false');
 
   // Кнопка-лейка — в верхнем углу панели (заголовочная строка, прижата вправо).
   const panelHeader = div('search-panel-header');
@@ -590,7 +596,7 @@ async function run(): Promise<void> {
     renderResults(lastResults);
   } catch (err) {
     if (resultsBox !== null) {
-      resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
+      resultsBox.replaceChildren(operationError(err, 'Ошибка поиска'));
     }
   }
 }
@@ -613,7 +619,7 @@ async function runById(networkId: string, id: string): Promise<void> {
     if (chrome !== null) {
       const resultsBox = chrome.host.querySelector('.search-results');
       if (resultsBox !== null) {
-        resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
+        resultsBox.replaceChildren(operationError(err, 'Ошибка поиска'));
       }
     }
   }
@@ -969,11 +975,12 @@ function buildSettingsZone(zone: HTMLElement): void {
 
   // --- 1-я строка: ограничение поддеревом ----------------------------------
   const subtreeRow = div('search-settings-row');
-  const subtreeLabel = el('label', 'checkbox-row');
-  const subtreeCheck = el('input');
-  subtreeCheck.type = 'checkbox';
-  subtreeCheck.checked = options.subtree;
-  subtreeLabel.append(subtreeCheck, span('ограничить потомками мыслей:'));
+  const subtreeHandle = checkboxRow({
+    label: 'ограничить потомками мыслей:',
+    checked: options.subtree,
+  });
+  const subtreeLabel = subtreeHandle.row;
+  const subtreeCheck = subtreeHandle.input;
 
   // Поле мыслей-подкорней — общий чип-лист пикера (инструкция «Использовать
   // унифицированные поля выбора ссылок в диалогах»), тот же, что у поля
@@ -999,7 +1006,7 @@ function buildSettingsZone(zone: HTMLElement): void {
           allowLinkType: false,
           selectedIds: options.subrootIds,
           title: 'Ограничить потомками мыслей',
-          applyLabel: 'Применить',
+          applyLabel: t('actions.apply'),
         });
         return result === null ? null : pickedThoughtIds(result);
       },
@@ -1021,17 +1028,15 @@ function buildSettingsZone(zone: HTMLElement): void {
     label: string,
     key: 'onlyThoughts' | 'onlyLinks' | 'onlyChrono' | 'showInactive' | 'trashed',
   ): HTMLElement => {
-    const wrap = el('label', 'checkbox-row');
-    const check = el('input');
-    check.type = 'checkbox';
-    check.checked = options[key];
-    check.addEventListener('change', () => {
-      options = { ...options, [key]: check.checked };
-      persistState();
-      refreshSearchIfVisible();
-    });
-    wrap.append(check, span(label));
-    return wrap;
+    return checkboxRow({
+      label,
+      checked: options[key],
+      onChange: (checked) => {
+        options = { ...options, [key]: checked };
+        persistState();
+        refreshSearchIfVisible();
+      },
+    }).row;
   };
   const placesRow = div('search-settings-row');
   placesRow.append(

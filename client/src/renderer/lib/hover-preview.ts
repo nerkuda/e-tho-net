@@ -2,24 +2,25 @@
  * Ctrl-hover content preview engine (task «Предпросмотр содержимого с
  * зажатым Ctrl», stages 1-2/3).
  *
- * A generic, reusable popup engine modelled after `lib/image-zoom.ts`: one
- * delegated set of `document`-level listeners, a `pointer-events: auto`
- * popup (unlike the image magnifier — this one must be scrollable and host
- * clickable links), content resolved lazily per "kind" via a small resolver
- * registry so new content types (search/pinned/selection rows — stage 3) can
- * register themselves without touching this file's core.
+ * Content engine on top of the shared popover component `lib/ui/popover.ts`
+ * (задача dd1f47d4, требование f74f1aae): the panel itself — appearance,
+ * positioning near the anchor and viewport clamping, closing on `Escape` /
+ * outside scroll / window blur, "the cursor may move into the popup" — is owned
+ * by {@link openPopover}. This module keeps only what is specific to Ctrl+hover
+ * previews: one delegated set of `document`-level listeners, the open debounce,
+ * the per-entry independent-close chain (nesting, depth cap) and a content
+ * resolver registry so new content types can register themselves without
+ * touching the engine core.
  *
  * Trigger elements declare what to show via `data-hp-*` attributes (set by
  * {@link markCommentPreview}/{@link markChronoPreview}/
  * {@link markAttachmentsPreview}/{@link markThoughtCommentPreview} for
  * indicators, and by {@link wireCommentLinksInDom} for links inside rendered
  * comment text — stage 2 — or by a future caller calling
- * {@link registerHoverPreviewResolver} + setting `data-hp-kind` itself). This
- * mirrors `image-zoom.ts`'s `data-zoom-thought`/`data-zoom-attachment`
- * convention.
+ * {@link registerHoverPreviewResolver} + setting `data-hp-kind` itself).
  *
- * Open/close model (differs from `image-zoom.ts` on purpose, see the task's
- * acceptance criteria):
+ * Open/close model (kept as-is from the pre-component engine; the panel
+ * mechanics now live in `lib/ui/popover.ts`):
  *  - opening requires Ctrl held over a trigger for a short debounce pause
  *    (not instant — Ctrl+hover is also used for other gestures, e.g. the
  *    selection panel's Ctrl+click/hover, and an instant trigger would
@@ -36,9 +37,13 @@
  *    trigger element (the indicator/link that opened it). `Escape` closes
  *    only the topmost (deepest, last opened) popup, one press at a time —
  *    not the whole chain (карточка ошибки «Некорректное закрытие
- *    предпросмотров», ETN 420a1f7e). Ctrl inside an already-open popup only
- *    matters for opening the NEXT, nested level;
- *  - nesting is capped at {@link MAX_DEPTH} levels.
+ *    предпросмотров», ETN 420a1f7e) — this is the component's `closeOnEsc`;
+ *    Ctrl inside an already-open popup only matters for opening the NEXT,
+ *    nested level;
+ *  - nesting is capped at {@link MAX_DEPTH} levels;
+ *  - the preview popup sets `closeOnOutsideClick: false` (the component
+ *    default is `true`): a click outside a Ctrl+hover preview has never
+ *    closed it, and changing that would be a UX change, not a refactor.
  *
  * NOTE on dependency direction: this module intentionally imports only from
  * `lib/*`, `state.ts`, shared types, `@etn/markdown` (constants only) and
@@ -64,6 +69,8 @@ import {
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { etn } from './etn.js';
+import { commentShell } from './ui/comment.js';
+import { openPopover, type PopoverHandle } from './ui/popover.js';
 import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
 import { store } from '../state.js';
 
@@ -76,8 +83,6 @@ const OPEN_DEBOUNCE_MS = 200;
 const CLOSE_DELAY_MS = 300;
 /** Maximum nesting depth of chained popups (task requirement). */
 const MAX_DEPTH = 5;
-/** Cursor→popup gap, px (mirrors `image-zoom.ts`'s `POPUP_OFFSET`). */
-const POPUP_OFFSET = 10;
 
 /** Resolved preview content: a title for the popup head + a ready DOM body. */
 export interface HoverPreviewContent {
@@ -91,8 +96,9 @@ export interface HoverPreviewContent {
    * generic default on a wide window.
    */
   maxWidthPx?: number;
-  /** Overrides `.hp-body`'s default `max-height` (min(420px, 60vh)), in px —
-   *  same reasoning as {@link maxWidthPx} (70% of the canvas viewport). */
+  /** Overrides the popup body's default `max-height` (min(420px, 60vh), see
+   *  `lib/ui/popover.css`'s `.ui-popover-body`), in px — same reasoning as
+   *  {@link maxWidthPx} (70% of the canvas viewport). */
   maxHeightPx?: number;
 }
 
@@ -236,6 +242,17 @@ function etnimgUrl(filePath: string): string {
   return `etnimg://${encoded.join('/')}`;
 }
 
+/**
+ * Оборачивает содержимое комментария в общую оболочку `lib/ui/comment.ts`
+ * (задача 9cb87c42): карточка Ctrl+hover показывает комментарий тем же
+ * каркасом, что и редактор/хроника. Режим — только просмотр.
+ */
+function commentPreviewBody(view: HTMLElement): HTMLElement {
+  const shell = commentShell({ mode: 'view' });
+  shell.setField(view);
+  return shell.root;
+}
+
 /** Permanent comment (📝): rendered exactly like the comment view mode. */
 async function resolveCommentContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
   const owner = ownerParams(trigger);
@@ -249,10 +266,10 @@ async function resolveCommentContent(trigger: HTMLElement): Promise<HoverPreview
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  void resolveWikiLinksInDom(body, networkId);
-  return { title: trigger.dataset['hpTitle'] ?? '—', body };
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  void resolveWikiLinksInDom(view, networkId);
+  return { title: trigger.dataset['hpTitle'] ?? '—', body: commentPreviewBody(view) };
 }
 
 /** One-line preview of a comment body — duplicated from `chrono-tab.ts`'s
@@ -427,12 +444,12 @@ async function resolveWikiThoughtContent(trigger: HTMLElement): Promise<HoverPre
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  wireCommentLinksInDom(body);
-  void resolveWikiLinksInDom(body, networkId);
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  wireCommentLinksInDom(view);
+  void resolveWikiLinksInDom(view, networkId);
   const label = trigger.textContent?.trim();
-  return { title: label !== undefined && label !== '' ? label : '—', body };
+  return { title: label !== undefined && label !== '' ? label : '—', body: commentPreviewBody(view) };
 }
 
 /** Legacy name-only wiki-link (`[[Имя мысли|текст]]`, rendered as
@@ -470,12 +487,12 @@ async function resolveWikiLegacyNameContent(trigger: HTMLElement): Promise<Hover
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  wireCommentLinksInDom(body);
-  void resolveWikiLinksInDom(body, networkId);
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  wireCommentLinksInDom(view);
+  void resolveWikiLinksInDom(view, networkId);
   const label = trigger.textContent?.trim();
-  return { title: foundTitle !== '' ? foundTitle : (label ?? '—'), body };
+  return { title: foundTitle !== '' ? foundTitle : (label ?? '—'), body: commentPreviewBody(view) };
 }
 
 /** Wiki-link to a thought in ANOTHER network (`[[n:<net>#<id>]]`): shows only
@@ -690,11 +707,11 @@ async function resolveCrossNetworkThoughtContent(
   }
   const permanent = comments.find((c) => c.kind === 'permanent');
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
-  const body = div('comment-view hp-comment-body');
-  renderHtml(body, permanent.body_html);
-  wireCommentLinksInDom(body);
-  void resolveWikiLinksInDom(body, netId);
-  return { title: head, body };
+  const view = div('comment-view');
+  renderHtml(view, permanent.body_html);
+  wireCommentLinksInDom(view);
+  void resolveWikiLinksInDom(view, netId);
+  return { title: head, body: commentPreviewBody(view) };
 }
 
 registerHoverPreviewResolver('wiki-thought', resolveWikiThoughtContent);
@@ -709,6 +726,9 @@ registerHoverPreviewResolver('link', resolveLinkContent);
 
 interface ChainEntry {
   depth: number;
+  /** Панель компонента `lib/ui/popover.ts` (оформление, позиция, закрытие). */
+  popover: PopoverHandle;
+  /** Корневой элемент панели — для чистого решения о «живости» цепочки. */
   el: HTMLElement;
   triggerEl: HTMLElement;
   /** Per-entry close timer (task fix, ETN 420a1f7e) — each popup closes on its
@@ -785,27 +805,14 @@ function isChainEntryAlive(
   return false;
 }
 
-/** True when `node` lies inside the root trigger or any currently open popup
- *  of the chain — used only to tell "a scroll happened somewhere inside our
- *  own UI" (see the `scroll` listener) from "a scroll happened elsewhere on
- *  the page", which still closes everything. NOT used for the per-entry
- *  independent-close decision any more — see {@link isChainEntryAlive}. */
-function withinIsland(node: Node | null): boolean {
-  if (node === null) return false;
-  if (rootTrigger !== null && rootTrigger.contains(node)) return true;
-  for (const entry of chain) {
-    if (entry.el.contains(node)) return true;
-  }
-  return false;
-}
-
 function closeChain(): void {
-  for (const entry of chain) {
-    cancelEntryCloseTimer(entry);
-    entry.el.remove();
-  }
+  const removed = chain;
   chain = [];
   rootTrigger = null;
+  for (const entry of removed) {
+    cancelEntryCloseTimer(entry);
+    entry.popover.close();
+  }
 }
 
 /**
@@ -822,13 +829,14 @@ export function closeHoverPreview(): void {
 /** Closes the chain entry at `index` together with every entry deeper than it
  *  (a deeper popup can never legitimately outlive the popup it was opened
  *  from — see {@link isChainEntryAlive}). Resets `rootTrigger` once the whole
- *  chain has emptied out. Used both by a fired per-entry close timer and by
- *  `Escape` (closing just the topmost entry, i.e. `index = chain.length - 1`). */
+ *  chain has emptied out. Used both by a fired per-entry close timer and by a
+ *  component-initiated close (`Escape`, scroll, blur) reported through the
+ *  popup's `onClose`. */
 function closeEntryAndDeeper(index: number): void {
-  while (chain.length > index) {
-    const entry = chain.pop()!;
+  const removed = chain.splice(index);
+  for (const entry of removed) {
     cancelEntryCloseTimer(entry);
-    entry.el.remove();
+    entry.popover.close();
   }
   if (chain.length === 0) rootTrigger = null;
 }
@@ -839,7 +847,7 @@ function truncateChainTo(maxDepth: number): void {
   while (chain.length > 0 && chain[chain.length - 1]!.depth > maxDepth) {
     const entry = chain.pop()!;
     cancelEntryCloseTimer(entry);
-    entry.el.remove();
+    entry.popover.close();
   }
 }
 
@@ -855,49 +863,6 @@ function depthFor(candidate: HTMLElement): number {
 function isAlreadyOpenAt(candidate: HTMLElement, depth: number): boolean {
   if (depth === 1) return rootTrigger === candidate;
   return chain.some((e) => e.depth === depth && e.triggerEl === candidate);
-}
-
-function buildPopupEl(content: HoverPreviewContent, depth: number): HTMLElement {
-  const popup = div('hover-preview-popup');
-  popup.dataset['depth'] = String(depth);
-  if (content.maxWidthPx !== undefined) popup.style.maxWidth = `${content.maxWidthPx}px`;
-  const bodyWrap = div('hp-body');
-  if (content.maxHeightPx !== undefined) bodyWrap.style.maxHeight = `${content.maxHeightPx}px`;
-  bodyWrap.append(content.body);
-  popup.append(el('div', 'hp-head', content.title), bodyWrap);
-  return popup;
-}
-
-/** Places the popup near the trigger, flipping above it when there is no room
- *  below, and clamping horizontally to the viewport — the same auto-adjust
- *  idea as `image-zoom.ts`'s `place()`. A CSS arrow (`--hp-arrow-left` + the
- *  `data-arrow` side) keeps the visual link to the trigger even after the
- *  clamp shifts the box sideways. */
-function positionPopup(popup: HTMLElement, trigger: HTMLElement): void {
-  const triggerRect = trigger.getBoundingClientRect();
-  const anchorX = triggerRect.left + triggerRect.width / 2;
-  const rect = popup.getBoundingClientRect();
-
-  let left = anchorX - rect.width / 2;
-  left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
-
-  let top = triggerRect.bottom + POPUP_OFFSET;
-  let arrowSide: 'top' | 'bottom' = 'top';
-  if (top + rect.height > window.innerHeight - 8) {
-    const above = triggerRect.top - POPUP_OFFSET - rect.height;
-    if (above >= 8) {
-      top = above;
-      arrowSide = 'bottom';
-    } else {
-      top = Math.max(8, window.innerHeight - rect.height - 8);
-    }
-  }
-
-  popup.style.left = `${Math.round(left)}px`;
-  popup.style.top = `${Math.round(top)}px`;
-  popup.dataset['arrow'] = arrowSide;
-  const arrowLeft = Math.max(14, Math.min(rect.width - 14, anchorX - left));
-  popup.style.setProperty('--hp-arrow-left', `${Math.round(arrowLeft)}px`);
 }
 
 async function doOpen(candidate: HTMLElement, depth: number): Promise<void> {
@@ -923,10 +888,33 @@ async function doOpen(candidate: HTMLElement, depth: number): Promise<void> {
   } else {
     truncateChainTo(depth - 1);
   }
-  const popupEl = buildPopupEl(content, depth);
-  document.body.append(popupEl);
-  positionPopup(popupEl, candidate);
-  chain.push({ depth, el: popupEl, triggerEl: candidate, closeTimer: null });
+
+  // Панель строит общий компонент `lib/ui`; движок оставляет себе только
+  // цепочку/таймеры. `closeOnOutsideClick: false` — поведение Ctrl+hover-
+  // предпросмотра (клик вне его никогда не закрывал) сохраняется. Ссылка на
+  // запись цепочки нужна обработчику `onClose` — держим её в изменяемой ячейке.
+  const holder: { entry: ChainEntry | null } = { entry: null };
+  const popover = openPopover({
+    anchor: { element: candidate },
+    content,
+    dataset: { depth: String(depth) },
+    closeOnOutsideClick: false,
+    onClose: () => {
+      // Компонент закрыл панель (Esc/прокрутка/blur) — синхронизируем цепочку.
+      const entry = holder.entry;
+      if (entry === null) return;
+      const index = chain.indexOf(entry);
+      if (index !== -1) closeEntryAndDeeper(index);
+    },
+  });
+  holder.entry = {
+    depth,
+    popover,
+    el: popover.element,
+    triggerEl: candidate,
+    closeTimer: null,
+  };
+  chain.push(holder.entry);
 }
 
 function tryScheduleOpen(candidate: HTMLElement): void {
@@ -980,12 +968,12 @@ export function initHoverPreview(): void {
 
   // Ctrl pressed while the cursor is already resting on a trigger (mirrors
   // `image-zoom.ts`'s keydown handling — no mousemove fires in that case).
+  // `Escape` closing the topmost popup, scroll-outside closing and window-blur
+  // closing are the shared component's job (`openPopover`); here Escape only
+  // cancels a still-pending debounced open.
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      // Closes only the topmost (deepest, last opened) popup, one Esc press
-      // at a time — not the whole chain (task fix, ETN 420a1f7e).
       cancelPendingOpen();
-      if (chain.length > 0) closeEntryAndDeeper(chain.length - 1);
       return;
     }
     if (event.key !== 'Control') return;
@@ -999,23 +987,12 @@ export function initHoverPreview(): void {
     if (event.key === 'Control') cancelPendingOpen();
   });
 
-  // A scroll elsewhere on the page (canvas pan, a zone/tree scrolling) leaves
-  // an anchored popup visually detached from its trigger — close the chain.
-  // Scrolling INSIDE one of our own popups (`.hp-body`, `.comment-view`) must
-  // not trigger this — capture-phase `scroll` fires for that target too, so
-  // it is explicitly excluded via `withinIsland`.
-  document.addEventListener(
-    'scroll',
-    (event) => {
-      if (chain.length === 0) return;
-      const target = event.target;
-      if (target instanceof Node && withinIsland(target)) return;
-      closeChain();
-    },
-    true,
-  );
+  // A scroll elsewhere (canvas pan, a zone/tree scrolling) leaves an anchored
+  // popup visually detached from its trigger — the shared component closes the
+  // panel then; scrolling INSIDE one of our own popups must not (also the
+  // component's rule). Only the pending-open debounce is still cancelled here
+  // on window blur.
   window.addEventListener('blur', () => {
-    closeChain();
     cancelPendingOpen();
   });
 }

@@ -26,7 +26,7 @@ export type IconName =
   | 'x'
   | 'mindmap'
   | 'tree'
-  | 'history'
+  | 'calendar-month'
   | 'activity'
   | 'plus'
   | 'trash'
@@ -92,10 +92,16 @@ const PATHS: Record<IconName, string> = {
     '<rect x="9" y="3" width="6" height="4" rx="1"/><rect x="3" y="17" width="6" height="4" rx="1"/>' +
     '<rect x="15" y="17" width="6" height="4" rx="1"/><path d="M12 7v6"/><path d="M6 13h12"/>' +
     '<path d="M6 13v4"/><path d="M18 13v4"/>',
-  // View switcher (L20): the chronicle timeline (lucide «history»).
-  history:
-    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>' +
-    '<path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  // View switcher (L20, ошибка 3e57ee11): «Хроника» — календарик месяца (лист
+  // с шапкой-месяцем и сеткой дней), а не часы: так понятнее, что это лента
+  // событий по датам. Сетка — 3 колонки (7 при глифе ~17px слились бы в шум);
+  // верхний ряд отделён линией-шапкой.
+  'calendar-month':
+    '<rect x="3" y="4" width="18" height="18" rx="2"/>' +
+    '<path d="M8 2v4"/><path d="M16 2v4"/>' +
+    '<path d="M3 10h18"/>' +
+    '<path d="M9 10v12"/><path d="M15 10v12"/>' +
+    '<path d="M3 15h18"/><path d="M3 19h18"/>',
   // View switcher (задача f27809d0 «События»): the activity log feed — lucide
   // «activity», a heartbeat-style polyline. Distinct from the chronicle clock.
   activity:

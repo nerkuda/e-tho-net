@@ -45,10 +45,10 @@ export function initDrafts(): void {
   store.subscribe(() => {
     const connected = isConnected();
     if (connected && !lastConnected) {
-      notice('Соединение восстановлено.');
+      notice('Соединение восстановлено.', 'success');
       void retryPendingDrafts();
     } else if (!connected && lastConnected && store.state.rtStatus === 'offline') {
-      notice('Соединение потеряно — правки сохраняются как черновики.', 'error');
+      notice('Соединение потеряно — правки сохраняются как черновики.', 'warning');
     }
     lastConnected = connected;
   });
@@ -140,7 +140,10 @@ export function canSave(): boolean {
 
 /** Blocks a save while offline: notifies and keeps the draft. */
 export function offlineNotice(): void {
-  notice('Нет соединения — правка сохранена как черновик и отправится после восстановления связи.');
+  notice(
+    'Нет соединения — правка сохранена как черновик и отправится после восстановления связи.',
+    'warning',
+  );
 }
 
 /** Re-sends every pending draft of the open network. */

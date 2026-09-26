@@ -24,8 +24,6 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { BASE_LAYER_ID, type Layer, type LayerColors } from '@etn/shared';
@@ -48,6 +46,7 @@ import {
   type LayerStyleTarget,
 } from '../src/renderer/lib/layer-colors.js';
 import { store } from '../src/renderer/state.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -377,10 +376,7 @@ describe('map label (0.6.4 §2.2a)', () => {
 });
 
 describe('styles.css rules the runtime relies on', () => {
-  const css = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'styles.css'),
-    'utf8',
-  );
+  const css = readFileSync(assembledStylesFile(), 'utf8');
 
   it('caps the focused thought at 78% of the canvas width', () => {
     const block = css.match(/\.cloud\.focus-cloud\s*\{[^}]*\}/)?.[0] ?? '';

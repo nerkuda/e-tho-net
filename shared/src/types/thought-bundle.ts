@@ -135,6 +135,14 @@ export interface ThoughtBundleResult {
   }>;
   attachments?: Attachment[];
   /**
+   * Id рёбер, материализованных применением link-дефолтов типа при СОЗДАНИИ
+   * мысли (ошибка 8655842b). Возвращаются, чтобы фасад опубликовал по ним
+   * `link.created` так же, как для `links[]` и set-записи свойств. Пусто/не
+   * задано — дефолтов-связей не было (или мысль не создавалась, а
+   * переиспользовалась/обновлялась).
+   */
+  default_link_ids?: string[];
+  /**
    * "Card completeness" warnings about the resulting card (task O6). Always
    * populated: empty array when the type has no `required` properties or all
    * of them are filled. The MCP layer surfaces this to the agent verbatim;

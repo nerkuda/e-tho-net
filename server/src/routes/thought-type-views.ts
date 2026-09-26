@@ -391,7 +391,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         //    переопределение «исполнялось» JS-сортировкой страницы по полям,
         //    которых нет в ThoughtRef. Тело переопределяет значения,
         //    сохранённые в определении отбора (контракт 95273103).
-        const result = runViewForThought(ndb, matched, thoughtId, req.auth!.user.id, req.id, {
+        const result = await runViewForThought(ndb, matched, thoughtId, req.auth!.user.id, req.id, {
           ...(sort !== undefined ? { sort } : {}),
           ...(order !== undefined ? { order } : {}),
           ...(limit !== undefined ? { limit } : {}),

@@ -35,10 +35,14 @@ import type {
   StructurePropertyOp,
   StructureSort,
 } from '@etn/shared';
+import { t } from './i18n.js';
 
-import { buildValueEditor, wrapClearable } from '../editor/value-editor.js';
+import { buildValueEditor } from '../editor/value-editor.js';
+import { wrapClearable } from './ui/field.js';
+import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
 import { buildEntityChipField, type EntityOption } from './entity-picker.js';
+import { collapsibleSection } from './ui/collapsible.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
 import {
   FILTER_ORDERS,
@@ -94,37 +98,42 @@ export interface FilterBlockOptions {
  * Блок формы: заголовок с маркером `*` и тело. Единственная реализация
  * блока на весь клиент — «Структуры», «Хроника», «События», диалог отбора
  * типа мысли и строка поиска строят свои группы этим конструктором.
+ * Сворачивание блока — общий компонент `lib/ui/collapsible.ts` (задача
+ * a57e7998): тело `st-f-body` готовится здесь, компонент показывает его и
+ * вращает каретку-треугольник.
  */
 export function buildFilterBlock(title: string, opts: FilterBlockOptions = {}): FilterSection {
-  const box = div('st-f-block');
-  const head = el('div', 'st-f-title');
-  const caret = opts.collapsible === true ? el('span', 'st-f-caret', '▸') : null;
-  if (caret !== null) head.classList.add('st-f-collapsible-title');
-  head.append(...(caret !== null ? [caret, el('span', '', title)] : [el('span', '', title)]));
-  const star = el('span', 'st-f-star', '');
-  head.append(star);
   const body = div('st-f-body');
-  box.append(head, body);
-
+  const star = el('span', 'st-f-star', '');
   const isNonEmpty = opts.isNonEmpty ?? ((): boolean => false);
+  const collapsible =
+    opts.collapsible === true && opts.getCollapsed !== undefined && opts.setCollapsed !== undefined;
+
+  const section = collapsibleSection({
+    title,
+    collapsible,
+    caretKind: 'triangle',
+    headerExtra: [star],
+    body,
+    getCollapsed: collapsible ? opts.getCollapsed : undefined,
+    onToggle: collapsible ? (value) => opts.setCollapsed!(value) : undefined,
+    classes: {
+      root: 'st-f-block',
+      header: collapsible ? 'st-f-title st-f-collapsible-title' : 'st-f-title',
+      caret: 'st-f-caret',
+      body: 'st-f-body',
+    },
+  });
+  const head = section.header;
+
   const refresh = (): void => {
     const active = isNonEmpty();
     head.classList.toggle('st-f-title-active', active);
     star.textContent = active ? ' *' : '';
-    if (caret !== null && opts.getCollapsed !== undefined) {
-      const collapsed = opts.getCollapsed();
-      body.classList.toggle('hidden', collapsed);
-      caret.textContent = collapsed ? '▸' : '▾';
-    }
+    if (collapsible) section.setCollapsed(opts.getCollapsed!());
   };
-  if (caret !== null && opts.setCollapsed !== undefined && opts.getCollapsed !== undefined) {
-    head.addEventListener('click', () => {
-      opts.setCollapsed!(!opts.getCollapsed!());
-      refresh();
-    });
-  }
   refresh();
-  return { id: title, box, body, head, star, isNonEmpty, refresh };
+  return { id: title, box: section.root, body, head, star, isNonEmpty, refresh };
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +213,7 @@ export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSecti
   }
   const clearBtn = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
   clearBtn.type = 'button';
-  setTooltip(clearBtn, 'Очистить');
+  setTooltip(clearBtn, t('actions.reset'));
   clearBtn.addEventListener('click', () => {
     ctx.getState().keywords = '';
     input.value = '';
@@ -371,7 +380,9 @@ export function buildConditionsSection(
     clear(box);
     const state = ctx.getState();
     if (state.properties.length === 0) {
-      box.append(el('div', 'st-f-empty', 'Условий нет'));
+      // Условий пока нет — общее пустое состояние с подсказкой, что сделать
+      // (задача d7b7c367): «Добавьте условие отбора».
+      box.append(emptyState({ title: t('filterForm.empty'), hint: t('filterForm.emptyHint') }));
       return;
     }
     state.properties.forEach((cond, index) => {
@@ -1120,10 +1131,10 @@ export function buildFilterFooterButtons(opts: {
   extra?: HTMLElement[];
 }): HTMLElement {
   const row = div('st-f-btnrow');
-  const apply = el('button', 'st-f-apply', opts.applyLabel ?? 'Применить');
+  const apply = el('button', 'st-f-apply', opts.applyLabel ?? t('actions.apply'));
   apply.type = 'button';
   apply.addEventListener('click', () => opts.onApply());
-  const clearBtn = el('button', 'st-f-clear', opts.clearLabel ?? 'Очистить');
+  const clearBtn = el('button', 'st-f-clear', opts.clearLabel ?? t('actions.reset'));
   clearBtn.type = 'button';
   clearBtn.addEventListener('click', () => opts.onClear());
   row.append(apply, clearBtn, ...(opts.extra ?? []));

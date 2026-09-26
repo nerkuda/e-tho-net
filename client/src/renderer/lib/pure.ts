@@ -39,6 +39,7 @@ import {
   SELECTION_W_MIN,
   splitCompoundTitle,
   type AnyRealtimeEvent,
+  type PropertyConfig,
   type RealtimeEventType,
 } from '@etn/shared';
 
@@ -67,6 +68,40 @@ export const CLOUD_BORDER = 1;
 const TITLE_LINE_FACTOR = 1.35;
 /** Indicators line-height factor relative to the font size (incl. 1px gap). */
 const IND_LINE_FACTOR = 1.1;
+
+/**
+ * Расхождение черновика формы с загруженным снимком (требование b58f6aad
+ * «Закрытие диалога-редактора с изменениями требует подтверждения»): `true`,
+ * если текущее значение отличается от исходного хотя бы в одном поле.
+ *
+ * Сравнение структурное (примитивы, массивы, простые объекты) — черновики
+ * диалогов-редакторов плоские. Годится только для сериализуемых значений
+ * полей: черновик, хранящий DOM-узлы или функции, таким снимком не покрыть
+ * (сравнивать нужно отдельно взятые значения полей, а не объект целиком).
+ */
+export function formDirty(initial: unknown, current: unknown): boolean {
+  return !sameField(initial, current);
+}
+
+/** Структурное равенство значений черновика (см. {@link formDirty}). */
+function sameField(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameField(item, b[index]));
+  }
+  if (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null) {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    if (keys.length !== Object.keys(right).length) return false;
+    return keys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) && sameField(left[key], right[key]),
+    );
+  }
+  return false;
+}
 
 /** Clamps a number into `[min, max]`. */
 export function clip(value: number, min: number, max: number): number {
@@ -153,6 +188,93 @@ export function cloudGeom(width: number, gap: number, zoom = 1): CloudGeom {
     gap: Math.round(gap * zoom),
     font: cloudFontSize(width, zoom),
     height: cloudHeight(width, zoom),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Anchoring of a zone's cloud grid to the focus thought (task f45ffc8a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Anchor of a canvas zone's cloud grid inside the zone box. The zones are
+ * absolute JS grids (`renderZoneContent` in `canvas/canvas.ts`), so the whole
+ * grid is shifted by `(zone size − content size) × anchor fraction` on each
+ * axis. The user order of the clouds (row-major) never changes — only the
+ * grid's origin moves.
+ */
+export type ZoneAnchor = 'right-bottom' | 'left-bottom' | 'center-top';
+
+/** An anchor as fractions of the free space: 0 — start, 0.5 — centre, 1 — end. */
+export interface ZoneAnchorFractions {
+  x: number;
+  y: number;
+}
+
+/** Fractions of an anchor, per axis. */
+export function anchorFractions(anchor: ZoneAnchor): ZoneAnchorFractions {
+  switch (anchor) {
+    case 'right-bottom':
+      return { x: 1, y: 1 };
+    case 'left-bottom':
+      return { x: 0, y: 1 };
+    case 'center-top':
+      return { x: 0.5, y: 0 };
+  }
+}
+
+/**
+ * Per-zone anchor (task f45ffc8a): the zones pull towards the focus row so the
+ * map reads as one cluster instead of scattered corners.
+ * - top-left (`parents`, above the focus on the left) — right-bottom: its last
+ *   row hugs the bottom edge (the focus row) and the rows right-align towards
+ *   the canvas centre;
+ * - top-right (`siblings`) — left-bottom: bottom edge to the focus row, rows
+ *   left-align towards the canvas centre;
+ * - bottom (`children`, below the focus) — center-top: its first row starts at
+ *   the top edge (the focus row), rows centred.
+ */
+export const ZONE_ANCHOR_BY_DIR: Record<'parents' | 'siblings' | 'children', ZoneAnchor> = {
+  parents: 'right-bottom',
+  siblings: 'left-bottom',
+  children: 'center-top',
+};
+
+/**
+ * Width of a zone grid's VISIBLE content: the widest row of clouds. The grid
+ * box cannot be used — `gridTemplateColumns` pins all `cols` columns, so a row
+ * with fewer clouds leaves the trailing columns empty while the box still
+ * spans almost the whole zone; anchoring by the box makes the horizontal
+ * offset vanish (приёмочный дефект f45ffc8a: the children zone's single
+ * partial row stayed left instead of centring). Row-major fill means only the
+ * last row can be partial, so the widest row holds `min(cols, count)` clouds.
+ * `count ≤ 0` (defensive) yields 0.
+ */
+export function zoneContentWidth(
+  cols: number,
+  count: number,
+  cloudWidth: number,
+  gap: number,
+): number {
+  const filled = Math.max(0, Math.min(Math.max(0, cols), count));
+  if (filled === 0) return 0;
+  return filled * cloudWidth + (filled - 1) * gap;
+}
+
+/**
+ * Grid origin inside its zone box: `(container − content) × anchor fractions`
+ * on each axis, never negative (content larger than the container is anchored
+ * to the start — the rest is reached by scrolling, never by a negative
+ * offset). Pure so the renderer and its tests share one formula.
+ */
+export function anchorOffset(
+  container: { width: number; height: number },
+  content: { width: number; height: number },
+  anchor: ZoneAnchor,
+): { x: number; y: number } {
+  const fractions = anchorFractions(anchor);
+  return {
+    x: Math.max(0, container.width - content.width) * fractions.x,
+    y: Math.max(0, container.height - content.height) * fractions.y,
   };
 }
 
@@ -695,6 +817,54 @@ export function parseListHeights(raw: string | null): Record<string, number> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Type-editor property split (ошибка 58807d03)
+// ---------------------------------------------------------------------------
+
+/**
+ * Стандартная доля верхней («унаследованные свойства») таблицы редактора типа
+ * — ровно половина свободной высоты вкладки «Свойства». Применяется, когда
+ * пользователь ещё не двигал сплиттер (нет сохранённого значения).
+ */
+export const TYPE_EDITOR_SPLIT_DEFAULT = 0.5;
+
+/** Нижняя граница доли: верхняя таблица не схлопывается до заголовка. */
+export const TYPE_EDITOR_SPLIT_MIN = 0.15;
+
+/** Верхняя граница доли: нижняя таблица не схлопывается до заголовка. */
+export const TYPE_EDITOR_SPLIT_MAX = 0.85;
+
+/**
+ * Прижимает долю сплиттера к допустимому диапазону. Мусор (NaN, ∞, доля вне
+ * диапазона) заменяется стандартной пропорцией — битое значение не должно
+ * обнулять или вырождать раскладку.
+ */
+export function clampTypeEditorSplit(value: number): number {
+  if (!Number.isFinite(value)) return TYPE_EDITOR_SPLIT_DEFAULT;
+  return clip(value, TYPE_EDITOR_SPLIT_MIN, TYPE_EDITOR_SPLIT_MAX);
+}
+
+/**
+ * Разбирает сохранённую в L4 долю сплиттера (обычная десятичная строка).
+ * Отсутствие значения (`null`/пусто) и нечисловой мусор дают стандартную
+ * пропорцию.
+ */
+export function parseTypeEditorSplit(raw: string | null): number {
+  if (raw === null || raw.trim() === '') return TYPE_EDITOR_SPLIT_DEFAULT;
+  return clampTypeEditorSplit(Number(raw));
+}
+
+/**
+ * Доля верхней таблицы по её пиксельной высоте и доступной высоте контейнера
+ * (пишется на отпускании сплиттера). Вырожденные входы (нет места, битый
+ * замер) дают стандартную пропорцию.
+ */
+export function splitRatioFromPx(topPx: number, availablePx: number): number {
+  if (!Number.isFinite(availablePx) || availablePx <= 0) return TYPE_EDITOR_SPLIT_DEFAULT;
+  if (!Number.isFinite(topPx)) return TYPE_EDITOR_SPLIT_DEFAULT;
+  return clampTypeEditorSplit(topPx / availablePx);
+}
+
 /** Parses `last_used_link_type_id` ui_state value (uuid or null). */
 export function parseLinkTypeId(raw: string | null): string | null {
   if (raw === null || raw.trim() === '') return null;
@@ -1106,4 +1276,335 @@ export function duplicateFilterName(name: string, existingNames: readonly string
 export function moveSavedFilterCursor(index: number, count: number, delta: number): number {
   if (count <= 0) return -1;
   return Math.min(count - 1, Math.max(0, index + delta));
+}
+
+/**
+ * Число «Свойств мыслей» для счётчика меню «Мыслесеть»: строки реестра
+ * свойств без системных структурных «Родители»/«Потомки» (у них
+ * `config.structural === true`, заводит миграция 039 — они не пользовательские
+ * свойства и в счётчик не входят). Реестр не хранится в store, поэтому счётчик
+ * считается из ответа `GET /networks/{nid}/properties` при открытии меню.
+ */
+export function countVisibleProperties(
+  rows: readonly { config: PropertyConfig | null }[],
+): number {
+  return rows.filter((row) => row.config?.structural !== true).length;
+}
+
+// ---------------------------------------------------------------------------
+// Focus-change animation plan (спека «FLIP-анимация холста», задача e9f0af94)
+// ---------------------------------------------------------------------------
+
+/** Rect subset used by {@link flipTransform} (viewport coordinates, px). */
+export interface RectLike {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * FLIP delta: the transform a cloud must START from so that, animating to
+ * `transform: none`, it lands exactly at `after`. `sx`/`sy` scale a zone cloud
+ * up into the larger focus cloud (and back). A zero-size target must not divide
+ * by zero (`max(1, …)`).
+ */
+export function flipTransform(
+  before: RectLike,
+  after: RectLike,
+): { dx: number; dy: number; sx: number; sy: number } {
+  return {
+    dx: before.left - after.left,
+    dy: before.top - after.top,
+    sx: before.width / Math.max(1, after.width),
+    sy: before.height / Math.max(1, after.height),
+  };
+}
+
+/** Zone a rendered cloud belongs to in the animation plan (`focus` — the focus row). */
+export type TransitionZone = 'focus' | 'parents' | 'siblings' | 'children';
+
+/** One node of a rendered layout, reduced to what the animation plan needs. */
+export interface TransitionNode {
+  id: string;
+  zone: TransitionZone;
+}
+
+/**
+ * Pure choreography plan for a focus change (спека «FLIP-анимация холста»):
+ * given the clouds rendered before and after the re-render, it classifies every
+ * id into the phase that must play it. The DOM orchestrator
+ * (`canvas/transition.ts`) owns the actual measurements, clones and timings —
+ * this function is the truth table behind them, unit-tested without a browser.
+ *
+ * Roles:
+ *  * `flyingId` — the selected thought: a clone of its new focus cloud flies
+ *    from its old zone slot into the centre (null when the focus did not change);
+ *  * `releasedFocus` — the former focus: it HOLDS the centre with its old
+ *    content until the flyer lands (своп содержимого только после приземления),
+ *    then leaves to its new zone (or fades);
+ *  * `leaving` — gone with the new focus, fade out during the flight;
+ *  * `entering` — new with the focus, fade in after the flight;
+ *  * `moving` — survivors that changed zone, glide to the new zone during flight;
+ *  * `settling` — survivors that only change slot inside their zone, they keep
+ *    the old position during the flight and settle into the new order after it.
+ */
+export interface TransitionPlan {
+  focusBefore: string | null;
+  focusAfter: string | null;
+  focusChanged: boolean;
+  flyingId: string | null;
+  releasedFocus: string | null;
+  leaving: string[];
+  entering: string[];
+  moving: string[];
+  settling: string[];
+  /** Anything worth animating at all (empty layouts and no-op re-renders are not). */
+  hasChanges: boolean;
+}
+
+/** Empty plan — nothing rendered on one of the sides, so nothing to animate. */
+function emptyTransitionPlan(
+  focusBefore: string | null,
+  focusAfter: string | null,
+): TransitionPlan {
+  return {
+    focusBefore,
+    focusAfter,
+    focusChanged: false,
+    flyingId: null,
+    releasedFocus: null,
+    leaving: [],
+    entering: [],
+    moving: [],
+    settling: [],
+    hasChanges: false,
+  };
+}
+
+/** Zone of a node by id, or null. */
+function zoneOf(nodes: readonly TransitionNode[], id: string): TransitionZone | null {
+  return nodes.find((node) => node.id === id)?.zone ?? null;
+}
+
+/**
+ * Builds the {@link TransitionPlan} for the pair of rendered layouts. First
+ * mounts (either side empty) plan nothing — there is no old layout to glide
+ * from.
+ */
+export function planFocusTransition(
+  before: readonly TransitionNode[],
+  after: readonly TransitionNode[],
+): TransitionPlan {
+  const focusBefore = before.find((node) => node.zone === 'focus')?.id ?? null;
+  const focusAfter = after.find((node) => node.zone === 'focus')?.id ?? null;
+  if (before.length === 0 || after.length === 0) {
+    return emptyTransitionPlan(focusBefore, focusAfter);
+  }
+
+  const focusChanged = focusBefore !== null && focusAfter !== null && focusBefore !== focusAfter;
+  const flyingId = focusChanged ? focusAfter : null;
+  // The old focus is handled by the held-content overlay; the new focus by the
+  // flyer. Their ids must not double as generic leavers/movers/settlers.
+  const special = new Set<string>();
+  if (focusChanged) {
+    special.add(focusBefore as string);
+    special.add(focusAfter as string);
+  }
+
+  const beforeIds = new Set(before.map((node) => node.id));
+  const afterById = new Map(after.map((node) => [node.id, node]));
+
+  const leaving: string[] = [];
+  for (const node of before) {
+    if (special.has(node.id)) continue;
+    if (!afterById.has(node.id)) leaving.push(node.id);
+  }
+
+  const entering: string[] = [];
+  for (const node of after) {
+    if (special.has(node.id)) continue;
+    if (!beforeIds.has(node.id)) entering.push(node.id);
+  }
+
+  const moving: string[] = [];
+  const settling: string[] = [];
+  for (const node of after) {
+    if (special.has(node.id)) continue;
+    if (!beforeIds.has(node.id)) continue;
+    if (zoneOf(before, node.id) !== node.zone) moving.push(node.id);
+    else settling.push(node.id);
+  }
+
+  // `settling` alone is NOT a change: the plan sees zones, not rects, so an
+  // untouched survivor is indistinguishable from one reordered inside its zone.
+  // The orchestrator compares real rects and decides whether such a slot move
+  // is visible (manual reorder, link change) — here only the unambiguous
+  // structural differences count.
+  const hasChanges =
+    focusChanged || leaving.length > 0 || entering.length > 0 || moving.length > 0;
+
+  return {
+    focusBefore,
+    focusAfter,
+    focusChanged,
+    flyingId,
+    releasedFocus: focusChanged ? focusBefore : null,
+    leaving,
+    entering,
+    moving,
+    settling,
+    hasChanges,
+  };
+}
+
+/** Пригоден ли прямоугольник как стартовая точка полёта (ненулевой размер). */
+function isUsableFlightRect(rect: RectLike | null): rect is RectLike {
+  return (
+    rect !== null &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+/**
+ * Стартовый прямоугольник клона выбранной мысли (первый кейфрейм полёта).
+ *
+ * `externalOrigin` — экранные координаты кликнутого элемента ВНЕ карты
+ * (облачко панели закреплённых/истории, строка поиска): при смене фокуса
+ * оттуда клон обязан вылетать «со стороны клика», даже если эта мысль уже
+ * стоит где-то на карте, поэтому внешний источник имеет приоритет над
+ * старым слотом облачка. Пригодный внешний прямоугольник отсутствует — берём
+ * слот выбранного облачка на карте (`canvasOrigin`). Оба непригодны — `null`,
+ * и вызывающий мягко деградирует до мгновенного свопа без полёта.
+ */
+export function resolveFocusFlightOrigin(
+  canvasOrigin: RectLike | null,
+  externalOrigin: RectLike | null,
+): RectLike | null {
+  if (isUsableFlightRect(externalOrigin)) return externalOrigin;
+  return isUsableFlightRect(canvasOrigin) ? canvasOrigin : null;
+}
+
+// ---------------------------------------------------------------------------
+// Размер файла в человекочитаемом виде (задача c69b078d, 0.9.1)
+// ---------------------------------------------------------------------------
+
+/** Единицы размера по возрастанию (байты → терабайты). */
+const FILE_SIZE_UNITS = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'] as const;
+
+/**
+ * Форматирует размер в байтах как «<число> <единица>» с авто-выбором
+ * КБ/МБ/ГБ (и ТБ как естественный предел): `0 → «0 Б»`, `1024 → «1 КБ»`,
+ * `1536 → «1,5 КБ»`. Дробная часть — до одного знака, разделитель — запятая
+ * (русская запись), целое — без дробной части. Некорректное или отрицательное
+ * значение трактуется как 0. Чистая функция — покрыта юнит-тестами.
+ */
+export function formatFileSize(bytes: number): string {
+  const safe = Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : 0;
+  if (safe < 1024) return `${safe} ${FILE_SIZE_UNITS[0]}`;
+  let value = safe / 1024;
+  let unit = 1;
+  while (value >= 1024 && unit < FILE_SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = Math.round(value * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
+  return `${text} ${FILE_SIZE_UNITS[unit]}`;
+}
+
+// ---------------------------------------------------------------------------
+// Заголовок меню слоёв: обрезка метки и полное имя в тултипе (задача 4388305f)
+// ---------------------------------------------------------------------------
+
+/**
+ * Предел длины метки-заголовка меню слоёв в кодпоинтах (задача 4388305f,
+ * решение пользователя 2026-09-26). Осознанное исключение из ADR 31e43436
+ * («Обрезка текста в интерфейсе — раскладкой, а не подсчётом символов»):
+ * ширина этого индикатора — часть контракта компоновки строки меню, поэтому
+ * показ ограничен числом кодпоинтов; полный текст всегда несёт тултип.
+ */
+export const LAYER_MENU_LABEL_MAX = 32;
+
+/** Метка заголовка меню слоёв, когда слой сессии не выбран (основа). */
+export const LAYER_MENU_LABEL_FALLBACK = 'Основа';
+
+/**
+ * Полное имя слоя для тултипа кнопки-заголовка: имя слоя, а для основы —
+ * «Основа». Тултип несёт полное имя всегда, независимо от того, обрезана ли
+ * метка (требование задачи 4388305f).
+ */
+export function layerMenuTooltip(title: string | null | undefined): string {
+  return title ?? LAYER_MENU_LABEL_FALLBACK;
+}
+
+/**
+ * Метка кнопки-заголовка меню слоёв: имя текущего слоя, не длиннее
+ * {@link LAYER_MENU_LABEL_MAX} кодпоинтов — при переполнении последние
+ * влезающие символы заменяются видимым «…» (33-й кодпоинт уже не влезает);
+ * слой не выбран — «Основа». Режем по кодпоинтам (не по UTF-16-единицам),
+ * чтобы не разрывать суррогатную пару (эмодзи). Чистая — юнит-тест.
+ */
+export function truncateLayerMenuLabel(title: string | null | undefined): string {
+  const full = layerMenuTooltip(title);
+  const points = Array.from(full);
+  if (points.length <= LAYER_MENU_LABEL_MAX) return full;
+  return `${points.slice(0, LAYER_MENU_LABEL_MAX - 1).join('')}…`;
+}
+
+// ---------------------------------------------------------------------------
+// Панель выделенных: точечное обновление строк (ошибка 3a64e680)
+// ---------------------------------------------------------------------------
+
+/**
+ * План разницы состава выделения для точечного обновления строк панели.
+ *
+ * Панель обязана перерисовываться ТОЛЬКО при изменении состава выделения, а
+ * строки — обновляться по разнице: полная пересборка списка на каждое событие
+ * магазина заставляла панель мигать и терять позицию прокрутки, а на время
+ * асинхронного resolve имена подменялись id (ошибка 3a64e680).
+ */
+export interface SelectionRowsPlan {
+  /** id, чьи строки надо убрать из списка (их больше нет в выделении). */
+  removed: string[];
+  /** Итоговый порядок строк — по нему существующие узлы переставляются. */
+  order: string[];
+}
+
+/**
+ * Считает разницу между прежним и новым составом выделения: какие строки
+ * убрать и в каком порядке расположить оставшиеся/новые. Порядок берётся из
+ * `next` (выделение — упорядоченный список): существующие строки лишь
+ * переставляются, повторно не создаются.
+ */
+export function planSelectionRows(
+  previous: readonly string[],
+  next: readonly string[],
+): SelectionRowsPlan {
+  const nextSet = new Set(next);
+  const removed = previous.filter((id) => !nextSet.has(id));
+  return { removed, order: [...next] };
+}
+
+/**
+ * Подписи строк панели выделенных: имя разрешённой мысли, для неразрешённой —
+ * ПРЕЖНЯЯ подпись, а при её отсутствии пустая строка. Идентификатор мысли в
+ * интерфейсе не показывается никогда (ошибка 3a64e680: пока ref-кэш
+ * переразрешался, панель на несколько секунд подменяла имена их id).
+ */
+export function selectionRowTitles(
+  ids: readonly string[],
+  resolved: ReadonlyMap<string, { title: string }>,
+  previous: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const id of ids) {
+    titles.set(id, resolved.get(id)?.title ?? previous.get(id) ?? '');
+  }
+  return titles;
 }

@@ -34,8 +34,9 @@ import { BASE_LAYER_ID } from '@etn/shared';
 import type { Logger } from '../logger.js';
 import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
 import { runMigrations } from './migrator.js';
-import { setupLayerContext } from './layer-chain.js';
+import { rebuildLayerSnapshot, setupLayerContext, type LayerContext } from './layer-chain.js';
 import { propertyValueId } from './property-value-id.js';
+import { applyConnectionPragmas } from './pragmas.js';
 
 /**
  * Process-wide registry of opened network databases, keyed by
@@ -91,17 +92,29 @@ export class NetworkDb {
    * go to the base layer until materialisation lands (S4+).
    */
   layerId: string;
-  /** Absolute path of the underlying `data.db` file (`:memory:` for tests). */
+  /** Абсолютный путь underlying `data.db` (`:memory:` for tests). */
   readonly dbPath: string;
   private readonly db: Database.Database;
   private closed = false;
+  /**
+   * Установленный контекст слоя (см. `layer-chain.ts`): цепочка предков, её
+   * подпись и признак «чтения идут по снапшоту видимости».
+   */
+  private layerContext: LayerContext;
+  /** Сигнал соединения на момент сборки снапшота (см. {@link readSignal}). */
+  private layerSignal = '';
+  /** Снапшот собран внутри транзакции соединения — на её исход он не опирается. */
+  private snapshotTxnScoped = false;
+  /** Кэш `SELECT total_changes()` — сигнальная проверка идёт на каждом чтении. */
+  private signalStmt: Database.Statement | null = null;
 
   constructor(db: Database.Database, networkId: string, dbPath: string, layerId: string = BASE_LAYER_ID) {
     this.db = db;
     this.networkId = networkId;
     this.dbPath = dbPath;
     this.layerId = layerId;
-    setupLayerContext(db, layerId);
+    this.layerContext = setupLayerContext(db, layerId);
+    this.layerSignal = this.readSignal();
   }
 
   /**
@@ -114,27 +127,114 @@ export class NetworkDb {
    */
   useLayer(layerId: string): void {
     this.assertOpen();
-    setupLayerContext(this.db, layerId);
+    this.layerContext = setupLayerContext(this.db, layerId, this.layerContext.key);
+    // Подпись та же — снапшот не пересобирался, и сигнал остаётся прежним:
+    // если данные с тех пор изменились, читатель пересоберёт снапшот сам.
+    if (this.layerContext.rebuilt) {
+      this.layerSignal = this.readSignal();
+      this.snapshotTxnScoped = false;
+    }
     this.layerId = layerId;
   }
 
   /**
-   * Compile a SQL string into a reusable {@link Database.Statement}. Domain
-   * services call this per-operation; `better-sqlite3` compilation is cheap and
-   * statements are safely GC-able once dropped.
+   * Compile a SQL string into a reusable {@link Database.Statement}.
+   *
+   * In a layer context, statements that return rows (SELECT…) additionally
+   * guard the layer visibility snapshot: before a read runs,
+   * {@link refreshLayerSnapshot} rebuilds the snapshot if the connection's write
+   * signal moved. This is the single choke point for reads, so no domain call
+   * site has to remember to invalidate; writes need no hook at all — the signal
+   * (`total_changes()` of this connection plus `PRAGMA data_version`, which
+   * catches commits of other connections) covers both own writes and foreign
+   * commits. In the base context there is no snapshot, so nothing is guarded.
    */
   prepare(sql: string): Database.Statement {
-    return this.db.prepare(sql);
+    const stmt = this.db.prepare(sql);
+    return stmt.reader && this.layerContext.usesSnapshot ? this.guardSnapshotRead(stmt) : stmt;
+  }
+
+  /**
+   * Signal of the connection's data state: row changes made by this connection
+   * (`total_changes()`, catches own writes including raw SQL and RETURNING)
+   * plus `data_version` (bumped by commits of OTHER connections — the WAL
+   * reader must not serve a stale layer snapshot after a foreign commit).
+   *
+   * Both parts are cheap scalars; the `total_changes` statement is cached.
+   */
+  private readSignal(): string {
+    this.signalStmt ??= this.db.prepare('SELECT total_changes() AS c');
+    const changes = (this.signalStmt.get() as { c: number }).c;
+    const dataVersion = this.db.pragma('data_version', { simple: true }) as number;
+    return `${dataVersion}:${changes}`;
+  }
+
+  /**
+   * Rebuild the layer visibility snapshot when the data state moved since it was
+   * built (ADR 6582c287: инвалидация при смене слоя и при изменении версий
+   * слоя в рамках соединения). The signal is re-read AFTER the rebuild because
+   * the rebuild itself writes to the temp snapshot tables and moves
+   * `total_changes()`.
+   *
+   * A rebuild that happened inside a transaction is transaction-scoped: SQLite
+   * rolls it back with the transaction, while the signal is a plain field and
+   * would not follow. Such a rebuild is remembered ({@link snapshotTxnScoped})
+   * and the signal is dropped on leaving the outermost transaction, so a
+   * rolled-back domain write cannot leave a snapshot of its intent behind.
+   */
+  private refreshLayerSnapshot(): void {
+    if (this.closed) return;
+    if (this.layerSignal !== '' && this.readSignal() === this.layerSignal) return;
+    rebuildLayerSnapshot(this.db);
+    this.layerSignal = this.readSignal();
+    this.snapshotTxnScoped = this.db.inTransaction;
+  }
+
+  /**
+   * Wrap a row-returning statement so every execution first refreshes the
+   * snapshot. Only `get`/`all`/`iterate` are intercepted; everything else is
+   * forwarded (getters like `reader` run with the real statement as `this`).
+   */
+  private guardSnapshotRead(stmt: Database.Statement): Database.Statement {
+    return new Proxy(stmt, {
+      get: (target, prop) => {
+        if (prop === 'get' || prop === 'all' || prop === 'iterate') {
+          const method = (target as unknown as Record<string, (...args: unknown[]) => unknown>)[
+            prop as string
+          ]!;
+          return (...args: unknown[]): unknown => {
+            this.refreshLayerSnapshot();
+            return method.apply(target, args);
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    }) as unknown as Database.Statement;
   }
 
   /**
    * Run `fn` inside a single SQLite transaction with automatic rollback on
-   * throw. Use to keep multi-statement domain operations atomic (e.g. creating
+   * throw. Use to keep multi-statement domain operations atomic (e.g., creating
    * a thought together with its link and synonyms).
+   *
+   * The layer snapshot is a transactional temp object: a rollback of this
+   * transaction also reverts a rebuild that happened inside it. Leaving the
+   * outermost transaction therefore marks the snapshot signal unknown when it
+   * was rebuilt in-transaction — the next read rebuilds from the committed
+   * state, so a rejected write cannot leave a snapshot of its rolled-back
+   * intent behind (see {@link refreshLayerSnapshot}).
    */
   transaction<T>(fn: () => T): T {
     const wrapped = this.db.transaction(fn);
-    return wrapped();
+    try {
+      return wrapped();
+    } finally {
+      if (this.snapshotTxnScoped && !this.db.inTransaction) {
+        this.snapshotTxnScoped = false;
+        this.layerSignal = '';
+      }
+    }
   }
 
   /** Execute raw SQL (multiple statements allowed). Used by migrations/tests. */
@@ -159,9 +259,33 @@ export class NetworkDb {
     }
   }
 
-  /** Close the underlying connection. Idempotent. */
+  /**
+   * Выполнить `PRAGMA optimize` перед закрытием соединения (требование
+   * 1119cbec, ADR 0fac2771): SQLite сам решает, для каких изменившихся таблиц
+   * обновить статистику. С SQLite 3.46+ объём анализа ограничивается
+   * автоматически (`analysis_limit` не нужен).
+   *
+   * Вынесено отдельным методом — точка наблюдаемости в тесте жизненного цикла
+   * соединения (`NetworkDb.close` обязан вызвать её ровно один раз).
+   */
+  protected optimizeStatisticsBeforeClose(): void {
+    this.db.pragma('optimize');
+  }
+
+  /**
+   * Close the underlying connection. Idempotent.
+   *
+   * Перед `close` вызывается {@link optimizeStatisticsBeforeClose}. Ошибку
+   * оптимизации проглатываем: закрытие соединения не должно падать из-за
+   * вспомогательной статистики.
+   */
   close(): void {
     if (this.closed) return;
+    try {
+      this.optimizeStatisticsBeforeClose();
+    } catch {
+      // Статистика — вспомогательная; закрытие важнее.
+    }
     this.db.close();
     this.closed = true;
   }
@@ -179,35 +303,69 @@ export interface MigrationHelpersContext {
 }
 
 /**
+ * Register the SQL functions used by DOMAIN QUERIES on any network connection
+ * (bug 883267ea).
+ *
+ * These are not migration-only helpers — read paths call them at runtime, so
+ * every connection that may execute a query must have them, not just the main
+ * thread's:
+ *
+ *   * `type_name_key` — the normalized type-name key (trim + lowercase, same
+ *     as shared `typeNameKey`) is used both by migration 017's backfill and by
+ *     property-service reads (`WHERE p.name_key = type_name_key(?)`);
+ *   * `unicode_lower` — case-folds non-ASCII text (SQLite's built-in `LOWER()`
+ *     only handles ASCII); the structures keyword filter matches the permanent
+ *     comment case-insensitively with it (03-server-api.md §6.10, bug fix
+ *     0.5.5).
+ *
+ * Single setup point shared by the main-thread connection
+ * ({@link openNetworkDb} / {@link createInMemoryNetworkDb}) and every
+ * read-only reader-worker connection (`db/reader-worker.ts`). Before the fix
+ * the worker applied only the pragma profile and failed with
+ * `no such function: unicode_lower` on any comment-scope keyword search that
+ * went through the reader pool.
+ */
+export function registerQueryFunctions(db: Database.Database): void {
+  db.function('type_name_key', (value: unknown) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  );
+  db.function('unicode_lower', (value: unknown) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  );
+}
+
+/**
  * Register SQL helpers used by network migrations.
  *
- * `type_name_key` computes the normalized type-name key (trim + lowercase,
- * same as shared `typeNameKey`) for the backfill in migration 017; `gen_uuid`
- * supplies row ids for `thought_synonyms`/`comment_targets` rows created
- * without an explicit id (migration 025); `unicode_lower` case-folds
- * non-ASCII text (SQLite's built-in `LOWER()` only handles ASCII) — used by
- * the structures keyword filter to match the permanent comment
- * case-insensitively (03-server-api.md §6.10, bug fix 0.5.5). Deliberately
- * registered WITHOUT the `deterministic` flag: SQLite folds a deterministic
- * no-argument function into a constant per statement, so
- * `INSERT … SELECT gen_uuid()` in 025 would give every row the same UUID and
- * trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)` does not require determinism
- * (only generated columns and index expressions do), so nothing is lost by
- * leaving the flag off.
- * `etn_first_user_id` exposes the id of the server's root administrator
- * (`is_first_user = 1`) for migrations that need to backfill authorship — see
- * task 38ba3498 / migration 033. Returns the empty string when the helper
- * context is not provided (tests / in-memory DBs without `_system.db`); the
- * migration interprets that as "fall back to a sentinel".
- * `etn_pv_id(owner_type, owner_id, property_id)` computes the deterministic
- * `property_values` id from the natural key (bug dc119240, migration 036) —
- * the SAME TypeScript code the domain write path uses
- * (db/property-value-id.ts), so the migration and runtime can never disagree
- * on an id. Registered WITH the `deterministic` flag: the function is pure,
- * and unlike `gen_uuid` folding it into a constant per statement is exactly
- * the desired semantics.
- * Both must exist on the connection before `runMigrations` executes. Exported
- * so tests that apply migrations to their own connections can register the
+ * Migration-only helpers (not needed by plain reads):
+ *
+ *   * `gen_uuid` supplies row ids for `thought_synonyms`/`comment_targets`
+ *     rows created without an explicit id (migration 025). Deliberately
+ *     registered WITHOUT the `deterministic` flag: SQLite folds a
+ *     deterministic no-argument function into a constant per statement, so
+ *     `INSERT … SELECT gen_uuid()` in 025 would give every row the same UUID
+ *     and trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)` does not require
+ *     determinism (only generated columns and index expressions do), so
+ *     nothing is lost by leaving the flag off.
+ *   * `etn_first_user_id` exposes the id of the server's root administrator
+ *     (`is_first_user = 1`) for migrations that need to backfill authorship —
+ *     see task 38ba3498 / migration 033. Returns the empty string when the
+ *     helper context is not provided (tests / in-memory DBs without
+ *     `_system.db`); the migration interprets that as "fall back to a
+ *     sentinel".
+ *   * `etn_pv_id(owner_type, owner_id, property_id)` computes the
+ *     deterministic `property_values` id from the natural key (bug dc119240,
+ *     migration 036) — the SAME TypeScript code the domain write path uses
+ *     (db/property-value-id.ts), so the migration and runtime can never
+ *     disagree on an id. Registered WITH the `deterministic` flag: the
+ *     function is pure, and unlike `gen_uuid` folding it into a constant per
+ *     statement is exactly the desired semantics.
+ *
+ * Migrations also use `type_name_key` (017, 021, 032, 042), so this function
+ * delegates to {@link registerQueryFunctions} and existing tests that apply
+ * migrations on their own connections keep working unchanged. The functions
+ * must exist on the connection before `runMigrations` executes. Exported so
+ * tests that apply migrations to their own connections can register the
  * helpers the same way production code does.
  */
 export function registerMigrationHelpers(
@@ -215,13 +373,8 @@ export function registerMigrationHelpers(
   ctx: MigrationHelpersContext = {},
 ): void {
   const firstUserId = ctx.firstUserId ?? '';
-  db.function('type_name_key', (value: unknown) =>
-    typeof value === 'string' ? value.trim().toLowerCase() : value,
-  );
+  registerQueryFunctions(db);
   db.function('gen_uuid', () => randomUUID());
-  db.function('unicode_lower', (value: unknown) =>
-    typeof value === 'string' ? value.toLowerCase() : value,
-  );
   db.function('etn_first_user_id', () => firstUserId);
   db.function(
     'etn_pv_id',
@@ -300,9 +453,22 @@ export function openNetworkDb(
   const db = new DatabaseConstructor(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // Единый профиль прагм соединения сети (ADR ff2ee606, требование bc312576):
+  // кэш, mmap, temp_store, synchronous, busy_timeout — в одной точке открытия.
+  applyConnectionPragmas(db);
   registerMigrationHelpers(db, { firstUserId: readFirstUserId(dataDir) });
 
-  runMigrations(db, networkMigrationsDir(), log);
+  const migrationResult = runMigrations(db, networkMigrationsDir(), log);
+
+  // Статистика планировщика — в конце применения миграций сети (требование
+  // 239be851, ADR 0fac2771): без неё планировщик строит O(мысли × рёбра) план
+  // (исследование 603a8bcb). Запускаем только когда миграции реально меняли
+  // схему/данные — на «степном» открытии статистика уже собрана, а полный
+  // ANALYZE на каждом старте не нужен. Любая правка схемы/индексов обязана
+  // заканчиваться ANALYZE, поэтому изменение гарантирует его выполнение.
+  if (migrationResult.applied.length > 0) {
+    db.exec('ANALYZE');
+  }
 
   // Object locks are session-only state — захваты не переживают рестарт
   // сервера (задача 2031df5e, требование 9ac48831 «сброс захватов — старт»).
@@ -393,7 +559,12 @@ export function closeAll(): void {
 export function createInMemoryNetworkDb(layerId: string = BASE_LAYER_ID): NetworkDb {
   const db = new DatabaseConstructor(':memory:');
   db.pragma('foreign_keys = ON');
+  applyConnectionPragmas(db);
   registerMigrationHelpers(db);
-  runMigrations(db, networkMigrationsDir());
+  const migrationResult = runMigrations(db, networkMigrationsDir());
+  // Тот же контракт, что и у файлового открытия: миграции оставили статистику.
+  if (migrationResult.applied.length > 0) {
+    db.exec('ANALYZE');
+  }
   return new NetworkDb(db, 'in-memory', ':memory:', layerId);
 }

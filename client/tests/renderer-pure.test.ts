@@ -58,12 +58,27 @@ import {
   shortenCompoundName,
   splitCompoundName,
   zoomStep,
+  TYPE_EDITOR_SPLIT_DEFAULT,
+  TYPE_EDITOR_SPLIT_MAX,
+  TYPE_EDITOR_SPLIT_MIN,
+  clampTypeEditorSplit,
+  parseTypeEditorSplit,
+  splitRatioFromPx,
+  formDirty,
+  formatFileSize,
+  countVisibleProperties,
+  flipTransform,
+  planFocusTransition,
+  resolveFocusFlightOrigin,
+  LAYER_MENU_LABEL_FALLBACK,
+  LAYER_MENU_LABEL_MAX,
+  layerMenuTooltip,
+  truncateLayerMenuLabel,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
-import { flipTransform } from '../src/renderer/canvas/transition.js';
 import { zoomable } from '../src/renderer/lib/image-zoom.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../src/renderer/state.js';
 
@@ -1028,6 +1043,114 @@ describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
   });
 });
 
+describe('planFocusTransition (focus-change choreography, задача e9f0af94)', () => {
+  const n = (id: string, zone: 'focus' | 'parents' | 'siblings' | 'children') => ({ id, zone });
+
+  it('a focus change flies the selected cloud and holds the old focus', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'children'), n('b', 'children')],
+      [n('a', 'focus'), n('f', 'children'), n('b', 'children'), n('d', 'children')],
+    );
+    assert.equal(plan.focusChanged, true);
+    assert.equal(plan.flyingId, 'a');
+    assert.equal(plan.releasedFocus, 'f');
+    assert.equal(plan.hasChanges, true);
+    // The old focus is handled by the held overlay, not as a generic leaver —
+    // and it is the flyer's origin, not a survivor to glide.
+    assert.deepEqual(plan.leaving, []);
+    assert.deepEqual(plan.moving, []);
+    assert.deepEqual(plan.settling, ['b']);
+    assert.deepEqual(plan.entering, ['d']);
+  });
+
+  it('a survivor that changed zone moves during the flight; the old focus stays special', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'children'), n('b', 'parents')],
+      [n('a', 'focus'), n('f', 'parents'), n('b', 'children')],
+    );
+    assert.deepEqual(plan.moving, ['b']);
+    assert.deepEqual(plan.settling, []);
+    // The old focus left the focus row for a zone — it is the held overlay's
+    // hand-off, never a plain mover.
+    assert.equal(plan.releasedFocus, 'f');
+  });
+
+  it('the old focus leaving the neighbourhood is neither ghosted nor entered', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'siblings'), n('b', 'siblings')],
+      [n('a', 'focus'), n('b', 'siblings')],
+    );
+    assert.deepEqual(plan.leaving, []);
+    assert.deepEqual(plan.entering, []);
+    assert.deepEqual(plan.settling, ['b']);
+  });
+
+  it('a same-focus refresh (zone animation) treats the focus cloud as ordinary', () => {
+    const plan = planFocusTransition(
+      [n('f', 'focus'), n('a', 'siblings')],
+      [n('f', 'focus'), n('a', 'parents')],
+    );
+    assert.equal(plan.focusChanged, false);
+    assert.equal(plan.flyingId, null);
+    assert.equal(plan.releasedFocus, null);
+    assert.deepEqual(plan.moving, ['a']);
+  });
+
+  it('plain appearance and disappearance are classified', () => {
+    const gone = planFocusTransition(
+      [n('f', 'focus'), n('a', 'siblings'), n('b', 'siblings')],
+      [n('f', 'focus'), n('a', 'siblings')],
+    );
+    assert.deepEqual(gone.leaving, ['b']);
+    assert.equal(gone.hasChanges, true);
+
+    const born = planFocusTransition([n('f', 'focus')], [n('f', 'focus'), n('a', 'children')]);
+    assert.deepEqual(born.entering, ['a']);
+  });
+
+  it('no-ops: an unchanged layout and a first mount plan nothing', () => {
+    const same = planFocusTransition([n('f', 'focus'), n('a', 'parents')], [n('f', 'focus'), n('a', 'parents')]);
+    assert.equal(same.hasChanges, false);
+
+    const firstMount = planFocusTransition([], [n('a', 'focus'), n('b', 'children')]);
+    assert.equal(firstMount.hasChanges, false);
+    assert.equal(firstMount.focusChanged, false);
+
+    const cleared = planFocusTransition([n('f', 'focus')], []);
+    assert.equal(cleared.hasChanges, false);
+  });
+});
+
+describe('resolveFocusFlightOrigin (источник полёта, дефект 2 задачи e9f0af94)', () => {
+  const canvas = { left: 100, top: 500, width: 100, height: 40 };
+  const external = { left: 700, top: 20, width: 120, height: 24 };
+
+  it('клик вне карты имеет приоритет над слотом на карте', () => {
+    assert.deepEqual(resolveFocusFlightOrigin(canvas, external), external);
+  });
+
+  it('без внешнего источника берётся старый слот облачка на карте', () => {
+    assert.deepEqual(resolveFocusFlightOrigin(canvas, null), canvas);
+    // Ненулевой прямоугольник обязателен — вырожденный внешний игнорируется.
+    assert.deepEqual(
+      resolveFocusFlightOrigin(canvas, { left: 0, top: 0, width: 0, height: 0 }),
+      canvas,
+    );
+  });
+
+  it('оба источника непригодны — null (мягкая деградация без полёта)', () => {
+    assert.equal(resolveFocusFlightOrigin(null, null), null);
+    assert.equal(resolveFocusFlightOrigin(null, { left: 5, top: 5, width: 0, height: 10 }), null);
+    assert.equal(
+      resolveFocusFlightOrigin(
+        { left: Number.NaN, top: 0, width: 10, height: 10 },
+        null,
+      ),
+      null,
+    );
+  });
+});
+
 describe('splitCompoundName (08-ui-spec §2.2.3)', () => {
   it('a name without dots is a single part', () => {
     assert.deepEqual(splitCompoundName('Проект А'), ['Проект А']);
@@ -1126,3 +1249,174 @@ describe('shortenCompoundName (08-ui-spec §2.2.3)', () => {
     assert.equal(shortenCompoundName('Задачи разработки', ['Задачи разработки']), 'Задачи разработки');
   });
 });
+
+describe('type-editor property split (ошибка 58807d03)', () => {
+  it('нет сохранённого значения — стандартная пропорция', () => {
+    assert.equal(parseTypeEditorSplit(null), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(parseTypeEditorSplit(''), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(parseTypeEditorSplit('   '), TYPE_EDITOR_SPLIT_DEFAULT);
+  });
+
+  it('нечисловой/битый мусор — стандартная пропорция', () => {
+    assert.equal(parseTypeEditorSplit('abc'), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(parseTypeEditorSplit('NaN'), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(clampTypeEditorSplit(Number.NaN), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(clampTypeEditorSplit(Number.POSITIVE_INFINITY), TYPE_EDITOR_SPLIT_DEFAULT);
+  });
+
+  it('корректное значение разбирается и прижимается к диапазону', () => {
+    assert.equal(parseTypeEditorSplit('0.5'), 0.5);
+    assert.equal(parseTypeEditorSplit('0.3'), 0.3);
+    assert.equal(parseTypeEditorSplit('0'), TYPE_EDITOR_SPLIT_MIN);
+    assert.equal(parseTypeEditorSplit('1'), TYPE_EDITOR_SPLIT_MAX);
+    assert.equal(parseTypeEditorSplit('-5'), TYPE_EDITOR_SPLIT_MIN);
+    assert.equal(parseTypeEditorSplit('42'), TYPE_EDITOR_SPLIT_MAX);
+  });
+
+  it('доля из пикселей: вырожденные входы дают стандарт', () => {
+    assert.equal(splitRatioFromPx(100, 0), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(splitRatioFromPx(100, -10), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(splitRatioFromPx(Number.NaN, 200), TYPE_EDITOR_SPLIT_DEFAULT);
+    assert.equal(splitRatioFromPx(Number.POSITIVE_INFINITY, 200), TYPE_EDITOR_SPLIT_DEFAULT);
+  });
+
+  it('доля из пикселей: нормальный расчёт и кламп', () => {
+    assert.equal(splitRatioFromPx(100, 200), 0.5);
+    assert.equal(splitRatioFromPx(20, 200), TYPE_EDITOR_SPLIT_MIN);
+    assert.equal(splitRatioFromPx(40, 200), 0.2);
+    assert.equal(splitRatioFromPx(190, 200), TYPE_EDITOR_SPLIT_MAX);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Сравнение черновика формы с загруженным снимком (требование b58f6aad)
+// ---------------------------------------------------------------------------
+
+describe('formDirty: сравнение черновика формы', () => {
+  it('примитивы, строки и null', () => {
+    assert.equal(formDirty('a', 'a'), false);
+    assert.equal(formDirty('a', 'b'), true);
+    assert.equal(formDirty('', ''), false);
+    assert.equal(formDirty(null, null), false);
+    assert.equal(formDirty(null, ''), true);
+    assert.equal(formDirty(0, 0), false);
+    assert.equal(formDirty(0, 1), true);
+    assert.equal(formDirty(true, false), true);
+  });
+
+  it('плоские объекты: отличие в любом поле', () => {
+    const base = { name: 'Тип', parentId: null, bold: false };
+    assert.equal(formDirty(base, { ...base }), false);
+    assert.equal(formDirty(base, { ...base, name: 'Иной' }), true);
+    assert.equal(formDirty(base, { ...base, bold: true }), true);
+    assert.equal(formDirty(base, { ...base, parentId: 'tt-2' }), true);
+  });
+
+  it('порядок ключей не важен', () => {
+    assert.equal(formDirty({ a: 1, b: 2 }, { b: 2, a: 1 }), false);
+  });
+
+  it('разная длина и содержимое массивов', () => {
+    assert.equal(formDirty([1, 2], [1, 2]), false);
+    assert.equal(formDirty([1, 2], [2, 1]), true);
+    assert.equal(formDirty([1, 2], [1, 2, 3]), true);
+    assert.equal(formDirty([], []), false);
+  });
+
+  it('вложенные структуры (черновик привязок)', () => {
+    const base = { rows: [{ id: 'a', required: false }], config: { multiple: true } };
+    const clone = structuredClone(base);
+    assert.equal(formDirty(base, clone), false);
+    const changed = structuredClone(base);
+    changed.rows[0]!.required = true;
+    assert.equal(formDirty(base, changed), true);
+    const extra = structuredClone(base);
+    extra.rows.push({ id: 'b', required: false });
+    assert.equal(formDirty(base, extra), true);
+    const config = structuredClone(base);
+    config.config.multiple = false;
+    assert.equal(formDirty(base, config), true);
+  });
+
+  it('разный набор ключей объекта — отличие', () => {
+    assert.equal(formDirty({ a: 1 }, { a: 1, b: 2 }), true);
+    assert.equal(formDirty({ a: 1, b: 2 }, { a: 1 }), true);
+  });
+});
+
+
+describe('countVisibleProperties — счётчик «Свойства мыслей» (a0cdd731)', () => {
+  it('не считает системные структурные свойства «Родители»/«Потомки»', () => {
+    assert.equal(countVisibleProperties([]), 0);
+    assert.equal(
+      countVisibleProperties([{ config: null }, { config: { structural: true } }, { config: {} }]),
+      2,
+    );
+    assert.equal(countVisibleProperties([{ config: { structural: true } }]), 0);
+  });
+});
+
+describe('formatFileSize — размер вложений (c69b078d)', () => {
+  it('авто-выбор единиц: байты → КБ → МБ → ГБ', () => {
+    assert.equal(formatFileSize(0), '0 Б');
+    assert.equal(formatFileSize(512), '512 Б');
+    assert.equal(formatFileSize(1023), '1023 Б');
+    assert.equal(formatFileSize(1024), '1 КБ');
+    assert.equal(formatFileSize(1536), '1,5 КБ');
+    assert.equal(formatFileSize(1024 * 1024), '1 МБ');
+    assert.equal(formatFileSize(1.5 * 1024 * 1024), '1,5 МБ');
+    assert.equal(formatFileSize(1024 * 1024 * 1024), '1 ГБ');
+    assert.equal(formatFileSize(2 * 1024 * 1024 * 1024), '2 ГБ');
+  });
+
+  it('некорректное и отрицательное значение трактуется как 0', () => {
+    assert.equal(formatFileSize(-5), '0 Б');
+    assert.equal(formatFileSize(Number.NaN), '0 Б');
+    assert.equal(formatFileSize(Number.POSITIVE_INFINITY), '0 Б');
+    assert.equal(formatFileSize(1024.4), '1 КБ', 'дробные байты округляются вниз до целых');
+  });
+});
+
+describe('truncateLayerMenuLabel — заголовок меню слоёв (задача 4388305f)', () => {
+  it('длинное имя обрезается: метка строго ≤32 кодпоинтов, последний — «…»', () => {
+    const long = 'А'.repeat(40);
+    const label = truncateLayerMenuLabel(long);
+    assert.equal(label, `${'А'.repeat(LAYER_MENU_LABEL_MAX - 1)}…`);
+    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX, 'видимая метка не длиннее лимита');
+  });
+
+  it('короткое имя (≤32) отдаётся как есть, без «…»', () => {
+    assert.equal(truncateLayerMenuLabel('Основа'), 'Основа');
+    assert.equal(truncateLayerMenuLabel(''), '');
+    const exact = 'Б'.repeat(LAYER_MENU_LABEL_MAX);
+    assert.equal(truncateLayerMenuLabel(exact), exact);
+    const over = 'Б'.repeat(LAYER_MENU_LABEL_MAX + 1);
+    assert.equal(truncateLayerMenuLabel(over), `${'Б'.repeat(LAYER_MENU_LABEL_MAX - 1)}…`);
+  });
+
+  it('резатся по кодпоинтам, а не по UTF-16-единицам (суррогатная пара цела)', () => {
+    const emoji = '😀'.repeat(40);
+    const label = truncateLayerMenuLabel(emoji);
+    assert.equal(label, `${'😀'.repeat(LAYER_MENU_LABEL_MAX - 1)}…`);
+    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX);
+  });
+
+  it('слой не выбран — «Основа»', () => {
+    assert.equal(truncateLayerMenuLabel(null), LAYER_MENU_LABEL_FALLBACK);
+    assert.equal(truncateLayerMenuLabel(undefined), LAYER_MENU_LABEL_FALLBACK);
+  });
+});
+
+describe('layerMenuTooltip — полное имя слоя в тултипе (задача 4388305f)', () => {
+  it('всегда отдаёт полное имя — и когда метка обрезана, и когда нет', () => {
+    const long = '0.9.1 — Дизайн-система клиентского интерфейса';
+    assert.equal(layerMenuTooltip(long), long);
+    assert.equal(layerMenuTooltip('В работе'), 'В работе');
+  });
+
+  it('слой не выбран — «Основа», тултип не пустой', () => {
+    assert.equal(layerMenuTooltip(null), LAYER_MENU_LABEL_FALLBACK);
+    assert.equal(layerMenuTooltip(undefined), LAYER_MENU_LABEL_FALLBACK);
+  });
+});
+

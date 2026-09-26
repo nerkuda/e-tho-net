@@ -1,0 +1,259 @@
+/**
+ * Стили фасада поля `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Базовые классы поля объявлены здесь и в `./field.ts` — старые
+ * (`.text-input`, `.textarea-input`, `.field`, `.field-label`,
+ * `.clearable-field`, `.clearable-clear`) удалены из `styles.css`. Значения
+ * перенесены без изменения плотности и размеров (визуальная преемственность):
+ * те же отступы, рамки, радиусы и токены ETN. Обе темы работают через токены —
+ * отдельного блока для `[data-theme='dark']` нет.
+ *
+ * Редакция 0.9.1 (требования 0dddd939/e2895c24): числа — по шкалам токенов;
+ * моноширинный шрифт многострочного поля — пользовательский токен
+ * (`--user-font-mono`), а не литеральная гарнитура.
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): полный набор — покой,
+ * `:hover` (рамка заметнее), `:active` (рамка акцентная на время нажатия),
+ * `:focus-visible` (рамка + мягкое кольцо `--accent-soft`), `:disabled`.
+ * Крестик очистки — отдельный контрол со своим набором. Переходы — по
+ * `--transition-hover` (гасятся при reduce-motion).
+ *
+ * Модификаторы (`--multiline`, `--disabled`) — часть словаря; прикладные
+ * классы-владельцы (`st-f-input`, `entity-chip-input`) идут через `extraClass`
+ * и остаются в `styles.css`.
+ */
+
+.ui-input {
+  width: 100%;
+  height: var(--field-h);
+  padding: var(--control-pad-y) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+  transition:
+    border-color var(--transition-hover) ease,
+    box-shadow var(--transition-hover) ease,
+    background-color var(--transition-hover) ease;
+}
+
+.ui-input:hover:not(:disabled):not([readonly]) {
+  border-color: var(--text-faint);
+}
+
+.ui-input:active:not(:disabled):not([readonly]) {
+  border-color: var(--accent);
+}
+
+.ui-input:focus,
+.ui-input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent-soft);
+}
+
+.ui-input:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.ui-input[readonly] {
+  background: var(--surface-2);
+}
+
+.ui-textarea {
+  /* Многострочное поле высотой не ограничено единой высотой однострочного
+     (требование b0e0e5a4): растягивается вручную, минимум — токен. */
+  height: auto;
+  resize: vertical;
+  min-height: var(--field-textarea-min-h);
+  font-family: var(--user-font-mono);
+  font-size: var(--font-size-s);
+}
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  /* Контейнер строки поля: перестроение — по её ширине (требование a08c2c4a).
+     Подпись и подсказка всегда идут над контролом (колонка ниже), поэтому на
+     узком контейнере перекладка подписи не нужна — ужимаются служебные
+     обёртки (свотч цвета, строка hex). */
+  container-type: inline-size;
+  container-name: ui-field;
+}
+
+.ui-field-label {
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+.ui-field-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+.ui-field--disabled {
+  opacity: 0.45;
+}
+
+/* Поле с угловым «✕» очистки значения (перенесено из `wrapClearable`).
+   Обёртка любого одиночного поля — значение свойства, поля дат фильтра. */
+.ui-clearable {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+}
+
+.ui-clearable .ui-input {
+  width: 100%;
+  padding-right: var(--field-clearable-pad-right);
+}
+
+.ui-clearable .st-f-input {
+  padding-right: var(--field-clearable-pad-right);
+}
+
+.ui-clearable-btn {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--hit-area);
+  height: var(--hit-area);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-none);
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-clearable-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+.ui-clearable-btn:active:not(:disabled) {
+  color: var(--accent);
+  background: var(--bg-active);
+}
+
+.ui-clearable-btn:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-clearable-btn:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* Невидимая зона нажатия углового крестика — не меньше тач-таргета
+   (требование 5677bc3d): сам крестик остаётся `--hit-area`. */
+.ui-clearable-btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
+}
+
+/* --- поле цвета (ColorField) -------------------------------------------- */
+
+.ui-color-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.ui-color-input {
+  width: var(--field-color-swatch-w);
+  height: var(--control-h);
+  padding: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--transition-hover) ease;
+}
+
+.ui-color-input:hover:not(:disabled) {
+  border-color: var(--text-faint);
+}
+
+.ui-color-input:active:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.ui-color-input:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-color-input:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.ui-color-hex {
+  width: var(--field-color-hex-w);
+  padding: var(--control-pad-y) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+  font-family: var(--user-font-mono);
+  text-transform: lowercase;
+  transition:
+    border-color var(--transition-hover) ease,
+    box-shadow var(--transition-hover) ease;
+}
+
+.ui-color-hex:hover:not(:disabled):not([readonly]) {
+  border-color: var(--text-faint);
+}
+
+.ui-color-hex:active:not(:disabled):not([readonly]) {
+  border-color: var(--accent);
+}
+
+.ui-color-hex:focus,
+.ui-color-hex:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent-soft);
+}
+
+.ui-color-hex:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* Узкая строка поля: свотч цвета и hex переносятся в столбик (hex — во всю
+   ширину), а не выдавливают друг друга за границу контейнера. Порог —
+   структурная константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-field (max-width: 220px) {
+  .ui-color-field {
+    flex-wrap: wrap;
+  }
+
+  .ui-color-hex {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+
+  .ui-clearable {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+}

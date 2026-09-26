@@ -366,12 +366,12 @@ const THOUGHT_KEYWORD_COND = `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
 ) OR EXISTS (
   SELECT 1 FROM comments_v c1
   JOIN comment_targets_v ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
-  WHERE ct1.owner_id = t.id AND c1.body_md LIKE ? ESCAPE '\\'
+  WHERE ct1.owner_id = t.id AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
 ) OR EXISTS (
   SELECT 1 FROM comments_v c2
   JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
   JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
-  WHERE c2.body_md LIKE ? ESCAPE '\\'
+  WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
 ))`;
 
 /**
@@ -403,12 +403,16 @@ function selectThoughts(
     }
   }
   for (const word of includeWords) {
-    const pattern = buildLikePattern(word);
+    // `toLowerCase()` — LIKE в SQLite регистронезависим только для ASCII, а
+    // `title_norm`/`synonym_norm`/`unicode_lower(body_md)` уже в нижнем
+    // регистре: без нормализации слова кириллица в другом регистре не
+    // матчилась (ошибка 2f27f244). Тот же приём, что в query-service.
+    const pattern = buildLikePattern(word.toLowerCase());
     where.push(THOUGHT_KEYWORD_COND);
     args.push(pattern, pattern, pattern, pattern);
   }
   for (const word of excludeWords) {
-    const pattern = buildLikePattern(word);
+    const pattern = buildLikePattern(word.toLowerCase());
     where.push(`NOT ${THOUGHT_KEYWORD_COND}`);
     args.push(pattern, pattern, pattern, pattern);
   }

@@ -254,8 +254,6 @@ export const PROPERTY_BINDING_SERVICE_FIELDS: readonly string[] = [
   'description_overridden',
 ];
 
-const PROPERTY_BINDING_SERVICE = new Set<string>(PROPERTY_BINDING_SERVICE_FIELDS);
-
 /**
  * Снять сервисные поля привязки с одной записи `properties[]`
  * ({@link PROPERTY_BINDING_SERVICE_FIELDS}); прочие поля (`key`, `value_type`,

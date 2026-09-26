@@ -31,31 +31,33 @@
  */
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
-// Строки кандидатов-дублей рисует общая фабрика облачка мысли.
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+// Строки кандидатов-дублей рисует общая выпадашка подсказок (общая сборка
+// строки) — собственной разметки списка нет (требование d1cd2095).
+import { buildSuggestRow, type SuggestEntry } from '../lib/suggest-dropdown.js';
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { footerErrorLine } from '../lib/ui/messages.js';
+import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
-import { buildEntityCombo, loadCrossNetworkCandidates } from '../lib/entity-picker.js';
+import { buildEntityCombo, loadCrossNetworkCandidates, type LinkPropertyPick } from '../lib/entity-picker.js';
 import {
   buildPropertyListRows,
   ensurePropertyLinkTypes,
   type PropertyListRow,
 } from '../lib/property-list.js';
-import {
-  buildLinkPropertyField,
-  LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
-  type LinkPropertyPick,
-} from '../lib/link-property-field.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
+import { uiButton } from '../lib/ui/button.js';
+import { fieldTextarea } from '../lib/ui/field.js';
+import { radioRow } from '../lib/ui/choice-row.js';
+import { fieldRow } from '../lib/ui/field.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
 export type ThoughtPickItem =
@@ -73,11 +75,19 @@ export type ThoughtPickItem =
   | { kind: 'new'; title: string; synonyms: string[]; raw: string };
 
 /**
- * Выбранное в диалоге СВОЙСТВО-связь — тип и поведение компонента поля
- * (`lib/link-property-field.ts`, ошибка dc175a5b). Реэкспорт: карточка диалога
- * и его потребители адресуют значение одним именем.
+ * Ширина выпадашек диалога добавления, px (ошибка 5c7f8376): списки типа мысли
+ * и свойства связи заметно шире узкого поля и должны совпадать по ширине.
+ * Выпадашка общего комбо-пикера позиционируется абсолютно и может быть шире
+ * поля. 560px — по фидбэку приёмки (прежние 640 были избыточны).
  */
-export type { LinkPropertyPick } from '../lib/link-property-field.js';
+export const ADD_DIALOG_DROPDOWN_MIN_WIDTH = 560;
+
+/**
+ * Выбранное в диалоге СВОЙСТВО-связь — значение четвёртого источника общего
+ * комбо-пикера (`lib/entity-picker.ts`, требование cdb6b52f). Реэкспорт:
+ * карточка диалога и его потребители адресуют значение одним именем.
+ */
+export type { LinkPropertyPick } from '../lib/entity-picker.js';
 
 /** Result of {@link pickThoughtsDialog} (null = cancelled). */
 export interface ThoughtPickResult {
@@ -205,11 +215,12 @@ function thoughtToCandidate(thought: Thought): DuplicateHit {
 }
 
 /**
- * Варианты поля «Свойство связи» строит переиспользуемый компонент
- * (`lib/link-property-field.ts`, ошибка dc175a5b): одна строка на КАЖДОЕ имя
- * стороны свойства-связи (прямое — источник, обратное — назначение) со
- * значком направления, как в общем списке свойств. Пункт «без свойства» —
- * связь создаётся бестиповой в направлении диалога.
+ * Варианты поля «Свойство связи» строит четвёртый источник общего комбо-пикера
+ * (`buildEntityCombo`, `kind: 'link-properties'`, требование cdb6b52f): одна
+ * строка на КАЖДОЕ имя стороны свойства-связи (прямое — источник, обратное —
+ * назначение) со значком направления, как в общем списке свойств. Пустое
+ * значение — свойство не выбрано: связь создаётся бестиповой в направлении
+ * диалога.
  */
 
 let mounted = false;
@@ -390,19 +401,11 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const lines: AddLine[] = [];
 
     const modeRow = div('add-mode-row');
-    const singleRadio = el('input');
-    singleRadio.type = 'radio';
-    singleRadio.name = 'add-mode';
-    singleRadio.checked = !multi;
-    const multiRadio = el('input');
-    multiRadio.type = 'radio';
-    multiRadio.name = 'add-mode';
-    multiRadio.checked = multi;
-    const singleLabel = el('label', 'checkbox-row');
-    singleLabel.append(singleRadio, span('одна'));
-    const multiLabel = el('label', 'checkbox-row');
-    multiLabel.append(multiRadio, span('несколько'));
-    modeRow.append(singleLabel, multiLabel);
+    const singleOpt = radioRow({ label: 'одна', name: 'add-mode', checked: !multi });
+    const multiOpt = radioRow({ label: 'несколько', name: 'add-mode', checked: multi });
+    const singleRadio = singleOpt.input;
+    const multiRadio = multiOpt.input;
+    modeRow.append(singleOpt.row, multiOpt.row);
     singleRadio.addEventListener('change', () => {
       multi = false;
       // Switching «несколько» → «одна» drops the accumulated list (карточка ETN
@@ -422,7 +425,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // Starts hidden unless the prefill switched multi mode on.
     const lineList = div(multi ? 'add-list' : 'add-list hidden');
 
-    const input = el('textarea', 'textarea-input');
+    const input = fieldTextarea();
     input.rows = 2;
     input.placeholder =
       allowCreate ? 'Введите название или вставьте список…' : 'Введите название для поиска…';
@@ -442,7 +445,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       emptyLabel: 'без типа',
       // Однообразная ширина выпадашек диалога (ошибка 5c7f8376): список типов
       // шире узкого поля и не уступает по ширине списку свойства связи.
-      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
+      dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         newThoughtTypeId = typeId;
       },
@@ -458,7 +461,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       placeholder: 'без типа',
       emptyLabel: 'без типа',
       // Та же ширина, что у списка типа мысли (ошибка 5c7f8376).
-      dropdownMinWidth: LINK_PROPERTY_DROPDOWN_MIN_WIDTH,
+      dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
         linkTypeId = typeId;
         store.update({ lastUsedLinkTypeId: typeId });
@@ -468,8 +471,10 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       },
     });
 
-    // Поле «Свойство связи» (ошибка 1dd08949; компонент — ошибка dc175a5b):
-    // вместо типа связи — СВОЙСТВО-связь отдельными пунктами по именам сторон.
+    // Поле «Свойство связи» (ошибка 1dd08949; с версии 0.9.1 — четвёртый
+    // источник общего комбо-пикера, требование cdb6b52f): вместо типа связи —
+    // СВОЙСТВО-связь отдельными пунктами по именам сторон, тем же полем, что
+    // «Тип мысли» (кнопка «…», единый вид), пустое значение — «без свойства».
     // Выбранное имя стороны адресует серверу и свойство, и направление ребра;
     // свойство заполняется у добавляемой мысли значением якоря. Строки (реестр +
     // имена сторон) готовит вызывающий. Тип связи при этом не выбирается вовсе —
@@ -479,27 +484,42 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       ? opts.linkProperty?.rows ?? []
       : [];
     let linkPropertyPick: LinkPropertyPick | null = null;
-    const linkPropertyField = buildLinkPropertyField({
-      rows: propertyRows,
-      onChange: (pick) => {
-        linkPropertyPick = pick;
+    const linkPropertyCombo = buildEntityCombo({
+      networkId,
+      kind: 'link-properties',
+      value: null,
+      placeholder: t('linkProperty.empty'),
+      emptyLabel: t('linkProperty.empty'),
+      pickerTitle: t('linkProperty.pickerTitle'),
+      // Однообразная ширина выпадашек диалога (ошибка 5c7f8376).
+      dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
+      linkPropertyRows: () => propertyRows,
+      onChange: () => undefined,
+      onChangeEntity: (option) => {
+        linkPropertyPick = option?.linkProperty ?? null;
       },
     });
 
-    const candidates = div('dup-list');
-    const errorLine = span('', 'error-text');
+    const candidates = div('add-candidates');
+    const errorLine = footerErrorLine();
 
     const body = div('form-stack');
     const typeRow = div('add-types-row');
-    const thoughtTypeField = div('field add-types-field');
-    thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
-    const linkTypeField = div('field add-types-field');
-    linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
-    const linkPropertyFieldWrap = div('field add-types-field');
-    linkPropertyFieldWrap.append(
-      el('label', 'field-label', 'Свойство связи'),
-      linkPropertyField.root,
-    );
+    const thoughtTypeField = fieldRow({
+      label: 'Тип мысли',
+      control: thoughtTypeCombo.root,
+      class: 'add-types-field',
+    });
+    const linkTypeField = fieldRow({
+      label: 'Тип связи',
+      control: linkTypeCombo.root,
+      class: 'add-types-field',
+    });
+    const linkPropertyFieldWrap = fieldRow({
+      label: 'Свойство связи',
+      control: linkPropertyCombo.root,
+      class: 'add-types-field add-link-property-combo',
+    });
     if (allowCreate) typeRow.append(thoughtTypeField);
     if (allowLinkProperty) typeRow.append(linkPropertyFieldWrap);
     else if (allowLinkType) typeRow.append(linkTypeField);
@@ -520,7 +540,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // исключительно кросс-режим (ea04a185), охват задан принудительно.
     const searchRow = div('add-search-row');
     searchRow.append(input);
-    body.append(modeRow, searchRow, hintLine, candidates, lineList, errorLine);
+    body.append(modeRow, searchRow, hintLine, candidates, lineList);
     if (crossNetwork !== undefined) {
       const note = el(
         'p',
@@ -602,7 +622,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                 );
                 return;
               }
-              errorLine.textContent = errText(err);
+              errorLine.show(errText(err));
             }
             return;
           }
@@ -628,7 +648,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
               ),
             );
           } catch (err) {
-            errorLine.textContent = errText(err);
+            errorLine.show(errText(err));
           }
         })();
       }, 200);
@@ -656,7 +676,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       // ↓ moves into the found-thoughts list (keyboard path of picking a
       // candidate); Tab reaches it as the next tab stop.
       if (event.key === 'ArrowDown') {
-        const first = candidates.querySelector<HTMLElement>('.dup-item');
+        const first = candidates.querySelector<HTMLElement>('.type-combo-item');
         if (first !== null) {
           event.preventDefault();
           first.focus();
@@ -726,7 +746,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       }
       const first = lastCandidates[0];
       if (first === undefined) {
-        errorLine.textContent = 'Совпадений нет — создание новых мыслей отключено.';
+        errorLine.show('Совпадений нет — создание новых мыслей отключено.');
         return null;
       }
       return {
@@ -760,7 +780,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       );
       const resolvedId = existingId ?? exact?.id ?? null;
       if (resolvedId !== null && lines.some((l) => l.existingId === resolvedId)) {
-        errorLine.textContent = 'Эта мысль уже в списке.';
+        errorLine.show('Эта мысль уже в списке.');
         return;
       }
       lines.push({
@@ -771,7 +791,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         matchKind: matchKind ?? exact?.matched_on ?? null,
         networkId: resolvedId !== null ? candidateNetworks.get(resolvedId) ?? null : null,
       });
-      errorLine.textContent = '';
+      errorLine.clear();
       renderLines();
     }
 
@@ -786,7 +806,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         matchKind: 'title',
         networkId: candidate.network_id ?? null,
       });
-      errorLine.textContent = '';
+      errorLine.clear();
       renderLines();
     }
 
@@ -796,15 +816,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       const head = div('add-list-head');
       head.append(span(`Выбрано: ${lines.length}`, 'muted'));
       head.append(
-        button(
-          'Очистить',
-          () => {
+        uiButton({
+          label: t('actions.reset'),
+          role: 'secondary',
+          size: 's',
+          title: 'Очистить список',
+          onClick: () => {
             lines.length = 0;
             renderLines();
           },
-          'btn small',
-          'Очистить список',
-        ),
+        }),
       );
       lineList.append(head);
       lines.forEach((line, index) => {
@@ -818,15 +839,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         title.title = line.raw;
         row.append(status, title);
         row.append(
-          button(
-            '×',
-            () => {
+          uiButton({
+            label: '×',
+            role: 'secondary',
+            size: 's',
+            title: 'Удалить строку',
+            onClick: () => {
               lines.splice(index, 1);
               renderLines();
             },
-            'btn small',
-            'Удалить строку',
-          ),
+          }),
         );
         lineList.append(row);
       });
@@ -836,47 +858,49 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     function renderCandidates(list: DuplicateHit[]): void {
       candidates.replaceChildren();
       if (list.length === 0) return;
-      candidates.append(el('p', 'muted', 'Найденные мысли:'));
+      candidates.append(el('p', 'muted', t('addDialog.candidatesHeader')));
       for (const candidate of list) {
-        // Строка-облачко — общая фабрика (профиль `tree`, ширина — по ширине
-        // списка): значок, цвета и начертание мысли; так равные имена легко
-        // отличить друг от друга, а длинное имя обрезается многоточием по
-        // ширине списка, а не по холстовым 200px (ошибка a42ea662).
-        // Жесты фабрики не подходят — строка это цель выбора, поэтому
-        // облачко строится чисто визуальным, а клик/клавиатуру вешает диалог.
-        const row = createThoughtCloud(candidate, {
-          profile: 'tree',
-          width: 'container',
-        });
-        row.classList.add('dup-item');
+        // Точность совпадения (точное имя / синоним / частичное) показана
+        // подсказкой строки, а не пометкой в ней (08-ui-spec.md §4.2).
+        const matchLabel =
+          candidate.matched_on === 'title'
+            ? t('addDialog.matchExact')
+            : candidate.matched_on === 'synonym'
+              ? t('addDialog.matchSynonym', candidate.matched_synonym ?? '')
+              : t('addDialog.matchPartial');
+        // Строка-облачко — общая сборка строки выпадашки (профиль `tree`,
+        // ширина — по ширине списка): значок, цвета и начертание мысли; так
+        // равные имена легко отличить друг от друга, а длинное имя обрезается
+        // многоточием по ширине списка, а не по холстовым 200px (ошибка
+        // a42ea662). Жесты выпадашки не подходят — строка это цель выбора,
+        // поэтому клик/клавиатуру вешает диалог; строка фокусируема.
+        const entry: SuggestEntry = {
+          value: candidate.id,
+          label: candidate.title,
+          thought: candidate,
+          tooltip:
+            candidate.synonyms.length > 0
+              ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
+              : `${candidate.title} — ${matchLabel}`,
+        };
         // В кросс-сетевом режиме (ea04a185) у чужой мысли родитель внутри её
         // сети мало что говорит пользователю текущей сети; подпись «сеть»
         // снимает неоднозначность одноимённых мыслей в разных сетях
-        // (ошибка defcd811). Цвет другой — чтобы не путать с локальным
+        // (ошибка defcd811). Цвет акцентный — чтобы не путать с локальным
         // «родителем», который остаётся в обычном режиме.
         if (crossNetwork !== undefined && typeof candidate.network_id === 'string' && candidate.network_id !== '') {
-          const netName = networkDisplayName(candidate.network_id);
-          const net = span(netName, 'dup-network');
-          net.title = candidate.network_id;
-          row.append(net);
+          entry.trailing = {
+            text: networkDisplayName(candidate.network_id),
+            tone: 'accent',
+            tooltip: candidate.network_id,
+          };
         } else if (candidate.parent_title !== null) {
           // The parent's title instead of the «использовать» button — the whole
           // row is the pick target (08-ui-spec.md §4.2). Full parent name in the
           // tooltip; the visible length is limited by layout.
-          const parent = span(candidate.parent_title, 'dup-parent');
-          parent.title = candidate.parent_title;
-          row.append(parent);
+          entry.trailing = { text: candidate.parent_title, tooltip: candidate.parent_title };
         }
-        const matchLabel =
-          candidate.matched_on === 'title'
-            ? 'точное имя'
-            : candidate.matched_on === 'synonym'
-              ? `синоним «${candidate.matched_synonym ?? ''}»`
-              : 'частичное совпадение';
-        row.title =
-          candidate.synonyms.length > 0
-            ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
-            : `${candidate.title} — ${matchLabel}`;
+        const row = buildSuggestRow(entry, { cloudProfile: 'tree', focusable: true });
         row.addEventListener('click', () => {
           pickCandidate(candidate);
         });
@@ -899,7 +923,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
             event.preventDefault();
             const next =
               event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
-            if (next instanceof HTMLElement && next.classList.contains('dup-item')) {
+            if (next instanceof HTMLElement && next.classList.contains('type-combo-item')) {
               next.focus();
               next.scrollIntoView({ block: 'nearest' });
             } else if (event.key === 'ArrowUp') {
@@ -1050,9 +1074,12 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const closeSelf = showDialog({
       title,
       body,
-      width: 620,
+      size: 'm',
+      // Ошибка выбора/ввода — строкой в панели кнопок, а не в теле:
+      // единственное обязательное место ошибки диалога (требование 397c5a56).
+      footerError: errorLine,
       buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
+        { label: t('actions.cancel'), onClick: () => finish(null) },
         {
           label: applyLabel,
           primary: true,
@@ -1063,7 +1090,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       // Ctrl+Shift+Enter applies the list and focuses the first inserted item
       // from any field except the found-thoughts list (the field-level handler
       // on `input` already does `preventDefault`, so the dialog handler is a
-      // no-op there; the dup-item rows also call `preventDefault`, so the
+      // no-op there; the candidate rows also call `preventDefault`, so the
       // shortcut does not fire while the caret sits in the candidate list).
       extraShortcuts: {
         ctrlShiftEnter: () => apply(true),

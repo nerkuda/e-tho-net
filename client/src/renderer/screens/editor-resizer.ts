@@ -13,6 +13,8 @@
 
 import { EDITOR_H_MAX, EDITOR_H_MIN, EDITOR_W_MAX, EDITOR_W_MIN, UI_STATE_KEY } from '@etn/shared';
 import { etn } from '../lib/etn.js';
+import { t } from '../lib/i18n.js';
+import { wireSplitter, type SplitterPlan } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
 
 /** Minimum canvas size preserved when the editor is dragged to its largest. */
@@ -20,21 +22,6 @@ const MIN_CANVAS_W = 200;
 const MIN_CANVAS_H = 160;
 /** Debounce for persisting the layout after a drag, ms. */
 const PERSIST_DEBOUNCE_MS = 400;
-
-interface DragPlan {
-  /** Which pointer axis drives the resize. */
-  axis: 'x' | 'y';
-  /** +1 when dragging in the positive axis direction grows the editor, else -1. */
-  sign: 1 | -1;
-  /** Editor size at drag start, px. */
-  startSize: number;
-  /** Pointer position at drag start, px. */
-  startX: number;
-  startY: number;
-  /** Clamped `[min, max]` range for the editor size during this drag. */
-  min: number;
-  max: number;
-}
 
 let persistTimer: number | null = null;
 
@@ -69,68 +56,52 @@ export function scheduleLayoutPersist(): void {
 /**
  * Wires the resizer element: `pointerdown` starts a drag, moving the pointer
  * resizes the editor (the canvas takes the rest). No-op while the editor is
- * hidden.
+ * hidden. The pointer-drag lifecycle is the shared `lib/ui/splitter` component
+ * (задача 50f57b82); here only the editor's dock-dependent policy lives.
  */
 export function mountEditorResizer(resizer: HTMLElement, body: HTMLElement): void {
-  resizer.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    const pos = currentPosition(body);
-    if (pos === 'hidden') return;
+  let horizontal = false;
 
-    const horizontal = pos === 'left' || pos === 'right';
-    const startSize = horizontal ? store.state.editorW : store.state.editorH;
-    const bodySize = horizontal ? body.clientWidth : body.clientHeight;
-    const canvasMin = horizontal ? MIN_CANVAS_W : MIN_CANVAS_H;
-    const hardMin = horizontal ? EDITOR_W_MIN : EDITOR_H_MIN;
-    const hardMax = horizontal ? EDITOR_W_MAX : EDITOR_H_MAX;
-    // Keep at least `canvasMin` for the canvas; never below the editor hardMin.
-    const max = Math.min(hardMax, Math.max(hardMin + 1, bodySize - canvasMin));
+  wireSplitter(resizer, {
+    stateHost: () => body,
+    stateClass: 'resizing',
+    plan: (): SplitterPlan | null => {
+      const pos = currentPosition(body);
+      if (pos === 'hidden') return null;
 
-    // Drag direction sign: for left/top docks the editor is on the leading side,
-    // so dragging into the body grows it; for right/bottom it shrinks it.
-    const sign: 1 | -1 = pos === 'left' || pos === 'top' ? 1 : -1;
+      horizontal = pos === 'left' || pos === 'right';
+      // Доступное имя — по текущей оси дока (док меняется на ходу).
+      resizer.title = t('splitter.resizeHint');
+      resizer.setAttribute(
+        'aria-label',
+        horizontal ? t('splitter.resizeAriaHorizontal') : t('splitter.resizeAriaVertical'),
+      );
+      const startSize = horizontal ? store.state.editorW : store.state.editorH;
+      const bodySize = horizontal ? body.clientWidth : body.clientHeight;
+      const canvasMin = horizontal ? MIN_CANVAS_W : MIN_CANVAS_H;
+      const hardMin = horizontal ? EDITOR_W_MIN : EDITOR_H_MIN;
+      const hardMax = horizontal ? EDITOR_W_MAX : EDITOR_H_MAX;
+      // Keep at least `canvasMin` for the canvas; never below the editor hardMin.
+      const max = Math.min(hardMax, Math.max(hardMin + 1, bodySize - canvasMin));
 
-    const plan: DragPlan = {
-      axis: horizontal ? 'x' : 'y',
-      sign,
-      startSize,
-      startX: event.clientX,
-      startY: event.clientY,
-      min: hardMin,
-      max,
-    };
+      // Drag direction sign: for left/top docks the editor is on the leading side,
+      // so dragging into the body grows it; for right/bottom it shrinks it.
+      const sign: 1 | -1 = pos === 'left' || pos === 'top' ? 1 : -1;
 
-    event.preventDefault();
-    resizer.setPointerCapture(event.pointerId);
-    resizer.classList.add('dragging');
-    body.classList.add('resizing');
-
-    const varName = horizontal ? '--editor-w' : '--editor-h';
-
-    const onMove = (ev: PointerEvent): void => {
-      const delta = plan.axis === 'x' ? ev.clientX - plan.startX : ev.clientY - plan.startY;
-      const raw = plan.startSize + plan.sign * delta;
-      const size = Math.round(Math.min(plan.max, Math.max(plan.min, raw)));
+      return {
+        axis: horizontal ? 'x' : 'y',
+        sign,
+        start: startSize,
+        min: hardMin,
+        max,
+      };
+    },
+    apply: (size) => {
+      const varName = horizontal ? '--editor-w' : '--editor-h';
       body.style.setProperty(varName, `${size}px`);
       if (horizontal) store.update({ editorW: size });
       else store.update({ editorH: size });
       scheduleLayoutPersist();
-    };
-    const onUp = (ev: PointerEvent): void => {
-      resizer.removeEventListener('pointermove', onMove);
-      resizer.removeEventListener('pointerup', onUp);
-      resizer.removeEventListener('pointercancel', onUp);
-      try {
-        resizer.releasePointerCapture(ev.pointerId);
-      } catch {
-        /* already released — ignore */
-      }
-      resizer.classList.remove('dragging');
-      body.classList.remove('resizing');
-    };
-
-    resizer.addEventListener('pointermove', onMove);
-    resizer.addEventListener('pointerup', onUp);
-    resizer.addEventListener('pointercancel', onUp);
+    },
   });
 }

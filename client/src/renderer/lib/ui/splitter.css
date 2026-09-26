@@ -1,0 +1,50 @@
+/* Сплиттер `lib/ui` (задача 50f57b82). Здесь — только то, что общее у всех
+ * разделителей: гриф и его вид. Раскладку (размер шва, положение, курсор)
+ * задаёт владелец своим классом в styles.css — у каждой панели она своя.
+ *
+ * Специфичность: правила ниже — одиночный класс (0,1,0), модификаторы
+ * владельцев поверх них поднимать по специфичности, а не полагаться на
+ * порядок в бандле (грабли 36889dd6). Свойства здесь с владельческими не
+ * пересекаются, поэтому база ничего не перебивает.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): размеры — по шкалам токенов.
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): гриф — покой, `:hover`,
+ * `:active`/`.dragging` (нажатие и перетаскивание), `:focus-visible`
+ * (кольцо из токенов). Отключения у грифа нет: разделитель не имеет
+ * `disabled`-контракта, поэтому состояние недоступности не объявляется.
+ * Переходы — по `--transition-hover`. */
+
+.ui-splitter {
+  touch-action: none;
+}
+
+/* Грип: видимый глиф по центру шва. Отдельный класс нужен потому, что у
+ * тонких шовных разделителей глифа нет (`grip: null`). */
+.ui-splitter--grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: var(--font-size-3xs);
+  letter-spacing: var(--letter-spacing-wide);
+  user-select: none;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-splitter--grip:hover,
+.ui-splitter--grip:active,
+.ui-splitter--grip.dragging {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+/* Кольцо фокуса: разделитель достигается клавиатурой, когда владелец даёт ему
+   фокус; состояние объявлено из общих токенов и обязано быть видимым. */
+.ui-splitter--grip:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}

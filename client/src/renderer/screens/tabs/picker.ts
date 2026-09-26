@@ -20,18 +20,23 @@
  *  └──────────────────────────────────────────────────────┘
  */
 import { openNetwork } from '../../app.js';
-import { button, div, el, errText, span } from '../../lib/dom.js';
+import { t } from '../../lib/i18n.js';
+import { div, el, errText, span } from '../../lib/dom.js';
+import { errorParagraph, footerErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { NetworkListItem } from '@etn/shared';
 import { upsertTab } from './tab-state.js';
 import { refreshTabAccessibility } from './tab-accessibility.js';
+import { uiButton } from '../../lib/ui/button.js';
+import { fieldInput } from '../../lib/ui/field.js';
+import { badge } from '../../lib/ui/badge.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
-  const badge = span(role === 'owner' ? 'владелец' : 'участник', 'role-badge');
-  if (role === 'owner') badge.classList.add('owner');
-  return badge;
+  return badge(role === 'owner' ? 'владелец' : 'участник', {
+    tone: role === 'owner' ? 'warn' : 'accent',
+  });
 }
 
 /**
@@ -41,14 +46,24 @@ function roleBadge(role: string): HTMLElement {
  * revoked network is reflected immediately.
  */
 export function mountPicker(host: HTMLElement): void {
-  const errorLine = el('p', 'error-text');
+  const errorLine = errorParagraph();
   errorLine.hidden = true;
 
   const title = el('h1', 'picker-title', 'Открыть сеть');
   const subtitle = el('p', 'picker-sub muted', 'Выберите сеть или создайте новую. Закрыть — любой другой таб.');
 
-  const createButton = button('+ Создать сеть', () => void showCreateDialog(), 'btn primary');
-  const cancelButton = button('Отмена', () => closePicker(), 'btn');
+  const createButton = uiButton({
+    label: '+ Создать сеть',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void showCreateDialog(),
+  });
+  const cancelButton = uiButton({
+    label: t('actions.cancel'),
+    role: 'secondary',
+    size: 'm',
+    onClick: () => closePicker(),
+  });
   const actions = div('picker-actions');
   actions.append(createButton, cancelButton);
 
@@ -112,53 +127,61 @@ export function mountPicker(host: HTMLElement): void {
   }
 
   async function showCreateDialog(): Promise<void> {
-    const nameInput = el('input', 'text-input');
+    const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.maxLength = 200;
     nameInput.placeholder = 'Название';
-    const descInput = el('input', 'text-input');
+    const descInput = fieldInput();
     descInput.type = 'text';
     descInput.maxLength = 2000;
     descInput.placeholder = 'Описание (необязательно)';
-    const dialogError = span('', 'error-text');
+    const dialogError = footerErrorLine();
     const body = div('form-stack');
-    body.append(nameInput, descInput, dialogError);
+    body.append(nameInput, descInput);
 
     const { showDialog } = await import('../../lib/dialog.js');
     let busy = false;
+    /** Создание сети и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+    async function create(close: () => void): Promise<void> {
+      if (busy) return;
+      const name = nameInput.value.trim();
+      if (name === '') {
+        dialogError.show('Введите название сети.', { field: () => nameInput });
+        return;
+      }
+      busy = true;
+      try {
+        const network = await etn.networks.create(name, descInput.value.trim() || undefined);
+        close();
+        // Refresh the cache BEFORE opening so the tab strip can show
+        // the freshly-created network's display_name right away.
+        await refreshNetworkList();
+        await pickNetwork(network.id);
+      } catch (err) {
+        dialogError.show(errText(err));
+      } finally {
+        busy = false;
+      }
+    }
     showDialog({
       title: 'Создать мыслесеть',
       body,
-      width: 460,
+      size: 's',
+      // Ошибка создания — в панели кнопок (требование 397c5a56).
+      footerError: dialogError,
+      // Грязная форма (требование b58f6aad): Esc/крестик при заполненных полях
+      // требуют подтверждения; «Сохранить» идёт тем же путём, что «Создать».
+      dirty: {
+        isDirty: () => nameInput.value.trim() !== '' || descInput.value.trim() !== '',
+        save: (close) => void create(close),
+      },
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         {
           label: 'Создать',
           primary: true,
           keepOpen: true,
-          onClick: (close) => {
-            void (async () => {
-              if (busy) return;
-              const name = nameInput.value.trim();
-              if (name === '') {
-                dialogError.textContent = 'Введите название сети.';
-                return;
-              }
-              busy = true;
-              try {
-                const network = await etn.networks.create(name, descInput.value.trim() || undefined);
-                close();
-                // Refresh the cache BEFORE opening so the tab strip can show
-                // the freshly-created network's display_name right away.
-                await refreshNetworkList();
-                await pickNetwork(network.id);
-              } catch (err) {
-                dialogError.textContent = errText(err);
-              } finally {
-                busy = false;
-              }
-            })();
-          },
+          onClick: (close) => void create(close),
         },
       ],
       onMount: () => nameInput.focus(),

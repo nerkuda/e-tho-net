@@ -5,9 +5,14 @@
  * and the canvas resize live. The new width is persisted to the L4
  * `window_layout` ui_state via the shared debounced writer (see
  * `editor-resizer.ts`), so it survives restarts alongside the editor sizes.
+ *
+ * The pointer-drag lifecycle is the shared `lib/ui/splitter` component
+ * (задача 50f57b82).
  */
 
 import { SELECTION_W_MAX, SELECTION_W_MIN } from '@etn/shared';
+import { t } from '../lib/i18n.js';
+import { wireSplitter } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
 import { scheduleLayoutPersist } from './editor-resizer.js';
 
@@ -20,44 +25,28 @@ const MIN_CANVAS_W = 200;
  * panel is hidden (the element is hidden along with it).
  */
 export function mountSelectionResizer(resizer: HTMLElement, body: HTMLElement): void {
-  resizer.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
-
-    const startSize = store.state.selectionW;
-    const startX = event.clientX;
-    // Keep at least `MIN_CANVAS_W` for the canvas; never below the panel min.
-    const max = Math.min(
-      SELECTION_W_MAX,
-      Math.max(SELECTION_W_MIN + 1, body.clientWidth - MIN_CANVAS_W),
-    );
-
-    event.preventDefault();
-    resizer.setPointerCapture(event.pointerId);
-    resizer.classList.add('dragging');
-    body.classList.add('resizing');
-
-    const onMove = (ev: PointerEvent): void => {
-      const raw = startSize + (ev.clientX - startX);
-      const size = Math.round(Math.min(max, Math.max(SELECTION_W_MIN, raw)));
+  wireSplitter(resizer, {
+    stateHost: () => body,
+    stateClass: 'resizing',
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaHorizontal'),
+    plan: () => {
+      // Keep at least `MIN_CANVAS_W` for the canvas; never below the panel min.
+      const max = Math.min(
+        SELECTION_W_MAX,
+        Math.max(SELECTION_W_MIN + 1, body.clientWidth - MIN_CANVAS_W),
+      );
+      return {
+        axis: 'x',
+        start: store.state.selectionW,
+        min: SELECTION_W_MIN,
+        max,
+      };
+    },
+    apply: (size) => {
       body.style.setProperty('--selection-w', `${size}px`);
       store.update({ selectionW: size });
       scheduleLayoutPersist();
-    };
-    const onUp = (ev: PointerEvent): void => {
-      resizer.removeEventListener('pointermove', onMove);
-      resizer.removeEventListener('pointerup', onUp);
-      resizer.removeEventListener('pointercancel', onUp);
-      try {
-        resizer.releasePointerCapture(ev.pointerId);
-      } catch {
-        /* already released — ignore */
-      }
-      resizer.classList.remove('dragging');
-      body.classList.remove('resizing');
-    };
-
-    resizer.addEventListener('pointermove', onMove);
-    resizer.addEventListener('pointerup', onUp);
-    resizer.addEventListener('pointercancel', onUp);
+    },
   });
 }

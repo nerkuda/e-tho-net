@@ -172,6 +172,39 @@ function ensureOwnerExists(ndb: NetworkDb, ownerType: CommentOwnerType, ownerId:
   }
 }
 
+/**
+ * Сдвинуть «последнюю активность» владельца при изменении его комментариев
+ * (ошибка 228df7a4): добавление/правка/удаление комментария меняет хронологию
+ * владельца, поэтому `updated_at`/`updated_at_ms`/`updated_by` обязаны
+ * обновиться — иначе фильтры и сортировки по `updated_at` не видят свежую
+ * запись, а карточка выглядит «не обновлявшейся».
+ *
+ * `version` НЕ трогаем: ревизия содержимого владельца (для optimistic
+ * concurrency, требование c9cd976b) от активности комментариев не меняется —
+ * правка комментария роняет свою версию сама. Это осознанное отличие от
+ * `touchOwner` в `property-service.ts`, где правка значения приравнена к правке
+ * владельца требованием e6d4165e (там версия растёт).
+ *
+ * Открывает теневую копию владельца в текущем слое (S4) и обновляет только
+ * строку этого слоя — как остальные доменные записи.
+ */
+function touchOwnerActivity(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+  actorUserId: string,
+): void {
+  const table = ownerType === 'thought' ? 'thoughts' : 'links';
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  materializeShadow(ndb, table, ownerId);
+  ndb
+    .prepare(
+      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?`,
+    )
+    .run(now, actorUserId, nowMs, ownerId, ndb.layerId);
+}
+
 /** Return a comment by id, or `null` when absent. */
 export function getComment(ndb: NetworkDb, id: string): Comment | null {
   const row = ndb.prepare('SELECT * FROM comments_v WHERE id = ? LIMIT 1').get(id) as
@@ -534,6 +567,11 @@ export function createCommentWithTargets(
     for (const t of targets) {
       insertTarget.run(id, t.owner_type, t.owner_id, ndb.layerId);
     }
+    // Комментарий появился у владельца — двигаем его «последнюю активность»
+    // (ошибка 228df7a4).
+    for (const t of targets) {
+      touchOwnerActivity(ndb, t.owner_type, t.owner_id, actorUserId);
+    }
     return getCommentOrThrow(ndb, id);
   });
 }
@@ -608,6 +646,10 @@ export function updateComment(
     ndb
       .prepare(`UPDATE comments SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
       .run(...args);
+    // Правка комментария — активность и у его владельцев (ошибка 228df7a4).
+    for (const t of current.targets) {
+      touchOwnerActivity(ndb, t.owner_type, t.owner_id, actorUserId);
+    }
     return getCommentOrThrow(ndb, id);
   });
 }
@@ -694,6 +736,7 @@ export function deleteComment(
   ndb: NetworkDb,
   id: string,
   expectedVersion: number | undefined,
+  actorUserId: string,
 ): void {
   ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
@@ -713,10 +756,14 @@ export function deleteComment(
       ).map((r) => r.id);
       for (const targetId of targetIds) materializeTombstone(ndb, 'comment_targets', targetId);
       materializeTombstone(ndb, 'comments', id);
-      return;
+    } else {
+      ndb.prepare('DELETE FROM comment_targets WHERE comment_id = ?').run(id);
+      ndb.prepare('DELETE FROM comments WHERE id = ?').run(id);
     }
-    ndb.prepare('DELETE FROM comment_targets WHERE comment_id = ?').run(id);
-    ndb.prepare('DELETE FROM comments WHERE id = ?').run(id);
+    // Удаление комментария — тоже активность владельцев (ошибка 228df7a4).
+    for (const t of current.targets) {
+      touchOwnerActivity(ndb, t.owner_type, t.owner_id, actorUserId);
+    }
   });
 }
 
@@ -770,6 +817,8 @@ export function addCommentTarget(
       )
       .run(commentId, ot, ownerId, ndb.layerId);
     bumpVersion(ndb, commentId, current.version, actorUserId);
+    // Новый владелец получил хроно-запись — двигаем его активность.
+    touchOwnerActivity(ndb, ot, ownerId, actorUserId);
     return getCommentOrThrow(ndb, commentId);
   });
 }
@@ -835,6 +884,9 @@ export function removeCommentTarget(
       owner_type: r.owner_type as CommentOwnerType,
       owner_id: r.owner_id,
     }));
+    // Запоминаем, что комментарий при откреплении последней цели переехал на
+    // HOME: у HOME хроно-запись появилась, её активность тоже надо сдвинуть.
+    let reattachedToHome: CommentTarget | null = null;
     if (rest.length === 0) {
       // Last target detached — fall back to the protected HOME thought.
       const home = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
@@ -849,6 +901,7 @@ export function removeCommentTarget(
         )
         .run(commentId, 'thought', home.id, ndb.layerId);
       rest = [{ owner_type: 'thought', owner_id: home.id }];
+      reattachedToHome = rest[0]!;
     }
 
     const wasPrimary = current.owner_type === ot && current.owner_id === ownerId;
@@ -879,6 +932,12 @@ export function removeCommentTarget(
         );
     } else {
       bumpVersion(ndb, commentId, current.version, actorUserId);
+    }
+    // Отсоединённый владелец потерял хроно-запись, а при откреплении последней
+    // цели её получил HOME — двигаем активность обоих (ошибка 228df7a4).
+    touchOwnerActivity(ndb, ot, ownerId, actorUserId);
+    if (reattachedToHome !== null) {
+      touchOwnerActivity(ndb, reattachedToHome.owner_type, reattachedToHome.owner_id, actorUserId);
     }
     return getCommentOrThrow(ndb, commentId);
   });

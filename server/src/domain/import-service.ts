@@ -360,24 +360,6 @@ function uniqueImportedTitle(ndb: NetworkDb, base: string): string {
   }
 }
 
-function readExistingThoughtTypeIds(ndb: NetworkDb, ids: string[]): Set<string> {
-  if (ids.length === 0) return new Set();
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = ndb
-    .prepare(`SELECT id FROM thought_types_v WHERE id IN (${placeholders})`)
-    .all(...ids) as Array<{ id: string }>;
-  return new Set(rows.map((r) => r.id));
-}
-
-function readExistingLinkTypeIds(ndb: NetworkDb, ids: string[]): Set<string> {
-  if (ids.length === 0) return new Set();
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = ndb
-    .prepare(`SELECT id FROM link_types_v WHERE id IN (${placeholders})`)
-    .all(...ids) as Array<{ id: string }>;
-  return new Set(rows.map((r) => r.id));
-}
-
 function readExistingPropertyIds(ndb: NetworkDb, ids: string[]): Set<string> {
   if (ids.length === 0) return new Set();
   const placeholders = ids.map(() => '?').join(',');
@@ -393,22 +375,31 @@ function readExistingPropertyIds(ndb: NetworkDb, ids: string[]): Set<string> {
 // ---------------------------------------------------------------------------
 
 /**
- * `INSERT OR IGNORE INTO thought_types ...` — reuses by primary key, so
- * already-existing rows are silently kept and the manifest data is dropped
- * (the importer does not overwrite type definitions on collision).
+ * `INSERT OR IGNORE INTO thought_types ...` — reuses by primary key (and, by
+ * the `name_key` UNIQUE index, by case-insensitive name), so already-existing
+ * rows are silently kept and the manifest definition is dropped.
+ *
+ * Нормализованный `name_key` (ошибка e7d1b27a) обязателен: колонка —
+ * `NOT NULL DEFAULT ''`, а UNIQUE-индекс `idx_thought_types_name_key` делает
+ * `''` занятым уже первой вставкой; без ключа все последующие типы молча
+ * отбрасывались `OR IGNORE`. `parent_id` сохраняет иерархию типов. `created`
+ * отражает фактическую вставку (`changes`), а не факт вызова — счётчики
+ * отчёта не врут.
  */
 function insertThoughtType(ndb: NetworkDb, row: ThoughtType): { created: boolean } {
-  ndb
+  const result = ndb
     .prepare(
       `INSERT OR IGNORE INTO thought_types (
-         id, name, icon, fg_color, bg_color, font_bold, font_italic,
+         id, name, name_key, parent_id, icon, fg_color, bg_color, font_bold, font_italic,
          font_underline, font_strike, description, version,
          created_at, updated_at, created_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, type_name_key(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.id,
       row.name,
+      row.name,
+      row.parent_id,
       row.icon,
       row.fg_color,
       row.bg_color,
@@ -422,31 +413,121 @@ function insertThoughtType(ndb: NetworkDb, row: ThoughtType): { created: boolean
       row.updated_at,
       row.created_by,
     );
-  return { created: true };
+  return { created: result.changes > 0 };
 }
 
+/**
+ * `INSERT OR IGNORE INTO link_types ...` — см. {@link insertThoughtType}:
+ * нормализованные `name_forward_key`/`name_reverse_key` (ошибка e7d1b27a),
+ * `parent_id` и честный `created` по `changes`.
+ */
 function insertLinkType(ndb: NetworkDb, row: LinkType): { created: boolean } {
-  ndb
+  const result = ndb
     .prepare(
       `INSERT OR IGNORE INTO link_types (
-         id, name_forward, name_reverse, color, style, width, description,
+         id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+         parent_id, color, style, width, style_set, width_set, description,
          version, created_at, updated_at, created_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, type_name_key(?), ?, type_name_key(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.id,
       row.name_forward,
+      row.name_forward,
       row.name_reverse,
+      row.name_reverse,
+      row.parent_id,
       row.color,
       row.style ?? 'solid',
       row.width ?? 1,
+      row.style === null ? 0 : 1,
+      row.width === null ? 0 : 1,
       row.description,
       row.version,
       row.created_at,
       row.updated_at,
       row.created_by,
     );
-  return { created: true };
+  return { created: result.changes > 0 };
+}
+
+/** id существующего типа мысли в целевой сети: по id, иначе по `name_key`
+ *  (слияние по имени — тот же приём, что у `insertProperty`). */
+function resolveThoughtTypeId(ndb: NetworkDb, row: ThoughtType): string {
+  const byId = ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(row.id) as
+    | { id: string }
+    | undefined;
+  if (byId !== undefined) return byId.id;
+  const byName = ndb
+    .prepare('SELECT id FROM thought_types_v WHERE name_key = type_name_key(?)')
+    .get(row.name) as { id: string } | undefined;
+  return byName?.id ?? row.id;
+}
+
+/** id существующего типа связи: по id, иначе по паре ключей имён. */
+function resolveLinkTypeId(ndb: NetworkDb, row: LinkType): string {
+  const byId = ndb.prepare('SELECT id FROM link_types_v WHERE id = ?').get(row.id) as
+    | { id: string }
+    | undefined;
+  if (byId !== undefined) return byId.id;
+  const byName = ndb
+    .prepare(
+      `SELECT id FROM link_types_v
+        WHERE name_forward_key = type_name_key(?) AND name_reverse_key = type_name_key(?)`,
+    )
+    .get(row.name_forward, row.name_reverse) as { id: string } | undefined;
+  return byName?.id ?? row.id;
+}
+
+/** id корневого типа мысли/связи целевой сети (единственный с `is_root = 1`). */
+function rootTypeId(ndb: NetworkDb, table: 'thought_types_v' | 'link_types_v'): string | null {
+  const row = ndb.prepare(`SELECT id FROM ${table} WHERE is_root = 1 LIMIT 1`).get() as
+    | { id: string }
+    | undefined;
+  return row?.id ?? null;
+}
+
+/**
+ * Перепривязать родителя СОЗДАННОГО типа (ошибка e7d1b27a): `parent_id`
+ * манифеста может быть переименован/слит по имени (смотри `typeIdRemap`),
+ * а тип-родитель, не попавший в манифест, в целевой сети отсутствует —
+ * тогда родителем становится корень целевой сети, чтобы не создать висячую
+ * ссылку (инвариант: NULL-родитель только у корня).
+ */
+function setThoughtTypeParent(ndb: NetworkDb, typeId: string, parentId: string | null): void {
+  const root = rootTypeId(ndb, 'thought_types_v');
+  let resolved = parentId;
+  if (resolved !== null) {
+    const exists = ndb
+      .prepare('SELECT 1 FROM thought_types_v WHERE id = ? LIMIT 1')
+      .get(resolved) as { '1': number } | undefined;
+    if (exists === undefined) resolved = root;
+  }
+  ndb
+    .prepare(
+      `UPDATE thought_types SET parent_id = ?
+        WHERE id = ? AND deleted = 0
+          AND layer_id = '00000000-0000-4000-8000-0000000000ba5e' /* импорт пишет в основу */`,
+    )
+    .run(resolved, typeId);
+}
+
+function setLinkTypeParent(ndb: NetworkDb, typeId: string, parentId: string | null): void {
+  const root = rootTypeId(ndb, 'link_types_v');
+  let resolved = parentId;
+  if (resolved !== null) {
+    const exists = ndb
+      .prepare('SELECT 1 FROM link_types_v WHERE id = ? LIMIT 1')
+      .get(resolved) as { '1': number } | undefined;
+    if (exists === undefined) resolved = root;
+  }
+  ndb
+    .prepare(
+      `UPDATE link_types SET parent_id = ?
+        WHERE id = ? AND deleted = 0
+          AND layer_id = '00000000-0000-4000-8000-0000000000ba5e' /* импорт пишет в основу */`,
+    )
+    .run(resolved, typeId);
 }
 
 /**
@@ -1168,29 +1249,52 @@ export function applyManifest(
 
     // 1. Thought types ------------------------------------------------------
     if (includeTypes) {
-      const existingTT = readExistingThoughtTypeIds(
-        ndb,
-        manifest.thought_types.map((t) => t.id),
-      );
+      // Проход 1: вставка типов и построение remap (id манифеста → выживший
+      // id целевой сети). Счётчики — по фактической вставке (`changes`),
+      // иначе отчёт врёт (ошибка e7d1b27a). Тип, слитый по имени, попадает в
+      // remap под чужим id — мысли и привязки резолвятся через него.
+      const createdThoughtTypeIds = new Set<string>();
       for (const t of manifest.thought_types) {
-        const wasExisting = existingTT.has(t.id);
-        insertThoughtType(ndb, t);
-        if (wasExisting) summary.thought_types_reused += 1;
-        else summary.thought_types_created += 1;
-        typeIdRemap.set(t.id, t.id);
+        const { created } = insertThoughtType(ndb, t);
+        const survivingId = created ? t.id : resolveThoughtTypeId(ndb, t);
+        typeIdRemap.set(t.id, survivingId);
+        if (created) {
+          createdThoughtTypeIds.add(t.id);
+          summary.thought_types_created += 1;
+        } else {
+          summary.thought_types_reused += 1;
+        }
+      }
+      // Проход 2: иерархия созданных типов — родитель резолвится через remap
+      // (родитель может быть слит по имени) с фолбэком на корень целевой
+      // сети, если родителя нет ни в манифесте, ни в цели.
+      for (const t of manifest.thought_types) {
+        if (!createdThoughtTypeIds.has(t.id)) continue;
+        const survivingId = typeIdRemap.get(t.id) ?? t.id;
+        const parentId =
+          t.parent_id === null ? null : typeIdRemap.get(t.parent_id) ?? t.parent_id;
+        setThoughtTypeParent(ndb, survivingId, parentId);
       }
 
       // 2. Link types ---------------------------------------------------------
-      const existingLT = readExistingLinkTypeIds(
-        ndb,
-        manifest.link_types.map((t) => t.id),
-      );
+      const createdLinkTypeIds = new Set<string>();
       for (const t of manifest.link_types) {
-        const wasExisting = existingLT.has(t.id);
-        insertLinkType(ndb, t);
-        if (wasExisting) summary.link_types_reused += 1;
-        else summary.link_types_created += 1;
-        linkTypeIdRemap.set(t.id, t.id);
+        const { created } = insertLinkType(ndb, t);
+        const survivingId = created ? t.id : resolveLinkTypeId(ndb, t);
+        linkTypeIdRemap.set(t.id, survivingId);
+        if (created) {
+          createdLinkTypeIds.add(t.id);
+          summary.link_types_created += 1;
+        } else {
+          summary.link_types_reused += 1;
+        }
+      }
+      for (const t of manifest.link_types) {
+        if (!createdLinkTypeIds.has(t.id)) continue;
+        const survivingId = linkTypeIdRemap.get(t.id) ?? t.id;
+        const parentId =
+          t.parent_id === null ? null : linkTypeIdRemap.get(t.parent_id) ?? t.parent_id;
+        setLinkTypeParent(ndb, survivingId, parentId);
       }
 
       // 3. Property registry (0.6.5) ----------------------------------------

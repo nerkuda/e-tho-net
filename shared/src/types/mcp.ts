@@ -532,11 +532,14 @@ export interface McpThoughtWriteItemResult {
   /**
    * Per-key property value ids set in this batch. `id` — id строки
    * `property_values` для скалярного свойства; `null` для свойства-связи
-   * (её значение — проекция рёбер, отдельной строки нет; адрес ребра —
-   * `link_id` из чтения значений свойства-связи или `etn.properties.add`).
-   * Ошибка 5a50f906: раньше для свойства-связи отдавалась пустая строка.
+   * (её значение — проекция рёбер, отдельной строки нет). Для свойства-связи
+   * `targets` несёт ИТОГОВЫЙ набор целей ребра — по нему агент видит, что
+   * запись состоялась, не перечитывая карточку (ошибка 5a50f906: раньше для
+   * свойства-связи отдавалась пустая строка; ошибка 17cc0d54: `id: null` без
+   * целей бесполезен). `link_ids` — id рёбер, СОЗДАННЫХ этой записью
+   * (ошибка 1b719d76: по ним публикуется `link.created`).
    */
-  properties?: Record<string, { id: string | null }>;
+  properties?: Record<string, { id: string | null; targets?: string[]; link_ids?: string[] }>;
   /** Link results: id + (if any) attached properties/comments. */
   links?: Array<{
     id: string;
@@ -547,6 +550,14 @@ export interface McpThoughtWriteItemResult {
   }>;
   /** Attachment ids added in this batch. */
   attachments?: Array<{ id: string }>;
+  /**
+   * Id рёбер, материализованных применением link-дефолтов типа при создании
+   * мысли (ошибка 8655842b). Не путать с `links` (явные `links[]` запроса) и
+   * с `properties[].link_ids` (рёбра set-записи свойства). По ним публикуется
+   * `link.created` — иначе создание мысли с непустым link-дефолтом ставило
+   * рёбра «молча». Пусто/не задано — дефолтов-связей не было.
+   */
+  default_link_ids?: string[];
   /** Card-completeness warnings (task O6) for this item. */
   warnings: ThoughtCardWarning[];
 }

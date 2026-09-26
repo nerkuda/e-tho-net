@@ -99,7 +99,8 @@ import {
 import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../domain/layer-diff-service.js';
 import { mergeLayer } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
-import { findPath, subgraph } from '../../domain/graph-traversal.js';
+import { findPath } from '../../domain/graph-traversal.js';
+import { subgraphAsync } from '../../domain/heavy-read.js';
 import { getHomeThoughtId, getThoughtOrThrow, resolveThoughts, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
 import { getLink, updateLink } from '../../domain/link-service.js';
 import { findMentions } from '../../domain/search-service.js';
@@ -776,14 +777,15 @@ const HANDLERS: Record<string, OpHandler> = {
         });
         const events: AnyWriteEvent[] = [];
         const activity: WriteActivityEntry[] = [];
-        for (const [, newId] of Object.entries(copied.thought_id_map)) {
-          if (newId === '') continue;
+        // События/журнал — строго по РЕАЛЬНО созданным сущностям (ошибка
+        // 0a30c5e4): `thought_id_map`/`link_id_map` включают при `reuse` и
+        // переиспользованные id, по ним события «создания» были бы ложными.
+        for (const newId of copied.created_thought_ids) {
           const thought = getThoughtOrThrow(targetNdb, newId);
           events.push({ type: 'thought.created', data: { thought } });
           activity.push({ kind: 'thought', action: 'created', thought });
         }
-        for (const [, newId] of Object.entries(copied.link_id_map)) {
-          if (newId === '') continue;
+        for (const newId of copied.created_link_ids) {
           const link = getLink(targetNdb, newId);
           if (link !== null) {
             events.push({ type: 'link.created', data: { link } });
@@ -1016,14 +1018,22 @@ const HANDLERS: Record<string, OpHandler> = {
     return runTool(async () => {
       const ndb = openMemberNetwork(rt, a.network_id);
       const format: ExportFormat = a.format ?? 'markdown';
-      const result = subgraph(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
+      // Имя сети-источника для манифеста `.etnx` — display_name из реестра,
+      // а не id (ошибка b52caa66); фолбэк на id, если записи нет.
+      const sourceNetworkName =
+        rt.deps.systemDb.getNetworkById(a.network_id)?.display_name ?? a.network_id;
+      const result = await subgraphAsync(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
       if (format === 'markdown') {
         return { format, truncated: result.truncated, content: exportToMarkdown(ndb, result.nodes) };
       }
       if (format === 'etnx') {
         const job = await startExportJob(ndb, result.nodes, format, {
           etnx: a.etnx_options ?? {},
-          source: { network_id: a.network_id, network_name: a.network_id, user_id: rt.deps.auth.userId },
+          source: {
+            network_id: a.network_id,
+            network_name: sourceNetworkName,
+            user_id: rt.deps.auth.userId,
+          },
         });
         const downloaded = getExportJobContent(job.job_id, format);
         if (downloaded === null) throw new Error('ETN error [INTERNAL]: export content unavailable');
@@ -1038,7 +1048,11 @@ const HANDLERS: Record<string, OpHandler> = {
         };
       }
       const job = await startExportJob(ndb, result.nodes, format, {
-        source: { network_id: a.network_id, network_name: a.network_id, user_id: rt.deps.auth.userId },
+        source: {
+          network_id: a.network_id,
+          network_name: sourceNetworkName,
+          user_id: rt.deps.auth.userId,
+        },
       });
       const downloaded = getExportJobContent(job.job_id, format);
       if (downloaded === null) throw new Error('ETN error [INTERNAL]: export content unavailable');
@@ -1397,7 +1411,7 @@ const HANDLERS: Record<string, OpHandler> = {
         if (existing === null) {
           throw new Error(`ETN error [NOT_FOUND]: comment ${a.comment_id} not found`);
         }
-        deleteComment(ndb, a.comment_id, a.expected_version);
+        deleteComment(ndb, a.comment_id, a.expected_version, rt.deps.auth.userId);
         return {
           result: undefined,
           events: [
@@ -1672,10 +1686,9 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Справочник редких операций',
       description:
         'Справочник MCP (прогрессивное раскрытие). Без параметров — реестр ' +
-        '«действие/тема → когда нужно» (одна строка на запись). С `topic` — полная инструкция: ' +
-        'для редких операций — состав `params`, обязательность `confirm`, эффекты, коды ошибок; ' +
-        'для частых — снятые из их `description` детали (секции батча, справочник фильтров). ' +
-        'Исполнитель редких операций — `etn.ops`; не вызывай его мимо гайда.',
+        '«действие/тема → когда нужно». С `topic` — полная инструкция: для редких операций — ' +
+        'состав `params`, `confirm`, эффекты, коды ошибок; для частых — детали из их `description`. ' +
+        'Исполнитель редких операций — `etn.ops`.',
       inputSchema: Guide.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.guide'],
     },
@@ -1688,7 +1701,13 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (entry !== undefined) {
           return { content: [{ type: 'text', text: renderTopic(entry) }] };
         }
-        const topic = GUIDE_TOPICS_BY_NAME.get(args.topic);
+        // Тема может быть названа как без префикса (`how_to_write_batch`),
+        // так и полным именем промпта (`etn.how_to_write_batch`) — описание
+        // `etn.thoughts.write` ссылается именно на вторую форму. Нормализуем
+        // префикс `etn.`, чтобы обе формы находили тему (ошибка e05d4688).
+        const topic =
+          GUIDE_TOPICS_BY_NAME.get(args.topic) ??
+          GUIDE_TOPICS_BY_NAME.get(args.topic.replace(/^etn\./, ''));
         if (topic !== undefined) {
           return { content: [{ type: 'text', text: topic.body_md }] };
         }
@@ -1707,12 +1726,10 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Исполнитель редких операций',
       description:
-        'Исполнитель редких (низкочастотных) операций, снятых из постоянного набора ' +
-        '(прогрессивное раскрытие). `action` — имя из справочника `etn.guide`; ' +
-        '`params` — плоский объект, состав по инструкции гайда; `confirm: true` — обязателен ' +
-        'для деструктивных (delete/purge/truncate/import/layers.delete/merge), без него ' +
-        'VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — там состав params и ' +
-        'эффекты. Семантика каждой операции перенесена без изменений.',
+        'Исполнитель редких операций, снятых из постоянного набора (прогрессивное раскрытие). ' +
+        '`action` — имя из справочника `etn.guide`; `params` — плоский объект; `confirm: true` ' +
+        'обязателен для деструктивных (delete/purge/truncate/import/layers.delete/merge), ' +
+        'без него VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — состав params и эффекты.',
       inputSchema: Ops.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ops'],
     },

@@ -70,6 +70,50 @@ function makeClient(fetchImpl: typeof fetch, extra: { random?: () => number } = 
   });
 }
 
+/**
+ * Yields to the macrotask queue so every pending microtask (lazy API-key
+ * resolution, fetch dispatch) has run.
+ */
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Fetch stub whose responses are released by the test, one body at a time —
+ * needed to pin the microtask ORDER of two concurrent responses (the race the
+ * regression tests below model). Each call gets a deferred body.
+ */
+function makeControlledFetch(): {
+  fetch: typeof fetch;
+  /** Releases the body of the n-th call (0-based) as a JSON success envelope. */
+  resolveBody: (index: number, body: unknown) => void;
+} {
+  let next = 0;
+  const releases = new Map<number, (payload: { body: string }) => void>();
+  const fetchStub = ((_url: string, _init?: RequestInit): Promise<Response> => {
+    const index = next++;
+    const bodyPromise = new Promise<{ body: string }>((res) => {
+      releases.set(index, res);
+    });
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async (): Promise<string> => (await bodyPromise).body,
+      json: async (): Promise<unknown> => JSON.parse((await bodyPromise).body),
+    } as unknown as Response;
+    return Promise.resolve(response);
+  }) as unknown as typeof fetch;
+  return {
+    fetch: fetchStub,
+    resolveBody: (index: number, body: unknown): void => {
+      const release = releases.get(index);
+      if (release === undefined) throw new Error(`no pending request #${index}`);
+      release({ body: JSON.stringify(body) });
+    },
+  };
+}
+
 describe('RestClient — headers', () => {
   it('attaches Authorization Bearer, Client-Id and Accept on GET', async () => {
     const { fetch, calls } = makeFetch([
@@ -267,7 +311,7 @@ describe('RestClient — превью соседей на холсте (ошиб
 });
 
 describe('RestClient — response parsing', () => {
-  it('returns the data field of the success envelope and captures meta', async () => {
+  it('returns the data field of the success envelope', async () => {
     const { fetch } = makeFetch([
       {
         status: 200,
@@ -277,8 +321,6 @@ describe('RestClient — response parsing', () => {
     const client = makeClient(fetch);
     const data = await client.getThought('net1', 't1');
     assert.deepEqual(data, { id: 't1', version: 3 });
-    assert.equal(client.lastMeta?.version, 3);
-    assert.equal(client.lastMeta?.request_id, 'r1');
   });
 
   it('treats 204 / empty body as undefined (DELETE)', async () => {
@@ -287,6 +329,54 @@ describe('RestClient — response parsing', () => {
     const result = await client.deleteThought('net1', 't1', 2);
     assert.equal(result, undefined);
     assert.equal(calls[0]!.init.method, 'DELETE');
+  });
+});
+
+describe('RestClient — метаданные ответа привязаны к своему ответу (ошибка 90811979)', () => {  /**
+   * Свойство полосы отборов (полоса фокуса) собирается из `data` И `meta`
+   * ОДНОГО ответа `GET …/thought-types/{id}/views`: `data` — собственные
+   * отборы типа, `meta.effective` — унаследованная цепочка. Пока обе части
+   * брались из общего поля клиента, ответ соседнего запроса, разобравшийся
+   * позже (но до продолжения читателя), подменял `meta.effective` пустым
+   * значением — полоса теряла отборы, режим откатывался на «Потомки», и нижняя
+   * зона оставалась пустой до ручного переключения режима.
+   */
+  it('читает meta.effective из своего ответа, а не из чужого (гонка разбора)', async () => {
+    const ctl = makeControlledFetch();
+    const client = makeClient(ctl.fetch);
+    const viewsPromise = client.listThoughtTypeViews('net1', 'type1', { includeEffective: true });
+    const otherPromise = client.getThought('net1', 't1');
+    await tick();
+    // Порядок разбора: сначала ответ полосы (со своим `effective`), затем
+    // ответ постороннего запроса с ДРУГОЙ meta. Продолжение читателя полосы
+    // выполняется уже после второго разбора.
+    ctl.resolveBody(0, {
+      data: [{ id: 'v1' }],
+      meta: { effective: [{ id: 'v1', name: 'отбор' }] },
+    });
+    ctl.resolveBody(1, { data: { id: 't1', version: 7 }, meta: { version: 7 } });
+    const [views, other] = await Promise.all([viewsPromise, otherPromise]);
+    assert.equal(other.id, 't1');
+    assert.deepEqual(
+      views.meta.effective.map((v) => v.id),
+      ['v1'],
+    );
+  });
+
+  it('не портит meta соседей: каждый читатель получает meta своего ответа', async () => {
+    const ctl = makeControlledFetch();
+    const client = makeClient(ctl.fetch);
+    const pagePromise = client.getNeighborsPage('net1', 't1', { dir: 'children' });
+    const activityPromise = client.listActivity('net1');
+    await tick();
+    ctl.resolveBody(0, { data: [{ id: 'n1' }], meta: { total: 5, limit: 1, offset: 0 } });
+    ctl.resolveBody(1, { data: [], meta: { total: 42 } });
+    const [page, activity] = await Promise.all([pagePromise, activityPromise]);
+    assert.deepEqual(
+      { items: page.items.map((n) => n.id), total: page.total, limit: page.limit },
+      { items: ['n1'], total: 5, limit: 1 },
+    );
+    assert.equal(activity.total, 42);
   });
 });
 
@@ -770,5 +860,177 @@ describe('RestClient — thought-type views (0.7.3, баг 5467fb19)', () => {
     assert.deepEqual(resp.data, []);
     assert.equal(resp.meta.unresolved?.length, 1);
     assert.equal(resp.meta.unresolved?.[0]?.reason, 'unknown_property');
+  });
+});
+
+/**
+ * Этап 4 тех.проекта e29c0f00: COUNT запрашивается явно (требование 5adebf61),
+ * курсор следующей страницы читается из `meta.next_cursor` (3f2fdc41), а
+ * `signal` отменяет устаревший запрос (ebed4980).
+ */
+describe('RestClient — structures query: COUNT, курсор и отмена', () => {
+  /** Список-конверт с заданными `meta`. */
+  function listMeta(meta: Record<string, unknown>): { status: number; body: unknown } {
+    return {
+      status: 200,
+      body: { data: [], meta: { offset: 0, limit: 100, directions: {}, ...meta } },
+    };
+  }
+
+  it('queryStructureThoughts запрашивает COUNT явно и прокидывает signal', async () => {
+    const { fetch, calls } = makeFetch([listMeta({ total: 3, has_more: true, next_cursor: 'cur-1' })]);
+    const client = makeClient(fetch);
+    const request = { sort: 'alpha', order: 'asc', limit: 100, offset: 0 } as Parameters<
+      RestClient['queryStructureThoughts']
+    >[1];
+    const controller = new AbortController();
+
+    const res = await client.queryStructureThoughts('net1', request, { signal: controller.signal });
+
+    assert.equal(res.total, 3);
+    assert.equal(res.next_cursor, 'cur-1');
+    const body = JSON.parse(String(calls[0]!.init.body)) as { count?: boolean };
+    assert.equal(body.count, true, 'транспорт просит COUNT явно — экрану нужен счётчик');
+    assert.ok(calls[0]!.init.signal instanceof AbortSignal, 'signal обязан дойти до fetch');
+    assert.equal(calls[0]!.init.signal?.aborted, false);
+  });
+
+  it('явный count: false не перетирается транспортом', async () => {
+    const { fetch, calls } = makeFetch([listMeta({ total: null, has_more: false, next_cursor: null })]);
+    const client = makeClient(fetch);
+    const request = {
+      sort: 'alpha',
+      order: 'asc',
+      limit: 100,
+      offset: 0,
+      count: false,
+    } as Parameters<RestClient['queryStructureThoughts']>[1];
+
+    const res = await client.queryStructureThoughts('net1', request);
+
+    const body = JSON.parse(String(calls[0]!.init.body)) as { count?: boolean };
+    assert.equal(body.count, false);
+    // Сервер COUNT не считал — транспорт подставляет длину страницы.
+    assert.equal(res.total, 0);
+  });
+});
+
+/**
+ * Ошибка da2c68a7: клиент 0.9.1 всегда шлёт `count` (и `cursor` на продолжении),
+ * а сервер старше этапа 4 тех.проекта e29c0f00 держит строгий REST-контракт
+ * запроса — лишнее поле роняет весь отбор `VALIDATION_ERROR`, и экран
+ * «Структуры» остаётся пустым при любом фильтре. Транспорт обязан деградировать
+ * на старый сервер: повторить запрос без новых полей и листать по `offset`.
+ */
+describe('RestClient — деградация выборки на сервер без count/cursor (da2c68a7)', () => {
+  /** Ответ старого сервера на неизвестное поле строгого контракта. */
+  function unknownField(field: string): { status: number; body: unknown } {
+    return {
+      status: 422,
+      body: {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Неизвестные поля: ${field}.`,
+          details: { fields: [field] },
+        },
+      },
+    };
+  }
+
+  /** Список-конверт старого сервера: `total` без `next_cursor`. */
+  function oldList(items: unknown[], total: number): { status: number; body: unknown } {
+    return {
+      status: 200,
+      body: { data: items, meta: { total, offset: 0, limit: items.length, directions: {} } },
+    };
+  }
+
+  /** Минимальная мысль-ссылка для страницы. */
+  function ref(id: string): { id: string; title: string; type_id: null; active: boolean } {
+    return { id, title: id, type_id: null, active: true };
+  }
+
+  it('повторяет запрос без count и листает offset-курсором', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ref(`t${i}`));
+    const { fetch, calls } = makeFetch([
+      unknownField('count'),
+      oldList(page1, 250),
+      oldList([ref('t100')], 250),
+    ]);
+    const client = makeClient(fetch);
+    const request = {
+      sort: 'created',
+      order: 'asc',
+      limit: 100,
+      offset: 0,
+    } as Parameters<RestClient['queryStructureThoughts']>[1];
+
+    const res = await client.queryStructureThoughts('net1', request);
+
+    assert.equal(res.items.length, 100, 'отбор снова возвращает результат');
+    assert.equal(res.total, 250, 'счётчик берётся из meta.total старого сервера');
+    assert.equal(res.next_cursor, 'offset:100', 'продолжение задаётся offset-курсором');
+    // Первый запрос нёс count (и был отвергнут), повтор — уже нет.
+    assert.equal((JSON.parse(String(calls[0]!.init.body)) as { count?: boolean }).count, true);
+    const retry = JSON.parse(String(calls[1]!.init.body)) as { count?: boolean; offset?: number };
+    assert.equal(retry.count, undefined, 'повтор уходит без неизвестного поля count');
+    assert.equal(retry.offset, 0);
+
+    // Следующая страница: транспорт разворачивает offset-курсор обратно в offset.
+    const res2 = await client.queryStructureThoughts('net1', {
+      ...request,
+      cursor: res.next_cursor ?? undefined,
+    });
+    const page2 = JSON.parse(String(calls[2]!.init.body)) as {
+      count?: boolean;
+      offset?: number;
+      cursor?: string;
+    };
+    assert.equal(page2.count, undefined);
+    assert.equal(page2.offset, 100);
+    assert.equal(page2.cursor, undefined, 'курсор-заглушка не уходит на старый сервер');
+    assert.equal(res2.items.length, 1);
+    assert.equal(res2.next_cursor, null, 'последняя страница закрывает листание');
+  });
+
+  it('на новом сервере count запрашивается, а реальный курсор не теряется', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [], meta: { total: 0, directions: {}, next_cursor: null } } },
+    ]);
+    const client = makeClient(fetch);
+    await client.queryStructureThoughts('net1', {
+      sort: 'created',
+      order: 'asc',
+      limit: 100,
+      offset: 0,
+      cursor: 'real-keyset-cursor',
+    } as Parameters<RestClient['queryStructureThoughts']>[1]);
+
+    const body = JSON.parse(String(calls[0]!.init.body)) as { count?: boolean; cursor?: string };
+    assert.equal(body.count, true);
+    assert.equal(body.cursor, 'real-keyset-cursor', 'keyset-курсор нового сервера обязан уходить в тело');
+  });
+
+  it('ids_only на старом сервере тоже листается offset-курсором', async () => {
+    const ids = Array.from({ length: 2000 }, (_, i) => `i${i}`);
+    const { fetch, calls } = makeFetch([
+      unknownField('count'),
+      { status: 200, body: { data: { ids, total: 5000 } } },
+    ]);
+    const client = makeClient(fetch);
+
+    const res = await client.queryStructureThoughtIds('net1', {
+      sort: 'created',
+      order: 'asc',
+      limit: 2000,
+      offset: 0,
+    } as Parameters<RestClient['queryStructureThoughtIds']>[1]);
+
+    assert.equal(res.ids.length, 2000);
+    assert.equal(res.total, 5000);
+    assert.equal(res.next_cursor, 'offset:2000');
+    const retry = JSON.parse(String(calls[1]!.init.body)) as { count?: boolean; cursor?: string };
+    assert.equal(retry.count, undefined);
+    assert.equal(retry.cursor, undefined);
   });
 });

@@ -84,7 +84,7 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         // `limit`/`offset`/`order` пробрасывается в SQL-движок; сортировка
         // исполняется движком по сохранённому в отборе `sort`/`order`
         // (контракт как у REST — задача c5265deb, ошибка 4dd14aa3).
-        const base = runViewForThought(
+        const base = await runViewForThought(
           ndb,
           matched,
           args.thought_id,

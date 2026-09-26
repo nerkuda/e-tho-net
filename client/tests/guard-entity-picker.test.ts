@@ -34,7 +34,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { assertGuardClean, collectViolations, type GuardRule } from './guard-helpers.js';
+import { assertGuardClean, collectViolations, DEFAULT_GUARD_EXTENSIONS, type GuardRule } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -73,6 +73,23 @@ const FIELD_BUILD_RULE: GuardRule = {
   pattern: /\b(?:div|el)\(\s*(?:'(?:[^'\\]|\\.)*'\s*,\s*)?'[^']*\bentity-combo-field\b/,
   allow: (rel) => rel === 'lib/entity-picker.ts',
 };
+
+/** Классы поглощённого поля свойства-связи (`lib/link-property-field.ts`)
+ *  запрещены: поле выбора свойства-связи строит только четвёртый источник
+ *  общего пикера — та же рамка, что у поля «Тип мысли» (требование cdb6b52f,
+ *  ошибка a7abe50e). Хвост `(?![\w.])` не даёт правилу ловить упоминание
+ *  удалённого модуля `…-field.ts` в комментариях. */
+const LEGACY_LINK_PROPERTY_RULE: GuardRule = {
+  name: 'no-legacy-link-property-classes',
+  description:
+    'Классы прежнего отдельного поля свойства-связи (link-property-field/-input/-pick/' +
+    '-picker/-option/-empty/-search) запрещены: поле строит только общий пикер ' +
+    'lib/entity-picker.ts (требование cdb6b52f, ошибка a7abe50e).',
+  pattern: /\blink-property-(?:field|input|pick|picker|option|empty|search)(?![\w.])/,
+};
+
+/** Расширения сканирования с CSS: классы-самоделки могут жить в стилях. */
+const GUARD_EXTENSIONS_WITH_CSS = [...DEFAULT_GUARD_EXTENSIONS, '.css'];
 
 describe('guard: выбор сущности делается только общим пикером', () => {
   it('<select> не собирается из типов мыслей или типов связей', () => {
@@ -121,6 +138,52 @@ describe('guard: выбор сущности делается только об�
 
   it('рамка поля одиночного выбора сущности собирается только общим пикером', () => {
     assertGuardClean(RENDERER_ROOT, [FIELD_BUILD_RULE]);
+  });
+
+  it('поле выбора свойства-связи — только общий пикер, прежних классов нет', () => {
+    // Четвёртый источник («свойство связи») — в том же комбо; отдельного поля
+    // и его классов (`link-property-field/-input/-pick/-option/…`) нет нигде,
+    // включая styles.css (требование cdb6b52f, ошибка a7abe50e).
+    assertGuardClean(RENDERER_ROOT, [LEGACY_LINK_PROPERTY_RULE], {
+      extensions: GUARD_EXTENSIONS_WITH_CSS,
+    });
+  });
+
+  it('модуль отдельного поля свойства-связи удалён', () => {
+    const legacy = path.join(RENDERER_ROOT, 'lib', 'link-property-field.ts');
+    assert.equal(
+      fs.existsSync(legacy),
+      false,
+      'lib/link-property-field.ts удалён: поле поглощено четвёртым источником общего пикера',
+    );
+  });
+
+  it('правило про классы поля свойства-связи краснеет на умышленной копии', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'fake.css'), '.link-property-field-box { padding: 0 }', 'utf8');
+      fs.writeFileSync(
+        path.join(dir, 'fake.ts'),
+        "import { fieldInput } from './lib/ui/field.js';\nconst i = fieldInput({ extraClass: 'link-property-input' });\nvoid i;",
+        'utf8',
+      );
+      const violations = collectViolations(dir, [LEGACY_LINK_PROPERTY_RULE], {
+        extensions: GUARD_EXTENSIONS_WITH_CSS,
+      });
+      assert.ok(
+        violations.some((v) => v.rule === 'no-legacy-link-property-classes'),
+        'класс прежнего поля свойства-связи обязан попадать в нарушение',
+      );
+      // Упоминание удалённого модуля в комментарии нарушением НЕ считается.
+      fs.writeFileSync(path.join(dir, 'note.ts'), '// поглощён: lib/link-property-field.ts', 'utf8');
+      const clean = collectViolations(dir, [LEGACY_LINK_PROPERTY_RULE], {
+        exclude: ['fake.css', 'fake.ts'],
+        extensions: GUARD_EXTENSIONS_WITH_CSS,
+      });
+      assert.equal(clean.length, 0, 'имя удалённого модуля в комментарии — не нарушение');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('чип-поля каталогов фильтруют выпадашку по вводу (ошибка 698800be)', () => {

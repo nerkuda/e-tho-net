@@ -36,6 +36,8 @@ import {
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
+import { createTypeProperty } from '../src/domain/property-service.js';
 
 interface WriteItemResult {
   ref: string | null;
@@ -46,7 +48,7 @@ interface WriteItemResult {
   matched_on: 'title' | 'synonym' | 'partial' | null;
   comment?: { id: string; version: number; action: 'created' | 'updated' };
   chronicle?: Array<{ id: string; version: number }>;
-  properties?: Record<string, { id: string | null }>;
+  properties?: Record<string, { id: string | null; targets?: string[] }>;
   links?: Array<{
     id: string;
     version: number;
@@ -331,6 +333,43 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('rejects an unknown nested key (links inside comment) with VALIDATION_ERROR (8b76e94e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Симптом ошибки 8b76e94e: `links` внутри `comment` молча терялись —
+        // вызов успешен, `links: []`. Теперь вложенный неизвестный ключ
+        // отвергается так же, как верхнеуровневый.
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                ref: 'a',
+                thought: { title: 'Nested strict A' },
+                comment: {
+                  body_md: 'Текст',
+                  links: [{ direction: 'child', target_id: ctx.homeId }],
+                },
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('links'), `expected offending nested key in error: ${text}`);
+        assert.ok(text.includes('fields'), `expected details.fields in error: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('still accepts documented top-level keys (network_id/local_refs/thoughts)', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -377,6 +416,36 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const text = toolText(result);
         assert.ok(text.includes('duplicate ref'), text);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('informative VALIDATION_ERROR when thoughts arrives as a string (a64c66f7)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Симптом ошибки a64c66f7: крупный/экранированный payload приходил как
+        // `thoughts`-строка и отвергался неинформативно. Теперь — явный
+        // VALIDATION_ERROR с полем, полученным типом, лимитом и подсказкой.
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: { network_id: ctx.networkId, thoughts: '[{"ref":"a"}]' },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('thoughts') && text.includes('массивом'), text);
+        assert.ok(text.includes('string'), `expected received type in error: ${text}`);
+        assert.ok(
+          text.includes(String(MCP_MAX_THOUGHTS_PER_WRITE)),
+          `expected per-batch limit in error: ${text}`,
+        );
+        assert.ok(text.includes('how_to_write_batch'), `expected how_to hint: ${text}`);
       } finally {
         await handle.close();
       }
@@ -1083,6 +1152,13 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           null,
           `link property id must be null, got ${JSON.stringify(props[linkKey])}`,
         );
+        // Осмысленное эхо (17cc0d54): `{id: null}` дополнен итоговым набором
+        // целей, иначе нельзя убедиться, что ребро встало, без перечитывания.
+        assert.deepEqual(
+          props[linkKey]?.targets,
+          [targetId],
+          `link property targets must echo the target id, got ${JSON.stringify(props[linkKey])}`,
+        );
 
         // Ребро действительно создано (ответ не врёт об отсутствии записи).
         // Направление ребра зависит от стороны привязки — проверяем оба конца.
@@ -1093,6 +1169,76 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           )
           .get(ownerId, targetId, targetId, ownerId) as { c: number };
         assert.equal(edge.c, 1, 'the link property edge must exist');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('обязательное свойство-связь, заполненное links[] того же вызова, не даёт ложного REQUIRED_PROPERTY_MISSING (6f5812a3)', async () => {
+    // Симптом: warnings считались в фазе 2 (upsertThoughtBundle), ДО записи
+    // верхнеуровневых links[] фазы 3, поэтому обязательное свойство-связь,
+    // поставленное ребром того же батча, считалось незаполненным. Теперь
+    // warnings пересчитываются по итоговому состоянию карточки.
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const lt = createLinkType(
+        ndb,
+        { name_forward: 'TEST 6f5812a3 затрагивает', name_reverse: 'TEST 6f5812a3 затронут' },
+        ctx.adminId,
+      );
+      const type = createThoughtType(ndb, { name: 'TEST 6f5812a3 грабли' }, ctx.adminId);
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        type.id,
+        {
+          key: 'TEST 6f5812a3 затрагивает',
+          value_type: 'link',
+          required: true,
+          config: { link_type_id: lt.id, direction: 'out' },
+        },
+        ctx.adminId,
+      );
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const target = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'target', thought: { title: 'TEST 6f5812a3 цель' } }],
+            },
+          }),
+        );
+        const targetId = target.items[0]!.id;
+
+        const result = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                {
+                  ref: 'g',
+                  thought: { title: 'TEST 6f5812a3 грабля', type_id: type.id },
+                  // Обязательное свойство заполняется ребром того же вызова.
+                  links: [{ direction: 'child', target_id: targetId, type_id: lt.id }],
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(
+          result.items[0]!.warnings,
+          [],
+          `no warnings expected when the required link is filled via links[]: ${JSON.stringify(result.items[0]!.warnings)}`,
+        );
+        assert.deepEqual(result.warnings, [], 'aggregated warnings must be empty too');
       } finally {
         await handle.close();
       }

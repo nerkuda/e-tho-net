@@ -79,12 +79,13 @@ npm run dev:server                      # сервер (tsx watch)
 npm run dev:client                      # Electron-клиент (electron-vite)
 
 npm run typecheck                       # типы всех workspace
+npm run lint                            # eslint по всему репозиторию
 npm -w @etn/server test                 # серверные тесты
 npm -w @etn/client test                 # клиентские тесты
 npm run build                           # сборка всех workspace
 ```
 
-Если `typecheck` или затронутые тесты красные — чинить до коммита. Сервер и клиент можно запускать одновременно.
+Если `typecheck`, `lint` или затронутые тесты красные — чинить до коммита. Сервер и клиент можно запускать одновременно.
 
 ## 5. Коммиты
 
@@ -96,7 +97,7 @@ npm run build                           # сборка всех workspace
 ## 6. Чек-лист перед коммитом
 
 - [ ] TS strict, без `any` без причины.
-- [ ] `npm run typecheck` зелёный; затронутые тесты зелёные.
+- [ ] `npm run typecheck` зелёный; `npm run lint` чистый; затронутые тесты зелёные.
 - [ ] Спецификация соблюдена (или правка — отдельным коммитом).
 - [ ] Правильный префикс коммита.
 - [ ] Runtime/build-артефакты не закоммичены.

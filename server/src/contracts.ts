@@ -58,10 +58,20 @@ import {
   TRAVERSAL_DEFAULTS,
   TYPES_LIST_SCOPES,
   TYPE_OWNER_TYPES,
+  type EtnErrorCode,
   type LinkTypeFilterInput,
+  type SearchRequest,
+  type StructureDirectionFlags,
+  type SubgraphEdge,
+  type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
 import { validateLayerColors } from './domain/layer-service.js';
+import type { TraversalBounds } from './domain/graph-traversal.js';
+import type {
+  ThoughtQueryOptions,
+  ThoughtQueryRequest,
+} from './domain/query-service.js';
 
 // ---------------------------------------------------------------------------
 // Общие zod-куски (до вехи 8 — `mcp/tools/shared.ts`)
@@ -742,6 +752,10 @@ const QueryFields = z
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
+    // Требование 5adebf61: COUNT только по явному флагу (по умолчанию total=null).
+    count: z.boolean().optional(),
+    // Требование 3f2fdc41: keyset-курсор продолжения страницы.
+    cursor: z.string().min(1).optional(),
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
@@ -1127,6 +1141,16 @@ export const AttachmentsDelete = defineContract(
 // ===========================================================================
 // Область: сети (tools/networks.ts)
 // ===========================================================================
+
+/**
+ * REST `GET /networks/:networkId/statistics` — сводка по мыслесети
+ * (задача c69b078d, 0.9.1). Только чтение, MCP-пары нет.
+ */
+export const NetworksStatistics = defineContract(
+  'etn.networks.statistics',
+  z.object({ network_id: NetworkId }),
+  { network_id: { from: { kind: 'param', name: 'networkId' } } },
+);
 
 export const NetworksStructure = defineContract(
   'etn.networks.structure',
@@ -3377,6 +3401,10 @@ export const RestStructureQueryBody = defineContract(
       ids_only: z.boolean().optional(),
       limit: z.number().int().optional(),
       offset: z.number().int().optional(),
+      // Требование 5adebf61: COUNT только по явному флагу; требование
+      // 3f2fdc41: keyset-курсор продолжения страницы.
+      count: z.boolean().optional(),
+      cursor: z.string().min(1).optional(),
       // Задача eb1a3f43, требование c98d5d19: веерный режим — массив
       // дополнительных сетей для fan-out. Опциональный — если передан,
       // `:networkId` в пути интерпретируется как одна из сетей, а не как
@@ -3394,6 +3422,8 @@ export const RestStructureQueryBody = defineContract(
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
+    count: { from: { kind: 'body' } },
+    cursor: { from: { kind: 'body' } },
     network_ids: { from: { kind: 'body' }, t: z.array(NetworkId).min(1).optional() },
   },
 );
@@ -3480,3 +3510,112 @@ export const RestPropertyUpdateBody = defineContract(
     link_width: { from: { kind: 'body' }, msg: 'link_width должен быть числом или null.' },
   },
 );
+
+// ---------------------------------------------------------------------------
+// Контракт reader-пула (ADR bec191e6, тех.проект e29c0f00 этап 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * DTO запроса/ответа reader-воркера (ADR bec191e6 «Тяжёлые чтения выполняются
+ * в пуле reader-соединений worker_threads»).
+ *
+ * Воркер не знает о состоянии сессии: всё, что ему нужно для чтения, приходит
+ * {@link ReaderTaskContext} — файл БД, сеть, слой и версия схемы. «Версия
+ * схемы» (`PRAGMA schema_version` соединения главного потока) — маркер
+ * инвалидации: сменилась — воркер переоткрывает своё соединение. Смена слоя
+ * едет в {@link ReaderTaskContext.layerId} и перестраивает temp-цепочку слоя
+ * на соединении воркера.
+ *
+ * Ответ — плоский structured-clone DTO: `Map`/функции/классы не пересекают
+ * границу потока, поэтому `depths` передаётся массивом пар.
+ */
+export interface ReaderTaskContext {
+  /** Абсолютный путь к `data.db` сети (воркер открывает своё read-only соединение). */
+  dbPath: string;
+  /** Логический id сети — диагностика/лог. */
+  networkId: string;
+  /** Контекст слоя: `*_v` резолвятся по цепочке предков этого слоя. */
+  layerId: string;
+  /** `PRAGMA schema_version` — инвалидация соединений воркера при смене схемы. */
+  schemaVersion: number;
+}
+
+/** Имена операций, исполняемых reader-воркером. Только чтение. */
+export type ReaderOp = 'thoughts.query' | 'thoughts.queryIds' | 'search.query' | 'graph.subgraph';
+
+/** Payload `thoughts.query` / `thoughts.queryIds`. */
+export interface ReaderThoughtsQueryPayload {
+  userId: string;
+  request: ThoughtQueryRequest;
+  options: ThoughtQueryOptions;
+}
+
+/** Payload `search.query`. */
+export interface ReaderSearchPayload {
+  request: SearchRequest;
+  showInactiveDefault: boolean;
+}
+
+/** Payload `graph.subgraph` — радиус-ограниченный подграф вокруг семян. */
+export interface ReaderSubgraphPayload {
+  seedIds: string[];
+  radius: number;
+  bounds: TraversalBounds;
+}
+
+/** Результат `graph.subgraph`. */
+export interface ReaderSubgraphResult {
+  nodes: string[];
+  edges: SubgraphEdge[];
+  truncated: boolean;
+}
+
+/** Одна задача reader-пула (op + payload, общий контекст). */
+export type ReaderTask = { context: ReaderTaskContext } & (
+  | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
+  | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
+  | { op: 'search.query'; payload: ReaderSearchPayload }
+  | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
+);
+
+/** `depths` в плоском виде (Map не переживает structured clone). */
+export interface ReaderDepthsEntry {
+  id: string;
+  depth: number;
+}
+
+/** Сериализованный результат `thoughts.query` (плоский `ThoughtQueryResult`). */
+export interface ReaderThoughtsQueryResult {
+  items: ThoughtRef[];
+  /** `null` — COUNT не запрашивался явным флагом (требование 5adebf61). */
+  total: number | null;
+  has_more: boolean;
+  next_cursor: string | null;
+  directions: StructureDirectionFlags;
+  depths: ReaderDepthsEntry[] | null;
+  truncated: boolean;
+  reason: 'max_nodes' | null;
+}
+
+/** Результат `thoughts.queryIds`. */
+export interface ReaderThoughtsQueryIdsResult {
+  ids: string[];
+  total: number | null;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+/** Успешный ответ воркера. `result` конкретизируется по `op` на стороне пула. */
+export interface ReaderTaskOk {
+  ok: true;
+  result: unknown;
+}
+
+/** Ответ воркера с ошибкой: доменная ошибка сериализуется в плоский вид. */
+export interface ReaderTaskFail {
+  ok: false;
+  error: { code: EtnErrorCode; message: string; details?: unknown };
+}
+
+/** Ответ reader-воркера. */
+export type ReaderTaskResponse = ReaderTaskOk | ReaderTaskFail;

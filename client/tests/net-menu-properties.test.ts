@@ -1,12 +1,13 @@
 /**
- * Pins the «Мыслесеть» submenu composition (task d4e23670, fd4d4927,
- * spec thought 328d0f98 «Подменю «Мыслесеть»»): the «Свойства» entry
- * sits immediately below «Типы связей», separated from the network section by
- * a separator (it shares the catalogue group with the type managers).
+ * Pins the «Мыслесеть» menu composition (задача d4e23670, fd4d4927; заново —
+ * задача a0cdd731 «Компоновка верхних меню»).
  *
- * 0.8.2 (задача 6ebde54e): команда снова называется «Свойства» (в 0.8.1 была
- * «Свойства и связи») и открывает общий список свойств. «Типы связей» — дерево,
- * открывающее редактор свойства-связи.
+ * Состав и порядок пунктов заданы карточкой задачи a0cdd731: счётчики
+ * каталогов и корзины, затем настройка/участники/выход/открытие/создание
+ * мыслесети, затем показ/скрытие редактора мысли. Числа типов мыслей и типов
+ * связей берутся из store, числа свойств и корзины передаются счётчиками.
+ * Терминология — по требованию fc00129d: «Свойства мыслей», «Участники
+ * мыслесети», «Выйти из мыслесети».
  */
 
 import assert from 'node:assert/strict';
@@ -14,74 +15,117 @@ import { afterEach, describe, it } from 'node:test';
 
 import { buildNetMenuItems } from '../src/renderer/screens/workspace-menus.js';
 import { store } from '../src/renderer/state.js';
+import type { LinkType, Network, ThoughtType } from '@etn/shared';
 
-function labels(): string[] {
-  return buildNetMenuItems(0)
-    .map((item) => ('label' in item ? (item.label as string) : '──'));
+const NETWORK: Network = {
+  id: 'net-1',
+  owner_id: 'u-1',
+  display_name: 'Test',
+  description: null,
+  when_to_use: null,
+  conventions: null,
+  examples: null,
+  type_roles: {},
+  created_at: '2025-01-01T00:00:00.000Z',
+  updated_at: '2025-01-01T00:00:00.000Z',
+};
+
+function labels(counts = { properties: 0, trash: 0 }): string[] {
+  return buildNetMenuItems(counts).map((item) => item.label);
 }
 
 afterEach(() => {
-  store.update({ network: null, me: null });
+  store.update({
+    network: null,
+    me: null,
+    thoughtTypes: [],
+    linkTypes: [],
+    editorPosition: 'right',
+  });
 });
 
-describe('«Мыслесеть» menu — «Свойства» entry (d4e23670, fd4d4927, 6ebde54e)', () => {
-  it('lists «Свойства» right after «Типы связей» for an open network', () => {
+describe('«Мыслесеть» menu — состав и счётчики (a0cdd731)', () => {
+  it('держит порядок пунктов и подставляет счётчики', () => {
     store.update({
-      network: {
-        id: 'net-1',
-        owner_id: 'u-1',
-        display_name: 'Test',
-        description: null,
-        when_to_use: null,
-        conventions: null,
-        examples: null,
-        type_roles: {},
-        created_at: '2025-01-01T00:00:00.000Z',
-        updated_at: '2025-01-01T00:00:00.000Z',
-      },
-      me: {
-        id: 'u-1',
-        username: 'owner',
-        display_name: 'Owner',
-        is_admin: false,
-      },
+      network: NETWORK,
+      me: { id: 'u-1', username: 'owner', display_name: 'Owner', is_admin: false },
+      thoughtTypes: Array.from({ length: 3 }, () => ({})) as ThoughtType[],
+      linkTypes: Array.from({ length: 5 }, () => ({})) as LinkType[],
+    });
+    assert.deepEqual(labels({ properties: 7, trash: 2 }), [
+      'Типы мыслей (3)',
+      'Типы связей (5)',
+      'Свойства мыслей (7)',
+      'Корзина (2)',
+      '—',
+      'Настройка мыслесети',
+      'Статистика мыслесети',
+      'Участники мыслесети',
+      'Выйти из мыслесети',
+      'Открыть мыслесеть (список)',
+      'Создать мыслесеть',
+      '—',
+      'Скрыть редактор мысли',
+    ]);
+  });
+
+  it('«Свойства мыслей» идёт сразу после «Типы связей» (не «Свойства»)', () => {
+    store.update({
+      network: NETWORK,
+      me: { id: 'u-1', username: 'owner', display_name: 'Owner', is_admin: false },
     });
     const ls = labels();
-    const idxLinkTypes = ls.indexOf('Типы связей');
-    const idxProps = ls.indexOf('Свойства');
-    assert.ok(idxLinkTypes >= 0, '«Типы связей» must be in the menu');
-    assert.ok(idxProps >= 0, '«Свойства» must be in the menu');
-    assert.equal(idxProps, idxLinkTypes + 1, '«Свойства» must follow «Типы связей» directly');
+    assert.equal(ls.indexOf('Свойства мыслей (0)'), ls.indexOf('Типы связей (0)') + 1);
+    assert.equal(ls.indexOf('Свойства'), -1, 'старая подпись «Свойства» убрана');
+    assert.equal(ls.indexOf('Участники сети'), -1, 'термин «сеть» заменён на «мыслесеть»');
+  });
+
+  it('«Статистика мыслесети» идёт между настройкой и участниками (c69b078d)', () => {
+    store.update({
+      network: NETWORK,
+      me: { id: 'u-1', username: 'owner', display_name: 'Owner', is_admin: false },
+    });
+    const ls = labels();
     assert.equal(
-      ls.indexOf('Свойства и связи'),
-      -1,
-      'команда «Свойства и связи» убрана (в 0.8.2 снова «Свойства», задача 6ebde54e)',
+      ls.indexOf('Статистика мыслесети'),
+      ls.indexOf('Настройка мыслесети') + 1,
+      'пункт статистики обязан идти сразу после «Настройка мыслесети»',
+    );
+    assert.equal(
+      ls.indexOf('Участники мыслесети'),
+      ls.indexOf('Статистика мыслесети') + 1,
+      'пункт статистики обязан идти строго перед «Участники мыслесети»',
     );
   });
 
-  it('still shows «Свойства» for a non-owner (it is a network-wide setting)', () => {
+  it('владельцу доступен выход, а участники — только владельцу', () => {
     store.update({
-      network: {
-        id: 'net-1',
-        owner_id: 'u-owner',
-        display_name: 'Test',
-        description: null,
-        when_to_use: null,
-        conventions: null,
-        examples: null,
-        type_roles: {},
-        created_at: '2025-01-01T00:00:00.000Z',
-        updated_at: '2025-01-01T00:00:00.000Z',
-      },
-      me: {
-        id: 'u-other',
-        username: 'other',
-        display_name: 'Other',
-        is_admin: false,
-      },
+      network: NETWORK,
+      me: { id: 'u-1', username: 'owner', display_name: 'Owner', is_admin: false },
     });
-    const ls = labels();
-    assert.ok(ls.includes('Свойства'));
-    assert.ok(ls.includes('Типы связей'));
+    const owner = buildNetMenuItems({ properties: 0, trash: 0 });
+    const ownerMembers = owner.find((i) => i.label === 'Участники мыслесети');
+    const ownerLeave = owner.find((i) => i.label === 'Выйти из мыслесети');
+    assert.equal(ownerMembers?.disabled, false);
+    assert.equal(ownerLeave?.disabled, true, 'владелец не выходит из своей мыслесети');
+
+    store.update({
+      network: { ...NETWORK, owner_id: 'u-owner' },
+      me: { id: 'u-other', username: 'other', display_name: 'Other', is_admin: false },
+    });
+    const other = buildNetMenuItems({ properties: 0, trash: 0 });
+    assert.equal(
+      other.find((i) => i.label === 'Участники мыслесети')?.disabled,
+      true,
+      'участники — только владельцу',
+    );
+    assert.equal(other.find((i) => i.label === 'Выйти из мыслесети')?.disabled, false);
+  });
+
+  it('подпись редактора зависит от его видимости', () => {
+    store.update({ editorPosition: 'hidden' });
+    assert.ok(labels().includes('Показать редактор мысли'));
+    store.update({ editorPosition: 'right' });
+    assert.ok(labels().includes('Скрыть редактор мысли'));
   });
 });

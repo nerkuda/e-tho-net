@@ -31,13 +31,13 @@ import type {
 import { onRealtimeEvent } from '../realtime.js';
 import { inFocusNeighbourhood, scheduleNeighbourhoodRepaint } from '../realtime-ui.js';
 import {
-  button,
   div,
   el,
   errText,
   setTooltip,
   span,
 } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -51,6 +51,7 @@ import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
+import { uiButton } from '../lib/ui/button.js';
 import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
@@ -244,7 +245,7 @@ function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
     try {
       values = await etn.properties.get(networkId, ownerType, ownerId);
     } catch (err) {
-      wrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      wrap.replaceChildren(operationError(err));
       return;
     }
     if (box.isConnected) everMounted = true;
@@ -618,12 +619,13 @@ function buildOutsideValueCell(
 
   /** Read-only «Открыть» button for a single URL value. */
 function buildUrlOpenBtn(value: string): HTMLButtonElement {
-    const btn = button(
-      'Открыть',
-      () => void openOneUrl(value),
-      'btn small',
-      'Открыть в системном обработчике',
-    );
+    const btn = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      title: 'Открыть в системном обработчике',
+      onClick: () => void openOneUrl(value),
+    });
     btn.disabled = value.trim() === '';
     return btn;
   }
@@ -660,7 +662,7 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
     try {
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
       return;
     }
     if (box.isConnected) everMounted = true;
@@ -886,12 +888,13 @@ export function buildMultiUrlReadonly(opts: {
 
 /** Builds a disabled «Открыть» button bound to {@link onOpen}; used in readonly cells. */
 function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): HTMLButtonElement {
-  const btn = button(
-    'Открыть',
-    () => onOpen(value),
-    'btn small',
-    'Открыть в системном обработчике',
-  );
+  const btn = uiButton({
+    label: 'Открыть',
+    role: 'secondary',
+    size: 's',
+    title: 'Открыть в системном обработчике',
+    onClick: () => onOpen(value),
+  });
   btn.disabled = value.trim() === '';
   return btn;
 }

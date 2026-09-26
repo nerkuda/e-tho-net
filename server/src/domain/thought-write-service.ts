@@ -35,6 +35,7 @@ import type {
   McpThoughtWriteLinkSpec,
   McpThoughtWriteParams,
   PropertyValue,
+  PropertyValueValue,
   ThoughtBundleInput,
   ThoughtCardWarning,
 } from '@etn/shared';
@@ -47,7 +48,7 @@ import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
 import { createLink } from './link-service.js';
 import { listComments } from './comment-service.js';
-import { getPropertyValues } from './property-service.js';
+import { computeThoughtCardWarnings, getPropertyValues } from './property-service.js';
 
 export { EtnError, MCP_MAX_THOUGHTS_PER_WRITE };
 
@@ -412,7 +413,19 @@ export function writeThoughts(
               properties: Object.fromEntries(
                 Object.entries(result.properties).map(([key, v]: [string, PropertyValue]) => [
                   key,
-                  { id: v.id },
+                  // Свойство-связь — проекция рёбер: строки `property_values`
+                  // нет (`id: null`), но эхо несёт ИТОГОВЫЙ набор целей —
+                  // иначе `{id: null}` не давал убедиться, что рёбра встали
+                  // (ошибка 17cc0d54).
+                  v.value_type === 'link'
+                    ? {
+                        id: null,
+                        targets: linkTargetIds(v.value),
+                        ...(v.link_ids !== undefined && v.link_ids.length > 0
+                          ? { link_ids: v.link_ids }
+                          : {}),
+                      }
+                    : { id: v.id },
                 ]),
               ),
             }
@@ -420,6 +433,11 @@ export function writeThoughts(
         // `links` filled in phase 3 below — we still want a placeholder so
         // the array order matches the request when the agent reads items[].
         links: [],
+        // Рёбра link-дефолтов типа при создании мысли — по ним фасад
+        // публикует `link.created` (ошибка 8655842b).
+        ...(result.default_link_ids !== undefined
+          ? { default_link_ids: result.default_link_ids }
+          : {}),
         ...(result.attachments !== undefined && result.attachments.length > 0
           ? { attachments: result.attachments.map((a) => ({ id: a.id })) }
           : {}),
@@ -500,6 +518,28 @@ export function writeThoughts(
       }
     }
 
+    // Phase 2 computed card warnings BEFORE phase 3 materialized the top-level
+    // `links[]` (upsertThoughtBundle does not see them), so a required
+    // link-property filled by an edge of the same batch kept a false
+    // `REQUIRED_PROPERTY_MISSING` (ошибка 6f5812a3). Recompute warnings against
+    // the FINAL card state once every link exists — this also refreshes the
+    // aggregated `warnings[]` so batch-level consumers see the same picture.
+    if (pendingLinks.some((p) => p.links !== undefined && p.links.length > 0)) {
+      warnings.length = 0;
+      for (const [index, it] of items.entries()) {
+        const fresh = computeThoughtCardWarnings(ndb, it.id);
+        it.warnings = fresh;
+        const source = resolved.thoughts[index]!;
+        warnings.push(
+          ...fresh.map((w) => ({
+            ...w,
+            ...(source.ref !== undefined ? { ref: source.ref } : {}),
+            ...(source.thought_id !== undefined ? { thought_id: source.thought_id } : {}),
+          })),
+        );
+      }
+    }
+
     // `thought_count` mirrors how many items had a mutation (created or
     // updated) — `reused` items aren't counted because the batch didn't
     // change them, but the agent still gets the `thought_action` per item.
@@ -510,4 +550,16 @@ export function writeThoughts(
 
     return { items, warnings, link_count: linkCount, thought_count: thoughtCount };
   });
+}
+
+/**
+ * Нормализовать значение свойства-связи в список id целей для эха ответа
+ * `etn.thoughts.write` (ошибка 17cc0d54): `setPropertyValue` отдаёт для связи
+ * одиночный id или массив — приводим к массиву, чтобы форма ответа была
+ * предсказуемой.
+ */
+function linkTargetIds(value: PropertyValueValue): string[] {
+  if (value === null) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v));
+  return [String(value)];
 }

@@ -13,7 +13,7 @@ import type { McpRuntime } from '../context.js';
 import { NetworksStructure } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, STRUCTURE_SECTION_PREVIEW_CHARS } from '@etn/shared';
 import { getPermanentPreview } from '../../domain/comment-service.js';
-import { findThoughtUsage, getPropertyValuesResolved } from '../../domain/property-service.js';
+import { getPropertyValuesResolved } from '../../domain/property-service.js';
 
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
@@ -33,7 +33,8 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
   // network's `table_of_contents` role (task ba024a45 / 0.7.2, ADR 46d17a91 —
   // the legacy `node_section_type_id` column was replaced by `type_roles`).
   // Each section is enriched with a permanent-comment preview, property
-  // values, neighbour counts and a usage_count (N3) — the same shape agents
+  // values, neighbour counts and `deletion_blocks` (задача cfc55b01; прежний
+  // `usage_count`, N3) — the same shape agents
   // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent
   // can dive from a structure node straight into a full read.
   //
@@ -63,7 +64,8 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Read the structure declared via `type_roles.table_of_contents`: active thoughts of that type ' +
         'with permanent-comment previews (600 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
         'property values (structural link properties «Родители»/«Потомки» are summarized by `counters` ' +
-        'and not repeated), neighbour counters, `thought_types`. `include_conventions: true` adds ' +
+        'and not repeated), neighbour counters (`deletion_blocks` too), `thought_types`. ' +
+        '`include_conventions: true` adds ' +
         '`conventions` (off by default); `include_examples: true` adds `examples`. Carries `type_roles` and ' +
         '`instructions_ref` when the `instructions` role is set. ' +
         '`has_structure: false` → empty `sections`, fall back to search/query.',
@@ -137,7 +139,6 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
               STRUCTURE_SECTION_PREVIEW_CHARS,
             );
             const properties = getPropertyValuesResolved(ndb, 'thought', row.id, accessibleNetworkIds);
-            const usage = findThoughtUsage(ndb, row.id);
             return {
               id: row.id,
               title: row.title,
@@ -148,7 +149,12 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
                 parents_count: meta.parents_count,
                 children_count: meta.children_count,
                 attachments_count: meta.attachments_count,
-                usage_count: usage.total,
+                // Блокировки удаления (задача cfc55b01): счётчик blocking-only,
+                // тот же источник, что и `meta.deletion_blocks` карточки. До
+                // правки здесь стояло `findThoughtUsage().total` — после
+                // c0a2a2e6 это все рёбра свойств-связей, то есть имя «usage» (и
+                // сама семантика) разошлись с карточкой; теперь единообразно.
+                deletion_blocks: meta.deletion_blocks,
               },
               permanent,
               properties,

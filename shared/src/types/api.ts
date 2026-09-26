@@ -31,11 +31,22 @@ export interface ApiSuccess<T> {
   meta?: SuccessMeta;
 }
 
-/** Pagination metadata returned on list responses. */
+/**
+ * Pagination metadata returned on list responses.
+ *
+ * `total` — полное число совпадений; `null`, когда вызывающий не запросил
+ * подсчёт явным флагом (требование 5adebf61: COUNT только по запросу). В этом
+ * случае наличие хвоста сообщает `has_more`, а продолжение страницы —
+ * `next_cursor` (keyset, требование 3f2fdc41).
+ */
 export interface ListMeta {
-  total: number;
+  total: number | null;
   offset: number;
   limit: number;
+  /** true — за текущей страницей есть ещё строки (без полного COUNT). */
+  has_more?: boolean;
+  /** Keyset-курсор следующей страницы; `null`/отсутствует — страниц больше нет. */
+  next_cursor?: string | null;
 }
 
 /** List success envelope: `{ data: [...], meta: { total, offset, limit } }`. */

@@ -12,12 +12,16 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { EtnApi, IpcInvokePayload } from '../main/ipc/contract.js';
+import type { EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
 import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
 function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
-  const payload: IpcInvokePayload = { method, args };
+  return dispatch<T>({ method, args });
+}
+
+/** Send one payload over `etn:invoke`, cleaning the Electron error wrapper. */
+function dispatch<T>(payload: IpcInvokePayload): Promise<T> {
   return ipcRenderer.invoke('etn:invoke', payload).catch((err: unknown) => {
     // Drop Electron's `Error invoking remote method …: EtnError: …` wrapper —
     // the UI shows the server's message verbatim.
@@ -25,8 +29,24 @@ function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
   }) as Promise<T>;
 }
 
-/** Build the typed `window.etn` object from the `EtnApi` contract. */
-function buildApi(): EtnApi {
+/**
+ * Вызов с необязательным `requestId` отмены (требование ebed4980, ошибка
+ * b7cbd0e0). Сам `AbortSignal` за мост НЕ идёт: он не переживает
+ * `contextBridge`-сериализацию (приезжает пустым объектом), поэтому
+ * слушатель `abort` живёт в renderer-фасаде (`renderer/lib/etn.ts`), а сюда
+ * попадает уже примитив. `requestId` кладётся в payload — main по нему
+ * регистрирует `AbortController`, который гасит сообщение `etn:cancel`.
+ */
+function invokeCancellable<T>(
+  method: string,
+  args: unknown[],
+  requestId: string | undefined,
+): Promise<T> {
+  return dispatch<T>(requestId === undefined ? { method, args } : { method, args, requestId });
+}
+
+/** Build the typed `window.etn` object from the `EtnBridgeApi` contract. */
+function buildApi(): EtnBridgeApi {
   return {
     server: {
       listProfiles: () => invoke('server.listProfiles'),
@@ -47,6 +67,7 @@ function buildApi(): EtnApi {
       transferOwnership: (id, userId) => invoke('networks.transferOwnership', id, userId),
       getPreferences: (id) => invoke('networks.getPreferences', id),
       setPreference: (id, key, value) => invoke('networks.setPreference', id, key, value),
+      statistics: (id) => invoke('networks.statistics', id),
     },
     thoughts: {
       get: (networkId, id, atLayerId) => invoke('thoughts.get', networkId, id, atLayerId),
@@ -102,13 +123,21 @@ function buildApi(): EtnApi {
         invoke('thoughts.setFocusOrder', networkId, focusId, input),
     },
     structures: {
-      query: (networkId, request) => invoke('structures.query', networkId, request),
-      queryIds: (networkId, request) => invoke('structures.queryIds', networkId, request),
+      query: (networkId, request, requestId) =>
+        invokeCancellable('structures.query', [networkId, request], requestId),
+      queryIds: (networkId, request, requestId) =>
+        invokeCancellable('structures.queryIds', [networkId, request], requestId),
       hierarchy: (networkId, thoughtId, query) =>
         invoke('structures.hierarchy', networkId, thoughtId, query),
       edges: (networkId, ids, showInactive) =>
         invoke('structures.edges', networkId, ids, showInactive),
     },
+    /**
+     * Отмена вызова по `requestId` (требование ebed4980): fire-and-forget
+     * сообщение main'у. За мост уходит только примитив — сигнал остаётся в
+     * renderer-контексте (ошибка b7cbd0e0).
+     */
+    cancelRequest: (requestId) => ipcRenderer.send('etn:cancel', requestId),
     savedFilters: {
       list: (networkId) => invoke('savedFilters.list', networkId),
       create: (networkId, input) => invoke('savedFilters.create', networkId, input),

@@ -12,6 +12,7 @@ import http from 'node:http';
 
 import { ConfigError, loadConfig } from './config.js';
 import { SystemDb } from './db/system-db.js';
+import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
 import { sweepCommentHtml } from './domain/markdown-sweep.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
@@ -35,6 +36,16 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   );
 
   const systemDb = SystemDb.open(config.dataDir, logger);
+
+  // Пул reader-воркеров тяжёлых чтений (ADR bec191e6): процессный ресурс,
+  // настраивается на старте. Тяжёлые выборки уходят в воркеры, чтобы
+  // синхронный better-sqlite3 не блокировал цикл событий; писатель остаётся
+  // единственным — в главном потоке. Воркеры поднимаются лениво.
+  configureReaderPool({
+    size: config.readerPool.size,
+    taskTimeoutMs: config.readerPool.taskTimeoutMs,
+    logger,
+  });
 
   if (!systemDb.hasFirstUser()) {
     systemDb.close();
@@ -101,6 +112,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
       await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
     }
     await app.close();
+    await closeReaderPool();
     systemDb.close();
     logger.info('ETN server stopped');
     fileLog.info('server', 'ETN server stopped');

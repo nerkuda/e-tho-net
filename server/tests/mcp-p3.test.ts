@@ -30,9 +30,15 @@ import { openNetworkDb } from '../src/db/network-db.js';
 import { createThought } from '../src/domain/thought-service.js';
 import { createLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
-import { createAttachment } from '../src/domain/attachment-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
+import { createAttachment, listAttachments } from '../src/domain/attachment-service.js';
 import { createComment } from '../src/domain/comment-service.js';
-import { createNetworkProperty } from '../src/domain/property-service.js';
+import {
+  createNetworkProperty,
+  createTypeProperty,
+  getPropertyValues,
+  setPropertyValue,
+} from '../src/domain/property-service.js';
 
 // ---------------------------------------------------------------------------
 // Вспомогательные хелперы — отдельные сети, типы, простые деревья.
@@ -204,6 +210,167 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
     }
   });
 
+  // Регресс ошибки 0a30c5e4: фасад `thoughts.copy_subtree` эмитил
+  // `thought.created`/`link.created` по ПОЛНЫМ картам id, включая
+  // переиспользованные сущности, — realtime/журнал сообщали о «создании»
+  // того, чего никто не создавал.
+  it('reuse: события и журнал только по реально созданным сущностям (ошибка 0a30c5e4)', async () => {
+    const w = await buildPair();
+    try {
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+
+      // Одинаковые мысль+связь в обеих сетях → полное переиспользование.
+      const srcRoot = createThought(ndbSrc, { title: 'Общий корень' }, w.src.adminId).id;
+      const srcChild = createThought(ndbSrc, { title: 'Общий потомок' }, w.src.adminId).id;
+      createLink(ndbSrc, { source_id: srcRoot, target_id: srcChild }, w.src.adminId);
+
+      const dstRoot = createThought(ndbDst, { title: 'Общий корень' }, w.dst.adminId).id;
+      const dstChild = createThought(ndbDst, { title: 'Общий потомок' }, w.dst.adminId).id;
+      createLink(ndbDst, { source_id: dstRoot, target_id: dstChild }, w.dst.adminId);
+
+      const reused = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(reused.isError, undefined, toolText(reused));
+      const rd = toolJson<{ thoughts_reused: number; thoughts_created: number }>(reused);
+      assert.equal(rd.thoughts_reused, 2);
+      assert.equal(rd.thoughts_created, 0);
+
+      const changes = await callOp(w.handle.client, 'changes.list', {
+        network_id: w.dst.networkId,
+        since_seq: 0,
+      });
+      assert.equal(changes.isError, undefined, toolText(changes));
+      const evs = toolJson<{ events: Array<{ type: string; data: unknown }> }>(changes).events;
+      const falseThoughtEvents = evs
+        .filter((e) => e.type === 'thought.created')
+        .map((e) => (e.data as { thought: { id: string } }).thought.id)
+        .filter((id) => id === dstRoot || id === dstChild);
+      assert.deepEqual(
+        falseThoughtEvents,
+        [],
+        'нет ложных thought.created для переиспользованных мыслей',
+      );
+      assert.equal(
+        evs.filter((e) => e.type === 'link.created').length,
+        0,
+        'нет ложного link.created при полном reuse',
+      );
+    } finally {
+      await w.closeAll();
+    }
+  });
+
+  // Ошибка af4f6568: политика `reuse` обещает «копируются только связи/
+  // свойства/вложения, которых у существующей мысли ещё нет», но код их не
+  // докопировал. Проверяем докопирование и идемпотентность повтора.
+  it('reuse докопирует отсутствующие связи/свойства/вложения идемпотентно (ошибка af4f6568)', async () => {
+    const w = await buildPair();
+    try {
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+
+      // Одноимённое свойство, привязанное к корневому типу мысли (id
+      // корневого типа един во всех сетях) — тогда оно доступно типовым
+      // мыслям и в src, и в dst.
+      const rootTypeId = (
+        ndbSrc.prepare('SELECT id FROM thought_types_v WHERE is_root = 1 LIMIT 1').get() as {
+          id: string;
+        }
+      ).id;
+      createTypeProperty(
+        ndbSrc,
+        'thought_type',
+        rootTypeId,
+        { key: 'Ключ', value_type: 'text' },
+        w.src.adminId,
+      );
+      createTypeProperty(
+        ndbDst,
+        'thought_type',
+        rootTypeId,
+        { key: 'Ключ', value_type: 'text' },
+        w.dst.adminId,
+      );
+
+      const srcRoot = createThought(ndbSrc, { title: 'Корень докопирования' }, w.src.adminId).id;
+      const srcChild = createThought(ndbSrc, { title: 'Потомок докопирования' }, w.src.adminId).id;
+      createLink(ndbSrc, { source_id: srcRoot, target_id: srcChild }, w.src.adminId);
+      setPropertyValue(ndbSrc, 'thought', srcRoot, 'Ключ', 'значение', w.src.adminId);
+      createAttachment(
+        ndbSrc,
+        'thought',
+        srcRoot,
+        { kind: 'url', url: 'https://example.org/dokopirovanie' },
+        w.src.adminId,
+      );
+
+      // В целевой — те же мысли, но без связи, свойства и вложения.
+      const dstRoot = createThought(ndbDst, { title: 'Корень докопирования' }, w.dst.adminId).id;
+      const dstChild = createThought(ndbDst, { title: 'Потомок докопирования' }, w.dst.adminId).id;
+
+      const first = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(first.isError, undefined, toolText(first));
+      const fd = toolJson<{
+        thoughts_reused: number;
+        thoughts_created: number;
+        links_created: number;
+      }>(first);
+      assert.equal(fd.thoughts_reused, 2, 'обе мысли переиспользованы');
+      assert.equal(fd.thoughts_created, 0);
+      assert.equal(fd.links_created, 1, 'докопирована отсутствующая связь');
+      assert.ok(
+        ndbDst
+          .prepare('SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND active = 1')
+          .get(dstRoot, dstChild) !== undefined,
+        'связь появилась в целевой сети',
+      );
+      const props = getPropertyValues(ndbDst, 'thought', dstRoot).filter(
+        (p) => p.property_name === 'Ключ',
+      );
+      assert.equal(props.length, 1, 'свойство докопировано');
+      assert.equal(props[0]!.value, 'значение');
+      const atts = listAttachments(ndbDst, 'thought', dstRoot);
+      assert.equal(atts.length, 1, 'вложение докопировано');
+      assert.equal(atts[0]!.url, 'https://example.org/dokopirovanie');
+
+      // Повторное копирование идемпотентно — ничего не дублируется.
+      const second = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(second.isError, undefined, toolText(second));
+      assert.equal(
+        toolJson<{ links_created: number }>(second).links_created,
+        0,
+        'повтор не создаёт связей',
+      );
+      assert.equal(
+        getPropertyValues(ndbDst, 'thought', dstRoot).filter((p) => p.property_name === 'Ключ')
+          .length,
+        1,
+        'повтор не дублирует свойство',
+      );
+      assert.equal(listAttachments(ndbDst, 'thought', dstRoot).length, 1, 'повтор не дублирует вложение');
+    } finally {
+      await w.closeAll();
+    }
+  });
+
   it('онтология целевой сети не покрывает подграф → VALIDATION_ERROR', async () => {
     const w = await buildPair();
     try {
@@ -230,6 +397,149 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
         text.includes('VALIDATION_ERROR') || text.includes('missing'),
         `неожиданный текст ошибки: ${text}`,
       );
+    } finally {
+      await w.closeAll();
+    }
+  });
+
+  // Открытый пункт предыдущего обхода: пока импорт .etnx терял типы (ошибка
+  // e7d1b27a), покрытие онтологии `copy_subtree` падало missing_*_types.
+  // Сквозной сценарий: экспорт из src → импорт в dst (создаёт онтологию) →
+  // copy_subtree src→dst проходит, duplicate_policy/id_remap/target_parent
+  // работают.
+  it('после импорта .etnx copy_subtree сквозь сети проходит (онтология покрыта)', async () => {
+    const w = await buildPair();
+    try {
+      // Два РАЗНЫХ пользовательских типа мысли — именно этот случай ломался:
+      // импорт оставлял только первый тип, второй терялся, и покрытие
+      // онтологии `copy_subtree` падало missing_thought_types.
+      const typeA = makeType(w.src, 'сквозной-тип-A');
+      const typeB = makeType(w.src, 'сквозной-тип-B');
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const linkTypeId = createLinkType(
+        ndbSrc,
+        { name_forward: 'сквозная-связь', name_reverse: 'сквозная-связь' },
+        w.src.adminId,
+      ).id;
+
+      const root = createThought(
+        ndbSrc,
+        { title: 'Сквозной корень', type_id: typeA },
+        w.src.adminId,
+      ).id;
+      const child = createThought(
+        ndbSrc,
+        { title: 'Сквозной потомок', type_id: typeB },
+        w.src.adminId,
+      ).id;
+      createLink(ndbSrc, { source_id: root, target_id: child, type_id: linkTypeId }, w.src.adminId);
+
+      // 1) Экспорт .etnx из src с типами и поддеревом.
+      const exported = await callOp(w.srcHandle.client, 'export.subgraph', {
+        network_id: w.src.networkId,
+        seed_ids: [root],
+        radius: 2,
+        format: 'etnx',
+        etnx_options: { include_types: true, include_subtree: true, subtree_depth: 2 },
+      });
+      assert.equal(exported.isError, undefined, toolText(exported));
+      const etnx = toolJson<{ format: string; content_b64: string }>(exported);
+      assert.equal(etnx.format, 'etnx');
+
+      // 2) Импорт в dst — пользовательские типы мысли и связи должны появиться.
+      const imported = await callOp(
+        w.handle.client,
+        'import.subgraph',
+        {
+          network_id: w.dst.networkId,
+          source: { kind: 'etnx_base64', content_base64: etnx.content_b64 },
+        },
+        true,
+      );
+      assert.equal(imported.isError, undefined, toolText(imported));
+      const imp = toolJson<{
+        imported: { thought_types_created: number; link_types_created: number };
+      }>(imported);
+      assert.ok(
+        imp.imported.thought_types_created >= 2,
+        'оба пользовательских типа мысли импортированы (не только первый)',
+      );
+      assert.ok(imp.imported.link_types_created >= 1, 'пользовательский тип связи импортирован');
+
+      // 3) copy_subtree с duplicate_policy=reuse: покрытие онтологии проходит,
+      // обе импортированные копии переиспользуются, id_remap заполнен.
+      const reused = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [root],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+        target_parent_thought_id: w.dst.homeId,
+      });
+      assert.equal(reused.isError, undefined, toolText(reused));
+      const rd = toolJson<{
+        thoughts_reused: number;
+        thoughts_created: number;
+        thought_id_map: Record<string, string>;
+        link_id_map: Record<string, string>;
+      }>(reused);
+      assert.equal(rd.thoughts_reused, 2, 'обе импортированные копии переиспользованы');
+      assert.equal(rd.thoughts_created, 0);
+      // Регресс ошибки b7533b9c: при полном переиспользовании карты тоже
+      // заполняются — «куда легли» переиспользованные мысли и связи.
+      assert.equal(
+        Object.keys(rd.thought_id_map).length,
+        2,
+        'thought_id_map заполнен при полном reuse',
+      );
+      assert.equal(
+        typeof rd.thought_id_map[root],
+        'string',
+        'переиспользованному корню сопоставлен id в целевой сети',
+      );
+      assert.ok(
+        rd.thought_id_map[root] !== root,
+        'id переиспользованной мысли — это существующая копия в целевой сети',
+      );
+      assert.ok(
+        Object.keys(rd.link_id_map).length >= 1,
+        'link_id_map отражает переиспользованную связь',
+      );
+      // Карта непуста и указывает на РЕАЛЬНЫЕ живые сущности целевой сети.
+      const ndbDstCheck = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+      for (const [, tgtId] of Object.entries(rd.thought_id_map)) {
+        assert.ok(
+          ndbDstCheck.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(tgtId) !== undefined,
+          `id ${tgtId} из thought_id_map существует в целевой сети`,
+        );
+      }
+      for (const [, linkId] of Object.entries(rd.link_id_map)) {
+        assert.ok(
+          ndbDstCheck.prepare('SELECT 1 FROM links_v WHERE id = ?').get(linkId) !== undefined,
+          `id ${linkId} из link_id_map существует в целевой сети`,
+        );
+      }
+
+      // 4) create_always + target_parent_thought_id: новый корень подвешен к HOME целевой сети.
+      const created = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [root],
+        max_depth: 1,
+        duplicate_policy: 'create_always',
+        target_parent_thought_id: w.dst.homeId,
+      });
+      assert.equal(created.isError, undefined, toolText(created));
+      const cd = toolJson<{ thought_id_map: Record<string, string>; thoughts_created: number }>(created);
+      assert.equal(cd.thoughts_created, 2);
+      assert.equal(Object.keys(cd.thought_id_map).length, 2, 'id_remap заполнен при create_always');
+      const newRoot = cd.thought_id_map[root];
+      assert.ok(newRoot !== undefined && newRoot !== root, 'корень копии получил новый id');
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+      const attached = ndbDst
+        .prepare('SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND active = 1 LIMIT 1')
+        .get(w.dst.homeId, newRoot);
+      assert.ok(attached !== undefined, 'корень копии подвешен к target_parent_thought_id');
     } finally {
       await w.closeAll();
     }

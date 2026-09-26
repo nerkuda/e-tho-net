@@ -76,7 +76,6 @@ import { createComment, listComments, updateComment } from './comment-service.js
 import {
   type CrossNetworkRefValue,
   parseCrossNetworkAddress,
-  isCrossNetworkAddress,
 } from '@etn/shared';
 import {
   type CrossNetworkAccessContext,
@@ -1147,7 +1146,7 @@ function setLinkPropertyTargets(
   targetIds: string[],
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): string[] {
+): { targets: string[]; createdLinkIds: string[] } {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1179,6 +1178,7 @@ function setLinkPropertyTargets(
   }
 
   const result: string[] = [];
+  const createdLinkIds: string[] = [];
   targetIds.forEach((targetId, index) => {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     const current = existing.get(targetId);
@@ -1195,10 +1195,13 @@ function setLinkPropertyTargets(
         ? index
         : nextStructuralPosition(ndb, src)
       : 0;
-    insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId);
+    // `insertLinkRow` может восстановить корзинное ребро той же тройки — для
+    // наблюдателя оно так же становится живым, поэтому идёт в `created`
+    // (та же семантика, что у `etn.properties.add`: `created = no live edge`).
+    createdLinkIds.push(insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId));
     result.push(targetId);
   });
-  return result;
+  return { targets: result, createdLinkIds };
 }
 
 /**
@@ -1209,6 +1212,11 @@ function setLinkPropertyTargets(
  * живость (отбор `allowed_type_ids` не применяется: значения — сторона
  * источников). Самосвязь молча пропускается. Полная замена набора:
  * недостающие рёбра создаются, лишние помечаются на удаление.
+ *
+ * Возвращает и итоговый набор источников (`targets`), и id рёбер, созданных
+ * (в том числе восстановленных из корзины) этой записью, — по ним фасады
+ * публикуют `link.created` (ошибка 8655842b, тот же контракт, что у
+ * {@link setLinkPropertyTargets}).
  */
 export function setLinkPropertySourcesForTarget(
   ndb: NetworkDb,
@@ -1216,7 +1224,7 @@ export function setLinkPropertySourcesForTarget(
   prop: PropertyLike,
   sourceIds: string[],
   actorUserId: string,
-): string[] {
+): { targets: string[]; createdLinkIds: string[] } {
   return ndb.transaction(() => {
     const cfg = prop.config ?? {};
     const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1227,16 +1235,17 @@ export function setLinkPropertySourcesForTarget(
       if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
     }
     const result: string[] = [];
+    const createdLinkIds: string[] = [];
     for (const sourceId of sourceIds) {
       if (sourceId === ownerId) continue;
       if (existing.has(sourceId)) {
         result.push(sourceId);
         continue;
       }
-      insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId);
+      createdLinkIds.push(insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId));
       result.push(sourceId);
     }
-    return result;
+    return { targets: result, createdLinkIds };
   });
 }
 
@@ -3045,20 +3054,87 @@ export function updateTypeProperty(
  * stored value in place — it becomes a value outside type, readable with
  * `outside_type: true` and deletable manually (02-data-model.md §3.5a). The
  * pre-0.6.5 cascade (values + overrides deleted with the definition) is gone.
+ *
+ * Снятие привязки со стороны назначения дополнительно синхронизирует legacy
+ * `config.allowed_target_type_ids` — см.
+ * {@link stripLegacyAllowedTargetType} (ошибка 3ac05cff, 0.9.1).
  */
 export function deleteTypeProperty(ndb: NetworkDb, id: string, actorUserId: string): void {
   const current = getTypeProperty(ndb, id);
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
   }
-  // S4 (13-layers.md §5.2): in a working layer the detach materialises a
-  // tombstone over the binding; the base rows stay intact.
-  deleteRowLayered(ndb, 'type_properties', id);
-  // Отключение свойства — это правка настроек типа: обновим авторство
-  // самого типа (требование e6d4165e, приравнивание).
   ndb.transaction(() => {
+    // S4 (13-layers.md §5.2): in a working layer the detach materialises a
+    // tombstone over the binding; the base rows stay intact.
+    deleteRowLayered(ndb, 'type_properties', id);
+    // Привязка назначения, порождённая legacy-ограничением целей, снимается
+    // НАВСЕГДА: из списка целей реестрового свойства её владелец убирается,
+    // иначе эффективный набор снова синтезирует зеркало и «✕» — no-op.
+    if (current.value_type === 'link' && !isStructuralLinkProperty(current.config)) {
+      if (current.side === 'target') {
+        stripLegacyAllowedTargetType(ndb, current.property_id, current.owner_id, actorUserId);
+      }
+    }
+    // Отключение свойства — это правка настроек типа: обновим авторство
+    // самого типа (требование e6d4165e, приравнивание).
     touchType(ndb, current.owner_type, current.owner_id, actorUserId);
   });
+}
+
+/**
+ * Убрать тип из legacy-списка `config.allowed_target_type_ids` свойства-связи
+ * (ошибка 3ac05cff, 0.9.1). Список — исторический механизм МАТЕРИАЛИЗАЦИИ
+ * зеркал (миграция 042, требование e93001ac): из него `createTypeProperty`
+ * создаёт настоящие target-привязки, а `appendMirroredLinkProperties` /
+ * `listThoughtLinkProperties` по-прежнему достраивают обратное свойство у
+ * типов, покрытых списком (нужно для .etnx-архивов, где target-привязок нет).
+ *
+ * Пока снятый владелец остаётся в списке, синтез возвращает свойство — снятие
+ * target-привязки визуально не срабатывает. Поэтому при отвязке target-привязки
+ * тип убирается из списка: в модели 0.8.1 ограничение целей — это сами
+ * target-привязки (`loadBindingTypesBySide`), а список лишь их дублирует.
+ *
+ * Синхронизируется только ТОЧНОЕ совпадение `typeId` со списком. Тип, покрытый
+ * списком через предка (поддерево), собственной привязки не имеет и снять её
+ * нельзя — правится объявление предка.
+ *
+ * Конфиг правится ТОЧЕЧНО, минуя {@link updateNetworkProperty}: его
+ * `validateLinkConfig` перепроверяет весь конфиг, включая посторонние
+ * legacy-записи списка, которые могли протухнуть (тип удалён) — это отвергло бы
+ * законное снятие. Здесь удаляется ровно один элемент, остальное не трогается.
+ */
+function stripLegacyAllowedTargetType(
+  ndb: NetworkDb,
+  propertyId: string,
+  typeId: string,
+  actorUserId: string,
+): void {
+  const prop = getNetworkProperty(ndb, propertyId);
+  if (prop === null || prop.value_type !== 'link' || isStructuralLinkProperty(prop.config)) return;
+  const cfg = prop.config ?? {};
+  const allowed = cfg.allowed_target_type_ids;
+  if (!Array.isArray(allowed) || !allowed.includes(typeId)) return;
+  const nextConfig: PropertyConfig = { ...cfg };
+  const remaining = allowed.filter((entry) => entry !== typeId);
+  if (remaining.length > 0) nextConfig.allowed_target_type_ids = remaining;
+  else delete nextConfig.allowed_target_type_ids;
+  const nowMs = Date.now();
+  // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer.
+  materializeShadow(ndb, 'properties', propertyId);
+  ndb
+    .prepare(
+      `UPDATE properties SET config = ?, updated_at = ?, updated_by = ?, updated_at_ms = ?
+        WHERE id = ? AND layer_id = ?`,
+    )
+    .run(
+      JSON.stringify(nextConfig),
+      new Date(nowMs).toISOString(),
+      actorUserId,
+      nowMs,
+      propertyId,
+      ndb.layerId,
+    );
 }
 
 /**
@@ -3703,9 +3779,10 @@ export function getPropertyValuesResolved(
 
 /**
  * Reverse lookup использования мысли (docs/03-server-api.md §9.1): мысли,
- * ссылающиеся на `thoughtId` через свойства-связи с `blocks_target_deletion`
- * (0.8.1, dbf1e4aa), сгруппированные по свойству реестра. Плечо
- * `thought_ref`-значений исчезло вместе с видом значения (миграция 040):
+ * ссылающиеся на `thoughtId` через ВСЕ формальные свойства-связи реестра
+ * (c0a2a2e6; флаг `blocks_target_deletion` на «Использование» не влияет —
+ * он остаётся про защиту от удаления), сгруппированные по свойству реестра.
+ * Плечо `thought_ref`-значений исчезло вместе с видом значения (миграция 040):
  * все ссылки — рёбра. Groups are ordered by property name, items by the
  * owner's normalized title.
  */
@@ -3761,9 +3838,11 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     group.thoughts.push(rowToThoughtRef(row));
   }
 
-  // Использование через свойства-связи с blocks_target_deletion — рёбра,
-  // у которых мысль является целью ссылки.
-  for (const bp of listBlockingLinkProperties(ndb)) {
+  // Использование через свойства-связи — ВСЕ формальные link-рёбра реестра,
+  // у которых мысль является целью ссылки (c0a2a2e6: «кто ссылается на мысль»).
+  // Блокировка удаления (`blocks_target_deletion`) здесь ни при чём — она
+  // остаётся в countThoughtRefUsages/clearThoughtRefUsages.
+  for (const bp of listLinkPropertyEdges(ndb, { onlyBlocking: false })) {
     const refCol = bp.direction === 'out' ? 'source_id' : 'target_id';
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
     const typeClause = bp.link_type_id === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
@@ -3793,34 +3872,46 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
   return { total, groups, holding_layers: [] };
 }
 
-/** Запись учёта блокирующих ссылок: свойство + направление, в котором оно блокирует. */
-interface BlockingLinkProperty {
+/**
+ * Записи учёта ссылок через свойства-связи: свойство + направление ребра у
+ * владельца. Общий тип для двух потребителей — «Использования» мысли
+ * (все свойства-связи, c0a2a2e6) и блокировки удаления (только
+ * `blocks_target_deletion`, dbf1e4aa).
+ */
+interface LinkPropertyEdge {
   property_id: string;
   name: string;
-  /** Направление ребра у ВЛАДЕЛЬЦА: `out` — владелец источник (блокируется цель),
-   *  `in` — владелец цель (блокируется источник). */
+  /** Направление ребра у ВЛАДЕЛЬЦА: `out` — владелец источник (ссылается на
+   *  цель), `in` — владелец цель (на него ссылается источник). */
   direction: LinkPropertyDirection;
   link_type_id: string | null;
 }
 
 /**
- * Свойства-связи, чьё ребро блокирует удаление значения
- * (`config.blocks_target_deletion`), с направлением, РАЗРЕШЁННЫМ ПО ПРИВЯЗКАМ
+ * Свойства-связи реестра с направлением, РАЗРЕШЁННЫМ ПО ПРИВЯЗКАМ
  * (ошибка 083dcde5; класс ошибки c67676f3).
  *
  * Направление свойства-связи живёт в привязке (`type_properties.side`,
  * миграция 042), а не в `config`: одна реестровая строка может быть привязана
  * и источником, и назначением на разные типы владельцев. Поэтому возвращаем по
  * записи на каждую ПАРУ `(property_id, direction)`, а не одну запись на
- * свойство: привязка-источник блокирует цель ребра (`out`), привязка-назначение
- * — источник (`in`). У свойства без привязок сохраняем прежний fallback на
- * `config.direction` (внетиповое заполнение, привязки до миграции 041).
+ * свойство: привязка-источник — `out`, привязка-назначение — `in`. У свойства
+ * без привязок сохраняем прежний fallback на `config.direction` (внетиповое
+ * заполнение, привязки до миграции 041).
  *
  * Симметрично чтению ({@link listThoughtLinkProperties}, `emitExplicit`):
  * направление каждой записи вычисляет {@link linkPropertyDirection} по стороне
  * привязки.
+ *
+ * `onlyBlocking` — `true` для проверки удаления (`blocks_target_deletion`),
+ * `false` для «Использования» мысли (все формальные link-рёбра, c0a2a2e6).
+ * Структурные «Родители»/«Потомки» исключаются всегда: они не формальные
+ * ссылки-свойства.
  */
-function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
+function listLinkPropertyEdges(
+  ndb: NetworkDb,
+  opts: { onlyBlocking: boolean },
+): LinkPropertyEdge[] {
   // Стороны, которыми свойство привязано у типов владельцев. Без привязок
   // свойство остаётся с fallback-направлением из config.
   const bindingSides = new Map<string, Set<LinkPropertySide | null>>();
@@ -3829,8 +3920,9 @@ function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
       `SELECT DISTINCT tp.property_id AS property_id, tp.side AS side
          FROM type_properties_v tp
          JOIN properties_v p ON p.id = tp.property_id
-        WHERE p.value_type = 'link'
-          AND json_extract(p.config, '$.blocks_target_deletion') = 1`,
+        WHERE p.value_type = 'link'${
+          opts.onlyBlocking ? " AND json_extract(p.config, '$.blocks_target_deletion') = 1" : ''
+        }`,
     )
     .all() as Array<{ property_id: string; side: string | null }>;
   for (const row of rows) {
@@ -3842,11 +3934,12 @@ function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
     sides.add(row.side === 'source' || row.side === 'target' ? row.side : null);
   }
 
-  const out: BlockingLinkProperty[] = [];
+  const out: LinkPropertyEdge[] = [];
   for (const prop of listNetworkProperties(ndb)) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
-    if (cfg.blocks_target_deletion !== true) continue;
+    if (isStructuralLinkProperty(cfg)) continue;
+    if (opts.onlyBlocking && cfg.blocks_target_deletion !== true) continue;
     const sides = bindingSides.get(prop.id);
     const directions: LinkPropertyDirection[] =
       sides === undefined || sides.size === 0
@@ -3862,6 +3955,11 @@ function listBlockingLinkProperties(ndb: NetworkDb): BlockingLinkProperty[] {
     }
   }
   return out;
+}
+
+/** Свойства-связи, блокирующие удаление цели (`blocks_target_deletion`). */
+function listBlockingLinkProperties(ndb: NetworkDb): LinkPropertyEdge[] {
+  return listLinkPropertyEdges(ndb, { onlyBlocking: true });
 }
 
 /**
@@ -4302,7 +4400,7 @@ function setPropertyValueForProperty(
         key: errKey.key,
       });
     }
-    const targetIds = setLinkPropertyTargets(
+    const { targets: targetIds, createdLinkIds } = setLinkPropertyTargets(
       ndb,
       ownerId,
       prop,
@@ -4318,6 +4416,8 @@ function setPropertyValueForProperty(
       // пустая строка-заглушка (ошибка 5a50f906 — `id: ""` в ответе читалось
       // как «id есть, но пустой»). Адрес ребра — `link_id` из
       // `LinkPropertyValueItem` (чтение значений) / `etn.properties.add`.
+      // `link_ids` — рёбра, СОЗДАННЫЕ этой записью: фасады публикуют по ним
+      // `link.created` (ошибка 1b719d76).
       id: null,
       owner_type: ownerType,
       owner_id: ownerId,
@@ -4326,6 +4426,7 @@ function setPropertyValueForProperty(
       property_name: prop.name,
       value_type: 'link',
       value: targetIds.length === 0 ? null : targetIds.length === 1 ? (targetIds[0] ?? null) : targetIds,
+      link_ids: createdLinkIds,
       updated_at: new Date(nowMs).toISOString(),
       created_by: actorUserId,
       updated_by: actorUserId,
@@ -4670,7 +4771,13 @@ export function computeThoughtCardWarnings(
     if (def.value_type === 'link') {
       const cfg = def.config ?? {};
       const linkTypeId = cfg.link_type_id as string;
-      const direction = linkPropertyDirection(def.config);
+      // Направление свойства-связи задаётся привязкой (`type_properties.side`,
+      // миграция 042), а не `config.direction` — та же единая точка
+      // интерпретации, что и в чтении карточки (`emitExplicit`). Без учёта
+      // стороны обязательное свойство «применяется к», заполненное ребром из
+      // того же батча, ложно давало `REQUIRED_PROPERTY_MISSING`
+      // (ошибка cb9fec6b-4606-4ddb-bd93-10716007b659).
+      const direction = linkPropertyDirection(def.config, def.side ?? null);
       if ((edgeCounts.get(`${linkTypeId}|${direction}`) ?? 0) > 0) continue;
     } else if (hasValue(stored.get(def.property_id))) {
       continue;

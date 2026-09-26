@@ -19,8 +19,10 @@
  *
  * The class holds **no** network state (no cookie jar) and is safe to share across
  * IPC handlers. All methods return the parsed `data` of the success envelope
- * (`{ data, meta }`); `meta` is exposed via {@link lastMeta} when a caller needs the
- * version/request_id of the most recent call.
+ * (`{ data, meta }`); a method that needs `meta` (page counters, `effective`,
+ * `view`, `directions`, `next_cursor`) reads it from the envelope of ITS OWN
+ * response via the internal `requestEnvelope` — never from a field shared
+ * between concurrent calls.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -64,6 +66,47 @@ const RETRY_MAX_DELAY_MS = 5_000;
 /** Response timeout applied to every request, in milliseconds (03-server-api.md §4.1). */
 const RESPONSE_TIMEOUT_MS = 30_000;
 
+/**
+ * Префикс курсора-заглушки для сервера старше этапа 4 (нет `count`/`cursor` в
+ * строгом контракте запроса, ошибка da2c68a7). Такой сервер листает список
+ * только через `offset`, поэтому деградация кодирует продолжение в тот же
+ * непрозрачный `next_cursor` (`offset:<N>`): экран «Структуры» и сбор id для
+ * команд листаются как прежде, не зная о разнице, а транспорт на входе
+ * разворачивает токен обратно в `offset`.
+ */
+const LEGACY_CURSOR_PREFIX = 'offset:';
+
+/** `offset`, закодированный в курсоре-заглушке, либо `undefined`. */
+function legacyCursorOffset(cursor: unknown): number | undefined {
+  if (typeof cursor !== 'string' || !cursor.startsWith(LEGACY_CURSOR_PREFIX)) return undefined;
+  const parsed = Number.parseInt(cursor.slice(LEGACY_CURSOR_PREFIX.length), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Курсор-заглушка продолжения offset-листания: есть ли ещё страница и с какого
+ * `offset` читать. `total` может быть `null` (COUNT не считался) — тогда
+ * признаком «есть ещё» служит полная страница.
+ */
+function legacyNextCursor(startOffset: number, pageLength: number, limit: number, total: number | null): string | null {
+  const fullPage = limit > 0 && pageLength >= limit;
+  const more = fullPage && (total === null || startOffset + pageLength < total);
+  return more ? `${LEGACY_CURSOR_PREFIX}${startOffset + pageLength}` : null;
+}
+
+/**
+ * Отверг ли сервер запрос выборки из-за неизвестных ему полей `count`/`cursor`
+ * (сервер старше этапа 4 тех.проекта e29c0f00): REST-контракт запроса —
+ * строгий, лишнее поле роняет весь отбор с `VALIDATION_ERROR`. Это признак
+ * старого сервера, а не ошибки отбора, — транспорт повторяет запрос без этих
+ * полей (ошибка da2c68a7).
+ */
+function isUnknownStructureFieldError(err: unknown): boolean {
+  if (!(err instanceof EtnError) || err.code !== 'VALIDATION_ERROR') return false;
+  const fields = (err.details as { fields?: unknown } | undefined)?.fields;
+  return Array.isArray(fields) && fields.some((f) => f === 'count' || f === 'cursor');
+}
+
 /** Constructor options for {@link RestClient}. */
 export interface RestClientOptions {
   /** Server base URL, e.g. `http://localhost:3000`. Trailing slash is stripped. */
@@ -96,6 +139,18 @@ type QueryValue = string | number | boolean | undefined | null;
 type QueryRecord = Record<string, QueryValue | QueryValue[]>;
 
 /**
+ * Parsed success envelope of ONE request: its own `data` paired with the `meta`
+ * of the SAME response. Internal — callers see `data` (or a named composed
+ * shape). Meta must never travel through a shared mutable field on the client:
+ * several requests resolve with interleaved continuations, so a late reader
+ * would pick up a foreign response's meta.
+ */
+interface ResponseEnvelope<T> {
+  data: T;
+  meta: ApiSuccess<unknown>['meta'] | undefined;
+}
+
+/**
  * Strongly-typed ETN REST client. Construct one per active server profile and reuse
  * it for the lifetime of the connection (see `NetContext`, task G7).
  *
@@ -117,15 +172,20 @@ export class RestClient {
   private readonly random: () => number;
 
   /**
-   * In-flight plain GETs by final URL (see {@link request}): identical GETs
-   * racing each other share one fetch. Cleared in a `finally` — completed
+   * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
+   * GETs racing each other share one fetch. Cleared in a `finally` — completed
    * responses are never cached, so sequential identical GETs fetch again and
    * realtime freshness is preserved.
    */
-  private readonly inflightGets = new Map<string, Promise<unknown>>();
+  private readonly inflightGets = new Map<string, Promise<ResponseEnvelope<unknown>>>();
 
-  /** Metadata of the most recent successful response (version/request_id). */
-  public lastMeta: ApiSuccess<unknown>['meta'] | undefined;
+  /**
+   * Сервер не знает полей `count`/`cursor` запроса выборки (старше этапа 4,
+   * ошибка da2c68a7) — устанавливается при первом `VALIDATION_ERROR` на эти
+   * поля и дальше запросы уходят без них, с offset-листанием. Флаг — свойство
+   * соединения (сервер-профиль), потому живёт на клиенте.
+   */
+  private legacyStructureQuery = false;
 
   public constructor(opts: RestClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
@@ -151,12 +211,12 @@ export class RestClient {
    * concurrently (the group's count badge and the properties table both ask
    * for the same definitions). GETs carrying `requestOptions` (signal /
    * Client-Request-Id / If-Match) bypass the dedup — those carry per-caller
-   * state that must not leak between callers. The dedup shares the response
-   * promise only, so `lastMeta` (which no current GET caller reads) reflects
-   * the single underlying call.
+   * state that must not leak between callers. The dedup shares the whole
+   * RESPONSE ENVELOPE (`data` + `meta`), so every joiner reads the meta of the
+   * single underlying call — never a foreign response's meta.
    *
    * Generic `T` is the `data` payload type. List endpoints use
-   * `T = SomeDto[]` together with {@link lastMeta}.
+   * `T = SomeDto[]`; callers that need `meta` use {@link requestEnvelope}.
    *
    * @param method HTTP verb.
    * @param path Path under `/api/v1` (without the prefix), e.g. `/me`.
@@ -171,10 +231,32 @@ export class RestClient {
       requestOptions?: RequestOptions;
     } = {},
   ): Promise<T> {
+    return (await this.requestEnvelope<T>(method, path, opts)).data;
+  }
+
+  /**
+   * The request engine behind {@link request}: auth, retry, dedup and error
+   * normalisation, returning the response's OWN `data` together with its OWN
+   * `meta`. Endpoints that read `meta` (`total`, `directions`, `effective`,
+   * `view`, `next_cursor`, …) MUST come through here: the meta travels with the
+   * response it belongs to, so a concurrently resolving request cannot
+   * overwrite it (ошибка 90811979: the focus strip read `meta.effective` of a
+   * foreign response and lost the focused type's views, leaving the lower zone
+   * empty until a manual mode toggle).
+   */
+  private async requestEnvelope<T>(
+    method: string,
+    path: string,
+    opts: {
+      query?: QueryRecord;
+      body?: unknown;
+      requestOptions?: RequestOptions;
+    } = {},
+  ): Promise<ResponseEnvelope<T>> {
     if (method === 'GET' && opts.requestOptions === undefined) {
       const url = this.buildUrl(path, opts.query);
       const inflight = this.inflightGets.get(url);
-      if (inflight !== undefined) return inflight as Promise<T>;
+      if (inflight !== undefined) return inflight as Promise<ResponseEnvelope<T>>;
       const promise = this.performRequest<T>(method, path, opts).finally(() => {
         this.inflightGets.delete(url);
       });
@@ -185,8 +267,8 @@ export class RestClient {
   }
 
   /**
-   * The request engine behind {@link request}: auth, retry, error
-   * normalisation. Returns the parsed `data` of the success envelope.
+   * The request engine behind {@link requestEnvelope}: auth, retry, error
+   * normalisation. Returns the parsed envelope of the success response.
    */
   private async performRequest<T>(
     method: string,
@@ -196,7 +278,7 @@ export class RestClient {
       body?: unknown;
       requestOptions?: RequestOptions;
     } = {},
-  ): Promise<T> {
+  ): Promise<ResponseEnvelope<T>> {
     const url = this.buildUrl(path, opts.query);
     const ro = opts.requestOptions ?? {};
     let lastError: Error | undefined;
@@ -289,7 +371,7 @@ export class RestClient {
         duration_ms: Date.now() - attemptStarted,
         status: res.status,
       });
-      return (await this.parseResponse<T>(res)) as T;
+      return await this.parseResponse<T>(res);
     }
 
     // Loop exited without returning — exhausted retries.
@@ -306,10 +388,10 @@ export class RestClient {
   }
 
   /**
-   * Parses a fetch `Response` into typed `data`, capturing `meta` and converting
-   * error envelopes into {@link EtnError}.
+   * Parses a fetch `Response` into its typed success envelope (`data` + the
+   * `meta` of THIS response) and converts error envelopes into {@link EtnError}.
    */
-  private async parseResponse<T>(res: Response): Promise<T> {
+  private async parseResponse<T>(res: Response): Promise<ResponseEnvelope<T>> {
     const text = await res.text();
     const empty = text.length === 0;
     let payload: unknown = undefined;
@@ -324,8 +406,7 @@ export class RestClient {
 
     if (res.status === 204 || empty) {
       // 204 No Content (e.g. DELETE) — no body to return.
-      this.lastMeta = undefined;
-      return undefined as T;
+      return { data: undefined as T, meta: undefined };
     }
 
     if (!res.ok) {
@@ -342,16 +423,14 @@ export class RestClient {
     }
 
     // Success envelope: either `{ data, meta }` (single) or `{ data: [...], meta }`
-    // (list). Both expose `data`; `meta` is captured on the instance.
+    // (list). Both expose `data`; `meta` stays bound to this response.
     const env = payload as ApiSuccess<T> | ApiList<unknown> | undefined;
     if (env && typeof env === 'object' && 'data' in env) {
-      this.lastMeta = (env as ApiSuccess<T>).meta;
-      return (env as ApiSuccess<T>).data;
+      return { data: (env as ApiSuccess<T>).data, meta: (env as ApiSuccess<T>).meta };
     }
 
     // Unexpected success shape (e.g. plain primitive) — return as-is.
-    this.lastMeta = undefined;
-    return payload as T;
+    return { data: payload as T, meta: undefined };
   }
 
   /** Builds the final URL with query string. Array values are repeated. */
@@ -627,6 +706,14 @@ export class RestClient {
     );
   }
 
+  /**
+   * `GET /networks/{id}/statistics` — сводка по мыслесети (задача c69b078d,
+   * 0.9.1): числа суммируются по всем слоям сети.
+   */
+  public async networkStatistics(id: string): Promise<import('@etn/shared').NetworkStats> {
+    return this.request('GET', `/networks/${encodeURIComponent(id)}/statistics`);
+  }
+
   // -------------------------------------------------------------------------
   // §6 Thoughts
   // -------------------------------------------------------------------------
@@ -717,6 +804,26 @@ export class RestClient {
       linkFilter?: import('@etn/shared').LinkTypeFilterInput;
     },
   ): Promise<import('@etn/shared').FocusNeighbor[]> {
+    return (await this.getNeighborsEnvelope(networkId, id, query)).data;
+  }
+
+  /**
+   * `GET …/neighbors` with the response's own `meta` (page counters). Shared by
+   * {@link getNeighbors} (data only) and {@link getNeighborsPage} (data + meta).
+   */
+  private async getNeighborsEnvelope(
+    networkId: string,
+    id: string,
+    query?: {
+      dir?: import('@etn/shared').FocusDir;
+      sort?: import('@etn/shared').SortKind;
+      order?: import('@etn/shared').SortOrder;
+      limit?: number;
+      offset?: number;
+      type_id?: string[];
+      linkFilter?: import('@etn/shared').LinkTypeFilterInput;
+    },
+  ): Promise<ResponseEnvelope<import('@etn/shared').FocusNeighbor[]>> {
     const q: QueryRecord = {};
     if (query) {
       if (query.dir !== undefined) q['dir'] = query.dir;
@@ -732,7 +839,7 @@ export class RestClient {
         }
       }
     }
-    return this.request(
+    return this.requestEnvelope<import('@etn/shared').FocusNeighbor[]>(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(id)}/neighbors`,
       { query: Object.keys(q).length ? q : undefined },
@@ -743,8 +850,8 @@ export class RestClient {
    * `GET /networks/{nid}/thoughts/{id}/neighbors` с метаданными пагинации
    * (`meta.total`) — источник порционной подгрузки секторов карты мыслей
    * (задача c8fa74ba). Отличие от {@link getNeighbors} только в возврате:
-   * тот отдаёт массив и теряет `meta`, здесь `total`/`limit`/`offset`
-   * читаются из `lastMeta` сразу после запроса.
+   * тот отдаёт массив и теряет `meta`, здесь `total`/`limit`/`offset` берутся
+   * из конверта ЭТОГО ответа (не из общего поля клиента).
    */
   public async getNeighborsPage(
     networkId: string,
@@ -759,15 +866,13 @@ export class RestClient {
       linkFilter?: import('@etn/shared').LinkTypeFilterInput;
     },
   ): Promise<import('@etn/shared').NeighborPage> {
-    const items = await this.getNeighbors(networkId, id, query);
-    // `getNeighbors` → `request()` кладёт `meta` списка в `lastMeta`; для
-    // одиночных запросов там `undefined` — безопасные фолбэки.
-    const meta = this.lastMeta as { total?: number; limit?: number; offset?: number } | undefined;
+    const { data: items, meta } = await this.getNeighborsEnvelope(networkId, id, query);
+    const page = meta as { total?: number; limit?: number; offset?: number } | undefined;
     return {
       items,
-      total: meta?.total ?? items.length,
-      limit: meta?.limit ?? items.length,
-      offset: meta?.offset ?? 0,
+      total: page?.total ?? items.length,
+      limit: page?.limit ?? items.length,
+      offset: page?.offset ?? 0,
     };
   }
 
@@ -1142,23 +1247,23 @@ export class RestClient {
     opts?: { includeEffective?: boolean },
   ): Promise<ThoughtTypeViewsResult> {
     const includeEffective = opts?.includeEffective !== false;
-    // `request()`/`parseResponse()` auto-unwrap the `{ data, meta }` success
-    // envelope down to `data` (see `queryStructureThoughts` for the same
-    // pattern) — `meta.effective` must be read separately via `lastMeta`
-    // right after the call. Returning `this.request(...)` directly here
-    // used to hand the *array* back typed as `{ data, meta }`, so every
-    // caller's `resp.data`/`resp.meta` read `undefined` at runtime (баг 3,
-    // 5467fb19: `Cannot read properties of undefined (reading 'filter')` in
-    // `views-tab.ts`'s `ownViewsOf(resp.data, ...)`).
-    const data = await this.request<import('@etn/shared').ThoughtTypeView[]>(
+    // The list envelope carries BOTH parts this method returns: `data` (the
+    // type's own views) and `meta.effective` (the inherited chain). They must
+    // travel together — read through `requestEnvelope`, never through a field
+    // shared with other in-flight requests (ошибка 90811979: a clobbered
+    // `meta.effective` emptied the effective set and the focus strip silently
+    // fell back to «Потомки»). Returning `this.request(...)` directly here used
+    // to hand the *array* back typed as `{ data, meta }`, so every caller's
+    // `resp.data`/`resp.meta` read `undefined` at runtime (баг 3, 5467fb19).
+    const { data, meta } = await this.requestEnvelope<import('@etn/shared').ThoughtTypeView[]>(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(thoughtTypeId)}/views`,
       { query: includeEffective ? { include_effective: 'true' } : undefined },
     );
-    const meta = this.lastMeta as
+    const effective = meta as
       | { effective?: import('@etn/shared').EffectiveThoughtTypeView[] }
       | undefined;
-    return { data, meta: { effective: meta?.effective ?? [] } };
+    return { data, meta: { effective: effective?.effective ?? [] } };
   }
 
   /** `POST /networks/{nid}/thought-types/{id}/views` — create a view. The
@@ -1226,16 +1331,17 @@ export class RestClient {
       offset?: number;
     },
   ): Promise<RunThoughtTypeViewResult> {
-    // Same auto-unwrap pitfall as `listThoughtTypeViews` above (баг 3,
-    // 5467fb19): `request()` hands back `env.data` alone, so `meta` (with
+    // Same envelope pitfall as `listThoughtTypeViews` above (баг 3, 5467fb19):
+    // `request()` hands back `env.data` alone, so `meta` (with
     // `unresolved`/`view`/`directions` — everything `runActiveViewIfNeeded`
-    // in `focus-filter-strip.ts` reads) must come from `lastMeta`.
-    const data = await this.request<import('@etn/shared').ThoughtRef[]>(
+    // in `focus-filter-strip.ts` reads) must come from the SAME response's
+    // envelope, not from a field shared with the other in-flight requests.
+    const { data, meta: envelope } = await this.requestEnvelope<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewName)}/run`,
       { body: opts ?? {} },
     );
-    const meta = this.lastMeta as {
+    const meta = envelope as {
       total?: number;
       limit?: number;
       offset?: number;
@@ -2147,6 +2253,38 @@ export class RestClient {
   }
 
   /**
+   * Выполняет `POST /networks/{nid}/thoughts/query` с деградацией на сервер
+   * старше этапа 4 (ошибка da2c68a7): если сервер отверг `count`/`cursor` как
+   * неизвестные поля строгого контракта, клиент запоминает это
+   * ({@link legacyStructureQuery}) и повторяет запрос один раз без них. Дальше
+   * все вызовы этого соединения уходят в совместимом режиме. `buildBody`
+   * собирает тело для нужного режима (в legacy — без `count`/`cursor`, с
+   * offset-продолжением).
+   */
+  private async postStructureQuery<T>(
+    networkId: string,
+    buildBody: (legacy: boolean) => Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<ResponseEnvelope<T>> {
+    const send = (legacy: boolean): Promise<ResponseEnvelope<T>> =>
+      this.requestEnvelope<T>('POST', `/networks/${encodeURIComponent(networkId)}/thoughts/query`, {
+        body: buildBody(legacy),
+        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      });
+    if (this.legacyStructureQuery) return send(true);
+    try {
+      return await send(false);
+    } catch (err) {
+      // Не признак ошибки отбора: сервер просто не знает новых полей. Повтор
+      // без них возвращает экран к работе; отменённый запрос сюда не попадёт
+      // (AbortError не VALIDATION_ERROR).
+      if (!isUnknownStructureFieldError(err)) throw err;
+      this.legacyStructureQuery = true;
+      return send(true);
+    }
+  }
+
+  /**
    * `POST /networks/{nid}/thoughts/query` с `network_ids` в теле —
    * кросс-сетевая структурная выборка (задача eb1a3f43, требование
    * c98d5d19). `networkIds` — массив дополнительных сетей веера;
@@ -2159,14 +2297,17 @@ export class RestClient {
     networkIds: string[],
     request: import('@etn/shared').StructureQueryRequest,
   ): Promise<import('@etn/shared').CrossNetworkStructureQueryResponse> {
-    const items = await this.request<import('@etn/shared').ThoughtRef[]>(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: { ...request, network_ids: networkIds } },
-    );
-    const meta = this.lastMeta as
+    const { data: items, meta: envelope } = await this.postStructureQuery<
+      import('@etn/shared').ThoughtRef[]
+    >(networkId, (legacy) => {
+      const body: Record<string, unknown> = { ...request, network_ids: networkIds };
+      if (legacy) delete body['count'];
+      else body['count'] = request.count ?? true;
+      return body;
+    });
+    const meta = envelope as
       | {
-          total?: number;
+          total?: number | null;
           directions?: import('@etn/shared').StructureDirectionFlags;
           networks?: import('@etn/shared').NetworksCatalog;
         }
@@ -2186,40 +2327,105 @@ export class RestClient {
 
   /**
    * `POST /networks/{nid}/thoughts/query` — filter thoughts for the structures
-   * view. Returns the page items, the unrestricted `total` and the direction
-   * flags of the page from the list envelope meta (read via {@link lastMeta},
-   * same call).
+   * view. Returns the page items, the unrestricted `total`, the direction flags
+   * of the page and the keyset cursor of the next page from the list envelope
+   * meta (read from the same response's envelope).
+   *
+   * COUNT запрашивается явно (`count: true` по умолчанию): экрану «Структуры»
+   * нужен счётчик «показано N из M» (требование 5adebf61 — сервер считает
+   * COUNT только по флагу). `request.count` остаётся за вызывающим.
+   * `options.signal` отменяет устаревший запрос (требование ebed4980).
+   *
+   * На сервере старше этапа 4 (нет `count`/`cursor`) запрос повторяется без этих
+   * полей, а продолжение кодируется offset-курсором (ошибка da2c68a7) — экран
+   * получает рабочий отбор и листание без изменений на своей стороне.
    */
   public async queryStructureThoughts(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
+    options?: { signal?: AbortSignal },
   ): Promise<import('@etn/shared').StructureQueryResponse> {
-    const items = await this.request<import('@etn/shared').ThoughtRef[]>(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: request },
+    // Offset продолжения: у нового сервера его всегда задаёт курсор (0), у
+    // старого — сам offset или развёрнутый из курсора-заглушки.
+    const startOffset = legacyCursorOffset(request.cursor) ?? request.offset ?? 0;
+    const { data: items, meta: envelope } = await this.postStructureQuery<
+      import('@etn/shared').ThoughtRef[]
+    >(
+      networkId,
+      (legacy) => {
+        const body: Record<string, unknown> = { ...request };
+        if (legacy) {
+          // Старый сервер курсора не знает — продолжение задаёт offset, сам
+          // курсор-заглушку из тела убираем.
+          body['offset'] = startOffset;
+          delete body['cursor'];
+        } else {
+          body['count'] = request.count ?? true;
+        }
+        return body;
+      },
+      options,
     );
-    const meta = this.lastMeta as
-      | { total?: number; directions?: import('@etn/shared').StructureDirectionFlags }
+    const meta = envelope as
+      | {
+          total?: number | null;
+          directions?: import('@etn/shared').StructureDirectionFlags;
+          next_cursor?: string | null;
+        }
       | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : items.length;
-    return { items, total, directions: meta?.directions ?? {} };
+    const limit = request.limit ?? items.length;
+    return {
+      items,
+      total,
+      directions: meta?.directions ?? {},
+      next_cursor: this.legacyStructureQuery
+        ? legacyNextCursor(startOffset, items.length, limit, typeof meta?.total === 'number' ? meta.total : null)
+        : meta?.next_cursor ?? null,
+    };
   }
 
   /**
    * `POST /networks/{nid}/thoughts/query` with `ids_only: true` — bare ids of
    * the whole filter result for the bulk structures commands (L22,
    * 03-server-api.md §6.10). The limit ceiling is higher than the paged tree.
+   *
+   * `count` запрашивается явно по умолчанию: bulk-командам нужен полный объём
+   * (`ids.length < total`) для добора следующих страниц. `options.signal`
+   * отменяет устаревший запрос (требование ebed4980). На старом сервере — та же
+   * деградация, что у {@link queryStructureThoughts} (ошибка da2c68a7).
    */
   public async queryStructureThoughtIds(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
-  ): Promise<import('@etn/shared').StructureIdsQueryResponse> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: { ...request, ids_only: true } },
+    options?: { signal?: AbortSignal },
+  ): Promise<import('@etn/shared').StructureIdsQueryResult> {
+    const startOffset = legacyCursorOffset(request.cursor) ?? request.offset ?? 0;
+    const { data: body } = await this.postStructureQuery<
+      import('@etn/shared').StructureIdsQueryResponse
+    >(
+      networkId,
+      (legacy) => {
+        const out: Record<string, unknown> = { ...request, ids_only: true };
+        if (legacy) {
+          out['offset'] = startOffset;
+          delete out['cursor'];
+        } else {
+          out['count'] = request.count ?? true;
+        }
+        return out;
+      },
+      options,
     );
+    const total = typeof body.total === 'number' ? body.total : body.ids.length;
+    const limit = request.limit ?? body.ids.length;
+    return {
+      ids: body.ids,
+      total,
+      next_cursor: this.legacyStructureQuery
+        ? legacyNextCursor(startOffset, body.ids.length, limit, typeof body.total === 'number' ? body.total : null)
+        : body.next_cursor ?? null,
+    };
   }
 
   /**
@@ -2332,12 +2538,10 @@ export class RestClient {
     networkId: string,
     request: import('@etn/shared').ChronicleQueryRequest,
   ): Promise<import('@etn/shared').ChronicleQueryResponse> {
-    const rows = await this.request<import('@etn/shared').ChronicleRow[]>(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/chronicle/query`,
-      { body: request },
-    );
-    const meta = this.lastMeta as { total?: number } | undefined;
+    const { data: rows, meta: envelope } = await this.requestEnvelope<
+      import('@etn/shared').ChronicleRow[]
+    >('POST', `/networks/${encodeURIComponent(networkId)}/chronicle/query`, { body: request });
+    const meta = envelope as { total?: number } | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : rows.length;
     return { rows, total };
   }
@@ -2663,7 +2867,7 @@ export class RestClient {
     if (filters?.entity_id !== undefined) query['entity_id'] = filters.entity_id;
     if (filters?.limit !== undefined) query['limit'] = filters.limit;
     if (filters?.offset !== undefined) query['offset'] = filters.offset;
-    const rows = await this.request<ActivityRow[]>(
+    const { data: rows, meta: envelope } = await this.requestEnvelope<ActivityRow[]>(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/activity`,
       { query: Object.keys(query).length ? query : undefined },
@@ -2671,7 +2875,7 @@ export class RestClient {
     // The envelope's `meta.total` carries the unfiltered count; fall back to
     // the page size if the server omitted it (same defensive pattern as
     // `queryChronicle`).
-    const meta = this.lastMeta as { total?: number } | undefined;
+    const meta = envelope as { total?: number } | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : rows.length;
     return { rows, total };
   }
@@ -2713,7 +2917,7 @@ export class RestClient {
       method,
       headers: { Accept: 'application/json', 'Client-Id': this.getClientId() },
     });
-    return (await this.parseResponse<T>(res)) as T;
+    return (await this.parseResponse<T>(res)).data;
   }
 }
 

@@ -36,20 +36,19 @@ import {
   type EffectiveTypeProperty,
   type NetworkProperty,
   type PropertyValueType,
-  type SortOrder,
-  type StructureAuthorOp,
   type StructurePropertyOp,
-  type StructureSort,
   type ThoughtType,
   type ThoughtTypeView,
   type ThoughtTypeViewDefinition,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
 } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
-import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { div, el, errText, span } from '../../lib/dom.js';
+import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
+import { div, el, errText } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
+import { fieldError, footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import {
   buildAuthorshipSection,
@@ -59,11 +58,11 @@ import {
   buildExtrasSection,
   buildKeywordsSection,
   buildSortSection,
-  type EntityChipSection,
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
 import { notice } from '../../lib/notice.js';
+import { formDirty } from '../../lib/pure.js';
 import {
   buildEntityChipField,
   filterEntityOptions,
@@ -89,11 +88,13 @@ import {
   type ChainProperties,
   type ComboOption,
   type DialogCriteriaState,
-  type DialogPropertyCondition,
   type ViewToken,
 } from './filter-dialog-pure.js';
 
 import { withReverseLinkPropertySides } from '../../lib/filter-builder.js';
+import { fieldInput, fieldTextarea } from '../../lib/ui/field.js';
+import { checkboxRow } from '../../lib/ui/choice-row.js';
+import { fieldRow } from '../../lib/ui/field.js';
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -157,7 +158,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // добавляются обратные стороны ВСЕХ свойств-связей реестра — в конструкторе
   // условий обе стороны адресуемы (обе стороны каждой связи, не только
   // цепочки редактируемого типа).
-  let baseRegistry = new Map<string, NetworkProperty>();
+  const baseRegistry = new Map<string, NetworkProperty>();
   try {
     const list = await etn.propertyRegistry.list(networkId);
     for (const row of list) baseRegistry.set(row.id, row);
@@ -177,74 +178,96 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
 
   // 3. Build the form DOM.
   const body = div('form-stack view-editor-body');
-  const errorLine = span('', 'error-text');
+  // Ошибка отбора живёт в панели кнопок (единственное обязательное место
+  // ошибки диалога, требование 397c5a56); у поля имени — дублирование.
+  const errorLine = footerErrorLine();
 
   // Name — required, ≤200.
-  const nameInput = el('input', 'text-input') as HTMLInputElement;
+  const nameInput = fieldInput() as HTMLInputElement;
   nameInput.type = 'text';
   nameInput.value = initialName;
   nameInput.maxLength = THOUGHT_TYPE_VIEW_NAME_MAX;
   nameInput.placeholder = 'Название отбора (обязательно)';
-  const nameField = div('field');
-  nameField.append(el('label', 'field-label', `Имя отбора (тип «${typeName}»)`));
-  nameField.append(nameInput);
+  const nameError = fieldError();
+  const nameField = fieldRow({
+    label: `Имя отбора (тип «${typeName}»)`,
+    control: nameInput,
+    error: nameError,
+  });
 
   // Description — optional, ≤1000.
-  const descInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+  const descInput = fieldTextarea() as HTMLTextAreaElement;
   descInput.rows = 3;
   descInput.maxLength = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
   descInput.value = initialDescription;
   descInput.placeholder = 'Описание (его читают и человек, и агент)';
-  const descField = div('field');
-  descField.append(el('label', 'field-label', 'Описание'));
-  descField.append(descInput);
+  const descField = fieldRow({ label: 'Описание', control: descInput });
 
   // «Open by default» checkbox.
-  const defaultLabel = el('label', 'checkbox-row') as HTMLLabelElement;
-  const defaultCheckbox = el('input') as HTMLInputElement;
-  defaultCheckbox.type = 'checkbox';
-  defaultCheckbox.checked = initialIsDefault;
-  defaultLabel.append(defaultCheckbox, span('Открывать по умолчанию'));
-  const defaultField = div('field');
-  defaultField.append(defaultLabel);
+  const defaultRow = checkboxRow({ label: 'Открывать по умолчанию', checked: initialIsDefault });
+  const defaultCheckbox = defaultRow.input;
+  const defaultField = defaultRow.row;
 
   // Criteria builder. Self-contained: it owns the criteria state for the
   // dialog lifetime.
   const criteria = buildCriteriaBuilder({ networkId, initial, registryById });
+  /** Определение условий на момент открытия — база «грязной» проверки
+   *  (требование b58f6aad). Снимок — из того же конструктора, поэтому
+   *  нетронутая форма не считается изменённой. */
+  const criteriaBase = criteria.buildWire();
 
   // Section title — жирный, чтобы «Критерии отбора» читались как заголовок.
   const criteriaLabel = el('div', 'view-editor-section-title', 'Критерии отбора');
 
-  body.append(nameField, descField, defaultField, criteriaLabel, criteria.root, errorLine);
+  body.append(nameField, descField, defaultField, criteriaLabel, criteria.root);
 
   // 4. Show the dialog. The Save button keeps itself open on validation
   //    failure; we close only when the IPC call resolves.
   let saveBtn: HTMLButtonElement | null = null;
+  /** Контекст сохранения — общий для кнопки «Применить» и подтверждения
+   *  «Сохранить» при закрытии «грязного» редактора (требование b58f6aad). */
+  const saveCtx = (close: () => void): SaveCtx => ({
+    close,
+    saveBtn,
+    opts,
+    name: nameInput.value,
+    description: descInput.value,
+    isDefault: defaultCheckbox.checked,
+    version: initialVersion,
+    criteria,
+    errorLine,
+    nameError,
+    nameAddress: { field: () => nameInput },
+  });
   showDialog({
     title,
     body,
-    width: 760,
+    size: 'l',
+    // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
+    // ошибки полей видны только на своей вкладке/месте, футер — всегда.
+    footerError: errorLine,
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях имени,
+    // описания, «по умолчанию» или условий отбора требуют подтверждения;
+    // «Сохранить» идёт тем же путём, что «Применить».
+    dirty: {
+      isDirty: () =>
+        nameInput.value !== initialName ||
+        descInput.value !== initialDescription ||
+        defaultCheckbox.checked !== initialIsDefault ||
+        formDirty(criteriaBase, criteria.buildWire()),
+      save: (close) => void onSave(saveCtx(close)),
+    },
     buttons: [
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       {
-        label: 'Сохранить',
+        label: t('actions.apply'),
         primary: true,
         keepOpen: true,
         ref: (b) => {
           saveBtn = b;
         },
         onClick: (close) => {
-          void onSave({
-            close,
-            saveBtn,
-            opts,
-            name: nameInput.value,
-            description: descInput.value,
-            isDefault: defaultCheckbox.checked,
-            version: initialVersion,
-            criteria,
-            errorLine,
-          });
+          void onSave(saveCtx(close));
         },
       },
     ],
@@ -267,17 +290,22 @@ interface SaveCtx {
   isDefault: boolean;
   version: number;
   criteria: CriteriaBuilder;
-  errorLine: HTMLElement;
+  /** Строка ошибки в панели кнопок диалога. */
+  errorLine: FooterErrorLine;
+  /** Дублирование ошибки у поля имени. */
+  nameError: HTMLElement;
+  /** Адрес ошибок имени — поле имени для перехода по клику на строку. */
+  nameAddress: ErrorAddress;
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
   const trimmedName = ctx.name.trim();
   if (trimmedName === '') {
-    showFieldError(ctx, 'Укажите имя отбора.');
+    showNameError(ctx, 'Укажите имя отбора.');
     return;
   }
   if (trimmedName.length > THOUGHT_TYPE_VIEW_NAME_MAX) {
-    showFieldError(
+    showNameError(
       ctx,
       `Имя не должно превышать ${THOUGHT_TYPE_VIEW_NAME_MAX} символов (сейчас ${trimmedName.length}).`,
     );
@@ -301,7 +329,8 @@ async function onSave(ctx: SaveCtx): Promise<void> {
   const definitionJson = JSON.stringify(definition);
 
   if (ctx.saveBtn !== null) ctx.saveBtn.disabled = true;
-  ctx.errorLine.textContent = '';
+  ctx.errorLine.clear();
+  ctx.nameError.textContent = '';
 
   const { networkId, thoughtTypeId, view } = ctx.opts;
   try {
@@ -338,8 +367,19 @@ async function onSave(ctx: SaveCtx): Promise<void> {
 }
 
 function showFieldError(ctx: SaveCtx, message: string): void {
-  ctx.errorLine.textContent = message;
-  notice(message, 'error');
+  // Ошибка не про имя — убираем дублирование у поля, чтобы оно не «залипало».
+  ctx.nameError.textContent = '';
+  ctx.errorLine.show(message);
+}
+
+/**
+ * Ошибка поля имени: строка в панели кнопок (обязательное место) + то же
+ * сообщение дублируется у самого поля. Тоста нет — ошибка диалога не
+ * неблокирующее уведомление (требование 397c5a56).
+ */
+function showNameError(ctx: SaveCtx, message: string): void {
+  ctx.errorLine.show(message, ctx.nameAddress);
+  ctx.nameError.textContent = message;
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +643,7 @@ function buildAuthorSingleEditor(
   onChange: (id: string) => void,
 ): HTMLElement {
   const single = div('author-single-wrap');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'st-f-input', bare: true }) as HTMLInputElement;
   input.type = 'text';
   input.value = currentId === '' || currentId.startsWith('$') ? currentId : (resolveUserName(currentId) ?? currentId);
   input.placeholder = 'Пользователь, id или токен…';

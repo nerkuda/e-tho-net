@@ -25,12 +25,13 @@ import {
   type ThoughtBatchArgs,
   type ThoughtBatchOp,
 } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { errText } from '../../lib/dom.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
-import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../../lib/menu.js';
+import { MENU_SEPARATOR, menuAction, showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { pickThoughtType } from '../../selection/dialogs.js';
 import { addToSelection, removeFromSelection } from '../../selection/selection.js';
@@ -54,20 +55,20 @@ export function openFilterCommandsMenu(anchor: HTMLElement, ctx: FilterCommandsC
 /** The «Команды» menu itself (§15.3): selection, activity/type, links, delete. */
 function buildMenu(ctx: FilterCommandsContext): MenuItem[] {
   return [
-    { label: 'Добавить к выделенным', onClick: () => void cmdSelection(ctx, true) },
-    { label: 'Удалить из выделенных', onClick: () => void cmdSelection(ctx, false) },
+    menuAction(t('structures.cmd.addSelected'), () => void cmdSelection(ctx, true)),
+    menuAction(t('structures.cmd.removeSelected'), () => void cmdSelection(ctx, false)),
     MENU_SEPARATOR,
-    { label: 'Сделать актуальными', onClick: () => void cmdBatch(ctx, 'set_active', {}) },
-    { label: 'Сделать неактуальными', onClick: () => void cmdBatch(ctx, 'set_inactive', {}) },
-    { label: 'Изменить тип мыслей…', onClick: () => void cmdChangeType(ctx) },
+    menuAction(t('structures.cmd.setActive'), () => void cmdBatch(ctx, 'set_active', {})),
+    menuAction(t('structures.cmd.setInactive'), () => void cmdBatch(ctx, 'set_inactive', {})),
+    menuAction(t('structures.cmd.changeType'), () => void cmdChangeType(ctx)),
     MENU_SEPARATOR,
-    { label: 'Добавить родительские мысли…', onClick: () => void cmdLinkAnchors(ctx, 'parents') },
-    { label: 'Сделать единственными родителями…', onClick: () => void cmdOnlyParents(ctx) },
-    { label: 'Разорвать связи с родителями…', onClick: () => void cmdUnlinkAnchors(ctx, 'parents') },
-    { label: 'Добавить подчинённые мысли…', onClick: () => void cmdLinkAnchors(ctx, 'children') },
-    { label: 'Разорвать связи с подчинёнными…', onClick: () => void cmdUnlinkAnchors(ctx, 'children') },
+    menuAction(t('structures.cmd.linkParents'), () => void cmdLinkAnchors(ctx, 'parents')),
+    menuAction(t('structures.cmd.onlyParents'), () => void cmdOnlyParents(ctx)),
+    menuAction(t('structures.cmd.unlinkParents'), () => void cmdUnlinkAnchors(ctx, 'parents')),
+    menuAction(t('structures.cmd.linkChildren'), () => void cmdLinkAnchors(ctx, 'children')),
+    menuAction(t('structures.cmd.unlinkChildren'), () => void cmdUnlinkAnchors(ctx, 'children')),
     MENU_SEPARATOR,
-    { label: 'Удалить', danger: true, onClick: () => void cmdDelete(ctx) },
+    menuAction(t('actions.delete'), () => void cmdDelete(ctx), { danger: true }),
   ];
 }
 
@@ -80,23 +81,27 @@ const COLLECT_MAX_PAGES = 200;
 
 /**
  * Collects the ids of EVERY thought matching the applied filter — the whole
- * result, not just the visible page. Pages walk the same ordering as the
- * tree query, so offsets line up.
+ * result, not just the visible page. Continuation pages are addressed by the
+ * keyset cursor from the previous response (`next_cursor`, требование
+ * 3f2fdc41): `offset` stays 0, so deep pages do not degrade.
  */
 async function collectAllIds(ctx: FilterCommandsContext): Promise<string[]> {
   const networkId = store.state.networkId;
   if (networkId === null) return [];
   const ids: string[] = [];
+  let cursor: string | null = null;
   for (let page = 0; page < COLLECT_MAX_PAGES; page++) {
     const result = await etn.structures.queryIds(networkId, {
       ...ctx.filter,
       sort: ctx.sort,
       order: ctx.order,
       limit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
-      offset: ids.length,
+      offset: 0,
+      ...(cursor !== null ? { cursor } : {}),
     });
     ids.push(...result.ids);
-    if (ids.length >= result.total || result.ids.length === 0) return ids;
+    cursor = result.next_cursor ?? null;
+    if (cursor === null || result.ids.length === 0) return ids;
   }
   return ids;
 }

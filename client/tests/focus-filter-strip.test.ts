@@ -296,10 +296,16 @@ before(async () => {
   strip = await import('../src/renderer/canvas/focus-filter-strip.js');
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   store.update({ networkId: null, focus: null });
   // Fresh fake per test (the closures capture a new state every time).
   (globalThis as any).etn = installFakeApi();
+  // Drop the module's per-focus caches between tests: `renderStrip(null)`
+  // clears `currentFocusId`, so the next `renderStrip(focus)` is a real focus
+  // change and resets the run result and the view `sort`/`order` cache.
+  // Without this the per-focus caches leak across tests (by design in
+  // production: they reset on a focus change, not on a re-render).
+  await strip.renderStrip(null);
 });
 
 // ---------------------------------------------------------------------------
@@ -413,7 +419,7 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
       },
     };
     await strip.renderStrip(focusOf(thought(FOCUS_ID, 'Версия')));
-    let mode = strip.getActiveMode();
+    const mode = strip.getActiveMode();
     assert.equal(mode.kind, 'view');
     assert.equal((mode as any).viewId, 'v-default');
 
@@ -602,6 +608,56 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.equal(result!.items.length, 1);
     assert.equal(strip.takeViewResult(), result);
     assert.equal(state.viewRun.calls.length, 1);
+  });
+
+  it('renderStrip того же фокуса не теряет закешированный результат отбора (ошибка 90811979)', async () => {
+    const harness = installShim();
+    setNetwork();
+    strip.mountFilterStrip(harness.host as any);
+    // Свой фокус — чтобы не зависеть от `persisted`, накопленного другими тестами.
+    const FRESH = '00000000-0000-4000-8000-0000000002f0';
+    state.thoughtsGet.response = {
+      meta: { views: [metaViewRow(view('v-k', 'K', { is_default: true, position: 0 }))] },
+    };
+    state.viewsList.effective = [view('v-k', 'K', { is_default: true, position: 0 })];
+    state.viewRun.response = {
+      data: [
+        {
+          id: '00000000-0000-4000-8000-0000000002f1',
+          title: 'Мысль K',
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          active: true,
+          marked_for_deletion: false,
+        },
+      ],
+      meta: {
+        total: 1,
+        limit: 50,
+        offset: 0,
+        directions: { '00000000-0000-4000-8000-0000000002f1': { has_incoming: false, has_outgoing: false } },
+        view: { id: 'v-k', name: 'K', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+
+    await strip.renderStrip(focusOf(thought(FRESH, 'Свежая')));
+    assert.equal(strip.getActiveMode().kind, 'view', 'включился отбор по умолчанию');
+    const fresh = await strip.runActiveViewIfNeeded(FRESH);
+    assert.ok(fresh !== null);
+    assert.equal(strip.takeViewResult()?.focusId, FRESH);
+
+    // Полоса перерисовывается на КАЖДОМ рендере холста (уведомление стора,
+    // пейджер зоны, realtime того же фокуса). Обнуление кеша здесь позволяло
+    // перекрытому (устаревшему) запуску вернуть `null` — и нижняя зона
+    // красилась пустой до ручного переключения режима (ошибка 90811979).
+    await strip.renderStrip(focusOf(thought(FRESH, 'Свежая')));
+    assert.equal(
+      strip.takeViewResult()?.focusId,
+      FRESH,
+      'кеш отбора переживает ре-рендер того же фокуса',
+    );
   });
 
   it('runActiveViewIfNeeded: keeps an «empty» result distinct from an unresolved one', async () => {

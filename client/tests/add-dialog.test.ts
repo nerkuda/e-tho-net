@@ -25,10 +25,18 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { store } from '../src/renderer/state.js';
-import { LINK_PROPERTY_DROPDOWN_MIN_WIDTH } from '../src/renderer/lib/link-property-field.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * Элемент ли это кнопки словаря (`ui-btn`). В футере диалога рядом с кнопками
+ * лежит строка ошибки (`footerError`, требование 397c5a56) — её клик ничего
+ * не делает, поэтому искать «неосновную кнопку» нужно среди кнопок.
+ */
+function isUiButton(node: ShimElement): boolean {
+  return node.className.split(/\s+/).includes('ui-btn');
+}
 
 /** Keydown-like event with the exact shape the dialog reads. */
 function key(name: string, mods: Record<string, boolean> = {}): any {
@@ -162,10 +170,13 @@ async function openDialog(opts: Record<string, unknown> = {}): Promise<DialogHan
   const input = formStack.querySelector('textarea') ?? new ShimElement('textarea');
   const lineList =
     formStack.children.find((c) => c.className.split(/\s+/).includes('add-list')) ?? new ShimElement('div');
-  const footer = box.children.find((c) => c.className === 'dialog-footer');
+  const footer = box.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
   const primaryBtn =
-    footer?.children.find((c) => c.className.split(/\s+/).includes('primary')) ?? new ShimElement('button');
-  const cancelBtn = footer?.children.find((c) => c !== primaryBtn) ?? new ShimElement('button');
+    footer?.children.find((c) => c.className.split(/\s+/).includes('ui-btn--primary')) ?? new ShimElement('button');
+  // Кнопка — элемент словаря (`ui-btn`): в футере рядом с ними лежит строка
+  // ошибки (`footerError`), её клик ничего не делает.
+  const cancelBtn =
+    footer?.children.find((c) => c !== primaryBtn && isUiButton(c)) ?? new ShimElement('button');
   const lineTitles = (): string[] =>
     lineList.children
       .filter((row) => row.className === 'add-list-item')
@@ -300,8 +311,10 @@ describe('заголовок диалога называет якорь, а не
       'Добавить мысль (вниз к «Источник драга»)',
     );
     // Отмена: диалог закрывается, ничего не создаётся.
-    const footer = box?.children.find((c) => c.className === 'dialog-footer');
-    footer?.children.find((c) => !c.className.split(/\s+/).includes('primary'))?.click();
+    const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+    footer?.children
+      .find((c) => isUiButton(c) && !c.className.split(/\s+/).includes('ui-btn--primary'))
+      ?.click();
     assert.equal(await done, undefined);
     store.update({ networkId: null, focus: null });
   });
@@ -455,12 +468,17 @@ describe('pickThoughtsDialog: подпись сети у чужих мыслей
     ui.input.emit('input');
     await settle();
 
-    const rows = ui.formStack.querySelectorAll('.dup-item');
+    const rows = ui.formStack.querySelectorAll('.type-combo-item');
     assert.equal(rows.length, 1, 'один кандидат в выдаче');
-    const net = rows[0]!.querySelector('.dup-network');
-    assert.ok(net !== null, 'есть подпись сети (`.dup-network`)');
+    const notes = rows[0]!.querySelectorAll('.type-combo-note');
+    const net = notes.find((n) => n.classList.contains('type-combo-note--accent'));
+    assert.ok(net !== undefined, 'есть подпись сети (акцентная метка `.type-combo-note--accent`)');
     assert.equal(net!.textContent, 'Заметки по работе', 'подпись — display_name чужой сети');
-    assert.equal(rows[0]!.querySelector('.dup-parent'), null, 'родитель НЕ показывается в кросс-режиме');
+    assert.equal(
+      notes.some((n) => !n.classList.contains('type-combo-note--accent')),
+      false,
+      'родитель НЕ показывается в кросс-режиме',
+    );
     ui.cancelBtn.click();
     await ui.promise;
   });
@@ -478,8 +496,11 @@ describe('pickThoughtsDialog: подпись сети у чужих мыслей
     ui.input.value = 'Чужая';
     ui.input.emit('input');
     await settle();
-    const net = ui.formStack.querySelectorAll('.dup-item')[0]!.querySelector('.dup-network');
-    assert.ok(net !== null, 'подпись сети есть даже без display_name');
+    const net = ui.formStack
+      .querySelectorAll('.type-combo-item')[0]!
+      .querySelectorAll('.type-combo-note')
+      .find((n) => n.classList.contains('type-combo-note--accent'));
+    assert.ok(net !== undefined, 'подпись сети есть даже без display_name');
     assert.equal(net!.textContent, 'n2', 'фолбэк — короткий id сети');
     ui.cancelBtn.click();
     await ui.promise;
@@ -511,9 +532,14 @@ describe('pickThoughtsDialog: подпись сети у чужих мыслей
     ui.input.value = 'Своя';
     ui.input.emit('input');
     await settle();
-    const row = ui.formStack.querySelectorAll('.dup-item')[0]!;
-    assert.equal(row.querySelector('.dup-parent')?.textContent, 'Локальный родитель');
-    assert.equal(row.querySelector('.dup-network'), null, 'в обычном режиме сеть НЕ подписывается');
+    const row = ui.formStack.querySelectorAll('.type-combo-item')[0]!;
+    const notes = row.querySelectorAll('.type-combo-note');
+    assert.equal(notes[0]?.textContent, 'Локальный родитель');
+    assert.equal(
+      notes.some((n) => n.classList.contains('type-combo-note--accent')),
+      false,
+      'в обычном режиме сеть НЕ подписывается',
+    );
     ui.cancelBtn.click();
     await ui.promise;
   });
@@ -550,7 +576,7 @@ function clickBackdrop(backdrop: ShimElement): void {
 
 /** Клик по × в заголовке. */
 function clickClose(backdrop: ShimElement): void {
-  const closeBtn = backdrop.querySelector('.dialog-close');
+  const closeBtn = backdrop.querySelector('.ui-btn--ghost');
   assert.ok(closeBtn !== null, 'в заголовке есть ×');
   closeBtn!.click();
 }
@@ -669,6 +695,20 @@ function propertySuggestList(): ShimElement {
   return list!;
 }
 
+/** Обёртка поля «Свойство связи» — четвёртый источник общего комбо-пикера. */
+function propertyCombo(formStack: ShimElement): ShimElement {
+  const wrap = formStack.querySelector('.add-link-property-combo');
+  assert.ok(wrap !== null, 'поле «Свойство связи» есть в диалоге');
+  return wrap!;
+}
+
+/** Строка ввода поля «Свойство связи» (общий комбо-пикер, не отдельное поле). */
+function propertyInput(formStack: ShimElement): ShimElement {
+  const input = propertyCombo(formStack).querySelector('.entity-combo-input');
+  assert.ok(input !== null, 'поле «Свойство связи» — строка ввода общего комбо');
+  return input!;
+}
+
 /** Подписи-имена пунктов открытого списка поля (без значков и уточнений). */
 function propertySuggestNames(list: ShimElement): string[] {
   return list
@@ -678,9 +718,8 @@ function propertySuggestNames(list: ShimElement): string[] {
 
 /** Выбирает пункт поля «Свойство связи» по имени стороны (через живой поиск). */
 async function choosePropertySide(formStack: ShimElement, label: string): Promise<void> {
-  const input = formStack.querySelector('.link-property-input');
-  assert.ok(input !== null, 'поле «Свойство связи» — поле ввода с живым поиском');
-  input!.focus();
+  const input = propertyInput(formStack);
+  input.focus();
   await settle();
   const row = propertySuggestList()
     .querySelectorAll('.type-combo-item')
@@ -758,11 +797,13 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
   it('поле — ввод с живым поиском; в списке имена сторон со значком и подписью', async () => {
     armEtn();
     const { done, formStack } = await openCanvasDialog();
-    const input = formStack.querySelector('.link-property-input');
-    assert.ok(input !== null, 'поле «Свойство связи» — поле ввода');
-    assert.equal(input!.tagName, 'input', 'никакой «открывашки»-select нет');
-    assert.equal(formStack.querySelector('.add-link-property'), null, 'прежнего select-поля нет');
-    input!.focus();
+    const input = propertyInput(formStack);
+    assert.equal(input.tagName, 'input', 'никакой «открывашки»-select нет');
+    assert.ok(
+      propertyCombo(formStack).querySelector('.entity-combo-field') !== null,
+      'поле «Свойство связи» — та же рамка общего комбо, что у поля «Тип мысли»',
+    );
+    input.focus();
     await settle();
     const list = propertySuggestList();
     assert.deepEqual(
@@ -798,12 +839,12 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       '4,8 9,3 14,8',
       'шеврон входящей стороны смотрит вверх',
     );
-    const labels = formStack.querySelectorAll('.field-label').map((l) => l.textContent);
+    const labels = formStack.querySelectorAll('.ui-field-label').map((l) => l.textContent);
     assert.ok(labels.includes('Свойство связи'), 'есть метка «Свойство связи»');
     assert.equal(labels.includes('Тип связи'), false, 'метки «Тип связи» в диалоге карты нет');
     assert.ok(
-      formStack.querySelector('.link-property-pick') !== null,
-      'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка 5817b009)',
+      propertyCombo(formStack).querySelector('.entity-combo-pick') !== null,
+      'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка a7abe50e)',
     );
     pressEscape();
     await done;
@@ -811,27 +852,28 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
 
   it('ширина выпадашек диалога — 560px, однообразно у типа мысли и свойства связи (ошибка 5c7f8376)', async () => {
     armEtn();
-    assert.equal(LINK_PROPERTY_DROPDOWN_MIN_WIDTH, 560, 'ширина выпадашек диалога — 560px');
+    const mod = await loadDialog();
+    const WIDTH = mod.ADD_DIALOG_DROPDOWN_MIN_WIDTH as number;
+    assert.equal(WIDTH, 560, 'ширина выпадашек диалога — 560px');
     const { done, formStack } = await openCanvasDialog();
 
-    const typeInput = formStack.querySelector('.entity-combo-input') as ShimElement | null;
-    assert.ok(typeInput !== null, 'поле «Тип мысли» есть в диалоге');
+    const typeInput = formStack.querySelectorAll('.entity-combo-input')[0];
+    assert.ok(typeInput !== undefined, 'поле «Тип мысли» есть в диалоге');
     typeInput!.focus();
     await settle();
     assert.equal(
       propertySuggestList().style.minWidth,
-      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      `${WIDTH}px`,
       'список типа мысли — 560px',
     );
     typeInput!.blur();
 
-    const propertyInput = formStack.querySelector('.link-property-input') as ShimElement | null;
-    assert.ok(propertyInput !== null, 'поле «Свойство связи» есть в диалоге');
-    propertyInput!.focus();
+    const propInput = propertyInput(formStack);
+    propInput.focus();
     await settle();
     assert.equal(
       propertySuggestList().style.minWidth,
-      `${LINK_PROPERTY_DROPDOWN_MIN_WIDTH}px`,
+      `${WIDTH}px`,
       'список свойства связи — та же ширина 560px',
     );
 
@@ -842,7 +884,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
   it('живой поиск сужает список до свойства (обе его стороны), скаляры не предлагаются', async () => {
     armEtn();
     const { done, formStack } = await openCanvasDialog();
-    const input = formStack.querySelector('.link-property-input')!;
+    const input = propertyInput(formStack);
     input.focus();
     await settle();
     input.value = 'включает';
@@ -940,7 +982,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     input.value = 'Существующая';
     input.emit('input');
     await settle();
-    const candidate = formStack.querySelectorAll('.dup-item')[0];
+    const candidate = formStack.querySelectorAll('.type-combo-item')[0];
     assert.ok(candidate !== undefined, 'кандидат-существующая мысль найден');
     candidate!.emit('click');
     const primary = openBackdrop()
@@ -995,7 +1037,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     input.value = 'Существующая';
     input.emit('input');
     await settle();
-    formStack.querySelectorAll('.dup-item')[0]!.emit('click');
+    formStack.querySelectorAll('.type-combo-item')[0]!.emit('click');
     openBackdrop()
       .querySelectorAll('button')
       .find((b) => b.textContent === 'Добавить')!

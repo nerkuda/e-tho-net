@@ -20,7 +20,7 @@
  *   - `ownViewsOf` keeps only entries whose `thought_type_id` matches.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';

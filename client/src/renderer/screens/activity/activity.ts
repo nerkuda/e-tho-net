@@ -22,6 +22,7 @@
  */
 
 import type { ActivityEntityType, ActivityRow } from '@etn/shared';
+import { t } from '../../lib/i18n.js';
 
 import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
@@ -43,7 +44,11 @@ import {
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
-import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
+import { div, el, span, setTooltip } from '../../lib/dom.js';
+import { operationError } from '../../lib/ui/messages.js';
+import { loadingState } from '../../lib/ui/empty-state.js';
+import { createTable, type TableHandle } from '../../lib/ui/table.js';
+import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
@@ -55,6 +60,9 @@ import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/fi
 import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
+import { uiButton } from '../../lib/ui/button.js';
+import { fieldInput } from '../../lib/ui/field.js';
+import { fieldRow } from '../../lib/ui/field.js';
 import {
   DEFAULT_FILTER,
   ENTITY_TYPE_OPTIONS,
@@ -68,26 +76,37 @@ const ENTITY_TYPES: ReadonlyArray<ActivityEntityType> = ENTITY_TYPE_OPTIONS.map(
 /** Коды действий — словарь единого конструктора отбора. */
 const ACTIONS: ReadonlyArray<ActionFilter> = ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActivityActionFilter> as ReadonlyArray<ActionFilter>;
 
-/** Russian labels for action codes (the wire format is English). */
+/** Russian labels for action codes (the wire format is English); из словаря
+ *  локализации — это строки списка (задача ae76b75e, требование 93115633). */
 const ACTION_LABELS: Record<ActionFilter, string> = {
-  created: 'создал(а)',
-  updated: 'изменил(а)',
-  deleted: 'удалил(а)',
-  trashed: 'пометил(а) на удаление',
-  restored: 'восстановил(а)',
+  created: t('activity.action.created'),
+  updated: t('activity.action.updated'),
+  deleted: t('activity.action.deleted'),
+  trashed: t('activity.action.trashed'),
+  restored: t('activity.action.restored'),
 };
 
 /** Russian labels for entity types used in the «сущность» column. */
 const ENTITY_LABELS: Record<string, string> = {
-  thought: 'мысль',
-  link: 'связь',
-  thought_type: 'тип мысли',
-  link_type: 'тип связи',
-  property: 'свойство',
-  comment: 'комментарий',
-  attachment: 'вложение',
-  layer: 'слой',
+  thought: t('activity.entity.thought'),
+  link: t('activity.entity.link'),
+  thought_type: t('activity.entity.thought_type'),
+  link_type: t('activity.entity.link_type'),
+  property: t('activity.entity.property'),
+  comment: t('activity.entity.comment'),
+  attachment: t('activity.entity.attachment'),
+  layer: t('activity.entity.layer'),
 };
+
+/** Подпись действия строки (метка из словаря, иначе — сырой код). */
+function actionLabel(action: string): string {
+  return ACTION_LABELS[action as ActionFilter] ?? action;
+}
+
+/** Подпись типа сущности строки (метка из словаря, иначе — сырой код). */
+function entityTypeLabel(entityType: string): string {
+  return ENTITY_LABELS[entityType] ?? entityType;
+}
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -103,10 +122,12 @@ let total = 0;
 let offset = 0;
 /** Loading guard against stale data. */
 let querySeq = 0;
-/** Индекс строки под курсором клавиатуры (`-1` — без курсора). */
-let cursorRow = -1;
-/** Индекс строки, по которой кликнули — отметка «выбрано» (запоминается между отрисовками). */
-let selectedRowIdx = -1;
+/** id строки под курсором клавиатуры (`null` — курсора нет). */
+let currentRowId: string | null = null;
+/** Рукоятка единой таблицы ленты (фасад `lib/ui/table.ts`). */
+let activityTable: TableHandle<ActivityRow> | null = null;
+/** id строки, чья сущность открыта в редакторе (подсветка строки); `null` — нет. */
+let currentEntityRowId: string | null = null;
 /** Ширина из ПРЕЖНЕГО пер-экранного снимка `activity_state` (задача 2ebe4206):
  *  миграционное значение для каркаса панели; размером владеет каркас. */
 let panelWidth: number | null = null;
@@ -212,7 +233,7 @@ export function mountActivity(hostEl: HTMLElement): void {
   // каркас (задача 2ebe4206): положение по ширине полотна (слева/вверху) и
   // перетаскивание границы; состояние — `ui_state.activity_filter_panel`.
   const panel = div('activity-filter');
-  const splitter = div('activity-splitter');
+  const splitter = splitterElement('activity-splitter');
   const results = div('activity-results');
   hostEl.append(panel, splitter, results);
   activityFrame = mountFilterPanelFrame({
@@ -232,8 +253,18 @@ export function mountActivity(hostEl: HTMLElement): void {
   // actions stay visibly apart from the table.
   const toolbar = div('activity-toolbar');
   toolbar.append(
-    button('Свернуть до даты…', () => void rollupDialog(), 'btn small'),
-    button('Обрезать до даты…', () => void truncateDialog(), 'btn small danger'),
+    uiButton({
+      label: t('activity.toolbar.rollup'),
+      role: 'secondary',
+      size: 's',
+      onClick: () => void rollupDialog(),
+    }),
+    uiButton({
+      label: t('activity.toolbar.truncate'),
+      role: 'danger',
+      size: 's',
+      onClick: () => void truncateDialog(),
+    }),
   );
   results.append(toolbar);
 
@@ -242,11 +273,31 @@ export function mountActivity(hostEl: HTMLElement): void {
   const pager = div('activity-pager');
   pagerLabel = span('', 'muted');
   pager.append(
-    button('≪', () => void gotoPage(0), 'btn small'),
-    button('‹', () => void gotoPage(offset - PAGE_SIZE), 'btn small'),
+    uiButton({
+      label: '≪',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(0),
+    }),
+    uiButton({
+      label: '‹',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(offset - PAGE_SIZE),
+    }),
     pagerLabel,
-    button('›', () => void gotoPage(offset + PAGE_SIZE), 'btn small'),
-    button('≫', () => void gotoPage(Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE), 'btn small'),
+    uiButton({
+      label: '›',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(offset + PAGE_SIZE),
+    }),
+    uiButton({
+      label: '≫',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void gotoPage(Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE),
+    }),
   );
   results.append(tableWrapEl, pager);
 
@@ -266,19 +317,15 @@ export function mountActivity(hostEl: HTMLElement): void {
     if (store.state.activeView !== 'activity') return;
     // Re-render names if the user cache fills in after the first paint.
     repaintNames();
-    // Рамка «открытая в редакторе сущность» реагирует на смену editorTarget.
-    repaintCursorAndCurrent();
+    // Подсветка строки, чья сущность открыта в редакторе, реагирует на смену
+    // editorTarget (источник — массив, потому перерисовку заказываем сами).
+    syncOpenEntityHighlight();
     // Фон списка меняется автоматически через CSS-переменную --layer-bg,
     // которую выставляет глобальный initLayerTheme() (см. lib/layer-colors.ts).
   });
   // The names may resolve after the first paint — subscribe and re-render
   // author cells when the user cache changes.
   subscribeUsers(() => repaintNames());
-
-  // Keyboard navigation across rows (08-ui-spec.md §18, замечание
-  // пользователя — «невозможно перемещаться с помощью клавиш»). Хэндлер
-  // вешается на хост, чтобы не зависеть от рендера таблицы.
-  hostEl.addEventListener('keydown', onTableKeydown);
 }
 
 // ---------------------------------------------------------------------------
@@ -501,135 +548,173 @@ async function gotoPage(next: number): Promise<void> {
 
 function renderLoading(): void {
   if (tableWrap === null) return;
-  tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  dropTable();
+  tableWrap.replaceChildren(loadingState());
 }
 
 function renderError(err: unknown): void {
   if (tableWrap === null) return;
-  tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+  dropTable();
+  tableWrap.replaceChildren(operationError(err));
   repaintPager();
+}
+
+/** Снимает таблицу перед показом загрузки/ошибки (источник пересоздаст её). */
+function dropTable(): void {
+  activityTable?.destroy();
+  activityTable = null;
+  currentEntityRowId = null;
 }
 
 function repaintPager(): void {
   if (pagerLabel === null) return;
   if (total === 0) {
-    pagerLabel.textContent = 'Нет событий';
+    pagerLabel.textContent = t('activity.pager.empty');
     return;
   }
   const from = offset + 1;
   const to = Math.min(offset + rows.length, total);
-  pagerLabel.textContent = `Записи ${from}–${to} из ${total}`;
+  pagerLabel.textContent = t('activity.pager.range', [from, to, total]);
 }
 
-const COLUMNS = ['Время', 'Автор', 'Действие', 'Сущность', 'Слой'] as const;
-
-function renderTable(): void {
-  if (tableWrap === null || pagerLabel === null) return;
-  const table = el('table', 'table-list activity-table');
-  const head = el('thead', 'activity-table-head');
-  const headRow = el('tr');
-  for (const col of COLUMNS) headRow.append(el('th', undefined, col));
-  head.append(headRow);
-  table.append(head);
-
-  const tbody = el('tbody');
-  if (rows.length === 0) {
-    const row = el('tr');
-    const cell = el('td', 'muted', 'Событий нет.');
-    cell.colSpan = COLUMNS.length;
-    row.append(cell);
-    tbody.append(row);
-  } else {
-    // Курсор не должен вылезать за пределы страницы — после смены
-    // данных откатываем к 0, если прошлый индекс уже неактуален.
-    if (cursorRow >= rows.length) cursorRow = rows.length - 1;
-    if (cursorRow < 0 && rows.length > 0) cursorRow = 0;
-    rows.forEach((r, index) => tbody.append(buildRow(r, index)));
-  }
-  table.append(tbody);
-  tableWrap.replaceChildren(table);
-  repaintPager();
-  repaintCursorAndCurrent();
-  // Фон .activity-results задан через var(--layer-bg) на CSS-стороне
-  // (см. .activity-results в styles.css) — нет нужды красить вручную.
-
-  // Row click — open the entity when it still exists (08-ui-spec.md §18:
-  // «удалённые сущности — read-only с пометкой»). We do a quick check: try
-  // `GET` and, on `NOT_FOUND`, fall back to a read-only placeholder.
-  tbody.addEventListener('click', (event) => {
-    const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>('.activity-row');
-    if (tr?.dataset['id'] === undefined) return;
-    const idx = Number(tr.dataset['idx'] ?? '-1');
-    const row = rows.find((r) => r.id === tr.dataset['id']);
-    if (row === undefined) return;
-    cursorRow = idx;
-    selectedRowIdx = idx;
-    repaintCursorAndCurrent();
-    void openEntity(row);
+/** Строит единую таблицу ленты (фасад `lib/ui/table.ts`). */
+function buildActivityTable(): TableHandle<ActivityRow> {
+  return createTable<ActivityRow>({
+    ariaLabel: t('activity.aria'),
+    columns: [
+      {
+        key: 'time',
+        header: t('activity.col.time'),
+        width: '160px',
+        sortable: true,
+        sortValue: (row) => row.occurred_at_ms,
+        text: (row) => formatDateTime(row.occurred_at_ms),
+        render: (row) => cellBox(row, span(formatDateTime(row.occurred_at_ms), 'activity-time')),
+      },
+      {
+        key: 'author',
+        header: t('activity.col.author'),
+        width: '180px',
+        sortable: true,
+        sortValue: (row) => row.user_name ?? row.user_id,
+        text: (row) => row.user_name ?? row.user_id,
+        render: (row) => cellBox(row, renderAuthor(row)),
+      },
+      {
+        key: 'action',
+        header: t('activity.col.action'),
+        sortable: true,
+        sortValue: (row) => actionLabel(row.action),
+        text: (row) => actionLabel(row.action),
+        render: (row) => cellBox(row, span(actionLabel(row.action), 'activity-action-label')),
+      },
+      {
+        key: 'entity',
+        header: t('activity.col.entity'),
+        width: '360px',
+        sortable: true,
+        sortValue: (row) =>
+          `${entityTypeLabel(row.entity_type)} ${resolveEntityTitle(row.entity_type, row.entity_title)}`,
+        text: (row) =>
+          `${entityTypeLabel(row.entity_type)}: ${resolveEntityTitle(row.entity_type, row.entity_title) || '—'}`,
+        render: (row) => cellBox(row, buildEntityContent(row)),
+      },
+      {
+        key: 'layer',
+        header: t('activity.col.layer'),
+        width: '90px',
+        sortable: true,
+        sortValue: (row) => (row.layer_id === null ? '' : layerDisplayName(row.layer_id)),
+        text: (row) => (row.layer_id === null ? '—' : layerDisplayName(row.layer_id)),
+        render: (row) =>
+          cellBox(
+            row,
+            row.layer_id === null
+              ? span('—', 'muted')
+              : span(layerDisplayName(row.layer_id), 'activity-layer'),
+          ),
+      },
+    ],
+    rows: [],
+    rowKey: (row) => row.id,
+    emptyText: t('activity.empty'),
+    emptyHint: t('activity.emptyHint'),
+    // Клик/Enter открывают сущность строки (удалённая — снимок), §18.
+    // Текущую строку фасад ставит сам до вызова обработчика.
+    onRowClick: (row) => void openEntity(row),
+    onActivate: (row) => void openEntity(row),
+    onCurrentChange: (_key, row) => {
+      currentRowId = row?.id ?? null;
+    },
   });
-}
-
-/** One table row — click opens the entity when alive. */
-function buildRow(row: ActivityRow, index: number): HTMLElement {
-  const tr = el('tr', 'activity-row');
-  tr.dataset['id'] = row.id;
-  tr.dataset['idx'] = String(index);
-  tr.tabIndex = 0;
-
-  // Time: the server returns wall-clock `occurred_at_ms`; render localised.
-  const timeCell = el('td', 'activity-time', formatDateTime(row.occurred_at_ms));
-
-  // Author: prefer the resolved user name, fall back to raw id (user cache may
-  // not yet have the id — admin-only endpoint).
-  const authorCell = el('td', 'activity-author');
-  authorCell.append(renderAuthor(row));
-
-  // Action: human label + the «сущность» link.
-  const actionCell = el('td', 'activity-action');
-  actionCell.append(
-    span(ACTION_LABELS[row.action as ActionFilter] ?? row.action, 'activity-action-label'),
-  );
-
-  // Entity: «entity_type: entity_title» snapshot (entity_title survives
-  // deletion — it's the whole point of the journal). UUIDы в снимке
-  // подменяются именами из кэша (замечание пользователя — замена id на
-  // имена в представлении).
-  const entityCell = el('td', 'activity-entity');
-  const typeLabel = ENTITY_LABELS[row.entity_type] ?? row.entity_type;
-  const resolvedTitle = resolveEntityTitle(row.entity_type, row.entity_title);
-  entityCell.append(span(`${typeLabel}: `, 'muted'), span(resolvedTitle || '—'));
-  if (row.entity_title === '') entityCell.classList.add('muted');
-
-  // Layer: заголовок слоя из кэша, иначе короткий id (ещё не подтянулся).
-  const layerCell = el('td', 'activity-layer');
-  if (row.layer_id === null) {
-    layerCell.append(span('—', 'muted'));
-  } else {
-    layerCell.append(span(layerDisplayName(row.layer_id)));
-  }
-
-  tr.append(timeCell, authorCell, actionCell, entityCell, layerCell);
-  return tr;
 }
 
 /**
- * Перерисовывает классы `activity-row-cursor` (строка под курсором
- * клавиатуры) и `activity-row-current` (сущность открыта в редакторе).
- * Вызывается после изменения курсора или смены `editorTarget`.
+ * Обёртка ячейки: обрезка многоточием; у строки, чья сущность открыта в
+ * редакторе, — рамка (верх/низ) и фон тинтом. Классы на узле внутри теневого
+ * DOM сетки документным CSS не стилизуются, поэтому подсветку задаём инлайном.
  */
-function repaintCursorAndCurrent(): void {
-  if (tableWrap === null) return;
-  const currentEntityId = currentEntityIdForRow();
-  const trs = tableWrap.querySelectorAll<HTMLElement>('.activity-row');
-  trs.forEach((tr) => {
-    const idx = Number(tr.dataset['idx'] ?? '-1');
-    const rowId = tr.dataset['id'];
-    tr.classList.toggle('activity-row-cursor', idx === cursorRow);
-    tr.classList.toggle(
-      'activity-row-current',
-      rowId !== undefined && currentEntityId !== null && rowIdForEntity(currentEntityId) === rowId,
-    );
-  });
+function cellBox(row: ActivityRow, content: Node): HTMLElement {
+  const box = div('activity-cell');
+  box.style.overflow = 'hidden';
+  box.style.textOverflow = 'ellipsis';
+  box.style.whiteSpace = 'nowrap';
+  if (row.id === currentEntityRowId) {
+    box.style.background = 'var(--accent-soft)';
+    box.style.borderTop = '2px solid var(--accent)';
+    box.style.borderBottom = '2px solid var(--accent)';
+  }
+  box.append(content);
+  return box;
+}
+
+/** Содержимое колонки «сущность»: «тип: снимок» с резолвом UUID в имена. */
+function buildEntityContent(row: ActivityRow): Node {
+  const cell = span('');
+  cell.append(
+    span(`${entityTypeLabel(row.entity_type)}: `, 'muted'),
+    span(resolveEntityTitle(row.entity_type, row.entity_title) || '—'),
+  );
+  if (row.entity_title === '') cell.classList.add('muted');
+  return cell;
+}
+
+function renderTable(): void {
+  if (tableWrap === null || pagerLabel === null) return;
+  if (activityTable === null) {
+    activityTable = buildActivityTable();
+    tableWrap.replaceChildren(activityTable.element);
+  }
+  // Текущую строку держим по id: после подгрузки слоёв/имён таблица
+  // перерисовывается, а курсор не должен перескочить (замечание к индексам).
+  if (currentRowId === null && rows.length > 0) currentRowId = rows[0]?.id ?? null;
+  if (currentRowId !== null && !rows.some((row) => row.id === currentRowId)) {
+    currentRowId = rows[0]?.id ?? null;
+  }
+  activityTable.setRows(rows);
+  activityTable.setCurrent(currentRowId);
+  repaintPager();
+  // Фон .activity-results задан через var(--layer-bg) на CSS-стороне
+  // (см. .activity-results в styles.css) — нет нужды красить вручную.
+}
+
+/**
+ * Подсвечивает строку, чья сущность открыта в редакторе (замечание
+ * пользователя — «нет выделения рамкой открытой сущности»). Перерисовываем
+ * только при смене открытой сущности: экран обновляется по store-событиям.
+ */
+function syncOpenEntityHighlight(): void {
+  if (activityTable === null) return;
+  const id = openEntityRowId();
+  if (id === currentEntityRowId) return;
+  currentEntityRowId = id;
+  activityTable.refresh();
+}
+
+/** id строки ленты, чья сущность открыта в редакторе; `null` — нет. */
+function openEntityRowId(): string | null {
+  const target = currentEntityIdForRow();
+  return target === null ? null : rowIdForEntity(target);
 }
 
 /** Id сущности, открытой в редакторе (для подсветки строки). */
@@ -661,97 +746,15 @@ function renderAuthor(row: ActivityRow): HTMLElement {
   return cell;
 }
 
-/** Re-renders just the author cells (cheap text rewrite) when the user
- *  cache fills in after the first paint. */
+/** Освежает имена авторов (кэш пользователей наполнился позже) перерисовкой
+ *  таблицы: источник — массив, точечно патчить ячейки вендорской сетки нельзя. */
 function repaintNames(): void {
-  if (tableWrap === null) return;
-  const cells = tableWrap.querySelectorAll<HTMLElement>('.activity-author');
-  cells.forEach((cell) => {
-    const tr = cell.closest<HTMLElement>('.activity-row');
-    if (tr === null) return;
-    const row = rows.find((r) => r.id === tr.dataset['id']);
-    if (row === undefined) return;
-    cell.replaceChildren(renderAuthor(row));
-  });
+  activityTable?.refresh();
 }
 
 /** Compact id label (first 8 hex chars) for the «слой» column. */
 function shortId(id: string): string {
   return id.length <= 8 ? id : `${id.slice(0, 8)}…`;
-}
-
-/** Arrow-keys / Home / End / Enter — навигация по таблице событий. */
-function onTableKeydown(event: KeyboardEvent): void {
-  // Не перехватываем ввод в полях фильтра — пользователь может
-  // пользоваться стрелками в самом инпуте/селекте.
-  const target = event.target as HTMLElement | null;
-  if (
-    target !== null &&
-    (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')
-  ) {
-    return;
-  }
-  if (rows.length === 0) return;
-  const last = rows.length - 1;
-  switch (event.key) {
-    case 'ArrowDown':
-      event.preventDefault();
-      cursorRow = cursorRow < last ? cursorRow + 1 : 0;
-      repaintCursorAndCurrent();
-      scrollCursorIntoView();
-      break;
-    case 'ArrowUp':
-      event.preventDefault();
-      cursorRow = cursorRow > 0 ? cursorRow - 1 : last;
-      repaintCursorAndCurrent();
-      scrollCursorIntoView();
-      break;
-    case 'Home':
-      event.preventDefault();
-      cursorRow = 0;
-      repaintCursorAndCurrent();
-      scrollCursorIntoView();
-      break;
-    case 'End':
-      event.preventDefault();
-      cursorRow = last;
-      repaintCursorAndCurrent();
-      scrollCursorIntoView();
-      break;
-    case 'Enter': {
-      event.preventDefault();
-      const row = cursorRow >= 0 ? rows[cursorRow] : undefined;
-      if (row !== undefined) {
-        selectedRowIdx = cursorRow;
-        repaintCursorAndCurrent();
-        void openEntity(row);
-      }
-      break;
-    }
-    case 'PageDown':
-      event.preventDefault();
-      cursorRow = Math.min(last, cursorRow + 10);
-      repaintCursorAndCurrent();
-      scrollCursorIntoView();
-      break;
-    case 'PageUp':
-      event.preventDefault();
-      cursorRow = Math.max(0, cursorRow - 10);
-      repaintCursorAndCurrent();
-      scrollCursorIntoView();
-      break;
-    default:
-      return;
-  }
-}
-
-/** Прокручивает контейнер таблицы так, чтобы курсор был видим. */
-function scrollCursorIntoView(): void {
-  if (tableWrap === null || cursorRow < 0) return;
-  const tr = tableWrap.querySelectorAll<HTMLElement>('.activity-row')[cursorRow];
-  if (tr === undefined) return;
-  tr.focus({ preventScroll: false });
-  tr.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** UUID-префикс для regex-подстановки (8-4-4-4-12 hex, lower-case). */
@@ -988,30 +991,53 @@ async function openCommentOrAttachmentOwner(
 /** Read-only dialog for an entity that no longer exists or lacks a client
  *  editor. Shows the snapshot title + the action context. */
 function showSnapshotDialog(row: ActivityRow): void {
-  const typeLabel = ENTITY_LABELS[row.entity_type] ?? row.entity_type;
   const body = div('form-stack');
   body.append(el('p', 'muted', 'Сущность удалена или недоступна. Снимок из журнала:'));
-  const table = el('table', 'table-list metadata-table');
-  const tbody = el('tbody');
-  const addRow = (label: string, value: string): void => {
-    const tr = el('tr');
-    tr.append(el('th', undefined, label), el('td', undefined, value));
-    tbody.append(tr);
-  };
-  addRow('Тип', typeLabel);
-  addRow('Действие', ACTION_LABELS[row.action as ActionFilter] ?? row.action);
-  addRow('Название', row.entity_title === '' ? '—' : resolveEntityTitle(row.entity_type, row.entity_title));
-  addRow('Автор', row.user_name ?? row.user_id);
-  addRow('Когда', formatDateTime(row.occurred_at_ms));
-  addRow('Слой', row.layer_id === null ? '—' : layerDisplayName(row.layer_id));
-  addRow('id сущности', row.entity_id);
-  table.append(tbody);
-  body.append(table);
+  // Снимок — двухколоночная таблица «поле → значение»; собирается тем же
+  // фасадом (ручной `<table>` в модуле запрещён сторожем guard-ui-tables).
+  const meta: Array<{ name: string; value: string }> = [
+    { name: 'Тип', value: entityTypeLabel(row.entity_type) },
+    { name: 'Действие', value: actionLabel(row.action) },
+    {
+      name: 'Название',
+      value:
+        row.entity_title === ''
+          ? '—'
+          : resolveEntityTitle(row.entity_type, row.entity_title),
+    },
+    { name: 'Автор', value: row.user_name ?? row.user_id },
+    { name: 'Когда', value: formatDateTime(row.occurred_at_ms) },
+    { name: 'Слой', value: row.layer_id === null ? '—' : layerDisplayName(row.layer_id) },
+    { name: 'id сущности', value: row.entity_id },
+  ];
+  const table = createTable<{ name: string; value: string }>({
+    columns: [
+      {
+        key: 'name',
+        header: '',
+        width: '140px',
+        text: (entry) => entry.name,
+        render: (entry) => span(entry.name),
+      },
+      {
+        key: 'value',
+        header: '',
+        text: (entry) => entry.value,
+        render: (entry) => span(entry.value),
+      },
+    ],
+    rows: meta,
+    rowKey: (entry) => entry.name,
+    copy: false,
+  });
+  // Небольшая фиксированная высота — сетке нужен ограниченный контейнер.
+  table.element.style.height = '260px';
+  body.append(table.element);
   showDialog({
     title: 'Снимок события',
     body,
-    width: 560,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    size: 'm',
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 }
 
@@ -1059,23 +1085,22 @@ interface MaintenanceOpts {
 }
 
 async function runMaintenance(opts: MaintenanceOpts): Promise<void> {
-  const input = el('input', 'text-input activity-date') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'activity-date' }) as HTMLInputElement;
   input.type = 'date';
   setTooltip(input, 'Все записи журнала до этой даты будут затронуты.');
-  const field = div('field');
-  field.append(el('label', 'field-label', 'Дата (включительно)'), input);
+  const dateField = fieldRow({ label: 'Дата (включительно)', control: input });
   const body = div('form-stack');
   body.append(
-    field,
+    dateField,
     el('p', 'muted activity-maintenance-hint', 'Операция необратима — записи будут удалены без возможности восстановления.'),
   );
   const ok = await new Promise<number | null>((resolve) => {
     showDialog({
       title: opts.title,
       body,
-      width: 420,
+      size: 's',
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(null) },
+        { label: t('actions.cancel'), onClick: () => resolve(null) },
         {
           label: opts.buttonLabel,
           primary: !opts.danger,

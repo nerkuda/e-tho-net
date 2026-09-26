@@ -1,0 +1,64 @@
+/**
+ * Стили тумблера `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Базовый тумблер вида не задаёт: вид компонента-владельца живёт в
+ * `styles.css` (`search-settings-toggle`, `fp-toggle`, полоса фильтров холста)
+ * и адресует состояние селектором `[aria-pressed='true']`. Фасад владеет
+ * поведением и ARIA. Вид `glyph` (переключатели шрифта стиля мысли) объявлен
+ * здесь — заменяет удалённые `.font-toggles`/`.font-toggle`.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): размеры — по токенам
+ * (`--control-*`, `--space-*`, `--font-*`).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): нативный `<button>` с
+ * `aria-pressed` — покой, `:hover`, `:active`, `:focus-visible`, `:disabled`,
+ * а также нажатое `[aria-pressed='true']`. Переходы — по `--transition-hover`.
+ */
+
+.ui-toggle {
+  /* Вид задаёт владелец через `extraClass`. */
+}
+
+.ui-toggle-group {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ui-toggle--glyph {
+  width: var(--control-w-m);
+  height: var(--control-h);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  transition:
+    background-color var(--transition-hover) ease,
+    border-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-toggle--glyph:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ui-toggle--glyph:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.ui-toggle--glyph:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-toggle--glyph:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.ui-toggle--glyph[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: var(--font-weight-bold);
+}

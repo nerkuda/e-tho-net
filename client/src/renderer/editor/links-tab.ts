@@ -27,7 +27,8 @@ import { requireNetworkId, setFocus } from '../app.js';
 // общая фабрика: значок, цвета, начертание, бледность и единые жесты.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
-import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
+import { div, el, renderHtml, span } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { toggleSelection } from '../selection/selection.js';
@@ -124,7 +125,7 @@ function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
     try {
       refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
     } catch (err) {
-      root.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      root.replaceChildren(operationError(err));
       return;
     }
     const byId = new Map(refs.map((r) => [r.id, r]));
@@ -197,7 +198,7 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
     try {
       hits = await etn.thoughts.backlinks(networkId, ctx.ownerId);
     } catch (err) {
-      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      box.replaceChildren(operationError(err));
       return;
     }
     const visible = hits.filter((hit) => hit.active || store.state.showInactive);
@@ -288,7 +289,7 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
     try {
       hits = await etn.thoughts.mentions(networkId, ctx.ownerId);
     } catch (err) {
-      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      box.replaceChildren(operationError(err));
       return;
     }
     // Inactive mentioning thoughts/links follow the `show_inactive` setting.

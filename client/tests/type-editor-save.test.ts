@@ -20,7 +20,7 @@
  * соглашению (см. `type-manager-name-sync.test.ts`, `type-editor-tabs.test.ts`).
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -34,6 +34,7 @@ import {
   typeRowRevealIds,
   type ThoughtTypeDraft,
 } from '../src/renderer/screens/type-manager.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const SOURCE_PATH = resolve(
   import.meta.dirname,
@@ -172,30 +173,30 @@ describe('typeRowRevealIds — текущая строка списка типо
   });
 });
 
-describe('type-manager — кнопка «Записать» и текущая строка (51732f9b)', () => {
-  it('«Записать» объявлена между «Отмена» и «Применить и закрыть»', () => {
+describe('type-manager — кнопка записи без закрытия (бывш. «Записать») и текущая строка (51732f9b)', () => {
+  it('кнопка записи без закрытия объявлена между «Отмена» и «Применить и закрыть»', () => {
     const src = source();
-    const applyIdx = src.indexOf("'Применить и закрыть'");
+    const applyIdx = src.indexOf("t('actions.applyClose')");
     assert.ok(applyIdx > 0, 'кнопка «Применить и закрыть» не найдена');
-    const cancelIdx = src.lastIndexOf("label: 'Отмена'", applyIdx);
-    const saveIdx = src.indexOf("label: 'Записать'");
+    const cancelIdx = src.lastIndexOf("t('actions.cancel')", applyIdx);
+    const saveIdx = src.lastIndexOf("t('actions.apply')", applyIdx);
     assert.ok(cancelIdx > 0, 'кнопка «Отмена» не найдена');
-    assert.ok(saveIdx > 0, 'кнопка «Записать» не найдена');
+    assert.ok(saveIdx > cancelIdx, 'кнопка записи без закрытия не найдена');
     assert.ok(
       cancelIdx < saveIdx && saveIdx < applyIdx,
-      '«Записать» должна стоять между «Отмена» и «Применить и закрыть»',
+      'кнопка записи без закрытия должна стоять между «Отмена» и «Применить и закрыть»',
     );
   });
 
-  it('«Записать» пишет без закрытия диалога (apply(«stay») + keepOpen)', () => {
+  it('кнопка записи без закрытия пишет без закрытия диалога (apply(«stay») + keepOpen)', () => {
     const src = source();
-    const saveIdx = src.indexOf("label: 'Записать'");
-    const applyIdx = src.indexOf("'Применить и закрыть'");
+    const applyIdx = src.indexOf("t('actions.applyClose')");
+    const saveIdx = src.lastIndexOf("t('actions.apply')", applyIdx);
     const saveBlock = src.slice(saveIdx, applyIdx);
-    assert.ok(saveBlock.includes('keepOpen: true'), '«Записать» не должна закрывать диалог');
+    assert.ok(saveBlock.includes('keepOpen: true'), 'кнопка записи не должна закрывать диалог');
     assert.ok(
       saveBlock.includes("apply('stay'"),
-      '«Записать» должна вызывать apply в режиме «stay»',
+      'кнопка записи должна вызывать apply в режиме «stay»',
     );
     assert.ok(
       src.slice(applyIdx, applyIdx + 400).includes("apply('close'"),
@@ -215,14 +216,9 @@ describe('type-manager — кнопка «Записать» и текущая �
     const src = source();
     assert.ok(src.includes('currentRowId'), 'нет понятия текущей строки');
     assert.ok(
-      src.includes("tr.classList.add('selected')"),
-      'текущая строка не подсвечивается классом selected',
+      src.includes('tree.revealRow(currentRowId)'),
+      'список не позиционируется на текущей строке общим деревом (lib/ui/tree: revealRow — раскрытие предков, подсветка, прокрутка; правило 7 требования 11ddd910)',
     );
-    assert.ok(
-      src.includes('typeRowRevealIds(types, currentRowId)'),
-      'цепочка предков текущей строки не разворачивается',
-    );
-    assert.ok(src.includes('scrollIntoView'), 'список не прокручивается к текущей строке');
   });
 });
 
@@ -262,12 +258,20 @@ describe('type-manager — вкладки несохранённого типа:
       'renderNewTypeHint не экспортирован из type-editor-hints.ts',
     );
     assert.ok(
-      helper.includes("'btn success'"),
-      'кнопка «Сохранить» в хелпере должна нести класс btn success',
+      helper.includes("role: 'primary'"),
+      'кнопка «Сохранить» в хелпере должна нести primary-роль словаря lib/ui',
     );
     assert.ok(
-      helper.includes('Записать тип и не закрывать диалог'),
-      'хелпер должен передавать осмысленный title для кнопки',
+      helper.includes("t('actions.save')"),
+      'несохранённый тип: подпись кнопки — «Сохранить» (actions.save), а не «Применить» (ошибка cbb1a67f)',
+    );
+    assert.ok(
+      !helper.includes("t('actions.apply')"),
+      'подпись «Применить» (actions.apply) для ещё не записанного типа — регресс ошибки cbb1a67f',
+    );
+    assert.ok(
+      helper.includes("t('typeEditor.saveHint')"),
+      'хелпер должен передавать осмысленный title для кнопки (из словаря)',
     );
   });
 
@@ -310,18 +314,19 @@ describe('type-manager — вкладки несохранённого типа:
     );
   });
 
-  it('CSS: у .btn.success зелёный фон var(--ok) и белый текст', () => {
-    const cssPath = resolve(
-      import.meta.dirname,
-      '..',
-      'src',
-      'renderer',
-      'styles.css',
+  it('CSS: primary-роль словаря залита акцентом и белым текстом', () => {
+    const renderer = resolve(import.meta.dirname, '..', 'src', 'renderer');
+    const css = readFileSync(resolve(renderer, 'lib', 'ui', 'button.css'), 'utf8');
+    assert.ok(/\.ui-btn--primary\s*\{/.test(css), '.ui-btn--primary не объявлен в lib/ui/button.css');
+    assert.ok(/background:\s*var\(--accent\)/.test(css), 'primary-роль должна иметь фон var(--accent)');
+    // Редакция 0.9.1 (требование 0dddd939): белый текст primary-роли — через
+    // токен --accent-fg (был литерал #fff).
+    assert.ok(
+      /color:\s*var\(--accent-fg\)/.test(css),
+      'primary-роль должна брать цвет текста из var(--accent-fg)',
     );
-    const css = readFileSync(cssPath, 'utf8');
-    assert.ok(/\.btn\.success\s*\{/.test(css), '.btn.success не объявлен в styles.css');
-    assert.ok(/background:\s*var\(--ok\)/.test(css), '.btn.success должен иметь фон var(--ok)');
-    assert.ok(/color:\s*#fff/.test(css), '.btn.success должен иметь белый текст (#fff)');
+    const styles = readFileSync(assembledStylesFile(), 'utf8');
+    assert.ok(/--accent-fg:\s*#ffffff/.test(styles), '--accent-fg должен быть белым (#ffffff)');
   });
 
   it('регрессия 74d9b4ed: ключ дедупликации нового типа не сломан', () => {

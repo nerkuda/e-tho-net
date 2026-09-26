@@ -13,14 +13,64 @@
  * declare `dedupeKey` (the entity it edits), and the caller first asks
  * {@link raiseOpenDialog} — a repeated click on the same row raises and focuses
  * the already-open editor instead of stacking a second one (ошибка c2d243bb).
+ *
+ * Entity editors also declare a dirty guard ({@link DialogDirtyGuard},
+ * требование b58f6aad): when the form has unsaved changes, closing by Esc or ×
+ * is intercepted by a confirmation («Данные изменены. Сохранить изменения?»)
+ * offering «Сохранить» / «Не сохранять» / «Отменить закрытие». An explicit
+ * footer button (including «Отмена») still closes silently.
  */
 
-import { button, div, el, errText } from './dom.js';
+import { div, el, errText } from './dom.js';
+import { t } from './i18n.js';
 import { svgIcon } from './icons.js';
+import { iconButton, uiButton } from './ui/button.js';
+import { fieldInput, fieldRow } from './ui/field.js';
+import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
+import { uiTabs, type TabsHandle } from './ui/tabs.js';
+import { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './ui/focus-anchor.js';
+
+/**
+ * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
+ * роли S/M/L/XL, высота не зависит от вкладки»). Роль задаёт ширину и высоту:
+ * высота фиксирована, поэтому переключение вкладок и раскрытие групп не
+ * «дёргают» окно — длинное содержимое прокручивается внутри тела. Авто-высота
+ * по содержимому запрещена.
+ */
+export type DialogSize = 's' | 'm' | 'l' | 'xl';
+
+/** Вкладка диалога: подпись и ленивое содержимое панели (`lib/ui/tabs.ts`). */
+export interface DialogTab {
+  id: string;
+  label: string;
+  content: HTMLElement | (() => HTMLElement);
+}
+
+
+/**
+ * Признак «есть несохранённые изменения» и команда записи диалога-редактора
+ * (требование b58f6aad «Закрытие диалога-редактора с изменениями требует
+ * подтверждения»). Форма объявляет грязность сама: каркас не знает её полей.
+ * Если {@link isDirty} вернула `true`, закрытие диалога по Esc или крестику
+ * перехватывается — вместо закрытия показывается подтверждение
+ * «Данные изменены. Сохранить изменения?» с кнопками «Сохранить» /
+ * «Не сохранять» / «Отменить закрытие». Явные кнопки футера (в т.ч. «Отмена»)
+ * закрывают диалог молча, как и раньше.
+ */
+export interface DialogDirtyGuard {
+  /** Есть ли расхождение текущих значений формы с загруженными. */
+  isDirty: () => boolean;
+  /**
+   * Записать изменения и закрыть — ТОТ ЖЕ путь, что у кнопки сохранения
+   * редактора: получает `close` каркаса и зовёт его сам при успехе; при ошибке
+   * показывает её и оставляет редактор открытым (кнопка «Сохранить»
+   * подтверждения закрывается в любом случае).
+   */
+  save: (close: () => void) => void;
+}
 
 /** A dialog footer button. */
-export interface DialogButton {
-  label: string;
+export interface DialogButton {  label: string;
   primary?: boolean;
   danger?: boolean;
   /**
@@ -46,7 +96,44 @@ export interface DialogButton {
 /** Options of {@link showDialog}. */
 export interface DialogOptions {
   title: string;
-  body: HTMLElement;
+  /**
+   * Тело диалога. Не задаётся, когда содержимое разложено по вкладкам
+   * ({@link tabs}); в остальных случаях обязательно.
+   */
+  body?: HTMLElement;
+  /**
+   * Вкладки диалога — единый механизм (`lib/ui/tabs.ts`). Панели ленивые,
+   * высота диалога фиксирована ролью {@link size}, поэтому переключение
+   * вкладок её не меняет. При заданных вкладках {@link body} не используется.
+   */
+  tabs?: DialogTab[];
+  /** Активная вкладка при открытии (по умолчанию — первая). */
+  activeTab?: string;
+  /**
+   * Блок между заголовком диалога и вкладками/телом — постоянная «шапка»
+   * содержимого, общая для всех вкладок (не переключается вместе с ними).
+   * Нужен редакторам сущностей, у которых идентичность (иконка, имя,
+   * родитель, шестерёнка настроек) не принадлежит ни одной вкладке: она
+   * остаётся видимой на любой из них. Прокрутки не имеет, высота — по
+   * содержимому; полосы вкладок и тело забирают остаток.
+   */
+  headerExtra?: HTMLElement;
+  /** Уведомление о переключении вкладки. */
+  onTabChange?: (id: string) => void;
+  /**
+   * Роль размера — ширина и фиксированная высота (требование 13464c39).
+   * По умолчанию `m`.
+   */
+  size?: DialogSize;
+  /**
+   * Фиксирует высоту диалога ролью {@link size}: тело прокручивается внутри,
+   * а высота окна не меняется при смене содержимого внутри роли (требование
+   * 13464c39 «Стабильные размеры диалога»). Нужен диалогам с переменным
+   * содержимым, у которых нет вкладок: вкладочный диалог фиксирует высоту
+   * автоматически, а без этого флага окно подстраивается под содержимое в
+   * пределах роли и «дёргается» (ошибка 0ab63eac — настройки).
+   */
+  fixedHeight?: boolean;
   buttons?: DialogButton[];
   /**
    * Sticky custom footer element. When provided, {@link buttons} is ignored:
@@ -57,17 +144,20 @@ export interface DialogOptions {
    */
   customFooter?: HTMLElement;
   /**
-   * Строка ошибки в панели кнопок (футере) — видна при активной ЛЮБОЙ вкладке
-   * диалога (ошибка add8d09d «Сообщения об ошибках диалогов с вкладками видны
-   * на любой вкладке»).
+   * Строка ошибки в панели кнопок (футере) — ОБЯЗАТЕЛЬНОЕ место любой ошибки
+   * диалога: футер лежит вне тела и не переключается вместе с вкладками,
+   * поэтому сообщение видно при активной любой вкладке (требование 397c5a56
+   * «Сообщения диалога: любая ошибка — строкой на панели кнопок, клик ведёт к
+   * полю»; ранее — ошибка add8d09d).
    *
-   * Футер лежит вне тела диалога и не переключается вместе с вкладками,
-   * поэтому у диалога с вкладками глобальное сообщение о неудачной записи
-   * выводится сюда, а не в тело вкладки. Вызывающий создаёт элемент сам
-   * (`span('', 'error-text')`) и пишет в него текст (`footerError.textContent = …`).
-   * Ошибки, относящиеся к конкретному полю вкладки, допустимо дублировать на
-   * месте; относится только к дефолтному футеру ({@link buttons}), при
-   * {@link customFooter} вызывающий кладёт строку в свой футер.
+   * Строку создаёт {@link footerErrorLine} из `lib/ui/messages.ts`; у неё есть
+   * адрес ошибки (вкладка + поле) и клик по строке переключает на нужную
+   * вкладку и ставит фокус в проблемное поле — переход подключает этот каркас
+   * ({@link ErrorAddress}). Произвольный элемент (например, простой `span`)
+   * каркас принимает и ставит в футер как прежде — без перехода.
+   *
+   * Относится только к дефолтному футеру ({@link buttons}); при
+   * {@link customFooter} вызывающий кладёт строку в свой футер сам.
    */
   footerError?: HTMLElement;
   /**
@@ -85,15 +175,8 @@ export interface DialogOptions {
      */
     ctrlShiftEnter?: () => void;
   };
-  width?: number;
-  /**
-   * Extra class on the dialog box — for CSS-driven sizing that a fixed px
-   * {@link width} cannot express (e.g. the group-delete table dialog,
-   * §5a.2: `clamp(400px, …, 1000px)` "as much as fits the screen").
-   */
-  boxClass?: string;
   /** Called after the dialog is mounted (focus management, etc.). */
-  onMount?: (close: () => void) => void;
+  onMount?: (close: () => void, box: HTMLElement) => void;
   /**
    * Called once when the dialog closes by ANY path — Esc, the × button, a
    * footer button, or `closeDialog()` popping the stack: it fires from the
@@ -113,6 +196,13 @@ export interface DialogOptions {
    * an entity identity leave it unset and always stack.
    */
   dedupeKey?: string;
+  /**
+   * Признак несохранённых изменений формы (требование b58f6aad). Задан —
+   * закрытие по Esc или крестику при {@link DialogDirtyGuard.isDirty} проверяется
+   * подтверждением; не задан (списки, подтверждения, пикеры, панели) — закрытие
+   * как всегда. Явные кнопки футера закрывают молча в любом случае.
+   */
+  dirty?: DialogDirtyGuard;
 }
 
 /** Open dialogs, bottom first. */
@@ -234,56 +324,186 @@ function focusFirstField(backdrop: HTMLDivElement): void {
 }
 
 /**
+ * Переход по клику на строку ошибки панели кнопок
+ * ({@link DialogOptions.footerError}, требование 397c5a56): активирует вкладку
+ * (или собственное состояние вкладок вызывающего — {@link ErrorAddress.activate})
+ * и ставит фокус в проблемное поле. Поле берётся геттером уже ПОСЛЕ активации:
+ * панель вкладки ленива и к моменту показа ошибки могла быть ещё не построена.
+ */
+function navigateToError(address: ErrorAddress, tabs: TabsHandle | null): void {
+  address.activate?.();
+  if (address.tab !== undefined && tabs !== null) tabs.setActive(address.tab);
+  const field = address.field?.() ?? null;
+  if (field === null) return;
+  field.focus();
+  if (typeof field.scrollIntoView === 'function') field.scrollIntoView({ block: 'nearest' });
+}
+
+/** Element that owned focus before a dialog opened (checks `isConnected` + `focus`). */
+type FocusableElement = Element & { focus?: () => void };
+
+/** Селектор якоря фокуса — контейнер клавиатурной навигации списка/дерева/таблицы. */
+const FOCUS_ANCHOR_QUERY = FOCUS_ANCHOR_SELECTOR;
+
+/** Теги полей ввода: возврат фокуса в них якорь списка не перебивает. */
+const TEXT_ENTRY_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+/** Пользователь печатал в это поле (ввод/select/contenteditable). */
+function isTextEntry(element: FocusableElement | null | undefined): boolean {
+  if (element === null || element === undefined) return false;
+  const tagName = (element as { tagName?: string }).tagName?.toUpperCase() ?? '';
+  if (TEXT_ENTRY_TAGS.has(tagName)) return true;
+  return (element as { isContentEditable?: boolean }).isContentEditable === true;
+}
+
+/** Родитель-элемент: `parentElement` в DOM, `parent` — в тестовом DOM-шиме. */
+function parentElementOf(node: Element): Element | null {
+  const carrier = node as Element & { parentElement?: Element | null; parent?: Element | null };
+  return carrier.parentElement ?? carrier.parent ?? null;
+}
+
+/**
+ * Якорь возврата фокуса — устойчивый контейнер клавиатурной навигации
+ * ({@link FOCUS_ANCHOR_ATTR}): сам владелец фокуса или его предок; а если
+ * диалог открыли кнопкой тулбара или пунктом контекстного меню — якорь диалога,
+ * НАД которым открывается новый. Диалог-редактор открывают над диалогом-списком,
+ * поэтому якорь живого списка лежит в верхнем открытом диалоге. `null` — якоря
+ * нет, фокус вернём прежнему владельцу (ошибка 28d69bc6, правило 10 требования
+ * 11ddd910).
+ */
+function resolveFocusAnchor(from: FocusableElement | null | undefined): HTMLElement | null {
+  let node: Element | null = from ?? null;
+  while (node !== null) {
+    if (node.hasAttribute(FOCUS_ANCHOR_ATTR)) return node as HTMLElement;
+    node = parentElementOf(node);
+  }
+  const below = stack[stack.length - 1];
+  if (below !== undefined) {
+    const host = below.querySelector<HTMLElement>(FOCUS_ANCHOR_QUERY);
+    if (host !== null) return host;
+  }
+  return null;
+}
+
+/**
+ * Возврат фокуса после закрытия диалога. Устойчивый якорь списка/дерева
+ * предпочтительнее прежнего владельца фокуса: редактор открывают кнопкой
+ * тулбара или пунктом меню, и `document.activeElement` в этот момент — кнопка
+ * (а после закрытия контекстного меню — вообще `body`); возврат фокуса туда не
+ * оживляет стрелочную навигацию списка (ошибка 28d69bc6). Исключение — поле
+ * ввода: если пользователь печатал в нём, фокус возвращаем полю.
+ */
+function restoreFocus(
+  previouslyFocused: FocusableElement | null | undefined,
+  focusAnchor: HTMLElement | null,
+): void {
+  const order: Array<FocusableElement | HTMLElement | null | undefined> = isTextEntry(previouslyFocused)
+    ? [previouslyFocused, focusAnchor]
+    : [focusAnchor, previouslyFocused];
+  for (const candidate of order) {
+    if (candidate === null || candidate === undefined) continue;
+    if (candidate.isConnected === false) continue;
+    if (typeof candidate.focus !== 'function') continue;
+    candidate.focus();
+    return;
+  }
+}
+
+/**
  * Shows a modal dialog. Returns its close function. Opening while another
  * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */
 export function showDialog(opts: DialogOptions): () => void {
+  // Элемент, владевший фокусом до открытия диалога (обычно обёртка списка,
+  // из которого диалог открыли). Фокуса возвращаем ЯКОРЮ навигации — устойчивому
+  // контейнеру списка/дерева, переживающему перерисовку строк; прежний владелец —
+  // запасной вариант. Иначе стрелки списка не работают без повторного клика
+  // (ошибка 28d69bc6, правило 10 требования 11ddd910).
+  const previouslyFocused = document.activeElement as FocusableElement | null | undefined;
+  const focusAnchor = resolveFocusAnchor(previouslyFocused);
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
-  if (opts.boxClass !== undefined) box.classList.add(...opts.boxClass.split(/\s+/));
-  if (opts.width !== undefined) box.style.width = `${opts.width}px`;
-  // Custom footers (e.g. the unified settings dialog) want a scrollable body
-  // and a sticky bottom bar; opt in via the `dialog-box-tall` class so the
-  // default one-button footer stays as small as before.
-  if (opts.customFooter !== undefined) box.classList.add('dialog-box-tall');
+  // Роль размера (требование 13464c39): класс несёт ширину и ФИКСИРОВАННУЮ
+  // высоту, поэтому переключение вкладок и смена содержимого высоту не меняют.
+  box.dataset['dialogSize'] = opts.size ?? 'm';
+  // Диалог с переменным содержимым без вкладок (настройки) фиксирует высоту
+  // ролью явно — тело тогда прокручивается, а окно не «дёргается» (ошибка
+  // 0ab63eac, требование 13464c39).
+  if (opts.fixedHeight === true) box.dataset['dialogFixedHeight'] = 'true';
 
   /** Confirm button of this dialog — Ctrl+Enter clicks it. */
   let primaryBtn: HTMLButtonElement | null = null;
 
   const header = div('dialog-header');
   header.append(el('span', 'dialog-title', opts.title));
-  const closeBtn = button('', () => close(), 'dialog-close', 'Закрыть (Esc)');
-  closeBtn.append(svgIcon('x', 14));
+  const closeBtn = iconButton({
+    icon: svgIcon('x', 14),
+    title: t('actions.closeShortcut', 'Esc'),
+    role: 'ghost',
+    size: 's',
+    onClick: () => requestClose(),
+  });
   header.append(closeBtn);
   box.append(header);
 
-  const body = div('dialog-body');
-  body.append(opts.body);
-  box.append(body);
+  // Постоянная шапка содержимого (идентичность сущности) — над вкладками,
+  // общая для всех: не переключается и не прокручивается вместе с ними.
+  if (opts.headerExtra !== undefined) {
+    const extra = div('dialog-header-extra');
+    extra.append(opts.headerExtra);
+    box.append(extra);
+  }
+
+  // Тело: либо вкладки (единый механизм lib/ui/tabs.ts), либо единый блок
+  // тела. Оба варианта занимают оставшуюся высоту и прокручиваются внутри —
+  // высота задана ролью, а не содержимым.
+  /** Дескриптор вкладок диалога — нужен переходу по клику на строку ошибки. */
+  let tabsHandle: TabsHandle | null = null;
+  if (opts.tabs !== undefined && opts.tabs.length > 0) {
+    // Признак вкладочного диалога: CSS фиксирует его высоту ролью, поэтому
+    // переключение вкладок высоту не меняет (требование 13464c39).
+    box.dataset['dialogTabs'] = 'true';
+    const host = div('dialog-tabs-host');
+    const tabs = uiTabs({
+      tabs: opts.tabs,
+      activeId: opts.activeTab,
+      onChange: opts.onTabChange,
+    });
+    tabsHandle = tabs;
+    host.append(tabs.root);
+    box.append(host);
+  } else {
+    const body = div('dialog-body');
+    if (opts.body !== undefined) body.append(opts.body);
+    box.append(body);
+  }
 
   if (opts.customFooter !== undefined) {
     box.append(opts.customFooter);
   } else if (opts.buttons !== undefined && opts.buttons.length > 0) {
     const footer = div('dialog-footer');
-    // Строка ошибки в панели кнопок — видна на любой вкладке (ошибка add8d09d).
-    // Кнопки прижимаются вправо, ошибка занимает свободное место слева.
+    // Строка ошибки в панели кнопок — видна на любой вкладке (требование
+    // 397c5a56): ошибка занимает свободное место слева, кнопки — справа.
     if (opts.footerError !== undefined) {
       footer.classList.add('dialog-footer-with-error');
+      // Строке словаря подключаем переход к вкладке и полю; произвольный
+      // элемент (старые вызовы) просто кладётся в футер.
+      if (isFooterErrorLine(opts.footerError)) {
+        opts.footerError.setNavigate((address) => navigateToError(address, tabsHandle));
+      }
       footer.append(opts.footerError);
     }
     for (const item of opts.buttons) {
-      const btn = button(
-        item.label,
-        () => {
+      const btn = uiButton({
+        label: item.label,
+        role: item.danger === true ? 'danger' : item.primary === true ? 'primary' : 'secondary',
+        onClick: () => {
           item.onClick?.(close);
           // Default: a click dismisses the dialog. Buttons that need to stay
           // open (validation/async) set `keepOpen: true` and close themselves.
           if (item.keepOpen !== true) close();
         },
-        ['dialog-btn', item.primary === true ? 'primary' : '', item.danger === true ? 'danger' : '']
-          .filter((c) => c !== '')
-          .join(' '),
-      );
+      });
       if (item.confirm === true || (item.confirm === undefined && item.primary === true)) {
         if (primaryBtn === null) primaryBtn = btn;
       }
@@ -298,6 +518,45 @@ export function showDialog(opts: DialogOptions): () => void {
     if (index >= 0) stack.splice(index, 1);
     backdrop.remove();
   };
+  /**
+   * Показать подтверждение закрытия «грязного» редактора (требование
+   * b58f6aad): три решения — «Сохранить» (записать и закрыть), «Не сохранять»
+   * (закрыть без записи), «Отменить закрытие» (ничего не делать). Отдельный
+   * диалог поверх редактора; его собственное закрытие (Esc/крестик) означает
+   * «Отменить закрытие» — редактор остаётся открытым.
+   */
+  const confirmDirtyClose = (): void => {
+    showDialog({
+      title: t('dialog.unsaved.title'),
+      size: 's',
+      body: el('p', 'dialog-text', t('dialog.unsaved.message')),
+      // Порядок: «отказ от закрытия» → «закрыть без записи» → «записать и
+      // закрыть» (главное действие справа, как в остальных футерах).
+      buttons: [
+        { label: t('dialog.unsaved.stay') },
+        { label: t('dialog.unsaved.discard'), onClick: () => close() },
+        {
+          label: t('dialog.unsaved.save'),
+          primary: true,
+          confirm: true,
+          onClick: () => opts.dirty?.save(close),
+        },
+      ],
+    });
+  };
+  /**
+   * Закрытие диалога для путей Esc и крестика. При объявленном
+   * {@link DialogOptions.dirty} и наличии изменений закрытие перехватывается
+   * подтверждением; иначе — как раньше. Явные кнопки футера зовут `close`
+   * напрямую (в т.ч. «Отмена» — молча, требование b58f6aad, п. 3).
+   */
+  const requestClose = (): void => {
+    if (opts.dirty !== undefined && opts.dirty.isDirty()) {
+      confirmDirtyClose();
+      return;
+    }
+    close();
+  };
   const onKey = (event: KeyboardEvent): void => {
     // Lower dialogs ignore Escape even though they see the event too —
     // same-target capture listeners run in registration order.
@@ -308,7 +567,7 @@ export function showDialog(opts: DialogOptions): () => void {
       // closed the whole stack). Key auto-repeat is ignored for the same
       // reason: a held Escape would otherwise walk the stack down.
       event.preventDefault();
-      close();
+      requestClose();
     }
   };
   window.addEventListener('keydown', onKey, true);
@@ -379,9 +638,13 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
     backdrop.removeEventListener('click', onBackdropClick);
+    // Возврат фокуса владельцу списка (ошибка 28d69bc6): стрелочная навигация
+    // продолжается без повторного клика. Фокус ставим до `onClose` — обработчик
+    // может открыть следующий диалог, который снимет фокус себе сам.
+    restoreFocus(previouslyFocused, focusAnchor);
     opts.onClose?.();
   });
-  opts.onMount?.(close);
+  opts.onMount?.(close, box);
   return close;
 }
 
@@ -391,12 +654,8 @@ export function showDialog(opts: DialogOptions): () => void {
  */
 export function promptDialog(title: string, label: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
-    const input = el('input', 'text-input');
-    input.type = 'text';
-    input.value = initial;
-    const row = div('field');
-    if (label !== '') row.append(el('label', 'field-label', label));
-    row.append(input);
+    const input = fieldInput({ value: initial });
+    const row = fieldRow({ label, control: input });
     const body = div('form-stack');
     body.append(row);
 
@@ -416,11 +675,12 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
     };
     closeSelf = showDialog({
       title,
+      size: 's',
       body,
       buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
+        { label: t('actions.cancel'), onClick: () => finish(null) },
         {
-          label: 'OK',
+          label: t('actions.apply'),
           primary: true,
           onClick: () => finish(input.value),
         },
@@ -458,11 +718,12 @@ export function confirmDialog(title: string, message: string, danger = false): P
     };
     showDialog({
       title,
+      size: 's',
       body: el('p', 'dialog-text', message),
       buttons: [
-        { label: 'Отмена', onClick: () => finish(false) },
+        { label: t('actions.cancel'), onClick: () => finish(false) },
         {
-          label: 'Подтвердить',
+          label: t('actions.confirm'),
           primary: !danger,
           danger,
           confirm: true,
@@ -480,15 +741,8 @@ export function confirmDialog(title: string, message: string, danger = false): P
 export function errorDialog(title: string, err: unknown): void {
   showDialog({
     title,
+    size: 's',
     body: el('p', 'dialog-text dialog-text-error', errText(err)),
-    buttons: [{ label: 'Закрыть', primary: true }],
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
-}
-
-/** Standard field builder: label + control wrapper. */
-export function field(label: string, control: HTMLElement): HTMLDivElement {
-  const row = div('field');
-  row.append(el('label', 'field-label', label));
-  row.append(control);
-  return row;
 }

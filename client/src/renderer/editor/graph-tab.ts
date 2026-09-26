@@ -79,7 +79,7 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
   //    типизированные и нетипизированные рёбра обеих сторон) без фильтра типов
   //    связей и без `type_id` — отбор карты мыслей (фильтр типов связей на
   //    карте и прочие её условия) сюда не передаётся и не должен передаваться.
-  let neighbours: Array<{ id: string; title: string }> = [];
+  const neighbours: Array<{ id: string; title: string }> = [];
   let links: Link[] = [];
   try {
     const [parents, children, grouped] = await Promise.all([

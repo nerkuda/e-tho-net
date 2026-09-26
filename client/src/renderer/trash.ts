@@ -20,6 +20,8 @@ import {
   type ThoughtDeletionCheckResult,
   type TrashListResult,
 } from '@etn/shared';
+import { t } from './lib/i18n.js';
+import { menuAction, type MenuItem } from './lib/menu.js';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
@@ -32,17 +34,22 @@ import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
 // `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
 // со всеми остальными списками клиента.
 import { createThoughtCloud } from './lib/thought-cloud.js';
-import { reflectThoughtUpdate } from './editor/editor.js';
+// Правило 6 требования 11ddd910: двойной клик по строке корзины открывает
+// сущность в редакторе (мысль — редактором мысли, связь — редактором связи).
+import { openLinkInEditor, openThoughtInEditor, reflectThoughtUpdate } from './editor/editor.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
 import { refreshSelectionPanel } from './selection/selection.js';
 import { patchFocusEdge, store } from './state.js';
 import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
-import { button, div, el, setTooltip, span } from './lib/dom.js';
-import { svgIcon } from './lib/icons.js';
+import { div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
+import { uiButton } from './lib/ui/button.js';
+import { choiceControl } from './lib/ui/choice-row.js';
+import { fieldInput } from './lib/ui/field.js';
+import { createTable } from './lib/ui/table.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -240,7 +247,7 @@ export async function openThoughtDeleteDialog(
   let deleteBtn: HTMLButtonElement | null = null;
   const buttons: DialogButton[] = [
     {
-      label: 'Удалить совсем',
+      label: t('actions.deleteForever'),
       danger: true,
       ref: (btn) => {
         deleteBtn = btn;
@@ -263,7 +270,7 @@ export async function openThoughtDeleteDialog(
       },
     },
     {
-      label: alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину',
+      label: alreadyMarked ? t('actions.restore') : t('actions.toTrash'),
       keepOpen: true,
       onClick: async (close) => {
         try {
@@ -288,7 +295,7 @@ export async function openThoughtDeleteDialog(
         }
       },
     },
-    { label: 'Отмена' },
+    { label: t('actions.cancel') },
   ];
 
   // Auto-acquire the thought lock for the lifetime of the delete dialog (task
@@ -301,6 +308,7 @@ export async function openThoughtDeleteDialog(
 
   showDialog({
     title: `Удаление мысли «${target.title}»`,
+    size: 's',
     body,
     buttons,
     onMount: () => deleteBtn?.focus(),
@@ -363,10 +371,11 @@ export async function openLinkDeleteDialog(
 
   showDialog({
     title: 'Удаление связи',
+    size: 's',
     body,
     buttons: [
       {
-        label: 'Удалить совсем',
+        label: t('actions.deleteForever'),
         danger: true,
         ref: (btn) => {
           btn.disabled = blocked;
@@ -395,7 +404,7 @@ export async function openLinkDeleteDialog(
         },
       },
       {
-        label: alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину',
+        label: alreadyMarked ? t('actions.restore') : t('actions.toTrash'),
         keepOpen: true,
         onClick: async (close) => {
           try {
@@ -413,7 +422,7 @@ export async function openLinkDeleteDialog(
           }
         },
       },
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
     ],
     onClose: () => void releaseHeld(handle),
   });
@@ -509,15 +518,22 @@ export async function openThoughtGroupDeleteDialog(
   // Mass-toggle toolbar («Переключить: …») — above the table, so the footer
   // stays reserved for the dialog-level actions only (§5a.2).
   const toolbar = div('group-delete-toolbar');
-  toolbar.append(span('Переключить:', 'group-delete-toolbar-label'));
+  toolbar.append(span(t('trash.group.toggle'), 'group-delete-toolbar-label'));
   toolbar.append(
-    button('все в корзину', () => massToggle('all-trash'), 'btn small', 'Все строки — «В корзину»'),
-    button(
-      'удалять возможное',
-      () => massToggle('delete-possible'),
-      'btn small',
-      'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
-    ),
+    uiButton({
+      label: t('trash.group.allToTrash'),
+      role: 'secondary',
+      size: 's',
+      title: 'Все строки — «В корзину»',
+      onClick: () => massToggle('all-trash'),
+    }),
+    uiButton({
+      label: t('trash.group.deletePossible'),
+      role: 'secondary',
+      size: 's',
+      title: 'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
+      onClick: () => massToggle('delete-possible'),
+    }),
   );
 
   /** Sets every row at once (§5a.2 semantics) and syncs the radio inputs. */
@@ -526,7 +542,6 @@ export async function openThoughtGroupDeleteDialog(
     syncRadios();
   };
 
-  const table = div('group-delete-table');
   /** Radio inputs per row — kept so mass toggles repaint without a rebuild. */
   const radiosById = new Map<string, { purge: HTMLInputElement; trash: HTMLInputElement }>();
 
@@ -559,54 +574,67 @@ export async function openThoughtGroupDeleteDialog(
   const buildToggleCell = (id: string): HTMLElement => {
     const blocked = checks[id]?.blocked ?? false;
     const toggle = div('group-delete-toggle');
-    const purgeRadio = el('input') as HTMLInputElement;
-    purgeRadio.type = 'radio';
-    purgeRadio.name = `gd-${id}`;
-    purgeRadio.checked = choice.get(id) === true;
-    purgeRadio.disabled = blocked;
+    const purgeRadio = choiceControl('radio', {
+      name: `gd-${id}`,
+      checked: choice.get(id) === true,
+      disabled: blocked,
+    });
     const blockedTooltip = `Нельзя удалить совсем — ${blockingReasons(
       'мысль',
       checks[id]?.blocking ?? { properties: 0, layers: [] },
     ).join('; ')}`;
-    setTooltip(purgeRadio, blocked ? blockedTooltip : 'Удалить совсем');
+    setTooltip(purgeRadio, blocked ? blockedTooltip : t('actions.deleteForever'));
     purgeRadio.addEventListener('change', () => {
       if (purgeRadio.checked) choice.set(id, true);
     });
-    const trashRadio = el('input') as HTMLInputElement;
-    trashRadio.type = 'radio';
-    trashRadio.name = `gd-${id}`;
-    trashRadio.checked = choice.get(id) !== true;
+    const trashRadio = choiceControl('radio', {
+      name: `gd-${id}`,
+      checked: choice.get(id) !== true,
+    });
     setTooltip(trashRadio, 'Поместить в корзину');
     trashRadio.addEventListener('change', () => {
       if (trashRadio.checked) choice.set(id, false);
     });
     const purgeLabel = el('label', 'group-delete-option');
-    purgeLabel.append(purgeRadio, span(blocked ? 'Удалить (недост.)' : 'Удалить'));
+    purgeLabel.append(
+      purgeRadio,
+      span(blocked ? t('trash.group.purgeBlocked') : t('actions.delete')),
+    );
     const trashLabel = el('label', 'group-delete-option');
-    trashLabel.append(trashRadio, span('В корзину'));
+    trashLabel.append(trashRadio, span(t('trash.group.toTrash')));
     toggle.append(purgeLabel, trashLabel);
     radiosById.set(id, { purge: purgeRadio, trash: trashRadio });
     return toggle;
   };
 
-  const renderTable = (): void => {
-    table.replaceChildren();
-    radiosById.clear();
-    const head = div('group-delete-row group-delete-head');
-    head.append(
-      span('Мысль', 'group-delete-head-cloud'),
-      span('Действие', 'group-delete-head-toggle'),
-    );
-    table.append(head);
-    for (const id of ids) {
-      const row = div('group-delete-row');
-      row.append(buildCloudCell(id), buildToggleCell(id));
-      table.append(row);
-    }
-  };
-  renderTable();
+  // Список группового удаления — единая таблица фасада `lib/ui/table.ts`
+  // (задача ae76b75e, требование 93115633): текущая строка, клавиатура,
+  // копирование; строки — из словаря локализации. Radio-приёмка строки
+  // остаётся прежней (одна модель `choice`, массовые переключатели её правят).
+  const table = createTable<string>({
+    ariaLabel: t('trash.group.aria'),
+    columns: [
+      {
+        key: 'thought',
+        header: t('trash.group.col.thought'),
+        text: (id) => refById.get(id)?.title ?? id,
+        render: (id) => buildCloudCell(id),
+      },
+      {
+        key: 'action',
+        header: t('trash.group.col.action'),
+        width: '260px',
+        text: (id) => (choice.get(id) === true ? t('actions.deleteForever') : t('actions.toTrash')),
+        render: (id) => buildToggleCell(id),
+      },
+    ],
+    rows: ids,
+    rowKey: (id) => id,
+  });
+  // Сетке нужен ограниченный контейнер (прежний лимит «10 строк + шапка»).
+  table.element.style.height = 'min(50vh, 420px)';
 
-  body.append(toolbar, table);
+  body.append(toolbar, table.element);
   if (totalOrphaned > 0) {
     body.append(
       el(
@@ -619,11 +647,11 @@ export async function openThoughtGroupDeleteDialog(
 
   showDialog({
     title: `Удаление выбранного (${ids.length})`,
+    size: 'l',
     body,
-    boxClass: 'group-delete-box',
     buttons: [
       {
-        label: 'Применить',
+        label: t('actions.apply'),
         primary: true,
         keepOpen: true,
         ref: (btn) => setTooltip(btn, 'Применить указанные удаление/помещение в корзину'),
@@ -678,8 +706,9 @@ export async function openThoughtGroupDeleteDialog(
           }
         },
       },
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
     ],
+    onClose: () => table.destroy(),
   });
 }
 
@@ -696,71 +725,186 @@ export async function openThoughtGroupDeleteDialog(
  * Имена концов связей и число мест использования мыслей диалог догружает к
  * одному `GET /trash` — у ребра в ответе только id, а использования он не несёт.
  */
+/** Строка диалога корзины — модель, которой живёт единая таблица фасада. */
+interface TrashDialogRow {
+  id: string;
+  kind: 'thought' | 'link';
+  label: string;
+  count: number | null;
+  blocked: boolean;
+  reason: string;
+  onRestore: () => Promise<void>;
+  onDelete: () => Promise<void>;
+}
+
 export async function openTrashDialog(networkId: string): Promise<void> {
-  const body = div('trash');
-  const table = div('trash-table');
-  body.append(table);
+  const body = div('trash list-dialog-body');
+  const listHost = div('trash-table');
+  // Высоту области списка задаёт раскладка диалога-списка (`.list-dialog-body`,
+  // правило 9 требования 11ddd910) — она тянется на свободную высоту роли.
 
-  /** Кнопка-иконка действия строки — как в остальном UI: svg + тултип. */
-  const actionButton = (
-    icon: 'undo' | 'trash',
-    label: string,
-    danger: boolean,
-    onClick: () => void,
-  ): HTMLButtonElement => {
-    const btn = el('button', danger ? 'icon-btn trash-act trash-act-danger' : 'icon-btn trash-act');
-    btn.type = 'button';
-    btn.append(svgIcon(icon, 15));
-    setTooltip(btn, label);
-    btn.setAttribute('aria-label', label);
-    btn.addEventListener('click', onClick);
-    return btn;
-  };
+  // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
+  // диалога, над строкой управления и списком; плейсхолдер — из словаря.
+  const searchRow = div('form-row type-list-search');
+  const searchInput = fieldInput({ extraClass: 'trash-search' }) as HTMLInputElement;
+  searchInput.type = 'text';
+  searchInput.placeholder = t('actions.search');
+  searchRow.append(searchInput);
 
-  /** Колонка действий строки: «Восстановить» всегда, «Удалить» — по блокировке. */
-  const buildActions = (
-    blocked: boolean,
-    reason: string,
-    onRestore: () => Promise<void>,
-    onDelete: () => Promise<void>,
-  ): HTMLElement => {
-    const cell = div('trash-actions');
-    cell.append(actionButton('undo', 'Восстановить', false, () => void onRestore()));
-    const delBtn = actionButton(
-      'trash',
-      blocked ? `Удалить нельзя — ${reason || 'заблокировано'}` : 'Удалить совсем',
-      true,
-      () => void onDelete(),
-    );
-    delBtn.disabled = blocked;
-    cell.append(delBtn);
-    return cell;
-  };
-
-  /** Строка таблицы: что в корзине, число мест использования, действия. */
-  const renderRow = (
-    label: string,
-    blocked: boolean,
-    reason: string,
-    count: number | null,
-    onRestore: () => Promise<void>,
-    onDelete: () => Promise<void>,
-  ): HTMLElement => {
-    const row = div('trash-row');
+  /** Ячейка «что в корзине»: подпись строки и метка блокировки (§5a.4). */
+  const buildItemCell = (row: TrashDialogRow): HTMLElement => {
     const item = div('trash-item');
-    item.append(span(label, 'trash-item-title'));
-    if (blocked) {
-      // Замок — статичная индикация блокировки (§5a.4): видно, не наводя курсор.
+    item.append(span(row.label, 'trash-item-title'));
+    if (row.blocked) {
+      // Замок — статичная индикация блокировки: видно, не наводя курсор.
       const lock = span('🔒', 'trash-item-lock');
-      setTooltip(lock, reason || 'заблокировано для удаления');
+      setTooltip(lock, row.reason || 'заблокировано для удаления');
       item.append(lock);
     }
-    setTooltip(item, label);
-    row.append(item);
-    row.append(span(referencesText(count), 'trash-count'));
-    row.append(buildActions(blocked, reason, onRestore, onDelete));
-    return row;
+    setTooltip(item, row.label);
+    return item;
   };
+
+  /** Пункты контекстного меню строки корзины (правило 8 требования 11ddd910):
+   *  «Вернуть из корзины» и «Удалить совсем»; у заблокированной строки
+   *  удаление погашено. Словарь подписей — `lib/i18n.ts`. */
+  function trashRowMenu(row: TrashDialogRow): MenuItem[] {
+    return [
+      menuAction(t('actions.restore'), () => void row.onRestore()),
+      menuAction(t('actions.deleteForever'), () => void row.onDelete(), {
+        danger: true,
+        disabled: row.blocked,
+      }),
+    ];
+  }
+
+  // Единая таблица корзины (задача ae76b75e, требование 93115633): текущая
+  // строка, клавиатура, копирование; строки — из словаря локализации.
+  // Правило 6 требования 11ddd910 (список, не выбор): клик делает строку
+  // текущей, двойной клик открывает сущность в редакторе.
+  const table = createTable<TrashDialogRow>({
+    ariaLabel: t('trash.aria'),
+    columns: [
+      {
+        key: 'item',
+        header: t('trash.col.item'),
+        text: (row) => row.label,
+        render: (row) => buildItemCell(row),
+      },
+      {
+        key: 'count',
+        header: t('trash.col.count'),
+        width: '90px',
+        align: 'end',
+        text: (row) => referencesText(row.count),
+        render: (row) => span(referencesText(row.count), 'trash-count'),
+      },
+    ],
+    rows: [],
+    rowKey: (row) => row.id,
+    emptyText: t('trash.empty'),
+    emptyHint: t('trash.emptyHint'),
+    onCurrentChange: () => updateButtons(),
+    onDblActivate: (row) => openRowInEditor(row),
+    // Правило 8 требования 11ddd910: команды над строкой — в её контекстном
+    // меню (построчных крестиков «Восстановить»/«Удалить» в строках нет).
+    rowMenu: (row) => trashRowMenu(row),
+  });
+  listHost.append(table.element);
+
+  // Правило 2 требования 11ddd910: строка управления НАД списком. «Вернуть из
+  // корзины» и «Удалить совсем» действуют на ТЕКУЩУЮ строку и гаснут без неё
+  // (`updateButtons`); «Удалить всё, что возможно» — массовое действие над
+  // списком (прежде стояло в футере, который правило 3 оставляет решению).
+  const toolbar = div('form-row type-list-toolbar trash-toolbar');
+  const restoreBtn = uiButton({
+    label: t('trash.action.restore'),
+    role: 'secondary',
+    size: 's',
+    title: 'Вернуть текущую строку из корзины',
+    disabled: true,
+    onClick: () => void currentRow()?.onRestore(),
+  });
+  const deleteBtn = uiButton({
+    label: t('actions.deleteForever'),
+    role: 'secondary',
+    size: 's',
+    title: 'Удалить текущую строку совсем',
+    disabled: true,
+    onClick: () => void currentRow()?.onDelete(),
+  });
+  const purgeAllBtn = uiButton({
+    label: 'Удалить всё, что возможно',
+    role: 'danger',
+    size: 's',
+    title: 'Физически удалить все незаблокированные строки корзины',
+    onClick: () => void purgeAll(),
+  });
+  toolbar.append(restoreBtn, deleteBtn, purgeAllBtn);
+
+  // Правила 1–2: поиск (первая строка), под ним управление, затем список.
+  body.append(searchRow, toolbar, listHost);
+
+  /** Строки всей корзины до фильтра поиска (правило 1, клиентский фильтр). */
+  let allRows: TrashDialogRow[] = [];
+
+  /** Закрытие диалога; присваивается сразу после `showDialog`. */
+  let closeDialog: () => void = () => undefined;
+
+  /** Текущая строка списка — на неё действует строка управления (правило 2). */
+  function currentRow(): TrashDialogRow | null {
+    return table.getCurrent()?.row ?? null;
+  }
+
+  /** Гасит кнопки текущей строки без неё (и «Удалить совсем» — у заблокированной). */
+  function updateButtons(): void {
+    const row = currentRow();
+    restoreBtn.disabled = row === null;
+    deleteBtn.disabled = row === null || row.blocked;
+  }
+
+  /** Правило 6: двойной клик по строке открывает сущность в редакторе. */
+  function openRowInEditor(row: TrashDialogRow): void {
+    if (row.kind === 'thought') {
+      closeDialog();
+      openThoughtInEditor(row.id);
+      return;
+    }
+    void etn.links
+      .get(networkId, row.id)
+      .then((link) => {
+        closeDialog();
+        openLinkInEditor(link);
+      })
+      .catch(() => undefined);
+  }
+
+  /** Клиентский фильтр по подписи строки; пустой запрос — вся корзина. */
+  function applyFilter(): void {
+    const query = searchInput.value.trim().toLowerCase();
+    const visible =
+      query === '' ? allRows : allRows.filter((row) => row.label.toLowerCase().includes(query));
+    table.setEmpty(
+      allRows.length === 0
+        ? { title: t('trash.empty'), hint: t('trash.emptyHint') }
+        : { title: t('trash.emptySearch'), hint: t('trash.emptySearchHint') },
+    );
+    table.setRows(visible);
+    updateButtons();
+  }
+  searchInput.addEventListener('input', () => applyFilter());
+
+  /** Полная физическая очистка корзины (массовое управление над списком). */
+  async function purgeAll(): Promise<void> {
+    try {
+      const { purged, skipped } = await etn.trash.purge(networkId);
+      scheduleRefresh();
+      notice(`Удалено ${purged}, осталось заблокировано ${skipped}.`);
+      await render();
+    } catch (err) {
+      errorDialog('Очистить корзину', err);
+    }
+  }
 
   const render = async (): Promise<void> => {
     let trash: TrashListResult;
@@ -768,11 +912,6 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       trash = await etn.trash.list(networkId);
     } catch (err) {
       errorDialog('Корзина', err);
-      return;
-    }
-
-    if (trash.thoughts.length === 0 && trash.links.length === 0) {
-      table.replaceChildren(el('p', 'dialog-text', 'Корзина пуста.'));
       return;
     }
 
@@ -793,40 +932,35 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       }),
     );
 
-    const head = div('trash-row trash-head');
-    head.append(
-      span('В корзине', 'trash-head-item'),
-      span('Ссылок', 'trash-head-count'),
-      span('Действия', 'trash-head-actions'),
-    );
-    const rows: HTMLElement[] = [head];
+    const out: TrashDialogRow[] = [];
     for (const t of trash.thoughts) {
       const view = thoughtTrashRow(t, usageById.get(t.id) ?? null);
-      rows.push(
-        renderRow(
-          view.label,
-          t.blocked,
-          blockingReasons('мысль', t.blocking).join('; '),
-          view.count,
-          () => restoreThought(networkId, t.id),
-          () => deleteFromTrash(networkId, t.id),
-        ),
-      );
+      out.push({
+        id: t.id,
+        kind: 'thought',
+        label: view.label,
+        count: view.count,
+        blocked: t.blocked,
+        reason: blockingReasons('мысль', t.blocking).join('; '),
+        onRestore: () => restoreThought(networkId, t.id),
+        onDelete: () => deleteFromTrash(networkId, t.id),
+      });
     }
     for (const l of trash.links) {
       const view = linkTrashRow(l, titles);
-      rows.push(
-        renderRow(
-          view.label,
-          l.blocked,
-          blockingReasons('связь', l.blocking).join('; '),
-          view.count,
-          () => restoreLink(networkId, l.id),
-          () => deleteLinkFromTrash(networkId, l.id),
-        ),
-      );
+      out.push({
+        id: l.id,
+        kind: 'link',
+        label: view.label,
+        count: view.count,
+        blocked: l.blocked,
+        reason: blockingReasons('связь', l.blocking).join('; '),
+        onRestore: () => restoreLink(networkId, l.id),
+        onDelete: () => deleteLinkFromTrash(networkId, l.id),
+      });
     }
-    table.replaceChildren(...rows);
+    allRows = out;
+    applyFilter();
   };
 
   const restoreThought = async (networkId: string, id: string): Promise<void> => {
@@ -866,7 +1000,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       await onThoughtDeleted(id);
       await render();
     } catch (err) {
-      errorDialog('Удалить', err);
+      errorDialog(t('actions.delete'), err);
     }
   };
   const deleteLinkFromTrash = async (networkId: string, id: string): Promise<void> => {
@@ -877,34 +1011,21 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       scheduleRefresh();
       await render();
     } catch (err) {
-      errorDialog('Удалить', err);
+      errorDialog(t('actions.delete'), err);
     }
   };
 
-  showDialog({
+  // Правило 3 требования 11ddd910: футер — только кнопка решения. Массовое
+  // «Удалить всё, что возможно» ушло в строку управления над списком.
+  closeDialog = showDialog({
     title: 'Корзина',
+    size: 'xl',
     body,
-    // Ширина задаётся классом (§5a.4, ошибка 009784ad): таблица из трёх колонок
-    // не должна ломать строки переносом, окно растёт вместе с экраном.
-    boxClass: 'trash-box',
-    buttons: [
-      {
-        label: 'Удалить всё, что возможно',
-        danger: true,
-        keepOpen: true,
-        onClick: async () => {
-          try {
-            const { purged, skipped } = await etn.trash.purge(networkId);
-            scheduleRefresh();
-            notice(`Удалено ${purged}, осталось заблокировано ${skipped}.`);
-            await render();
-          } catch (err) {
-            errorDialog('Очистить корзину', err);
-          }
-        },
-      },
-      { label: 'Закрыть', primary: true },
-    ],
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
+    buttons: [{ label: t('actions.close'), primary: true }],
     onMount: () => void render(),
+    onClose: () => table.destroy(),
   });
 }

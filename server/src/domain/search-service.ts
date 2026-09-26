@@ -151,6 +151,27 @@ function trigramPhrase(word: string): string | null {
   return fragments.map((f) => `"${f.replace(/"/g, '""')}"`).join(' AND ');
 }
 
+/**
+ * Boolean `MATCH` expression over `fts_thought_names` for the §6.10 include
+ * words, or `null` when no word yields a usable trigram (every word shorter
+ * than {@link TRIGRAM_MIN_LEN} after splitting on `*`).
+ *
+ * Используется `query-service` как индексный сужатель отбора по `keywords`
+ * (требование 314cbb8d, ADR 5f6cb775): FTS-условие — обязательный конъюнкт,
+ * поэтому оно строится только из слов, которые индекс способен отразить;
+ * точную семантику мини-языка по-прежнему гарантирует LIKE-клауза, которая
+ * применяется ко всем словам. Слова без индексного представления (короткие)
+ * сужатель просто не учитывает.
+ */
+export function nameTrigramMatch(include: string[]): string | null {
+  const positives: string[] = [];
+  for (const word of include) {
+    const phrase = trigramPhrase(word);
+    if (phrase !== null) positives.push(phrase);
+  }
+  return positives.length === 0 ? null : positives.join(' AND ');
+}
+
 /** Parsed `q` ready for the four FTS groups + the `by_names` LIKE fallback. */
 interface TrigramQuery {
   /**

@@ -4,13 +4,22 @@
  * мысли», стандарт S3, задача a1f5141b, веха 3 версии 0.8.2; элемент
  * интерфейса «Пикер сущностей: типы мыслей, типы связей, мысли»).
  *
- * Три источника — параметр пикера, а не повод писать три компонента:
+ * Источники — параметр пикера, а не повод писать несколько компонентов:
  *
- * | Источник        | Данные                                            |
- * |-----------------|---------------------------------------------------|
- * | `thought-types` | каталог типов мыслей (иерархия через type-tree)   |
- * | `link-types`    | каталог типов связей (иерархия, свотч линии)      |
- * | `thoughts`      | мысли — живой поиск по серверу (`findDuplicates`) |
+ * | Источник          | Данные                                            |
+ * |-------------------|---------------------------------------------------|
+ * | `thought-types`   | каталог типов мыслей (иерархия через type-tree)   |
+ * | `link-types`      | каталог типов связей (иерархия, свотч линии)      |
+ * | `thoughts`        | мысли — живой поиск по серверу (`findDuplicates`) |
+ * | `link-properties` | свойства-связи сети — по строке на имя стороны    |
+ *
+ * Четвёртый источник — «свойство связи» (требование cdb6b52f): строки общего
+ * списка свойств (`lib/property-list.ts`) дают по варианту на КАЖДОЕ имя
+ * стороны свойства-связи (прямое/обратное), с парной подписью
+ * «(прямое -> обратное)», значком конца связи и живым поиском по имени,
+ * обратному имени и описанию. Им поглощено прежнее отдельное поле
+ * `lib/link-property-field.ts` (ошибка a7abe50e) — второго поля рядом с полем
+ * «Тип мысли» нет.
  *
  * Варианты рисуются облачками общей фабрики (`lib/thought-cloud.ts`): тип
  * мысли передаётся облачку как `type_id` — фабрика сама резолвит значок,
@@ -18,7 +27,8 @@
  * ссылки и свотчем линии; мысль — её собственный визуал. Живой поиск —
  * общей выпадашкой `wireSuggest` (источник кандидатов — её параметр, ADR
  * «одна выпадашка-подсказчик»). Иерархия типов строится функциями
- * `lib/type-tree.ts` (`orderedTypeRows`), а не в экране.
+ * `lib/type-tree.ts` (`orderedTypeRows`), а не в экране; строки модального
+ * чек-листа типов рисует единое дерево `lib/ui/tree.ts` (требование 0086037c).
  *
  * Два режима показа одного пикера:
  *   - {@link pickEntitiesModal} — модальный чек-лист: одиночный или
@@ -39,13 +49,21 @@
  */
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import type { LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
+import { t } from './i18n.js';
+import type { LinkPropertySide, LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
-import { button, div, el, span } from './dom.js';
+import { div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { svgIcon, type IconName } from './icons.js';
+import {
+  buildLinkEndIcon,
+  linkEndIconSpec,
+  sortPropertyListRows,
+  type LinkEndIconSpec,
+  type PropertyListRow,
+} from './property-list.js';
 import { parseThoughtIdLookupQuery } from './pure.js';
 import {
   wireSuggest,
@@ -55,13 +73,34 @@ import {
 } from './suggest-dropdown.js';
 import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
+import { iconButton, uiButton } from './ui/button.js';
+import { fieldInput } from './ui/field.js';
+import { createTree } from './ui/tree.js';
 
 // ---------------------------------------------------------------------------
 // Опции пикера
 // ---------------------------------------------------------------------------
 
 /** Какую сущность выбирает пикер. */
-export type EntityKind = 'thought-types' | 'link-types' | 'thoughts';
+export type EntityKind = 'thought-types' | 'link-types' | 'thoughts' | 'link-properties';
+
+/**
+ * Выбранное СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает не тип
+ * связи, а имя стороны свойства-связи — `key` (display-имя стороны) адресует
+ * серверу и свойство, и направление ребра. Свойство заполняется у ДОБАВЛЯЕМОЙ
+ * мысли значением якоря (мысли, от которой строится связь), так что ребро
+ * попадает в типизированное свойство, а не в «Свойства вне типа».
+ */
+export interface LinkPropertyPick {
+  /** Id реестровой записи свойства — для карточки/диагностики. */
+  propertyId: string;
+  /** Сторона свойства (`source` — имя прямого, `target` — обратного). */
+  side: LinkPropertySide;
+  /** Display-имя выбранной стороны: ключ записи (`properties.set`). Имя
+   *  однозначно задаёт направление ребра (name_forward → исходящее,
+   *  name_reverse → входящее). */
+  key: string;
+}
 
 /** Одна выбираемая сущность. */
 export interface EntityOption {
@@ -79,10 +118,18 @@ export interface EntityOption {
   hasChildren?: boolean;
   /** `false` — вариант показывается, но не выбирается (корень иерархии). */
   selectable?: boolean;
-  /** Данные облачка фабрики (значок, цвета, начертание). */
-  cloud: ThoughtCloudInput;
+  /** Данные облачка фабрики (значок, цвета, начертание). Нет у варианта
+   *  свойства-связи: его знак — значок конца связи (`linkEnd`). */
+  cloud?: ThoughtCloudInput;
   /** Свотч линии для типа связи. */
   line?: { color: string | null; style: LinkStyle | null; width: number | null } | null;
+  /** Значок конца связи (вариант-свойство-связь): направление и оформление
+   *  линии, рисуется общим списком свойств (`buildLinkEndIcon`). */
+  linkEnd?: LinkEndIconSpec | null;
+  /** Уточнение строки серым (пара имён типа связи «(прямое -> обратное)»). */
+  note?: string;
+  /** Значение варианта для свойства-связи (`kind: 'link-properties'`). */
+  linkProperty?: LinkPropertyPick;
 }
 
 /** Глиф облачка типа связи (тип связи не имеет иконки в модели данных). */
@@ -139,6 +186,38 @@ export function thoughtEntityOption(hit: DuplicateHit): EntityOption {
     selectable: true,
     cloud: { ...hit },
   };
+}
+
+/**
+ * Варианты каталога свойств-связей сети — четвёртый источник пикера
+ * (требование cdb6b52f, ошибка a7abe50e): одна строка на КАЖДОЕ имя стороны
+ * свойства-связи (прямое — источник, обратное — назначение), в едином
+ * алфавитном порядке имён общего списка свойств. Скаляры и структурные
+ * «Родители»/«Потомки» не предлагаются. Подпись пары — серым
+ * «(прямое -> обратное)», знак — значок конца связи; `searchText` несёт оба
+ * имени пары и описание, поэтому живой поиск находит свойство и по обратному
+ * имени, и по описанию (как `filterPropertyListRows` общего списка). Чистая —
+ * юнит-тест.
+ */
+export function linkPropertyEntityOptions(rows: readonly PropertyListRow[]): EntityOption[] {
+  const out: EntityOption[] = [];
+  for (const row of sortPropertyListRows(rows)) {
+    if (row.valueType !== 'link' || row.structural || row.side === null) continue;
+    const names = row.linkNames;
+    out.push({
+      id: row.id,
+      title: row.name,
+      searchText:
+        names === null
+          ? row.description ?? ''
+          : `${names.forward} ${names.reverse} ${row.description ?? ''}`.trim(),
+      selectable: true,
+      linkEnd: linkEndIconSpec(row.side, row.visual),
+      ...(names !== null ? { note: `(${names.forward} -> ${names.reverse})` } : {}),
+      linkProperty: { propertyId: row.propertyId, side: row.side, key: row.name },
+    });
+  }
+  return out;
 }
 
 /** Полная мысль → кандидат дубль-поиска (для id-lookup, ошибка d8893a1f). */
@@ -198,8 +277,9 @@ export function createRowName(query: string, matchCount: number, enabled: boolea
 /**
  * Шагов отступа строки каталога типов по её глубине. `depth` вариантов
  * начинается с 1 у верхнего уровня списка (корень иерархии из `options`
- * исключён, поэтому первыми идут его дети). Единая формула для модального
- * чек-листа и встроенного комбо — строки каталога выглядят одинаково.
+ * исключён, поэтому первыми идут его дети). Формула встроенного комбо (строки
+ * выпадашки `wireSuggest`); строки модального чек-листа отступ считает сам
+ * `lib/ui/tree.ts` по `parentId`.
  */
 export function typeRowIndentSteps(depth: number | undefined): number {
   return Math.max(0, (depth ?? 1) - 1);
@@ -211,8 +291,9 @@ export function typeRowIndentSteps(depth: number | undefined): number {
  * вариантов (корень иерархии исключён из списка — сервер проставляет его
  * `parent_id` типов верхнего уровня, но сам корень в `options` не попадает)
  * или родитель раскрыт. Непустой — совпадения вместе с цепочкой предков.
- * Чистая — единственный источник правила «пустой поиск показывает всё»
- * и для модального чек-листа, и для встроенного комбо.
+ * Чистая — правило «пустой поиск показывает всё» встроенного комбо (строки
+ * выпадашки `wireSuggest`); видимость строк модального чек-листа считает
+ * `lib/ui/tree.ts` (`treeVisibleIds`).
  */
 export function visibleEntityIds(
   options: readonly EntityOption[],
@@ -400,25 +481,25 @@ export interface EntityPickerModalOptions {
    * (ошибка bd8b78a0), поэтому все команды живут в верхней строке.
    */
   commands?: (ctx: EntityPickerDialogCtx) => EntityPickerCommand[];
-  /** Ширина диалога, px (по умолчанию 480). */
-  width?: number;
   /** Подпись кнопки применения (по умолчанию «Применить»). */
   applyLabel?: string;
+  /**
+   * Двойной клик по строке каталога — редактор варианта (правило 6 требования
+   * 11ddd910, режим множественного выбора; в одиночном диалог закрывается
+   * первым кликом). Пикер сам редакторов не открывает — механику задаёт
+   * вызывающий; клик по строке при этом по-прежнему переключает флажок.
+   */
+  onEdit?: (opt: EntityOption) => void;
 }
 
 /**
  * Кнопка-иконка команды верхней строки пикера: единый набор иконок проекта,
  * тултип и `aria-label` (клавиатурная доступность — нативный `<button>`).
- * Класс `.icon-btn` сужен до строки поиска правилом `.st-f-searchbar .icon-btn`.
+ * Кнопка-иконка словаря `lib/ui` (задача 56f1dcb2): тултип становится
+ * `aria-label`. Размер в строке поиска сужает правило `.st-f-searchbar .ui-btn--icon`.
  */
 function commandButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
-  const btn = el('button', 'icon-btn') as HTMLButtonElement;
-  btn.type = 'button';
-  btn.title = title;
-  btn.setAttribute('aria-label', title);
-  btn.append(svgIcon(icon, 14));
-  btn.addEventListener('click', onClick);
-  return btn;
+  return iconButton({ icon: svgIcon(icon, 14), title, onClick });
 }
 
 /**
@@ -449,7 +530,6 @@ export async function pickEntitiesModal(
     const checked = new Set<string>(opts.currentIds ?? []);
     /** Собранные данные облачков выбранных мыслей (для kind === 'thoughts'). */
     const pickedThoughts = new Map<string, ThoughtCloudInput>();
-    let needle = '';
     let settled = false;
     /**
      * Закрывает сам диалог. Футер закрывает его неявно (клик по кнопке), а
@@ -464,20 +544,19 @@ export async function pickEntitiesModal(
       closeSelf?.();
       resolve(value);
     };
-    const isSelected = (id: string): boolean => checked.has(id);
 
     // Раскрытие иерархии: по умолчанию всё раскрыто (прежний чек-лист
     // показывал всё дерево), тоггл сворачивает ветку.
     const expanded = new Set<string>(options.filter((o) => o.hasChildren === true).map((o) => o.id));
 
-    const body = div('st-f-picker');
+    const body = div('st-f-picker list-dialog-body');
 
     // --- Режим «мысли»: поиск с выпадашкой + чипы выбранного --------------
     if (opts.kind === 'thoughts') {
       const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
       searchInput.type = 'text';
       searchInput.autocomplete = 'off';
-      searchInput.placeholder = 'Найти мысль…';
+      searchInput.placeholder = t('actions.search');
       // Охват поиска задан назначением выбора (требование 79755f76, ошибка
       // 81be082f): цели внутрисетевых связей ищутся только по текущей сети,
       // переключателя охвата здесь нет.
@@ -573,7 +652,7 @@ export async function pickEntitiesModal(
       const buttons: DialogButton[] = [];
       if (!single) {
         buttons.push({
-          label: 'Очистить',
+          label: t('actions.reset'),
           keepOpen: true,
           ref: (btn) => {
             clearBtn = btn;
@@ -590,12 +669,12 @@ export async function pickEntitiesModal(
       buttons.push(
         // «Отмена» без `onClick`: каркас снимает диалог сам, а отмену
         // фиксирует `onClose` ниже (ошибка 12dfb87e).
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         ...(single
           ? []
           : [
               {
-                label: opts.applyLabel ?? 'Применить',
+                label: opts.applyLabel ?? t('actions.apply'),
                 primary: true,
                 ref: (btn: HTMLButtonElement) => {
                   applyBtn = btn;
@@ -608,7 +687,11 @@ export async function pickEntitiesModal(
       closeSelf = showDialog({
         title: opts.title,
         body,
-        width: opts.width ?? 480,
+        size: 's',
+        // Правило 9 требования 11ddd910: размер диалога-списка задан ролью и
+        // стабилен — список занимает свободное место роли (`.list-dialog-body`),
+        // а не схлопывается по содержимому при наборе поиска.
+        fixedHeight: true,
         buttons,
         onMount: () => searchInput.focus(),
         // Любое закрытие каркаса — «Отмена», Esc, ×, программный
@@ -625,74 +708,78 @@ export async function pickEntitiesModal(
       return;
     }
 
-    // --- Режим типов: поиск + дерево-чек-лист ------------------------------
+    // --- Режим типов: поиск + единое дерево-чек-лист ----------------------
     const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
     searchInput.type = 'text';
     searchInput.autocomplete = 'off';
-    searchInput.placeholder = 'Найти…';
+    searchInput.placeholder = t('actions.search');
     const list = div('st-f-checks st-f-picker-list');
 
-    /** Id, видимые при поиске (пустой запрос — весь каталог). */
-    const visibleIds = (): Set<string> => visibleEntityIds(options, needle, expanded);
-
-    const renderList = (): void => {
-      list.replaceChildren();
-      const ids = visibleIds();
-      const shown = options.filter((opt) => ids.has(opt.id));
-      if (shown.length === 0) {
-        list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-        return;
-      }
-      for (const opt of shown) {
-        const line = el('label', 'st-f-check entity-pick-row');
-        line.style.paddingLeft = `${8 + typeRowIndentSteps(opt.depth) * 16}px`;
-        if (opt.hasChildren === true) {
-          const toggle = span(expanded.has(opt.id) ? '▾' : '▸', 'type-combo-toggle');
-          toggle.addEventListener('mousedown', (event) => event.preventDefault());
-          toggle.addEventListener('click', (event) => {
-            event.stopPropagation();
-            if (expanded.has(opt.id)) expanded.delete(opt.id);
-            else expanded.add(opt.id);
-            renderList();
-          });
-          line.append(toggle);
-        } else {
-          line.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
-        }
-        if (!single) {
-          const check = el('input') as HTMLInputElement;
-          check.type = 'checkbox';
-          check.checked = checked.has(opt.id);
-          check.addEventListener('change', () => {
-            if (check.checked) checked.add(opt.id);
-            else checked.delete(opt.id);
-            updateButtons();
-          });
-          line.append(check);
-        }
+    // Дерево рисует общий компонент `lib/ui/tree.ts` (требование 0086037c,
+    // ошибка 6925ffa0): каретка/флажок/облачко-подпись выровнены по токенам,
+    // клавиатура и ARIA — его. Пикер задаёт только источник данных, раскрытие
+    // по умолчанию и содержимое строки.
+    const tree = createTree<EntityOption>({
+      items: () => options,
+      ariaLabel: opts.title,
+      checkbox: !single,
+      // Раскрытие иерархии: по умолчанию всё раскрыто (прежний чек-лист
+      // показывал всё дерево), тоггл сворачивает ветку.
+      expandedIds: expanded,
+      emptyText: t('tree.empty'),
+      emptyHint: t('tree.emptyHint'),
+      showChildCount: true,
+      filterText: (opt) => `${opt.title} ${opt.searchText ?? ''}`,
+      isChecked: (opt) => checked.has(opt.id),
+      onCheck: (opt, on) => {
+        if (on) checked.add(opt.id);
+        else checked.delete(opt.id);
+        updateButtons();
+      },
+      // Правило 6 требования 11ddd910: одиночный пикер подтверждает выбор
+      // двойным кликом или Enter (`onActivate`; клик только делает строку
+      // текущей, кнопка «Выбрать» — ниже), множественный — двойной клик
+      // открывает редактор строки, если вызывающий его задал, а клик
+      // переключает флажок (ошибка d1a009fa).
+      onActivate: single ? (opt) => finish([opt.id]) : undefined,
+      onDblActivate: !single ? opts.onEdit : undefined,
+      renderContent: (opt) => {
+        const nodes: Node[] = [];
         if (opt.line != null) {
           const swatch = span('', 'type-combo-swatch');
           const dash = opt.line.style === 'dashed' ? 'dashed' : opt.line.style === 'dotted' ? 'dotted' : 'solid';
           swatch.style.borderTop = `${Math.max(1, Math.min(6, opt.line.width ?? 1))}px ${dash} ${opt.line.color ?? '#9aa3b2'}`;
-          line.append(swatch);
+          nodes.push(swatch);
         }
-        line.append(
-          createThoughtCloud(opt.cloud, {
-            profile: 'chip',
-            // Ширина — по строке списка выбора.
-            width: 'container',
-          }),
-        );
-        if (single) {
-          line.addEventListener('click', () => finish([opt.id]));
+        // Вариант-свойство-связь: знак — значок конца связи, вместо облачка
+        // подпись именем стороны (у варианта нет данных мысли).
+        if (opt.linkEnd != null) nodes.push(buildLinkEndIcon(opt.linkEnd));
+        if (opt.cloud !== undefined) {
+          nodes.push(
+            createThoughtCloud(opt.cloud, {
+              profile: 'chip',
+              // Ширина — по строке списка выбора.
+              width: 'container',
+            }),
+          );
+        } else {
+          const label = span(opt.title, 'entity-pick-label');
+          label.title = opt.title;
+          nodes.push(label);
         }
-        list.append(line);
-      }
+        if (opt.note !== undefined) nodes.push(span(opt.note, 'entity-pick-note'));
+        return nodes;
+      },
+    });
+    list.append(tree.root);
+
+    /** Перерисовать список (команды «Очистить»/«Пометить все» и смена набора). */
+    const renderList = (): void => {
+      tree.render();
     };
 
     searchInput.addEventListener('input', () => {
-      needle = searchInput.value.trim().toLowerCase();
-      renderList();
+      tree.setFilter(searchInput.value.trim().toLowerCase());
     });
 
     let clearBtn: HTMLButtonElement | null = null;
@@ -714,7 +801,7 @@ export async function pickEntitiesModal(
     const searchBar = div('st-f-searchbar');
     searchBar.append(searchInput);
     if (!single) {
-      clearBtn = commandButton('eraser', 'Очистить', () => {
+      clearBtn = commandButton('eraser', t('actions.reset'), () => {
         checked.clear();
         renderList();
         updateButtons();
@@ -730,12 +817,27 @@ export async function pickEntitiesModal(
     const buttons: DialogButton[] = [
       // «Отмена» без `onClick`: отмену фиксирует `onClose` диалога ниже
       // (ошибка 12dfb87e), поэтому она работает и для Esc, и для ×.
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       ...(single
-        ? []
+        ? [
+            // Одиночный пикер (правило 6 требования 11ddd910, ошибка
+            // d1a009fa): клик по строке только делает её текущей; выбор
+            // подтверждают кнопка «Выбрать», двойной клик или Enter.
+            {
+              label: t('actions.select'),
+              primary: true,
+              keepOpen: true,
+              onClick: () => {
+                const id = tree.getCurrentId();
+                if (id === null) return;
+                finish([id]);
+                closeSelf?.();
+              },
+            },
+          ]
         : [
             {
-              label: opts.applyLabel ?? 'Применить',
+              label: opts.applyLabel ?? t('actions.apply'),
               primary: true,
               ref: (btn: HTMLButtonElement) => {
                 applyBtn = btn;
@@ -749,7 +851,11 @@ export async function pickEntitiesModal(
     closeSelf = showDialog({
       title: opts.title,
       body,
-      width: opts.width ?? 480,
+      size: 's',
+      // Правило 9 требования 11ddd910: роль задаёт фиксированную высоту, тело
+      // прокручивается внутри, а область списка (`.list-dialog-body`) тянется на
+      // свободное место — размер не «дёргается» от поиска и числа строк.
+      fixedHeight: true,
       buttons,
       onMount: () => {
         renderList();
@@ -810,7 +916,8 @@ export interface EntityChipField {
 
 /** Строка выпадашки по варианту сущности: облачко, отступ дерева, свотч линии. */
 function entityEntry(opt: EntityOption): SuggestEntry {
-  const entry: SuggestEntry = { value: opt.id, label: opt.title, thought: opt.cloud };
+  const entry: SuggestEntry = { value: opt.id, label: opt.title };
+  if (opt.cloud !== undefined) entry.thought = opt.cloud;
   if (opt.depth !== undefined) entry.indent = typeRowIndentSteps(opt.depth);
   if (opt.line != null) entry.swatch = opt.line;
   return entry;
@@ -864,7 +971,7 @@ function restoreKeyboardFocus(
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
   const root = div('entity-chip-field st-f-fieldrow');
   const field = div('st-f-chipfield entity-chip-field-inner');
-  const input = el('input', 'text-input entity-chip-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'entity-chip-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? 'Добавить значение…';
@@ -962,8 +1069,7 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   if (opts.picker !== undefined) {
     const { picker } = opts;
     const managed = (): string[] => opts.getValues().filter((v) => !v.startsWith('$'));
-    pickBtn = el('button', 'btn small entity-chip-pick', picker.label) as HTMLButtonElement;
-    pickBtn.type = 'button';
+    pickBtn = uiButton({ label: picker.label, size: 's', class: 'entity-chip-pick' });
     pickBtn.addEventListener('click', () => {
       if (disabled) return;
       void picker.open(managed()).then((next) => {
@@ -1012,6 +1118,17 @@ export interface EntityComboOptions {
   disabled?: boolean;
   /** Типы мыслей, сужающие живой поиск (только для `thoughts`). */
   searchTypeIds?: readonly string[];
+  /**
+   * Строки общего списка свойств (`lib/property-list.ts`) — источник вариантов
+   * четвёртого источника (`kind: 'link-properties'`): по варианту на КАЖДОЕ имя
+   * стороны свойства-связи. Скаляры и структурные строки отсеиваются.
+   */
+  linkPropertyRows?: () => readonly PropertyListRow[];
+  /**
+   * Выбран вариант целиком (в дополнение к `onChange(id)`): свойству-связи
+   * нужен не id, а `linkProperty` варианта. `null` — значение очищено.
+   */
+  onChangeEntity?: (option: EntityOption | null) => void;
   /**
    * Минимальная (она же — потолок) ширина выпадашки живого поиска, px.
    * Передаётся вызывающим, когда список не помещается под узким полем и должен
@@ -1071,15 +1188,22 @@ export function normalizeParentTypeId(
 }
 
 /** Заголовок диалога «…» по виду выбираемой сущности (см. {@link buildEntityCombo}). */
-const PICKER_TITLES: Record<EntityKind, string> = {
+const PICKER_TITLES: Record<Exclude<EntityKind, 'link-properties'>, string> = {
   'thought-types': 'Выбрать тип мысли',
   'link-types': 'Выбрать тип связи',
   thoughts: 'Выбрать мысль',
 };
 
+/** Заголовок диалога «…»: `override` вызывающего либо словарная подпись вида
+ *  (свойство-связь — из словаря, требование fc00129d). */
+function pickerTitleOf(kind: EntityKind, override?: string): string {
+  if (override !== undefined) return override;
+  return kind === 'link-properties' ? t('linkProperty.pickerTitle') : PICKER_TITLES[kind];
+}
+
 /**
  * Собирает встроенное комбо-поле пикера — единый компонент поля ОДИНОЧНОГО
- * выбора сущности (тип мысли, тип связи, мысль).
+ * выбора сущности (тип мысли, тип связи, мысль, свойство связи).
  *
  * Два состояния поля (ошибка ba2f57d3):
  *   - значение пусто — обычное поле ввода с живым поиском (общая выпадашка) и
@@ -1094,10 +1218,12 @@ const PICKER_TITLES: Record<EntityKind, string> = {
  * Режим типов — дерево с отступами и раскрытием (`expandAll` раскрывает всё);
  * строки — те же облачка, что в модальном чек-листе (значок, цвета и
  * начертание из цепочки типов), у типа связи — свотч линии и подпись
- * «прямое / обратное». Каталог отдаёт ЕДИНСТВЕННЫЙ источник общей выпадашки
- * (пустой запрос — весь каталог с учётом раскрытия, непустой — совпадения с
- * цепочкой предков), поэтому ручное открытие кареткой не рисует список
- * дважды.
+ * «прямое / обратное». Режим свойств-связей — плоский список имён сторон с
+ * парной подписью и значком конца связи (четвёртый источник, требование
+ * cdb6b52f); пустое значение подписано словарём «без свойства». Каталог
+ * отдаёт ЕДИНСТВЕННЫЙ источник общей выпадашки (пустой запрос — весь каталог
+ * с учётом раскрытия, непустой — совпадения с цепочкой предков), поэтому
+ * ручное открытие кареткой не рисует список дважды.
  */
 export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   let current = opts.value;
@@ -1109,8 +1235,8 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   /** Раскрытие узлов дерева: явный выбор пользователя (иначе — дефолт). */
   const expanded = new Map<string, boolean>();
 
-  /** Перечитывает каталог типов на каждое открытие списка (realtime может
-   *  принести каталог позже создания поля). */
+  /** Перечитывает каталог на каждое открытие списка (realtime может принести
+   *  каталог типов позже создания поля; строки свойств-связей — от вызывающего). */
   const reloadOptions = (): void => {
     if (opts.options !== undefined) {
       allOptions = opts.options();
@@ -1118,6 +1244,8 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       allOptions = thoughtTypeEntityOptions(store.state.thoughtTypes);
     } else if (opts.kind === 'link-types') {
       allOptions = linkTypeEntityOptions(store.state.linkTypes);
+    } else if (opts.kind === 'link-properties') {
+      allOptions = linkPropertyEntityOptions(opts.linkPropertyRows?.() ?? []);
     } else {
       allOptions = [];
     }
@@ -1137,7 +1265,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   // облачке (ошибка ba2f57d3 «Неправильное поле ввода типа в редакторе мысли»).
   const field = div('st-f-chipfield entity-combo-field');
   const valueHost = div('entity-combo-value');
-  const input = el('input', 'text-input entity-combo-input') as HTMLInputElement;
+  const input = fieldInput({ extraClass: 'entity-combo-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
   input.spellcheck = false;
@@ -1145,13 +1273,12 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   input.disabled = opts.disabled === true;
   const caret = span('', 'type-combo-caret entity-combo-caret');
   caret.append(svgIcon('chevron-down', 12));
-  const pickBtn = button(
-    '…',
-    () => openPicker(),
-    'entity-combo-pick',
-    opts.pickerTitle ?? PICKER_TITLES[opts.kind],
-  );
-  pickBtn.type = 'button';
+  const pickBtn = uiButton({
+    label: '…',
+    class: 'entity-combo-pick',
+    title: pickerTitleOf(opts.kind, opts.pickerTitle),
+    onClick: () => openPicker(),
+  });
   field.append(valueHost, input, caret, pickBtn);
   root.append(field);
 
@@ -1182,7 +1309,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         })
         .catch(() => undefined);
     }
-    const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: current };
+    const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? current };
     valueHost.append(
       createThoughtCloud(cloud, {
         profile: 'chip',
@@ -1213,6 +1340,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     renderValue();
     renderMode();
     opts.onChange(id);
+    opts.onChangeEntity?.(id === null ? null : opt ?? null);
     restoreKeyboardFocus(current !== null ? pickBtn : input, hadFocus);
   };
 
@@ -1232,34 +1360,44 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
 
   /**
    * Кнопка «…»: диалог выбора ЕДИНСТВЕННОГО значения. Каталог диалога — тот
-   * же, что у живого поиска (свой `options()` у родительского пикера), поэтому
-   * запрещённые варианты в диалоге не предлагаются.
+   * же, что у живого поиска (свой `options()` у родительского пикера либо
+   * строки свойств-связей), поэтому запрещённые варианты в диалоге не
+   * предлагаются.
    */
   function openPicker(): void {
     if (opts.disabled === true) return;
+    const catalogue =
+      opts.options !== undefined
+        ? opts.options()
+        : opts.kind === 'link-properties'
+          ? linkPropertyEntityOptions(opts.linkPropertyRows?.() ?? [])
+          : undefined;
     void pickEntitiesModal({
       networkId: opts.networkId,
       kind: opts.kind,
-      title: opts.pickerTitle ?? PICKER_TITLES[opts.kind],
+      title: pickerTitleOf(opts.kind, opts.pickerTitle),
       single: true,
       ...(opts.searchTypeIds !== undefined ? { searchTypeIds: opts.searchTypeIds } : {}),
-      ...(opts.options !== undefined ? { catalogue: opts.options() } : {}),
+      ...(catalogue !== undefined ? { catalogue } : {}),
     }).then((ids) => {
       if (ids === null) return;
       setValue(ids[0] ?? null);
     });
   }
 
-  /** Строка выпадашки по варианту каталога типов: облачко типа (значок,
-   *  цвета, начертание), отступ дерева, свотч линии, тоггл раскрытия. */
-  const typeEntry = (opt: EntityOption): SuggestEntry => {
+  /** Строка выпадашки по варианту каталога: облачко типа (значок, цвета,
+   *  начертание) либо, у свойства-связи, значок конца связи с парной подписью;
+   *  отступ и тоггл — только у дерева типов. */
+  const catalogueEntry = (opt: EntityOption): SuggestEntry => {
     const entry: SuggestEntry = {
       value: opt.id,
       label: opt.title,
-      thought: opt.cloud,
-      indent: typeRowIndentSteps(opt.depth),
       swatch: opt.line ?? null,
     };
+    if (opt.cloud !== undefined) entry.thought = opt.cloud;
+    if (opt.linkEnd != null) entry.linkEnd = opt.linkEnd;
+    if (opt.note !== undefined) entry.note = opt.note;
+    if (opt.depth !== undefined) entry.indent = typeRowIndentSteps(opt.depth);
     if (opt.hasChildren === true) {
       entry.toggle = {
         expanded: isExpanded(opt),
@@ -1288,7 +1426,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         const visible = visibleEntityIds(allOptions, q, expandedIds);
         const entries = allOptions
           .filter((o) => o.selectable !== false && visible.has(o.id))
-          .map(typeEntry);
+          .map(catalogueEntry);
         const matchedCount =
           q === ''
             ? 0
@@ -1329,7 +1467,9 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
           hits.map((hit) => {
             const opt = thoughtEntityOption(hit);
             byId.set(hit.id, opt);
-            return { value: hit.id, label: hit.title, thought: opt.cloud };
+            const entry: SuggestEntry = { value: hit.id, label: hit.title };
+            if (opt.cloud !== undefined) entry.thought = opt.cloud;
+            return entry;
           });
         // Охват — только текущая сеть (требование 79755f76, ошибка 81be082f):
         // цели внутрисетевых связей ищутся штатным findDuplicates, переключателя

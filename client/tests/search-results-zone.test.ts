@@ -24,12 +24,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const SEARCH_TS = resolve(RENDERER, 'search', 'search.ts');
 const THOUGHT_CLOUD_TS = resolve(RENDERER, 'lib', 'thought-cloud.ts');
 const DOM_TS = resolve(RENDERER, 'lib', 'dom.ts');
-const STYLES_CSS = resolve(RENDERER, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');
@@ -113,7 +114,7 @@ describe('Enter по выбранной строке результатов (з�
 
   it('ни одна строка не выбрана — Enter повторяет поиск', () => {
     const src = readText(SEARCH_TS);
-    const enter = /if \(event\.key === 'Enter'\) \{(?<body>[\s\S]*?)\n    \} else if/.exec(src);
+    const enter = /if \(event\.key === 'Enter'\) \{(?<body>[\s\S]*?)\n {4}\} else if/.exec(src);
     assert.ok(enter?.groups?.['body'] !== undefined, 'ветка Enter найдена');
     const body = enter.groups['body'] ?? '';
     assert.match(body, /row\.activate\(\);/, 'выбранная строка — её действие');

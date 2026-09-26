@@ -21,7 +21,7 @@ import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type LinkTypeFilterIn
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClientLogState, PickFileResult, PickImageResult } from './contract.js';
+import type { AppInfo, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
 import { classifyOpenTarget } from './open-target.js';
 import { errText } from '../../renderer/lib/dom.js';
 
@@ -60,7 +60,7 @@ export interface HandlerDeps {
 }
 
 /** IPC handler signature: positional args in, promise out. */
-export type IpcHandler = (args: unknown[]) => Promise<unknown> | unknown;
+export type IpcHandler = (args: unknown[], ctx: IpcCallContext) => Promise<unknown> | unknown;
 
 /**
  * Re-assert `unknown[]` IPC arguments onto a typed function. The ONLY place in
@@ -72,6 +72,17 @@ export type IpcHandler = (args: unknown[]) => Promise<unknown> | unknown;
  */
 function bind<const A extends unknown[]>(fn: (...args: A) => unknown): IpcHandler {
   return async (args) => fn(...(args as A));
+}
+
+/**
+ * Как {@link bind}, но обработчик дополнительно получает контекст вызова
+ * (сигнал отмены, требование ebed4980) последним аргументом: им пользуются
+ * только отменяемые вызовы выборок.
+ */
+function bindCancellable<const A extends unknown[]>(
+  fn: (...args: [...A, IpcCallContext]) => unknown,
+): IpcHandler {
+  return async (args, ctx) => fn(...(args as unknown as A), ctx);
 }
 
 /** Throws a canonical error when a handler runs before `server.connect`. */
@@ -206,6 +217,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((id: string, key: string, value: unknown) =>
       requireRest(deps).setPreference(id, key, value as never),
     ),
+  );
+  handlers.set(
+    'networks.statistics',
+    bind((id: string) => requireRest(deps).networkStatistics(id)),
   );
 
   // --- tabs (Q2, 07-client-electron.md §3.6) --------------------------------
@@ -498,16 +513,22 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- structures & saved filters (L15) --------------------------------------
   handlers.set(
     'structures.query',
-    bind(
-      (networkId: string, request: Parameters<RestClient['queryStructureThoughts']>[1]) =>
-        requireRest(deps).queryStructureThoughts(networkId, request),
+    bindCancellable(
+      (
+        networkId: string,
+        request: Parameters<RestClient['queryStructureThoughts']>[1],
+        ctx: IpcCallContext,
+      ) => requireRest(deps).queryStructureThoughts(networkId, request, { signal: ctx.signal }),
     ),
   );
   handlers.set(
     'structures.queryIds',
-    bind(
-      (networkId: string, request: Parameters<RestClient['queryStructureThoughtIds']>[1]) =>
-        requireRest(deps).queryStructureThoughtIds(networkId, request),
+    bindCancellable(
+      (
+        networkId: string,
+        request: Parameters<RestClient['queryStructureThoughtIds']>[1],
+        ctx: IpcCallContext,
+      ) => requireRest(deps).queryStructureThoughtIds(networkId, request, { signal: ctx.signal }),
     ),
   );
   handlers.set(

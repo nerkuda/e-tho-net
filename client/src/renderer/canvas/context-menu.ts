@@ -22,8 +22,9 @@
  */
 
 import type { FocusDir, Link } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
-import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { getActiveMode as getStripActiveMode } from './focus-filter-strip.js';
 import { openAddDialog } from './add-dialog.js';
 import {
@@ -34,10 +35,17 @@ import {
 } from './clipboard.js';
 import { getRef, invalidateRef, requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
-import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
+import { errorDialog, promptDialog } from '../lib/dialog.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
-import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
+import {
+  MENU_SEPARATOR,
+  menuAction,
+  menuChoice,
+  menuSubmenu,
+  showMenuAt,
+  type MenuItem,
+} from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
 import { reflectThoughtUpdate } from '../editor/editor.js';
@@ -185,24 +193,11 @@ export function showLinkContextMenu(event: MouseEvent, linkId: string): void {
 /** Builds the link menu items: properties / activity / invert / delete. */
 function buildLinkMenuItems(networkId: string, linkId: string): MenuItem[] {
   return [
-    {
-      label: 'Изменить свойства',
-      onClick: () => void openLinkSettings(networkId, linkId),
-    },
-    {
-      label: 'Изменить актуальность',
-      onClick: () => void toggleLinkActive(networkId, linkId),
-    },
-    {
-      label: 'Инвертировать',
-      onClick: () => void invertLink(networkId, linkId),
-    },
+    menuAction('Изменить свойства', () => void openLinkSettings(networkId, linkId)),
+    menuAction('Изменить актуальность', () => void toggleLinkActive(networkId, linkId)),
+    menuAction('Инвертировать', () => void invertLink(networkId, linkId)),
     MENU_SEPARATOR,
-    {
-      label: 'Удалить',
-      danger: true,
-      onClick: () => void deleteLink(networkId, linkId),
-    },
+    menuAction(t('actions.delete'), () => void deleteLink(networkId, linkId), { danger: true }),
   ];
 }
 
@@ -430,172 +425,113 @@ export function buildThoughtMenuItems(
     opts.hideSelectionCommand === true
       ? []
       : [
-          {
-            label: inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
-            onClick: () => addToSelectionHook?.(target.id),
-          },
+          menuAction(
+            inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
+            () => addToSelectionHook?.(target.id),
+          ),
         ];
 
   return [
-    {
-      label: 'Добавить',
-      submenu: [
-        {
-          label: 'вверх (родитель)',
-          onClick: () =>
-            openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
+    menuSubmenu('Добавить', [
+      menuAction('вверх (родитель)', () =>
+        openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
+      ),
+      menuAction('вниз (ребёнок)', () =>
+        openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
+      ),
+      menuAction(
+        'налево (родственник)',
+        () => {
+          if (siblingParentId !== null) {
+            openAddDialog({
+              anchorId: siblingParentId,
+              anchorTitle: siblingParentTitle,
+              direction: 'child',
+            });
+          }
         },
-        {
-          label: 'вниз (ребёнок)',
-          onClick: () =>
-            openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
-        },
-        {
-          label: 'налево (родственник)',
-          disabled: !canAddSibling,
-          onClick: () => {
-            if (siblingParentId !== null) {
-              openAddDialog({
-                anchorId: siblingParentId,
-                anchorTitle: siblingParentTitle,
-                direction: 'child',
-              });
-            }
-          },
-        },
+        { disabled: !canAddSibling },
+      ),
+    ]),
+    menuAction('Изменить актуальность', () => void toggleActive(networkId, target.id)),
+    // Submenu is enabled only while the zone is sorted «ручной» (08-ui-spec.md
+    // §2.7). Siblings never accept manual order (§6.2); for parents/children
+    // each row self-gates on its own position condition so the user gets a
+    // precise signal of what is and is not possible right now.
+    menuSubmenu(
+      'Изменить порядок',
+      [
+        menuAction(
+          'сделать первой',
+          () => void moveInZone(networkId, target.id, target.dir as OrderableDir, 0),
+          { disabled: !canReorder || isZoneFirst },
+        ),
+        menuAction(
+          'сдвинуть назад',
+          () => void moveInZone(networkId, target.id, target.dir as OrderableDir, zoneIdx - 1),
+          { disabled: !canReorder || isZoneFirst },
+        ),
+        menuAction(
+          'сдвинуть вперёд',
+          () => void moveInZone(networkId, target.id, target.dir as OrderableDir, zoneIdx + 1),
+          { disabled: !canReorder || isZoneLast },
+        ),
+        menuAction(
+          'сделать последней',
+          () => void moveInZone(networkId, target.id, target.dir as OrderableDir, zoneLen - 1),
+          { disabled: !canReorder || isZoneLast },
+        ),
       ],
-    },
-    {
-      label: 'Изменить актуальность',
-      onClick: () => void toggleActive(networkId, target.id),
-    },
-    {
-      // Submenu is enabled only while the zone is sorted «ручной» (08-ui-spec.md
-      // §2.7). Siblings never accept manual order (§6.2); for parents/children
-      // each row self-gates on its own position condition so the user gets a
-      // precise signal of what is and is not possible right now.
-      label: 'Изменить порядок',
-      disabled: !canReorder,
-      submenu: [
-        {
-          label: 'сделать первой',
-          disabled: !canReorder || isZoneFirst,
-          onClick: () =>
-            void moveInZone(networkId, target.id, target.dir as OrderableDir, 0),
-        },
-        {
-          label: 'сдвинуть назад',
-          disabled: !canReorder || isZoneFirst,
-          onClick: () =>
-            void moveInZone(
-              networkId,
-              target.id,
-              target.dir as OrderableDir,
-              zoneIdx - 1,
-            ),
-        },
-        {
-          label: 'сдвинуть вперёд',
-          disabled: !canReorder || isZoneLast,
-          onClick: () =>
-            void moveInZone(
-              networkId,
-              target.id,
-              target.dir as OrderableDir,
-              zoneIdx + 1,
-            ),
-        },
-        {
-          label: 'сделать последней',
-          disabled: !canReorder || isZoneLast,
-          onClick: () =>
-            void moveInZone(
-              networkId,
-              target.id,
-              target.dir as OrderableDir,
-              zoneLen - 1,
-            ),
-        },
-      ],
-    },
-    {
-      label: 'Изменить тип',
-      onClick: () => void pickTypeForThought(networkId, target.id),
-    },
-    {
-      label: 'Изменить иконку',
-      onClick: () => void changeIcon(networkId, target.id),
-    },
-    {
-      // In the structures view (L15) both commands open the editor without
-      // switching the canvas focus; on the canvas they focus the thought.
-      // В редакторе мысль уже открыта — контекст ведёт на вкладку «Вложения».
-      label: 'Добавить вложение',
-      onClick: () => {
-        if (opts.attachmentHandler !== undefined) opts.attachmentHandler(target.id);
-        else if (opts.openHandler !== undefined) opts.openHandler(target.id);
-        else void setFocus(target.id);
-      },
-    },
+      { disabled: !canReorder },
+    ),
+    menuAction('Изменить тип', () => void pickTypeForThought(networkId, target.id)),
+    menuAction('Изменить иконку', () => void changeIcon(networkId, target.id)),
+    // In the structures view (L15) both commands open the editor without
+    // switching the canvas focus; on the canvas they focus the thought.
+    // В редакторе мысль уже открыта — контекст ведёт на вкладку «Вложения».
+    menuAction('Добавить вложение', () => {
+      if (opts.attachmentHandler !== undefined) opts.attachmentHandler(target.id);
+      else if (opts.openHandler !== undefined) opts.openHandler(target.id);
+      else void setFocus(target.id);
+    }),
     MENU_SEPARATOR,
     ...(opts.hideOpenCommand === true
       ? []
       : [
-          {
-            label: opts.openLabel ?? 'Открыть редактор',
-            onClick: () => {
-              if (opts.openHandler !== undefined) opts.openHandler(target.id);
-              else void setFocus(target.id);
-            },
-          } satisfies MenuItem,
+          menuAction(opts.openLabel ?? 'Открыть редактор', () => {
+            if (opts.openHandler !== undefined) opts.openHandler(target.id);
+            else void setFocus(target.id);
+          }),
         ]),
     ...(opts.focusHandler !== undefined
-      ? [{ label: 'В фокус', onClick: () => opts.focusHandler?.() } satisfies MenuItem]
+      ? [menuAction('В фокус', () => opts.focusHandler?.())]
       : []),
-    {
-      label: 'Экспорт…',
-      onClick: () => void exportSingleThought(networkId, target.id),
-    },
-    {
-      label: 'Импорт…',
-      onClick: () => void importToThought(networkId, target.id),
-    },
+    menuAction('Экспорт…', () => void exportSingleThought(networkId, target.id)),
+    menuAction('Импорт…', () => void importToThought(networkId, target.id)),
     ...(opts.findOnMapHandler !== undefined
       ? [
-          {
-            // Structures-only command (L23, 08-ui-spec.md §15.8): jump to the
-            // map view with this thought focused.
-            label: 'Найти на карте мыслей',
-            onClick: () => opts.findOnMapHandler?.(target.id),
-          },
+          // Structures-only command (L23, 08-ui-spec.md §15.8): jump to the
+          // map view with this thought focused.
+          menuAction('Найти на карте мыслей', () => opts.findOnMapHandler?.(target.id)),
         ]
       : []),
-    {
-      // Pinned-thoughts command (L18, 08-ui-spec.md §16): available in every
-      // thought menu — the canvas, the selection panel, the structures tree,
-      // the history chips and the pinned panel itself.
-      label: isPinned(target.id) ? 'Открепить мысль' : 'Закрепить мысль',
-      onClick: () => void togglePinned(target.id),
-    },
+    // Pinned-thoughts command (L18, 08-ui-spec.md §16): available in every
+    // thought menu — the canvas, the selection panel, the structures tree,
+    // the history chips and the pinned panel itself.
+    menuAction(isPinned(target.id) ? 'Открепить мысль' : 'Закрепить мысль', () =>
+      void togglePinned(target.id),
+    ),
     ...selectionItem,
-    {
-      label: 'Копировать',
-      onClick: () => void copyThought(target, networkId),
-    },
-    {
-      label: 'Вставить',
+    menuAction('Копировать', () => void copyThought(target, networkId)),
+    menuAction('Вставить', () => void pasteThoughtsTo(networkId, target.id), {
       disabled: !hasClipboard(),
-      onClick: () => void pasteThoughtsTo(networkId, target.id),
-    },
-    {
-      label: 'Копировать ID',
-      onClick: () => {
-        void navigator.clipboard.writeText(target.id).then(
-          () => notice('ID мысли скопирован.'),
-          () => notice('Не удалось скопировать ID.', 'error'),
-        );
-      },
-    },
+    }),
+    menuAction('Копировать ID', () => {
+      void navigator.clipboard.writeText(target.id).then(
+        () => notice('ID мысли скопирован.'),
+        () => notice('Не удалось скопировать ID.', 'error'),
+      );
+    }),
     MENU_SEPARATOR,
     // Команды контекста (значение свойства: «Удалить связь с мыслью» /
     // «Поместить связь в корзину») — отдельным блоком перед удалением: это
@@ -603,14 +539,14 @@ export function buildThoughtMenuItems(
     ...(opts.extraItems !== undefined && opts.extraItems.length > 0
       ? [...opts.extraItems, MENU_SEPARATOR]
       : []),
-    {
-      // For a thought already in the trash the label becomes
-      // «Удалить/восстановить» (S13, 08-ui-spec.md §2.6) — the action is the
-      // same two-phase dialog either way.
-      label: trashed ? 'Удалить/восстановить' : 'Удалить',
-      danger: true,
-      onClick: () => void deleteThought(networkId, target),
-    },
+    // For a thought already in the trash the label becomes
+    // «Удалить/восстановить» (S13, 08-ui-spec.md §2.6) — the action is the
+    // same two-phase dialog either way.
+    menuAction(
+      trashed ? 'Удалить/восстановить' : t('actions.delete'),
+      () => void deleteThought(networkId, target),
+      { danger: true },
+    ),
   ];
 }
 
@@ -907,14 +843,15 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     dir === 'children' && getStripActiveMode().kind === 'view';
 
   const sortItem = (
-    label: string,
+    caption: string,
     sort: 'alpha' | 'created' | 'viewed',
     order: 'asc' | 'desc',
-  ): MenuItem => ({
-    label,
-    checked: current.sort === sort && current.order === order,
-    onClick: () => void setZoneSort(networkId, focus.focused.id, dir, sort, order),
-  });
+  ): MenuItem =>
+    menuChoice(
+      caption,
+      current.sort === sort && current.order === order,
+      () => void setZoneSort(networkId, focus.focused.id, dir, sort, order),
+    );
 
   // «Добавить мысль» (L19) lives only in the parents/children zones: the zone
   // itself tells the direction; the siblings zone has no unambiguous anchor.
@@ -922,27 +859,24 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     dir === 'siblings'
       ? []
       : [
-          {
-            label: 'Добавить мысль',
-            onClick: () =>
-              openAddDialog({
-                anchorId: focus.focused.id,
-                anchorTitle: focus.focused.title,
-                direction: dir === 'parents' ? 'parent' : 'child',
-              }),
-          },
+          menuAction('Добавить мысль', () =>
+            openAddDialog({
+              anchorId: focus.focused.id,
+              anchorTitle: focus.focused.title,
+              direction: dir === 'parents' ? 'parent' : 'child',
+            }),
+          ),
         ];
 
   showMenuAt(event.clientX, event.clientY, [
     ...addItem,
-    {
-      label: 'Сортировка',
-      // View result owns the order (см. описание viewResultActive выше) —
-      // показываем заглушку подменю, чтобы сразу было видно, что режим
-      // сменился. Подменю недоступно, пока в фокусе активен отбор.
-      disabled: viewResultActive,
-      submenu: viewResultActive
-        ? [{ label: 'порядок задаётся отбором', disabled: true }]
+    // View result owns the order (см. описание viewResultActive выше) —
+    // показываем заглушку подменю, чтобы сразу было видно, что режим
+    // сменился. Подменю недоступно, пока в фокусе активен отбор.
+    menuSubmenu(
+      'Сортировка',
+      viewResultActive
+        ? [menuAction('порядок задаётся отбором', undefined, { disabled: true })]
         : [
             sortItem('по алфавиту (возр)', 'alpha', 'asc'),
             sortItem('по алфавиту (убыв)', 'alpha', 'desc'),
@@ -950,16 +884,17 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
             sortItem('по дате создания (убыв)', 'created', 'desc'),
             sortItem('по дате просмотра (возр)', 'viewed', 'asc'),
             sortItem('по дате просмотра (убыв)', 'viewed', 'desc'),
-            {
-              label: 'ручной',
-              checked: current.sort === 'manual',
-              disabled: !manual,
-              onClick: () => {
+            menuChoice(
+              'ручной',
+              current.sort === 'manual',
+              () => {
                 if (manual) void setZoneSort(networkId, focus.focused.id, dir, 'manual', 'asc');
               },
-            },
+              { disabled: !manual },
+            ),
           ],
-    },
+      { disabled: viewResultActive },
+    ),
   ]);
 }
 

@@ -20,9 +20,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
 const SEARCH_TS = resolve(import.meta.dirname, '..', 'src', 'renderer', 'search', 'search.ts');
-const STYLES_CSS = resolve(import.meta.dirname, '..', 'src', 'renderer', 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');

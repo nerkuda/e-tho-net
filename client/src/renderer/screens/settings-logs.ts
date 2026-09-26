@@ -22,11 +22,15 @@
  */
 
 import type { SystemLoggingStatus } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import type { ClientLogState, DeleteLogsResult } from '../../main/ipc/contract.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
+import { errorParagraph, setStatusText } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
+import { uiButton } from '../lib/ui/button.js';
+import { checkboxRow, choiceControl } from '../lib/ui/choice-row.js';
 
 /**
  * Confirmation seam: unit tests substitute their own resolver, the dialog
@@ -47,8 +51,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
   const clientMsg = span('', 'muted');
 
   function setClientMsg(text: string, isError = false): void {
-    clientMsg.textContent = text;
-    clientMsg.className = isError ? 'error-text' : 'muted';
+    setStatusText(clientMsg, text, isError);
   }
 
   function renderClient(): void {
@@ -61,45 +64,52 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       ),
     );
 
-    const toggle = el('input');
-    toggle.type = 'checkbox';
-    toggle.checked = clientState?.enabled ?? false;
-    toggle.disabled = clientState === null;
-    toggle.addEventListener('change', () => {
-      const next = toggle.checked;
-      toggle.disabled = true;
-      void etn.system
-        .setClientLogging(next)
-        .then((state) => {
-          clientState = state;
-          setClientMsg(next ? 'Логирование клиента включено.' : 'Логирование клиента выключено.');
-          renderClient();
-        })
-        .catch((err: unknown) => {
-          // Immediate apply failed — revert the visual state and say why.
-          toggle.checked = !next;
-          setClientMsg(errText(err), true);
-        })
-        .finally(() => {
-          toggle.disabled = false;
-        });
+    const logToggle = checkboxRow({
+      label: 'Логирование клиента',
+      checked: clientState?.enabled ?? false,
+      disabled: clientState === null,
+      onChange: (next) => {
+        const toggle = logToggle.input;
+        toggle.disabled = true;
+        void etn.system
+          .setClientLogging(next)
+          .then((state) => {
+            clientState = state;
+            setClientMsg(next ? 'Логирование клиента включено.' : 'Логирование клиента выключено.');
+            renderClient();
+          })
+          .catch((err: unknown) => {
+            // Immediate apply failed — revert the visual state and say why.
+            toggle.checked = !next;
+            setClientMsg(errText(err), true);
+          })
+          .finally(() => {
+            toggle.disabled = false;
+          });
+      },
     });
-    const toggleLabel = el('label', 'checkbox-row');
-    toggleLabel.append(toggle, span('Логирование клиента'));
+    const toggleLabel = logToggle.row;
 
     const filePath = clientState?.logFile ?? '—';
     const fileCode = el('code', 'settings-log-path', filePath);
     fileCode.title = filePath;
 
     const btnRow = div('form-row');
-    const btnOpen = button('Открыть', () => void openClientJournal(), 'btn small', 'Открыть файл журнала');
+    const btnOpen = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      title: 'Открыть файл журнала',
+      onClick: () => void openClientJournal(),
+    });
     btnOpen.disabled = clientState === null;
-    const btnDelete = button(
-      'Удалить',
-      () => void deleteClientJournals(),
-      'btn small danger',
-      'Удалить все файлы журнала клиента',
-    );
+    const btnDelete = uiButton({
+      label: t('actions.delete'),
+      role: 'danger',
+      size: 's',
+      title: 'Удалить все файлы журнала клиента',
+      onClick: () => void deleteClientJournals(),
+    });
     btnDelete.disabled = clientState === null;
     btnRow.append(btnOpen, btnDelete);
 
@@ -147,8 +157,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
   const serverMsg = span('', 'muted');
 
   function setServerMsg(text: string, isError = false): void {
-    serverMsg.textContent = text;
-    serverMsg.className = isError ? 'error-text' : 'muted';
+    setStatusText(serverMsg, text, isError);
   }
 
   function renderServer(): void {
@@ -160,7 +169,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       // Admin-only endpoints refused us or the server is unreachable — the
       // block shows the reason and stays inert (08-ui-spec.md §9.7).
       serverBox.append(
-        el('p', 'error-text', serverError),
+        errorParagraph(serverError),
         el('p', 'muted', 'Управление журналом сервера доступно администратору при подключённом сервере.'),
       );
       return;
@@ -175,30 +184,30 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       ),
     );
 
-    const toggle = el('input');
-    toggle.type = 'checkbox';
-    toggle.checked = status?.enabled ?? false;
-    toggle.disabled = status === null;
-    toggle.addEventListener('change', () => {
-      const next = toggle.checked;
-      toggle.disabled = true;
-      void etn.system
-        .setServerLogging(next)
-        .then((fresh) => {
-          serverStatus = fresh;
-          setServerMsg(next ? 'Логирование сервера включено.' : 'Логирование сервера выключено.');
-          renderServer();
-        })
-        .catch((err: unknown) => {
-          toggle.checked = !next;
-          setServerMsg(errText(err), true);
-        })
-        .finally(() => {
-          toggle.disabled = false;
-        });
+    const logToggle = checkboxRow({
+      label: 'Логирование сервера',
+      checked: status?.enabled ?? false,
+      disabled: status === null,
+      onChange: (next) => {
+        const toggle = logToggle.input;
+        toggle.disabled = true;
+        void etn.system
+          .setServerLogging(next)
+          .then((fresh) => {
+            serverStatus = fresh;
+            setServerMsg(next ? 'Логирование сервера включено.' : 'Логирование сервера выключено.');
+            renderServer();
+          })
+          .catch((err: unknown) => {
+            toggle.checked = !next;
+            setServerMsg(errText(err), true);
+          })
+          .finally(() => {
+            toggle.disabled = false;
+          });
+      },
     });
-    const toggleLabel = el('label', 'checkbox-row');
-    toggleLabel.append(toggle, span('Логирование сервера'));
+    const toggleLabel = logToggle.row;
 
     const dir = status?.logDir ?? '—';
     const dirCode = el('code', 'settings-log-path', dir);
@@ -214,12 +223,12 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       const tbody = el('tbody');
       for (const file of status.files) {
         const row = el('tr');
-        const pick = el('input');
-        pick.type = 'radio';
-        pick.name = 'settings-server-log-file';
-        pick.checked = file.name === selectedServerFile;
-        pick.addEventListener('change', () => {
-          selectedServerFile = pick.checked ? file.name : null;
+        const pick = choiceControl('radio', {
+          name: 'settings-server-log-file',
+          checked: file.name === selectedServerFile,
+          onChange: (checked) => {
+            selectedServerFile = checked ? file.name : null;
+          },
         });
         const pickCell = el('td');
         pickCell.append(pick);
@@ -236,26 +245,29 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     }
 
     const btnRow = div('form-row');
-    const btnDownload = button(
-      'Скачать…',
-      () => void downloadServerJournal(),
-      'btn small',
-      'Скачать файл журнала сервера',
-    );
+    const btnDownload = uiButton({
+      label: 'Скачать…',
+      role: 'secondary',
+      size: 's',
+      title: 'Скачать файл журнала сервера',
+      onClick: () => void downloadServerJournal(),
+    });
     btnDownload.disabled = status === null;
-    const btnOpen = button(
-      'Открыть',
-      () => void openServerJournal(),
-      'btn small',
-      'Открыть текущий файл журнала сервера',
-    );
+    const btnOpen = uiButton({
+      label: 'Открыть',
+      role: 'secondary',
+      size: 's',
+      title: 'Открыть текущий файл журнала сервера',
+      onClick: () => void openServerJournal(),
+    });
     btnOpen.disabled = status === null;
-    const btnDelete = button(
-      'Удалить',
-      () => void deleteServerJournals(),
-      'btn small danger',
-      'Удалить все файлы журнала сервера',
-    );
+    const btnDelete = uiButton({
+      label: t('actions.delete'),
+      role: 'danger',
+      size: 's',
+      title: 'Удалить все файлы журнала сервера',
+      onClick: () => void deleteServerJournals(),
+    });
     btnDelete.disabled = status === null;
     btnRow.append(btnDownload, btnOpen, btnDelete);
 

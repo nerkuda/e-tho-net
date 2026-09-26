@@ -45,7 +45,11 @@ import {
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { uiTabs } from '../lib/ui/tabs.js';
+import { div, el, errText } from '../lib/dom.js';
+import { footerErrorLine } from '../lib/ui/messages.js';
+import { availableLocales, getLang, t } from '../lib/i18n.js';
+import { applyLang } from '../lib/lang.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -53,6 +57,9 @@ import { clip } from '../lib/pure.js';
 import { store, type Theme } from '../state.js';
 import { buildLogsSection } from './settings-logs.js';
 import { scheduleStructuresRefresh } from './structures/structures.js';
+import { uiButton } from '../lib/ui/button.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
 type Section = 'user' | 'network' | 'client' | 'logs';
@@ -108,6 +115,8 @@ interface Draft {
   showInactive: boolean;
   showTrash: boolean;
   theme: Theme;
+  /** Язык интерфейса (L5 `client_meta.lang`, задача 57f09136). */
+  lang: string;
   cloudWidth: number;
   cloudGap: number;
 }
@@ -134,6 +143,7 @@ function readInitialDraft(): Draft {
     showInactive: store.state.showInactive,
     showTrash: store.state.showTrash,
     theme: store.state.theme,
+    lang: getLang(),
     cloudWidth: store.state.cloudWidth,
     cloudGap: store.state.cloudGap,
   };
@@ -153,6 +163,7 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.showInactive !== b.showInactive ||
     a.showTrash !== b.showTrash ||
     a.theme !== b.theme ||
+    a.lang !== b.lang ||
     a.cloudWidth !== b.cloudWidth ||
     a.cloudGap !== b.cloudGap
   );
@@ -202,7 +213,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // Строка ошибки живёт в sticky-футере (ниже), а не в теле: она обязана быть
   // видна на любой вкладке/разделе диалога, в т.ч. при прокрученном
   // содержимом (ошибка add8d09d).
-  const errorLine = span('', 'error-text settings-error');
+  const errorLine = footerErrorLine('settings-error');
 
   body.append(nav, content);
 
@@ -213,17 +224,30 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     errorLine,
   );
   const btnGroup = div('settings-footer-buttons');
-  const btnApply = button('Применить', () => void applyDraft(false), 'dialog-btn');
-  btnApply.title = 'Применить (Shift+Enter)';
-  const btnApplyClose = button(
-    'Применить и закрыть',
-    () => void applyDraft(true),
-    'dialog-btn primary',
-  );
-  btnApplyClose.title = 'Применить и закрыть (Ctrl+Enter)';
-  const btnCancel = button('Отменить', () => closeDialog(), 'dialog-btn');
-  btnCancel.title = 'Отменить (Esc)';
-  btnGroup.append(btnApply, btnApplyClose, btnCancel);
+  const btnApply = uiButton({
+    label: t('actions.apply'),
+    role: 'secondary',
+    size: 'm',
+    onClick: () => void applyDraft(false),
+  });
+  btnApply.title = t('actions.applyShortcut', 'Shift+Enter');
+  const btnApplyClose = uiButton({
+    label: t('actions.applyClose'),
+    role: 'primary',
+    size: 'm',
+    onClick: () => void applyDraft(true),
+  });
+  btnApplyClose.title = t('actions.applyCloseShortcut', 'Ctrl+Enter');
+  const btnCancel = uiButton({
+    label: t('actions.cancel'),
+    role: 'secondary',
+    size: 'm',
+    onClick: () => closeDialog(),
+  });
+  btnCancel.title = t('actions.cancelShortcut', 'Esc');
+  // Primary-действие — крайним справа (требование edc5faea): панель
+  // кнопок диалога держит главное действие последним.
+  btnGroup.append(btnApply, btnCancel, btnApplyClose);
   footer.append(btnGroup);
 
   // -- helpers -----------------------------------------------------------
@@ -254,7 +278,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       return root;
     }
 
-    const nameInput = el('input', 'text-input');
+    const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.value = draft.displayName;
     nameInput.maxLength = DISPLAY_NAME_MAX_LENGTH;
@@ -264,15 +288,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
-    const username = el('input', 'text-input');
+    const username = fieldInput();
     username.type = 'text';
     username.value = me.username;
     username.disabled = true;
 
     root.append(
       el('h3', 'settings-section-title', 'Профиль пользователя'),
-      field('Имя для отображения', nameInput),
-      field('Логин', username),
+      fieldRow({ label: 'Имя для отображения', control: nameInput }),
+      fieldRow({ label: 'Логин', control: username }),
       el(
         'p',
         'muted',
@@ -356,7 +380,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     const isOwner =
       store.state.network !== null && store.state.network.owner_id === store.state.me?.id;
 
-    const nameInput = el('input', 'text-input');
+    const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.value = draft.networkName;
     nameInput.maxLength = 200;
@@ -366,17 +390,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
-    // Tabs for the four markdown self-description fields (O5).
-    let activeTab: NetworkTab = 'description';
-    const tabsBar = el('div', 'settings-md-tabs');
-    const tabButtons: Record<NetworkTab, HTMLButtonElement> = {
-      description: el('button', 'settings-md-tab'),
-      when_to_use: el('button', 'settings-md-tab'),
-      conventions: el('button', 'settings-md-tab'),
-      examples: el('button', 'settings-md-tab'),
-    };
-    const tabPanel = div('settings-md-panel');
-
+    // Вкладки четырёх markdown-полей самоописания сети (O5) — общий механизм
+    // `lib/ui/tabs.ts` (задача a57e7998): панели сохраняются, поле каждой
+    // вкладки строится лениво при первом показе.
     const fieldSetters: Record<NetworkTab, (md: string) => void> = {
       description: (md) => {
         draft.networkDescription = md;
@@ -398,35 +414,21 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       examples: () => draft.networkExamples,
     };
 
-    function paintTabs(): void {
-      for (const key of Object.keys(tabButtons) as NetworkTab[]) {
-        const btn = tabButtons[key];
-        const isActive = key === activeTab;
-        btn.classList.toggle('active', isActive);
-        btn.setAttribute('aria-current', isActive ? 'page' : 'false');
-      }
-      tabPanel.replaceChildren();
-      tabPanel.append(
-        renderMarkdownField({
-          tab: activeTab,
-          getValue: fieldGetters[activeTab],
-          setValue: fieldSetters[activeTab],
-          disabled: !isOwner,
+    const mdTabs = uiTabs({
+      tabs: (['description', 'when_to_use', 'conventions', 'examples'] as NetworkTab[]).map(
+        (key) => ({
+          id: key,
+          label: NETWORK_TAB_TITLES[key],
+          content: () =>
+            renderMarkdownField({
+              tab: key,
+              getValue: fieldGetters[key],
+              setValue: fieldSetters[key],
+              disabled: !isOwner,
+            }),
         }),
-      );
-    }
-    for (const key of Object.keys(tabButtons) as NetworkTab[]) {
-      const btn = tabButtons[key];
-      btn.type = 'button';
-      btn.textContent = NETWORK_TAB_TITLES[key];
-      btn.addEventListener('click', () => {
-        if (activeTab === key) return;
-        activeTab = key;
-        paintTabs();
-      });
-      tabsBar.append(btn);
-    }
-    paintTabs();
+      ),
+    });
 
     // Node-section type field (O5). The catalogue comes from the in-memory
     // store (refreshed on type changes by realtime); `null` means "no
@@ -461,34 +463,28 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       },
     });
 
-    const showInactiveCheckbox = el('input');
-    showInactiveCheckbox.type = 'checkbox';
-    showInactiveCheckbox.checked = draft.showInactive;
-    showInactiveCheckbox.addEventListener('change', () => {
-      draft.showInactive = showInactiveCheckbox.checked;
-      markDirty();
+    const showInactiveRow = checkboxRow({
+      label: 'Показывать неактуальные мысли и связи в этой сети',
+      checked: draft.showInactive,
+      onChange: (checked) => {
+        draft.showInactive = checked;
+        markDirty();
+      },
     });
-    const showInactiveLabel = el('label', 'checkbox-row');
-    showInactiveLabel.append(
-      showInactiveCheckbox,
-      span('Показывать неактуальные мысли и связи в этой сети'),
-    );
+    const showInactiveLabel = showInactiveRow.row;
 
     // «Показывать содержимое корзины» (задача 77923b49) — рядом с неактуальными,
     // тот же механизм (L3 `show_trash`): выключено — помеченные на удаление
     // мысли/связи скрыты на карте, в локальном графе редактора и в структурах.
-    const showTrashCheckbox = el('input');
-    showTrashCheckbox.type = 'checkbox';
-    showTrashCheckbox.checked = draft.showTrash;
-    showTrashCheckbox.addEventListener('change', () => {
-      draft.showTrash = showTrashCheckbox.checked;
-      markDirty();
+    const showTrashRow = checkboxRow({
+      label: 'Показывать содержимое корзины в этой сети',
+      checked: draft.showTrash,
+      onChange: (checked) => {
+        draft.showTrash = checked;
+        markDirty();
+      },
     });
-    const showTrashLabel = el('label', 'checkbox-row');
-    showTrashLabel.append(
-      showTrashCheckbox,
-      span('Показывать содержимое корзины в этой сети'),
-    );
+    const showTrashLabel = showTrashRow.row;
 
     const ownerHint = isOwner
       ? 'Эти поля задаёт владелец сети; изменения сохраняются для всех участников.'
@@ -496,26 +492,24 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
     root.append(
       el('h3', 'settings-section-title', 'Настройки сети'),
-      field('Название сети', nameInput),
+      fieldRow({ label: 'Название сети', control: nameInput }),
       el(
         'p',
         'muted',
         'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
       ),
-      tabsBar,
-      tabPanel,
-      el(
+      mdTabs.root,      el(
         'p',
         'muted',
         'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
       ),
-      field('Узловой тип раздела', typeCombo.root),
+      fieldRow({ label: 'Узловой тип раздела', control: typeCombo.root }),
       el(
         'p',
         'muted',
         'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
       ),
-      field('Тип инструкций агентам', instructionsTypeCombo.root),
+      fieldRow({ label: 'Тип инструкций агентам', control: instructionsTypeCombo.root }),
       el('p', 'muted', ownerHint),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
       showInactiveLabel,
@@ -528,31 +522,49 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   function renderClientSection(): HTMLElement {
     const root = div('settings-section');
 
-    const themeGroup = div('radio-group');
-    const lightLabel = el('label', 'radio-row');
-    const lightRadio = el('input');
-    lightRadio.type = 'radio';
-    lightRadio.name = 'settings-theme';
-    lightRadio.value = 'light';
-    lightRadio.checked = draft.theme === 'light';
-    lightLabel.append(lightRadio, span('Светлая'));
-    const darkLabel = el('label', 'radio-row');
-    const darkRadio = el('input');
-    darkRadio.type = 'radio';
-    darkRadio.name = 'settings-theme';
-    darkRadio.value = 'dark';
-    darkRadio.checked = draft.theme === 'dark';
-    darkLabel.append(darkRadio, span('Тёмная'));
-    for (const radio of [lightRadio, darkRadio]) {
+    // Язык интерфейса (L5 `client_meta.lang`, задача 57f09136): выбор из
+    // зарегистрированных каталогов (`lib/i18n.ts`) рядом с темой — обе
+    // настройки клиентские и действуют на всех экранах.
+    const langGroup = choiceGroup();
+    for (const locale of availableLocales()) {
+      langGroup.append(
+        radioRow({
+          label: locale.name,
+          name: 'settings-lang',
+          value: locale.code,
+          checked: draft.lang === locale.code,
+          onChange: (checked) => {
+            if (!checked) return;
+            draft.lang = locale.code;
+            markDirty();
+          },
+        }).row,
+      );
+    }
+
+    const themeGroup = choiceGroup();
+    const lightOpt = radioRow({
+      label: 'Светлая',
+      name: 'settings-theme',
+      value: 'light',
+      checked: draft.theme === 'light',
+    });
+    const darkOpt = radioRow({
+      label: 'Тёмная',
+      name: 'settings-theme',
+      value: 'dark',
+      checked: draft.theme === 'dark',
+    });
+    for (const radio of [lightOpt.input, darkOpt.input]) {
       radio.addEventListener('change', () => {
         if (!radio.checked) return;
         draft.theme = radio.value as Theme;
         markDirty();
       });
     }
-    themeGroup.append(lightLabel, darkLabel);
+    themeGroup.append(lightOpt.row, darkOpt.row);
 
-    const widthInput = el('input', 'text-input');
+    const widthInput = fieldInput();
     widthInput.type = 'number';
     widthInput.min = String(CLOUD_WIDTH_MIN);
     widthInput.max = String(CLOUD_WIDTH_MAX);
@@ -562,7 +574,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
-    const gapInput = el('input', 'text-input');
+    const gapInput = fieldInput();
     gapInput.type = 'number';
     gapInput.min = String(CLOUD_GAP_MIN);
     gapInput.max = String(CLOUD_GAP_MAX);
@@ -573,12 +585,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     });
 
     root.append(
-      el('h3', 'settings-section-title', 'Тема'),
+      el('h3', 'settings-section-title', t('settings.language')),
+      langGroup,
+      el('p', 'muted', t('settings.languageHint')),
+      el('h3', 'settings-section-title settings-section-title-spaced', 'Тема'),
       themeGroup,
       el('p', 'muted', 'Применяется на всех экранах. Действует только на этом клиенте.'),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Размер облачка'),
-      field(`Ширина облачка, px (${CLOUD_WIDTH_MIN}–${CLOUD_WIDTH_MAX})`, widthInput),
-      field(`Отступ между облачками, px (${CLOUD_GAP_MIN}–${CLOUD_GAP_MAX})`, gapInput),
+      fieldRow({ label: `Ширина облачка, px (${CLOUD_WIDTH_MIN}–${CLOUD_WIDTH_MAX})`, control: widthInput }),
+      fieldRow({ label: `Отступ между облачками, px (${CLOUD_GAP_MIN}–${CLOUD_GAP_MAX})`, control: gapInput }),
       el('p', 'muted', 'Хранится только на этом клиенте.'),
     );
     return root;
@@ -590,7 +605,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       navButtons[key].setAttribute('aria-current', key === active ? 'page' : 'false');
     }
     content.replaceChildren();
-    errorLine.textContent = '';
+    errorLine.clear();
     let section: HTMLElement;
     switch (active) {
       case 'user':
@@ -709,6 +724,18 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
+    // Client: язык интерфейса (L5 `client_meta.lang`, задача 57f09136).
+    // Как тема: применить сразу (каркас i18n + атрибут `lang` документа),
+    // затем сохранить выбор.
+    if (draft.lang !== original.lang) {
+      tasks.push(
+        (async () => {
+          await etn.meta.set(CLIENT_META_KEY.LANG, draft.lang);
+          applyLang(draft.lang);
+        })(),
+      );
+    }
+
     // Client: cloud_width / cloud_gap (L4). Clipped to the system constants.
     if (draft.cloudWidth !== original.cloudWidth || draft.cloudGap !== original.cloudGap) {
       const w = clip(Math.round(draft.cloudWidth), CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX);
@@ -733,7 +760,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       return;
     }
     setBusy(true);
-    errorLine.textContent = '';
+    errorLine.clear();
     try {
       await applyDiff();
       // Resync from the store: empty display_name normalises to null, etc.
@@ -749,24 +776,39 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.showInactive = draft.showInactive;
       original.showTrash = draft.showTrash;
       original.theme = draft.theme;
+      original.lang = draft.lang;
       original.cloudWidth = draft.cloudWidth;
       original.cloudGap = draft.cloudGap;
       refreshApplyButtons();
       renderContent();
-      notice('Настройки сохранены.');
+      notice('Настройки сохранены.', 'success');
       if (thenClose) closeDialog();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     } finally {
       setBusy(false);
     }
   }
 
   closeDialog = showDialog({
-    title: 'Настройки',
+    title: t('settings.title'),
+    size: 'l',
+    // Высота фиксируется ролью: разделы разной высоты (Пользователь / Мыслесеть
+    // / Клиент / Логирование) при переключении больше не меняют высоту окна —
+    // содержимое прокручивается в теле, футер остаётся на месте (требование
+    // 13464c39, ошибка 0ab63eac). Левая навигация по разделам — по спеке
+    // элемента «Единый диалог настроек», поэтому не заменяется вкладками.
+    fixedHeight: true,
     body,
     customFooter: footer,
-    width: 760,
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях требуют
+    // подтверждения; «Сохранить» подтверждения идёт тем же путём, что кнопка
+    // «Применить и закрыть» (запись + закрытие). Явная «Отмена» в футере по-
+    // прежнему закрывает молча.
+    dirty: {
+      isDirty: () => isDirtyDraft(draft, original),
+      save: () => void applyDraft(true),
+    },
     extraShortcuts: {
       shiftEnter: () => void applyDraft(false),
     },
@@ -776,10 +818,3 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   refreshApplyButtons();
 }
 
-/** Standard field builder (label + control wrapper). */
-function field(label: string, control: HTMLElement): HTMLDivElement {
-  const row = div('field');
-  row.append(el('label', 'field-label', label));
-  row.append(control);
-  return row;
-}

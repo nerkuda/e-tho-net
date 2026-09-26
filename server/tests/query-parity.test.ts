@@ -126,7 +126,8 @@ async function restQuery(
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/thoughts/query`,
     headers: authHeaders(ctx),
-    payload,
+    // `count: true` — паритет сверяет полные числа, а не null (5adebf61).
+    payload: { count: true, ...payload },
   });
   assert.equal(res.statusCode, 200, `REST query: ${res.statusCode} ${res.body}`);
   const json = res.json() as {
@@ -144,7 +145,8 @@ async function mcpQuery(
 ): Promise<{ ids: string[]; total: number; hits: Array<{ id: string; depth: number | null }> }> {
   const result = await handle.client.callTool({
     name: 'etn.thoughts.query',
-    arguments: { network_id: networkId, ...args },
+    // `count: true` — см. `restQuery`.
+    arguments: { network_id: networkId, count: true, ...args },
   });
   assert.equal(result.isError, undefined, `MCP query: ${toolText(result)}`);
   const data = toolJson<{
@@ -530,6 +532,112 @@ describe(
         );
         assert.equal(restRunJson.meta.sort, 'created');
         assert.equal(restRunJson.meta.order, 'desc');
+      } finally {
+        if (handle !== undefined) await handle.close();
+        if (mcpCtx !== undefined) await closeMcpContext(mcpCtx, overrides);
+        await closeRestContext(restCtx);
+      }
+    });
+
+    it('счётчик только по флагу, keyset-курсор страниц и FTS-keywords — сквозным сценарием REST ↔ MCP (этап 4)', async () => {
+      const restCtx = await buildRestContext();
+      const overrides = {
+        dataDir: restCtx.dataDir,
+        systemDb: restCtx.sys,
+        networkId: restCtx.networkId,
+      };
+      let mcpCtx: McpTestContext | undefined;
+      let handle: McpClientHandle | undefined;
+      try {
+        const ndb = openNetworkDb(restCtx.dataDir, restCtx.networkId);
+        // Пять мыслей с одинаковыми ключами сортировки: порядок держит только
+        // уникальный добор `id` (ADR 5f6cb775).
+        const ids = ['Смета A', 'Смета B', 'Смета C', 'Смета D', 'Смета E'].map((title) =>
+          insertThought(ndb, title, { created_at: '2024-03-01T00:00:00.000Z' }),
+        );
+        insertThought(ndb, 'Прочее', { created_at: '2024-03-01T00:00:00.000Z' });
+
+        const queryUrl = `/api/v1/networks/${restCtx.networkId}/thoughts/query`;
+        const post = async (payload: Record<string, unknown>) => {
+          const res = await restCtx.app.inject({
+            method: 'POST',
+            url: queryUrl,
+            headers: authHeaders(restCtx),
+            payload,
+          });
+          assert.equal(res.statusCode, 200, `REST query: ${res.statusCode} ${res.body}`);
+          return res.json() as {
+            data: Array<{ id: string }>;
+            meta: { total: number | null; has_more?: boolean; next_cursor?: string | null };
+          };
+        };
+
+        // Без флага COUNT не считается — хвост сообщает has_more + курсор
+        // (требование 5adebf61), курсор есть только когда есть продолжение.
+        const plain = await post({ keywords: 'Смета', sort: 'created', order: 'asc', limit: 2, offset: 0 });
+        assert.equal(plain.meta.total, null);
+        assert.equal(plain.meta.has_more, true);
+        assert.equal(typeof plain.meta.next_cursor, 'string');
+
+        // С флагом — точное число.
+        const counted = await post({
+          keywords: 'Смета',
+          sort: 'created',
+          order: 'asc',
+          limit: 2,
+          offset: 0,
+          count: true,
+        });
+        assert.equal(counted.meta.total, 5);
+        assert.equal(counted.meta.has_more, true);
+
+        // Обход keyset-курсором: каждая строка ровно один раз, порядок совпадает
+        // со сплошной страницей.
+        const full = await post({ keywords: 'Смета', sort: 'created', order: 'asc', limit: 100, offset: 0 });
+        let cursor: string | undefined;
+        const seen: string[] = [];
+        for (let guard = 0; guard < 10; guard += 1) {
+          const page = await post({
+            keywords: 'Смета',
+            sort: 'created',
+            order: 'asc',
+            limit: 2,
+            offset: 0,
+            ...(cursor !== undefined ? { cursor } : {}),
+          });
+          seen.push(...page.data.map((t) => t.id));
+          if (page.meta.has_more !== true) {
+            assert.equal(page.meta.next_cursor ?? null, null);
+            break;
+          }
+          assert.equal(typeof page.meta.next_cursor, 'string');
+          cursor = page.meta.next_cursor as string;
+        }
+        assert.deepEqual(seen, full.data.map((t) => t.id));
+        assert.equal(new Set(seen).size, 5);
+
+        // MCP: тот же контракт — без флага `total: null`, с флагом — число.
+        mcpCtx = await buildMcpContext(overrides);
+        handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
+        const mcpPlain = toolJson<{ total: number | null; has_more: boolean; hits: unknown[] }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.query',
+            arguments: { network_id: restCtx.networkId, keywords: 'Смета', limit: 2 },
+          }),
+        );
+        assert.equal(mcpPlain.total, null);
+        assert.equal(mcpPlain.has_more, true);
+        const mcpCounted = toolJson<{ total: number | null }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.query',
+            arguments: { network_id: restCtx.networkId, keywords: 'Смета', limit: 2, count: true },
+          }),
+        );
+        assert.equal(mcpCounted.total, 5);
+
+        // Каждая из пяти мыслей найдена FTS-путём keywords (индексный сужатель
+        // + LIKE-остаток) — курсорный обход вернул ровно их.
+        assert.deepEqual(new Set(seen), new Set(ids));
       } finally {
         if (handle !== undefined) await handle.close();
         if (mcpCtx !== undefined) await closeMcpContext(mcpCtx, overrides);

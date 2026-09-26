@@ -17,17 +17,22 @@
  */
 
 import type { Comment } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { button, div, el, errText, fmtDate, span } from '../lib/dom.js';
+import { div, el, errText, fmtDate } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { formatDateTime, renderAuthorPair } from '../lib/metadata.js';
 import { notice } from '../lib/notice.js';
 import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext } from './editor.js';
 import { createMarkdownField, editMarkdownField } from './markdown-field.js';
 import { rowSplitter } from './splitter.js';
+import { commentShell } from '../lib/ui/comment.js';
+import { uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
 
 /** Registers the «Хроника» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
@@ -60,7 +65,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
 
   const top = div('chrono-top');
   const toolbar = div('chrono-toolbar');
-  toolbar.append(button('Добавить', () => startNew(), 'btn small'));
+  toolbar.append(uiButton({
+    label: 'Добавить',
+    role: 'secondary',
+    size: 's',
+    onClick: () => startNew(),
+  }));
   const tableWrap = div('admin-table-wrap chrono-table');
   top.append(toolbar, tableWrap);
 
@@ -97,7 +107,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      tableWrap.replaceChildren(operationError(err));
       return;
     }
     const chrono = comments.filter((c) => c.kind === 'chronological');
@@ -225,11 +235,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   /** Shows an empty editor area — nothing is selected yet (§6.6). */
   function showEmptyEditor(): void {
     selectedId = null;
-    const hint = el('p', 'muted', 'Выберите комментарий из списка или нажмите «Добавить».');
-    hint.style.margin = '0';
-    const body = div('chrono-editor-body');
-    body.append(hint);
-    bottom.replaceChildren(body);
+    const shell = commentShell({
+      variant: 'fill',
+      state: { kind: 'empty', text: t('comment.emptySelection') },
+    });
+    bottom.replaceChildren(shell.root);
   }
 
   /**
@@ -237,15 +247,15 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
    * is null for a new comment; the first non-empty text blur creates it.
    */
   function buildEditor(existing: Comment | null, startEdit: boolean): void {
-    const titleInput = el('input', 'text-input chrono-meta-input');
+    const titleInput = fieldInput({ extraClass: 'chrono-meta-input' });
     titleInput.type = 'text';
     titleInput.value = existing?.title ?? '';
     titleInput.maxLength = 200;
     titleInput.placeholder = 'Заголовок';
-    const fromInput = el('input', 'text-input chrono-meta-input');
+    const fromInput = fieldInput({ extraClass: 'chrono-meta-input' });
     fromInput.type = 'date';
     fromInput.value = existing?.valid_from.slice(0, 10) ?? todayIso();
-    const toInput = el('input', 'text-input chrono-meta-input');
+    const toInput = fieldInput({ extraClass: 'chrono-meta-input' });
     toInput.type = 'date';
     toInput.value = existing?.valid_to?.slice(0, 10) ?? '';
 
@@ -256,12 +266,13 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     metaRow.append(titleInput, fromInput, toInput);
     if (existing !== null) {
       metaRow.append(
-        button(
-          'Удалить',
-          () => void removeComment(),
-          'btn small danger',
-          'Удалить хронологический комментарий',
-        ),
+        uiButton({
+          label: t('actions.delete'),
+          role: 'danger',
+          size: 's',
+          title: 'Удалить хронологический комментарий',
+          onClick: () => void removeComment(),
+        }),
       );
     }
 
@@ -286,6 +297,10 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     titleInput.addEventListener('blur', commitMeta);
     fromInput.addEventListener('blur', commitMeta);
     toInput.addEventListener('blur', commitMeta);
+
+    // Оболочка комментария: панель действий — метаданные и удаление, тело —
+    // встроенное поле markdown, режим зеркалится в `data-mode` (задача 9cb87c42).
+    const shell = commentShell({ variant: 'fill', tools: [metaRow] });
 
     const widget = createMarkdownField({
       md: existing?.body_md ?? '',
@@ -325,11 +340,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         await reload();
         return html;
       },
+      onEditChange: (editing) => shell.setMode(editing ? 'edit' : 'view'),
     });
 
-    const body = div('chrono-editor-body');
-    body.append(metaRow, widget);
-    bottom.replaceChildren(body);
+    shell.setField(widget);
+    shell.setState({ kind: 'ready' });
+    bottom.replaceChildren(shell.root);
     if (startEdit) editMarkdownField(widget);
   }
 

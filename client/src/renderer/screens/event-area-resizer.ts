@@ -13,13 +13,17 @@
  * Width bounds (08-ui-spec §11): `[EVENT_AREA_W_MIN, 30 % of the client
  * window width]`. The upper bound is recomputed on every drag tick so a
  * window resize between drags is respected.
+ *
+ * The pointer-drag lifecycle is the shared `lib/ui/splitter` component
+ * (задача 50f57b82).
  */
 
 import { EVENT_AREA_W_MAX_RATIO, EVENT_AREA_W_MIN } from '@etn/shared';
 
-import { scheduleLayoutPersist } from './editor-resizer.js';
-import { clampEventAreaW } from '../lib/pure.js';
+import { t } from '../lib/i18n.js';
+import { wireSplitter } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
+import { scheduleLayoutPersist } from './editor-resizer.js';
 
 /** Width of the splitter hit area, px. */
 const HIT_W = 6;
@@ -27,73 +31,41 @@ const HIT_W = 6;
  *  even if the upper bound would allow a wider event area. */
 const MIN_HISTORY_W = 80;
 
-interface DragPlan {
-  /** Event-area width at drag start, px. */
-  startSize: number;
-  /** Pointer position at drag start, px. */
-  startX: number;
-  /** Status-bar width at drag start, px. */
-  startBarWidth: number;
-}
-
 /**
- * Wires the resizer element: `pointerdown` starts a drag, moving the pointer
- * resizes the event area (the history strip takes the rest). The status-bar
- * element is needed to read its current width for the upper-bound clamp.
+ * Wires the resizer element: dragging the seam left grows the event area (the
+ * history strip takes the rest). The status-bar element is needed to read its
+ * width for the upper-bound clamp.
  */
 export function mountEventAreaResizer(resizer: HTMLElement, statusbar: HTMLElement): void {
-  resizer.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
+  let startBarWidth = 0;
 
-    const plan: DragPlan = {
-      startSize: store.state.eventAreaW,
-      startX: event.clientX,
-      startBarWidth: statusbar.clientWidth,
-    };
-
-    event.preventDefault();
-    resizer.setPointerCapture(event.pointerId);
-    resizer.classList.add('dragging');
-    statusbar.classList.add('resizing');
-
-    const onMove = (ev: PointerEvent): void => {
-      // The user drags the splitter left → event area grows → positive delta.
-      const delta = plan.startX - ev.clientX;
+  wireSplitter(resizer, {
+    stateHost: () => statusbar,
+    stateClass: 'resizing',
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaHorizontal'),
+    plan: () => {
+      startBarWidth = statusbar.clientWidth;
       const ratioCap = Math.floor(
-        Math.max(EVENT_AREA_W_MIN, plan.startBarWidth * EVENT_AREA_W_MAX_RATIO),
+        Math.max(EVENT_AREA_W_MIN, startBarWidth * EVENT_AREA_W_MAX_RATIO),
       );
       // The history strip must keep at least MIN_HISTORY_W so the chips
       // always have somewhere to live; otherwise the splitter cannot move
       // further, regardless of the ratio cap.
-      const historyCap = Math.max(
-        EVENT_AREA_W_MIN,
-        plan.startBarWidth - MIN_HISTORY_W - HIT_W,
-      );
-      const max = Math.min(ratioCap, historyCap);
-      const raw = plan.startSize + delta;
-      const size = clampEventAreaW(raw, plan.startBarWidth);
-      const clamped = Math.min(size, max);
-      store.update({ eventAreaW: clamped });
-      statusbar.style.setProperty('--event-area-w', `${clamped}px`);
+      const historyCap = Math.max(EVENT_AREA_W_MIN, startBarWidth - MIN_HISTORY_W - HIT_W);
+      return {
+        // The user drags the splitter left → event area grows → positive delta.
+        axis: 'x',
+        sign: -1,
+        start: store.state.eventAreaW,
+        min: EVENT_AREA_W_MIN,
+        max: Math.min(ratioCap, historyCap),
+      };
+    },
+    apply: (size) => {
+      store.update({ eventAreaW: size });
+      statusbar.style.setProperty('--event-area-w', `${size}px`);
       scheduleLayoutPersist();
-    };
-    const onUp = (ev: PointerEvent): void => {
-      resizer.removeEventListener('pointermove', onMove);
-      resizer.removeEventListener('pointerup', onUp);
-      resizer.removeEventListener('pointercancel', onUp);
-      try {
-        resizer.releasePointerCapture(ev.pointerId);
-      } catch {
-        /* already released — ignore */
-      }
-      resizer.classList.remove('dragging');
-      statusbar.classList.remove('resizing');
-      // The history strip picks up its new free width by itself: the strip's
-      // ResizeObserver fires on the width change and re-plans the chips.
-    };
-
-    resizer.addEventListener('pointermove', onMove);
-    resizer.addEventListener('pointerup', onUp);
-    resizer.addEventListener('pointercancel', onUp);
+    },
   });
 }

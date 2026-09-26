@@ -288,6 +288,7 @@ describe(
           '042_unified_property_link_registry.sql',
           '043_type_properties_canonical_unique.sql',
           '044_cross_network_ref.sql',
+          '045_links_covering_indexes.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

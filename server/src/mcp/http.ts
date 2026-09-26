@@ -345,7 +345,13 @@ export async function handleMcpNodeRequest(
   try {
     body = await readJsonBody(req);
   } catch {
-    sendNodeError(res, 413, 'VALIDATION_ERROR', 'Request body too large.');
+    sendNodeError(
+      res,
+      413,
+      'VALIDATION_ERROR',
+      `MCP request body exceeds the ${Math.round(MAX_MCP_BODY_BYTES / (1024 * 1024))} MiB limit; ` +
+        `split the call into smaller batches (e.g. fewer thoughts[] items per etn.thoughts.write).`,
+    );
     return;
   }
   const outcome = await endpoint.prepareRequest(req, body);

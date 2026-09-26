@@ -1,0 +1,403 @@
+/*
+ * ETN client stylesheet (phase H; light + dark themes, L10).
+ *
+ * CSS variables in :root are the single source of truth for colors/sizes
+ * (08-ui-spec.md §13); the dark theme swaps the variable block only via the
+ * [data-theme='dark'] selector on the document root. No hex colours outside
+ * these two blocks — components reference tokens. Cloud geometry defaults
+ * (--cloud-width/--cloud-gap/--cloud-font) are overridden at runtime from L4
+ * ui_state by the canvas module.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* palette */
+  --bg: #eef0f4;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9;
+  /* Hover/active backgrounds for chrome controls (menu items, list rows). */
+  --bg-hover: #e3e6ec;
+  --bg-active: #d8dde5;
+  /* Фон строки заголовков колонок списков/таблиц/деревьев: отличается от
+     строк данных и надписей, обе темы — через --surface-2 (требование
+     11ddd910, ошибка 96b62874). */
+  --table-header-bg: var(--surface-2);
+  --border: #d7dbe3;
+  --border-strong: #b9c1cf;
+  --text: #20242d;
+  --text-dim: #5c6675;
+  --text-faint: #8a93a3;
+  --accent: #2f6fed;
+  /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
+  --accent-strong: #245cc9;
+  /* Нажатие акцентной заливки (primary-кнопка). */
+  --accent-pressed: #1d4aa8;
+  --accent-soft: #e4ecfd;
+  /* Текст и иконки НА акцентной заливке (primary-кнопка, активная вкладка).
+     От темы не зависит: акцент обеих тем — насыщенный синий, на нём читается
+     светлый текст. */
+  --accent-fg: #ffffff;
+  /* Фон текстового выделения (::selection и .cm-selectionBackground) —
+     акцент с альфой: текст выделенного фрагмента сохраняет свой цвет
+     (обычный, код, ссылки) и остаётся контрастным. Оба режима markdown-поля
+     — просмотр и редактор — красятся одной переменной (06b18f19). */
+  --selection-bg: rgba(47, 111, 237, 0.4);
+  /* Selection outline of clouds picked into the selection panel — teal, so it
+   * never reads as the editor halo (§5, L22 review). */
+  --selection: #0f8f86;
+  --danger: #d64545;
+  --danger-soft: #fdeaea;
+  --ok: #2f9e44;
+  --ok-soft: #e6f4ea;
+  --warn: #c98a06;
+  --warn-strong: #9a6b00;
+  --warn-soft: #fdf0dc;
+  --warn-glow: rgba(201, 138, 6, 0.35);
+  /* Search/mention highlight (<mark>). */
+  --mark-bg: #ffe08a;
+  /* Default (untyped) link line colour; also read by links.ts. */
+  --link-default: #9aa3b2;
+  /* Filled link-direction ellipse of a non-focus cloud. */
+  --ellipse-fill: #9dbcf2;
+  --ellipse-fill-border: #5b87d9;
+  --backdrop: rgba(24, 32, 48, 0.35);
+  /* Canvas dot-grid colour (L10). */
+  --canvas-dot: rgba(24, 32, 48, 0.14);
+  /* Focus band (L12): colour of the horizontal stripe across the focus row
+     and the fade distance towards the canvas top/bottom edges. */
+  --focus-band-color: #1e62be;
+  --focus-band-fade: 180px;
+  /* Шкала теней: цвета-основы (--shadow-c — крупная, --shadow-sm-c — мелкая),
+     из которых собираются готовые токены. Тёмная тема переопределяет основы
+     и усиленные тени ниже. */
+  --shadow-c: rgba(24, 32, 48, 0.16);
+  --shadow-sm-c: rgba(24, 32, 48, 0.08);
+  --shadow: 0 8px 28px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 10px var(--shadow-c);
+  --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
+
+  /* --- Дизайн-токены 0.9.1: шкалы оформления (требование 0dddd939) ------------
+     Единый язык размеров для словаря `lib/ui` и переведённых модулей. Компоненты
+     ссылаются только на эти токены: числовые `px`/`em`/`rem` и прямые hex-цвета
+     в правилах `lib/ui` запрещены (сторож `guard-ui-tokens.test.ts`). Шкалы от
+     темы не зависят — тему меняют цветовые токены в `[data-theme='dark']`. */
+
+  /* Шкала размеров шрифта. */
+  --font-size-3xs: 10px;
+  --font-size-2xs: 11px;
+  --font-size-xs: 12px;
+  --font-size-s: 13px;
+  --font-size-m: 14px;
+  --font-size-l: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 20px;
+
+  /* Шкала насыщенности шрифта. */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Шкала межстрочных интервалов. */
+  --line-height-none: 1;
+  --line-height-tight: 1.25;
+  --line-height-snug: 1.4;
+  --line-height-normal: 1.5;
+
+  /* Шкала отступов: шаг 2px (компактная десктопная плотность ETN), --space-N = N × 2px. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+
+  /* Вертикальный паддинг компактного контрола (поле ввода, ghost-кнопка): 5px
+     не ложится на шаг шкалы отступов, но это устойчивый размер плотности ETN. */
+  --control-pad-y: 5px;
+
+  /* Шкала радиусов. */
+  --radius-s: 6px; /* мелкие элементы: чипы, svg-свотчи */
+  --radius-m: 8px; /* обычные контролы и панели */
+  --radius-l: 10px; /* крупные панели */
+  --radius-xl: 14px; /* карточки-облака (L11) */
+  --radius-pill: 999px; /* метки-«пилюли» (бейджи) */
+  /* Семантические псевдонимы шкалы — исторические имена `styles.css`. */
+  --radius-sm: var(--radius-m);
+  --radius: var(--radius-l);
+  --radius-cloud: var(--radius-xl);
+
+  /* Толщина линий и смещения. */
+  --border-thick: 2px;
+  --focus-ring-width: 2px;
+  --underline-offset: 2px;
+  --letter-spacing-wide: 2px;
+
+  /* Микроанимации состояний контролов: hover/active-переходы ~120 мс по
+     background/border/color/box-shadow (Технические принципы UI). При
+     `prefers-reduced-motion` токен обнуляется одним правилом ниже — компоненты
+     ссылаются на него и ничего не дублируют. */
+  --transition-hover: 120ms;
+
+  /* Плавная смена фокуса на карте мыслей (спека «FLIP-анимация холста»,
+     задача e9f0af94). Единственный источник длительностей и сглаживания фаз:
+     оркестратор `canvas/transition.ts` читает эти токены через
+     `getComputedStyle` и не задаёт собственных чисел (сторож
+     `guard-focus-animation`). При `prefers-reduced-motion` все длительности
+     обнуляются одним правилом ниже — переход становится мгновенным.
+     - flight — полёт выбранной мысли в центр и переезд сменивших зону;
+     - settle — достройка оставшихся в новый порядок, проявление новых и
+       выход бывшего фокуса из центра (после свопа содержимого);
+     - fade — затухание/проявление облачков и линий связей. */
+  --anim-focus-flight: 400ms;
+  --anim-focus-settle: 260ms;
+  --anim-focus-fade: 300ms;
+  --anim-focus-ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* Параметры состояний: приглушение недоступного контрола (disabled). Цвета
+     состояний — существующие --bg-hover/--bg-active/--accent-pressed/--accent-soft. */
+  --state-disabled-opacity: 0.5;
+
+  /* Геометрия контролов словаря `lib/ui` (размеры вне шкалы отступов):
+     высоты/ширины конкретных контролов. */
+  --control-h: 26px; /* высота компактного контрола (глиф-тумблер, свотч цвета) */
+  /* Единая высота ОДНОСТРОЧНОГО поля ввода и однострочного чип-поля
+     (требование b0e0e5a4, ошибка 80871d3d): все однострочные поля на всех
+     экранах имеют эту высоту, размер шрифта при этом не меняется. Правится
+     только здесь — потребители ссылаются на токен, а не задают высоту. */
+  --field-h: 30px;
+  /* Высота кнопки строки управления списком-диалога: на 20% ниже обычной
+     компактной кнопки, чтобы ряд кнопок не выглядел громоздко рядом с полем
+     поиска и списком (требование 11ddd910, ошибка 6e8ca7fc). */
+  --list-btn-h: 18px;
+  --control-w-m: 30px; /* сторона контрола плотности m (иконочная кнопка, глиф-тумблер) */
+  --control-w-s: 28px; /* сторона иконочной кнопки плотности s */
+  --field-textarea-min-h: 72px; /* минимальная высота многострочного поля */
+  --field-clearable-pad-right: 22px; /* резерв под угловой крестик очистки поля */
+  --field-color-swatch-w: 34px; /* ширина свотча цвета */
+  --field-color-hex-w: 90px; /* ширина поля hex-кода цвета */
+  --chip-list-min-h: 22px; /* строка чипов (резерв высоты под чип) */
+  --tree-caret-w: 16px; /* колонка каретки раскрытия дерева (читаемый глиф) */
+  --popover-min-w: 220px;
+  --popover-max-w: 420px;
+  --popover-max-h: 420px;
+  --popover-arrow: 12px; /* сторона хвостика-стрелки панели */
+  --popover-arrow-offset: 20px; /* отступ хвостика от левого края по умолчанию */
+  --popover-arrow-overlap: -6px; /* заглубление хвостика под рамку панели */
+
+  /* chrome */
+  --toolbar-h: 46px;
+  --top-row-h: 38px;
+  --statusbar-h: 32px;
+  --editor-w: 340px;
+  --editor-h: 300px;
+  /* Ширина формы диалога «Статистика мыслесети» (screens/network-stats.ts):
+     пять колонок таблицы не влезают в роль `m` (560px), поэтому диалог несёт
+     модификатор `dialog-stats` и берёт ширину из этого токена, а не из литерала
+     (styles/dialogs.css). */
+  --dialog-w-stats: 650px;
+  /* Единый размер интерактивной цели строки списка/дерева: высота строки,
+     флажок и значок типа равны ему — деталь не «выпадает» из строки
+     (требование 0086037c, ошибка 6925ffa0 — дисбаланс размеров чекбокса и
+     иконки в списках типов). Шаг отступа ветви дерева — --tree-indent. */
+  --hit-area: 18px;
+  /* Минимальная эффективная ЗОНА НАЖАТИЯ (WCAG 2.5.8) — невидимый тач-таргет
+     компактных контролов (крестики, каретки). Визуальный размер остаётся
+     плотным (`--hit-area`/`--tree-caret-w`), зона расширяется псевдоэлементом;
+     поднимать сам `--hit-area` до 24 нельзя — он задаёт высоту строки, размер
+     флажка и значка дерева, и нарушит согласованный баланс требования 0086037c
+     (ошибка 6925ffa0). */
+  --hit-area-min: 24px;
+  --tree-indent: var(--space-8);
+
+  /* Закладки-переключатели экранов (строка меню мыслесети, задача a0cdd731;
+     форма закладок — ошибка 3e57ee11): «Карта мыслей / Структуры мыслей /
+     Хроника / События». Каждая закладка на 5% крупнее прочих кнопок меню
+     (базовый размер глифа кнопки меню — --font-size-l), активная закладка ещё
+     на 5% крупнее закладки (+5% к обычной — размер символа растёт мягко).
+     Размеры — calc от базового, без магических чисел. */
+  --view-tab-base: var(--font-size-l);
+  --view-tab-scale: 1.05;
+  --view-tab-active-scale: 1.05;
+  --view-tab-icon: calc(var(--view-tab-base) * var(--view-tab-scale));
+  --view-tab-icon-active: calc(var(--view-tab-icon) * var(--view-tab-active-scale));
+
+  /* cloud geometry (L4 defaults, 11-settings-and-state.md §2.4) */
+  --cloud-width: 200px;
+  --cloud-gap: var(--space-6);
+  --cloud-font: var(--font-size-s);
+
+  /* highlight.js palette (M4): токены подсветки fenced-кода в просмотре */
+  --hljs-comment: #6e7781;
+  --hljs-keyword: #cf222e;
+  --hljs-string: #0a3069;
+  --hljs-number: #0550ae;
+  --hljs-literal: #0550ae;
+  --hljs-title: #8250df;
+  --hljs-builtin: #953800;
+  --hljs-attr: #953800;
+  --hljs-type: #116329;
+  --hljs-tag: #116329;
+  --hljs-meta: #0550ae;
+  --hljs-symbol: #8250df;
+  --hljs-section: #0550ae;
+  --hljs-addition: #1a7f37;
+  --hljs-deletion: #82071e;
+
+  /* базовый размер шрифта markdown-полей; меняется Ctrl+колесом (M9) */
+  --md-font-size: var(--font-size-s);
+  /* моноширинный шрифт кода — один и для просмотра, и для редактора */
+  --md-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  /* --- Группа пользовательских токенов (`--user-*`, требование e2895c24) ------
+     Аспекты оформления, которые планируется отдать пользователю в настройках:
+     фон холста, цвета, шрифты, стили текста комментариев. Значения группы
+     переопределяются подстановкой на корне документа — без правки компонентов,
+     поэтому компоненты `lib/ui` берут эти аспекты из `--user-*`, а не из
+     литералов (сторож `guard-ui-user-tokens.test.ts`). Сам функционал настроек
+     оформления — отдельный будущий тех.проект; здесь только архитектура.
+     Значение по умолчанию ссылается на базовый токен темы, чтобы обе темы
+     работали без дублирования. */
+
+  /* Шрифты интерфейса и кода. */
+  --user-font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --user-font-mono: var(--md-mono);
+  --user-font-size: var(--font-size-s);
+
+  /* Фон холста: цвет, фоновое изображение (обои) и точечная сетка. */
+  --user-canvas-bg: var(--bg);
+  --user-canvas-image: none;
+  --user-canvas-dot: var(--canvas-dot);
+
+  /* Стили текста комментариев. */
+  --user-comment-font-size: var(--font-size-s);
+  --user-comment-line-height: var(--line-height-normal);
+  --user-comment-bg: var(--surface);
+  --user-comment-color: var(--text);
+  --user-comment-link: var(--accent);
+
+  font-family: var(--user-font-ui);
+  font-size: var(--font-size-s);
+}
+
+/* Dark theme (L10, 08-ui-spec.md §13): swap tokens only. */
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --surface: #161b23;
+  --surface-2: #1f2630;
+  --bg-hover: #1f2630;
+  --bg-active: #2a3340;
+  --border: #29303d;
+  --border-strong: #3a4353;
+  --text: #e6e9f0;
+  --text-dim: #9aa3b5;
+  --text-faint: #67707f;
+  --accent: #5b8cff;
+  --accent-strong: #7ba1ff;
+  --accent-pressed: #4d7fe8;
+  --accent-soft: #22304d;
+  /* Фон текстового выделения (06b18f19): акцент #5b8cff с альфой — на тёмных
+     фонах поля и блоков кода смесь достаточно светлая и заметная, светлый
+     текст и подсветка кода остаются контрастными. */
+  --selection-bg: rgba(91, 140, 255, 0.5);
+  /* Selection outline of clouds picked into the selection panel — teal. */
+  --selection: #2fbfae;
+  --danger: #e06a6a;
+  --danger-soft: #3a2226;
+  --ok: #4cb763;
+  --ok-soft: #17281c;
+  --warn: #d9a13c;
+  --warn-strong: #e8b45a;
+  --warn-soft: #322712;
+  --warn-glow: rgba(217, 161, 60, 0.35);
+  --mark-bg: rgba(250, 204, 21, 0.28);
+  --link-default: #6b7587;
+  --ellipse-fill: #2f4a7d;
+  --ellipse-fill-border: #4a6db3;
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --canvas-dot: rgba(255, 255, 255, 0.07);
+  --shadow-c: rgba(0, 0, 0, 0.55);
+  --shadow-sm-c: rgba(0, 0, 0, 0.35);
+  --shadow-hover: 0 4px 16px var(--shadow-c);
+  --shadow-focus: 0 4px 24px rgba(91, 140, 255, 0.28);
+
+  /* highlight.js palette (M4) */
+  --hljs-comment: #8b949e;
+  --hljs-keyword: #ff7b72;
+  --hljs-string: #a5d6ff;
+  --hljs-number: #79c0ff;
+  --hljs-literal: #79c0ff;
+  --hljs-title: #d2a8ff;
+  --hljs-builtin: #ffa657;
+  --hljs-attr: #ffa657;
+  --hljs-type: #7ee787;
+  --hljs-tag: #7ee787;
+  --hljs-meta: #79c0ff;
+  --hljs-symbol: #d2a8ff;
+  --hljs-section: #79c0ff;
+  --hljs-addition: #3fb950;
+  --hljs-deletion: #f85149;
+}
+
+/* Отключение микроанимаций состояний при reduce-motion (Технические принципы
+   UI). Компоненты `lib/ui` задают переходы через `--transition-hover`, поэтому
+   обнуления токена достаточно — специфичность их правил не важна, а порядок в
+   бандле ни на что не влияет (грабли 36889dd6). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-hover: 0ms;
+    /* Фазы смены фокуса тоже обнуляются: оркестратор читает длительности из
+       этих токенов, поэтому нулевые значения делают переход мгновенным. */
+    --anim-focus-flight: 0ms;
+    --anim-focus-settle: 0ms;
+    --anim-focus-fade: 0ms;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+.hidden {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+

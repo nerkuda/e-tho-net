@@ -334,6 +334,48 @@ describe(
       }
     });
 
+    it('findThoughtUsage показывает все link-рёбра, включая неблокирующие (c0a2a2e6)', () => {
+      // Симптом: обычное свойство-связь («затрагивает», без
+      // blocks_target_deletion) не попадало в «Использование» — total: 0.
+      // Теперь usage (просмотр) показывает все формальные link-рёбра реестра,
+      // а проверка удаления/clear остаются blocking-only.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'затрагивает', name_reverse: 'затронут' },
+          USER,
+        );
+        const grabli = createThoughtType(ndb, { name: 'ГраблиU' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентU' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          grabli.id,
+          {
+            key: 'затрагивает',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out' },
+          },
+          USER,
+        );
+        const target = seedTypedThought(ndb, comp.id);
+        const owner = seedTypedThought(ndb, grabli.id);
+        setPropertyValue(ndb, 'thought', owner, 'затрагивает', target, USER);
+
+        const usage = findThoughtUsage(ndb, target);
+        assert.equal(usage.total, 1);
+        assert.equal(usage.groups.length, 1);
+        assert.equal(usage.groups[0]!.key, 'затрагивает');
+        assert.equal(usage.groups[0]!.thoughts[0]!.id, owner);
+
+        // Проверка удаления не расширена: неблокирующее ребро не блокирует.
+        assert.equal(countThoughtRefUsages(ndb, target), 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('учёт блокирующих ссылок берёт сторону привязки: владелец-цель (ошибка 083dcde5)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
@@ -379,9 +421,9 @@ describe(
         assert.equal(countThoughtRefUsages(ndb, owner), 0);
 
         // Зеркало в карточке мысли согласовано с проверкой удаления.
-        assert.equal(getThoughtMeta(ndb, value).usage_count, 1);
-        assert.equal(getThoughtMeta(ndb, value).usage_count, countThoughtRefUsages(ndb, value));
-        assert.equal(getThoughtMeta(ndb, owner).usage_count, countThoughtRefUsages(ndb, owner));
+        assert.equal(getThoughtMeta(ndb, value).deletion_blocks, 1);
+        assert.equal(getThoughtMeta(ndb, value).deletion_blocks, countThoughtRefUsages(ndb, value));
+        assert.equal(getThoughtMeta(ndb, owner).deletion_blocks, countThoughtRefUsages(ndb, owner));
 
         // «Очистить использование» снимает то же ребро (тот же резолв стороны).
         assert.equal(clearThoughtRefUsages(ndb, value), 1);
@@ -944,6 +986,45 @@ describe(
         const thought = seedTypedThought(ndb, tt.id);
         setPropertyValue(ndb, 'thought', thought, 'note', '', USER);
         assert.deepEqual(computeThoughtCardWarnings(ndb, thought), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('required link property filled by an edge uses the binding side (ошибка cb9fec6b)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'применяется к', name_reverse: 'регулируется из' },
+          USER,
+        );
+        const requirement = createThoughtType(ndb, { name: 'ТребованиеW' }, USER);
+        const component = createThoughtType(ndb, { name: 'КомпонентW' }, USER);
+        // Обязательное свойство-связь, направление задано ПРИВЯЗКОЙ
+        // (`side: 'source'`), а в `config.direction` его нет — привязка-источник
+        // означает ребро «владелец → цель» (direction `out`). До правки
+        // направление бралось только из config и ребро не находилось.
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          requirement.id,
+          {
+            key: 'применяется к',
+            value_type: 'link',
+            required: true,
+            config: { link_type_id: lt.id },
+            side: 'source',
+          },
+          USER,
+        );
+        const req = seedTypedThought(ndb, requirement.id);
+        const comp = seedTypedThought(ndb, component.id);
+        // Пустая карточка — предупреждение обязано быть.
+        assert.equal(computeThoughtCardWarnings(ndb, req).length, 1);
+        // Свойство заполнено тем же вызовом/ребром — предупреждения нет.
+        setPropertyValue(ndb, 'thought', req, 'применяется к', comp, USER);
+        assert.deepEqual(computeThoughtCardWarnings(ndb, req), []);
       } finally {
         ndb.close();
       }

@@ -1,0 +1,75 @@
+/*
+ * Единое оформление всплывающей панели `lib/ui/popover.ts` (задача dd1f47d4,
+ * требование f74f1aae). Раньше вид панели жил в `styles.css` и принадлежал
+ * одному движку; теперь это словарь компонента, а движки (Ctrl+hover-
+ * предпросмотр) лишь наполняют тело своим контентом.
+ *
+ * Классы объявлены только здесь; прямой сборкой панели занимается компонент —
+ * сторож `guard-ui-popover.test.ts`.
+ *
+ * Панель интерактивна (`pointer-events: auto`): курсор переводится внутрь,
+ * ссылки кликабельны, тело прокручивается. `z-index` намеренно НИЖЕ лупы
+ * изображений (`styles.css` `.image-zoom-popup`, 2000) — картинка внутри
+ * предпросмотра увеличивается поверх него.
+ *
+ * Хвостик-стрелка ставится по `data-arrow` (какая сторона панели смотрит на
+ * якорь: `top` — панель под якорем, `bottom` — над ним) и `--ui-popover-arrow-left`
+ * (смещение от левого края, ставит компонент). Без `data-arrow` (панель у
+ * точки курсора) стрелки нет.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): размеры и отступы — по токенам
+ * (`--popover-*`, `--space-*`, `--font-size-*`).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): панель — контейнер, а не
+ * интерактивный контрол: собственных `:hover`/`:active`/`:disabled` у неё нет
+ * и не требуется (фокус получают ссылки внутри тела — браузерным кольцом).
+ * Это обоснованный край `guard-ui-states.test.ts`.
+ */
+
+.ui-popover {
+  position: fixed;
+  z-index: 1950;
+  max-width: var(--popover-max-w);
+  min-width: var(--popover-min-w);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.ui-popover[data-arrow]::before {
+  content: '';
+  position: absolute;
+  left: var(--ui-popover-arrow-left, var(--popover-arrow-offset));
+  width: var(--popover-arrow);
+  height: var(--popover-arrow);
+  background: var(--surface);
+  transform: translateX(-50%) rotate(45deg);
+}
+.ui-popover[data-arrow='top']::before {
+  top: var(--popover-arrow-overlap);
+  border-top: 1px solid var(--border-strong);
+  border-left: 1px solid var(--border-strong);
+}
+.ui-popover[data-arrow='bottom']::before {
+  bottom: var(--popover-arrow-overlap);
+  border-bottom: 1px solid var(--border-strong);
+  border-right: 1px solid var(--border-strong);
+}
+
+.ui-popover-head {
+  padding: var(--space-3) var(--space-5);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-popover-body {
+  max-height: min(var(--popover-max-h), 60vh);
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+}

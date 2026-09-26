@@ -125,6 +125,15 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
                     value: set.value,
                   },
                 },
+                // Свойство-связь: set-запись создаёт рёбра — подписчики должны
+                // увидеть `link.created`, как при `etn.properties.add`
+                // (ошибка 1b719d76).
+                ...(set.link_ids ?? []).flatMap((linkId) => {
+                  const link = getLink(ndb, linkId);
+                  return link === null
+                    ? []
+                    : [{ type: 'link.created' as const, data: { link } }];
+                }),
               ],
               ...(ownerEntity === null
                 ? {}

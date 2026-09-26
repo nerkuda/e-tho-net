@@ -29,13 +29,18 @@ export function sendSuccess<T>(
 /**
  * Send a list response `{ data: [...], meta: { total, offset, limit } }`.
  *
+ * `total` — `null`, когда вызывающий не запросил COUNT явным флагом
+ * (требование 5adebf61): тогда наличие хвоста несёт `meta.has_more`
+ * (передаётся через `metaExtra`), а продолжение страницы — `meta.next_cursor`.
+ *
  * @param metaExtra - Extra fields merged into `meta` (e.g. the structures
- *   query attaches `directions` to its page, 03-server-api.md §6.10).
+ *   query attaches `directions`, `has_more` and `next_cursor` to its page,
+ *   03-server-api.md §6.10).
  */
 export function sendList<T>(
   reply: FastifyReply,
   data: T[],
-  total: number,
+  total: number | null,
   offset: number,
   limit: number,
   metaExtra?: Record<string, unknown>,

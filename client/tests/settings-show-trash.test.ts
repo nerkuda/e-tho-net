@@ -108,7 +108,7 @@ async function openSettings(
 
 /** Галочка «Показывать содержимое корзины в этой сети». */
 function trashCheckbox(backdrop: ShimElement): ShimElement {
-  for (const row of backdrop.findAll('checkbox-row')) {
+  for (const row of backdrop.findAll('ui-choice-row')) {
     const label = row.children.map((c) => c.textContent ?? '').join(' ');
     if (label.includes('содержимое корзины')) {
       const input = row.children.find((c) => c.tagName.toLowerCase() === 'input');
@@ -173,7 +173,7 @@ describe('настройка «Показывать содержимое кор�
       showTrash: true,
       showInactive: false,
     });
-    for (const row of backdrop.findAll('checkbox-row')) {
+    for (const row of backdrop.findAll('ui-choice-row')) {
       const label = row.children.map((c) => c.textContent ?? '').join(' ');
       if (!label.includes('неактуальные мысли')) continue;
       const input = row.children.find((c) => c.tagName.toLowerCase() === 'input');

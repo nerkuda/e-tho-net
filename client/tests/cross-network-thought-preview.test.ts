@@ -106,8 +106,14 @@ describe('Ctrl-hover: предпросмотр мысли чужой сети (9
     assert.ok(content !== null, 'попап строится');
     assert.ok(content!.title.includes('Чужая сеть'), 'в заголовке имя сети-источника');
     assert.ok(content!.title.includes('Чужая мысль'), 'в заголовке имя цели');
+    // Тело карточки — общая оболочка комментария `lib/ui/comment.ts`
+    // (задача 9cb87c42), текст комментария — во вложенном виде.
+    const view = content!.body.querySelector('.comment-view') as unknown as
+      | { innerHTML: string }
+      | null;
+    assert.ok(view !== null, 'тело карточки — оболочка комментария с видом');
     assert.ok(
-      content!.body.innerHTML.includes('Постоянный комментарий цели'),
+      view!.innerHTML.includes('Постоянный комментарий цели'),
       'в теле — комментарий чужой мысли',
     );
   });

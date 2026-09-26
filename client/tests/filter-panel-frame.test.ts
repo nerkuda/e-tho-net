@@ -20,13 +20,14 @@ import {
   parseFilterPanelState,
   serializeFilterPanelState,
 } from '../src/renderer/lib/pure.js';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const FRAME_TS = resolve(RENDERER, 'lib', 'filter-panel-frame.ts');
 const STRUCTURES_TS = resolve(RENDERER, 'screens', 'structures', 'structures.ts');
 const CHRONICLE_TS = resolve(RENDERER, 'screens', 'chronicle', 'chronicle.ts');
 const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
-const STYLES_CSS = resolve(RENDERER, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 const CONSTANTS_TS = resolve(import.meta.dirname, '..', '..', 'shared', 'src', 'constants.ts');
 
 function readText(path: string): string {
@@ -155,10 +156,17 @@ describe('размер панели перетаскиванием границ�
 
   it('в боковом положении тянется ширина, в верхнем — высота', () => {
     const frame = readText(FRAME_TS);
+    // Pointer-drag ведёт общий компонент `lib/ui/splitter` (задача 50f57b82):
+    // каркас задаёт только политику — ось, диапазон и сохранение размера.
     assert.match(
       frame,
-      /placementAtStart === 'top' \? event\.clientY - startPos : event\.clientX - startPos/,
-      'дельта берётся по вертикали вверху и по горизонтали слева',
+      /wireSplitter\(splitter,\s*\{/,
+      'драг разделителя вешает общий компонент lib/ui/splitter',
+    );
+    assert.match(
+      frame,
+      /axis: placementAtStart === 'top' \? 'y' : 'x'/,
+      'ось драга — по положению панели: вверху вертикаль, слева горизонталь',
     );
     assert.match(
       frame,
@@ -167,7 +175,7 @@ describe('размер панели перетаскиванием границ�
     );
     assert.match(
       frame,
-      /apply\(\);\s*persist\(\);\s*\};\s*\n\s*\n\s*splitter\.addEventListener\('pointerdown'/,
+      /commit: \(\) => \{[\s\S]*?apply\(\);\s*persist\(\);/,
       'конец перетаскивания сохраняет размер',
     );
   });

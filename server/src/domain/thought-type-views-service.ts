@@ -53,7 +53,8 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
-import { queryThoughts, structureRequestToQuery, type ThoughtQueryResult } from './query-service.js';
+import { structureRequestToQuery, type ThoughtQueryRequest, type ThoughtQueryResult } from './query-service.js';
+import { queryThoughtsAsync } from './heavy-read.js';
 import {
   buildResolveContext,
   resolveTokensInDefinition as resolveTokensDefinition,
@@ -735,14 +736,14 @@ function collectThoughtPropertyValues(
  * Этап 5 упакует результат в REST-ответ `POST /thoughts/{id}/views/{view}/run`;
  * здесь только чистый pipeline без HTTP-обвязки.
  */
-export function runViewForThought(
+export async function runViewForThought(
   ndb: NetworkDb,
   view: ThoughtTypeView,
   thoughtId: string,
   userId: string,
   requestId?: string,
   options?: RunViewQueryOptions,
-): RunViewResult {
+): Promise<RunViewResult> {
   const thought = getThought(ndb, thoughtId);
   if (thought === null) {
     throw new EtnError(
@@ -807,14 +808,17 @@ export function runViewForThought(
   // Резолвер оставляет на выходе объект, потому что на входе был объект
   // (валидация отвергла бы не-объект), — cast для согласования типов.
   const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
-  const query: Parameters<typeof queryThoughts>[2] = structureRequestToQuery({
+  const query: ThoughtQueryRequest = structureRequestToQuery({
     ...filter,
     sort,
     order,
     limit,
     offset,
+    // Отбор типа отвечает полным числом совпадений — COUNT запрашивается
+    // явно (требование 5adebf61: по умолчанию подсчёта нет).
+    count: true,
   });
-  const result = queryThoughts(ndb, userId, query, {
+  const result = await queryThoughtsAsync(ndb, userId, query, {
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
   });
@@ -823,7 +827,7 @@ export function runViewForThought(
   // `StructureQueryRequest` пока не несёт `exclude_ids` — фильтруем после
   // запроса. Это редкая операция (лимит 100), цена невелика.
   const items = result.items.filter((i) => i.id !== thoughtId);
-  const total = Math.max(0, result.total - (result.items.length > items.length ? 1 : 0));
+  const total = Math.max(0, (result.total ?? 0) - (result.items.length > items.length ? 1 : 0));
   return {
     items,
     total,

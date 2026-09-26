@@ -34,6 +34,7 @@ import type { IconKind, ThoughtRef } from '@etn/shared';
 
 import { store } from '../state.js';
 import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
+import { noteFocusOrigin } from './focus-origin.js';
 import { svgIcon } from './icons.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
@@ -222,6 +223,12 @@ export function wireCloudGestures(
   let pendingClick: { cancel: () => void } | null = null;
   root.addEventListener('click', (event) => {
     logUiEvent('ui.cloud.click', { id });
+    // Remember the clicked element as the origin of a focus flight: a click on
+    // a chip outside the canvas (pinned/history/search) must send the selected
+    // thought to the centre «со стороны клика» (дефект 2 задачи e9f0af94).
+    // Captured synchronously — by the time the async `setFocus` render runs the
+    // panel may already be rebuilt. Clicks inside the canvas are ignored there.
+    noteFocusOrigin(id, root);
     if (event.ctrlKey || event.metaKey) {
       pendingClick?.cancel();
       pendingClick = null;

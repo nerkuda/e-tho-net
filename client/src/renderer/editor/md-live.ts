@@ -243,7 +243,14 @@ function buildDecorations(state: EditorState): DecorationSet {
         case 'QuoteMark': {
           const block = quoteStack[quoteStack.length - 1];
           if (quoteStack.length === 1) {
-            parts.push(Decoration.line({ class: 'cm-md-quote-line' }).range(from));
+            // Вертикальные отступы (6px сверху/снизу) — только у первой и
+            // последней строки блока: между строками одной цитаты отступа нет,
+            // как в просмотре (`styles/editor.css`, `.cm-md-quote-first/-last`).
+            const line = state.doc.lineAt(from);
+            const classes = ['cm-md-quote-line'];
+            if (block !== undefined && line.from === block.from) classes.push('cm-md-quote-first');
+            if (block !== undefined && line.to === block.to) classes.push('cm-md-quote-last');
+            parts.push(Decoration.line({ class: classes.join(' ') }).range(from));
           }
           const active = block !== undefined && isInRangeInclusive(ranges, block.from, block.to);
           if (!active) {

@@ -1,0 +1,166 @@
+/**
+ * Стили словаря кнопок `lib/ui` (задача 56f1dcb2).
+ *
+ * Классы объявлены только здесь и в `./button.ts` — старые наборы
+ * (`btn*`, `dialog-btn*`) удалены из `styles.css`. Значения перенесены
+ * из `styles.css` без изменения плотности и размеров (визуальная
+ * преемственность): те же отступы, рамки, радиусы и токены ETN. Обе темы
+ * работают через токены — отдельного блока для `[data-theme='dark']` нет.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): числа переведены на шкалы токенов
+ * (`--space-*`, `--font-size-*`, `--control-*`, `--line-height-*`); текст
+ * primary-кнопки берёт `--accent-fg` вместо литерала `#fff`.
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): полный набор — покой,
+ * `:hover`, `:active` (нажатие), `:focus-visible`, `:disabled`. Реакции на
+ * наведение/нажатие отключены у `:disabled` (`:not(:disabled)`); фокусное
+ * кольцо — из токенов `--accent`/`--focus-ring-width`; переходы — по
+ * `--transition-hover` (гасятся при reduce-motion).
+ *
+ * Роли: `--primary`, `--secondary`, `--danger`, `--ghost`.
+ * Плотность: `--s` (компактная), `--m` (обычная).
+ * Состояния: `:disabled`, `:hover`, `:active`, `:focus-visible`, `--active`
+ * (выбранный сегмент), `--icon`.
+ *
+ * Комбинация `--ghost --icon` намеренно идёт последней: у ghost-роли
+ * иконочная кнопка не квадрат, а кнопка-иконка с паддингами тулбара
+ * (иконочные кнопки строки поиска, тулбара, крестик диалога).
+ */
+
+.ui-btn {
+  padding: var(--space-3) var(--space-7);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--transition-hover) ease,
+    border-color var(--transition-hover) ease,
+    color var(--transition-hover) ease,
+    box-shadow var(--transition-hover) ease;
+}
+
+.ui-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.ui-btn:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.ui-btn:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-btn:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* --- роли ---------------------------------------------------------------- */
+
+/* primary — главное действие: не больше одной на панель и крайним справа. */
+.ui-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.ui-btn--primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.ui-btn--primary:active:not(:disabled) {
+  background: var(--accent-pressed);
+}
+
+/* danger — разрушающее действие: контур и текст цвета опасности. */
+.ui-btn--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ui-btn--danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+/* Нажатие разрушающего действия — заливка опасности (наглядное подтверждение). */
+.ui-btn--danger:active:not(:disabled) {
+  background: var(--danger);
+  color: var(--accent-fg);
+}
+
+/* ghost — малозначимое без рамки; панели и тулбар (плотность тулбара). */
+.ui-btn--ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--control-pad-y) var(--space-5);
+  border: 0;
+  background: transparent;
+}
+
+.ui-btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.ui-btn--ghost:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+/* --- плотность ----------------------------------------------------------- */
+
+.ui-btn--s {
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--font-size-xs);
+}
+
+/* --- иконочная кнопка ---------------------------------------------------- */
+
+.ui-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: var(--font-size-l);
+  line-height: var(--line-height-none);
+}
+
+.ui-btn--icon.ui-btn--m {
+  width: var(--control-w-m);
+  height: var(--control-w-m);
+}
+
+.ui-btn--icon.ui-btn--s {
+  width: var(--control-w-s);
+  height: var(--control-w-s);
+}
+
+/* Иконочная кнопка подсвечивает рамку при наведении — узнаваемая
+   реакция, перенесённая из прежнего `.icon-btn`. */
+.ui-btn--icon:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* --- состояния ----------------------------------------------------------- */
+
+/* Активный сегмент переключателя вида (заменяет `.tb-btn.view-btn.active`). */
+.ui-btn--ghost.ui-btn--active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Ghost-иконочная: не квадрат — кнопка-иконка с паддингами тулбара.
+   `m` — тулбар/панели (был `.tb-btn.tb-icon`), `s` — крестик диалога. */
+.ui-btn--ghost.ui-btn--icon {
+  width: auto;
+  height: auto;
+  padding: var(--control-pad-y) var(--space-4);
+}
+
+.ui-btn--ghost.ui-btn--icon.ui-btn--s {
+  padding: var(--space-1) var(--space-4);
+  color: var(--text-dim);
+}

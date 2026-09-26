@@ -46,6 +46,7 @@ import { noteThoughtWillOpen } from '../history.js';
 import { inNeighbourhood, reloadTypeCatalogues } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
+import { invalidateSelectionThought } from '../selection/selection.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import {
   canSave,
@@ -55,7 +56,7 @@ import {
   offlineNotice,
   saveDraft,
 } from '../drafts.js';
-import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
@@ -118,6 +119,10 @@ import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
+import { fieldTextarea } from '../lib/ui/field.js';
 import {
   acquireOrShowBlocked,
   lockHandleFromOutcome,
@@ -507,9 +512,14 @@ export function mountEditor(editorHost: HTMLElement): void {
 
   const header = div('editor-header');
   titleEl = span('', 'editor-title');
-  positionButton = button('', () => void openPositionMenu(), 'btn small');
+  positionButton = uiButton({
+    label: '',
+    size: 's',
+    title: 'Положение редактора',
+    onClick: () => void openPositionMenu(),
+  });
   positionButton.append(svgIcon('chevron-down', 12));
-  setTooltip(positionButton, 'Положение редактора');
+  positionButton.setAttribute('aria-label', 'Положение редактора');
   header.append(titleEl, positionButton);
   scrollBox = div('editor-scroll');
   // Carries the saved list max-heights as --clamp-* variables (ee745368).
@@ -1515,7 +1525,8 @@ function focusEditorComment(): void {
   }
   const deadline = Date.now() + 5000;
   const tick = (): void => {
-    const field = scrollBox?.querySelector<HTMLElement>('.comment-permanent .md-field') ?? null;
+    // Каркас комментария — оболочка `lib/ui/comment.ts` (задача 9cb87c42).
+    const field = scrollBox?.querySelector<HTMLElement>('.ui-comment .md-field') ?? null;
     if (field === null || field.isConnected === false) {
       // Still loading (or a rebuild raced us) — keep waiting a bit.
       if (Date.now() < deadline) window.setTimeout(tick, 50);
@@ -1640,6 +1651,10 @@ export function reflectThoughtUpdate(updated: Thought): void {
     invalidatePinnedBar();
   }
   invalidateHistoryBar();
+  // Панель выделенных держит свой кэш строк и подписана лишь на состав
+  // выделения: переименование/смена оформления выделенной мысли обновляет её
+  // строку точечно (ошибка 3a64e680).
+  invalidateSelectionThought(id);
 }
 
 /**
@@ -1771,7 +1786,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   setTooltip(iconBox, 'Изменить иконку');
   iconBox.addEventListener('click', () => void changeThoughtIcon(thought));
 
-  const titleArea = el('textarea', 'editor-title-input') as HTMLTextAreaElement;
+  const titleArea = fieldTextarea({ extraClass: 'editor-title-input', bare: true }) as HTMLTextAreaElement;
   titleArea.value = thought.title;
   titleArea.maxLength = 400;
   titleArea.rows = 1;
@@ -1864,15 +1879,18 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }
   });
 
-  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
-  settingsBtn.append(svgIcon('settings', 14));
+  const settingsBtn = iconButton({
+    icon: svgIcon('settings', 14),
+    title: 'Цвет и стиль',
+    onClick: () => openThoughtSettings(thought),
+  });
   settingsBtn.setAttribute('aria-label', 'Настройки мысли');
 
   topRow.append(iconBox, titleArea, settingsBtn);
   box.append(topRow);
 
   // --- Строка 2: синонимы -------------------------------------------------
-  const synonymsInput = el('input', 'text-input synonyms-input');
+  const synonymsInput = fieldInput({ extraClass: 'synonyms-input' });
   synonymsInput.type = 'text';
   synonymsInput.value = thought.synonyms.join(', ');
   synonymsInput.placeholder = 'Синонимы (через запятую)';
@@ -1927,20 +1945,23 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     },
   });
 
-  const activeLabel = el('label', 'checkbox-row');
-  const activeCheck = el('input');
-  activeCheck.type = 'checkbox';
-  activeCheck.checked = thought.active;
+  const activeRow = checkboxRow({ label: 'актуально', checked: thought.active });
+  const activeLabel = activeRow.row;
+  const activeCheck = activeRow.input;
   activeCheck.disabled = thought.is_protected && thought.is_root; // HOME always active
   activeCheck.addEventListener('change', () => {
     void saveThought({ active: activeCheck.checked });
   });
-  activeLabel.append(activeCheck, span('актуально'));
 
   // Подменю «Действия» — задача 8ab775d9. Команды зеркалят контекстное меню
   // облачка: «В фокус», toggle выделения, toggle закрепления. Меню открывается
   // и с клавиатуры (Enter/Space).
-  const actionsBtn = button('Действия ▾', () => void openThoughtActionsMenu(thought, actionsBtn), 'btn small');
+  const actionsBtn = uiButton({
+    label: 'Действия ▾',
+    role: 'secondary',
+    size: 's',
+    onClick: () => void openThoughtActionsMenu(thought, actionsBtn),
+  });
   actionsBtn.type = 'button';
 
   row.append(typeCombo.root, activeLabel, actionsBtn);
@@ -2103,7 +2124,7 @@ function buildThoughtHeaderLoading(thoughtId: string): HTMLElement {
   iconBox.append(svgIcon('loader', 18));
   topRow.append(iconBox);
 
-  const titleArea = el('textarea', 'editor-title-input') as HTMLTextAreaElement;
+  const titleArea = fieldTextarea({ extraClass: 'editor-title-input', bare: true }) as HTMLTextAreaElement;
   titleArea.value = `…загрузка ${thoughtId.slice(0, 8)}`;
   titleArea.maxLength = 400;
   titleArea.rows = 1;
@@ -2165,7 +2186,7 @@ function buildLinkHeader(link: Link): HTMLElement {
         if (ok && focusComment) focusEditorComment();
       });
     },
-    onCreateNew: async (query) => {
+    onCreateNew: async (_query) => {
       // Создание типа связи теперь идёт через единый диалог свойства
       // (требование 09f692ff, задача 09201bd4): пользователь выбирает
       // `value_type = 'link'`, вводит имена сторон, сервер автоматически
@@ -2187,17 +2208,18 @@ function buildLinkHeader(link: Link): HTMLElement {
     },
   });
 
-  const settingsBtn = button('', () => openLinkSettings(link), 'icon-btn', 'Цвет и стиль линии');
-  settingsBtn.append(svgIcon('settings', 14));
+  const settingsBtn = iconButton({
+    icon: svgIcon('settings', 14),
+    title: 'Цвет и стиль линии',
+    onClick: () => openLinkSettings(link),
+  });
 
-  const activeLabel = el('label', 'checkbox-row');
-  const activeCheck = el('input');
-  activeCheck.type = 'checkbox';
-  activeCheck.checked = link.active;
+  const activeRow = checkboxRow({ label: 'актуально', checked: link.active });
+  const activeLabel = activeRow.row;
+  const activeCheck = activeRow.input;
   activeCheck.addEventListener('change', () => {
     void saveLink(link, { active: activeCheck.checked });
   });
-  activeLabel.append(activeCheck, span('актуально'));
 
   row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);

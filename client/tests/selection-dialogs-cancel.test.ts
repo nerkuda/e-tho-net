@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { pickLinkType, pickThoughtType } from '../src/renderer/selection/dialogs.js';
+import { t } from '../src/renderer/lib/i18n.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -85,7 +86,7 @@ function openBackdrop(body: ShimElement): ShimElement {
 
 /** Кнопка футера по подписи. */
 function footerButton(backdrop: ShimElement, label: string): ShimElement {
-  const btn = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === label);
+  const btn = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === label);
   assert.ok(btn !== undefined, `в футере есть кнопка «${label}»`);
   return btn!;
 }
@@ -101,7 +102,7 @@ function clickBackdrop(backdrop: ShimElement): void {
 
 /** Клик по × в заголовке. */
 function clickClose(backdrop: ShimElement): void {
-  const closeBtn = findAllByClass(backdrop, 'dialog-close')[0];
+  const closeBtn = findAllByClass(backdrop, 'ui-btn--ghost')[0];
   assert.ok(closeBtn !== undefined, 'в заголовке есть ×');
   closeBtn!.click();
 }
@@ -153,7 +154,7 @@ describe('pickLinkType: отмена любым путём закрытия (a68
     const { settled } = await resolvesTo(done);
     assert.equal(settled, false, 'клик мимо не резолвит промис');
     assert.equal(findAllByClass(body, 'dialog-backdrop').length, 1, 'диалог остался открыт');
-    footerButton(openBackdrop(body), 'Отмена').click();
+    footerButton(openBackdrop(body), t('actions.cancel')).click();
     const { value } = await resolvesTo(done);
     assert.equal(value, undefined, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
@@ -162,17 +163,17 @@ describe('pickLinkType: отмена любым путём закрытия (a68
     const { body } = installShim();
     prepare();
     const done = pickLinkType('Тип связи');
-    footerButton(openBackdrop(body), 'Отмена').click();
+    footerButton(openBackdrop(body), t('actions.cancel')).click();
     const { value } = await resolvesTo(done);
     assert.equal(value, undefined, 'кнопка отмены — undefined');
   });
 
-  it('«OK» отдаёт значение поля и не переигрывается поздним onClose', async () => {
+  it('«Применить» отдаёт значение поля и не переигрывается поздним onClose', async () => {
     const { body } = installShim();
     prepare();
     store.update({ lastUsedLinkTypeId: null });
     const done = pickLinkType('Тип связи');
-    footerButton(openBackdrop(body), 'OK').click();
+    footerButton(openBackdrop(body), t('actions.apply')).click();
     const { value, settled } = await resolvesTo(done);
     assert.equal(settled, true, 'промис завершён');
     assert.equal(value, null, 'основной путь отдал значение поля («без типа»), а не undefined');
@@ -208,7 +209,7 @@ describe('pickThoughtType: отмена любым путём закрытия (
     const { settled } = await resolvesTo(done);
     assert.equal(settled, false, 'клик мимо не резолвит промис');
     assert.equal(findAllByClass(body, 'dialog-backdrop').length, 1, 'диалог остался открыт');
-    footerButton(openBackdrop(body), 'Отмена').click();
+    footerButton(openBackdrop(body), t('actions.cancel')).click();
     const { value } = await resolvesTo(done);
     assert.equal(value, undefined, 'после клика мимо кнопка «Отмена» всё ещё закрывает');
   });
@@ -217,16 +218,16 @@ describe('pickThoughtType: отмена любым путём закрытия (
     const { body } = installShim();
     prepare();
     const done = pickThoughtType('a');
-    footerButton(openBackdrop(body), 'Отмена').click();
+    footerButton(openBackdrop(body), t('actions.cancel')).click();
     const { value } = await resolvesTo(done);
     assert.equal(value, undefined, 'кнопка отмены — undefined');
   });
 
-  it('«OK» отдаёт значение поля и не переигрывается поздним onClose', async () => {
+  it('«Применить» отдаёт значение поля и не переигрывается поздним onClose', async () => {
     const { body } = installShim();
     prepare();
     const done = pickThoughtType('a');
-    footerButton(openBackdrop(body), 'OK').click();
+    footerButton(openBackdrop(body), t('actions.apply')).click();
     const { value, settled } = await resolvesTo(done);
     assert.equal(settled, true, 'промис завершён');
     assert.equal(value, 'a', 'основной путь отдал выбранный тип, а не undefined');

@@ -95,7 +95,7 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
       children_count: 0,
       attachments_count: 0,
       chrono_count: 0,
-      usage_count: 0,
+      deletion_blocks: 0,
       permanent: null,
       // 0.7.2 (задача 327be956) — профиль влияния мысли. Для свежей мысли
       // без связей: пустой `stats`. 0.8.3: имена типов связи — внутри каждой
@@ -230,12 +230,12 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
     }
 
     const meta = getThoughtMeta(ndb, target);
-    assert.equal(meta.usage_count, 2);
+    assert.equal(meta.deletion_blocks, 2);
     // The referencing thoughts themselves have no usages.
-    assert.equal(getThoughtMeta(ndb, owner1).usage_count, 0);
+    assert.equal(getThoughtMeta(ndb, owner1).deletion_blocks, 0);
   });
 
-  it('usage_count блокирующего свойства-связи берёт направление из стороны привязки (083dcde5)', () => {
+  it('deletion_blocks блокирующего свойства-связи берёт направление из стороны привязки (083dcde5)', () => {
     const ndb = createInMemoryNetworkDb();
     const linkType = randomUUID();
     ndb
@@ -270,13 +270,13 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
     seedLink(ndb, value, owner, 1, 0, linkType);
 
     // Блокируется источник (значение), не владелец-цель.
-    assert.equal(getThoughtMeta(ndb, value).usage_count, 1);
-    assert.equal(getThoughtMeta(ndb, owner).usage_count, 0);
+    assert.equal(getThoughtMeta(ndb, value).deletion_blocks, 1);
+    assert.equal(getThoughtMeta(ndb, owner).deletion_blocks, 0);
 
     // Свойство без привязок — прежний fallback на config.direction (`out`):
     // блокируется цель ребра.
     ndb.prepare('DELETE FROM type_properties WHERE property_id = ?').run(prop);
-    assert.equal(getThoughtMeta(ndb, value).usage_count, 0);
-    assert.equal(getThoughtMeta(ndb, owner).usage_count, 1);
+    assert.equal(getThoughtMeta(ndb, value).deletion_blocks, 0);
+    assert.equal(getThoughtMeta(ndb, owner).deletion_blocks, 1);
   });
 });

@@ -13,6 +13,7 @@
  *    are not draggable in v1, see Q3 DoD).
  */
 import { openNetwork } from '../../app.js';
+import { t } from '../../lib/i18n.js';
 import { div, el, setTooltip, span } from '../../lib/dom.js';
 import { svgIcon } from '../../lib/icons.js';
 import { etn } from '../../lib/etn.js';
@@ -146,7 +147,7 @@ function render(elements: StripElements<TabDto> & { reserveButton: HTMLButtonEle
           void activateTab(tab.tab_id);
           close();
         });
-        const closeBtn = el('button', 'link-btn', 'Закрыть') as HTMLButtonElement;
+        const closeBtn = el('button', 'link-btn', t('actions.close')) as HTMLButtonElement;
         closeBtn.type = 'button';
         closeBtn.addEventListener('click', (e) => {
           e.stopPropagation();

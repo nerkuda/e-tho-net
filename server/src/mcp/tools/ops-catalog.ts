@@ -17,6 +17,7 @@
 
 import { z } from 'zod';
 
+import { writeBatchHowToText } from '../how-to.js';
 import type { OperationContract } from '../../contracts.js';
 import {
   ActivityRollup,
@@ -972,6 +973,15 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       'Несёт справочник `thought_types` плюс опциональные эхо `resolved_types`/`resolved_properties`',
       'для входов, заданных по имени.',
     ].join('\n'),
+  },
+  {
+    // Ошибка e05d4688-8180-41c6-bcd9-733d088c8981: описание `etn.thoughts.write`
+    // ссылается на «etn.how_to_write_batch», но темы в реестре гайда не было —
+    // `etn.guide { topic: "how_to_write_batch" }` падал VALIDATION_ERROR. Текст
+    // общий с одноимённым промптом (`how-to.ts`), чтобы не расходились.
+    topic: 'how_to_write_batch',
+    when: 'пошаговая инструкция батч-записи `etn.thoughts.write`: секции, `ref`/`target_ref`, `on_duplicate`, лимиты, миграция с поглощённых инструментов',
+    body_md: writeBatchHowToText('<network_id>'),
   },
 ];
 

@@ -1,0 +1,45 @@
+/* ---------------------------------------------------------------------------
+ * Notifications / transient notices
+ * ------------------------------------------------------------------------- */
+
+.notice {
+  position: fixed;
+  right: 14px;
+  bottom: calc(var(--statusbar-h) + 12px);
+  z-index: 800;
+  max-width: 360px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.notice.error {
+  border-left-color: var(--danger);
+}
+
+/* Виды тоста (задача e20761c2): успех — зелёный токен, внимание — жёлтый;
+ * info остаётся акцентной полосой по умолчанию. */
+.notice.success {
+  border-left-color: var(--ok);
+}
+
+.notice.warning {
+  border-left-color: var(--warn);
+}
+
+.notice .notice-text {
+  flex: 1;
+  overflow-wrap: break-word;
+}
+
+.notice .notice-close {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+

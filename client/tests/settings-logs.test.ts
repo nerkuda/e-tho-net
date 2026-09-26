@@ -267,7 +267,7 @@ describe('тумблеры применяются немедленно', () => {
   });
 
   it('сбой применения откатывает тумблер и показывает ошибку inline', async () => {
-    const { calls } = makeMock({ clientState: { enabled: false } });
+    makeMock({ clientState: { enabled: false } });
     (globalThis as any).window.etn.system.setClientLogging = () =>
       Promise.reject(new Error('бой'));
     const section = (await makeSection()) as unknown as ShimElement;

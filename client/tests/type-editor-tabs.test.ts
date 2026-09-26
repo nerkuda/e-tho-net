@@ -1,37 +1,46 @@
 /**
  * Smoke checks for the thought-type editor tabs (задача b8301c16, требование
- * 344b8798, 0.7.3).
+ * 344b8798; перекомпоновка — ошибка 58807d03, 0.9.1; перевод на общий
+ * механизм — задача a57e7998).
  *
  * The DOM-bound code (`type-manager.ts`/`views-tab.ts`) pulls in IPC,
  * realtime and the dialog module — heavy for the unit runner. These tests
  * stay cheap by checking the structural anchors the editor relies on:
  *
- *   - The five tab labels («Описание», «Шаблон», «Свойства», «Отборы»,
- *     «Метаданные») match the requirement word-for-word;
- *   - The CSS module declares the class names the editor emits
- *     (`.type-editor-tabs`, `.type-editor-tab`, `.type-editor-tab.active`,
- *     `.type-editor-tab-pane`, `.type-editor-tab-pane.active`);
+ *   - The three tab labels («Основное», «Свойства», «Отборы») are handed to
+ *     the dialog's shared tab mechanism (`showDialog({ tabs: [...] })`) in
+ *     order, with «Основное» first (the default tab). Идентичность типа
+ *     (иконка · название · ⚙ и родитель) вынесена в постоянную шапку
+ *     диалога (`headerExtra`) НАД вкладками; шаблон и метаданные — группы
+ *     внутри «Основного» (ошибка 58807d03);
+ *   - The shared tab component declares the class names it emits
+ *     (`.ui-tab`, `.ui-tablist`, `.ui-tabpanel` — `lib/ui/tabs.css`);
  *   - The pure helpers in `views-tab-pure.ts` stay stable for the keys
  *     the row code reads (`id`, `position`, `is_default`,
  *     `thought_type_id`).
  *
  * Together these act as a tripwire: a rename of either the tab labels or
- * the CSS classes breaks the build before the integration tests run.
+ * the tab mechanism breaks the build before the integration tests run.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
-const CSS_PATH = resolve(
+const CSS_PATH = assembledStylesFile();
+
+const TABS_CSS_PATH = resolve(
   import.meta.dirname,
   '..',
   'src',
   'renderer',
-  'styles.css',
+  'lib',
+  'ui',
+  'tabs.css',
 );
 
 const SOURCE_FILES = {
@@ -62,12 +71,19 @@ const SOURCE_FILES = {
   ),
 };
 
-const REQUIRED_TAB_LABELS = [
-  '«Описание»',
-  '«Шаблон»',
-  '«Свойства»',
-  '«Отборы»',
-  '«Метаданные»',
+/** Идентификаторы вкладок редактора типа в требуемом порядке (ошибка
+ *  58807d03): «Основное», «Свойства», «Отборы». */
+const REQUIRED_TAB_IDS = ['basic', 'properties', 'views'];
+
+/** Ключи словаря подписей вкладок и групп (ошибка 58807d03). */
+const REQUIRED_I18N_KEYS = [
+  'typeEditor.tab.basic',
+  'typeEditor.tab.properties',
+  'typeEditor.tab.views',
+  'typeEditor.group.template',
+  'typeEditor.group.metadata',
+  'typeEditor.group.inherited',
+  'typeEditor.group.own',
 ];
 
 /** Plain string-substring search — the labels are unique enough that a
@@ -77,34 +93,35 @@ function readText(path: string): string {
 }
 
 describe('thought-type editor — tabs (задача b8301c16)', () => {
-  it('type-manager declares the five tab buttons in the order required', () => {
+  it('type-manager hands the three tab ids to the shared tab mechanism in order', () => {
     const src = readText(SOURCE_FILES.typeManager);
-    // The tab button row is built with literal labels; assert each one is
-    // emitted as the argument of a `tabButton(key, label)` call so a
-    // rename trips the test before the UI does.
-    const labels = ['Описание', 'Шаблон', 'Свойства', 'Отборы', 'Метаданные'];
-    for (const label of labels) {
-      assert.ok(
-        src.includes(`'${label}'`),
-        `tab label «${label}» not found in showThoughtTypeEditor`,
-      );
-    }
-    // Order: tabs are passed to `tabRow.append(...)` in sequence — the
-    // first occurrence after `tabRow.append(` should be «Описание» and the
-    // last «Метаданные».
-    const tabRowStart = src.indexOf('tabRow.append(');
-    assert.ok(tabRowStart > 0, 'tabRow.append call not found');
-    const tabRowSlice = src.slice(tabRowStart, src.indexOf(');', tabRowStart));
-    const firstLabelIdx = tabRowSlice.indexOf(`'Описание'`);
-    const lastLabelIdx = tabRowSlice.lastIndexOf(`'Метаданные'`);
-    assert.ok(firstLabelIdx > 0 && firstLabelIdx < lastLabelIdx, 'tab order');
+    const start = src.indexOf('tabs: [');
+    assert.ok(start > 0, 'type-manager must pass `tabs: [...]` to showDialog');
+    const end = src.indexOf('],', start);
+    const block = src.slice(start, end);
+    const ids = [...block.matchAll(/id: '([^']+)'/g)].map((m) => m[1]);
+    assert.deepEqual(
+      ids,
+      REQUIRED_TAB_IDS,
+      'вкладки редактора типа — общий механизм каркаса диалога, в требуемом порядке',
+    );
   });
 
-  it('type-manager activates the «Описание» tab by default', () => {
+  it('type-manager activates the «Основное» tab by default (id basic first)', () => {
     const src = readText(SOURCE_FILES.typeManager);
-    assert.ok(
-      /let\s+activeTab:\s*TabKey\s*=\s*'description'/.test(src),
-      'activeTab must default to «description»',
+    assert.match(
+      src,
+      /tabs:\s*\[\s*\{\s*id: 'basic'/,
+      'первая (активная по умолчанию) вкладка — «Основное»',
+    );
+  });
+
+  it('идентичность типа вынесена в шапку диалога над вкладками (58807d03)', () => {
+    const src = readText(SOURCE_FILES.typeManager);
+    assert.match(
+      src,
+      /headerExtra:\s*headerBox/,
+      'иконка · название · ⚙ и родитель живут в постоянной шапке диалога, а не во вкладке',
     );
   });
 
@@ -138,8 +155,13 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
     assert.ok(src.includes('export interface OpenEditorOptions'));
     assert.ok(src.includes('initialThoughtTypeId'));
     assert.ok(src.includes('initialSide'));
-    // Ширина диалога ≥ 1200 px (требование 465495a9).
-    assert.ok(src.includes('width: 1240'), 'editor width must be at least 1200 px');
+    // Диалог «Свойство / связь» — роль xl: ширина 1240px (требование 465495a9).
+    const css = readText(CSS_PATH);
+    assert.ok(src.includes("size: 'xl'"), 'редактор свойства — роль xl (≥1200 px)');
+    assert.ok(
+      css.includes("--dialog-w: 1240px"),
+      'роль xl задаёт ширину 1240px (lib/dialog.ts, styles.css)',
+    );
     // Вид `thought_ref` исключён из выбора (требование 5a82c709).
     assert.ok(src.includes('SELECTABLE_VALUE_TYPES'));
     // Список выбора НЕ включает `thought_ref` (только скаляры + link).
@@ -152,15 +174,9 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
     );
   });
 
-  it('styles.css declares the classes the tab row + panes rely on', () => {
-    const css = readText(CSS_PATH);
-    const required = [
-      '.type-editor-tabs',
-      '.type-editor-tab',
-      '.type-editor-tab.active',
-      '.type-editor-tab-pane',
-      '.type-editor-tab-pane.active',
-    ];
+  it('the shared tab component declares the classes the tab row + panes rely on', () => {
+    const css = readText(TABS_CSS_PATH);
+    const required = ['.ui-tablist', '.ui-tab', '.ui-tabpanel'];
     for (const cls of required) {
       assert.ok(css.includes(cls), `CSS missing selector ${cls}`);
     }
@@ -177,15 +193,12 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
     assert.ok(src.includes('dispose'), 'views-tab exposes dispose()');
   });
 
-  it('lists the five required tab labels in the requirement reference', () => {
-    // Mirror the labels documented in the requirement so a future rename
-    // goes through the test on both sides.
+  it('редактор типа берёт подписи вкладок и групп из словаря (ошибка 58807d03)', () => {
     const src = readText(SOURCE_FILES.typeManager);
-    for (const label of REQUIRED_TAB_LABELS) {
-      const plain = label.replace(/[«»]/g, '');
+    for (const key of REQUIRED_I18N_KEYS) {
       assert.ok(
-        src.includes(plain),
-        `tab label «${plain}» not referenced in the editor source`,
+        src.includes(`'${key}'`),
+        `ключ словаря ${key} не используется в редакторе типа`,
       );
     }
   });

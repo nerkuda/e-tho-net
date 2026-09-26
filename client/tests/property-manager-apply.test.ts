@@ -98,11 +98,21 @@ function makeRow(overrides: Partial<TypeRowDraft> = {}): TypeRowDraft {
 // Поле «Описание» — зеркалирование ввода в черновик
 // ---------------------------------------------------------------------------
 
+/** Заглушка класс-листа: фасад поля навешивает классы многострочного контрола. */
+const NOOP_CLASS_LIST = {
+  add: (): void => undefined,
+  remove: (): void => undefined,
+  contains: (): boolean => false,
+  toggle: (): void => undefined,
+};
+
 /** Минимальный textarea-шим: value + addEventListener/dispatch. */
 class ShimTextarea {
   value = '';
   rows = 0;
   placeholder = '';
+  className = '';
+  readonly classList = NOOP_CLASS_LIST;
   readonly listeners = new Map<string, Array<() => void>>();
   addEventListener(type: string, handler: () => void): void {
     let list = this.listeners.get(type);

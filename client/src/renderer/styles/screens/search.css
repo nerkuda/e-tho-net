@@ -1,0 +1,237 @@
+/* ---------------------------------------------------------------------------
+ * Search panel (H13)
+ * ------------------------------------------------------------------------- */
+
+.search-panel {
+  position: absolute;
+  z-index: 900;
+  /* left/top are anchored to the search input from JS (positionPanel). */
+  right: 10%;
+  max-height: 50%;
+  /* Прокрутка живёт у зон, а не у панели: общий `overflow-y` скроллил
+     результаты и настройки одной полосой (ошибка aa5d0aff). Панель —
+     flex-колонка: тело забирает остаток высоты и раздаёт его зонам. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 8px 12px;
+}
+
+/* Верхний угол панели: кнопка-переключатель «Настройки поиска» (иконка-лейка)
+   прижата вправо. Раньше настройки открывала шестерёнка рядом со строкой
+   поиска — её больше нет (задача a3247f84). */
+.search-panel-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.search-settings-toggle.pressed,
+.search-settings-toggle[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Две зоны выпадающей панели: «результаты поиска» и «настройки поиска».
+   Тело — единственный «сжимаемый» слой панели: `min-height: 0` позволяет ему
+   ужаться под `max-height` панели, а зоны растягиваются на его высоту
+   (`align-items: stretch` по умолчанию) и прокручиваются каждая своей полосой. */
+.search-panel-body {
+  display: flex;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.search-results {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.search-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Ширина окна > 1000px: настройки справа от результатов — 30% ширины панели.
+   Положение зоны задаёт JS-класс `search-settings-side` (applySettingsPlacement
+   пересчитывает его на каждом ресайзе). */
+.search-panel.search-settings-side .search-settings {
+  flex: 0 0 30%;
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+  /* Боковая зона растянута на высоту тела — своя вертикальная прокрутка. */
+  overflow-y: auto;
+}
+
+/* Ширина окна ≤ 1000px: настройки сверху над результатами. */
+.search-panel.search-settings-top .search-panel-body {
+  flex-direction: column;
+}
+
+/* В колонке настройки не растягиваются и не сжимаются (`flex: 0 0 auto`):
+   высоту им задаёт содержимое, но не выше `max-height` — иначе три строки
+   настроек съедали бы результаты, а результаты получали нулевую высоту.
+   Сверх предела настройки прокручиваются своей полосой, остаток высоты
+   панели забирают результаты.
+   Предел задан в определённых единицах (`px`/`vh`): процент от высоты тела
+   не разрешается — тело получает высоту флексингом, и Chromium считает её
+   неопределённой, поэтому `max-height: 45%` молча превращался в `none`
+   (проверено зондом). Панель занимает не больше 50% высоты окна, поэтому
+   `25vh` — это примерно половина панели: настройки получают её лишь при
+   крайне низком окне, а остаток (не меньше 240px в обычном окне) остаётся
+   результатам. */
+.search-panel.search-settings-top .search-settings {
+  order: -1;
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: min(240px, 25vh);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+  overflow-y: auto;
+}
+
+/* Одна «строка» настроек. При нехватке ширины элементы строки укладываются
+   друг под другом (flex-wrap), а отступы между строками сохраняет `gap`
+   контейнера `.search-settings` (задача a3247f84, п. 4). */
+.search-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.search-settings-row .search-settings-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.search-settings-row .ui-choice-row {
+  margin-bottom: 0;
+}
+
+/* Поле мыслей-подкорней тянется по ширине строки настроек. */
+.search-settings-row .entity-chip-field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* Выключенное поле выбора мыслей-подкорней (флажок не установлен). */
+.entity-chip-field.disabled {
+  opacity: 0.55;
+}
+
+.entity-chip-field.disabled .st-f-chipfield,
+.entity-chip-field.disabled .entity-chip-pick {
+  cursor: default;
+}
+
+/* Поля «Автор»/«редактор» в строке ограничений — без нижнего отступа. */
+.search-settings-row .user-select-row {
+  margin: 0;
+}
+
+.search-group {
+  margin-bottom: 8px;
+}
+
+.search-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 2px 2px;
+  border-radius: var(--radius-sm);
+  user-select: none;
+}
+
+.search-group-header:hover {
+  background: var(--surface-2);
+}
+
+.search-hit {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.search-hit + .search-hit {
+  border-top: 1px solid var(--border);
+}
+
+.search-hit:hover {
+  background: var(--surface-2);
+}
+
+/* Хиты-мысли собирает общая фабрика облачка (начертание и бледность — на
+   корне `.cloud`, классы `font-*` на `.search-hit` больше не навешиваются);
+   `hit-title` остаётся только у простых строк связей/хроники (a6055d05). */
+.search-hit .hit-title {
+  font-weight: 600;
+}
+
+.search-hit .hit-snippet {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+/* Хит-мысль (ошибки 265cdb5f, a42ea662): облачко занимает всю ширину
+   выпадашки, а не холстовые 200px (`--cloud-width`) — название обрезается
+   многоточием по ширине списка; snippet с подсветкой вхождений уходит на
+   следующую строку под облачко и отступает от левого края самого облачка, а
+   не от края строки. Ширину «по контейнеру» объявляет вызов фабрики
+   (`width: 'container'`, класс `cloud-width-container`) — здесь только
+   раскладка строки. Строки связи/хронологии остаются однострочными
+   (глиф + текст). */
+.search-hit.search-hit-cloud {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.search-hit.search-hit-cloud > .search-hit-info {
+  padding-left: 10px;
+}
+
+/* Keyboard/restore selection (08-ui-spec.md §3.1). */
+.search-group-header.selected,
+.search-hit.selected {
+  background: var(--accent-soft);
+}
+
+.search-hit.selected {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Подсветка совпадений запроса: `<mark>` серверных сниппетов и такая же
+   подсветка в названии облачка результата (опция `highlightTerms` фабрики,
+   задача a1766c7d) выглядят одинаково. */
+.search-hit mark,
+.cloud-title mark {
+  background: var(--mark-bg);
+  color: var(--text);
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.search-empty {
+  color: var(--text-faint);
+  padding: 12px 4px;
+}
+

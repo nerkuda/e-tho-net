@@ -38,6 +38,7 @@ installShim();
 const { renderNewTypeHint } = await import(
   '../src/renderer/lib/type-editor-hints.js'
 );
+const { t } = await import('../src/renderer/lib/i18n.js');
 
 describe('renderNewTypeHint — заглушка несохранённого типа (e7352642)', () => {
   it('без onSave — текст подсказки есть, кнопки нет', () => {
@@ -49,26 +50,26 @@ describe('renderNewTypeHint — заглушка несохранённого т
     assert.equal(hint.querySelector('button'), null, 'кнопка не должна рисоваться без onSave');
   });
 
-  it('с onSave — рисуется кнопка «Сохранить» класса btn success', () => {
+  it('с onSave — рисуется кнопка «Сохранить» primary-роли словаря lib/ui', () => {
     const hint = renderNewTypeHint({
       message: 'Подсказка.',
       onSave: () => undefined,
     });
     // `lib/dom-shim.ts` понимает только атомарные селекторы (`.class`,
-    // `#id`, `tag`); составной `.btn.success` не поддержан — ищем по
-    // одному классу `.btn` (он уникален внутри заглушки) и явно
-    // проверяем второй класс через `classList`.
-    const btn = hint.querySelector('.btn') as unknown as ShimElement;
-    assert.ok(btn !== null, 'нет кнопки класса btn');
+    // `#id`, `tag`); составной `.ui-btn--primary` не поддержан — ищем по
+    // базовому классу `.ui-btn` (он уникален внутри заглушки) и явно
+    // проверяем роль через `classList`.
+    const btn = hint.querySelector('.ui-btn') as unknown as ShimElement;
+    assert.ok(btn !== null, 'нет кнопки словаря lib/ui');
     assert.equal(btn.tagName, 'button', 'элемент с классом btn должен быть <button>');
     assert.ok(
-      btn.classList.contains('success'),
-      'кнопка «Сохранить» должна нести класс success',
+      btn.classList.contains('ui-btn--primary'),
+      'кнопка «Сохранить» должна нести primary-роль словаря',
     );
-    assert.equal(btn.textContent, 'Сохранить');
+    assert.equal(btn.textContent, t('actions.save'));
     assert.equal(
       btn.title,
-      'Записать тип и не закрывать диалог',
+      t('typeEditor.saveHint'),
       'title кнопки должен объяснять действие',
     );
     assert.equal(btn.type, 'button', 'кнопка должна быть type=button (не submit)');
@@ -82,7 +83,7 @@ describe('renderNewTypeHint — заглушка несохранённого т
         called += 1;
       },
     });
-    const btn = hint.querySelector('.btn') as unknown as ShimElement;
+    const btn = hint.querySelector('.ui-btn') as unknown as ShimElement;
     assert.ok(btn !== null);
     btn.click();
     assert.equal(called, 1, 'onSave должен быть вызван ровно один раз');

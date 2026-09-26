@@ -1,0 +1,80 @@
+/* Оболочка комментария `lib/ui/comment.ts` (задача 9cb87c42).
+   Единый каркас: шапка (панель действий) → тело (поле markdown / состояние) →
+   футер. Раскладку потребителя задаёт модификатор `--fill`/`--scroll`; вид
+   самого поля markdown остаётся за `styles.css` (`.md-field*`).
+   Редакция 0.9.1 (требование 0dddd939): отступы — по шкале `--space-*`. */
+
+.ui-comment {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Шапка: панель действий (метаданные, удаление, чипы целей). */
+.ui-comment__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+/* Пустая панель места не занимает (авторский display перебивает UA `[hidden]`). */
+.ui-comment__head[hidden],
+.ui-comment__foot[hidden] {
+  display: none;
+}
+
+.ui-comment__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.ui-comment__body {
+  min-height: 0;
+}
+
+.ui-comment__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  margin-top: var(--space-3);
+}
+
+/* Состояние «загрузка / пустота / ошибка». */
+.ui-comment__state {
+  padding: var(--space-4) var(--space-2);
+}
+
+/* Растянутый комментарий: тело занимает остаток высоты, поле — всё тело
+   (пустое место под коротким комментарием принадлежит полю — двойной клик
+   для правки работает по всей площади). */
+.ui-comment--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ui-comment--fill > .ui-comment__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-comment--fill > .ui-comment__body > .md-field {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-comment--fill > .ui-comment__body > .md-field > .md-field-view {
+  flex: 1 1 auto;
+}
+
+/* Прокрутка корня: комментарий на всю высоту панели (вкладка «Комментарий»). */
+.ui-comment--scroll {
+  overflow: auto;
+}

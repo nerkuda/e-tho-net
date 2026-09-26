@@ -1,0 +1,281 @@
+/**
+ * Стили дерева списков `lib/ui` (задача d1c15a2d, требование 0086037c,
+ * компонент 24a05c95).
+ *
+ * Классы объявлены здесь и в `./tree.ts`; самодельные `st-f-check` /
+ * `entity-pick-row` / `type-combo-toggle` / `type-tree-name` в деревьях типов
+ * упразднены. Выравнивание строки — по токенам: высота строки, размер флажка
+ * и размер значка типа равны `--hit-area` (ошибка 6925ffa0 — дисбаланс
+ * размеров чекбокса и иконки в списках типов); отступ ветви — `--tree-indent`.
+ *
+ * Прикладные модификаторы поверх словарных классов поднимаются по
+ * специфичности (`.ui-tree-row.type-tree-root`), а не порядком в бандле
+ * (грабли 36889dd6).
+ *
+ * Редакция 0.9.1 (требование 0dddd939): числа — по токенам (`--space-*`,
+ * `--font-*`, `--tree-caret-w`, `--focus-ring-width`, `--border-thick`).
+ *
+ * Колонки списков по умолчанию БЕЗ переноса: текст обрезается многоточием
+ * (`white-space: nowrap` + `text-overflow: ellipsis`), полный текст — в
+ * подсказке `title`; подпись строки дерева — класс `.ui-tree-label`
+ * (ошибка d866bc65). Каретка раскрытия — читаемый контрастный глиф
+ * (`--font-size-xs`, цвет `--text`), зона нажатия — не меньше `--hit-area-min`.
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): строка — покой, `:hover`,
+ * `:active`, `:focus-visible` (внутреннее кольцо), недоступность при
+ * отключённом флажке (`:has(:disabled)`); каретка раскрытия — нативная кнопка
+ * со своим полным набором. Переходы — по `--transition-hover`.
+ */
+
+.ui-tree {
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  /* Контейнер дерева: перестроение — по ширине дерева, не окна
+     (требование a08c2c4a). */
+  container-type: inline-size;
+  container-name: ui-tree;
+}
+
+.ui-tree:focus-visible {
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+/* Строка заголовков колонок — как шапка списка, но без `<table>`. Колонки не
+   сжимаются (`flex-shrink: 0` у ячеек), поэтому заголовки не наезжают друг на
+   друга даже на узком контейнере; ширина шапки — как у строк (`min-width: 0`),
+   иначе `min-content` шапки разошёлся бы с шириной строк и колонки заголовков
+   встали бы не над колонками данных (ошибка aada462a). Заголовок закреплён
+   сверху скролл-обёртки владельца и не уезжает со строками (правило 4
+   требования 11ddd910): sticky работает внутри ближайшего скролл-порта, а
+   дерево занимает всю его высоту. Фон — непрозрачный токен заголовка
+   `--table-header-bg`, иначе строки просвечивают под шапкой; он же отличает
+   шапку от строк данных (требование 11ddd910, правило 11, ошибка 96b62874). */
+.ui-tree-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--table-header-bg);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  min-width: 0;
+}
+
+/* Строка дерева — ОДНА ширина у всех строк (ширина контейнера): только тогда
+   колонки «Комментарий»/«Количество» начинаются с одной позиции во всех
+   строках. `min-width: min-content` здесь запрещён: подпись строки и ячейки
+   колонок объявлены `white-space: nowrap`, поэтому их min-content равен ПОЛНОЙ
+   ширине ненарезанного текста; строка с длинным именем/комментарием распухала
+   шире контейнера и уводила свои колонки вправо — соседние строки оставались
+   на месте (ошибка aada462a: «Инструкция для агентов» и «Ключевой раздел»
+   сдвинуты относительно строк того же уровня). Колонки и так не сжимаются:
+   у ячеек и каретки `flex-shrink: 0`, а содержимое обрезается многоточием
+   (`min-width: 0`, `overflow: hidden`). */
+.ui-tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--hit-area);
+  padding-right: var(--space-2);
+  padding-left: calc(var(--space-4) + var(--tree-level, 0) * var(--tree-indent));
+  cursor: default;
+  user-select: none;
+  transition: background-color var(--transition-hover) ease;
+}
+
+.ui-tree-row:hover {
+  background: var(--bg-hover);
+}
+
+.ui-tree-row:active {
+  background: var(--bg-active);
+}
+
+.ui-tree-row:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+/* Недоступная строка — отключённый флажок внутри (мышь и клавиатура мертвы). */
+.ui-tree-row:has(.ui-tree-check:disabled) {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.ui-tree-row--current {
+  background: var(--accent-soft);
+}
+
+/* Корневой тип иерархии — отделён и подчёркнут (бывший `.type-tree-root > td`). */
+.ui-tree-row.type-tree-root {
+  border-top: var(--border-thick) solid var(--border);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Каретка раскрытия: фиксированная колонка, у листа — невидимая распорка,
+   чтобы подписи соседних уровней не разъезжались. Глиф читаемый (не «точка»)
+   и контрастный: размер — токен шкалы шрифта, цвет — токен основного текста
+   (ошибка d866bc65: мелкие неразличимые треугольники). */
+.ui-tree-caret {
+  position: relative;
+  flex: 0 0 var(--tree-caret-w);
+  width: var(--tree-caret-w);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-none);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-tree-caret:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.ui-tree-caret:active:not(:disabled) {
+  color: var(--accent);
+  background: var(--bg-active);
+}
+
+.ui-tree-caret:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-tree-caret:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.ui-tree-caret--leaf {
+  visibility: hidden;
+  cursor: default;
+}
+
+/* Невидимая зона нажатия каретки — не меньше тач-таргета (требование
+   5677bc3d): глиф компактный, попадать по нему можно с запасом. Каретка
+   идёт в разметке раньше флажка/значка строки, поэтому перекрытие зоны
+   выигрывает тот контрол, по которому кликнули поверх (поздний в DOM). */
+.ui-tree-caret::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
+}
+
+/* Флажок строки — размер как у значка типа и как у строки (`--hit-area`). */
+.ui-tree-row .ui-tree-check {
+  flex: 0 0 var(--hit-area);
+  inline-size: var(--hit-area);
+  block-size: var(--hit-area);
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Значок типа/облачко-подпись — единственная содержательная часть строки.
+   `overflow: hidden` не даёт подписи вылезти за колонку и наехать на соседние
+   (ошибка d866bc65). */
+.ui-tree-content {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Подпись строки дерева — одна строка с обрезанием многоточием (без переноса);
+   полный текст даёт `title` на элементе (ошибка d866bc65). Соседние элементы
+   строки (значок, свотч, облачко) под это правило не попадают — у них свои
+   классы. */
+.ui-tree-content > .ui-tree-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Значок типа в дереве совпадает размером с флажком и строкой. Селектор по
+   двум классам перебивает базовый `.mini-icon` из `styles.css` независимо от
+   порядка в бандле (грабли 36889dd6). */
+.ui-tree-content > .mini-icon {
+  inline-size: var(--hit-area);
+  block-size: var(--hit-area);
+}
+
+/* Облачко-подпись варианта занимает остаток строки (бывший
+   `.st-f-check.entity-pick-row .prop-ref-cloud`). */
+.ui-tree-content > .prop-ref-cloud {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Подпись варианта без облачка — имя стороны свойства-связи. */
+.ui-tree-content > .entity-pick-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Дополнительные колонки строки (комментарий, количество, действия). */
+.ui-tree-cell {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-tree-cell--tree {
+  flex: 1 1 auto;
+  color: var(--text-dim);
+}
+
+.ui-tree-cell--end {
+  text-align: end;
+}
+
+.ui-tree-cell--center {
+  text-align: center;
+}
+
+.ui-tree-count {
+  flex: 0 0 auto;
+}
+
+/* Пустое состояние дерева рисует общий компонент `lib/ui/empty-state.ts`
+   (вид в `empty-state.css`); `.ui-tree-empty` — лишь хук-класс для
+   потребителей тестов и прикладных стилей. */
+.ui-tree-empty {
+  align-self: stretch;
+}
+
+/* Узкое дерево: шаг ветви и зазоры строки уменьшаются, чтобы подпись
+   получила максимум места, а не уезжала за границу. Порог — структурная
+   константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-tree (max-width: 320px) {
+  .ui-tree-row {
+    gap: var(--space-2);
+    padding-left: calc(var(--space-2) + var(--tree-level, 0) * var(--tree-indent));
+  }
+}

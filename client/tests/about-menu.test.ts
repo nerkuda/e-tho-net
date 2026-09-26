@@ -1,14 +1,16 @@
 /**
- * Tests for the «О программе» entry points (task 4cba7d74, 08-ui-spec.md
- * §8.2): the user menu always carries the About item — non-danger, in the
- * last group together with the danger «Отключиться» — both for a regular
- * user and for an admin (whose menu has the extra «Администрирование»
- * group). The About dialog itself needs no server connection, so the menu
- * must build with `me === null` too.
+ * «О программе» в меню пользователя (ошибка 0e623d4c).
+ *
+ * Пункт был потерян при перекомпоновке верхних меню (задача a0cdd731) и
+ * возвращён в меню пользователя. Прежняя точка входа — кнопка на экране списка
+ * мыслесетей (`screens/networks.ts`) — сохранена, поэтому диалог достижим и без
+ * подключения к серверу.
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, describe, it } from 'node:test';
 
 import { buildUserMenuItems } from '../src/renderer/screens/workspace-menus.js';
 import { store } from '../src/renderer/state.js';
@@ -23,34 +25,37 @@ function me(isAdmin: boolean): CurrentUser {
   } as CurrentUser;
 }
 
-describe('buildUserMenuItems — «О программе»', () => {
-  it('shows the About item before the danger «Отключиться» for a regular user', () => {
+afterEach(() => {
+  store.update({ me: null });
+});
+
+describe('меню пользователя — «О программе» возвращено (0e623d4c)', () => {
+  it('содержит «О программе» и для обычного пользователя, и для админа', () => {
+    for (const isAdmin of [false, true]) {
+      store.update({ me: me(isAdmin) });
+      const item = buildUserMenuItems().find((i) => i.label === 'О программе');
+      assert.ok(item !== undefined, 'пункт «О программе» есть в меню пользователя');
+      assert.equal(typeof item?.onClick, 'function', 'пункт открывает диалог (обработчик есть)');
+    }
+  });
+
+  it('идёт перед «Отключиться» — последний пункт остаётся разрушающим', () => {
     store.update({ me: me(false) });
     const labels = buildUserMenuItems().map((i) => i.label);
-    const aboutIdx = labels.indexOf('О программе');
-    const logoutIdx = labels.indexOf('Отключиться');
-    assert.ok(aboutIdx !== -1, 'the menu must contain «О программе»');
-    assert.ok(logoutIdx !== -1, 'the menu must contain «Отключиться»');
-    assert.ok(aboutIdx < logoutIdx, '«О программе» comes before «Отключиться»');
-    // A separator must group the two entries apart from the network commands.
-    assert.equal(labels[aboutIdx - 1], '—', 'the About entry starts a new group');
+    assert.ok(
+      labels.indexOf('О программе') < labels.indexOf('Отключиться'),
+      '«О программе» стоит до «Отключиться»',
+    );
   });
 
-  it('keeps the About item with the admin menu layout', () => {
-    store.update({ me: me(true) });
-    const items = buildUserMenuItems();
-    const labels = items.map((i) => i.label);
-    const about = items[labels.indexOf('О программе')];
-    const logout = items[labels.indexOf('Отключиться')];
-    assert.ok(about !== undefined && logout !== undefined, 'menu items must exist');
-    assert.equal(about.danger, undefined, '«О программе» is not a danger entry');
-    assert.equal(logout.danger, true, '«Отключиться» stays danger');
-    assert.ok(labels.indexOf('Администрирование') !== -1, 'admin layout expected');
-  });
-
-  it('builds without a logged-in user (no server connection)', () => {
-    store.update({ me: null });
-    const labels = buildUserMenuItems().map((i) => i.label);
-    assert.ok(labels.includes('О программе'));
+  it('прежняя точка входа на экране списка мыслесетей сохранена', () => {
+    const networks = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'networks.ts'),
+      'utf8',
+    );
+    assert.ok(
+      networks.includes('showAboutDialog()'),
+      'на экране списка мыслесетей должна остаться кнопка «О программе»',
+    );
   });
 });

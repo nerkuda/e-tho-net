@@ -135,6 +135,20 @@ export interface ThoughtQueryRequest {
   limit?: number;
   /** Смещение (по умолчанию 0). */
   offset?: number;
+  /**
+   * Явно запросить полное число совпадений (`total`) — требование 5adebf61.
+   * По умолчанию COUNT не выполняется: `total` = `null`, а наличие хвоста
+   * сообщает `has_more`.
+   */
+  count?: boolean;
+  /**
+   * Keyset-курсор следующей страницы (требование 3f2fdc41, ADR 5f6cb775) —
+   * берётся из `next_cursor` предыдущего ответа. Передан — страница читается
+   * по ключу сортировки (`ORDER BY` + уникальный `id`), `offset` игнорируется.
+   * Курсор обязан соответствовать `sort`/`order` запроса, иначе
+   * `VALIDATION_ERROR`.
+   */
+  cursor?: string;
 }
 
 /** Одна мысль в результате выборки. */
@@ -152,8 +166,17 @@ export interface ThoughtQueryHit {
 
 /** Ответ структурной выборки. */
 export interface ThoughtQueryResponse {
-  total: number;
+  /**
+   * Полное число совпадений; `null`, когда COUNT не запрошен явным флагом
+   * (`count: false` по умолчанию, требование 5adebf61). Наличие хвоста в этом
+   * случае сообщает {@link has_more}.
+   */
+  total: number | null;
   hits: ThoughtQueryHit[];
+  /** true — за текущей страницей есть ещё строки. */
+  has_more: boolean;
+  /** Keyset-курсор следующей страницы; `null` — страниц больше нет. */
+  next_cursor: string | null;
   /** True, когда обход поддерева остановился по лимиту узлов. */
   truncated: boolean;
   /**

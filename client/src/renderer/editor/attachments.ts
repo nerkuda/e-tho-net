@@ -17,14 +17,19 @@
  */
 
 import type { Attachment, Thought, ThoughtUpdateInput } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { rememberShownAttachments } from '../lib/attachment-events.js';
-import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { closeDialog, confirmDialog, showDialog } from '../lib/dialog.js';
+import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { radioRow } from '../lib/ui/choice-row.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { filePathField } from '../lib/ui/file-path-field.js';
+import { errorLine as panelErrorLine, footerErrorLine, operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
-import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
@@ -37,6 +42,7 @@ import {
   type EditorContext,
 } from './editor.js';
 import { rowSplitter } from './splitter.js';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Registers the attachments tab content and its badge counter (L7). */
 export function registerAttachmentsTab(): void {
@@ -217,7 +223,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   drop.textContent = 'Перетащите файлы или ссылки сюда';
   const list = div('attachments-list');
   const actions = div('attachments-actions');
-  actions.append(button('Добавить вложение', () => openAddDialog(), 'btn small'));
+  actions.append(uiButton({
+    label: 'Добавить вложение',
+    role: 'secondary',
+    size: 's',
+    onClick: () => openAddDialog(),
+  }));
   top.append(drop, list, actions);
 
   const bottom = div('attachment-viewer-area');
@@ -325,7 +336,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     try {
       attachments = await etn.attachments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
-      list.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      list.replaceChildren(operationError(err));
       return;
     }
     // Показанный список — источник индекса владельцев для realtime-событий
@@ -444,11 +455,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
    * does not depend on the double-click/context menu being discovered.
    */
   function buildOpenDefaultButton(attachment: Attachment): HTMLElement {
-    return button(
-      'Открыть в приложении по умолчанию',
-      () => void openDefault(attachment),
-      'btn small',
-    );
+    return uiButton({
+      label: 'Открыть в приложении по умолчанию',
+      role: 'secondary',
+      size: 's',
+      onClick: () => void openDefault(attachment),
+    });
   }
 
   /** Shows a muted hint in the viewer area (nothing selected). */
@@ -501,7 +513,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       content = await etn.attachments.getContent(networkId, attachment.id);
       if (content.text === null) throw new Error('не текстовое вложение');
     } catch (err) {
-      bottom.replaceChildren(span(`Не удалось прочитать файл: ${errText(err)}`, 'error-text'));
+      bottom.replaceChildren(operationError(err, 'Не удалось прочитать файл'));
       return;
     }
     // Another attachment may have been picked while the content loaded.
@@ -687,30 +699,22 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       (attachment.kind === 'file' && attachment.file_path !== null) ||
       (attachment.kind === 'url' && attachment.url !== null);
     if (hasTarget) {
-      items.push({
-        label: 'Открыть в программе по умолчанию',
-        onClick: () => void openDefault(attachment),
-      });
+      items.push(
+        menuAction(t('attachments.menu.openDefault'), () => void openDefault(attachment)),
+      );
     }
     if (ctx.ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
-      items.push({
-        label: 'Назначить иконкой мысли',
-        onClick: () => void assignAsThoughtIcon(attachment),
-      });
+      items.push(
+        menuAction(t('attachments.menu.assignIcon'), () => void assignAsThoughtIcon(attachment)),
+      );
     }
-    items.push({
-      label: 'Перенести в мысль…',
-      onClick: () => void moveToThought(attachment),
-    });
-    items.push({
-      label: 'Скопировать в мысли…',
-      onClick: () => void copyToThoughts(attachment),
-    });
-    items.push({
-      label: 'Удалить…',
-      danger: true,
-      onClick: () => void removeAttachment(attachment),
-    });
+    items.push(
+      menuAction(t('attachments.menu.move'), () => void moveToThought(attachment)),
+      menuAction(t('attachments.menu.copy'), () => void copyToThoughts(attachment)),
+      menuAction(t('attachments.menu.delete'), () => void removeAttachment(attachment), {
+        danger: true,
+      }),
+    );
     showMenuAt(event.clientX, event.clientY, items);
   }
 
@@ -720,39 +724,40 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     // «Создать новое» — the classic form (URL/path + title + description).
     // «Найти существующее» — network-wide search by title/description/url/file_path,
     // reuses an existing attachment instead of uploading a fresh copy (L25).
-    const tabCreate = el('input');
-    tabCreate.type = 'radio';
-    tabCreate.name = 'att-tab';
-    tabCreate.checked = true;
-    const tabSearch = el('input');
-    tabSearch.type = 'radio';
-    tabSearch.name = 'att-tab';
+    const tabCreateOpt = radioRow({ label: 'Создать новое', name: 'att-tab', checked: true });
+    const tabSearchOpt = radioRow({ label: 'Найти существующее', name: 'att-tab' });
+    const tabCreate = tabCreateOpt.input;
+    const tabSearch = tabSearchOpt.input;
 
     // --- create panel (the classic form) ------------------------------------
-    const kindUrl = el('input');
-    kindUrl.type = 'radio';
-    kindUrl.name = 'att-kind';
-    kindUrl.checked = true;
-    const kindFile = el('input');
-    kindFile.type = 'radio';
-    kindFile.name = 'att-kind';
+    const kindUrlOpt = radioRow({ label: 'Ссылка (URL)', name: 'att-kind', checked: true });
+    const kindFileOpt = radioRow({ label: 'Файл (путь)', name: 'att-kind' });
+    const kindUrl = kindUrlOpt.input;
+    const kindFile = kindFileOpt.input;
 
-    const locationInput = el('input', 'text-input');
-    locationInput.type = 'text';
-    locationInput.placeholder = 'https://…';
+    const titleInput = fieldInput({ maxLength: 300 });
+    const descInput = fieldInput({ maxLength: 2000 });
+    const errorLine = footerErrorLine();
+
     // «Открыть с диска…» fills the path via the OS picker; the file reaches
     // the server only when «Добавить» is pressed (§6.5).
-    const pickBtn = button('Открыть с диска…', () => void pickFileFromDisk(), 'btn small');
-    const locationRow = div('input-with-btn');
-    locationRow.append(locationInput, pickBtn);
-
-    const titleInput = el('input', 'text-input');
-    titleInput.type = 'text';
-    titleInput.maxLength = 300;
-    const descInput = el('input', 'text-input');
-    descInput.type = 'text';
-    descInput.maxLength = 2000;
-    const errorLine = span('', 'error-text');
+    const location = filePathField({
+      placeholder: 'https://…',
+      onPick: async () => {
+        try {
+          const picked = await etn.system.pickFile();
+          if (picked.status !== 'ok') return null;
+          if (titleInput.value.trim() === '') titleInput.value = picked.name;
+          return picked.path;
+        } catch (err) {
+          errorLine.show(errText(err));
+          return null;
+        }
+      },
+    });
+    const locationInput = location.input;
+    const pickBtn = location.button;
+    const locationRow = location.root;
 
     const syncKind = (): void => {
       locationInput.placeholder = kindFile.checked ? 'Путь к файлу' : 'https://…';
@@ -762,48 +767,30 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     kindFile.addEventListener('change', syncKind);
     syncKind();
 
-    /** OS file picker → the path field (and the file name as the title). */
-    async function pickFileFromDisk(): Promise<void> {
-      try {
-        const picked = await etn.system.pickFile();
-        if (picked.status !== 'ok') return;
-        locationInput.value = picked.path;
-        if (titleInput.value.trim() === '') titleInput.value = picked.name;
-      } catch (err) {
-        errorLine.textContent = errText(err);
-      }
-    }
-
     const kindRow = div('form-row');
-    const urlLabel = el('label', 'checkbox-row');
-    urlLabel.append(kindUrl, span('Ссылка (URL)'));
-    const fileLabel = el('label', 'checkbox-row');
-    fileLabel.append(kindFile, span('Файл (путь)'));
-    kindRow.append(urlLabel, fileLabel);
+    kindRow.append(kindUrlOpt.row, kindFileOpt.row);
 
     const createPanel = div('att-tab-panel');
     createPanel.append(
-      field('Тип', kindRow),
-      field('Адрес / путь', locationRow),
-      field('Заголовок (необязательно)', titleInput),
-      field('Комментарий (необязательно)', descInput),
+      fieldRow({ label: 'Тип', control: kindRow }),
+      fieldRow({ label: 'Адрес / путь', control: locationRow }),
+      fieldRow({ label: 'Заголовок (необязательно)', control: titleInput }),
+      fieldRow({ label: 'Комментарий (необязательно)', control: descInput }),
     );
     // errorLine уходит в панель кнопок диалога (`footerError`, ошибка
     // add8d09d): сообщение о неудачном добавлении должно быть видно и на
     // вкладке «Найти существующее», а не только в теле «Создать новое».
 
     // --- search panel --------------------------------------------------------
-    const searchInput = el('input', 'text-input');
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Название, файл, URL, комментарий…';
+    const searchInput = fieldInput({ placeholder: 'Название, файл, URL, комментарий…' });
     const searchResults = div('att-search-results');
     const searchHint = el('p', 'muted att-search-hint', 'Введите запрос для поиска по сети.');
     searchResults.append(searchHint);
-    const searchError = span('', 'error-text');
+    const searchError = panelErrorLine();
 
     const searchPanel = div('att-tab-panel hidden');
     searchPanel.append(
-      field('Поиск', searchInput),
+      fieldRow({ label: 'Поиск', control: searchInput }),
       searchResults,
       searchError,
     );
@@ -881,11 +868,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
 
     // --- tabs ---------------------------------------------------------------
     const tabRow = div('form-row');
-    const createLabel = el('label', 'checkbox-row');
-    createLabel.append(tabCreate, span('Создать новое'));
-    const searchLabel = el('label', 'checkbox-row');
-    searchLabel.append(tabSearch, span('Найти существующее'));
-    tabRow.append(createLabel, searchLabel);
+    tabRow.append(tabCreateOpt.row, tabSearchOpt.row);
 
     const applyTabs = (): void => {
       if (tabCreate.checked) {
@@ -901,62 +884,74 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     tabSearch.addEventListener('change', applyTabs);
 
     const body = div('form-stack');
-    body.append(field('Режим', tabRow), createPanel, searchPanel);
+    body.append(fieldRow({ label: 'Режим', control: tabRow }), createPanel, searchPanel);
+
+    /** Создание вложения и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+    async function addNew(close: () => void): Promise<void> {
+      // The «Добавить» button only applies to the «Создать новое» tab —
+      // the search tab commits immediately on row click.
+      if (!tabCreate.checked) return;
+      const kind = kindFile.checked ? 'file' : 'url';
+      const location = locationInput.value.trim();
+      if (location === '') {
+        errorLine.show('Укажите адрес или путь.');
+        return;
+      }
+      try {
+        if (kind === 'file') {
+          // Upload the content so the server keeps a copy (preview,
+          // other clients) — a bare file_path would only register it.
+          const name = location.split(/[\\/]/).pop() ?? location;
+          await uploadLocalFile(
+            networkId,
+            ctx.ownerType,
+            ctx.ownerId,
+            location,
+            titleInput.value.trim() || name,
+            descInput.value.trim() || null,
+          );
+        } else {
+          await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+            kind,
+            url: location,
+            title: titleInput.value.trim() || null,
+            description: descInput.value.trim() || null,
+          });
+        }
+        invalidateIndicators(ctx.ownerId);
+        close();
+        await reload();
+      } catch (err) {
+        errorLine.show(errText(err));
+      }
+    }
 
     showDialog({
       title: 'Добавить вложение',
       body,
-      width: 520,
+      size: 'm',
       // Ошибка добавления — в панели кнопок, видимой на обеих вкладках
       // (ошибка add8d09d); на вкладке «Найти существующее» своя строка
       // `searchError` для ошибок поиска (локальная операция вкладки).
       footerError: errorLine,
+      // Грязная форма (требование b58f6aad): Esc/крестик при заполненной форме
+      // создания вложения требуют подтверждения; «Сохранить» идёт тем же путём,
+      // что «Добавить». Вкладка поиска — выбор строки, не форма.
+      dirty: {
+        isDirty: () =>
+          tabCreate.checked &&
+          (locationInput.value.trim() !== '' ||
+            titleInput.value.trim() !== '' ||
+            descInput.value.trim() !== ''),
+        save: (close) => void addNew(close),
+      },
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         {
           label: 'Добавить',
           primary: true,
           keepOpen: true,
-          onClick: (close) => {
-            // The «Добавить» button only applies to the «Создать новое» tab —
-            // the search tab commits immediately on row click.
-            if (!tabCreate.checked) return;
-            void (async () => {
-              const kind = kindFile.checked ? 'file' : 'url';
-              const location = locationInput.value.trim();
-              if (location === '') {
-                errorLine.textContent = 'Укажите адрес или путь.';
-                return;
-              }
-              try {
-                if (kind === 'file') {
-                  // Upload the content so the server keeps a copy (preview,
-                  // other clients) — a bare file_path would only register it.
-                  const name = location.split(/[\\/]/).pop() ?? location;
-                  await uploadLocalFile(
-                    networkId,
-                    ctx.ownerType,
-                    ctx.ownerId,
-                    location,
-                    titleInput.value.trim() || name,
-                    descInput.value.trim() || null,
-                  );
-                } else {
-                  await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
-                    kind,
-                    url: location,
-                    title: titleInput.value.trim() || null,
-                    description: descInput.value.trim() || null,
-                  });
-                }
-                invalidateIndicators(ctx.ownerId);
-                close();
-                await reload();
-              } catch (err) {
-                errorLine.textContent = errText(err);
-              }
-            })();
-          },
+          onClick: (close) => void addNew(close),
         },
       ],
     });

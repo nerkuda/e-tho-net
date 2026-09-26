@@ -21,6 +21,7 @@ module.exports = tseslint.config(
       '**/release/**',
       '**/coverage/**',
       '**/.nyc_output/**',
+      '**/.tmp/**',
       '**/*.db',
       '**/*.db-wal',
       '**/*.db-shm',

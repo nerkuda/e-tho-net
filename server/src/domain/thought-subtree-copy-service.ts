@@ -43,6 +43,7 @@ import {
   type McpCopySubtreePolicy,
   type PropertyValueValue,
   type Thought,
+  type ThoughtCopyAttachment,
   type ThoughtCopyInput,
   type ThoughtCopyItem,
   type ThoughtCopyLink,
@@ -51,12 +52,14 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { listAttachments } from './attachment-service.js';
+import { createAttachment, listAttachments } from './attachment-service.js';
 import { listComments } from './comment-service.js';
 import { traverse } from './graph-traversal.js';
+import { createLink, findLinksBetween } from './link-service.js';
+import { getPropertyValues, setPropertyValue } from './property-service.js';
 import { findDuplicates } from './search-service.js';
 import { getThought } from './thought-service.js';
-import { copyThoughtsBatch } from './thought-copy-service.js';
+import { copyThoughtsBatch, linkIdentity, resolveCopyLinkTypeId } from './thought-copy-service.js';
 import { getLinkType } from './link-type-service.js';
 import { getThoughtType } from './thought-type-service.js';
 
@@ -95,6 +98,15 @@ export interface CopySubtreeSummary {
   thought_id_map: Record<string, string>;
   /** Карта `linkIdentity(sourceId, targetId, typeId) → target_link_id`. */
   link_id_map: Record<string, string>;
+  /**
+   * id РЕАЛЬНО созданных в целевой сети мыслей. `thought_id_map` несёт две
+   * роли — remap для клиента и источник событий для `ops.ts`; вторая требует
+   * отличать созданное от переиспользованного (ошибка 0a30c5e4), поэтому
+   * фасад эмитит `thought.created` строго по этому списку.
+   */
+  created_thought_ids: string[];
+  /** id РЕАЛЬНО созданных в целевой сети связей (см. `created_thought_ids`). */
+  created_link_ids: string[];
   /** Конфликты при `duplicate_policy=fail`. */
   conflicts: Array<{ source_thought_id: string; target_thought_id: string; title: string }>;
 }
@@ -178,42 +190,42 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
     target_parent_thought_id,
   );
 
-  // 7. Если после применения политики нечего копировать — выходим.
-  if (built.copyInput.thoughts.length === 0) {
+  // 7. Материализация и докопирование одной транзакцией. Созданные мысли
+  // идут через `copyThoughtsBatch`; у переиспользованных докопируется то,
+  // чего у них ещё нет (связи/свойства/вложения), иначе `reuse` не
+  // выполнял бы обещанного политикой (ошибка af4f6568 «reuse не докопирует
+  // недостающее»). Транзакция вложена в `runWrite`-транзакцию фасада —
+  // savepoint откатывает всё вместе при ошибке.
+  return target_ndb.transaction(() => {
+    const base: ThoughtCopyResult =
+      built.copyInput.thoughts.length > 0
+        ? copyThoughtsBatch(target_ndb, built.copyInput, actor_user_id)
+        : emptyCopyResult();
+
+    // Полная карта адресации: созданные (`base`) + переиспользованные.
+    const thoughtIdMap: Record<string, string> = { ...base.thought_id_map };
+    for (const [srcId, tgtId] of duplicateMap.reusedIds) thoughtIdMap[srcId] = tgtId;
+
+    const fill = fillReusedThoughts(
+      target_ndb,
+      built.reusePlans,
+      built.reuseLinks,
+      thoughtIdMap,
+      actor_user_id,
+    );
+
     return {
-      thoughts_created: 0,
+      thoughts_created: base.created_thoughts.length,
       thoughts_reused: built.reused,
       thoughts_skipped: built.skipped,
-      links_created: 0,
-      thought_id_map: {},
-      link_id_map: {},
+      links_created: base.created_links.length + fill.created_link_ids.length,
+      thought_id_map: thoughtIdMap,
+      link_id_map: { ...base.link_id_map, ...fill.link_id_map },
+      created_thought_ids: base.created_thoughts.map((t) => t.id),
+      created_link_ids: [...base.created_links.map((l) => l.id), ...fill.created_link_ids],
       conflicts: built.conflicts,
     };
-  }
-
-  // 8. Материализация через существующий доменный код (одна транзакция).
-  const result: ThoughtCopyResult = copyThoughtsBatch(
-    target_ndb,
-    built.copyInput,
-    actor_user_id,
-  );
-
-  // 9. `copyThoughtsBatch` не знает про reused-мысли — добавляем их в карту
-  // сами, чтобы клиент мог переписать ссылки в скопированных комментариях.
-  const thoughtIdMap: Record<string, string> = { ...result.thought_id_map };
-  for (const [srcId, tgtId] of duplicateMap.reusedIds) {
-    thoughtIdMap[srcId] = tgtId;
-  }
-
-  return {
-    thoughts_created: result.created_thoughts.length,
-    thoughts_reused: built.reused,
-    thoughts_skipped: built.skipped,
-    links_created: result.created_links.length,
-    thought_id_map: thoughtIdMap,
-    link_id_map: result.link_id_map,
-    conflicts: built.conflicts,
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -544,9 +556,25 @@ function resolveDuplicates(
 
 interface BuiltInput {
   copyInput: ThoughtCopyInput;
+  /** Что докопировать переиспользованным мыслям (свойства/вложения). */
+  reusePlans: ReusePlan[];
+  /**
+   * Связи снапшота, у которых хотя бы один конец переиспользован. Их создаёт
+   * не `copyThoughtsBatch` (он не знает про reused-мысли), а
+   * {@link fillReusedThoughts}: существующая связь переиспользуется, отсутствующая
+   * создаётся.
+   */
+  reuseLinks: ThoughtCopyLink[];
   reused: number;
   skipped: number;
   conflicts: CopySubtreeSummary['conflicts'];
+}
+
+/** Недостающие части для переиспользованной мысли из снапшота. */
+interface ReusePlan {
+  target_id: string;
+  properties: Record<string, PropertyValueValue>;
+  attachments: ReadonlyArray<ThoughtCopyAttachment>;
 }
 
 function buildCopyInput(
@@ -573,8 +601,11 @@ function buildCopyInput(
     thoughtIdMap.set(srcId, tgtId);
   }
 
-  // Связи для копирования: только те, у которых ОБА конца в `thoughtIdMap`.
+  // Связи: те, у которых ОБА конца создаются, отдаём `copyThoughtsBatch`;
+  // остальные (хотя бы один конец переиспользован) — на докопирование.
+  const createdSourceIds = new Set(thoughtsToCopy.map((t) => t.id));
   const linksToCopy: ThoughtCopyLink[] = [];
+  const reuseLinks: ThoughtCopyLink[] = [];
   for (const link of snapshot.links) {
     if (!thoughtIdMap.has(link.source_id)) continue;
     if (!thoughtIdMap.has(link.target_id)) continue;
@@ -582,7 +613,7 @@ function buildCopyInput(
       link.type_id !== null
         ? lookupLinkType(src, link.type_id)
         : { id: null, name_forward: null, name_reverse: null };
-    linksToCopy.push({
+    const builtLink: ThoughtCopyLink = {
       source_id: link.source_id,
       target_id: link.target_id,
       type: {
@@ -594,6 +625,25 @@ function buildCopyInput(
       style: link.style,
       width: link.width,
       active: link.active,
+    };
+    if (createdSourceIds.has(link.source_id) && createdSourceIds.has(link.target_id)) {
+      linksToCopy.push(builtLink);
+    } else {
+      reuseLinks.push(builtLink);
+    }
+  }
+
+  // Планы докопирования для переиспользованных мыслей: свойства и вложения,
+  // которых у существующей мысли ещё нет.
+  const snapshotById = new Map(snapshot.thoughts.map((t) => [t.id, t]));
+  const reusePlans: ReusePlan[] = [];
+  for (const [srcId, tgtId] of duplicates.reusedIds) {
+    const t = snapshotById.get(srcId);
+    if (t === undefined) continue;
+    reusePlans.push({
+      target_id: tgtId,
+      properties: t.properties,
+      attachments: t.attachments ?? [],
     });
   }
 
@@ -617,6 +667,8 @@ function buildCopyInput(
 
   return {
     copyInput,
+    reusePlans,
+    reuseLinks,
     reused: duplicates.reusedCount,
     skipped: duplicates.skippedCount,
     conflicts: duplicates.conflicts,
@@ -636,6 +688,131 @@ function lookupLinkType(
 // Misc
 // ---------------------------------------------------------------------------
 
+/**
+ * Докопировать переиспользованным мыслям то, чего у них ещё нет (ошибка
+ * «reuse не докопирует недостающее»): отсутствующие связи, свойства и
+ * вложения. Уже существующее не дублируется и не перезаписывается —
+ * повторное копирование идемпотентно.
+ *
+ *  * **Свойства** — по ключу: если у целевой мысли ключ уже есть, значение не
+ *    трогаем (политика `reuse` не перезаписывает существующее); отсутствующий
+ *    ключ записываем.
+ *  * **Вложения** — сравнение по видимым полям (`kind` + `url`/`file_path` +
+ *    `title`/`description`): совпадающее вложение не создаётся повторно.
+ *  * **Связи** — для каждого ребра снапшота, у которого хотя бы один конец
+ *    переиспользован: ищем эквивалент по `(source, target, type)` в целевой
+ *    сети; нашли — кладём в `link_id_map`; нет — создаём (это и есть
+ *    докопирование отсутствующей связи).
+ *
+ * `combinedMap` — полная карта адресации `source → target` (созданные +
+ * переиспользованные); по ней разрешаются концы рёбер. Всё выполняется в
+ * транзакции вызывающего.
+ */
+function fillReusedThoughts(
+  target: NetworkDb,
+  plans: ReadonlyArray<ReusePlan>,
+  links: ReadonlyArray<ThoughtCopyLink>,
+  combinedMap: Record<string, string>,
+  actorUserId: string,
+): { link_id_map: Record<string, string>; created_link_ids: string[] } {
+  for (const plan of plans) {
+    const existingKeys = new Set(
+      getPropertyValues(target, 'thought', plan.target_id).map((p) => p.property_name),
+    );
+    for (const [key, value] of Object.entries(plan.properties)) {
+      if (existingKeys.has(key)) continue;
+      try {
+        setPropertyValue(target, 'thought', plan.target_id, key, value, actorUserId);
+      } catch (err) {
+        // Значение, не подходящее типу целевой сети, не должен ронять всю копию
+        // (та же деградация, что у `copyThoughtsBatch`).
+        if (!(err instanceof EtnError)) throw err;
+      }
+    }
+
+    const existingAttachments = listAttachments(target, 'thought', plan.target_id);
+    for (const a of plan.attachments) {
+      if (existingAttachments.some((e) => sameVisibleAttachment(e, a))) continue;
+      try {
+        createAttachment(
+          target,
+          'thought',
+          plan.target_id,
+          {
+            kind: a.kind,
+            url: a.url ?? null,
+            file_path: a.file_path ?? null,
+            file_size: a.file_size ?? null,
+            mime_type: a.mime_type ?? null,
+            title: a.title ?? null,
+            description: a.description ?? null,
+          },
+          actorUserId,
+        );
+      } catch (err) {
+        if (!(err instanceof EtnError)) throw err;
+      }
+    }
+  }
+
+  const linkIdMap: Record<string, string> = {};
+  const createdLinkIds: string[] = [];
+  for (const link of links) {
+    const sourceId = combinedMap[link.source_id];
+    const targetId = combinedMap[link.target_id];
+    if (sourceId === undefined || targetId === undefined) continue;
+    if (sourceId === targetId) continue;
+    const typeId = resolveCopyLinkTypeId(target, link.type);
+    const existing = findLinksBetween(target, sourceId, targetId, typeId).find((l) => l.active);
+    if (existing !== undefined) {
+      linkIdMap[linkIdentity(link)] = existing.id;
+      continue;
+    }
+    try {
+      const created = createLink(
+        target,
+        {
+          source_id: sourceId,
+          target_id: targetId,
+          type_id: typeId,
+          color: link.color,
+          style: link.style,
+          width: link.width,
+          active: link.active,
+        },
+        actorUserId,
+      );
+      linkIdMap[linkIdentity(link)] = created.id;
+      createdLinkIds.push(created.id);
+    } catch (err) {
+      if (!(err instanceof EtnError)) throw err;
+    }
+  }
+  return { link_id_map: linkIdMap, created_link_ids: createdLinkIds };
+}
+
+/** Совпадают ли видимые поля вложения снапшота и уже существующего. */
+function sameVisibleAttachment(existing: Attachment, wanted: ThoughtCopyAttachment): boolean {
+  return (
+    existing.kind === wanted.kind &&
+    (existing.url ?? null) === (wanted.url ?? null) &&
+    (existing.file_path ?? null) === (wanted.file_path ?? null) &&
+    (existing.title ?? null) === (wanted.title ?? null) &&
+    (existing.description ?? null) === (wanted.description ?? null)
+  );
+}
+
+/** Пустой результат материализации (когда создавать нечего). */
+function emptyCopyResult(): ThoughtCopyResult {
+  return {
+    thought_id_map: {},
+    link_id_map: {},
+    created_thoughts: [],
+    created_links: [],
+    created_attachments: [],
+  };
+}
+
 function emptySummary(): CopySubtreeSummary {
   return {
     thoughts_created: 0,
@@ -644,6 +821,8 @@ function emptySummary(): CopySubtreeSummary {
     links_created: 0,
     thought_id_map: {},
     link_id_map: {},
+    created_thought_ids: [],
+    created_link_ids: [],
     conflicts: [],
   };
 }

@@ -11,18 +11,23 @@
  */
 
 import { disconnect, openNetwork } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { showAboutDialog } from './about-dialog.js';
-import { confirmDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { confirmDialog, showDialog } from '../lib/dialog.js';
+import { div, el, errText, span } from '../lib/dom.js';
+import { badge } from '../lib/ui/badge.js';
+import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { errorParagraph, footerErrorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import type { NetworkListItem } from '@etn/shared';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
-  const badge = span(role === 'owner' ? 'владелец' : 'участник', 'role-badge');
-  if (role === 'owner') badge.classList.add('owner');
-  return badge;
+  return badge(role === 'owner' ? 'владелец' : 'участник', {
+    tone: role === 'owner' ? 'warn' : 'accent',
+  });
 }
 
 /** Builds the network list screen. The list loads asynchronously. */
@@ -35,9 +40,24 @@ export function buildNetworks(): HTMLElement {
   header.style.marginBottom = '12px';
   const title = el('h1', 'networks-title', 'Мыслесети');
   title.style.flex = '1';
-  const createButton = button('Создать сеть', () => void showCreateNetworkDialog(), 'btn primary');
-  const aboutButton = button('О программе', () => showAboutDialog(), 'btn');
-  const logoutButton = button('Отключиться', () => void confirmDisconnect(), 'btn');
+  const createButton = uiButton({
+    label: 'Создать сеть',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void showCreateNetworkDialog(),
+  });
+  const aboutButton = uiButton({
+    label: 'О программе',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => showAboutDialog(),
+  });
+  const logoutButton = uiButton({
+    label: 'Отключиться',
+    role: 'secondary',
+    size: 'm',
+    onClick: () => void confirmDisconnect(),
+  });
   header.append(title, createButton, aboutButton, logoutButton);
   card.append(header);
 
@@ -56,7 +76,7 @@ export function buildNetworks(): HTMLElement {
   card.append(userLine);
 
   const list = div('networks-list');
-  const errorLine = el('p', 'error-text');
+  const errorLine = errorParagraph();
   errorLine.hidden = true;
   card.append(list, errorLine);
 
@@ -126,54 +146,58 @@ export function buildNetworks(): HTMLElement {
  * network menu, 08-ui-spec.md §8). Opens the created network immediately (A1).
  */
 export async function showCreateNetworkDialog(): Promise<void> {
-  const nameInput = el('input', 'text-input');
-  nameInput.type = 'text';
-  nameInput.maxLength = 200;
-  const descInput = el('input', 'text-input');
-  descInput.type = 'text';
-  descInput.maxLength = 2000;
-  const errorLine = span('', 'error-text');
+  const nameInput = fieldInput({ maxLength: 200 });
+  const descInput = fieldInput({ maxLength: 2000 });
+  const errorLine = footerErrorLine();
   const body = div('form-stack');
   body.append(
-    field('Название сети', nameInput),
-    field('Описание (необязательно)', descInput),
-    errorLine,
+    fieldRow({ label: 'Название сети', control: nameInput }),
+    fieldRow({ label: 'Описание (необязательно)', control: descInput }),
   );
 
   let creating = false;
   await new Promise<void>((resolve) => {
+    /** Создание сети и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+    async function create(close: () => void): Promise<void> {
+      if (creating) return;
+      const name = nameInput.value.trim();
+      if (name === '') {
+        errorLine.show('Введите название сети.', { field: () => nameInput });
+        return;
+      }
+      creating = true;
+      try {
+        const description = descInput.value.trim() || undefined;
+        const network = await etn.networks.create(name, description);
+        close();
+        await openNetwork(network.id);
+      } catch (err) {
+        errorLine.show(errText(err));
+      } finally {
+        creating = false;
+        resolve();
+      }
+    }
     showDialog({
       title: 'Создать мыслесеть',
       body,
-      width: 460,
+      size: 's',
+      // Ошибка создания — в панели кнопок, единственное обязательное место
+      // ошибки диалога (требование 397c5a56).
+      footerError: errorLine,
+      // Грязная форма (требование b58f6aad): Esc/крестик при заполненных полях
+      // требуют подтверждения; «Сохранить» идёт тем же путём, что «Создать».
+      dirty: {
+        isDirty: () => nameInput.value.trim() !== '' || descInput.value.trim() !== '',
+        save: (close) => void create(close),
+      },
       buttons: [
-        { label: 'Отмена', onClick: () => resolve() },
+        { label: t('actions.cancel'), onClick: () => resolve() },
         {
           label: 'Создать',
           primary: true,
           keepOpen: true,
-          onClick: (close) => {
-            void (async () => {
-              if (creating) return;
-              const name = nameInput.value.trim();
-              if (name === '') {
-                errorLine.textContent = 'Введите название сети.';
-                return;
-              }
-              creating = true;
-              try {
-                const description = descInput.value.trim() || undefined;
-                const network = await etn.networks.create(name, description);
-                close();
-                await openNetwork(network.id);
-              } catch (err) {
-                errorLine.textContent = errText(err);
-              } finally {
-                creating = false;
-                resolve();
-              }
-            })();
-          },
+          onClick: (close) => void create(close),
         },
       ],
       onMount: () => nameInput.focus(),

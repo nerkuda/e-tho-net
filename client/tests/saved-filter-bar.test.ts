@@ -3,8 +3,11 @@
  *
  * Контракт: в самом низу панели отбора — строка «имя отбора» + дискета
  * (записать) + крестик (удалить) + «…» (выбрать); список сохранённых отборов
- * открывается диалогом с поиском по именам, навигацией ↑/↓, выбором
- * кликом/Enter и контекстным меню строки «Переименовать» / «Скопировать»
+ * открывается диалогом: поиск по именам сверху (правило 1 требования
+ * 11ddd910), строка управления «Изменить/Копировать/Удалить» над текущей
+ * строкой (правило 2), навигация ↑/↓, клик делает строку текущей,
+ * Enter/«Выбрать» применяют, двойной клик открывает редактор, и контекстное
+ * меню строки «Переименовать» / «Скопировать»
  * (копия с « (копия)») / «Удалить». «Хроника» работает так же, как «Структуры».
  *
  * Клиентские тесты идут без jsdom (конвенция соседних тестов), поэтому чистая
@@ -75,11 +78,11 @@ describe('строка сохранённых отборов (задача 2ebe4
     assert.match(bar, /placeholder = 'имя отбора'/, 'поле имени отбора');
     assert.match(bar, /svgIcon\('save', 15\)/, 'кнопка-дискета «записать настройки отбора»');
     assert.match(bar, /svgIcon\('x', 15\)/, 'кнопка-крестик «удалить настройки отбора»');
-    assert.match(bar, /el\('button', 'sfb-btn sfb-more', '…'\)/, 'кнопка с многоточием «выбрать отбор»');
+    assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка с многоточием «выбрать отбор»');
     assert.match(bar, /root\.append\(nameWrap, saveBtn, deleteBtn, moreBtn\)/, 'порядок элементов строки');
     const icons = readText(ICONS_TS);
-    assert.match(icons, /\n  save:/, 'иконка дискеты объявлена в общем наборе иконок');
-    assert.match(icons, /\n  copy:/, 'иконка копии объявлена в общем наборе иконок');
+    assert.match(icons, /\n {2}save:/, 'иконка дискеты объявлена в общем наборе иконок');
+    assert.match(icons, /\n {2}copy:/, 'иконка копии объявлена в общем наборе иконок');
   });
 
   it('запись: создаёт отбор, при занятом имени — перезаписывает определение', () => {
@@ -113,38 +116,69 @@ describe('строка сохранённых отборов (задача 2ebe4
   });
 });
 
-describe('диалог выбора сохранённого отбора (задача 2ebe4206)', () => {
+describe('диалог выбора сохранённого отбора (задача 2ebe4206, фасад таблицы — ae76b75e)', () => {
   it('открывается кнопкой «…», вверху — поиск по именам', () => {
     const bar = readText(BAR_TS);
-    assert.match(bar, /moreBtn\.addEventListener\('click', \(\) => openPicker\(\)\)/, 'кнопка «…» открывает диалог');
-    assert.match(bar, /title: 'Сохранённые отборы'/, 'диалог подписан');
-    assert.match(bar, /search\.placeholder = 'Поиск по имени…'/, 'строка поиска по именам — вверху списка');
-    assert.match(bar, /body\.append\(search, list\)/, 'поиск стоит перед списком');
+    assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка «…» открывает диалог');
+    assert.match(bar, /title: t\('savedFilters\.title'\)/, 'заголовок диалога — из словаря');
+    assert.match(bar, /search\.placeholder = t\('actions\.search'\)/, 'единый плейсхолдер поиска — вверху списка');
+    assert.match(
+      bar,
+      /body\.append\(search, toolbar, listHost\)/,
+      'порядок правила 1–2: поиск, строка управления, список',
+    );
     assert.match(bar, /onMount: \(\) => search\.focus\(\)/, 'фокус — в поле поиска');
   });
 
-  it('навигация ↑/↓ и выбор кликом/Enter', () => {
+  it('список — единая таблица фасада: текущая строка, клавиатура, выбор', () => {
     const bar = readText(BAR_TS);
+    assert.match(bar, /createTable<SavedFilterEntry>\(\{/, 'список собирает фасад lib/ui/table.ts');
+    assert.match(bar, /rowKey: \(entry\) => entry\.id/, 'строка адресуется стабильным id');
+    assert.match(bar, /onActivate: \(entry\) => pick\(entry\)/, 'Enter применяет текущую строку (решение)');
     assert.match(
       bar,
-      /if \(event\.key === 'ArrowDown' \|\| event\.key === 'ArrowUp'\)/,
-      'стрелки двигают курсор',
+      /onDblActivate: \(entry\) => void opts\.onRename\(entry\)\.then\(render\)/,
+      'двойной клик открывает редактор строки (переименование), правило 6',
+    );
+    // Клавиатура — от фасада: стрелки/Enter из поля поиска перенаправляются
+    // таблице, чтобы текущая строка была видна.
+    assert.match(
+      bar,
+      /table\.element\.dispatchEvent\(new KeyboardEvent\('keydown', \{ key: event\.key, bubbles: true \}\)\)/,
+      'клавиатура поля поиска перенаправляется таблице',
+    );
+    assert.match(bar, /table\.setRows\(visible\)/, 'перерисовка списка по фильтру');
+  });
+
+  it('строка управления над списком: изменить / копировать / удалить текущей', () => {
+    const bar = readText(BAR_TS);
+    assert.match(bar, /type-list-toolbar sfd-toolbar/, 'под поиском — строка управления');
+    assert.ok(bar.includes("t('listActions.edit')"), 'кнопка «Изменить» действует на текущую строку');
+    assert.ok(bar.includes("t('listActions.copy')"), 'кнопка «Копировать»');
+    assert.match(
+      bar,
+      /editBtn\.disabled = !has/,
+      'кнопки управления гаснут без текущей строки (правило 2)',
     );
     assert.match(
       bar,
-      /moveSavedFilterCursor\(cursor, visible\.length, event\.key === 'ArrowDown' \? 1 : -1\)/,
-      'курсор ходит по видимому (отфильтрованному) списку',
+      /pendingCurrentId = id/,
+      'после копии список позиционируется на новой записи (правило 7)',
     );
-    assert.match(bar, /else if \(event\.key === 'Enter'\)/, 'Enter выбирает строку под курсором');
-    assert.match(bar, /row\.addEventListener\('click', \(\) => pick\(entry\)\)/, 'клик по строке выбирает отбор');
+  });
+
+  it('футер — решение: «Выбрать» + «Отмена»', () => {
+    const bar = readText(BAR_TS);
+    assert.match(bar, /label: t\('actions\.select'\)/, 'решение — «Выбрать»');
+    assert.match(bar, /label: t\('actions\.cancel'\)/, 'отмена закрывает без выбора');
   });
 
   it('контекстное меню строки: переименовать / скопировать / удалить', () => {
     const bar = readText(BAR_TS);
-    for (const label of ['Переименовать', 'Скопировать', 'Удалить']) {
-      assert.ok(bar.includes(`label: '${label}'`), `команда «${label}» в контекстном меню строки`);
-    }
-    assert.match(bar, /row\.addEventListener\('contextmenu',/, 'контекстное меню открывается по правому клику');
+    assert.ok(bar.includes("menuAction(t('savedFilters.menu.rename')"), 'команда «Переименовать» — из словаря');
+    assert.ok(bar.includes("menuAction(t('savedFilters.menu.copy')"), 'команда «Скопировать» — из словаря');
+    assert.ok(bar.includes("t('actions.delete')"), 'команда «Удалить» — из словаря');
+    assert.match(bar, /rowMenu: \(entry\) => rowMenu\(entry\)/, 'меню строки собирает словарь lib/menu');
     assert.match(
       bar,
       /await opts\.store\.create\(copyName, entry\.definition\)/,
@@ -156,7 +190,7 @@ describe('диалог выбора сохранённого отбора (за�
   it('после переименования/копии/удаления диалог перерисовывается на месте', () => {
     const bar = readText(BAR_TS);
     assert.match(bar, /opts\.onRename\(entry\)\.then\(render\)/, 'переименование обновляет список');
-    assert.match(bar, /opts\.onCopy\(entry\)\.then\(render\)/, 'копия обновляет список');
+    assert.match(bar, /opts\.onCopy\(entry\)\.then\(\(id\) =>/, 'копия обновляет список и позиционируется');
     assert.match(bar, /opts\.onDelete\(entry\)\.then\(opts\.onRefresh\)\.then\(render\)/, 'удаление обновляет список');
   });
 });

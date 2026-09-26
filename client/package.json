@@ -1,6 +1,6 @@
 {
   "name": "@etn/client",
-  "version": "0.8.4",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "ETN — The Endless Thought Network desktop client",
@@ -12,11 +12,14 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-vite build && electron-builder",
+    "prepackage": "npm run notices",
+    "notices": "tsx scripts/generate-notices.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "node --test --import tsx tests/**/*.test.ts",
     "rebuild:native": "node scripts/rebuild-native.mjs"
   },
   "dependencies": {
+    "@awesome.me/webawesome": "^3.13.0",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-cpp": "^6.0.3",
@@ -41,6 +44,7 @@
     "@etn/shared": "*",
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.7.2",
+    "@vaadin/grid": "^25.3.0",
     "better-sqlite3": "11.10.0",
     "d3-drag": "^3.0.0",
     "d3-force": "^3.0.0",

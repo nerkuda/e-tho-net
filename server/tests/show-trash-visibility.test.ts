@@ -115,7 +115,7 @@ describe(
       const liveLinkId = link(ndb, liveParent, focused);
       const trashedLinkId = link(ndb, trashedParent, focused);
       trashLink(ndb, trashedLinkId);
-      const trashedThoughtLink = link(ndb, focused, trashedThought);
+      link(ndb, focused, trashedThought);
       trashThought(ndb, trashedThought);
       const childLinkId = link(ndb, focused, liveChild);
 

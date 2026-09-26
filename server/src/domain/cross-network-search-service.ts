@@ -29,7 +29,8 @@ import type { Logger } from 'pino';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer } from './layer-service.js';
 import { findDuplicates, search } from './search-service.js';
-import { queryThoughts, type ThoughtQueryRequest } from './query-service.js';
+import { queryThoughtsAsync } from './heavy-read.js';
+import type { ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
 import type { DuplicateHit, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
 
@@ -257,11 +258,11 @@ export interface CrossNetworkQueryArgs {
   maxHits?: number;
 }
 
-/** Запустить веером {@link queryThoughts} по всем сетям. */
-export function fanOutQuery(
+/** Запустить веером {@link queryThoughtsAsync} по всем сетям. */
+export async function fanOutQuery(
   access: CrossNetworkAccess,
   args: CrossNetworkQueryArgs,
-): { response: ThoughtQueryResponse; networks: NetworksCatalog } {
+): Promise<{ response: ThoughtQueryResponse; networks: NetworksCatalog }> {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
   const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
@@ -272,12 +273,20 @@ export function fanOutQuery(
   let reason: 'max_nodes' | 'cross_network_max_hits' | null = null;
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
-    const result = queryThoughts(
+    const result = await queryThoughtsAsync(
       ndb,
       access.userId,
       // per-сеть лимит — тот же приём, что в fanOutSearch: не занижаем до
       // `cap`, чтобы обрезку можно было отличить от «ровно в потолок».
-      { ...args.query, limit: args.limit * Math.max(accessible.length, 1), offset: 0 },
+      // `count: true` — вееру нужен полный счёт по каждой сети для `total`
+      // объединённой выдачи (требование 5adebf61: COUNT только по явному флагу).
+      {
+        ...args.query,
+        count: true,
+        cursor: undefined,
+        limit: args.limit * Math.max(accessible.length, 1),
+        offset: 0,
+      },
       { maxLimit: 200, emptyFilterMode: 'all' },
     );
     for (const item of acceptWithBudget(budget, result.items)) {
@@ -290,7 +299,7 @@ export function fanOutQuery(
         depth: result.depths === null ? null : (result.depths.get(item.id) ?? null),
       });
     }
-    total += result.total;
+    total += result.total ?? 0;
     if (result.truncated) {
       truncated = true;
       reason = result.reason;
@@ -316,6 +325,11 @@ export function fanOutQuery(
     response: {
       total,
       hits: page,
+      // Кросс-сетевая выдача собирается в памяти и пагинируется slice'ом по
+      // объединённому списку — keyset-курсор к ней неприменим (требование
+      // 3f2fdc41 адресует однoсетевые выборки).
+      has_more: args.offset + page.length < hits.length,
+      next_cursor: null,
       truncated,
       reason,
     },

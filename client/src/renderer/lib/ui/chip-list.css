@@ -1,0 +1,115 @@
+/**
+ * Стили generic-чип-листа `lib/ui` (требование d1cd2095): чипы выбранных
+ * значений с крестиком снятия и поле добавления. Вид чипа — из токенов темы
+ * (поверхность, рамка, скругление); заменяет самодельные `.user-multi-*` из
+ * `styles.css`.
+ *
+ * Редакция 0.9.1 (требование 0dddd939): размеры — по шкалам токенов.
+ * Приглушённый цвет чипа — `--text-dim` (прежде ссылка на необъявленный
+ * `--muted` не давала эффекта и чип наследовал цвет текста).
+ *
+ * Состояния (задача 0af93058, требование 5bbf9e45): крестик снятия чипа —
+ * интерактивный контрол с полным набором (`:hover`, `:active`,
+ * `:focus-visible`, `:disabled`); переходы — по `--transition-hover`.
+ */
+
+.ui-chip-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Контейнер чип-листа: перестроение — по его ширине (требование a08c2c4a).
+     Чипы переносятся по строкам (flex-wrap ниже); на узком контейнере длинный
+     чип обрезается многоточием, а не растягивает список. */
+  container-type: inline-size;
+  container-name: ui-chip-list;
+}
+
+.ui-chip-list-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-height: var(--chip-list-min-h);
+}
+
+/* Пустое состояние чип-листа рисует общий компонент `lib/ui/empty-state.ts`
+   (вид в `empty-state.css`); `.ui-chip-list-empty` остаётся хук-классом. */
+.ui-chip-list-empty {
+  padding: var(--space-2) 0;
+}
+
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--font-size-xs);
+}
+
+.ui-chip-remove {
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-m);
+  line-height: var(--line-height-none);
+  border-radius: var(--radius-s);
+  transition:
+    background-color var(--transition-hover) ease,
+    color var(--transition-hover) ease;
+}
+
+.ui-chip-remove:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.ui-chip-remove:active:not(:disabled) {
+  color: var(--accent-fg);
+  background: var(--danger);
+}
+
+.ui-chip-remove:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ui-chip-remove:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* Невидимая зона нажатия крестика — не меньше токена тач-таргета
+   (требование 5677bc3d): визуальный «×» остаётся компактным, попадать по нему
+   можно с запасом. Псевдоэлемент принадлежит кнопке — клик по зоне её и
+   нажимает. */
+.ui-chip-remove::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
+}
+
+.ui-chip-list-add {
+  width: 100%;
+}
+
+/* Узкий чип-лист: чип не шире контейнера, длинная подпись — многоточием.
+   Порог — структурная константа раскладки (guard-ui-tokens: условие запроса). */
+@container ui-chip-list (max-width: 200px) {
+  .ui-chip {
+    max-inline-size: 100%;
+  }
+
+  .ui-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

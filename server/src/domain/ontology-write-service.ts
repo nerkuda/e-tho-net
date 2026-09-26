@@ -663,9 +663,24 @@ function resolveTypeViews(
         { field: `type_views[${index}].action`, allowed: ['create', 'update', 'delete'] },
       );
     }
+    // XOR `id` / `ref_for_update`: отбор адресуется ровно одним способом.
+    // Оба заданы — операция применилась бы ДВАЖДЫ (ошибка ddb9ce53): сначала
+    // по `id`, затем по id, разрешённому из `ref_for_update` во втором проходе.
+    const hasId = item.id !== undefined && item.id !== null && item.id !== '';
+    const hasRefForUpdate =
+      item.ref_for_update !== undefined &&
+      item.ref_for_update !== null &&
+      item.ref_for_update !== '';
+    if (hasId && hasRefForUpdate) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `type_views[${index}] must set at most one of id or ref_for_update`,
+        { field: `type_views[${index}]` },
+      );
+    }
     let viewId: string | null = null;
-    if (item.id !== undefined && item.id !== undefined && item.id !== null) {
-      const existing = getThoughtTypeView(ndb, item.id);
+    if (hasId) {
+      const existing = getThoughtTypeView(ndb, item.id as string);
       if (existing === null) {
         throw new EtnError('NOT_FOUND', `thought_type_view ${item.id} not found`, {
           entity: 'thought_type_view',
@@ -735,6 +750,33 @@ function resolveTypeViews(
     });
   }
   return out;
+}
+
+/**
+ * Тип-владелец отбора `type_views[]`: явный (`thought_type` /
+ * `thought_type_ref`) либо — для `update`/`delete` — выведенный из
+ * адресуемого отбора (`id` XOR `ref_for_update`, гайд `ontology.write`).
+ *
+ * Пустая строка означает, что тип не задан и адрес отбора ещё не разрешён в
+ * id; вызывающий сам решает, ошибка это (create без типа) или нет.
+ * `addressedViewId` — id отбора, уже разрешённый в текущей фазе (`item.viewId`
+ * в первом проходе, resolved `ref_for_update` во втором).
+ */
+function resolveTypeViewOwnerTypeId(
+  ndb: NetworkDb,
+  item: ResolvedTypeView,
+  addressedViewId: string | null,
+  ttIdByRef: Map<string, string>,
+): string {
+  if (item.thoughtTypeRef.kind === 'batch_ref') {
+    return ttIdByRef.get(item.thoughtTypeRef.ref) ?? '';
+  }
+  if (item.thoughtTypeRef.id !== '') return item.thoughtTypeRef.id;
+  // Тип не указан явно (update/delete) — берём из адресуемого отбора.
+  if (addressedViewId !== null) {
+    return getThoughtTypeView(ndb, addressedViewId)?.thought_type_id ?? '';
+  }
+  return '';
 }
 
 // ===========================================================================
@@ -1374,6 +1416,23 @@ export function writeOntology(
     const tvResults: OntologyWriteTypeViewResult[] = [];
     const viewIdByRef = new Map<string, string>();
     for (const item of resolvedTypeViews) {
+      // `update`/`delete`, адресованные только по `ref_for_update`, зависят
+      // от id отбора, полученного в этом же проходе, — обрабатываются вторым.
+      // Placeholder держит выравнивание индексов `tvResults[i]`.
+      if (
+        (item.action === 'update' || item.action === 'delete') &&
+        item.viewId === null &&
+        item.ref_for_update !== null
+      ) {
+        tvResults.push({
+          ref: item.ref,
+          id: '',
+          thought_type_id: '',
+          version: 0,
+          action: 'unchanged',
+        });
+        continue;
+      }
       // Пропуск delete с нерезолвнутым id/ref_for_update — это пустой
       // проход, резолвится во втором.
       if (item.action === 'delete' && item.viewId === null && item.ref_for_update === null) {
@@ -1388,10 +1447,7 @@ export function writeOntology(
         });
         continue;
       }
-      const thoughtTypeId =
-        item.thoughtTypeRef.kind === 'existing'
-          ? item.thoughtTypeRef.id
-          : (ttIdByRef.get(item.thoughtTypeRef.ref) ?? '');
+      const thoughtTypeId = resolveTypeViewOwnerTypeId(ndb, item, item.viewId, ttIdByRef);
       if (thoughtTypeId === '') {
         throw new EtnError(
           'VALIDATION_ERROR',
@@ -1486,10 +1542,7 @@ export function writeOntology(
         );
       }
       // Применяем операцию с подставленным id.
-      const thoughtTypeId =
-        item.thoughtTypeRef.kind === 'existing'
-          ? item.thoughtTypeRef.id
-          : (ttIdByRef.get(item.thoughtTypeRef.ref) ?? '');
+      const thoughtTypeId = resolveTypeViewOwnerTypeId(ndb, item, resolvedId, ttIdByRef);
       let id = '';
       let version = 0;
       let action: OntologyWriteTypeViewAction = 'unchanged';

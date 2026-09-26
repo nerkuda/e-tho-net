@@ -12,16 +12,17 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
 import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
-import { findDuplicates, resolveThoughts, search } from '../../domain/search-service.js';
+import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
-import { mcpRequestToQuery, queryThoughts } from '../../domain/query-service.js';
+import { mcpRequestToQuery } from '../../domain/query-service.js';
+import { queryThoughtsAsync, searchAsync, subgraphAsync } from '../../domain/heavy-read.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
@@ -31,7 +32,7 @@ import {
   projectThoughtRows,
   stripStructuralLinkProperties,
 } from '../../domain/response-projection.js';
-import { subgraph, traverse } from '../../domain/graph-traversal.js';
+import { traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
 import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
@@ -163,7 +164,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         } else if (args.type_id !== undefined && args.type_id !== null) {
           typeIdForDomain = [args.type_id];
         }
-        const result = search(ndb, {
+        const result = await searchAsync(ndb, {
           q: args.query,
           scope: args.scope,
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
@@ -270,7 +271,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             domainProperties = out;
             if (resolved !== null) resolvedProperties = resolved;
           }
-          const result = fanOutQuery(access, {
+          const result = await fanOutQuery(access, {
             networkIds: access.accessibleIds,
             // Используем `mcpRequestToQuery` — единый канонический конвертер,
             // тот же, что и в обычном (односетевом) пути ниже.
@@ -350,7 +351,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Единый движок выборки (задача c5265deb): MCP-запрос переводится в
         // канонический адаптером (имена типов/свойств уже отрезолвнуты фасадом
         // выше) и исполняется той же доменной функцией, что REST-фильтр.
-        const result = queryThoughts(
+        const result = await queryThoughtsAsync(
           ndb,
           rt.deps.auth.userId,
           mcpRequestToQuery(
@@ -380,6 +381,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         return {
           total: result.total,
           hits,
+          has_more: result.has_more,
+          next_cursor: result.next_cursor,
           truncated: result.truncated,
           reason: result.reason,
           thought_types: thoughtTypeCatalog(ndb, result.items.map((h) => h.type_id)),
@@ -396,10 +399,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
         'значения свойств (`outside_type: true` — свойство не на цепочке типа владельца, карточка не ' +
         'пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
-        '`meta.permanent` — полный текст постоянного комментария (у других выборок превью 2000 ' +
-        'символов; полностью — `etn.comments.get`). `meta.link_stats` — счётчики активных связей по ' +
-        '`(link_type_id, direction)` с именами типа; помеченные на удаление рёбра не считаются. ' +
-        '`meta.views` — эффективные отборы мысли (имя, описание, тип-владелец), исполняются через ' +
+        '`meta.deletion_blocks` — блокировки удаления. ' +
+        '`meta.permanent` — полный текст постоянного комментария (полностью — `etn.comments.get`). ' +
+        '`meta.link_stats` — счётчики активных связей по `(link_type_id, direction)` с именами типа. ' +
+        '`meta.views` — эффективные отборы мысли (имя, описание); исполняются через ' +
         '`etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
@@ -472,6 +475,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '(счётчики с именами типов связей), ' +
         'полнотекстовый `comment_preview` и `meta.views` — ' +
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
+        'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
+        '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
         'Лимит — `maxNodesPerSubgraph`.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
@@ -704,7 +709,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           args.max_nodes ?? rt.limits.maxNodesPerSubgraph,
           rt.limits.maxNodesPerSubgraph,
         );
-        const result = subgraph(ndb, args.seed_ids, args.radius, {
+        const result = await subgraphAsync(ndb, args.seed_ids, args.radius, {
           maxNodes: effectiveMax,
           linkFilter: args.link_filter,
         });

@@ -16,12 +16,13 @@
  */
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { t } from '../lib/i18n.js';
 import {
   setAddToSelectionHook,
   showSelectionThoughtContextMenu,
 } from '../canvas/context-menu.js';
 import { buildMultiThoughtSnapshot, type SnapshotDeps } from '../canvas/clipboard.js';
-import { getRef, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
+import { getRef, invalidateRef, onThoughtRefInvalidated, setSelectionClickHooks } from '../canvas/canvas.js';
 // Строки панели выделенных рисует общая фабрика облачка мысли (профиль `chip`):
 // значок, цвета, начертание, бледность и метка корзины — как в любом списке.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -31,20 +32,48 @@ import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
 import { showImportEtnxDialog } from '../import-export/import-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { button, div, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
+import { select } from '../lib/ui/state.js';
+import { planSelectionRows, selectionRowTitles } from '../lib/pure.js';
 import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
 import { openThoughtDeleteDialog, openThoughtGroupDeleteDialog } from '../trash.js';
-import { THOUGHT_RESOLVE_MAX_IDS, type ExportEtnxOptions, type ExportFormat, type ExportRequest } from '@etn/shared';
+import { THOUGHT_RESOLVE_MAX_IDS, type ExportEtnxOptions, type ExportFormat, type ExportRequest, type ThoughtRef } from '@etn/shared';
+import { uiButton } from '../lib/ui/button.js';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
 let listHost: HTMLElement | null = null;
+/** Rendered rows keyed by thought id; updated by difference, never rebuilt whole. */
+const rows = new Map<string, SelectionRowEntry>();
+/** Last rendered id order — the source of the diff plan. */
+let rowOrder: string[] = [];
+/**
+ * Metadata of selection rows, kept across re-renders so an unresolved
+ * re-resolve never blanks a name. Own cache (not the canvas one) because the
+ * selection may hold thoughts outside the focus neighbourhood.
+ */
+const refCache = new Map<string, ThoughtRef>();
+/** Last known non-empty title per id — shown while a re-resolve is in flight. */
+const labelCache = new Map<string, string>();
+/** Ids whose resolve is in flight — guards against duplicate requests. */
+const resolving = new Set<string>();
+/** Unsubscribe of the canvas ref-invalidation signal (re-wired on remount). */
+let unsubRefInvalidation: (() => void) | null = null;
+/** Coalesces multiple invalidation signals into one row repaint. */
+let renderPending = false;
+
+/** One rendered selection row: its element plus the ref/title it was built from. */
+interface SelectionRowEntry {
+  el: HTMLElement;
+  ref: ThoughtRef | null;
+  title: string;
+}
 
 /** Mounts the selection panel into the workspace selection host. */
 export function mountSelection(selectionHost: HTMLElement): void {
@@ -53,7 +82,13 @@ export function mountSelection(selectionHost: HTMLElement): void {
 
   const header = div('selection-header');
   const title = span('Выделение', 'selection-title');
-  const clearButton = button('✕', () => clearSelection(), 'btn small', 'Очистить список');
+  const clearButton = uiButton({
+    label: '✕',
+    role: 'secondary',
+    size: 's',
+    title: 'Очистить список',
+    onClick: () => clearSelection(),
+  });
   header.append(title, clearButton);
   const menuBar = div('selection-menu');
   const menus: Array<[string, () => MenuItem[]]> = [
@@ -68,6 +103,13 @@ export function mountSelection(selectionHost: HTMLElement): void {
   listHost = div('selection-list');
   host.append(header, menuBar, listHost);
 
+  // A remount replaces the panel: drop the row bookkeeping of the previous host.
+  rows.clear();
+  rowOrder = [];
+  refCache.clear();
+  labelCache.clear();
+  resolving.clear();
+
   // Ctrl+click wiring (spec §5.1) and list drag-n-drop (§5.5): rows drag onto
   // canvas clouds/zones, and canvas drags can be dropped into the list.
   setAddToSelectionHook((id) => toggleSelection([id]));
@@ -77,101 +119,207 @@ export function mountSelection(selectionHost: HTMLElement): void {
   });
   registerDropActions({ addToSelection });
 
-  store.subscribe(() => {
-    if (host?.isConnected === true) refresh();
+  // Панель держит собственный кэш строк, поэтому сброс ref-кэша холстом
+  // (invalidateRef на правку мысли — локальную или realtime) должен обновить и
+  // её строки. Сигнал точечный: перерисовка коалесцируется в микрозадачу, так
+  // что цикл invalidateRef по выделению даёт один рендер.
+  if (unsubRefInvalidation !== null) unsubRefInvalidation();
+  unsubRefInvalidation = onThoughtRefInvalidated((id) => {
+    if (id === null) {
+      refCache.clear();
+      labelCache.clear();
+      scheduleRender();
+      return;
+    }
+    if (!store.state.selection.includes(id)) return;
+    refCache.delete(id);
+    scheduleRender();
   });
-  refresh();
+
+  // Узкая подписка: панель перерисовывается ТОЛЬКО при изменении состава
+  // выделения (ошибка 3a64e680). Раньше панель подписывалась на весь store и
+  // на каждое событие (ответы фокуса, догрузка длинных списков, статус
+  // realtime) полностью пересобирала список — он мигал, а на время
+  // асинхронного resolve имена подменялись id. Подписка немедленная: текущий
+  // состав отрисовывается сразу, до первого изменения.
+  subscribeSelectionChanges(() => render());
 }
 
 // ---------------------------------------------------------------------------
 // Selection state
 // ---------------------------------------------------------------------------
 
-/** Refreshes the panel visibility and list. */
-function refresh(): void {
+/**
+ * Узкая подписка панели выделенных на срез `selection` магазина. Экспортирована
+ * ради сторожа «событие пагинации не перерисовывает панель выделенных»: тест
+ * подписывается тем же путём и считает вызовы. Панель обязана реагировать
+ * только на состав выделения — прочие апдейты (ответы фокуса, догрузка
+ * длинных списков, статус realtime) её рисовать не должны (ошибка 3a64e680).
+ */
+export function subscribeSelectionChanges(fn: (ids: readonly string[]) => void): () => void {
+  return select((s) => s.selection, fn);
+}
+
+/** Coalesced row repaint: several invalidation signals in one tick — one render. */
+function scheduleRender(): void {
+  if (renderPending) return;
+  renderPending = true;
+  queueMicrotask(() => {
+    renderPending = false;
+    if (host?.isConnected === true) render();
+  });
+}
+
+/** Refreshes the panel visibility and rows from the current selection. */
+function render(): void {
   if (host === null || listHost === null) return;
   const ids = store.state.selection;
   host.classList.toggle('hidden', ids.length === 0);
-  if (ids.length === 0) return;
+  if (ids.length === 0) {
+    listHost.replaceChildren();
+    rows.clear();
+    rowOrder = [];
+    return;
+  }
   const title = host.querySelector('.selection-title');
   if (title !== null) title.textContent = `Выделение (${ids.length})`;
-  void renderList(ids);
+
+  // Точечное обновление по разнице: пропавшие строки убираются, существующие
+  // переставляются, отсутствующие создаются, а изменившиеся (пришло новое имя
+  // или оформление) пересобираются поштучно. Полная пересборка списка
+  // запрещена — она и давала мигание (ошибка 3a64e680).
+  const plan = planSelectionRows(rowOrder, ids);
+  for (const id of plan.removed) {
+    rows.get(id)?.el.remove();
+    rows.delete(id);
+  }
+  const titles = selectionRowTitles(ids, refCache, labelCache);
+  for (const id of plan.order) {
+    const ref = refCache.get(id) ?? null;
+    const text = titles.get(id) ?? '';
+    const entry = rows.get(id);
+    if (entry === undefined || entry.ref !== ref || entry.title !== text) {
+      const el = buildRow(id, ref, text);
+      if (entry === undefined) {
+        rows.set(id, { el, ref, title: text });
+      } else {
+        entry.el.replaceWith(el);
+        rows.set(id, { el, ref, title: text });
+      }
+    }
+    const current = rows.get(id);
+    if (current !== undefined) listHost.append(current.el);
+  }
+  rowOrder = [...ids];
+  void resolveRows(ids);
 }
 
 /**
- * Forces a selection-list re-render (S13): the rows re-resolve their refs, so
+ * Forces a selection-row repaint (S13): the rows re-resolve their refs, so
  * thoughts that just moved to/from the trash repaint their marks. Called after
  * the group-delete dialog applies its batch — the panel stays open with the
  * same contents, only the per-row state (trash mark) may change.
  */
 export function refreshSelectionPanel(): void {
-  if (host?.isConnected === true) refresh();
+  if (host?.isConnected !== true) return;
+  // Сброс кэша: render() пересоберёт строки по разнице (ref отличается) и
+  // заново разрешит свежие метки корзины/актуальности.
+  for (const id of store.state.selection) refCache.delete(id);
+  render();
 }
 
-/** Resolves and renders the selection list. */
-async function renderList(ids: string[]): Promise<void> {
-  if (listHost === null) return;
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  listHost.replaceChildren(el('span', 'muted', 'Загрузка…'));
-  let refs = new Map<string, import('@etn/shared').ThoughtRef>();
-  try {
-    // resolve caps at 100 ids per call — chunk long lists (bulk filter
-    // commands can push the whole filter result into the selection, L22).
-    const resolved: import('@etn/shared').ThoughtRef[] = [];
-    for (let i = 0; i < ids.length; i += THOUGHT_RESOLVE_MAX_IDS) {
-      const chunk = await etn.thoughts.resolve(networkId, ids.slice(i, i + THOUGHT_RESOLVE_MAX_IDS));
-      resolved.push(...chunk);
-    }
-    refs = new Map(resolved.map((r) => [r.id, r]));
-  } catch {
-    // ids shown as-is
-  }
-  listHost.replaceChildren();
-  for (const id of ids) {
-    const ref = refs.get(id);
-    // Строка — фабричное мини-облачко (профиль `chip`): значок, цвета мысли,
-    // бледность неактуальной и метка корзины у помеченной — раньше панель
-    // показывала только подпись без цветов (расхождение, закрытое вехой 2).
-    const item = createThoughtCloud(
-      ref ?? { id, title: id },
-      {
-        profile: 'chip',
-        // Ширина — по строке панели выбранных: имя обрезается многоточием
-        // по ней, а не растягивает панель.
-        width: 'container',
-        actions: {
-          onClick: (targetId) => {
-            // Click on the row focuses the thought (canvas + editor repaint);
-            // it stays in the selection.
-            void setFocus(targetId).catch(() => undefined);
-          },
-          onContextMenu: (event) => {
-            event.stopPropagation();
-            // Same context menu as a canvas cloud, minus the selection toggle
-            // (§5.1).
-            showSelectionThoughtContextMenu(event, {
-              id,
-              title: ref?.title ?? id,
-              dir: 'siblings',
-            });
-          },
+/** Builds one selection row (a factory chip plus its remove button). */
+function buildRow(id: string, ref: ThoughtRef | null, title: string): HTMLElement {
+  // Строка — фабричное мини-облачко (профиль `chip`): значок, цвета мысли,
+  // бледность неактуальной и метка корзины. Неразрешённое имя — пустая строка
+  // либо прежняя подпись, но НИКОГДА не id (ошибка 3a64e680).
+  const item = createThoughtCloud(
+    ref ?? { id, title },
+    {
+      profile: 'chip',
+      // Ширина — по строке панели выбранных: имя обрезается многоточием
+      // по ней, а не растягивает панель.
+      width: 'container',
+      actions: {
+        onClick: (targetId) => {
+          // Click on the row focuses the thought (canvas + editor repaint);
+          // it stays in the selection.
+          void setFocus(targetId).catch(() => undefined);
+        },
+        onContextMenu: (event) => {
+          event.stopPropagation();
+          // Same context menu as a canvas cloud, minus the selection toggle
+          // (§5.1). Unresolved — an empty title, never the id.
+          showSelectionThoughtContextMenu(event, { id, title, dir: 'siblings' });
         },
       },
-    );
-    item.classList.add('selection-item');
-    // A row drags onto the canvas like a zone cloud (§5.5): link onto a
-    // cloud, Ctrl for reparent, drop into parents/children to link to focus.
-    wireExternalDragSource(item, id, 'selection');
-    // Stage 3: no per-indicator icons in the selection list — Ctrl+hover on
-    // the row shows the thought's permanent comment.
-    markThoughtCommentPreview(item, id, ref?.title ?? id);
-    const removeBtn = button('✕', () => toggleSelection([id]), 'btn small', 'Убрать из выделения');
-    // Keep the row click (focus) from firing alongside the removal.
-    removeBtn.addEventListener('click', (event) => event.stopPropagation());
-    item.append(removeBtn);
-    listHost.append(item);
+    },
+  );
+  item.classList.add('selection-item');
+  // A row drags onto the canvas like a zone cloud (§5.5): link onto a
+  // cloud, Ctrl for reparent, drop into parents/children to link to focus.
+  wireExternalDragSource(item, id, 'selection');
+  // Stage 3: no per-indicator icons in the selection list — Ctrl+hover on
+  // the row shows the thought's permanent comment.
+  markThoughtCommentPreview(item, id, title);
+  const removeBtn = uiButton({
+    label: '✕',
+    role: 'secondary',
+    size: 's',
+    title: 'Убрать из выделения',
+    onClick: () => toggleSelection([id]),
+  });
+  // Keep the row click (focus) from firing alongside the removal.
+  removeBtn.addEventListener('click', (event) => event.stopPropagation());
+  item.append(removeBtn);
+  return item;
+}
+
+/**
+ * Resolves metadata of the given ids into the panel's ref cache and repaints the
+ * rows that got a new name. Chunked (`resolve` caps at 100 ids per call) and
+ * best-effort: a failed resolve leaves the previous label in place — the id is
+ * never shown as a name (ошибка 3a64e680).
+ */
+async function resolveRows(ids: readonly string[]): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const missing = ids.filter((id) => !refCache.has(id) && !resolving.has(id));
+  if (missing.length === 0) return;
+  for (const id of missing) resolving.add(id);
+  try {
+    const resolved: ThoughtRef[] = [];
+    for (let i = 0; i < missing.length; i += THOUGHT_RESOLVE_MAX_IDS) {
+      const chunk = await etn.thoughts.resolve(
+        networkId,
+        missing.slice(i, i + THOUGHT_RESOLVE_MAX_IDS),
+      );
+      resolved.push(...chunk);
+    }
+    for (const ref of resolved) {
+      refCache.set(ref.id, ref);
+      if (ref.title !== '') labelCache.set(ref.id, ref.title);
+    }
+  } catch {
+    // Имена остаются прежними (или пустыми) — на id не подменяем.
+  } finally {
+    for (const id of missing) resolving.delete(id);
   }
+  // Применить разрешённые имена точечно (render сама считает разницу).
+  render();
+}
+
+/**
+ * Точечно обновляет строку выделения после изменения мысли (переименование,
+ * смена оформления/типа/актуальности): мысль в выделении — сбрасываем её кэш и
+ * перерисовываем ТОЛЬКО её строку. Нужен локальным производителям и realtime:
+ * своего эха актору сервер не шлёт (04-realtime.md §5), а панель подписана лишь
+ * на состав выделения (ошибка 3a64e680).
+ */
+export function invalidateSelectionThought(thoughtId: string): void {
+  if (!store.state.selection.includes(thoughtId)) return;
+  refCache.delete(thoughtId);
+  scheduleRender();
 }
 
 /** Toggles the given ids in the selection (adds when missing, else removes). */
@@ -304,7 +452,7 @@ function buildActionsMenu(): MenuItem[] {
     },
     MENU_SEPARATOR,
     {
-      label: 'Удалить',
+      label: t('actions.delete'),
       danger: true,
       onClick: () => void batchDelete(),
     },

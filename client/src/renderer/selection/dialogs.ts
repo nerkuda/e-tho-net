@@ -12,10 +12,12 @@
  */
 
 import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { buildValueEditor } from '../editor/value-editor.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el } from '../lib/dom.js';
+import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { showDialog } from '../lib/dialog.js';
@@ -65,17 +67,17 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
       kind: 'link-types',
       value: store.state.lastUsedLinkTypeId,
       emptyLabel: 'Без типа',
-      placeholder: 'Поиск типа связи…',
+      placeholder: t('actions.search'),
       onChange: () => undefined,
     });
     showDialog({
       title,
       body: combo.root,
-      width: 420,
+      size: 's',
       buttons: [
-        { label: 'Отмена', onClick: () => finish(undefined) },
+        { label: t('actions.cancel'), onClick: () => finish(undefined) },
         {
-          label: 'OK',
+          label: t('actions.apply'),
           primary: true,
           onClick: () => {
             const id = combo.value();
@@ -115,17 +117,17 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
       kind: 'thought-types',
       value: initial,
       emptyLabel: 'Без типа',
-      placeholder: 'Поиск типа…',
+      placeholder: t('actions.search'),
       onChange: () => undefined,
     });
     showDialog({
       title: 'Изменить тип мыслей',
       body: combo.root,
-      width: 420,
+      size: 's',
       buttons: [
-        { label: 'Отмена', onClick: () => finish(undefined) },
+        { label: t('actions.cancel'), onClick: () => finish(undefined) },
         {
-          label: 'OK',
+          label: t('actions.apply'),
           primary: true,
           onClick: () => finish(combo.value()),
         },
@@ -155,7 +157,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   let defsByType = new Map<string, EffectiveTypeProperty[]>();
 
   const applyBtn = {
-    label: 'Применить',
+    label: t('actions.apply'),
     primary: true,
     keepOpen: true,
     onClick: (close: () => void) => void applyAll(close),
@@ -163,8 +165,15 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   showDialog({
     title: 'Значения свойств выделенных мыслей',
     body,
-    width: 560,
-    buttons: [{ label: 'Закрыть', onClick: () => undefined }, applyBtn],
+    size: 'm',
+    // Грязная форма (требование b58f6aad): Esc/крестик при заполненных
+    // значениях требуют подтверждения; «Сохранить» идёт тем же путём, что
+    // «Применить». Явное «Закрыть» закрывает молча.
+    dirty: {
+      isDirty: () => [...rows.values()].some((row) => row.value !== null && row.value !== ''),
+      save: (close) => void applyAll(close),
+    },
+    buttons: [{ label: t('actions.close'), onClick: () => undefined }, applyBtn],
   });
 
   /** Writes every filled value to the thoughts whose type defines the property. */
@@ -188,7 +197,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
         }
       }
     }
-    if (applied > 0) notice(`Значения применены (${applied}).`);
+    if (applied > 0) notice(`Значения применены (${applied}).`, 'success');
     if (failed > 0) notice(`Не удалось применить: ${failed}.`, 'error');
     // Своя запись значения (в т.ч. свойства-связи) не поднимает версию мысли, а
     // собственному клиенту не приходит realtime-эхо (G8), поэтому ни таблица
@@ -208,7 +217,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     try {
       refs = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
     } catch (err) {
-      body.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      body.replaceChildren(operationError(err));
       return;
     }
     selectedRefs = refs;
@@ -224,7 +233,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       );
       for (const [typeId, defs] of perType) defsByType.set(typeId, defs);
     } catch (err) {
-      body.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      body.replaceChildren(operationError(err));
       return;
     }
 

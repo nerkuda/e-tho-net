@@ -28,6 +28,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
+import { takeFocusOrigin } from '../lib/focus-origin.js';
 import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
@@ -53,6 +54,7 @@ import {
   SINGLE_CLICK_DELAY_MS,
 } from '../lib/thought-cloud.js';
 import {
+  anchorOffset,
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
   cloudHeight,
@@ -62,6 +64,8 @@ import {
   neighborsPreviewHeading,
   shortenCompoundName,
   sortRefsByTitle,
+  ZONE_ANCHOR_BY_DIR,
+  zoneContentWidth,
 } from '../lib/pure.js';
 import {
   createZonePaging,
@@ -82,12 +86,18 @@ import {
   setSupplementalEdges,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
-import { captureClouds, playFocusTransition, prefersReducedMotion } from './transition.js';
+import {
+  captureClouds,
+  finishFocusTransition,
+  playFocusTransition,
+  prefersReducedMotion,
+} from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
 import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
+import { splitterElement } from '../lib/ui/splitter.js';
 import {
   getActiveMode as getStripActiveMode,
   loadPersistedStrip,
@@ -95,7 +105,6 @@ import {
   onModeChange as onStripModeChange,
   renderStrip as renderFilterStrip,
   runActiveViewIfNeeded,
-  takeViewResult,
   type ViewResult,
 } from './focus-filter-strip.js';
 import { openThoughtDeleteDialog } from '../trash.js';
@@ -125,6 +134,10 @@ export interface IndicatorInfo {
 
 /** Overlap rows rendered beyond the visible window (virtualization). */
 const OVERSCAN_ROWS = 2;
+/** Padding of a `.zone` in px (matches the CSS `padding: 12px`); the grid is
+ *  anchored inside the zone's CONTENT box, so the padding is discounted on both
+ *  axes when the anchor offset is computed. */
+const ZONE_PADDING_PX = 12;
 /** How many indicator fetches may run concurrently. */
 const INDICATOR_CONCURRENCY = 3;
 /** Minimum mouse travel before a press becomes a drag, px. */
@@ -204,6 +217,13 @@ export function setSelectionClickHooks(next: SelectionClickHooks | null): void {
 
 /** Resolved metadata cache (id → ThoughtRef), persistent across focuses. */
 const refCache = new Map<string, ThoughtRef>();
+/**
+ * Counter of evicted rendered refs. `invalidateRef`/`invalidateAllRefs` bump
+ * it when they drop an entry the canvas may be showing, so a content-identical
+ * focus re-fetch still triggers a repaint ({@link canvasRenderKey}); without it
+ * a neighbour's new icon never reached its cloud (ошибка 1ea2d05a).
+ */
+let refEpoch = 0;
 /** Indicator cache (id → counts), invalidated on comment/attachment events. */
 const indicatorCache = new Map<string, IndicatorInfo>();
 const indicatorQueue: string[] = [];
@@ -219,6 +239,9 @@ let indicatorRunning = 0;
  */
 export function mountCanvas(canvasHost: HTMLElement): void {
   host = canvasHost;
+  // A remount (layer/view switch) may find a transition still running against
+  // the previous host — drop its layers/timers before the DOM is wiped.
+  finishFocusTransition();
   host.replaceChildren();
   clear(host);
   // Wire the lock-badge refresh once — `store.subscribe` is a cheap
@@ -229,7 +252,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   const top = div('canvas-top');
   const zoneParents = buildZone('parents');
   const zoneSiblings = buildZone('siblings');
-  const zoneSplitterV = div('zone-splitter zone-splitter-v');
+  const zoneSplitterV = splitterElement('zone-splitter zone-splitter-v');
   top.append(zoneParents, zoneSplitterV, zoneSiblings);
 
   focusRow = div('canvas-focus-row');
@@ -237,7 +260,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   const zoneChildren = buildZone('children');
   // Draggable zone splitters (08-ui-spec.md §2.1): vertical inside the top
   // strip, horizontal between the focus row and the children zone.
-  const zoneSplitterH = div('zone-splitter zone-splitter-h');
+  const zoneSplitterH = splitterElement('zone-splitter zone-splitter-h');
 
   const empty = div('canvas-empty');
   empty.textContent = 'Нет открытой сети';
@@ -367,10 +390,18 @@ export function getRef(id: string): ThoughtRef | null {
 
 /**
  * Drops the cached metadata for a thought so the next render re-resolves it
- * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`.
+ * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`
+ * and by local producers (`reflectThoughtUpdate`) that got no realtime echo.
+ *
+ * Evicting a ref that IS rendered bumps {@link refEpoch}: the focus response
+ * carries no icon/colors of a neighbour, so a re-fetch of the same focus is
+ * content-identical and the content-addressed {@link canvasRenderKey} would
+ * otherwise skip the repaint — the stale icon of the thought while it is not
+ * the focus persisted until the next focus switch (ошибка 1ea2d05a).
  */
 export function invalidateRef(id: string): void {
-  refCache.delete(id);
+  if (refCache.delete(id)) refEpoch++;
+  notifyRefInvalidated(id);
 }
 
 /**
@@ -380,7 +411,31 @@ export function invalidateRef(id: string): void {
  * survive the switch until the thought is re-read by some other path.
  */
 export function invalidateAllRefs(): void {
+  if (refCache.size > 0) refEpoch++;
   refCache.clear();
+  notifyRefInvalidated(null);
+}
+
+/**
+ * Подписчики на сброс кэша метаданных мыслей. Панели со СВОИМ кэшем ref-ов
+ * (панель выделенных) обновляют по этому сигналу свои строки точечно, не
+ * подписываясь на весь store: иначе панель перерисовывалась на каждое событие
+ * магазина — в т.ч. на догрузку длинных списков — и мигала (ошибка 3a64e680).
+ * `id` — конкретная мысль, `null` — сброшен весь кэш.
+ */
+const refInvalidationListeners = new Set<(id: string | null) => void>();
+
+/** Регистрирует подписчика на сброс ref-кэша; возвращает отписку. */
+export function onThoughtRefInvalidated(cb: (id: string | null) => void): () => void {
+  refInvalidationListeners.add(cb);
+  return () => {
+    refInvalidationListeners.delete(cb);
+  };
+}
+
+/** Оповещает подписчиков о сбросе ref-кэша (см. {@link onThoughtRefInvalidated}). */
+function notifyRefInvalidated(id: string | null): void {
+  for (const cb of [...refInvalidationListeners]) cb(id);
 }
 
 /** Returns the currently rendered focus cloud (H6 line anchoring). */
@@ -481,6 +536,12 @@ function canvasRenderKey(): string {
     // refresh hit the selection-only fast path and the badge only appeared
     // after the next focus/layer change repainted the canvas.
     layerOverrides: s.layerOverrides,
+    // Evicted rendered refs (ошибка 1ea2d05a): a neighbour's icon/colors live
+    // only in `refCache` (the focus response does not carry them), so an
+    // invalidation of a shown ref must break the content-addressed fast path
+    // and force `render()` to re-resolve it — otherwise the cloud kept the
+    // stale icon until the next focus switch.
+    refEpoch,
     zoneAnimationPending,
   });
 }
@@ -518,6 +579,11 @@ function paintHalo(): void {
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
   if (host === null || zones === null || focusRow === null) return;
+  // A real data update arriving mid-flight wins: snap any running transition to
+  // its final state (release the held focus, drop the clones/layers) BEFORE the
+  // old layout is captured and rebuilt. The rebuild below then starts from the
+  // settled positions, so animations never run against dead coordinates.
+  finishFocusTransition();
   applyCanvasScaleVars(host);
   const focus = store.state.focus;
   if (focus === null) {
@@ -546,6 +612,11 @@ async function render(): Promise<void> {
   const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
   zoneAnimationPending = false;
   const snapshot = animate ? captureClouds(host) : null;
+  // Source of the flight when the focus was picked OUTSIDE the map (pinned /
+  // history / search chip, `lib/focus-origin.ts`). Consumed on every focus
+  // change — even when this render turns out not to animate — so a stale click
+  // box never leaks into a later focus change.
+  const externalOrigin = focusChanged ? takeFocusOrigin(focus.focused.id) : null;
 
   // The focused thought is always fresh in the focus response — refresh the
   // neighbour cache so its (possibly just-edited) style, icon and title show
@@ -555,31 +626,41 @@ async function render(): Promise<void> {
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
   await enrichRefs(focus);
   relatedTitles = visibleRelatedTitles(focus);
-  renderFocusRow(focus);
-  // The strip must be in sync with the focus before we resolve the lower
-  // zone: its active mode decides whether the children zone shows real
-  // children or a view's run result.
+  // Resolve the filter strip and any active view result BEFORE rebuilding the
+  // DOM. The rebuild and the focus transition MUST share one synchronous task
+  // (дефект 1 задачи e9f0af94): otherwise the browser paints a frame with the
+  // NEW focus content in the centre after `renderFocusRow` and before
+  // `playFocusTransition` hides it — the new thought flashes in place, then the
+  // old focus "returns" as the held overlay. Hoisting every await above the
+  // rebuild means the first painted frame of the new state already holds the
+  // old content. `guard-focus-animation` guards the invariant.
   await renderFilterStrip(focus);
+  const stripMode = getStripActiveMode();
+  let viewResult: ViewResult | null = null;
+  if (stripMode.kind !== 'children') {
+    // Run the view against the focused thought (no-op if already cached).
+    // The mode change listener also calls `render()`; this call may execute
+    // repeatedly during a mode toggle, and the strip's run cancellation keeps
+    // stale responses from overwriting fresh ones.
+    viewResult = await runActiveViewIfNeeded(focus.focused.id);
+  }
+
+  // --- Rebuild + transition: one synchronous task, one paint --------------
+  renderFocusRow(focus);
   updateFocusBand();
   renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
   renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
-  // Lower zone: pick the strip's active mode and paint accordingly. View
-  // results share the children-zone DOM (same virtualization, same cloud
-  // shape) but the gestures that imply a parent/child link to the focus
-  // (manual order, double-click-to-add) are gated on `viewResultActive`.
-  const stripMode = getStripActiveMode();
+  // Lower zone: the strip's active mode decides whether it shows real children
+  // or a view's run result. View results share the children-zone DOM (same
+  // virtualization, same cloud shape) but the gestures that imply a
+  // parent/child link to the focus (manual order, double-click-to-add) are
+  // gated on `viewResultActive`.
   if (stripMode.kind === 'children') {
     renderZone('children', groupByThought(zoneNeighbors('children', focus)));
     setZoneAsViewResult(false, null);
   } else {
-    // Run the view against the focused thought (no-op if already cached)
-    // and paint the result as the children zone. The mode change listener
-    // also calls `render()`, so this branch may execute repeatedly during
-    // a mode toggle; the strip's run cancellation keeps stale responses
-    // from overwriting fresh ones.
-    const result = await runActiveViewIfNeeded(focus.focused.id);
-    renderZone('children', viewResultToZoneEntries(result, focus));
-    setZoneAsViewResult(true, result);
+    renderZone('children', viewResultToZoneEntries(viewResult, focus));
+    setZoneAsViewResult(true, viewResult);
   }
   lastFocusId = focus.focused.id;
   // The response is now on screen: a further store notification with the SAME
@@ -592,7 +673,7 @@ async function render(): Promise<void> {
   paintZoneIndicators();
   scheduleIndicatorLoads();
   if (snapshot !== null) {
-    playFocusTransition(host, snapshot, drawLinksNow);
+    playFocusTransition(host, snapshot, drawLinksNow, externalOrigin);
   } else {
     redrawLinks?.();
   }
@@ -1277,7 +1358,7 @@ async function appendNextZonePage(
  * page the focus response's `edges` no longer covers the neighbourhood, so the
  * overlay is fed the authoritative set from `POST /thoughts/edges`.
  */
-async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
+async function refreshZoneEdges(_focus: FocusResponse): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const token = zonePagingToken;
@@ -1481,6 +1562,13 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     });
   });
 
+  // A host resize — editor dock switch, panel/window splitter drag, plain
+  // window resize — changes the zone box: recompute the column count and
+  // re-anchor the grid right away, otherwise the clouds keep the previous
+  // width's layout and a bottom/right-anchored zone grows a horizontal
+  // scrollbar (ошибка 1deced69). Deliberately re-laid out in place instead of
+  // through `render()`: `render()` starts with `finishFocusTransition()`, so a
+  // resize mid-flight would snap a running focus animation.
   new ResizeObserver(() => {
     if (host?.isConnected === true) void renderZoneContent(dir);
   }).observe(zone);
@@ -1575,15 +1663,18 @@ const zoneCountEls: Record<'parents' | 'siblings' | 'children', HTMLElement | nu
 function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
   cols: number;
   rows: number;
+  /** Width of the zone's content box (padding discounted) — the container the
+   *  grid is anchored in (task f45ffc8a). */
+  avail: number;
 } | null {
   const zone = zones?.[dir];
   if (zone === null || zone === undefined) return null;
   const entries = zoneData.get(dir) ?? [];
   const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
   const cellW = geom.width + geom.gap;
-  const avail = Math.max(80, zone.clientWidth - 24);
+  const avail = Math.max(80, zone.clientWidth - 2 * ZONE_PADDING_PX);
   const cols = Math.max(1, Math.floor(avail / cellW));
-  return { cols, rows: Math.ceil(entries.length / cols) };
+  return { cols, rows: Math.ceil(entries.length / cols), avail };
 }
 
 /**
@@ -1621,6 +1712,9 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     spacer.style.height = '0px';
     empty.classList.remove('hidden');
     clear(grid);
+    // Drop the previous render's content width: a leftover box would keep the
+    // empty zone horizontally scrollable (ошибка 1deced69).
+    grid.style.width = '';
     // The children zone carries a view-result empty state when the active
     // strip mode is a view (spec 9984aa98). Distinguish three cases:
     //   * "unresolved" — the filter referenced a token that did not bind;
@@ -1689,7 +1783,42 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   endRow = Math.min(rows, endRow + OVERSCAN_ROWS);
 
   spacer.style.height = `${prefix[rows]!}px`;
-  grid.style.transform = `translateY(${prefix[startRow]!}px)`;
+  // Anchor the grid inside the zone's content box (task f45ffc8a): the zones
+  // pull towards the focus row (parents/siblings — bottom edge, children — top
+  // edge), so the clouds read as one cluster instead of scattered corners. The
+  // offset moves ONLY the grid's origin: the row-major order, gaps,
+  // virtualization window and (hence) all hit-testing/index math stay exactly
+  // as before.
+  //
+  // The anchor container is the zone's content box; the CONTENT width is the
+  // widest ROW of clouds, not the grid BOX. `gridTemplateColumns` pins all
+  // `cols` columns, so a row with fewer clouds leaves the trailing columns
+  // EMPTY and the box still spans almost the whole zone — anchoring by the box
+  // made `(avail − content) ≈ 0`, so the horizontal offset vanished and the
+  // children zone's single partial row stayed left instead of centring
+  // (приёмочный дефект f45ffc8a). Row-major fill means only the LAST row can
+  // be partial, and only when `entries.length < cols` is the grid a single
+  // partial row; otherwise the widest row holds all `cols` clouds.
+  const contentWidth = zoneContentWidth(cols, entries.length, geom.width, geom.gap);
+  const contentHeight = Math.max(0, prefix[rows]! - geom.gap);
+  const origin = anchorOffset(
+    { width: gridInfo.avail, height: Math.max(0, zone.clientHeight - 2 * ZONE_PADDING_PX) },
+    { width: contentWidth, height: contentHeight },
+    ZONE_ANCHOR_BY_DIR[dir],
+  );
+  // The grid BOX must be no wider than the visible content (ошибка 1deced69).
+  // `gridTemplateColumns` pins all `cols` columns, so the box spans almost the
+  // whole zone even when the only row uses a fraction of them. Anchoring such a
+  // box by `origin.x` pushed its EMPTY trailing columns past the zone's right
+  // edge — a horizontal scrollbar appeared in a zone holding a single thought
+  // (bottom/right-anchored zones), and the scrollbar only disappeared once the
+  // rows happened to fill all columns. Narrowing the box to the widest ROW
+  // removes the phantom scroll WITHOUT moving a cloud: the trailing columns
+  // hold no items, and a full grid (`contentWidth` = every column) is unchanged.
+  // The box still overflows — and the scrollbar is legitimate — when a single
+  // cloud is genuinely wider than the zone (`cols === 1`).
+  grid.style.width = `${contentWidth}px`;
+  grid.style.transform = `translate(${origin.x}px, ${origin.y + prefix[startRow]!}px)`;
 
   clear(grid);
   // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order
@@ -2309,7 +2438,7 @@ async function createLinkFromDrop(
     // update, and animate the thought flowing into its new zone.
     requestZoneAnimation();
     scheduleRefresh();
-    notice('Связь создана.');
+    notice('Связь создана.', 'success');
   } catch (err) {
     notice(
       `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,

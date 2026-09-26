@@ -23,6 +23,7 @@
  */
 
 import type { LinkTypeFilterInput, NetworkProperty } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 import { PREF_KEY, computeDefaultCanvasLinkFilter, parseStoredCanvasLinkFilter } from '@etn/shared';
 
 import { refreshFocus } from '../app.js';
@@ -83,7 +84,7 @@ async function loadAndOpen(networkId: string): Promise<void> {
     title: 'Фильтр типов связей на карте',
     currentIds: [...checked],
     allowEmpty: false,
-    applyLabel: 'Применить и закрыть',
+    applyLabel: t('actions.applyClose'),
     extraOptions: [STRUCTURAL_OPTION],
     commands: linkFilterCommands(defaultFilter),
   });

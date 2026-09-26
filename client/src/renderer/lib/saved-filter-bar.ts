@@ -5,9 +5,17 @@
  * Панель отбора каждого экрана заканчивается одной строкой: поле «имя отбора»,
  * кнопка-дискета («записать настройки отбора»), кнопка-крестик («удалить
  * настройки отбора») и кнопка с многоточием («выбрать сохранённый отбор»).
- * Список сохранённых отборов показывается ОТДЕЛЬНЫМ ДИАЛОГОМ: сверху поиск по
- * именам, навигация ↑/↓, выбор кликом или Enter, у каждой строки контекстное
- * меню «Переименовать» / «Скопировать» (копия с « (копия)») / «Удалить».
+ * Список сохранённых отборов показывается ОТДЕЛЬНЫМ ДИАЛОГОМ по единым
+ * правилам диалогов-списков (требование 11ddd910): сверху поиск по именам
+ * (правило 1), под ним строка управления «Изменить» / «Копировать» /
+ * «Удалить» над текущей строкой (правило 2), сам список — единый табличный
+ * фасад `lib/ui/table.ts` (задача ae76b75e, требование 93115633): текущая
+ * строка, клавиатура (↑/↓, Home/End, PgUp/PgDn, Enter), контекстное меню
+ * строки, копирование Ctrl+C. Клик делает строку текущей, двойной клик
+ * открывает редактор (переименование), Enter и кнопка «Выбрать» футера
+ * применяют отбор (правила 3, 6); после копии список позиционируется на ней
+ * (правило 7). У строки контекстное меню «Переименовать» / «Скопировать»
+ * (копия с « (копия)») / «Удалить».
  *
  * Экран передаёт каркасу только своё: хранилище отборов (REST-виды разные —
  * `structures` и `chronicle`), конвертер текущих настроек в определение и
@@ -20,15 +28,14 @@
  */
 
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
-import { button, div, el, setTooltip } from './dom.js';
+import { t } from './i18n.js';
+import { div, el, span } from './dom.js';
 import { svgIcon } from './icons.js';
-import { showMenuAt, type MenuItem } from './menu.js';
+import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
-import {
-  duplicateFilterName,
-  filterSavedByName,
-  moveSavedFilterCursor,
-} from './pure.js';
+import { iconButton, uiButton } from './ui/button.js';
+import { createTable } from './ui/table.js';
+import { duplicateFilterName, filterSavedByName } from './pure.js';
 
 /** Запись сохранённого отбора. `definition` — непрозрачное определение вида. */
 export interface SavedFilterEntry {
@@ -90,23 +97,27 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
   nameInput.addEventListener('input', () => opts.setName(nameInput.value));
   nameWrap.append(nameInput);
 
-  const saveBtn = button('', () => void save(), 'sfb-btn');
-  saveBtn.type = 'button';
-  saveBtn.append(svgIcon('save', 15));
-  setTooltip(saveBtn, 'Записать настройки отбора');
-  saveBtn.setAttribute('aria-label', 'Записать настройки отбора');
+  const saveBtn = iconButton({
+    icon: svgIcon('save', 15),
+    title: 'Записать настройки отбора',
+    size: 's',
+    onClick: () => void save(),
+  });
 
-  const deleteBtn = button('', () => void removeCurrent(), 'sfb-btn');
-  deleteBtn.type = 'button';
-  deleteBtn.append(svgIcon('x', 15));
-  setTooltip(deleteBtn, 'Удалить настройки отбора');
-  deleteBtn.setAttribute('aria-label', 'Удалить настройки отбора');
+  const deleteBtn = iconButton({
+    icon: svgIcon('x', 15),
+    title: 'Удалить настройки отбора',
+    size: 's',
+    onClick: () => void removeCurrent(),
+  });
 
-  const moreBtn = el('button', 'sfb-btn sfb-more', '…') as HTMLButtonElement;
-  moreBtn.type = 'button';
-  setTooltip(moreBtn, 'Выбрать сохранённый отбор');
-  moreBtn.setAttribute('aria-label', 'Выбрать сохранённый отбор');
-  moreBtn.addEventListener('click', () => openPicker());
+  const moreBtn = iconButton({
+    icon: el('span', undefined, '…'),
+    title: 'Выбрать сохранённый отбор',
+    size: 's',
+    class: 'sfb-more',
+    onClick: () => openPicker(),
+  });
 
   root.append(nameWrap, saveBtn, deleteBtn, moreBtn);
 
@@ -202,20 +213,23 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
     return trimmed;
   }
 
-  /** Создаёт полную копию записи со свободным именем «… (копия)». */
+  /** Создаёт полную копию записи со свободным именем «… (копия)». Возвращает
+   *  id созданной копии — диалог позиционируется на ней (правило 7 требования
+   *  11ddd910). */
   async function copyEntry(entry: SavedFilterEntry): Promise<string | null> {
     const copyName = duplicateFilterName(
       entry.name,
       entries.map((e) => e.name),
     );
+    let created: SavedFilterEntry;
     try {
-      await opts.store.create(copyName, entry.definition);
+      created = await opts.store.create(copyName, entry.definition);
     } catch (err) {
       errorDialog('Скопировать отбор', err);
       return null;
     }
     await load();
-    return copyName;
+    return created.id;
   }
 
   /** Открывает диалог выбора сохранённого отбора. */
@@ -252,6 +266,7 @@ interface SavedFilterDialogOptions {
   selectedId: () => string | null;
   onPick: (entry: SavedFilterEntry) => void;
   onRename: (entry: SavedFilterEntry) => Promise<string | null>;
+  /** Создаёт копию; возвращает id копии — диалог на ней позиционируется (правило 7). */
   onCopy: (entry: SavedFilterEntry) => Promise<string | null>;
   onDelete: (entry: SavedFilterEntry) => Promise<void>;
   /** Перечитать список после переименования/копирования/удаления. */
@@ -264,92 +279,200 @@ interface SavedFilterDialogOptions {
  * переименования/копирования/удаления — список перерисовывается на месте.
  */
 export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
-  const body = div('sfd');
+  const body = div('sfd list-dialog-body');
+
+  // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
+  // диалога, над строкой управления и списком.
   const search = el('input', 'st-f-input sfd-search') as HTMLInputElement;
   search.type = 'text';
-  search.placeholder = 'Поиск по имени…';
-  const list = div('sfd-list');
-  body.append(search, list);
+  search.placeholder = t('actions.search');
 
-  let cursor = 0;
-  /** Видимые строки текущей отрисовки — по ним ходит клавиатура. */
+  // Правило 2 требования 11ddd910: строка управления НАД списком. «Изменить»
+  // (переименовать), «Копировать» и «Удалить» действуют на ТЕКУЩУЮ строку и
+  // гаснут без неё (`updateButtons`). «Добавить» диалогу не положено: новый
+  // отбор создаёт строка сохранённых отборов из текущих настроек панели
+  // (карточка 284d6a56).
+  const toolbar = div('form-row type-list-toolbar sfd-toolbar');
+  const editBtn = uiButton({
+    label: t('listActions.edit'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.editHint'),
+    disabled: true,
+    onClick: () => {
+      const entry = currentEntry();
+      if (entry !== null) void opts.onRename(entry).then(render);
+    },
+  });
+  const copyBtn = uiButton({
+    label: t('listActions.copy'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.copyHint'),
+    disabled: true,
+    onClick: () => {
+      const entry = currentEntry();
+      // Правило 7: созданная копия становится текущей строкой — список на неё
+      // позиционируется (реализует `render` через `pendingCurrentId`).
+      if (entry !== null) {
+        void opts.onCopy(entry).then((id) => {
+          if (id !== null) pendingCurrentId = id;
+          render();
+        });
+      }
+    },
+  });
+  const deleteBtn = uiButton({
+    label: t('actions.delete'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.deleteHint'),
+    disabled: true,
+    onClick: () => {
+      const entry = currentEntry();
+      if (entry !== null) void opts.onDelete(entry).then(opts.onRefresh).then(render);
+    },
+  });
+  toolbar.append(editBtn, copyBtn, deleteBtn);
+
+  const listHost = div('sfd-list');
+  // Высоту области списка задаёт раскладка диалога-списка (`.list-dialog-body`,
+  // правило 9 требования 11ddd910): она тянется на свободную высоту роли и не
+  // схлопывается при пустом поиске (ошибка f68bb43c).
+  // Правила 1–2 требования 11ddd910: поиск, под ним управление, затем список.
+  body.append(search, toolbar, listHost);
+
+  /** Видимые строки текущей отрисовки — источник массива для фасада. */
   let visible: SavedFilterEntry[] = [];
   /** Закрытие диалога; присваивается сразу после `showDialog`. */
   let close: () => void = () => undefined;
+  /** id только что созданного отбора — цель позиционирования (правило 7). */
+  let pendingCurrentId: string | null = null;
+  /** Кнопка решения «Выбрать» футера — гаснет без текущей строки. */
+  let selectBtn: HTMLButtonElement | null = null;
 
-  const render = (): void => {
-    visible = filterSavedByName(opts.entries(), search.value);
-    cursor = visible.length === 0 ? -1 : Math.min(Math.max(cursor, 0), visible.length - 1);
-    list.replaceChildren();
-    if (visible.length === 0) {
-      list.append(
-        el(
-          'div',
-          'st-f-empty',
-          opts.entries().length === 0 ? 'Нет сохранённых отборов' : 'Ничего не найдено',
-        ),
-      );
-      return;
-    }
-    visible.forEach((entry, index) => {
-      const row = el('button', 'sfd-row');
-      row.type = 'button';
-      if (entry.id === opts.selectedId()) row.classList.add('active');
-      if (index === cursor) row.classList.add('cursor');
-      row.textContent = entry.name;
-      row.addEventListener('click', () => pick(entry));
-      row.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
-        cursor = index;
-        render();
-        openRowMenu(entry, event.clientX, event.clientY);
-      });
-      list.append(row);
-    });
-  };
+  const table = createTable<SavedFilterEntry>({
+    ariaLabel: t('savedFilters.aria'),
+    columns: [
+      {
+        key: 'name',
+        header: t('savedFilters.col.name'),
+        sortable: true,
+        sortValue: (entry) => entry.name,
+        text: (entry) => entry.name,
+        // Применённый отбор подсвечиваем жирным: фасад держит только текущую
+        // (клавиатурную) строку, а «применённый» — отдельное состояние экрана.
+        render: (entry) => {
+          const node = span(entry.name);
+          if (entry.id === opts.selectedId()) node.style.fontWeight = '600';
+          return node;
+        },
+      },
+    ],
+    rows: [],
+    rowKey: (entry) => entry.id,
+    emptyText: t('savedFilters.empty'),
+    emptyHint: t('savedFilters.emptyHint'),
+    // Правило 6 (выбор одиночного значения): клик делает строку текущей,
+    // решение принимает Enter или кнопка «Выбрать»; двойной клик открывает
+    // редактор строки (переименование).
+    onActivate: (entry) => pick(entry),
+    onDblActivate: (entry) => void opts.onRename(entry).then(render),
+    onCurrentChange: () => updateButtons(),
+    rowMenu: (entry) => rowMenu(entry),
+  });
+  listHost.append(table.element);
+
+  /** Текущая строка списка — на неё действует строка управления (правило 2). */
+  function currentEntry(): SavedFilterEntry | null {
+    return table.getCurrent()?.row ?? null;
+  }
+
+  /** Гасит кнопки текущей строки и решение «Выбрать» без неё. */
+  function updateButtons(): void {
+    const has = table.getCurrent() !== null;
+    editBtn.disabled = !has;
+    copyBtn.disabled = !has;
+    deleteBtn.disabled = !has;
+    if (selectBtn !== null) selectBtn.disabled = !has;
+  }
 
   const pick = (entry: SavedFilterEntry): void => {
     opts.onPick(entry);
     close();
   };
 
-  const openRowMenu = (entry: SavedFilterEntry, x: number, y: number): void => {
-    const items: MenuItem[] = [
-      { label: 'Переименовать', onClick: () => void opts.onRename(entry).then(render) },
-      { label: 'Скопировать', onClick: () => void opts.onCopy(entry).then(render) },
-      {
-        label: 'Удалить',
-        danger: true,
-        onClick: () => void opts.onDelete(entry).then(opts.onRefresh).then(render),
-      },
-    ];
-    showMenuAt(x, y, items);
+  /** Контекстное меню строки из общего словаря пунктов (`lib/menu.ts`). */
+  const rowMenu = (entry: SavedFilterEntry): MenuItem[] => [
+    menuAction(t('savedFilters.menu.rename'), () => void opts.onRename(entry).then(render)),
+    menuAction(t('savedFilters.menu.copy'), () =>
+      void opts.onCopy(entry).then((id) => {
+        if (id !== null) pendingCurrentId = id;
+        render();
+      }),
+    ),
+    menuAction(
+      t('actions.delete'),
+      () => void opts.onDelete(entry).then(opts.onRefresh).then(render),
+      { danger: true },
+    ),
+  ];
+
+  const render = (): void => {
+    visible = filterSavedByName(opts.entries(), search.value);
+    // Пустое состояние зависит от поиска: без сохранённых — свой текст с
+    // подсказкой, без совпадений — «Ничего не найдено». Рисует общий компонент
+    // `lib/ui/empty-state.ts` через `table.setEmpty`.
+    table.setEmpty(
+      opts.entries().length === 0
+        ? { title: t('savedFilters.empty'), hint: t('savedFilters.emptyHint') }
+        : { title: t('savedFilters.emptySearch'), hint: t('savedFilters.emptySearchHint') },
+    );
+    table.setRows(visible);
+    // Правило 7: цель позиционирования — только что созданный отбор, иначе
+    // применённый. Фасад прокручивает список к текущей строке (setCurrent).
+    const target = pendingCurrentId ?? opts.selectedId();
+    pendingCurrentId = null;
+    table.setCurrent(
+      target !== null && visible.some((entry) => entry.id === target) ? target : null,
+    );
+    updateButtons();
   };
 
-  search.addEventListener('input', () => {
-    cursor = 0;
-    render();
-  });
+  // Ввод в поле поиска фильтрует список; стрелки/Enter перенаправляем таблице,
+  // чтобы клавиатура оставалась от фасада (текущая строка и подсветка видны).
+  search.addEventListener('input', () => render());
   search.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (visible.length === 0) return;
-      cursor = moveSavedFilterCursor(cursor, visible.length, event.key === 'ArrowDown' ? 1 : -1);
-      render();
-      const row = list.children[cursor];
-      if (row instanceof HTMLElement) row.scrollIntoView({ block: 'nearest' });
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      const entry = visible[cursor];
-      if (entry !== undefined) pick(entry);
-    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
+    event.preventDefault();
+    table.focus();
+    table.element.dispatchEvent(new KeyboardEvent('keydown', { key: event.key, bubbles: true }));
   });
 
   close = showDialog({
-    title: 'Сохранённые отборы',
+    title: t('savedFilters.title'),
     body,
-    width: 420,
-    buttons: [{ label: 'Закрыть', onClick: (c) => c() }],
+    size: 's',
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
+    // Правило 3: футер — кнопки решения. «Выбрать» применяет текущую строку,
+    // «Отмена» закрывает без выбора.
+    buttons: [
+      {
+        label: t('actions.select'),
+        primary: true,
+        ref: (btn) => {
+          selectBtn = btn;
+          btn.disabled = true;
+        },
+        onClick: () => {
+          const entry = currentEntry();
+          if (entry !== null) pick(entry);
+        },
+      },
+      { label: t('actions.cancel') },
+    ],
     onMount: () => search.focus(),
   });
   render();

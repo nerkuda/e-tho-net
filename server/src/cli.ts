@@ -25,6 +25,7 @@ import { logger } from './logger.js';
 import { SystemDb } from './db/system-db.js';
 import { generateApiKey } from './auth/api-key.js';
 import { runStdioMcp } from './mcp/stdio.js';
+import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
 
 /** Error for CLI usage problems (missing/unknown arguments). */
 export class CliError extends Error {
@@ -277,12 +278,20 @@ export async function main(opts: MainOptions = {}): Promise<number> {
     }
     const apiKey = parsed.apiKey ?? env.ETN_API_KEY?.trim() ?? null;
     try {
+      // Тяжёлые чтения агента тоже не должны морозить stdio-процесс: тот же
+      // пул reader-воркеров, что в HTTP-сервере (ADR bec191e6).
+      configureReaderPool({
+        size: config.readerPool.size,
+        taskTimeoutMs: config.readerPool.taskTimeoutMs,
+      });
       // Logger is built inside runStdioMcp (stderr-bound) to keep stdout clean.
       await runStdioMcp({ dataDir: config.dataDir, apiKey });
       return 0;
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
+    } finally {
+      await closeReaderPool();
     }
   }
 

@@ -25,6 +25,7 @@ import {
   buildEntityChipField,
   buildEntityCombo,
   filterEntityOptions,
+  linkPropertyEntityOptions,
   linkTypeEntityOptions,
   normalizeParentTypeId,
   pickEntitiesModal,
@@ -33,6 +34,10 @@ import {
   visibleEntityIds,
   type EntityOption,
 } from '../src/renderer/lib/entity-picker.js';
+import {
+  buildPropertyListRows,
+  type PropertyRegistryRow,
+} from '../src/renderer/lib/property-list.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -119,7 +124,7 @@ describe('entity-picker: каталоги типов без корня иера�
     );
     assert.ok(options.every((o) => o.selectable === true));
     // Облачко резолвит значок/цвета/начертание по типу.
-    assert.ok(options.every((o) => o.cloud.type_id === o.id));
+    assert.ok(options.every((o) => o.cloud?.type_id === o.id));
   });
 
   it('linkTypeEntityOptions подписывает «прямое / обратное» и несёт свотч', () => {
@@ -327,6 +332,15 @@ function findAllByClass(root: ShimElement, cls: string): ShimElement[] {
   if (root.classList.contains(cls)) out.push(root);
   for (const child of root.children) out.push(...findAllByClass(child, cls));
   return out;
+}
+
+/** Кнопка «Выбрать» футера одиночного пикера (правило 6, ошибка d1a009fa). */
+function pickSelectButton(root: ShimElement): ShimElement {
+  const btn = findAllByClass(root, 'ui-btn')
+    .filter((b) => !b.classList.contains('ui-btn--icon'))
+    .find((b) => b.textContent === 'Выбрать');
+  assert.ok(btn !== undefined, 'в футере одиночного пикера есть «Выбрать»');
+  return btn!;
 }
 
 /** Части поля одиночного выбора. */
@@ -565,11 +579,13 @@ describe('entity-picker: поле одиночного выбора — запо
     pick.click();
     await flush();
     await flush();
-    const rows = findAllByClass(body, 'entity-pick-row');
+    const rows = findAllByClass(body, 'ui-tree-row');
     assert.ok(rows.length > 0, 'диалог «…» показал каталог типов');
     const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
     assert.ok(target !== undefined, 'в диалоге есть строка типа c');
     target!.click();
+    assert.deepEqual(changes, [], 'клик только делает строку текущей (правило 6)');
+    pickSelectButton(body).click();
     await flush();
     assert.deepEqual(changes, ['c'], 'диалог применил выбранный единственный тип');
     assert.equal(combo.value(), 'c');
@@ -634,7 +650,7 @@ describe('entity-picker: выбор из списка не роняет клав
   });
 
   it('комбо: выбор строки с клавиатуры (Enter) тоже удерживает фокус в поле', async () => {
-    const { body } = installShim();
+    installShim();
     store.update({ thoughtTypes: THOUGHT_TYPES });
     const combo = buildEntityCombo({
       networkId: 'n',
@@ -697,13 +713,14 @@ describe('entity-picker: выбор из списка не роняет клав
     pick.click();
     await flush();
     await flush();
-    const rows = findAllByClass(body, 'entity-pick-row');
+    const rows = findAllByClass(body, 'ui-tree-row');
     const target = rows.find((r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'c');
     assert.ok(target !== undefined, 'в диалоге есть строка типа c');
 
     // Модальный пикер закрылся, фокус остался на <body> — поле забирает его себе.
     loseFocusToBody(body);
     target!.click();
+    pickSelectButton(body).click();
     await flush();
     assert.equal(combo.value(), 'c', 'значение применено');
     assert.equal(pick.focused, true, 'фокус вернулся на живой узел поля, а не остался на <body>');
@@ -812,7 +829,7 @@ describe('entity-picker: команды-иконки верхней строки
     const searchbar = findByClass(backdrop, 'st-f-searchbar');
     assert.ok(searchbar, 'есть верхняя строка');
     assert.ok(findByClass(searchbar, 'st-f-search'), 'в верхней строке есть поиск');
-    const commands = findAllByClass(searchbar, 'icon-btn');
+    const commands = findAllByClass(searchbar, 'ui-btn--icon');
     assert.equal(commands.length, 3, 'три команды-иконки в верхней строке');
     assert.deepEqual(
       commands.map((b) => b.title),
@@ -824,7 +841,7 @@ describe('entity-picker: команды-иконки верхней строки
     }
 
     // Футер: ровно «Отмена» и «Применить и закрыть», без команд.
-    const footerButtons = findAllByClass(backdrop, 'dialog-btn');
+    const footerButtons = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon'));
     assert.deepEqual(
       footerButtons.map((b) => b.textContent),
       ['Отмена', 'Применить и закрыть'],
@@ -849,7 +866,7 @@ describe('entity-picker: команды-иконки верхней строки
     });
     const backdrop = body.children[0];
     assert.ok(backdrop, 'диалог смонтирован');
-    const clear = findAllByClass(backdrop, 'icon-btn')[0];
+    const clear = findAllByClass(backdrop, 'ui-btn--secondary')[0];
     assert.ok(clear, 'есть кнопка «Очистить»');
     assert.equal(clear.disabled, false, 'при непустом наборе активна');
     clear.click();
@@ -869,9 +886,11 @@ describe('entity-picker: завершение модального чек-лис
     { id: 'tb', title: 'Задача', selectable: true, cloud: { id: 'tb', title: 'Задача' } },
   ];
 
-  it('одиночный выбор: клик по строке возвращает выбор И закрывает диалог', async () => {
-    // Регрессия c9bd04ed: клик по строке резолвил промис, но диалог оставался
-    // поверх всего — закрывали его только кнопки футера.
+  it('одиночный выбор: клик ставит текущую, «Выбрать» возвращает выбор и закрывает диалог', async () => {
+    // Регрессия c9bd04ed: выбор резолвил промис, но диалог оставался поверх
+    // всего — закрывали его только кнопки футера. Правило 6 требования
+    // 11ddd910 (ошибка d1a009fa): клик только делает строку текущей, выбор
+    // подтверждают «Выбрать», двойной клик иEnter.
     const { body } = installShim();
     let result: string[] | null | undefined;
     const done = pickEntitiesModal({
@@ -884,15 +903,42 @@ describe('entity-picker: завершение модального чек-лис
       result = ids;
     });
     assert.equal(body.children.length, 1, 'диалог открыт');
-    const rows = findAllByClass(body.children[0]!, 'entity-pick-row');
+    const backdrop = body.children[0]!;
+    const rows = findAllByClass(backdrop, 'ui-tree-row');
     assert.equal(rows.length, 2, 'каталог показан целиком');
     rows[0]!.click();
+    assert.equal(body.children.length, 1, 'клик по строке не закрывает диалог (только текущая)');
+    assert.equal(result, undefined, 'до подтверждения результат не отдан');
+    const select = findAllByClass(backdrop, 'ui-btn')
+      .filter((b) => !b.classList.contains('ui-btn--icon'))
+      .find((b) => b.textContent === 'Выбрать');
+    assert.ok(select, 'в футере есть «Выбрать»');
+    select!.click();
     await done;
     assert.deepEqual(result, ['ta'], 'одиночный выбор вернул выбранный id');
-    assert.equal(body.children.length, 0, 'диалог закрыт сразу после выбора');
+    assert.equal(body.children.length, 0, 'диалог закрыт после подтверждения');
   });
 
-  it('одиночный выбор: в футере только «Отмена» (применения нет)', () => {
+  it('одиночный выбор: двойной клик по строке тоже подтверждает и закрывает', async () => {
+    const { body } = installShim();
+    let result: string[] | null | undefined;
+    const done = pickEntitiesModal({
+      networkId: 'n',
+      kind: 'thought-types',
+      title: 'Выбрать тип мысли',
+      catalogue: CATALOGUE,
+      single: true,
+    }).then((ids) => {
+      result = ids;
+    });
+    const backdrop = body.children[0]!;
+    findAllByClass(backdrop, 'ui-tree-row')[1]!.emit('dblclick');
+    await done;
+    assert.deepEqual(result, ['tb'], 'двойной клик подтвердил выбор');
+    assert.equal(body.children.length, 0, 'диалог закрыт');
+  });
+
+  it('одиночный выбор: в футере «Отмена» и «Выбрать»', () => {
     const { body } = installShim();
     void pickEntitiesModal({
       networkId: 'n',
@@ -904,9 +950,9 @@ describe('entity-picker: завершение модального чек-лис
     const backdrop = body.children[0];
     assert.ok(backdrop, 'диалог смонтирован');
     assert.deepEqual(
-      findAllByClass(backdrop, 'dialog-btn').map((b) => b.textContent),
-      ['Отмена'],
-      'одиночный режим завершается выбором строки, а не кнопкой применения',
+      findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).map((b) => b.textContent),
+      ['Отмена', 'Выбрать'],
+      'одиночный пикер подтверждается «Выбрать» (правило 6 требования 11ddd910)',
     );
   });
 
@@ -924,16 +970,17 @@ describe('entity-picker: завершение модального чек-лис
     });
     const backdrop = body.children[0];
     assert.ok(backdrop, 'диалог смонтирован');
-    // Клик по строке в множественном режиме отмечает вариант, но диалог не
+    // Клик по строке в множественном режиме отмечает вариант (флажок
+    // переключает сам компонент дерева — `lib/ui/tree.ts`), но диалог не
     // закрывает и ничего не возвращает (в отличие от одиночного).
-    findAllByClass(backdrop, 'entity-pick-row')[0]!.click();
+    findAllByClass(backdrop, 'ui-tree-row')[0]!.click();
     assert.equal(body.children.length, 1, 'клик по строке не закрыл диалог');
     assert.equal(result, undefined, 'до применения результат не отдан');
-    const apply = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Применить');
+    const apply = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Применить');
     assert.ok(apply, 'в футере есть кнопка применения');
     apply!.click();
     await done;
-    assert.deepEqual(result, ['tb'], 'применение отдало текущий набор');
+    assert.deepEqual(result, ['tb', 'ta'], 'применение отдало текущий набор (tb был отмечен, ta — кликом)');
     assert.equal(body.children.length, 0, 'применение закрыло диалог');
   });
 });
@@ -951,7 +998,7 @@ describe('entity-picker: отмена модального чек-листа (12
 
   /** Кнопка «Отмена» футера открытого диалога. */
   function cancelButton(backdrop: ShimElement): ShimElement {
-    const btn = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Отмена');
+    const btn = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Отмена');
     assert.ok(btn !== undefined, 'в футере есть «Отмена»');
     return btn!;
   }
@@ -1011,7 +1058,7 @@ describe('entity-picker: отмена модального чек-листа (12
     });
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог смонтирован');
-    const closeBtn = findAllByClass(backdrop, 'dialog-close')[0];
+    const closeBtn = findAllByClass(backdrop, 'ui-btn--ghost')[0];
     assert.ok(closeBtn !== undefined, 'в заголовке есть ×');
     closeBtn!.click();
     await done;
@@ -1034,7 +1081,7 @@ describe('entity-picker: отмена модального чек-листа (12
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог смонтирован');
     // «Очистить» меняет набор, но промис до завершения молчит.
-    findAllByClass(backdrop, 'icon-btn')[0]!.click();
+    findAllByClass(backdrop, 'ui-btn--secondary')[0]!.click();
     assert.equal(result, undefined, 'до завершения результат не отдан');
     cancelButton(backdrop).click();
     await done;
@@ -1054,7 +1101,7 @@ describe('entity-picker: отмена модального чек-листа (12
     });
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог смонтирован');
-    const apply = findAllByClass(backdrop, 'dialog-btn').find((b) => b.textContent === 'Применить');
+    const apply = findAllByClass(backdrop, 'ui-btn').filter((b) => !b.classList.contains('ui-btn--icon')).find((b) => b.textContent === 'Применить');
     assert.ok(apply !== undefined, 'в футере есть «Применить»');
     apply!.click();
     await done;
@@ -1097,12 +1144,210 @@ describe('entity-picker: отмена модального чек-листа (12
     await flush();
     const backdrop = body.children[0];
     assert.ok(backdrop !== undefined, 'диалог «…» открыт');
-    const row = findAllByClass(backdrop, 'entity-pick-row')[0];
+    const row = findAllByClass(backdrop, 'ui-tree-row')[0];
     assert.ok(row !== undefined, 'каталог показан');
     row!.click();
+    pickSelectButton(body).click();
     await flush();
     assert.deepEqual(calls, ['c'], 'выбор строки задал значение');
     assert.equal(combo.value(), 'c', 'значение в поле обновилось');
     assert.equal(body.children.length, 0, 'диалог закрыт выбором');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Четвёртый источник: свойства-связи (требование cdb6b52f, ошибка a7abe50e).
+// Поглощён прежний модуль lib/link-property-field.ts: то же поле — общее комбо.
+// ---------------------------------------------------------------------------
+
+const LP_FORWARD = 'запланировано в версию';
+const LP_REVERSE = 'включает работы';
+
+function lpLinkType(): LinkType {
+  return {
+    id: 'lt1',
+    name_forward: LP_FORWARD,
+    name_reverse: LP_REVERSE,
+    parent_id: null,
+    is_root: false,
+    color: '#e08a3c',
+    style: 'dashed',
+    width: 3,
+    description: null,
+    version: 1,
+    created_at: '',
+    updated_at: '',
+    created_by: '',
+  };
+}
+
+function lpRow(extra: Partial<PropertyRegistryRow>): PropertyRegistryRow {
+  return {
+    id: 'p1',
+    name: LP_FORWARD,
+    value_type: 'link',
+    config: { link_type_id: 'lt1' },
+    description: null,
+    created_at: '',
+    updated_at: '',
+    types_count: 2,
+    values_count: 0,
+    types_source_count: 1,
+    types_target_count: 1,
+    ...extra,
+  } as PropertyRegistryRow;
+}
+
+/** Свойство-связь (две стороны) + скаляр + структурное — в поле попадают только стороны. */
+const LP_ROWS = buildPropertyListRows(
+  [
+    lpRow({}),
+    lpRow({ id: 'p2', name: 'Скаляр', value_type: 'text', config: null }),
+    lpRow({ id: 'p3', name: 'Родители', config: { structural: true } }),
+  ],
+  [lpLinkType()],
+);
+
+describe('entity-picker: четвёртый источник «свойство связи» (требование cdb6b52f)', () => {
+  it('по варианту на имя стороны, единый алфавит, парная подпись и значок конца связи', () => {
+    const options = linkPropertyEntityOptions(LP_ROWS);
+    assert.deepEqual(options.map((o) => o.title), [LP_REVERSE, LP_FORWARD]);
+    assert.deepEqual(options.map((o) => o.linkProperty?.side), ['target', 'source']);
+    assert.equal(options[0]!.note, `(${LP_FORWARD} -> ${LP_REVERSE})`, 'пара имён типа связи в скобках');
+    assert.equal(options[0]!.linkEnd?.direction, 'up', 'назначение — входящая, стрелка вверх');
+    assert.equal(options[1]!.linkEnd?.direction, 'down', 'источник — исходящая, стрелка вниз');
+    assert.equal(options[0]!.linkEnd?.color, '#e08a3c');
+    assert.deepEqual(
+      options[1]!.linkProperty,
+      { propertyId: 'p1', side: 'source', key: LP_FORWARD },
+      'значение варианта — свойство, сторона и имя стороны-ключ',
+    );
+    assert.ok(options.every((o) => o.cloud === undefined), 'у варианта-свойства нет облачка мысли');
+  });
+
+  it('живой поиск находит свойство по обратному имени и по описанию', () => {
+    const options = linkPropertyEntityOptions(LP_ROWS);
+    const found = visibleEntityIds(options, 'включает', new Set());
+    assert.deepEqual(
+      options.filter((o) => found.has(o.id)).map((o) => o.title),
+      [LP_REVERSE, LP_FORWARD],
+      'обратное имя находит свойство целиком (обе стороны)',
+    );
+    const withDesc = linkPropertyEntityOptions(
+      buildPropertyListRows([lpRow({ description: 'планирование версии' })], [lpLinkType()]),
+    );
+    assert.equal(visibleEntityIds(withDesc, 'планирование', new Set()).size, 2, 'поиск по описанию');
+  });
+
+  it('без известного типа связи обратное имя назвать нечем — пары нет, сторона одна', () => {
+    const options = linkPropertyEntityOptions(
+      buildPropertyListRows([lpRow({ config: null })], [lpLinkType()]),
+    );
+    assert.equal(options.length, 1);
+    assert.equal(options[0]!.note, undefined);
+  });
+});
+
+describe('entity-picker: комбо свойства-связи как поле «Тип мысли» (ошибка a7abe50e)', () => {
+  it('пустое поле подписано «без свойства», а не «поиск»; список — обе стороны со значком', async () => {
+    const { body } = installShim();
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'link-properties',
+      value: null,
+      placeholder: 'без свойства',
+      emptyLabel: 'без свойства',
+      linkPropertyRows: () => LP_ROWS,
+      onChange: () => undefined,
+    });
+    const { input, caret, pick } = parts(combo);
+    assert.equal(input.placeholder, 'без свойства', 'подпись пустого значения — «без свойства», не «поиск»');
+    assert.ok(pick.classList.contains('entity-combo-pick'), 'кнопка «…» — как у поля типа');
+    assert.ok(caret.classList.contains('entity-combo-caret'), 'каретка ▾ — как у поля типа');
+    input.emit('focus');
+    await flush();
+    const labels = itemRows(body).map((r) => r.querySelector('.type-combo-label')?.textContent ?? '');
+    assert.deepEqual(
+      labels,
+      ['без свойства', LP_REVERSE, LP_FORWARD],
+      'в списке — «без свойства» и обе стороны свойства-связи; скаляр и структурное отсеяны',
+    );
+    const sideRow = itemRows(body).find(
+      (r) => r.querySelector('.type-combo-label')?.textContent === LP_FORWARD,
+    );
+    assert.ok(sideRow !== undefined, 'строка-сторона есть в списке');
+    assert.ok(
+      sideRow!.querySelector('.property-list-link-icon') !== null,
+      'у строки-стороны значок конца связи (направление + оформление)',
+    );
+    assert.equal(
+      sideRow!.querySelector('.type-combo-note')?.textContent,
+      `(${LP_FORWARD} -> ${LP_REVERSE})`,
+    );
+  });
+
+  it('выбор стороны отдаёт вариант с linkProperty; крестик очищает значение', async () => {
+    const { body } = installShim();
+    const entities: Array<EntityOption | null> = [];
+    const ids: Array<string | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'link-properties',
+      value: null,
+      emptyLabel: 'без свойства',
+      linkPropertyRows: () => LP_ROWS,
+      onChange: (id) => ids.push(id),
+      onChangeEntity: (opt) => entities.push(opt),
+    });
+    const { input, pick } = parts(combo);
+    input.emit('focus');
+    await flush();
+    const row = itemRows(body).find((r) => r.querySelector('.type-combo-label')?.textContent === LP_FORWARD);
+    assert.ok(row !== undefined, 'строка-сторона есть');
+    row!.emit('mousedown', mousedownEvent(row));
+    row!.click();
+    assert.equal(combo.value(), 'p1:source');
+    assert.deepEqual(
+      entities.at(-1)?.linkProperty,
+      { propertyId: 'p1', side: 'source', key: LP_FORWARD },
+    );
+    assert.deepEqual(ids, ['p1:source']);
+    assert.equal(pick.focused, true, 'фокус удержан на живом узле поля');
+
+    const remove = findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline');
+    assert.ok(remove !== undefined, 'у значения есть крестик очистки, как у поля типа');
+    remove!.emit('click', { stopPropagation: () => undefined });
+    assert.equal(combo.value(), null);
+    assert.equal(entities.at(-1), null, 'очистка отдаёт null');
+  });
+
+  it('кнопка «…» открывает тот же диалог пикера с полным списком свойства-связи', async () => {
+    const { body } = installShim();
+    const entities: Array<EntityOption | null> = [];
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'link-properties',
+      value: null,
+      emptyLabel: 'без свойства',
+      pickerTitle: 'Выбрать свойство связи',
+      linkPropertyRows: () => LP_ROWS,
+      onChange: () => undefined,
+      onChangeEntity: (opt) => entities.push(opt),
+    });
+    parts(combo).pick.click();
+    await flush();
+    await flush();
+    const rows = findAllByClass(body, 'ui-tree-row');
+    assert.equal(rows.length, 2, 'в диалоге — обе стороны свойства-связи (скаляр и структурное отсеяны)');
+    const target = rows.find((r) => findByClass(r, 'entity-pick-label')?.textContent === LP_REVERSE);
+    assert.ok(target !== undefined, 'в диалоге есть строка обратной стороны');
+    target!.click();
+    pickSelectButton(body).click();
+    await flush();
+    assert.deepEqual(
+      entities.at(-1)?.linkProperty,
+      { propertyId: 'p1', side: 'target', key: LP_REVERSE },
+    );
+    assert.equal(combo.value(), 'p1:target');
   });
 });

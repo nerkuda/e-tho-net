@@ -1,0 +1,57 @@
+/**
+ * Стили бейджа `lib/ui` (задача f351b894, требование e64083b5).
+ *
+ * Виды: `pill` (метка-облачко, тона) и `quiet` (приглушённый счётчик).
+ * Заменяет `.role-badge`, `.group-count`, `.st-count` из `styles.css`.
+ *
+ * Размеры — только по токенам-шкалам из `styles.css` (требование 0dddd939):
+ * редакция 0.9.1 перевела плотность бейджа на `--font-size-*`/`--space-*`;
+ * значения те же (визуальная преемственность).
+ */
+
+.ui-badge {
+  padding: 1px var(--space-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.ui-badge--pill.ui-badge--neutral {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+.ui-badge--pill.ui-badge--accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ui-badge--pill.ui-badge--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.ui-badge--pill.ui-badge--warn {
+  background: var(--warn-soft);
+  color: var(--warn-strong);
+}
+
+.ui-badge--pill.ui-badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Приглушённый счётчик: без фона и паддингов, цвет приглушённый. */
+.ui-badge--quiet {
+  padding: 0;
+  border-radius: 0;
+  font-weight: var(--font-weight-normal);
+  color: var(--text-faint);
+}
+
+/* Блочный счётчик под заголовком (бывший `.st-count`). */
+.ui-badge--block {
+  display: block;
+  font-size: var(--font-size-xs);
+  margin-top: var(--space-2);
+}

@@ -205,6 +205,12 @@ export const UI_STATE_KEY = {
    *  switching to a thought not in the map falls back to its default view
    *  (or «Потомки»). */
   FOCUS_FILTER_STRIP: 'focus_filter_strip',
+  /** Пропорция вертикального сплиттера двух таблиц свойств в редакторе типа
+   *  мысли (ошибка 58807d03): доля верхней («унаследованные свойства»)
+   *  таблицы от свободной высоты вкладки «Свойства». Хранится локально
+   *  (L4 `ui_state`), как размеры панелей; наличие/количество записей на
+   *  размер не влияют. */
+  TYPE_EDITOR_PROPERTY_SPLIT: 'type_editor_property_split',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 
@@ -216,6 +222,8 @@ export const CLIENT_META_KEY = {
   CLIENT_ID: 'client_id',
   LAST_SEQ: 'last_seq',
   THEME: 'theme',
+  /** Язык интерфейса клиента (задача 57f09136); исходный — `ru`. */
+  LANG: 'lang',
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
   WINDOW_BOUNDS: 'window_bounds',

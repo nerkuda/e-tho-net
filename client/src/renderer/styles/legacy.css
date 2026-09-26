@@ -1,0 +1,402 @@
+/* ---------------------------------------------------------------------------
+ * Адаптация редактора под единую модель связей (задача 8ab775d9)
+ * --------------------------------------------------------------------------- */
+
+/* Шапка — три строки: иконка · заголовок · ⚙ / синонимы / тип ▾ · актуально · Действия */
+.editor-top-row .editor-icon-box {
+  flex: 0 0 auto;
+}
+.editor-top-row .editor-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.editor-top-row > .ui-btn--icon {
+  flex: 0 0 auto;
+}
+
+/* Подменю «Действия» в шапке */
+.editor-header-row .ui-btn--s {
+  flex: 0 0 auto;
+}
+
+/* Вкладка «Комментарий» — единая зона комментария на всю высоту
+   (каркас — `.ui-comment--fill`/`--scroll`, `lib/ui/comment.css`). */
+.main-full {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Плейсхолдер пустого комментария */
+.md-field-placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 12px 4px;
+}
+
+/* Вкладка «Свойства» */
+.properties-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Группы — прямые дети вкладки; развёрнутая (с body) заполняет остаток
+   высоты вместе с прочими развёрнутыми, сплиттер клампит группу выше себя
+   (max-height) — тот же контракт, что у .links-tab (08-ui-spec.md §6.3). */
+.properties-tab > .group {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.properties-tab > .group:has(> .group-body) {
+  flex-grow: 1;
+}
+.properties-tab > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Внутри вкладки высотой управляет сплиттер группы, а не фиксированная
+   высота таблицы (`--clamp-props` — legacy-канал вкладки «Комментарий»):
+   таблица естественной высоты, скроллит тело группы. */
+.properties-tab .prop-wrap {
+  height: auto;
+  max-height: none;
+}
+.properties-body,
+.properties-outside-body {
+  padding: 4px 0;
+}
+.link-value-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* Редактор кросс-сетевой ссылки `cross_network_ref` (задача 7849008a; поле-чип
+ * — ошибка 9be98ae1): чипы-облачка фабрики с меткой «чужой сети» + поле живого
+ * веерного поиска, угловые кнопки «…» (диалог) и «✕» (очистить). Разметку
+ * чип-поля даёт общая `.link-value-wrap/field/corner`, здесь — только
+ * специфика кросс-сети. */
+.value-editor--cross-network-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.value-editor--cross-network-ref .cross-network-ref-add {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+/* Нерезолвленный чип: последний живой резолв отказал — бледность и рамка-
+ * предупреждение (причина видна в метке-подсказке чипа). */
+.cross-network-ref-chip--unresolved {
+  opacity: 0.6;
+  border-color: #e53935;
+}
+/* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
+ * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу
+ * поля, не отъедают ширину у списка значений. */
+.link-value-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 220px;
+}
+.link-value-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  /* Приёмка 0.8.1: поле не растягивает таблицу — максимум 10 строк чипов
+   * (~28px на строку с gap), дальше внутренняя прокрутка; прокрутка
+   * колесом над полем крутит поле, над именами полей — таблицу. */
+  max-height: 280px;
+  overflow-y: auto;
+  /* Свободная полоса под угловыми кнопками, чтобы последний чип не уходил
+   * под них при прокрутке. */
+  padding-right: 56px;
+  /* Ширина поля не зависит от содержимого (ошибка 10ad23d1): без этого
+   * nowrap-имя длинного чипа уходит в min-content таблицы свойств, таблица
+   * ширится сверх панели и вместо обрезки имени появляется горизонтальная
+   * прокрутка. `contain: inline-size` берёт ширину поля от контейнера (у
+   * `.link-value-wrap` есть пол 220px — поле не схлопнется), и чип
+   * (`width: 'container'` фабрики облачка) обрезает имя многоточием по
+   * полю. */
+  contain: inline-size;
+}
+
+/* --- Two-column property grids: definite column widths (ошибка 2012f46b) ----
+ *
+ * Таблицы свойств «имя → значение» основной группы и группы «Свойства вне
+ * типа» (класс-модификатор `prop-grid`, ставится в `editor/properties.ts`).
+ *
+ * Корень ошибки 2012f46b: подпись чипа однострочная (`nowrap` + ellipsis),
+ * её min-content равен полной ширине имени. В auto-раскладке min-content
+ * содержимого колонки значения побеждает ширину контейнера, и таблица
+ * раздувалась сверх панели — вместо обрезки имени появлялась горизонтальная
+ * прокрутка (`min-width: 0` этого не снимает).
+ *
+ * Решение уровня таблицы, а не поля: `table-layout: fixed` вообще не смотрит
+ * на min-content содержимого ячеек, поэтому колонке значения достаётся весь
+ * остаток ширины панели, а чип «по контейнеру» (`cloud-width-container`)
+ * обрезает имя многоточием по ней. Колонка имени получает предел 130px: все
+ * ключи реестра, кроме двух самых длинных (141px), влезают в одну строку
+ * (замер зондом). Auto-раскладка остаётся у многостолбцовых таблиц свойств
+ * типа и выбора мыслей — там своя раскладка по содержимому. */
+.prop-grid {
+  table-layout: fixed;
+}
+
+.prop-grid > tbody > tr > td:first-child {
+  width: 130px;
+  /* Длинное неразрывное имя ключа не выползает в колонку значения. */
+  overflow-wrap: anywhere;
+}
+
+/* Пол 220px у `.link-value-wrap` (ошибка 10ad23d1) — страховка auto-раскладки
+ * от схлопывания поля. В фиксированной раскладке ширина колонки значения уже
+ * известна, и пол только выталкивает поле за неё: на узких панелях (240–340px)
+ * возвращается горизонтальная прокрутка. Здесь пол не нужен. */
+.prop-grid .link-value-wrap {
+  min-width: 0;
+}
+
+/* Значение внетипового свойства-связи — flex-строка «содержимое + ×»
+ * (`.prop-outside-cell`): чип-редактор обязан сжиматься по колонке значения,
+ * а не диктовать ей min-content своей колонки чипов. */
+.prop-outside-cell > .link-value-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.link-value-corner {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  gap: 2px;
+  z-index: 2;
+}
+.link-value-corner-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.link-value-corner-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.link-value-add {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+/* Поле ввода с угловым «✕» очистки значения (приёмка 0.8.1) — обёртка
+ * любого одиночного поля (text/number/date/url таблицы свойств; поля дат
+ * панели фильтра «Структур» — ошибка a8e9eef1). */
+/* Имя свойства в таблице: липнет к верхней кромке прокручиваемой области,
+ * пока его (возможно многострочная) ячейка значения не проскроллится
+ * целиком (приёмка 0.8.1). Фон обязателен — под ним проплывают чипы. */
+.properties-type-body .prop-table td.prop-name-cell {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  vertical-align: top;
+}
+.prop-hint {
+  margin-left: 2px;
+  cursor: help;
+}
+/* Список URL-значений: угловая кнопка «✕» очистки всех значений. */
+.multi-url-editor {
+  position: relative;
+  padding-right: 26px;
+}
+.multi-url-clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+.multi-url-clear:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+/* Вкладка «Граф» — мини-граф на всю высоту вкладки. Цепочка
+   flex-растяжения идёт сверху вниз от `.tab-pane.fixed`:
+     .tab-pane.fixed → .graph-tab → .links-local-graph--fill
+                       → .mini-graph → .mini-graph-viewport--fill
+   Каждый уровень обязан быть flex-контейнером column, иначе
+   `flex: 1 1 auto` потомка не на что опереться (CSS растягивает только
+   во flex-родителе). Без правок `.graph-tab` был обычным блоком и
+   `.links-local-graph--fill` оставался на высоте по содержимому; тогда
+   `.mini-graph-viewport--fill` делил эту высоту поровну с `header` и
+   `hint` — отсюда «граф занимает ровно половину вкладки». */
+.graph-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.links-local-graph {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+.links-local-graph--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.links-local-graph--fill > .mini-graph {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mini-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.mini-graph-header {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mini-graph-viewport {
+  position: relative;
+  width: 100%;
+  height: 280px;
+  overflow: hidden;
+  background: var(--bg-soft, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+  cursor: grab;
+}
+.mini-graph-viewport:active {
+  cursor: grabbing;
+}
+.mini-graph-viewport--fill {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mini-graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Локальный граф на d3 (приёмка 0.8.1): линии и облачка живут в одном
+   SVG-пространстве, зум/пан двигают их вместе. --- */
+
+.mini-graph-edge {
+  /* Эффективное оформление линии приходит кастомными свойствами из
+     mini-graph.ts (тип связи по цепочке предков); без них — нейтральный цвет
+     и толщина. Инлайн-`stroke` не используем: он перебил бы подсветку. */
+  stroke: var(--edge-color, var(--border-strong));
+  stroke-width: var(--edge-width, 1.2);
+  pointer-events: none;
+}
+.mini-graph-edge.hovered {
+  stroke: var(--accent);
+  stroke-width: var(--edge-hover-width, 2);
+}
+.mini-graph-edge-arrow {
+  fill: var(--edge-color, var(--border-strong));
+  pointer-events: none;
+}
+.mini-graph-edge-arrow.hovered {
+  fill: var(--accent);
+}
+/* Постоянная подпись типа связи на середине ребра (приёмка 0.8.1). */
+.mini-graph-edge-label {
+  fill: var(--text-dim);
+  font-size: 9px;
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke;
+  stroke: var(--surface, #fff);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+/* Прозрачная толстая линия — зона наведения для tooltip/подсветки. */
+.mini-graph-edge-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: help;
+}
+
+/* Помеченное на удаление ребро (ошибка 355319d4): остаётся на графе, но
+   приглушается (пунктир приходит из модели, `TRASHED_EDGE_DASH`); симметрия с
+   бледной пилюлей помеченной мысли. */
+.mini-graph-edge.trashed,
+.mini-graph-edge-arrow.trashed {
+  opacity: 0.45;
+}
+.mini-graph-edge-label.trashed {
+  opacity: 0.6;
+}
+
+/* Метка корзины помеченного ребра: вид даёт общий `.link-trash-badge`, размер —
+   foreignObject (18 px), клик открывает диалог связи. */
+.mini-graph-edge-trash {
+  overflow: visible;
+}
+
+.mini-node {
+  cursor: pointer;
+}
+/* Рамки подсветки узла. Класс `mini-node-cloud` перенесён с <rect> на
+   HTML-облачко фабрики внутри <foreignObject> (задача 1b9dccc5): свойство
+   `stroke` на HTML-элементе не действует, а внешняя рамка срезается краем
+   foreignObject. Подсветку рисует граница самого облачка: border следует за
+   border-radius, рамка остаётся скруглённой (чистка дублей, a6055d05).
+   Фокус приходит на облачко (tabindex фабрики), а не на SVG-группу. */
+.mini-node:hover .mini-node-cloud,
+.mini-node:focus .mini-node-cloud {
+  border-color: var(--accent);
+}
+.mini-node-cloud:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mini-node-center .mini-node-cloud {
+  border-color: var(--accent);
+  border-width: 1.6px;
+}
+/* Hover на связи: связанные мысли — оранжевая рамка и поверх остальных
+   (узлы подняты append'ом в mini-graph.ts). */
+.mini-node.edge-hi .mini-node-cloud {
+  border-color: #e8871e;
+  border-width: 2px;
+}
+.mini-graph-mass-chip text {
+  font-size: 10px;
+  fill: var(--text-dim);
+}
+.mini-graph-hint {
+  font-size: 11px;
+}

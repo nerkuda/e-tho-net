@@ -22,7 +22,7 @@ import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
 import { createHandlers, selfMutationNetwork } from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
-import type { IpcInvokePayload } from './contract.js';
+import type { IpcCallContext, IpcInvokePayload } from './contract.js';
 
 /** IPC calls slower than this are journaled as WARN instead of INFO (f051bf95 §3). */
 const IPC_SLOW_MS = 500;
@@ -63,6 +63,11 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   let currentUser: CurrentUser | null = null;
   /** G8 applier state: in-memory thought/link cache + echo suppression. */
   const rtState = new RealtimeState();
+  /**
+   * Отменяемые вызовы `etn:invoke` (требование ebed4980): `requestId` →
+   * контроллер вызова. Запись живёт на время вызова, `etn:cancel` её гасит.
+   */
+  const inflight = new Map<string, AbortController>();
 
   const broadcast = (channel: string, payload: unknown): void => {
     const win = opts.getWindow();
@@ -245,9 +250,17 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // Journal instrumentation (task f051bf95 §3): method + duration per call,
     // slow calls (>IPC_SLOW_MS) as WARN, failures as ERROR (always written).
     const startedAt = Date.now();
+    // Отмена устаревших вызовов (требование ebed4980): renderer присылает
+    // `requestId`, при отмене — `etn:cancel { requestId }`. Контроллер живёт
+    // ровно на время вызова; abort доезжает до fetch через `signal` RestClient.
+    const requestId =
+      typeof payload.requestId === 'string' && payload.requestId !== '' ? payload.requestId : null;
+    const controller = new AbortController();
+    if (requestId !== null) inflight.set(requestId, controller);
+    const callCtx: IpcCallContext = { signal: controller.signal };
     let result: unknown;
     try {
-      result = await handler(payload.args ?? []);
+      result = await handler(payload.args ?? [], callCtx);
     } catch (err) {
       getClientLog()?.error('ipc', 'ipc call failed', {
         method: payload.method,
@@ -255,6 +268,8 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         error: err instanceof Error ? err.message : String(err),
       });
       throw err;
+    } finally {
+      if (requestId !== null) inflight.delete(requestId);
     }
     const durationMs = Date.now() - startedAt;
     if (durationMs > IPC_SLOW_MS) {
@@ -279,6 +294,14 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     return result;
   });
 
+  // Отмена устаревшего вызова выборки (требование ebed4980): renderer шлёт
+  // `requestId` отменяемого вызова; сигнал гасит fetch в main.
+  const onCancel = (_event: unknown, requestId: unknown): void => {
+    if (typeof requestId !== 'string') return;
+    inflight.get(requestId)?.abort(new Error('IPC call cancelled by renderer'));
+  };
+  ipcMain.on('etn:cancel', onCancel);
+
   // One-way channel from the renderer's `window.online` DOM event (defect
   // 7f4cef31): main owns the sockets, so network-restored notifications must
   // cross the bridge even though they carry no request/response payload.
@@ -299,6 +322,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
 
   return {
     shutdown() {
+      ipcMain.removeListener('etn:cancel', onCancel);
       ipcMain.removeListener('etn:realtime:online', onRendererOnline);
       ipcMain.removeListener('etn:log-event', onRendererLogEvent);
       disconnect();

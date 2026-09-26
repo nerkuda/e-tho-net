@@ -20,7 +20,6 @@ import {
   CLOUD_WIDTHS,
   CLOUD_WIDTH_CONTAINER_CLASS,
   SINGLE_CLICK_DELAY_MS,
-  applyCloudStyle as factoryApplyCloudStyle,
   applyThoughtIcon,
   createThoughtCloud,
   deferSingleClick,

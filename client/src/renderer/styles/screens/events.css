@@ -1,0 +1,357 @@
+/* ---------------------------------------------------------------------------
+ * «События» view (задача f27809d0 «Вид workspace «События» в клиенте»,
+ * элемент UI 8cd9ad55, 08-ui-spec.md §18, docs/03-server-api.md §13d).
+ *
+ * A fourth workspace view: a filter row (period / participant / entity type /
+ * action) on top, a destructive-commands toolbar, then the activity table.
+ * Follows the same chrome conventions as the chronicle screen
+ * (`.admin-table-wrap` + pager).
+ * ------------------------------------------------------------------------- */
+
+.activity {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  background: var(--layer-bg, var(--bg));
+}
+
+/* Filter row: one line of compact controls with a label per group. */
+.activity-filter-area {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Layout: левая панель отборов + правая колонка (замечание пользователя —
+ * «использовать компоновку экрана Структуры мыслей»). */
+.activity-filter {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* Сплиттер изменения ширины панели (как в Структурах мыслей). */
+.activity-splitter {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.activity-splitter:hover,
+.activity-splitter.dragging {
+  background: var(--warn);
+}
+
+.activity-results {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* --layer-bg (0.6.4, 13-layers.md §2.2a): фон списка событий следует за
+   * активным слоем, как в Хронике/Структурах. Без этого .activity-results
+   * перекрывал родительский var(--layer-bg) фиксированным var(--surface)
+   * (замечание пользователя: «фон таблицы событий не меняется при смене слоя»). */
+  background: var(--layer-bg, var(--surface));
+  overflow: hidden;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Обёртка мульти-выбора пользователей: подпись + общий чип-лист
+ * `lib/ui/chip-list.ts` (задача 59119797; требование d1cd2095). Вид чипов и
+ * поля добавления — в `chip-list.css`; прежние самодельные классы упразднены. */
+.user-chip-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Строка условия авторства в Структурах (задача 59119797). */
+.author-cond-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.author-cond-label {
+  width: 60px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.author-cond-op {
+  width: auto;
+}
+
+.author-cond-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.activity-date {
+  width: 130px;
+}
+
+.activity-user {
+  width: 180px;
+}
+
+.activity-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.activity-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  max-height: none;
+}
+
+.activity-pager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Ячейка таблицы событий: содержимое обрезается многоточием, а обёртка
+ * несёт подсветку строки, открытой в редакторе (§18). Строки ленты собирает
+ * единый фасад `lib/ui/table.ts` — прежние правила `.activity-row*` и
+ * `table.activity-table*` удалены вместе с самодельной таблицей (Z5). */
+.activity-cell {
+  min-width: 0;
+}
+
+.activity-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.activity-author {
+  max-width: 180px;
+}
+
+.activity-action-label {
+  white-space: nowrap;
+}
+
+.activity-entity {
+  max-width: 360px;
+}
+
+.activity-layer {
+  max-width: 90px;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+}
+
+.activity-maintenance-hint {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+}
+
+/* Thought-type view editor dialog (задача e37f3f04, 0.7.3). */
+.view-editor-body {
+  max-height: min(70vh, 760px);
+  overflow-y: auto;
+}
+.view-editor-body .ui-field-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.view-editor-criteria {
+  max-height: none;
+  padding: 4px 0;
+}
+.st-f-token-btn {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  font-family: var(--mono, monospace);
+  white-space: nowrap;
+}
+.st-f-token-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* «КРИТЕРИИ ОТБОРА» — заголовок секции в диалоге отбора (e8365d29). */
+.view-editor-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 8px 0 2px;
+}
+
+/* Маркер «группа заполнена» — звёздочка в заголовке группы. */
+.st-f-star {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Отступ между группами конструктора условий (половина кегля заголовка —
+ * 6px при .st-f-title font-size:12px). Без него свёрнутые группы сливаются. */
+.view-editor-criteria > .st-f-block + .st-f-block {
+  margin-top: 6px;
+}
+
+/* Строки «Автор/Редактор» — вертикальный стек (каждое условие — строка). */
+.st-f-author-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Компактный редактор списка автора: чипы + кнопки в одну строку. */
+.author-list-editor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-value-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.author-list-add {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 130px;
+}
+
+/* Одиночное значение автора: свободный ввод + токен + выбор пользователя. */
+.author-single-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-single-wrap .st-f-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-single-wrap .user-select-row {
+  flex: 0 0 auto;
+}
+
+.author-single-wrap .user-select-row .select-input {
+  width: auto;
+  min-width: 150px;
+}
+
+/* --- type-editor tabs (задача b8301c16, требование 344b8798) ---------- */
+/* Five tabs «Описание», «Шаблон», «Свойства», «Отборы», «Метаданные» для
+   редактора типа мысли. Редактор типа связи остаётся без табов — состав
+   полей прежний, и он не набирает нужной массы. */
+
+/* Полоса вкладок редактора типа — общий механизм `lib/ui/tabs.ts`
+ * (задача a57e7998); частные `.type-editor-tabs`/`-tab`/`-pane` упразднены. */
+
+/* Кнопки перестановки отборов внутри вкладки «Отборы». Тот же тон,
+   что и в таблицах свойств, чтобы строки были визуально одного
+   семейства. */
+.views-tab-table .ui-btn--s {
+  font-size: var(--font-size-xs);
+}
+
+/* Колонки таблицы отборов (e8365d29, доработка): «Имя» — 40%, «Описание» —
+   последняя и обрезается, «умлоч.» — галочка у помеченного. */
+.views-tab-table .views-tab-col-name {
+  width: 40%;
+}
+
+.views-tab-table .views-tab-name,
+.views-tab-table .views-tab-desc {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.views-tab-table .views-tab-default {
+  text-align: center;
+  width: 60px;
+}
+
+.views-tab-table .views-tab-default-mark {
+  color: var(--accent);
+  font-weight: var(--font-weight-bold);
+}
+
+.views-tab-table .views-tab-actions {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.views-tab-empty {
+  padding: 8px 0;
+  color: var(--text-dim);
+}
+

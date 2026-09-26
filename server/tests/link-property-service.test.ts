@@ -17,6 +17,8 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import {
   computeThoughtCardWarnings,
   createTypeProperty,
+  deleteTypeProperty,
+  getNetworkProperty,
   getPropertyValuesResolved,
   getPropertyValuesWithLinks,
   listEffectiveTypeProperties,
@@ -236,6 +238,50 @@ describe(
         assert.equal(linkProp.property_name, 'регулируется из');
         assert.equal(linkProp.direction, 'in');
         assert.equal(linkProp.outside_type, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('detaching a materialized target binding is not resurrected by the legacy mirror (ошибка 3ac05cff)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'зависит от', name_reverse: 'от него зависят' },
+          USER,
+        );
+        const src = createThoughtType(ndb, { name: 'Источник' }, USER);
+        const dst = createThoughtType(ndb, { name: 'Назначение' }, USER);
+        const sourceBinding = createTypeProperty(
+          ndb,
+          'thought_type',
+          src.id,
+          {
+            key: 'зависит от',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [dst.id] },
+          },
+          USER,
+        );
+        // Ограничение целей материализует настоящую target-привязку у типа-назначения.
+        const ownLinks = (): ReturnType<typeof listEffectiveTypeProperties> =>
+          listEffectiveTypeProperties(ndb, 'thought_type', dst.id).filter(
+            (p) => p.property_id === sourceBinding.property_id,
+          );
+        const before = ownLinks();
+        assert.equal(before.length, 1, 'одна материализованная target-привязка');
+        assert.equal(before[0]!.mirrored === true, false, 'материализованная привязка — не зеркало');
+        const targetBindingId = before[0]!.id;
+
+        deleteTypeProperty(ndb, targetBindingId, USER);
+
+        // Снятая привязка назначения не должна возвращаться legacy-зеркалом
+        // (appendMirroredLinkProperties) — иначе «✕» в редакторе типа no-op.
+        assert.equal(ownLinks().length, 0, 'снятая привязка назначения не возвращается');
+        // Legacy-список целей синхронизирован: тип-назначение из него убран.
+        const prop = getNetworkProperty(ndb, sourceBinding.property_id);
+        assert.deepEqual(prop?.config?.allowed_target_type_ids ?? [], []);
       } finally {
         ndb.close();
       }

@@ -197,7 +197,7 @@ describe(
         for (let i = 0; i < 5; i += 1) {
           await createThought(ctx, ctx.networkId, ctx.adminKey, `Запрос${i}`);
         }
-        const { response } = fanOutQuery(makeAccess(ctx, ctx.networkId), {
+        const { response } = await fanOutQuery(makeAccess(ctx, ctx.networkId), {
           networkIds: [ctx.networkId],
           query: { sort: 'alpha', order: 'asc', limit: 50, offset: 0, keywords: 'Запрос' },
           limit: 50,

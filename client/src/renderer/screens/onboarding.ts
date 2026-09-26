@@ -12,10 +12,15 @@
  */
 
 import { restoreSession } from '../app.js';
+import { t } from '../lib/i18n.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, span } from '../lib/dom.js';
+import { errorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
+import { uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
+import { fieldRow } from '../lib/ui/field.js';
 
 /**
  * Builds the onboarding screen. The profile list loads asynchronously; form
@@ -48,29 +53,31 @@ export function buildOnboarding(): HTMLElement {
   const formTitle = el('h2', 'form-title', 'Новое подключение');
   const form = div('form-stack');
 
-  const labelInput = el('input', 'text-input');
+  const labelInput = fieldInput();
   labelInput.type = 'text';
   labelInput.placeholder = 'Мой сервер (необязательно)';
-  const labelField = div('field');
-  labelField.append(el('label', 'field-label', 'Название'), labelInput);
+  const labelField = fieldRow({ label: 'Название', control: labelInput });
 
-  const urlInput = el('input', 'text-input');
+  const urlInput = fieldInput();
   urlInput.type = 'text';
   urlInput.placeholder = 'http://localhost:3000';
   urlInput.spellcheck = false;
-  const urlField = div('field');
-  urlField.append(el('label', 'field-label', 'Адрес сервера'), urlInput);
+  const urlField = fieldRow({ label: 'Адрес сервера', control: urlInput });
 
-  const keyInput = el('input', 'text-input');
+  const keyInput = fieldInput();
   keyInput.type = 'password';
   keyInput.placeholder = 'etn_…';
   keyInput.spellcheck = false;
-  const keyField = div('field');
-  keyField.append(el('label', 'field-label', 'API-key'), keyInput);
+  const keyField = fieldRow({ label: 'API-key', control: keyInput });
 
   const submitRow = div('form-row');
-  const submit = button('Подключиться', () => void submitForm(), 'btn primary');
-  const formError = span('', 'error-text');
+  const submit = uiButton({
+    label: 'Подключиться',
+    role: 'primary',
+    size: 'm',
+    onClick: () => void submitForm(),
+  });
+  const formError = errorLine();
   submitRow.append(submit, formError);
   form.append(labelField, urlField, keyField, submitRow);
   card.append(formTitle, form);
@@ -107,7 +114,12 @@ export function buildOnboarding(): HTMLElement {
       const item = div('profile-item' + (p.isActive ? ' active' : ''));
       const info = div('profile-info');
       info.append(span(p.label, 'profile-label'), span(p.baseUrl, 'profile-url'));
-      const removeBtn = button('Удалить', () => void removeSavedProfile(p), 'btn small danger');
+      const removeBtn = uiButton({
+        label: t('actions.delete'),
+        role: 'danger',
+        size: 's',
+        onClick: () => void removeSavedProfile(p),
+      });
       // The whole row also acts as a "connect" affordance; the delete button
       // must not bubble the click or it would both delete and connect at once.
       removeBtn.addEventListener('click', (ev) => ev.stopPropagation());

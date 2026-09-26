@@ -1,13 +1,25 @@
 /**
- * Floating context/dropdown menu (08-ui-spec.md §2.6, §8).
+ * Общий словарь пунктов меню клиента (08-ui-spec.md §2.6, §8; требование
+ * f9ad4f53 «Контекстное меню карты — на общем словаре пунктов меню»).
  *
- * A single shared menu element supports one level of hover submenus, click
- * outside / Escape dismissal and per-item disabled/danger/checked flags. Used
- * by the toolbar menus, the canvas thought menu, zone sort menus and the
- * selection panel.
+ * Единственное описание пункта меню — тип {@link MenuItem}; единственный
+ * способ собрать пункты — конструкторы словаря {@link menuAction},
+ * {@link menuChoice}, {@link menuSubmenu} и разделитель {@link MENU_SEPARATOR}.
+ * Меню карты мыслей и меню экранов строятся только из них: самодельные
+ * объекты-пункты (`{ label: … }`) в месте сборки запрещены — за этим следит
+ * сторож `tests/guard-canvas-menu-dictionary.test.ts`.
+ *
+ * Одно готовое меню поддерживает один уровень hover-подменю, закрытие кликом
+ * вне / Escape / потерей фокуса / изменением размера окна и флаги пункта
+ * `disabled` / `danger` / `checked`. Потребители: меню тулбара, меню мысли
+ * холста и редактора, меню сортировки зон, панель выделения, меню списков.
+ *
+ * Строк интерфейса у словаря нет: подпись пункта задаёт потребитель (при
+ * переводе — `t('…')` из `lib/i18n.ts`).
  */
 
 import { div, el, span } from './dom.js';
+import { noteFocusOrigin } from './focus-origin.js';
 
 /** A menu entry: leaf with `onClick` or a parent with `submenu`.
  *  `dragId` marks a row as a drag source for a thought (the history dropdown)
@@ -35,6 +47,76 @@ export interface MenuItem {
 
 /** A visible separator. */
 export const MENU_SEPARATOR: MenuItem = { label: '—' };
+
+/** Опции пункта словаря — всё, кроме подписи, обработчика и подменю. */
+export interface MenuItemOptions {
+  /** Значок: строка-глиф (текстом) или DOM-узел (например, inline-SVG). */
+  icon?: string | Node;
+  /** Готовое содержимое строки вместо пары «значок + подпись». */
+  content?: Node;
+  /** Пункт недоступен: клик игнорируется, строка приглушена. */
+  disabled?: boolean;
+  /** Разрушающее действие — опасный вид строки. */
+  danger?: boolean;
+  /** Идентификатор перетаскивания (попадает в `row.dataset['dragId']`). */
+  dragId?: string;
+}
+
+/** Разворачивает опции в поля пункта, не заводя `undefined`-ключей. */
+function withOptions(item: MenuItem, options: MenuItemOptions): MenuItem {
+  if (options.icon !== undefined) item.icon = options.icon;
+  if (options.content !== undefined) item.content = options.content;
+  if (options.disabled !== undefined) item.disabled = options.disabled;
+  if (options.danger !== undefined) item.danger = options.danger;
+  if (options.dragId !== undefined) item.dragId = options.dragId;
+  return item;
+}
+
+/**
+ * Пункт-действие: лист меню с обработчиком. Основа словаря. `onClick` не
+ * задан — строка без действия (обычно вместе с `disabled`: так показывают
+ * недоступный режим, не убирая пункт из меню).
+ */
+export function menuAction(
+  label: string,
+  onClick?: () => void,
+  options: MenuItemOptions = {},
+): MenuItem {
+  const item: MenuItem = { label };
+  if (onClick !== undefined) item.onClick = onClick;
+  return withOptions(item, options);
+}
+
+/**
+ * Пункт-переключатель: отмечает текущий выбранный режим (`checked`) — так
+ * показывается активная сортировка зоны и другие взаимоисключающие наборы
+ * (по смыслу радио, а не флажок: выбор применяется сразу).
+ */
+export function menuChoice(
+  label: string,
+  checked: boolean,
+  onClick?: () => void,
+  options: MenuItemOptions = {},
+): MenuItem {
+  const item = menuAction(label, onClick, options);
+  item.checked = checked;
+  return item;
+}
+
+/**
+ * Пункт-родитель: при наведении раскрывает подменю (один уровень, см.
+ * {@link buildMenu}). Обработчика у самого пункта нет — клик по родителю
+ * ничего не делает.
+ */
+export function menuSubmenu(
+  label: string,
+  submenu: MenuItem[],
+  options: MenuItemOptions = {},
+): MenuItem {
+  const item = menuAction(label, undefined, options);
+  item.submenu = submenu;
+  return item;
+}
 
 let roots: HTMLElement[] = [];
 let dismissers: Array<() => void> = [];
@@ -87,6 +169,11 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
     row.addEventListener('click', (event) => {
       event.stopPropagation();
       if (item.disabled === true) return;
+      // Строка-мысль (drop-меню закреплённых/истории, `dragId` — её id) —
+      // запоминаем её экранный прямоугольник как источник полёта к этой мысли
+      // ДО закрытия меню, пока строка ещё в раскладке (дефект 2 задачи
+      // e9f0af94).
+      if (item.dragId !== undefined) noteFocusOrigin(item.dragId, row);
       closeMenu();
       item.onClick?.();
     });

@@ -17,19 +17,27 @@
  */
 
 import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerDiffResult, type LayerMergeReport } from '@etn/shared';
+import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
-import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
-import { errorDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, span } from '../lib/dom.js';
-import { svgIcon } from '../lib/icons.js';
+import {
+  MENU_SEPARATOR,
+  menuAction,
+  menuChoice,
+  showMenuAt,
+  type MenuItem,
+} from '../lib/menu.js';
+import { errorDialog, showDialog } from '../lib/dialog.js';
+import { div, span } from '../lib/dom.js';
+import { colorField } from '../lib/ui/color-field.js';
+import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
 import {
   defaultLayerColors,
   invertThemeColor,
 } from '../lib/layer-colors.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { resyncAfterLayerSwitch } from '../app.js';
-import { store, requireNetworkId, type Theme } from '../state.js';
+import { store, type Theme } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { lineDiff } from '../lib/diff.js';
@@ -122,37 +130,43 @@ export function buildLayerMenuItems(networkId: string, layers: Layer[]): MenuIte
     .sort((a, b) => a.depth - b.depth || a.created_at.localeCompare(b.created_at));
   for (const l of selectable) {
     const indent = l.is_base ? '' : '\u00A0\u00A0'.repeat(l.depth - 1);
-    items.push({
-      label: `${indent}${l.is_base ? 'Основа' : l.title}`,
-      checked: l.current,
-      onClick: () => void selectLayerForTab(networkId, l.id),
-    });
+    items.push(
+      menuChoice(
+        `${indent}${l.is_base ? t('layers.menu.base') : l.title}`,
+        l.current,
+        () => void selectLayerForTab(networkId, l.id),
+      ),
+    );
   }
   items.push(MENU_SEPARATOR);
-  items.push({ label: 'Создать новый слой…', onClick: () => void openCreateLayerDialog(networkId) });
+  items.push(menuAction(t('layers.menu.create'), () => void openCreateLayerDialog(networkId)));
   if (current !== undefined) {
-    items.push({
-      label: current.is_base ? 'Свойства основы…' : 'Свойства слоя…',
-      onClick: () => void openLayerPropsDialog(networkId, current.id),
-    });
+    items.push(
+      menuAction(
+        current.is_base ? t('layers.menu.propsBase') : t('layers.menu.propsLayer'),
+        () => void openLayerPropsDialog(networkId, current.id),
+      ),
+    );
   }
   if (current !== undefined && !current.is_base) {
     const targetTitle =
-      layers.find((l) => l.id === current.parent_id)?.title ?? 'Основу';
+      layers.find((l) => l.id === current.parent_id)?.title ?? t('layers.menu.baseTo');
     items.push(MENU_SEPARATOR);
-    items.push({
-      label: `Отличия от «${targetTitle}»…`,
-      onClick: () => void openDiffDialog(networkId, current.id),
-    });
-    items.push({
-      label: `Слить «${current.title}» в «${targetTitle}»…`,
-      onClick: () => void openMergeLayerDialog(networkId, current.id),
-    });
-    items.push({
-      label: `Удалить «${current.title}»…`,
-      danger: true,
-      onClick: () => void openDeleteLayerDialog(networkId, current.id),
-    });
+    items.push(
+      menuAction(t('layers.menu.diff', targetTitle), () =>
+        void openDiffDialog(networkId, current.id),
+      ),
+    );
+    items.push(
+      menuAction(t('layers.menu.merge', [current.title, targetTitle]), () =>
+        void openMergeLayerDialog(networkId, current.id),
+      ),
+    );
+    items.push(
+      menuAction(t('layers.menu.delete', current.title), () => void openDeleteLayerDialog(networkId, current.id), {
+        danger: true,
+      }),
+    );
   }
   return items;
 }
@@ -275,25 +289,11 @@ function colorPickerRow(label: string, initial: string): {
   root: HTMLElement;
   get: () => string;
 } {
-  const picker = el('input', 'color-input') as HTMLInputElement;
-  picker.type = 'color';
-  picker.value = initial;
-  const hex = el('input', 'text-input layer-color-hex') as HTMLInputElement;
-  hex.value = initial;
-  picker.addEventListener('input', () => {
-    hex.value = picker.value;
-  });
-  hex.addEventListener('change', () => {
-    const trimmed = hex.value.trim();
-    if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) picker.value = trimmed.toLowerCase();
-    else hex.value = picker.value;
-  });
-  const row = div('layer-color-row');
-  row.append(picker, hex);
-  const wrap = field(label, row);
+  const f = colorField({ value: initial, withHex: true, extraClass: 'layer-color-row' });
+  const wrap = fieldRow({ label, control: f.root });
   return {
     root: wrap,
-    get: () => picker.value.toLowerCase(),
+    get: () => f.value(),
   };
 }
 
@@ -317,7 +317,7 @@ function colorPickerRow(label: string, initial: string): {
  * его с сервера отдельным запросом.
  */
 export function openLayerPropsDialog(networkId: string, layerId: string): void {
-  let layer = store.state.layers.find((l) => l.id === layerId);
+  const layer = store.state.layers.find((l) => l.id === layerId);
   if (layer === undefined) {
     void openLayerPropsDialogAsync(networkId, layerId);
     return;
@@ -343,91 +343,111 @@ async function openLayerPropsDialogAsync(networkId: string, layerId: string): Pr
 function showLayerPropsDialog(networkId: string, layer: Layer): void {
   const theme: Theme = store.state.theme;
 
-  const titleInput = el('input', 'text-input') as HTMLInputElement;
-  titleInput.value = layer.title;
+  const titleInput = fieldInput({ value: layer.title });
   if (layer.is_base) titleInput.disabled = true;
-  const commentInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-  commentInput.value = layer.comment ?? '';
+  const commentInput = fieldTextarea({ value: layer.comment ?? '' });
 
   const body = div('form-stack');
-  body.append(field('Название', titleInput), field('Комментарий', commentInput));
+  body.append(
+    fieldRow({ label: 'Название', control: titleInput }),
+    fieldRow({ label: 'Комментарий', control: commentInput }),
+  );
 
   // Colour indication (0.6.4): only for non-base layers.
   const themeLabel = theme === 'dark' ? 'тёмной' : 'светлой';
   let stripeRow: ReturnType<typeof colorPickerRow> | null = null;
   let bgRow: ReturnType<typeof colorPickerRow> | null = null;
+  /** Исходные цвета пары при открытии — база «грязной» проверки (b58f6aad). */
+  let stripeInitial: string | null = null;
+  let bgInitial: string | null = null;
   if (!layer.is_base) {
     const defaults = defaultLayerColors();
     const initialStripe = layer.colors?.focus_stripe[theme] ?? defaults.focus_stripe[theme];
     const initialBg = layer.colors?.background[theme] ?? defaults.background[theme];
+    stripeInitial = initialStripe;
+    bgInitial = initialBg;
     stripeRow = colorPickerRow('Полоса фокуса', initialStripe);
     bgRow = colorPickerRow('Фон холста', initialBg);
     const hint = div('layer-hint');
     hint.textContent = `Цвета для ${themeLabel} темы; второй вариант вычисляется инверсией светлоты.`;
+    // Парные цветовые поля — на одной строке (ошибка 57e05439): в столбик они
+    // съедали высоту и выталкивали содержимое за роль размера.
+    const colorsRow = div('form-row two-col-row layer-colors-row');
+    colorsRow.append(stripeRow.root, bgRow.root);
     const colorsBlock = div('form-stack layer-colors-block');
-    colorsBlock.append(hint, stripeRow.root, bgRow.root);
+    colorsBlock.append(hint, colorsRow);
     body.append(colorsBlock);
+  }
+
+  /** Запись изменений слоя и закрытие — общий путь кнопки и подтверждения. */
+  async function save(close: () => void): Promise<void> {
+    const title = titleInput.value.trim();
+    const comment = commentInput.value.trim();
+    if (!layer.is_base && title.length === 0) return;
+    // Colours: `undefined` — untouched, an object — the picked pair
+    // plus the inverted opposite theme (§2.2a). There is no «off»
+    // switch anymore: the shown pair is always what gets saved, so a
+    // layer without stored colours picks up the shown defaults.
+    let colors: LayerColors | undefined;
+    if (stripeRow !== null && bgRow !== null) {
+      const next: LayerColors = {
+        focus_stripe: invertThemeColor(
+          { dark: stripeRow.get(), light: stripeRow.get() },
+          theme,
+        ),
+        background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
+      };
+      if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
+    }
+    try {
+      const updated = await etn.layers.update(
+        networkId,
+        layer.id,
+        {
+          ...(layer.is_base || title === layer.title ? {} : { title }),
+          ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),
+          ...(colors !== undefined ? { colors } : {}),
+        },
+        layer.version,
+      );
+      close();
+      await syncLayersForTab(networkId, store.state.currentLayer?.id ?? null);
+      void updated;
+    } catch (err) {
+      errorDialog('Не удалось сохранить слой', err);
+    }
   }
 
   showDialog({
     title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
     body,
-    width: 460,
+    // Роль `m` (требование 13464c39): имя, комментарий и парные цветовые поля
+    // (в одну строку) помещаются без прокрутки (ошибка 57e05439).
+    size: 'm',
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях требуют
+    // подтверждения; «Сохранить» идёт тем же путём, что «Применить».
+    dirty: {
+      isDirty: () =>
+        (!layer.is_base && titleInput.value.trim() !== layer.title) ||
+        commentInput.value.trim() !== (layer.comment ?? '') ||
+        (stripeRow !== null && stripeRow.get() !== stripeInitial) ||
+        (bgRow !== null && bgRow.get() !== bgInitial),
+      save: (close) => void save(close),
+    },
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
-      {
-        label: 'Сохранить',
-        primary: true,
-        onClick: async (close) => {
-          const title = titleInput.value.trim();
-          const comment = commentInput.value.trim();
-          if (!layer.is_base && title.length === 0) return;
-          // Colours: `undefined` — untouched, an object — the picked pair
-          // plus the inverted opposite theme (§2.2a). There is no «off»
-          // switch anymore: the shown pair is always what gets saved, so a
-          // layer without stored colours picks up the shown defaults.
-          let colors: LayerColors | undefined;
-          if (stripeRow !== null && bgRow !== null) {
-            const next: LayerColors = {
-              focus_stripe: invertThemeColor(
-                { dark: stripeRow.get(), light: stripeRow.get() },
-                theme,
-              ),
-              background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
-            };
-            if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
-          }
-          try {
-            const updated = await etn.layers.update(
-              networkId,
-              layer.id,
-              {
-                ...(layer.is_base || title === layer.title ? {} : { title }),
-                ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),
-                ...(colors !== undefined ? { colors } : {}),
-              },
-              layer.version,
-            );
-            close();
-            await syncLayersForTab(networkId, store.state.currentLayer?.id ?? null);
-            void updated;
-          } catch (err) {
-            errorDialog('Не удалось сохранить слой', err);
-          }
-        },
-      },
+      { label: t('actions.cancel'), onClick: (close) => close() },
+      { label: t('actions.apply'), primary: true, onClick: (close) => void save(close) },
     ],
     onMount: () => titleInput.focus(),
   });
 }
 
 /** Create-layer dialog (§10.3: the explaining one-liner + comment + git branch). */function openCreateLayerDialog(networkId: string): void {
-  const titleInput = el('input', 'text-input') as HTMLInputElement;
-  titleInput.placeholder = 'Например: Правки августа';
-  const commentInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-  commentInput.placeholder = 'Зачем этот слой — чтобы следующий (или агент) понял без расспросов';
-  const branchInput = el('input', 'text-input') as HTMLInputElement;
-  branchInput.placeholder = 'ветка git (необязательно)';
+  const titleInput = fieldInput({ placeholder: 'Например: Правки августа' });
+  const commentInput = fieldTextarea({
+    placeholder: 'Зачем этот слой — чтобы следующий (или агент) понял без расспросов',
+  });
+  const branchInput = fieldInput({ placeholder: 'ветка git (необязательно)' });
 
   const body = div('form-stack');
   const hint = div('layer-hint');
@@ -437,43 +457,53 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     'Новый слой получит собственные цвета карты (полоса фокуса и фон), чтобы его было видно; их можно поменять в «Свойствах слоя».';
   body.append(
     hint,
-    field('Название', titleInput),
-    field('Комментарий', commentInput),
-    field('Ветка git', branchInput),
+    fieldRow({ label: 'Название', control: titleInput }),
+    fieldRow({ label: 'Комментарий', control: commentInput }),
+    fieldRow({ label: 'Ветка git', control: branchInput }),
     colorsHint,
   );
+
+  /** Создание слоя и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+  async function create(close: () => void): Promise<void> {
+    const title = titleInput.value.trim();
+    if (title.length === 0) return;
+    const comment = commentInput.value.trim();
+    const gitBranch = branchInput.value.trim();
+    try {
+      // Creation defaults (0.6.4 §2.2a): the layer is immediately
+      // visually distinct from the base; the opposite theme's pair is
+      // the lightness inversion of these.
+      const layer = await etn.layers.create(networkId, {
+        title,
+        ...(comment.length > 0 ? { comment } : {}),
+        ...(gitBranch.length > 0 ? { git_branch: gitBranch } : {}),
+        colors: defaultLayerColors(),
+      });
+      close();
+      await selectLayerForTab(networkId, layer.id);
+    } catch (err) {
+      errorDialog('Не удалось создать слой', err);
+    }
+  }
 
   showDialog({
     title: 'Новый слой изменений',
     body,
-    width: 460,
+    // Роль `m` (требование 13464c39): подсказки, имя, комментарий и ветка
+    // помещаются без прокрутки (ошибка 57e05439).
+    size: 'm',
+    // Грязная форма (требование b58f6aad): Esc/крестик при заполненной форме
+    // требуют подтверждения; «Сохранить» идёт тем же путём, что «Создать».
+    dirty: {
+      isDirty: () =>
+        titleInput.value.trim() !== '' ||
+        commentInput.value.trim() !== '' ||
+        branchInput.value.trim() !== '',
+      save: (close) => void create(close),
+    },
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
-      {
-        label: 'Создать',
-        primary: true,
-        onClick: async (close) => {
-          const title = titleInput.value.trim();
-          if (title.length === 0) return;
-          const comment = commentInput.value.trim();
-          const gitBranch = branchInput.value.trim();
-          try {
-            // Creation defaults (0.6.4 §2.2a): the layer is immediately
-            // visually distinct from the base; the opposite theme's pair is
-            // the lightness inversion of these.
-            const layer = await etn.layers.create(networkId, {
-              title,
-              ...(comment.length > 0 ? { comment } : {}),
-              ...(gitBranch.length > 0 ? { git_branch: gitBranch } : {}),
-              colors: defaultLayerColors(),
-            });
-            close();
-            await selectLayerForTab(networkId, layer.id);
-          } catch (err) {
-            errorDialog('Не удалось создать слой', err);
-          }
-        },
-      },
+      { label: t('actions.cancel'), onClick: (close) => close() },
+      { label: 'Создать', primary: true, onClick: (close) => void create(close) },
     ],
     extraShortcuts: undefined,
     onMount: () => titleInput.focus(),
@@ -505,9 +535,9 @@ function openDeleteLayerDialog(networkId: string, layerId: string): void {
   showDialog({
     title: `Удалить слой «${layer.title}»?`,
     body,
-    width: 460,
+    size: 's',
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
+      { label: t('actions.cancel'), onClick: (close) => close() },
       {
         label: 'Удалить слой',
         danger: true,
@@ -555,9 +585,9 @@ function openMergeLayerDialog(networkId: string, layerId: string): void {
   showDialog({
     title: `Слить «${layer.title}» в «${targetTitle}»?`,
     body,
-    width: 460,
+    size: 's',
     buttons: [
-      { label: 'Отмена', onClick: (close) => close() },
+      { label: t('actions.cancel'), onClick: (close) => close() },
       {
         label: 'Слить',
         primary: true,
@@ -607,8 +637,8 @@ function showMergeReport(report: LayerMergeReport): void {
   showDialog({
     title: 'Слой слит',
     body,
-    width: 460,
-    buttons: [{ label: 'Закрыть', onClick: (close) => close() }],
+    size: 's',
+    buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
   });
 }
 
@@ -621,52 +651,48 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
   const targetTitle =
     store.state.layers.find((l) => l.id === layer?.parent_id)?.title ?? 'Основа';
 
-  const tabBar = div('diff-tabs');
-  const contentHost = div('diff-content');
-  const body = div('diff-body');
-  body.append(tabBar, contentHost);
-
-  const structuralBtn = el('button', 'diff-tab active', 'Связи') as HTMLButtonElement;
-  structuralBtn.type = 'button';
-  const textBtn = el('button', 'diff-tab', 'Содержание') as HTMLButtonElement;
-  textBtn.type = 'button';
-  tabBar.append(structuralBtn, textBtn);
+  // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
+  // сохраняются, данные диффа наполняют свою панель по готовности.
+  const structuralHost = div('diff-content');
+  const textHost = div('diff-content');
 
   let structural: LayerDiffResult | null = null;
   let textEntries: ReturnType<typeof lineDiff> | null = null;
 
-  const render = (mode: 'structural' | 'text'): void => {
-    structuralBtn.classList.toggle('active', mode === 'structural');
-    textBtn.classList.toggle('active', mode === 'text');
-    contentHost.replaceChildren();
-    if (mode === 'structural' && structural !== null) {
-      contentHost.append(renderStructuralDiff(networkId, structural));
-    } else if (mode === 'text' && textEntries !== null) {
-      contentHost.append(renderTextDiff(textEntries));
-    } else {
-      const loading = span('Загрузка…', 'layer-hint');
-      contentHost.append(loading);
-    }
+  const paintStructural = (): void => {
+    structuralHost.replaceChildren(
+      structural !== null
+        ? renderStructuralDiff(networkId, structural)
+        : span('Загрузка…', 'layer-hint'),
+    );
   };
+  const paintText = (): void => {
+    textHost.replaceChildren(
+      textEntries !== null ? renderTextDiff(textEntries) : span('Загрузка…', 'layer-hint'),
+    );
+  };
+  paintStructural();
+  paintText();
 
   showDialog({
     title: `Отличия «${layer?.title ?? 'слоя'}» от «${targetTitle}»`,
-    body,
-    width: 720,
-    boxClass: 'diff-dialog',
-    buttons: [{ label: 'Закрыть', onClick: (close) => close() }],
+    size: 'l',
+    tabs: [
+      { id: 'structural', label: 'Связи', content: structuralHost },
+      { id: 'text', label: 'Содержание', content: textHost },
+    ],
+    buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
     onMount: () => {
-      structuralBtn.addEventListener('click', () => render('structural'));
-      textBtn.addEventListener('click', () => render('text'));
       void (async () => {
         try {
           structural = await etn.layers.diff(networkId, layerId);
-          render('structural');
+          paintStructural();
           const docs = await etn.layers.diffDoc(networkId, layerId);
           textEntries = lineDiff(docs.target_doc, docs.layer_doc);
-          render('text');
+          paintText();
         } catch (err) {
-          contentHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
+          structuralHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
+          textHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
         }
       })();
     },

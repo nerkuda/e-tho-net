@@ -149,6 +149,7 @@ export function confirmSwitchToMap(): Promise<boolean> {
     };
     showDialog({
       title: 'Мысль не отображается',
+      size: 's',
       body: el(
         'p',
         'dialog-text',

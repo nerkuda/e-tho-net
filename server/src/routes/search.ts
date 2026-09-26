@@ -36,7 +36,8 @@ import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
-import { findMentionsInTexts, search } from '../domain/search-service.js';
+import { findMentionsInTexts } from '../domain/search-service.js';
+import { searchAsync } from '../domain/heavy-read.js';
 import {
   fanOutSearch,
   type CrossNetworkAccess,
@@ -189,7 +190,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           offset,
         };
 
-        let response: SearchResponse = search(
+        let response: SearchResponse = await searchAsync(
           ndb,
           { ...requestBase, scope: granularScopes[0] },
           showInactiveDefault,
@@ -197,7 +198,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         for (let i = 1; i < granularScopes.length; i += 1) {
           response = mergeSearchResponses(
             response,
-            search(ndb, { ...requestBase, scope: granularScopes[i] }, showInactiveDefault),
+            await searchAsync(ndb, { ...requestBase, scope: granularScopes[i] }, showInactiveDefault),
           );
         }
         sendSuccess(reply, response);
@@ -242,12 +243,15 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const etnxOpts = input.etnx as ExportEtnxOptions | undefined;
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Имя сети-источника для манифеста `.etnx` — display_name из реестра,
+        // а не id (ошибка b52caa66); фолбэк на id, если записи нет.
+        const networkName = app.systemDb.getNetworkById(networkId)?.display_name ?? networkId;
         // PDF is rejected by the service on MVP (VALIDATION_ERROR → 422).
         const job = await startExportJob(ndb, thoughtIds, format as ExportFormat, {
           etnx: etnxOpts,
           source: {
             network_id: networkId,
-            network_name: networkId,
+            network_name: networkName,
             user_id: req.auth!.user.id,
           },
         });

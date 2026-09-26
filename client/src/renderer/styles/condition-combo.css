@@ -1,0 +1,496 @@
+/* ---------------------------------------------------------------------------
+ * Unified condition-value combo (задача 27472616): tag-input chip list +
+ * live-search dropdown, replaces the old click-to-open chip fields and the
+ * static `{…}` token menu.
+ * ------------------------------------------------------------------------- */
+
+.value-combo-row {
+  align-items: flex-start;
+}
+
+/* The chip field now doubles as a text input container — no longer
+ * click-to-open, so it keeps the text cursor instead of a pointer. */
+.value-combo-field {
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+}
+
+.value-combo-chip {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 4px 1px 8px;
+}
+
+.value-combo-add {
+  flex: 1 1 80px;
+  min-width: 60px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  padding: 2px 2px;
+}
+
+.value-combo-add:focus {
+  outline: none;
+}
+
+.value-combo-pick {
+  white-space: nowrap;
+  align-self: flex-start;
+}
+
+/* Section headers of the shared suggestions dropdown are rendered with the
+ * common `type-combo-empty` header class (lib/suggest-dropdown.ts) — the
+ * old combobox-specific `.value-combo-section` rule is gone with its own
+ * dropdown implementation. */
+
+/* Keyword-history / saved-filter dropdowns: a small absolute list under the
+ * anchor field (§15.3). */
+.st-f-kw-wrap {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.st-f-kw-wrap .st-f-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Keyword scope checkboxes («наименование»/«синонимы»/«комментарий», §15.3,
+ * bug fix 0.5.5): one compact row under the keywords field. */
+.st-f-kw-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.st-f-kw-scope-item {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+
+/* Pill checkbox dictionary (`lib/filter-form.ts`, `buildPillGroupSection`):
+ * «Тип сущности», «Действие» и подобные закрытые словари панелей отбора —
+ * элемент общего каркаса, стили живут вместе с ним, а не в экране. */
+.st-f-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.st-f-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.st-f-pill input[type='checkbox'] {
+  margin: 0;
+}
+
+.st-f-dropdown {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-2, 0 4px 12px rgba(0, 0, 0, 0.25));
+}
+
+.st-f-dropdown-item {
+  padding: 5px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-f-dropdown-item:hover {
+  background: var(--surface-2);
+}
+
+/* Collapsible group header («Свойства»/«Дополнительно», §15.3): bold + accent
+ * color while collapsed with non-empty content. */
+.st-f-collapsible-title {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+}
+
+.st-f-caret {
+  font-size: 10px;
+  width: 10px;
+  display: inline-block;
+}
+
+/* «Дополнительно» tri-state rows. */
+.st-f-tri-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.st-f-tri-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.st-f-tri-row .st-f-input {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 110px;
+}
+
+.st-f-tri-row .st-f-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* «Даты» group rows (задача 7032e55a): «Создано» / «Изменено», в каждом
+ * «от» / «до» `<input type="datetime-local">`. Компактнее, чем tri-row —
+ * две пары полей на одной строке. */
+.st-f-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.st-f-date-label {
+  flex: 0 0 auto;
+  min-width: 70px;
+  color: var(--text);
+}
+
+.st-f-date-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.st-f-date-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+
+.st-f-date-field .st-f-input {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 6px;
+}
+
+/* Type/link-type picker dialog body (§15.3). */
+.st-f-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.st-f-picker-list {
+  height: 320px;
+}
+
+/* Список модального пикера сущностей — диалог-список: область списка занимает
+   свободное место роли и не схлопывается по содержимому (правило 9 требования
+   11ddd910). В диалоге пикер несёт `.list-dialog-body`; общий фиксированный
+   размер `.st-f-checks`/`.st-f-picker-list` здесь снимается (исправлено в
+   ревизии 0.9.1 — список был 132px внутри диалога роли s). */
+.list-dialog-body .st-f-picker-list {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Верхняя строка пикера: поиск + команды-иконки («Очистить», «Пометить все»,
+ * «Вернуть умолчания») справа от него. Полное название команды несёт тултип
+ * кнопки — команд в футере нет, их длинный ряд текстовых кнопок вылезал за
+ * границы диалога (ошибка bd8b78a0). */
+.st-f-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.st-f-searchbar .st-f-search {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Команда-иконка в строке поиска — по высоте поля поиска, а не общей
+ * кнопки-иконки 30px. */
+.st-f-searchbar .ui-btn.ui-btn--icon {
+  width: 26px;
+  height: 26px;
+}
+
+/* Строка поиска диалога добавления/выбора мысли: поле ввода (охват диктует
+ * назначение выбора — требование 79755f76; переключателя в диалоге нет). */
+.add-search-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.add-search-row .ui-textarea {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into
+ * a wide orange grip while hovering or dragging. */
+.st-splitter {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.st-splitter:hover,
+.st-splitter.dragging {
+  background: var(--warn);
+}
+
+.st-f-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Группа, недоступная при текущем состоянии панели: «Выбирать потомков по
+ * связям» погашена, пока пусты «Родительские мысли» (ошибка 6158d2ea). */
+.st-f-block.st-f-block-disabled {
+  opacity: 0.55;
+}
+
+.st-f-block.st-f-block-disabled .st-f-title {
+  cursor: default;
+}
+
+.st-f-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* «Group carries values» marking (§15.3): compound selector — wins over the
+ * base `.st-f-title` regardless of rule order. */
+.st-f-title.st-f-title-active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.st-f-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st-f-input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.st-f-input:focus {
+  outline: 1px solid var(--accent);
+  background: var(--surface);
+}
+
+.st-f-keywords {
+  font-size: 13px;
+}
+
+/* Type/link-type checklist groups (§15.3): search box, multi-column list
+ * (column-count set by the panel JS), height grip and «Очистить». */
+.st-f-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st-f-search {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.st-f-checks {
+  height: var(--st-checks-h, 132px);
+  overflow-y: auto;
+  column-gap: 14px;
+  padding-right: 4px;
+}
+
+.st-f-clear {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.st-f-clear:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.st-f-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.st-f-conds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st-f-cond {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.st-f-cond .st-f-prop {
+  flex: 1 1 120px;
+}
+
+.st-f-cond .st-f-op {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.st-f-values {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 140px;
+}
+
+.st-f-value-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.st-f-value-row .st-f-input {
+  flex: 1;
+}
+
+.st-f-ref {
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Thought-ref value row: live-search input + «выбрать» button (§15.3).
+ * Без flex-basis/flex-grow: строка живёт внутри колонки `.st-f-values`, и
+ * `flex: 1 1 140px` трактовался бы как высота 140px (огромные вертикальные
+ * отступы у первого условия) — ошибка e8365d29. */
+.st-f-ref-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.st-f-ref-row .st-f-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-f-ref-pick {
+  white-space: nowrap;
+  border-style: solid;
+}
+
+.st-f-add,
+.st-f-remove {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.st-f-add:hover,
+.st-f-remove:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.st-f-remove {
+  border-style: solid;
+  border-color: transparent;
+  padding: 2px 6px;
+}
+
+.st-f-sort {
+  display: flex;
+  gap: 6px;
+}
+
+.st-f-apply {
+  padding: 7px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.st-f-apply:hover {
+  background: var(--accent-strong);
+}
+
+.st-f-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+

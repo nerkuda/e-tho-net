@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const CHRONICLE_TS = resolve(RENDERER, 'screens', 'chronicle', 'chronicle.ts');
@@ -28,7 +29,7 @@ const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
 const STRUCTURES_TS = resolve(RENDERER, 'screens', 'structures', 'structures.ts');
 const LIST_HEIGHTS_TS = resolve(RENDERER, 'editor', 'list-heights.ts');
 const FRAME_TS = resolve(RENDERER, 'lib', 'filter-panel-frame.ts');
-const STYLES_CSS = resolve(RENDERER, 'styles.css');
+const STYLES_CSS = assembledStylesFile();
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');
@@ -120,10 +121,12 @@ describe('высота таблицы хроно-комментариев (ош�
       /applyGroupClamp\(wrap, 'chronicle\.table'\)/,
       'высота применяется сразу при монтировании экрана',
     );
-    // Обёртка таблицы не пересоздаётся при обновлении данных — меняются только
-    // строки внутри неё, поэтому инлайновая высота не теряется.
+    // Обёртка таблицы не пересоздаётся при обновлении данных: таблица —
+    // единый фасад (элемент создаётся один раз), обновление — `setRows`, поэтому
+    // инлайновая высота не теряется.
     assert.match(src, /const wrap = div\('admin-table-wrap chron-table-wrap'\)/, 'обёртка таблицы — стабильный элемент');
-    assert.match(src, /tableWrap\.replaceChildren\(table\)/, 'перерисовка меняет только содержимое обёртки');
+    assert.match(src, /createTable<ChronicleRow>\(\{/, 'таблица — единый фасад lib/ui/table.ts');
+    assert.match(src, /table\.setRows\(rows\)/, 'перерисовка меняет строки фасада, а не обёртку');
     assert.ok(
       !/wrap\.replaceChildren\(/.test(src),
       'обёртку таблицы никогда не пересобирают целиком',

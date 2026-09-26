@@ -14,6 +14,12 @@ import {
   type ApplierHooks,
 } from '../src/main/realtime/applier.js';
 import { createHandlers, type HandlerDeps } from '../src/main/ipc/handlers.js';
+import type { IpcCallContext } from '../src/main/ipc/contract.js';
+
+/** Контекст вызова IPC-обработчика (требование ebed4980) для прямых вызовов. */
+function noopContext(): IpcCallContext {
+  return { signal: new AbortController().signal };
+}
 
 /** Build a minimal thought record for cache assertions. */
 function thought(id: string, title: string, version = 1): Thought {
@@ -221,7 +227,7 @@ describe('IPC handler factory (G7)', () => {
     const handlers = createHandlers(deps);
     const handler = handlers.get('thoughts.create');
     assert.ok(handler);
-    const result = await handler(['net-1', { title: 'Hello' }]);
+    const result = await handler(['net-1', { title: 'Hello' }], noopContext());
     assert.deepEqual(captured, { title: 'Hello' });
     assert.deepEqual(result, { id: 't1' });
   });
@@ -230,7 +236,7 @@ describe('IPC handler factory (G7)', () => {
     const deps = { getRest: () => null } as unknown as HandlerDeps;
     const handlers = createHandlers(deps);
     await assert.rejects(async () => {
-      await handlers.get('thoughts.get')!(['net-1', 't1']);
+      await handlers.get('thoughts.get')!(['net-1', 't1'], noopContext());
     }, /Not connected/);
   });
 

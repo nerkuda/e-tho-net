@@ -15,12 +15,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { assembledStylesFile } from './renderer-css.js';
 
 const SRC = {
   graph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
   graphTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'graph-tab.ts'),
   model: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph-model.ts'),
-  css: resolve(import.meta.dirname, '..', 'src', 'renderer', 'styles.css'),
+  css: assembledStylesFile(),
 };
 
 function readText(path: string): string {

@@ -1,0 +1,85 @@
+/*
+ * Карта маппинга токенов ETN → переменные Vaadin (`--vaadin-*`).
+ *
+ * Единственное место, где токены ETN связываются с Vaadin Grid (задача
+ * cf4f8f70; ADR «Основа lib/ui: готовые Web Components за фасадами»,
+ * компонент lib/ui). Токены ETN объявлены в
+ * `client/src/renderer/styles/tokens.css` (манифест стилей —
+ * `client/src/renderer/styles.css`):
+ *   • светлая тема — блок `:root`;
+ *   • тёмная тема  — блок `[data-theme='dark']`.
+ *
+ * В Vaadin 25 прежние переменные темы Lumo (`--lumo-*`) заменены
+ * дизайн-токенами `--vaadin-*` — та же роль (цвет текста/фона/границ, акцент,
+ * типографика, плотность, радиусы). Маппинг целится в них; поведение и состав
+ * тем же, что у `--lumo-*` в Vaadin 24.
+ *
+ * Переопределения объявлены БЕЗ cascade-слоёв. Vaadin публикует базовые токены
+ * внутри `@layer vaadin.base` (адаптированные таблицы стилей), а
+ * unlayered-правила всегда приоритетнее слоёв — поэтому наши значения
+ * перекрывают вендорские. Значения ссылаются на токены ETN (`var(--text)` и
+ * т. п.), а те меняются вместе с темой: одна и та же карта красит обе темы,
+ * отдельный блок `[data-theme='dark']` не нужен.
+ *
+ * Прямых hex здесь нет — только ссылки на токены ETN. Подключается из
+ * `./register.ts`.
+ */
+
+:root {
+  /* Текст. */
+  --vaadin-text-color: var(--text);
+  --vaadin-text-color-secondary: var(--text-dim);
+  --vaadin-text-color-disabled: var(--text-faint);
+
+  /* Поверхности и границы. */
+  --vaadin-background-color: var(--surface);
+  --vaadin-background-container: var(--surface-2);
+  --vaadin-background-container-strong: var(--bg-hover);
+  --vaadin-border-color: var(--border-strong);
+  --vaadin-border-color-secondary: var(--border);
+
+  /* Акцент (фокусное кольцо). */
+  --vaadin-focus-ring-color: var(--accent);
+  --vaadin-focus-ring-width: var(--focus-ring-width);
+
+  /* Радиусы — как у прочих контролов ETN. */
+  --vaadin-radius-s: var(--radius-s);
+  --vaadin-radius-m: var(--radius-sm);
+  --vaadin-radius-l: var(--radius);
+
+  /* Плотность: компактная десктопная (Vaadin по умолчанию
+     6/8 px — ETN плотнее). Значения — из шкалы отступов ETN. */
+  --vaadin-padding-xs: var(--space-2);
+  --vaadin-padding-s: var(--space-3);
+  --vaadin-padding-m: var(--space-4);
+  --vaadin-padding-l: var(--space-6);
+  --vaadin-padding-xl: var(--space-8);
+  --vaadin-padding-block-container: var(--space-2);
+  --vaadin-padding-inline-container: var(--space-4);
+  --vaadin-gap-xs: var(--space-2);
+  --vaadin-gap-s: var(--space-3);
+  --vaadin-gap-m: var(--space-4);
+  --vaadin-gap-l: var(--space-6);
+  --vaadin-gap-xl: var(--space-8);
+
+  /* Поля ввода (текстовый фильтр колонок): подсказка и ошибка. */
+  --vaadin-input-field-placeholder-color: var(--text-faint);
+  --vaadin-input-field-error-color: var(--danger);
+
+  /* --- Vaadin Grid: поверхности, строки, шапка, плотность --- */
+  --vaadin-grid-background: var(--surface);
+  --vaadin-grid-border-color: var(--border);
+  --vaadin-grid-border-radius: var(--radius-sm);
+  --vaadin-grid-cell-padding: var(--space-2) var(--space-4);
+  --vaadin-grid-row-background-color: var(--surface);
+  --vaadin-grid-row-odd-background-color: var(--surface-2);
+  --vaadin-grid-row-hover-background-color: var(--bg-hover);
+  --vaadin-grid-row-selected-background-color: var(--accent-soft);
+  /* Подсветка ТЕКУЩЕЙ строки задаётся НЕ здесь: глобальное значение этого
+     токена красило бы все строки (ошибка 4f27f85c). По умолчанию — прозрачно,
+     а `part(row-current)` текущей строки переопределяет токен в `./table.css`. */
+  --vaadin-grid-row-highlight-background-color: transparent;
+  --vaadin-grid-header-text-color: var(--text-dim);
+  --vaadin-grid-header-font-size: var(--font-size-xs);
+  --vaadin-grid-header-font-weight: var(--font-weight-semibold);
+}

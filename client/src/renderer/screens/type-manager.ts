@@ -69,26 +69,27 @@ import type {
   ThoughtType,
   ThoughtTypeInput,
   ThoughtTypeUpdateInput,
-  LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
+import { t } from '../lib/i18n.js';
+import { menuAction, type MenuItem } from '../lib/menu.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
-import { typeNameKey, EtnError } from '@etn/shared';
+import { typeNameKey, EtnError, UI_STATE_KEY } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 // Иконки превью типов — каноном общей фабрики облачка (пилюля типа — не
 // мысль, но использует тот же единый канон).
 import { applyThoughtIcon } from '../lib/thought-cloud.js';
 import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogButton } from '../lib/dialog.js';
-import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
+import { div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
+import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLine } from '../lib/ui/messages.js';
+import { loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import {
   MAX_TYPE_DEPTH,
   aggregateTypeCounts,
-  flattenTypeTree,
-  buildTypeTree,
   findRootType,
   orderedTypeRows,
   resolveLinkTypeVisual,
@@ -97,9 +98,16 @@ import {
   typeChainOf,
   typeDepth,
   subtreeHeight,
-  typeSearchVisibleIds,
-  type FlatTypeRow,
 } from '../lib/type-tree.js';
+import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
+import { collapsibleSection } from '../lib/ui/collapsible.js';
+import { uiSplitter } from '../lib/ui/splitter.js';
+import {
+  TYPE_EDITOR_SPLIT_DEFAULT,
+  formDirty,
+  parseTypeEditorSplit,
+  splitRatioFromPx,
+} from '../lib/pure.js';
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 // Локальные уведомления открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
@@ -141,9 +149,13 @@ import { store } from '../state.js';
 import { renderNewTypeHint } from '../lib/type-editor-hints.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
-import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
+import { showThoughtStyleDialog } from '../editor/style-dialog.js';
 import { renderMarkdown } from '@etn/markdown';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
+import { fieldInput, fieldTextarea } from '../lib/ui/field.js';
+import { choiceControl } from '../lib/ui/choice-row.js';
+import { FIELD_CLASS } from '../lib/ui/field.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
@@ -164,12 +176,6 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
 async function refreshThoughtTypes(): Promise<void> {
   const networkId = requireNetworkId();
   store.update({ thoughtTypes: await etn.types.listThoughtTypes(networkId) });
-}
-
-/** Reloads the link-type catalogue (line labels/colours read it). */
-async function refreshLinkTypes(): Promise<void> {
-  const networkId = requireNetworkId();
-  store.update({ linkTypes: await etn.types.listLinkTypes(networkId) });
 }
 
 /** Applies a type's own colours/font flags to an element (list name cells). */
@@ -341,31 +347,25 @@ export function typeRowRevealIds(
 }
 
 // ---------------------------------------------------------------------------
-// Tree rows for the catalogue dialogs (L21): expand/collapse per dialog.
+// Type tree rows for the catalogue dialog (L21) — единый компонент
+// `lib/ui/tree.ts` над данными `lib/type-tree.ts` (задача d1c15a2d,
+// требование 0086037c): своего рендера строк/каретки/отступа в экране нет.
 // ---------------------------------------------------------------------------
 
-/** Rows of a type tree restricted to the expanded nodes. */
-function visibleRows<T extends { id: string; parent_id: string | null; is_root: boolean }>(
-  types: readonly T[],
-  expanded: ReadonlySet<string>,
-): FlatTypeRow<T>[] {
-  return flattenTypeTree(buildTypeTree(types), expanded);
+/** Узел дерева типов для общего компонента `lib/ui/tree`. */
+interface TypeTreeItem extends TreeItem {
+  type: ThoughtType;
 }
 
-/** The ▸/▾ expander button of a tree row (hidden for leaves). */
-function treeToggle(
-  row: FlatTypeRow<{ id: string; parent_id: string | null; is_root: boolean }>,
-  expanded: ReadonlySet<string>,
-  onToggle: () => void,
-  /** While a name search is filtering the list, branches are shown by the
-   *  search itself (matches + ancestor chain) — the toggle renders expanded
-   *  and inert so it does not fight the search's own expansion. */
-  forceOpen = false,
-): HTMLElement {
-  const btn = button('', onToggle, 'btn small type-tree-toggle', row.hasChildren ? 'Развернуть/свернуть' : '');
-  btn.textContent = row.hasChildren ? (forceOpen || expanded.has(row.type.id) ? '▾' : '▸') : '';
-  btn.disabled = !row.hasChildren || forceOpen;
-  return btn;
+/** Строки дерева типов мыслей из каталога (данные `orderedTypeRows`). */
+function typeTreeItems(types: readonly ThoughtType[]): TypeTreeItem[] {
+  return orderedTypeRows(types).map((row) => ({
+    id: row.type.id,
+    parentId: row.type.parent_id,
+    hasChildren: row.hasChildren,
+    filterText: row.type.name,
+    type: row.type,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -375,33 +375,94 @@ function treeToggle(
 /** Opens the thought-types tree dialog (L6/L21). */
 export function showThoughtTypesDialog(): void {
   const networkId = requireNetworkId();
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '340px';
-  const body = div('form-stack');
+  const body = div('form-stack list-dialog-body');
 
-  // Toolbar (top of the list, task «Улучшить диалог…»): «Добавить»,
-  // «Свернуть все»/«Развернуть все» and the name-search box.
-  const toolbar = div('form-row type-list-toolbar');
-  const searchInput = el('input', 'text-input') as HTMLInputElement;
+  // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
+  // диалога, над списком и строкой управления; плейсхолдер — из словаря.
+  const searchRow = div('form-row type-list-search');
+  const searchInput = fieldInput() as HTMLInputElement;
   searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск по названию…';
-  toolbar.append(
-    button('Добавить', () => showThoughtTypeEditor(null, onChanged), 'btn small', 'Создать тип'),
-    button('Свернуть все', () => collapseAll(), 'btn small', 'Свернуть всю иерархию'),
-    button('Развернуть все', () => expandAll(), 'btn small', 'Развернуть всю иерархию'),
-    searchInput,
-  );
-  body.append(toolbar, tableWrap, errorLine);
+  searchInput.placeholder = t('actions.search');
+  searchRow.append(searchInput);
 
-  // L21: the root type is always expanded; everything else starts collapsed.
-  let expanded = new Set<string>();
+  // Правило 2 требования 11ddd910: строка управления НАД списком (под
+  // поиском) — только допустимые для списка кнопки. «Изменить», «Удалить» и
+  // «Копировать» действуют на ТЕКУЩУЮ строку и погасают без неё (см.
+  // `updateButtons`); «Свернуть все»/«Развернуть все» управляют видом дерева,
+  // а не элементами списка, поэтому стоят в конце ряда.
+  const toolbar = div('form-row type-list-toolbar');
+  const addBtn = uiButton({
+    label: t('thoughtTypes.add'),
+    role: 'secondary',
+    size: 's',
+    title: t('thoughtTypes.addHint'),
+    onClick: () => showThoughtTypeEditor(null, onChanged),
+  });
+  const editBtn = uiButton({
+    label: t('listActions.edit'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.editHint'),
+    disabled: true,
+    onClick: () => {
+      const item = currentItem();
+      if (item !== undefined) showThoughtTypeEditor(item.type, onChanged);
+    },
+  });
+  const deleteBtn = uiButton({
+    label: t('actions.delete'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.deleteHint'),
+    disabled: true,
+    onClick: () => {
+      const item = currentItem();
+      // Корневой тип неудалим (сервер отвергает) — кнопка для него погашена.
+      if (item !== undefined && !item.type.is_root) void removeRow(item.type);
+    },
+  });
+  const copyBtn = uiButton({
+    label: t('listActions.copy'),
+    role: 'secondary',
+    size: 's',
+    title: t('listActions.copyHint'),
+    disabled: true,
+    onClick: () => {
+      tree.copyCurrent();
+    },
+  });
+  const collapseBtn = uiButton({
+    label: t('thoughtTypes.collapseAll'),
+    role: 'secondary',
+    size: 's',
+    title: t('thoughtTypes.collapseAll'),
+    onClick: () => collapseAll(),
+  });
+  const expandBtn = uiButton({
+    label: t('thoughtTypes.expandAll'),
+    role: 'secondary',
+    size: 's',
+    title: t('thoughtTypes.expandAll'),
+    onClick: () => expandAll(),
+  });
+  toolbar.append(addBtn, editBtn, deleteBtn, copyBtn, collapseBtn, expandBtn);
+
+  // Состояние загрузки/ошибки живёт рядом с деревом: сам список рисует общий
+  // компонент `lib/ui/tree.ts`, а статус его скрывает на время запроса.
+  const status = div('muted hidden');
   let searchQuery = '';
   // Last loaded catalogue — tree toggles/search re-render from this cache,
   // without a network round-trip and without the «Загрузка…» placeholder, so
   // expanding/collapsing/typing does not flicker or jump the scroll position.
   let cachedTypes: ThoughtType[] | null = null;
   let cachedCounts: Record<string, number> | null = null;
+  // Текущий каталог и агрегированные счётчики — читаются рендером строк.
+  let currentTypes: readonly ThoughtType[] = [];
+  let currentAggregated: Record<string, number> = {};
+  // Первичное раскрытие (root expanded, остальное свёрнуто) — один раз за диалог.
+  let expansionInitialized = false;
   // «Текущая строка» списка: тип, который пользователь только что
   // отредактировал (или создал) в открытом отсюда редакторе. Строка
   // подсвечивается, её цепочка родителей разворачивается, и список
@@ -416,88 +477,100 @@ export function showThoughtTypesDialog(): void {
     void reload();
   };
 
-  async function reload(useCache = false): Promise<void> {
-    const scrollTop = tableWrap.scrollTop;
-    let types: ThoughtType[];
-    let counts: Record<string, number>;
-    if (useCache && cachedTypes !== null && cachedCounts !== null) {
-      types = cachedTypes;
-      counts = cachedCounts;
-    } else {
-      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-      try {
-        [types, counts] = await Promise.all([
-          etn.types.listThoughtTypes(networkId),
-          etn.types.getThoughtTypeCounts(networkId),
-        ]);
-      } catch (err) {
-        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-        return;
-      }
-      cachedTypes = types;
-      cachedCounts = counts;
+  /** Текущий элемент дерева — на него действуют «Изменить»/«Удалить»/«Копировать». */
+  function currentItem(): TypeTreeItem | undefined {
+    return currentItems.find((item) => item.id === currentRowId);
+  }
+
+  /** Гасит кнопки текущей строки, когда строки нет (или это неудалимый корень). */
+  function updateButtons(): void {
+    const item = currentItem();
+    editBtn.disabled = item === undefined;
+    deleteBtn.disabled = item === undefined || item.type.is_root;
+    copyBtn.disabled = item === undefined;
+  }
+
+  // Единое дерево списков (задача d1c15a2d, требование 0086037c): каретка,
+  // отступ, флажок-колонки и клавиатура — его; экран задаёт данные, визуал
+  // типа и действия строки. Строки — из словаря локализации.
+  let currentItems: TypeTreeItem[] = [];
+
+  /** Пункты контекстного меню строки дерева типов (правило 8 требования
+   *  11ddd910): «Изменить», «Копировать», «Удалить» (кроме корня) и
+   *  «Развернуть/Свернуть» у ветви. Строятся из общего словаря `lib/menu.ts`. */
+  function rowMenuItems(item: TypeTreeItem): MenuItem[] {
+    const items: MenuItem[] = [
+      menuAction(t('listActions.edit'), () => showThoughtTypeEditor(item.type, onChanged)),
+      menuAction(t('listActions.copy'), () => {
+        tree.setCurrentId(item.id);
+        tree.copyCurrent();
+      }),
+    ];
+    if (!item.type.is_root) {
+      items.push(
+        menuAction(t('actions.delete'), () => void removeRow(item.type), { danger: true }),
+      );
     }
-    if (expanded.size === 0) {
-      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
+    if (item.hasChildren ?? false) {
+      const open = tree.isExpanded(item.id);
+      items.push(
+        menuAction(open ? t('listActions.collapse') : t('listActions.expand'), () => {
+          tree.setExpanded(item.id, !open);
+        }),
+      );
     }
-    const aggregated = aggregateTypeCounts(types, counts);
-    const searching = searchQuery.trim() !== '';
-    const keepIds = typeSearchVisibleIds(types, searchQuery);
-    // Searching shows every matched branch fully expanded (task's «ветви до
-    // совпадений разворачиваются автоматически»); otherwise the manual
-    // expand/collapse state applies as before.
-    let rows = (
-      searching ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id))) : visibleRows(types, expanded)
-    ).filter((row) => keepIds.has(row.type.id));
-    // Текущая строка обязана быть видна: если её цепочка родителей свёрнута,
-    // разворачиваем её (при поиске ветви и так раскрыты). Иначе после создания
-    // типа с нестандартным родителем строку пришлось бы искать вручную.
-    if (currentRowId !== null && !searching && !rows.some((row) => row.type.id === currentRowId)) {
-      const reveal = typeRowRevealIds(types, currentRowId);
-      if (reveal.some((id) => !expanded.has(id))) {
-        expanded = new Set([...expanded, ...reveal]);
-        rows = visibleRows(types, expanded).filter((row) => keepIds.has(row.type.id));
-      }
-    }
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Тип'),
-      el('th', undefined, 'Комментарий'),
-      el('th', undefined, 'Количество'),
-      el('th'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    if (rows.length === 0) {
-      const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет типов.');
-      emptyCell.colSpan = 4;
-      emptyRow.append(emptyCell);
-      tbody.append(emptyRow);
-    }
-    let currentTr: HTMLElement | null = null;
-    for (const row of rows) {
-      const type = row.type;
-      const tr = el('tr');
-      if (type.is_root) tr.classList.add('type-tree-root');
-      if (type.id === currentRowId) {
-        tr.classList.add('selected');
-        currentTr = tr;
-      }
-      const nameCell = el('td');
-      nameCell.style.whiteSpace = 'nowrap';
-      const nameWrap = span('', 'type-tree-name');
-      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
-      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id), searching));
+    return items;
+  }
+
+  const tree = createTree<TypeTreeItem>({
+    items: () => currentItems,
+    ariaLabel: t('thoughtTypes.title'),
+    treeColumnHeader: t('thoughtTypes.col.name'),
+    emptyText: t('thoughtTypes.empty'),
+    emptyHint: t('thoughtTypes.emptyHint'),
+    rowClass: (item) => (item.type.is_root ? 'type-tree-root' : undefined),
+    // Правило 6 требования 11ddd910 (список, не выбор): клик только ставит
+    // строку текущей, редактор открывают двойной клик и Enter (onActivate).
+    onDblActivate: (item) => showThoughtTypeEditor(item.type, onChanged),
+    onActivate: (item) => showThoughtTypeEditor(item.type, onChanged),
+    // Текущая строка правит состояние кнопок управления (правило 2).
+    onCurrentChange: (id) => {
+      currentRowId = id;
+      updateButtons();
+    },
+    // Кнопка «Копировать» и Ctrl+C: текущая строка в буфер обмена.
+    copyText: (item) =>
+      [item.type.name, item.type.description ?? '', String(currentAggregated[item.id] ?? 0)].join(
+        '\t',
+      ),
+    // Правило 8 требования 11ddd910: команды над строкой доступны из её
+    // контекстного меню (построчного крестика удаления в строке больше нет).
+    rowMenu: (item) => rowMenuItems(item),
+    columns: [
+      {
+        key: 'comment',
+        header: t('thoughtTypes.col.comment'),
+        width: '280px',
+        // Полный текст отдаём подписи-ячейке: визуально строка обрезается
+        // многоточием, полный — в подсказке `title` (ошибка d866bc65).
+        render: (item) => item.type.description ?? '',
+      },
+      {
+        key: 'count',
+        header: t('thoughtTypes.col.count'),
+        width: '6rem',
+        align: 'end',
+        render: (item) => String(currentAggregated[item.id] ?? 0),
+      },
+    ],
+    renderContent: (item) => {
       // L21: the row shows the EFFECTIVE look — a subordinate type renders
       // with the icon/colours/font inherited from its ancestors.
-      const visual = resolveThoughtTypeVisual(types, type.id);
+      const visual = resolveThoughtTypeVisual(currentTypes, item.type.id);
       const icon = span('', 'mini-icon');
       applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: null });
-      const name = span(type.name, 'type-list-name');
+      const name = span(item.type.name, `type-list-name ${TREE_LABEL_CLASS}`);
+      name.title = item.type.name;
       applyTypeStyle(name, {
         fg_color: visual.fg_color,
         bg_color: visual.bg_color,
@@ -506,68 +579,81 @@ export function showThoughtTypesDialog(): void {
         font_underline: visual.font_underline ?? false,
         font_strike: visual.font_strike ?? false,
       });
-      nameWrap.append(icon, name);
-      nameCell.append(nameWrap);
-      const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
-      descCell.style.maxWidth = '280px';
-      descCell.style.overflow = 'hidden';
-      descCell.style.textOverflow = 'ellipsis';
-      descCell.style.whiteSpace = 'nowrap';
-      const countCell = el('td', 'muted', String(aggregated[type.id] ?? 0));
-      countCell.style.textAlign = 'right';
-      const actions = el('td');
-      actions.style.whiteSpace = 'nowrap';
-      if (!type.is_root) {
-        actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
-      }
-      tr.append(nameCell, descCell, countCell, actions);
-      // Clicks on the ▸/▾ toggle or the ✕ button must not open the editor.
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        showThoughtTypeEditor(type, onChanged);
-      });
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    tableWrap.scrollTop = scrollTop;
-    // Список прокручивается к текущей строке — она может быть ниже видимой
-    // части (высота обёртки ограничена).
-    currentTr?.scrollIntoView({ block: 'nearest' });
-  }
+      return [icon, name];
+    },
+  });
+  tableWrap.append(status, tree.root);
+  // Правила 1–2 требования 11ddd910: поиск (первая строка), под ним
+  // управление, затем список.
+  body.append(searchRow, toolbar, tableWrap);
 
-  /** Expands/collapses a node and re-renders from the cache (no round-trip). */
-  function toggle(typeId: string): void {
-    if (expanded.has(typeId)) expanded.delete(typeId);
-    else expanded.add(typeId);
-    void reload(true);
+  async function reload(useCache = false): Promise<void> {
+    const scrollTop = tableWrap.scrollTop;
+    let types: ThoughtType[];
+    let counts: Record<string, number>;
+    if (useCache && cachedTypes !== null && cachedCounts !== null) {
+      types = cachedTypes;
+      counts = cachedCounts;
+    } else {
+      status.replaceChildren(el('span', 'muted', t('common.loading')));
+      status.classList.remove('hidden');
+      tree.root.classList.add('hidden');
+      try {
+        [types, counts] = await Promise.all([
+          etn.types.listThoughtTypes(networkId),
+          etn.types.getThoughtTypeCounts(networkId),
+        ]);
+      } catch (err) {
+        status.replaceChildren(operationError(err));
+        return;
+      }
+      cachedTypes = types;
+      cachedCounts = counts;
+    }
+    currentTypes = types;
+    currentAggregated = aggregateTypeCounts(types, counts);
+    // L21: the root type is always expanded; everything else starts collapsed.
+    if (!expansionInitialized) {
+      tree.collapseAll(types.filter((t) => t.is_root).map((t) => t.id));
+      expansionInitialized = true;
+    }
+    currentItems = typeTreeItems(types);
+    status.classList.add('hidden');
+    tree.root.classList.remove('hidden');
+    // Поиск и данные списка — состояние общего компонента (задача d1c15a2d):
+    // совпадения с цепочкой предков, автораскрытие ветвей.
+    tree.setFilter(searchQuery);
+    tree.setItems(currentItems);
+    // Правило 7 требования 11ddd910: текущая строка (только что записанный
+    // тип) обязана быть видна и список позиционируется на ней — цепочка
+    // родителей раскрывается, прокрутку делает фасад (revealRow). Иначе после
+    // создания типа с нестандартным родителем строку пришлось бы искать
+    // вручную (ошибка 51732f9b).
+    if (currentRowId !== null) tree.revealRow(currentRowId);
+    else tableWrap.scrollTop = scrollTop;
+    updateButtons();
   }
 
   /** «Развернуть все»: opens every branch of the hierarchy. */
   function expandAll(): void {
-    if (cachedTypes !== null) expanded = new Set(cachedTypes.map((t) => t.id));
-    void reload(true);
+    tree.expandAll();
   }
 
   /** «Свернуть все»: back to just the root expanded (the initial state). */
   function collapseAll(): void {
-    if (cachedTypes !== null) expanded = new Set(cachedTypes.filter((t) => t.is_root).map((t) => t.id));
-    void reload(true);
+    const roots = cachedTypes?.filter((t) => t.is_root).map((t) => t.id) ?? [];
+    tree.collapseAll(roots);
   }
 
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value;
-    void reload(true);
+    // Фильтр и автораскрытие ветвей — состояние общего компонента.
+    tree.setFilter(searchQuery);
   });
 
   /** Deletes a thought type (forced: thoughts detached, values dropped). */
   async function removeRow(type: ThoughtType): Promise<void> {
-    const ok = await confirmDialog(
-      'Удалить тип',
-      `Удалить тип «${type.name}»? Мысли этого типа останутся и станут без типа; ` +
-        'значения свойств этого типа будут удалены.',
-      true,
-    );
+    const ok = await confirmDialog(t('thoughtTypes.delete'), t('thoughtTypes.deleteConfirm', type.name), true);
     if (!ok) return;
     try {
       await etn.types.removeThoughtType(networkId, type.id, type.version, true);
@@ -582,17 +668,26 @@ export function showThoughtTypesDialog(): void {
       notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: type.id }));
       // Удалённый тип не может остаться текущей строкой.
       if (currentRowId === type.id) currentRowId = null;
+      updateButtons();
       onChanged();
     } catch (err) {
-      errorDialog('Удалить тип', err);
+      errorDialog(t('thoughtTypes.delete'), err);
     }
   }
 
   showDialog({
-    title: 'Типы мыслей',
+    title: t('thoughtTypes.title'),
     body,
-    width: 640,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    // Роль `l` (требование 13464c39): три колонки списка (тип, комментарий,
+    // количество) читаются без наезда; на узком контейнере — прокрутка
+    // (ошибка d866bc65).
+    size: 'l',
+    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
+    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    fixedHeight: true,
+    // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
+    footerError: errorLine,
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
   void reload();
 }
@@ -693,20 +788,16 @@ export interface TypeEditorExtras {
 }
 
 /**
- * Ширина диалога редактора типа мысли (ошибка 3c7213ec).
+ * Ширина диалога редактора типа мысли (ошибка 3c7213ec) задана ролью размера
+ * `l` (lib/dialog.ts, требование 13464c39: «широкие» диалоги — L/XL).
  *
- * Самое широкое содержимое диалога — таблица «Свойства типа» на вкладке
- * «Свойства»: шесть колонок, где «По умолчанию» держит редактор значения
- * (у свойства-связи — `.link-value-wrap` с полом 220px), а последняя —
- * кнопки ▲/▼/✎/✕ с `nowrap`. Таблица остаётся на auto-раскладке, поэтому её
- * ширина упирается в min-content строки: замер зондом на Chromium (реальный
- * `styles.css`, самый длинный набор свойств сети ETN) даёт 688px. Прежние
- * 600px отдавали таблице ≈560px — и `.admin-table-wrap` получал
- * горизонтальную прокрутку. 760px — наименьшая из стандартных «широких»
- * ширин проекта (столько же у «Настроек», «Администрирования» и диалога
- * отборов) и даёт таблице ≈720px, то есть запас над замеренным min-content.
+ * Самое широкое содержимое — таблица «Свойства типа» на вкладке «Свойства»:
+ * шесть колонок, где «По умолчанию» держит редактор значения (у
+ * свойства-связи — `.link-value-wrap` с полом 220px), а последняя — кнопки
+ * ▲/▼/✎/✕ с `nowrap`. Таблица на auto-раскладке, её ширина упирается в
+ * min-content строки: замер зондом на Chromium (реальный `styles.css`, самый
+ * длинный набор свойств сети ETN) даёт 688px; 900px роли L оставляют запас.
  */
-const TYPE_EDITOR_DIALOG_WIDTH = 760;
 
 /**
  * Ключ редактора ещё не созданного типа мысли (ошибка 74d9b4ed).
@@ -736,6 +827,21 @@ const NEW_THOUGHT_TYPE_DIALOG_KEY = 'thought-type:new';
 export function thoughtTypeDialogKey(id: string | null): string {
   return id === null ? NEW_THOUGHT_TYPE_DIALOG_KEY : `thought-type:${id}`;
 }
+
+/**
+ * Классы разметки сворачиваемых групп редактора типа (ошибка 58807d03):
+ * общий вид групп редактора (`.group`-семейство из `styles/editor.css` и
+ * `styles/layout.css`) — тот же, что у групп панели «Свойства» редактора
+ * мысли. Компонент {@link collapsibleSection} отвечает за состояние, вид —
+ * за этими классами.
+ */
+const TYPE_EDITOR_GROUP_CLASSES = {
+  root: 'group',
+  header: 'group-header',
+  title: 'group-title',
+  caret: 'group-caret',
+  body: 'group-body',
+} as const;
 
 /**
  * Opens the thought-type editor; `type === null` edits a NEW type (L6/L21).
@@ -809,58 +915,24 @@ export function showThoughtTypeEditor(
   // The id of the type created in this session — handed to the caller when
   // the dialog closes.
   let createdId: string | null = null;
-  const errorLine = span('', 'error-text');
-  const body = div('form-stack type-editor');
+  const errorLine = footerErrorLine();
 
-  // ---- Tabs (задача b8301c16, требование 344b8798) -----------------------
+  // ---- Tabs (задача b8301c16, требование 344b8798; общий механизм a57e7998)
   // Состояние черновика живёт в замыкании выше (draft, templateMd, props…)
   // — при переключении вкладок ничего не теряется и ничего не пишется.
   // Единственная точка записи — «Применить и закрыть» в футере диалога.
-  const TAB_KEYS = ['description', 'template', 'properties', 'views', 'metadata'] as const;
-  type TabKey = (typeof TAB_KEYS)[number];
-  const tabRow = div('type-editor-tabs');
-  const tabPanes = new Map<TabKey, HTMLElement>();
-  const tabButtons = new Map<TabKey, HTMLButtonElement>();
-  let activeTab: TabKey = 'description';
-
-  const activateTab = (key: TabKey): void => {
-    activeTab = key;
-    for (const [tabKey, pane] of tabPanes) {
-      pane.classList.toggle('active', tabKey === key);
-    }
-    for (const [tabKey, btn] of tabButtons) {
-      btn.classList.toggle('active', tabKey === key);
-    }
-  };
-
-  const tabButton = (key: TabKey, label: string): HTMLButtonElement => {
-    const btn = button(label, () => activateTab(key), 'type-editor-tab');
-    btn.type = 'button';
-    btn.dataset['tabKey'] = key;
-    tabButtons.set(key, btn);
-    return btn;
-  };
-
-  const tabPane = (key: TabKey): HTMLElement => {
-    const pane = div('type-editor-tab-pane');
-    tabPanes.set(key, pane);
-    return pane;
-  };
-
-  tabRow.append(
-    tabButton('description', 'Описание'),
-    tabButton('template', 'Шаблон'),
-    tabButton('properties', 'Свойства'),
-    tabButton('views', 'Отборы'),
-    tabButton('metadata', 'Метаданные'),
-  );
-  body.append(tabRow);
-
-  const descriptionPane = tabPane('description');
-  const templatePane = tabPane('template');
-  const propertiesPane = tabPane('properties');
-  const viewsPane = tabPane('views');
-  const metadataPane = tabPane('metadata');
+  // Полоса вкладок и панели — общий механизм каркаса диалога
+  // (`DialogOptions.tabs`, lib/ui/tabs.ts): панели не пересобираются, высота
+  // диалога задана ролью и при переключении не меняется.
+  // Панели вкладок. Идентичность типа (иконка · название · ⚙ и родитель)
+  // живёт в постоянной шапке диалога НАД вкладками (`headerBox` ниже) — она
+  // общая для всех вкладок, а не принадлежит первой (ошибка 58807d03).
+  const descriptionPane = div('type-editor-pane type-editor-basic');
+  const propertiesPane = div('type-editor-pane type-editor-properties');
+  const viewsPane = div('type-editor-pane');
+  /** Постоянная шапка: строка «иконка + название + шестерёнка» и строка
+   *  «родитель»; под ними — вкладки (каркас диалога, опция `headerExtra`). */
+  const headerBox = div('type-editor-header');
 
   // Duplicate-name guard: type names are unique ignoring case (08-ui-spec.md
   // §8.4). The catalogue is loaded once on open; the server re-checks on apply.
@@ -888,6 +960,13 @@ export function showThoughtTypeEditor(
   };
   /** Draft of the comment template (staged like everything else). */
   let templateMd = type?.comment_template_md ?? '';
+  /**
+   * Снимок полей формы на момент открытия — база проверки «есть несохранённые
+   * изменения» (требование b58f6aad). Обновляется после успешной записи
+   * (`apply`), чтобы «Записать» не оставляло форму «грязной».
+   */
+  let dirtyBase = { ...draft };
+  let templateBase = templateMd;
 
   // Top row: icon · name · settings (⚙) — all active from the very start.
   const topRow = div('editor-top-row');
@@ -909,20 +988,30 @@ export function showThoughtTypeEditor(
       },
     });
   });
-  const nameInput = el('input', 'text-input');
+  const nameInput = fieldInput();
   nameInput.type = 'text';
   nameInput.value = draft.name;
   nameInput.maxLength = 200;
   nameInput.placeholder = 'Название типа (обязательно)';
-  const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
-  settingsBtn.append(svgIcon('settings', 14));
+  const settingsBtn = iconButton({
+    icon: svgIcon('settings', 14),
+    title: 'Настройки типа',
+    onClick: openStyle,
+  });
   topRow.append(iconBox, nameInput, settingsBtn);
-  descriptionPane.append(topRow);
+  headerBox.append(topRow);
+
+  /**
+   * Адрес ошибок имени: вкладка «Основное» (там живёт поле) + само поле.
+   * Клик по строке ошибки в футере переключает на эту вкладку и ставит фокус
+   * (требование 397c5a56).
+   */
+  const nameAddress = (): ErrorAddress => ({ tab: 'basic', field: () => nameInput });
 
   // Parent picker (L21). The root type has no parent; the picked value is
   // staged and re-checked by the server on apply (a type in use cannot be
   // reparented, no cycles, max 4 levels).
-  const parentField = div('field');
+  const parentField = div(FIELD_CLASS);
   const parentLabel = el('p', 'muted', 'Родитель (наследование свойств и стиля)');
   parentLabel.style.margin = '8px 0 2px';
   if (type?.is_root === true) {
@@ -943,13 +1032,17 @@ export function showThoughtTypeEditor(
     });
     parentField.append(picker.root);
   }
-  descriptionPane.append(parentField);
+  headerBox.append(parentField);
 
   // Comment (type description / usage rules) — placeholder only, no label.
-  const descArea = el('textarea', 'textarea-input');
+  // Высота — 4 строки; растягивается по вертикали пользователем штатным
+  // средством дизайн-системы (`.ui-textarea { resize: vertical }`, требование
+  // b0e0e5a4) — своего ресайз-механизма не заводим.
+  const descArea = fieldTextarea();
   descArea.value = draft.description;
-  descArea.rows = 3;
+  descArea.rows = 4;
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
+  descArea.classList.add('type-editor-description');
   descriptionPane.append(descArea);
 
   // Строка ошибки диалога живёт в панели кнопок (футер), а не в теле вкладки:
@@ -964,33 +1057,37 @@ export function showThoughtTypeEditor(
   // Ctrl+Enter сохраняет, Esc — отмена. С задачи «Улучшить диалог…» шаблон
   // тоже черновой: поле коммитит текст локально (onSave без сети), а на сервер
   // markdown уходит одним пакетом по «Применить и закрыть».
-  const templateLabel = el(
-    'p',
-    'muted',
-    'Шаблон комментария (применяется к пустому комментарию мысли при создании/назначении типа)',
-  );
-  templateLabel.style.margin = '0 0 2px';
-  templatePane.append(templateLabel);
-  /** Last markdown committed inside the field (Esc reverts the mirror to it). */
+  // Ошибка 58807d03: с вкладки «Шаблон» поле переехало в сворачиваемую группу
+  // «Шаблон» вкладки «Основное» (по умолчанию свёрнута), рамка — как у поля
+  // описания (`.ui-textarea`).
+  /** Последний markdown, зафиксированный внутри поля (Esc возвращает к нему). */
   let committedTemplateMd = templateMd;
-  templatePane.append(
-    createMarkdownField({
-      md: templateMd,
-      html: renderTemplateHtml(templateMd),
-      onInput: (md) => {
-        templateMd = md;
-      },
-      onSave: async (md) => {
-        templateMd = md;
-        committedTemplateMd = md;
-        return renderTemplateHtml(md);
-      },
-      onCancel: () => {
-        templateMd = committedTemplateMd;
-      },
-      minRows: 5,
-    }),
-  );
+  const templateField = createMarkdownField({
+    md: templateMd,
+    html: renderTemplateHtml(templateMd),
+    onInput: (md) => {
+      templateMd = md;
+    },
+    onSave: async (md) => {
+      templateMd = md;
+      committedTemplateMd = md;
+      return renderTemplateHtml(md);
+    },
+    onCancel: () => {
+      templateMd = committedTemplateMd;
+    },
+    minRows: 4,
+  });
+  templateField.classList.add('type-editor-template-field');
+  const templateBody = div('group-body');
+  templateBody.append(templateField);
+  const templateGroup = collapsibleSection({
+    title: t('typeEditor.group.template'),
+    collapsed: true,
+    caretKind: 'chevron',
+    body: templateBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
 
   // Property sections (own staged + inherited). For a new type the inherited
   // preview follows the picked parent; for an existing type the inherited
@@ -1007,8 +1104,9 @@ export function showThoughtTypeEditor(
       draft.parent_id ?? findRootType(store.state.thoughtTypes)?.id ?? null,
     onOverrideApplied: onChanged,
     // Ошибки записи привязок идут в общую строку панели кнопок: пользователь
-    // может находиться на любой вкладке (ошибка add8d09d).
+    // может находиться на любой вкладке; клик по строке вернёт на «Свойства».
     errorLine,
+    errorAddress: { tab: 'properties' },
     onSave: () => {
       // Эмулируем клик по «Записать» — `close` тут no-op, диалог не закрываем.
       void apply('stay', () => undefined);
@@ -1016,18 +1114,30 @@ export function showThoughtTypeEditor(
   });
   propertiesPane.append(props.root);
 
-  // Вкладка «Метаданные» — автор, даты, id сущности (задача 04cd9794). Для
-  // нового типа до первой записи показываем подсказку «id будет присвоен при
-  // сохранении»; после «Записать» вкладка перерисовывается настоящими
-  // метаданными (ошибка 51732f9b: раньше подсказка оставалась до переоткрытия).
+  // Группа «Метаданные» (вкладка «Основное») — автор, даты, id сущности
+  // (задача 04cd9794). Для нового типа до первой записи показываем подсказку
+  // «id будет присвоен при сохранении»; после «Записать» тело группы
+  // перерисовывается настоящими метаданными (ошибка 51732f9b). По умолчанию
+  // группа свёрнута (ошибка 58807d03).
+  const metadataBody = div('group-body');
+  const metadataGroup = collapsibleSection({
+    title: t('typeEditor.group.metadata'),
+    collapsed: true,
+    caretKind: 'chevron',
+    body: metadataBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
   function renderMetadataPane(): void {
-    metadataPane.replaceChildren(
+    metadataBody.replaceChildren(
       current !== null
         ? buildMetadataRowsFromType(current)
         : el('p', 'muted', 'id появится после первой записи типа.'),
     );
   }
   renderMetadataPane();
+  // Порядок вкладки «Основное»: описание → группа «Шаблон» → группа
+  // «Метаданные».
+  descriptionPane.append(templateGroup.root, metadataGroup.root);
 
   // Вкладка «Отборы» — собственная подписка на realtime-события
   // (thought-type-view.{created,updated,deleted}); диалог вызывает dispose()
@@ -1044,9 +1154,7 @@ export function showThoughtTypeEditor(
   });
   viewsPane.append(viewsTab.root);
 
-  // Подвесить все панели к body и активировать первую.
-  body.append(descriptionPane, templatePane, propertiesPane, viewsPane, metadataPane);
-  activateTab(activeTab);
+  // Панели вкладок передаются каркасу диалога (см. `tabs` ниже).
 
   /** Existing type with the same normalized name as `name` (self excluded). */
   function nameClash(name: string): ThoughtType | null {
@@ -1060,9 +1168,9 @@ export function showThoughtTypeEditor(
   function revalidateName(): void {
     const clash = nameClash(nameInput.value) !== null;
     if (clash) {
-      errorLine.textContent = DUP_NAME_MSG;
+      errorLine.show(DUP_NAME_MSG, nameAddress());
     } else if (errorLine.textContent === DUP_NAME_MSG) {
-      errorLine.textContent = '';
+      errorLine.clear();
     }
     if (applyBtn !== null) applyBtn.disabled = clash;
     if (saveBtn !== null) saveBtn.disabled = clash;
@@ -1110,14 +1218,14 @@ export function showThoughtTypeEditor(
   async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
     // Строка ошибки в панели кнопок общая для диалога: перед новой попыткой
     // гасим прошлое сообщение (иначе оно «залипает» и видно на всех вкладках).
-    errorLine.textContent = '';
+    errorLine.clear();
     const name = nameInput.value.trim();
     if (name === '') {
-      errorLine.textContent = 'Название типа обязательно.';
+      errorLine.show('Название типа обязательно.', nameAddress());
       return;
     }
     if (nameClash(name) !== null) {
-      errorLine.textContent = DUP_NAME_MSG;
+      errorLine.show(DUP_NAME_MSG, nameAddress());
       return;
     }
     const description = descArea.value.trim();
@@ -1181,7 +1289,7 @@ export function showThoughtTypeEditor(
                   err.details.thoughts_count,
                 ))
               ) {
-                errorLine.textContent = 'Смена родителя отменена.';
+                errorLine.show('Смена родителя отменена.');
                 return;
               }
               const reparentVersion = await readFreshTypeVersion(
@@ -1235,9 +1343,13 @@ export function showThoughtTypeEditor(
       renderMetadataPane();
       void viewsTab.refresh();
       onChanged(current.id);
+      // Запись успешна — обновляем базу «грязной» проверки (b58f6aad): после
+      // «Записать» диалог не считается изменённым.
+      dirtyBase = { ...draft };
+      templateBase = templateMd;
       if (mode === 'close') close();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
@@ -1284,8 +1396,19 @@ export function showThoughtTypeEditor(
   return new Promise<string | null>((resolve) => {
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
-      body,
-      width: TYPE_EDITOR_DIALOG_WIDTH,
+      size: 'l',
+      // Постоянная шапка над вкладками: иконка · название · ⚙ и родитель
+      // (ошибка 58807d03). Общая для всех вкладок — на «Свойствах» и
+      // «Отборах» тип тоже виден и правится.
+      headerExtra: headerBox,
+      // Три вкладки: «Основное» (описание + группы «Шаблон»/«Метаданные»),
+      // «Свойства» (две таблицы со сплиттером) и «Отборы». Прежние отдельные
+      // вкладки «Шаблон» и «Метаданные» стали группами внутри «Основного».
+      tabs: [
+        { id: 'basic', label: t('typeEditor.tab.basic'), content: descriptionPane },
+        { id: 'properties', label: t('typeEditor.tab.properties'), content: propertiesPane },
+        { id: 'views', label: t('typeEditor.tab.views'), content: viewsPane },
+      ],
       // Идентичность сущности для повторного открытия (ошибки c2d243bb,
       // 74d9b4ed): второй клик по строке этого типа — или по «Добавить» при
       // ещё не созданном типе (`thought-type:new`) — поднимает этот диалог,
@@ -1295,13 +1418,22 @@ export function showThoughtTypeEditor(
       // Ошибка записи живёт в панели кнопок, а не в теле вкладки: она должна
       // быть видна на любой вкладке диалога (ошибка add8d09d).
       footerError: errorLine,
+      // Грязная форма (требование b58f6aad): Esc/крестик при изменениях
+      // перехватываются подтверждением. «Сохранить» подтверждения идёт тем же
+      // путём, что «Применить и закрыть»; явная «Отмена» в футере закрывает
+      // молча, отбрасывая черновик.
+      dirty: {
+        isDirty: () =>
+          formDirty(dirtyBase, draft) || templateMd !== templateBase || props.hasChanges(),
+        save: (close) => void apply('close', close),
+      },
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
         // содержимое обновляется (отборы нового типа становятся доступны,
         // «Метаданные» показывают id/даты) — ошибка 51732f9b.
         {
-          label: 'Записать',
+          label: t('actions.apply'),
           keepOpen: true,
           onClick: (close) => void apply('stay', close),
           ref: (btn) => {
@@ -1309,7 +1441,7 @@ export function showThoughtTypeEditor(
           },
         },
         {
-          label: 'Применить и закрыть',
+          label: t('actions.applyClose'),
           primary: true,
           keepOpen: true,
           onClick: (close) => void apply('close', close),
@@ -1318,11 +1450,10 @@ export function showThoughtTypeEditor(
           },
         },
       ],
-      onMount: () => {
-        // Шапку диалога можно переписать после первой записи: находим её от
-        // тела диалога (оба уже в DOM к моменту onMount).
-        dialogTitleEl =
-          body.closest('.dialog-box')?.querySelector<HTMLElement>('.dialog-title') ?? null;
+      onMount: (_close, box) => {
+        // Шапку диалога можно переписать после первой записи: каркас отдаёт
+        // бокс диалога (оба уже в DOM к моменту onMount).
+        dialogTitleEl = box.querySelector<HTMLElement>('.dialog-title');
         syncDialogTitle();
         nameInput.focus();
       },
@@ -1355,6 +1486,12 @@ interface StagedPropertySection {
    * re-diffs only what is still missing.
    */
   applyChanges(typeId: string): Promise<boolean>;
+  /**
+   * Есть ли подготовленные, но не записанные изменения собственных привязок
+   * (добавление/снятие/порядок/`required`) или их дефолтов — база проверки
+   * «есть несохранённые изменения» редактора типа (требование b58f6aad).
+   */
+  hasChanges(): boolean;
   /**
    * Команда «Сохранить» из заглушки несохранённого типа (задача e7352642):
    * та же логика, что у кнопки «Записать» в футере диалога — запись без
@@ -1405,50 +1542,157 @@ function buildStagedPropertySection(opts: {
   onOverrideApplied?: () => void;
   /**
    * Общая строка ошибки диалога (в панели кнопок): ошибки записи привязок
-   * выводятся сюда, чтобы быть видимыми на любой вкладке (ошибка add8d09d).
+   * выводятся сюда, чтобы быть видимыми на любой вкладке. Клик по строке
+   * ведёт на вкладку «Свойства» (требование 397c5a56).
    */
-  errorLine: HTMLElement;
+  errorLine: FooterErrorLine;
+  /** Адрес ошибок привязок — вкладка «Свойства» для перехода по клику. */
+  errorAddress: ErrorAddress;
   /** Команда «Сохранить» для заглушки несохранённого типа (задача e7352642):
    *  запись без закрытия диалога; после неё секция свойств оживает (id
    *  появляется). У существующего типа — `undefined`, заглушка не нужна. */
   onSave?: () => void;
 }): StagedPropertySection {
-  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine, onSave } = opts;
+  const { networkId, ownerType, typeId, previewParentId, onOverrideApplied, errorLine, errorAddress, onSave } = opts;
   // Текущее «живое» id типа: для НОВОГО — стартует `null`, после успешного
   // `applyChanges(targetId)` обновляется до созданного id — заглушка
   // (задача e7352642) перестаёт показываться, секция оживает. У
   // существующего типа совпадает с `typeId` всё время.
   let liveTypeId: string | null = typeId;
-  const box = div('form-stack');
-  const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '220px';
+  // Две сворачиваемые таблицы (ошибка 58807d03): унаследованные свойства —
+  // сверху, собственные — снизу, между ними вертикальный сплиттер. Группы —
+  // общий компонент `lib/ui/collapsible.ts`; тела постоянные (таблицы
+  // перерисовываются в те же узлы, состояние формы цело).
+  const box = div('te-split');
+  const inheritedBody = div('group-body te-split-body');
+  const ownBody = div('group-body te-split-body');
+  const inheritedScroll = div('admin-table-wrap');
+  const ownScroll = div('admin-table-wrap');
   // The first load often starts before the dialog mounts this box — show the
   // placeholder up front instead of a blank gap.
-  tableWrap.append(el('span', 'muted', 'Загрузка…'));
-  // Заголовка «Свойства» над таблицей нет (ошибка 3c7213ec): вкладка уже
-  // называется «Свойства», подпись только дублировала её. Подзаголовок
-  // «Свойства типа» остаётся — он отличает собственную таблицу от
-  // унаследованной. Строки ошибки здесь нет: ошибки записи уходят в футер
-  // диалога (ошибка add8d09d).
-  box.append(tableWrap);
-  // Кнопка добавления свойства (задача 298fe6f3): в списке диалога «Добавить
-  // свойство» свойство-связь показано парой КОНКРЕТНЫХ имён — прямое
-  // (`name_forward`, сторона `source`) и обратное (`name_reverse`, сторона
-  // `target`); выбор имени сразу задаёт сторону привязки, отдельного диалога
-  // «Сторона привязки» нет. «Создать свойство» — кнопка самого диалога выбора,
-  // отдельной кнопки вкладки нет.
-  const actions = div('form-row');
-  actions.style.gap = '8px';
-  actions.style.flexWrap = 'wrap';
-  actions.append(
-    button(
-      'Добавить свойство…',
-      () => void openAttachPropertyDialog(),
-      'btn small',
-      'Подключить свойство из справочника сети (новое создаётся кнопкой «Создать свойство» в диалоге выбора)',
-    ),
+  inheritedScroll.append(loadingState());
+  ownScroll.append(loadingState());
+  // Кнопка добавления свойства (задача 298fe6f3): над таблицей СВОБСТВЕННЫХ
+  // свойств, пониженной высоты (как кнопки управления списком —
+  // `--list-btn-h`), с небольшими отступами по вертикали (единым правилом в
+  // CSS). В списке диалога «Добавить свойство» свойство-связь показано парой
+  // КОНКРЕТНЫХ имён — прямое (`name_forward`, сторона `source`) и обратное
+  // (`name_reverse`, сторона `target`); выбор имени сразу задаёт сторону
+  // привязки, отдельного диалога «Сторона привязки» нет. «Создать свойство» —
+  // кнопка самого диалога выбора. Строки ошибки здесь нет: ошибки записи
+  // уходят в футер диалога (ошибка add8d09d).
+  const addRow = div('form-row type-list-toolbar type-rows-toolbar te-split-add');
+  addRow.append(
+    uiButton({
+      label: t('typeEditor.addProperty'),
+      role: 'secondary',
+      size: 's',
+      title: t('typeEditor.addPropertyHint'),
+      onClick: () => void openAttachPropertyDialog(),
+    }),
   );
-  box.append(actions);
+  ownBody.append(addRow, ownScroll);
+  inheritedBody.append(inheritedScroll);
+
+  const inheritedGroup = collapsibleSection({
+    title: t('typeEditor.group.inherited'),
+    collapsed: false,
+    caretKind: 'chevron',
+    body: inheritedBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
+  const ownGroup = collapsibleSection({
+    title: t('typeEditor.group.own'),
+    collapsed: false,
+    caretKind: 'chevron',
+    body: ownBody,
+    classes: TYPE_EDITOR_GROUP_CLASSES,
+  });
+
+  // Пропорция сплиттера — на клиенте (L4 `ui_state`, ошибка 58807d03):
+  // восстанавливается при открытии, обновляется на отпускании ручки. Само
+  // значение — доля верхней таблицы (чистая логика — `lib/pure.ts`).
+  let splitRatio = TYPE_EDITOR_SPLIT_DEFAULT;
+  let splitActive = false;
+  /** Минимальная высота таблицы при перетаскивании, px. */
+  const SPLIT_MIN_PX = 60;
+
+  const splitter = uiSplitter({
+    extraClass: 'te-splitter',
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaVertical'),
+    // Сплиттер доступен ТОЛЬКО когда раскрыты обе группы (ошибка 58807d03):
+    // `plan()` возвращает `null` в остальных состояниях, и драг/клавиатура
+    // молча не начинаются.
+    plan: () => {
+      if (!splitActive) return null;
+      const total = box.clientHeight;
+      if (!Number.isFinite(total) || total <= 0) return null;
+      return {
+        axis: 'y',
+        start: inheritedGroup.root.getBoundingClientRect().height,
+        min: SPLIT_MIN_PX,
+        max: Math.max(SPLIT_MIN_PX, total - SPLIT_MIN_PX),
+      };
+    },
+    apply: (value) => {
+      inheritedGroup.root.style.flex = `0 0 ${value}px`;
+      ownGroup.root.style.flex = '1 1 auto';
+    },
+    commit: (value, _plan, moved) => {
+      if (!moved) return;
+      splitRatio = splitRatioFromPx(value, box.clientHeight);
+      void etn.ui
+        .setState(networkId, UI_STATE_KEY.TYPE_EDITOR_PROPERTY_SPLIT, String(splitRatio))
+        .catch(() => undefined);
+    },
+  });
+
+  /**
+   * Раскладка пары групп: обе раскрыты — верхняя держит сохранённую долю,
+   * нижняя добирает остаток, сплиттер активен; одна раскрыта — она занимает
+   * всю свободную высоту, вторая схлопота до заголовка, сплиттер инертен
+   * (ошибка 58807d03). Свёрнутость между открытиями не сохраняется.
+   */
+  function relayoutSplit(): void {
+    const inheritedOpen = !inheritedGroup.collapsed();
+    const ownOpen = !ownGroup.collapsed();
+    splitActive = inheritedOpen && ownOpen;
+    splitter.setAttribute('aria-disabled', splitActive ? 'false' : 'true');
+    splitter.classList.toggle('disabled', !splitActive);
+    if (splitActive) {
+      if (!splitter.hasAttribute('tabindex')) splitter.setAttribute('tabindex', '0');
+    } else {
+      splitter.removeAttribute('tabindex');
+    }
+    if (splitActive) {
+      inheritedGroup.root.style.flex = `0 0 ${splitRatio * 100}%`;
+      ownGroup.root.style.flex = '1 1 auto';
+    } else if (inheritedOpen) {
+      inheritedGroup.root.style.flex = '1 1 auto';
+      ownGroup.root.style.flex = '0 0 auto';
+    } else if (ownOpen) {
+      ownGroup.root.style.flex = '1 1 auto';
+      inheritedGroup.root.style.flex = '0 0 auto';
+    } else {
+      inheritedGroup.root.style.flex = '0 0 auto';
+      ownGroup.root.style.flex = '0 0 auto';
+    }
+  }
+  inheritedGroup.root.addEventListener('etn:toggled', relayoutSplit);
+  ownGroup.root.addEventListener('etn:toggled', relayoutSplit);
+  relayoutSplit();
+  // Восстановление сохранённой пропорции (ошибка 58807d03): нет значения —
+  // остаётся стандартная доля из `relayoutSplit`.
+  void etn.ui
+    .getState(networkId, UI_STATE_KEY.TYPE_EDITOR_PROPERTY_SPLIT)
+    .then((raw) => {
+      splitRatio = parseTypeEditorSplit(raw);
+      relayoutSplit();
+    })
+    .catch(() => undefined);
+
+  box.append(inheritedGroup.root, splitter, ownGroup.root);
 
   /** Server-side snapshot of the type's OWN bindings (kept in sync after
    *  every applied op — the base the next diff is computed against). */
@@ -1710,7 +1954,8 @@ function buildStagedPropertySection(opts: {
 
   /** Renders the staged own table + the inherited table. */
   function render(): void {
-    tableWrap.replaceChildren();
+    inheritedScroll.replaceChildren();
+    ownScroll.replaceChildren();
 
     // Заглушка несохранённого типа (задача e7352642): свойства и отборы
     // недоступны, пока у типа нет id — «Типы источников»/«Типы назначений»
@@ -1718,27 +1963,22 @@ function buildStagedPropertySection(opts: {
     // в списках. Тот же подход, что на «Отборах» (уже было): единая
     // разметка-заглушка с кнопкой «Сохранить» (зелёная, та же команда, что
     // «Записать» в футере — пишет накопленный черновик без закрытия диалога,
-    // после чего обе вкладки оживают).
+    // после чего обе вкладки оживают). Заглушка живёт в таблице СВОБСТВЕННЫХ
+    // свойств; унаследованная группа в этом состоянии пуста.
     if (liveTypeId === null) {
-      tableWrap.append(
+      ownScroll.append(
         renderNewTypeHint({
           message: 'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
           onSave,
         }),
       );
+      inheritedScroll.append(
+        el('p', 'muted', 'Свойства появятся после сохранения типа.'),
+      );
       return;
     }
 
     if (inherited.length > 0) {
-      const inhLabel = el(
-        'p',
-        'muted',
-        liveTypeId === null
-          ? 'Унаследованные свойства (передадутся от выбранного родителя)'
-          : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание; обязательность задаётся на типе, который подключил свойство)',
-      );
-      inhLabel.style.margin = '0 0 2px';
-      tableWrap.append(inhLabel);
       const inhTable = el('table', 'table-list prop-table');
       const inhHead = el('thead');
       const inhHeadRow = el('tr');
@@ -1797,22 +2037,33 @@ function buildStagedPropertySection(opts: {
         // физической привязки — переопределять нечего.
         if (liveTypeId !== null && def.mirrored !== true) {
           actions.append(
-            button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
+            uiButton({
+              label: 'описание…',
+              role: 'secondary',
+              size: 's',
+              title: 'Переопределить описание свойства',
+              onClick: () => showDescriptionOverrideDialog(def),
+            }),
           );
         }
         if (liveTypeId !== null && def.description_overridden) {
           actions.append(
-            button('сбросить ◆', () => void clearDescriptionOverride(def), 'btn small', 'Сбросить переопределение описания'),
+            uiButton({
+              label: 'сбросить ◆',
+              role: 'secondary',
+              size: 's',
+              title: 'Сбросить переопределение описания',
+              onClick: () => void clearDescriptionOverride(def),
+            }),
           );
         }
         row.append(actions);
         inhBody.append(row);
       }
       inhTable.append(inhBody);
-      tableWrap.append(inhTable);
-      const ownLabel = el('p', 'muted', 'Свойства типа');
-      ownLabel.style.margin = '8px 0 2px';
-      tableWrap.append(ownLabel);
+      inheritedScroll.append(inhTable);
+    } else {
+      inheritedScroll.append(el('p', 'muted', 'Унаследованных свойств нет.'));
     }
 
     const table = el('table', 'table-list prop-table');
@@ -1845,11 +2096,11 @@ function buildStagedPropertySection(opts: {
       tr.append(el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]));
       tr.append(el('td', 'muted', sideLabel(row.side)));
       const requiredCell = el('td');
-      const requiredCheck = el('input') as HTMLInputElement;
-      requiredCheck.type = 'checkbox';
-      requiredCheck.checked = row.required;
-      requiredCheck.addEventListener('change', () => {
-        setRequired(row.id, requiredCheck.checked);
+      const requiredCheck = choiceControl('checkbox', {
+        checked: row.required,
+        onChange: (checked) => {
+          setRequired(row.id, checked);
+        },
       });
       requiredCell.append(requiredCheck);
       tr.append(requiredCell);
@@ -1874,26 +2125,45 @@ function buildStagedPropertySection(opts: {
       // стороне свойства-связи.
       if (canReorderBinding(row)) {
         actions.append(
-          button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
-          button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),
+          uiButton({
+            label: '▲',
+            role: 'secondary',
+            size: 's',
+            title: 'Выше',
+            onClick: () => move(row.id, -1),
+          }),
+          uiButton({
+            label: '▼',
+            role: 'secondary',
+            size: 's',
+            title: 'Ниже',
+            onClick: () => move(row.id, 1),
+          }),
         );
       }
       actions.append(
-        button(
-          '✎',
-          () => editNature(row),
-          'btn small',
-          'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
-        ),
-        button('✕', () => void unbind(row), 'btn small', 'Снять привязку свойства — значения не удаляются'),
+        uiButton({
+          label: '✎',
+          role: 'secondary',
+          size: 's',
+          title: 'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
+          onClick: () => editNature(row),
+        }),
+        uiButton({
+          label: '✕',
+          role: 'secondary',
+          size: 's',
+          title: 'Снять привязку свойства — значения не удаляются',
+          onClick: () => void unbind(row),
+        }),
       );
       tr.append(actions);
       tbody.append(tr);
     }
     table.append(tbody);
-    tableWrap.append(table);
-    if (ownDraft.length === 0 && inherited.length === 0) {
-      tableWrap.append(el('p', 'muted', 'У типа нет свойств.'));
+    ownScroll.append(table);
+    if (ownDraft.length === 0) {
+      ownScroll.append(el('p', 'muted', 'У типа нет собственных свойств.'));
     }
   }
 
@@ -1951,7 +2221,10 @@ function buildStagedPropertySection(opts: {
         inherited = defs;
       }
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      // Ошибка чтения набора свойств — одной строкой в нижней таблице; верхняя
+      // остаётся пустой, чтобы не дублировать сообщение.
+      inheritedScroll.replaceChildren();
+      ownScroll.replaceChildren(operationError(err));
       return;
     }
     if (box.isConnected) everMounted = true;
@@ -2010,7 +2283,7 @@ function buildStagedPropertySection(opts: {
           );
         }
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err), errorAddress);
         render();
         return false;
       }
@@ -2024,7 +2297,7 @@ function buildStagedPropertySection(opts: {
           ownDraft.map((d) => d.id),
         );
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err), errorAddress);
         return false;
       }
     }
@@ -2045,7 +2318,7 @@ function buildStagedPropertySection(opts: {
           write.value,
         );
       } catch (err) {
-        errorLine.textContent = errText(err);
+        errorLine.show(errText(err), errorAddress);
         render();
         return false;
       }
@@ -2053,7 +2326,10 @@ function buildStagedPropertySection(opts: {
       if (draftEntry !== undefined) draftEntry.initial = draftEntry.value;
     }
     deletedIds = [];
-    errorLine.textContent = '';
+    // Черновик привязок записан — «грязного» состояния больше нет (b58f6aad):
+    // следующий Esc/крестик не должен требовать подтверждения.
+    draftTouched = false;
+    errorLine.clear();
     render();
     // Refresh the inherited view too: reparenting on the same apply may have
     // changed what this type receives from its ancestors.
@@ -2068,6 +2344,16 @@ function buildStagedPropertySection(opts: {
       if (liveTypeId === null) void reload();
     },
     applyChanges,
+    hasChanges: (): boolean => {
+      // Подготовленные действия над привязками помечаются `draftTouched`
+      // (добавление, снятие, порядок, `required`), дефолты — сравнением
+      // черновика с загруженным снимком строки «По умолчанию».
+      if (draftTouched) return true;
+      for (const entry of bindingDefaults.values()) {
+        if (formDirty(entry.initial, entry.value)) return true;
+      }
+      return false;
+    },
     onSave,
   };
 }
@@ -2149,12 +2435,12 @@ async function openAttachDialog(opts: {
   await ensurePropertyLinkTypes(networkId, registryRows);
 
   return new Promise((resolve) => {
-    const errorLine = span('', 'error-text');
+    const errorLine = footerErrorLine();
 
     /** Строки каталога по текущему снимку каталога типов связей. */
     const list = buildPropertyList({
       mode: 'picker',
-      searchPlaceholder: 'Поиск по имени или описанию…',
+      searchPlaceholder: t('actions.search'),
       callbacks: {
         rowBlocked: (row) => rowBlockReason(row, existingSides, inheritedPropertyIds),
         onActivate: (row) => void choose(row),
@@ -2171,7 +2457,7 @@ async function openAttachDialog(opts: {
     /** Активация строки: подтверждение перенимаемых привязок потомков, затем
      *  возврат черновика привязки — выбранное имя задаёт сторону. */
     async function choose(row: PropertyListRow): Promise<void> {
-      errorLine.textContent = '';
+      errorLine.clear();
       const warning = await warnDescendantBindings(networkId, row.registry, {
         ownerType,
         types,
@@ -2207,15 +2493,20 @@ async function openAttachDialog(opts: {
       }
     }
 
-    const body = div('form-stack');
-    body.append(list.root, errorLine);
+    const body = div('form-stack list-dialog-body');
+    body.append(list.root);
 
     const close = showDialog({
       title: 'Добавить свойство',
       body,
-      width: 760,
+      size: 'l',
+      // Высота стабильна: задана ролью, не содержимым списка (правило 9
+      // требования 11ddd910, ошибка f68bb43c).
+      fixedHeight: true,
+      // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
+      footerError: errorLine,
       buttons: [
-        { label: 'Отмена' },
+        { label: t('actions.cancel') },
         {
           label: 'Создать свойство',
           keepOpen: true,
@@ -2238,7 +2529,7 @@ async function openAttachDialog(opts: {
           },
         },
       ],
-      onMount: () => list.focusSearch(),
+      onMount: () => list.focus(),
     });
   });
 }
@@ -2422,9 +2713,9 @@ function openDescriptionOverrideDialog(opts: {
   onDone: () => void;
 }): void {
   const { networkId, ownerType, typeId, def, onDone } = opts;
-  const errorLine = span('', 'error-text');
+  const errorLine = footerErrorLine();
 
-  const area = el('textarea', 'textarea-input');
+  const area = fieldTextarea();
   area.value = def.description ?? '';
   area.rows = 5;
   area.placeholder = 'Описание свойства для этого типа (пусто — наследуется от родителя)';
@@ -2437,7 +2728,7 @@ function openDescriptionOverrideDialog(opts: {
       'Здесь задаётся описание свойства только для этого типа (и его подчинённых, пока те не переопределят сами).',
   );
   hint.style.margin = '0';
-  body.append(hint, area, errorLine);
+  body.append(hint, area);
 
   /** Applies the override (or clears it when the field is empty). */
   async function apply(close: () => void): Promise<void> {
@@ -2453,16 +2744,24 @@ function openDescriptionOverrideDialog(opts: {
       onDone();
       close();
     } catch (err) {
-      errorLine.textContent = errText(err);
+      errorLine.show(errText(err));
     }
   }
 
   showDialog({
     title: `Описание свойства — «${def.key}»`,
     body,
-    width: 460,
+    size: 's',
+    // Ошибка записи — в панели кнопок (требование 397c5a56).
+    footerError: errorLine,
+    // Грязная форма (требование b58f6aad): Esc/крестик при правке описания
+    // требуют подтверждения; «Сохранить» идёт тем же путём, что «Применить».
+    dirty: {
+      isDirty: () => area.value !== (def.description ?? ''),
+      save: (close) => void apply(close),
+    },
     buttons: [
-      { label: 'Отменить' },
+      { label: t('actions.cancel') },
       ...(def.description_overridden
         ? [
             {
@@ -2481,14 +2780,14 @@ function openDescriptionOverrideDialog(opts: {
                     onDone();
                     close();
                   } catch (err) {
-                    errorLine.textContent = errText(err);
+                    errorLine.show(errText(err));
                   }
                 })();
               },
             } satisfies DialogButton,
           ]
         : []),
-      { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+      { label: t('actions.apply'), primary: true, keepOpen: true, onClick: (close) => void apply(close) },
     ],
   });
 }
@@ -2499,18 +2798,6 @@ function openDescriptionOverrideDialog(opts: {
 
 /** Преобразует ThoughtType DTO в плоский набор полей для блока «Метаданные». */
 function buildMetadataRowsFromType(type: ThoughtType): HTMLElement {
-  const fields: MetadataFields = {
-    id: type.id,
-    createdAtMs: type.created_at_ms ?? type.created_at,
-    createdBy: type.created_by ?? null,
-    updatedAtMs: type.updated_at_ms ?? type.updated_at,
-    updatedBy: type.updated_by ?? null,
-  };
-  return buildMetadataRows(fields);
-}
-
-/** Преобразует LinkType DTO в плоский набор полей для блока «Метаданные». */
-function buildMetadataRowsFromLinkType(type: LinkType): HTMLElement {
   const fields: MetadataFields = {
     id: type.id,
     createdAtMs: type.created_at_ms ?? type.created_at,
@@ -2565,7 +2852,6 @@ export async function confirmReparentImpactDialog(
   thoughtsCount: number,
 ): Promise<boolean> {
   const noun = thoughtsCount === 1 ? 'мысли' : thoughtsCount < 5 ? 'мыслей' : 'мыслей';
-  const verb = thoughtsCount === 1 ? 'изменится' : 'изменится';
   const message =
     `Смена родителя повлияет на ${thoughtsCount} ${noun}: у ${thoughtsCount === 1 ? 'неё' : 'них'} ` +
     `изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения ` +

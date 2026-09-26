@@ -16,9 +16,11 @@
  */
 
 import { showDialog } from '../lib/dialog.js';
+import { t } from '../lib/i18n.js';
 import { button, div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { THIRD_PARTY_COMPONENTS, type ThirdPartyComponent } from '../lib/third-party.js';
 import { store } from '../state.js';
 
 /** Project repository — mirrors `client/package.json` `homepage`. */
@@ -63,13 +65,14 @@ export function showAboutDialog(): void {
     linksRow,
     techLine,
     serverLine,
+    thirdPartyBlock(),
   );
 
   showDialog({
     title: 'О программе',
     body,
-    width: 420,
-    buttons: [{ label: 'Закрыть', primary: true }],
+    size: 's',
+    buttons: [{ label: t('actions.close'), primary: true }],
   });
 
   void etn.system.appInfo().then((info) => {
@@ -107,6 +110,35 @@ async function loadServerLine(serverLine: HTMLElement): Promise<void> {
     serverLine.textContent = 'Сервер: нет подключения';
   }
   serverLine.hidden = false;
+}
+
+/**
+ * Блок «Сторонние компоненты» (задача 35b9cc05, ADR 03eb2c61): краткий
+ * перечень библиотек из общего каталога `lib/third-party.ts` — того же, по
+ * которому генератор `scripts/generate-notices.ts` собирает полный
+ * `THIRD-PARTY-NOTICES.txt` в поставке.
+ */
+function thirdPartyBlock(): HTMLElement {
+  const block = div('about-third');
+  block.append(el('h3', 'about-third-title', t('about.thirdParty')));
+
+  const list = div('about-third-list');
+  for (const comp of THIRD_PARTY_COMPONENTS) list.append(thirdPartyRow(comp));
+  block.append(list);
+
+  block.append(el('p', 'about-third-hint muted', t('about.thirdPartyHint')));
+  return block;
+}
+
+/** Строка перечня: имя библиотеки — лицензия — ссылка на сайт. */
+function thirdPartyRow(comp: ThirdPartyComponent): HTMLElement {
+  const row = div('about-third-row');
+  row.append(
+    el('span', 'about-third-name', comp.title),
+    el('span', 'about-third-license muted', comp.license),
+    button(t('about.website'), () => void openLink(comp.url), 'link-btn'),
+  );
+  return row;
 }
 
 /** Opens an external link in the OS browser; failures surface as a toast. */

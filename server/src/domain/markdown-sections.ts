@@ -9,6 +9,11 @@
  * 255 символов — это адресация, а не правка форматирования, поэтому сам
  * текст при этом не меняется и `#` в тело не вставляется.
  *
+ * Вводный абзац перед первым `#`-заголовком тоже адресуем: он становится
+ * первой виртуальной секцией (ошибка a39046d9). До правки такой текст не
+ * попадал ни в одну секцию, был невидим в `sections[]` и недоступен
+ * `replace_section`/`delete_section`.
+ *
  * Файл держит только парсер секций и применение ops к строкам; запись в БД
  * делает `comment-service.ts::editComment` поверх `updateComment` — так
  * версионирование, теневые строки и журнал активности остаются единой
@@ -91,8 +96,11 @@ function collectHeadings(body: string): HeadingHit[] {
  * Разобрать тело комментария на секции. Если в тексте есть хотя бы один
  * `#` заголовок — возвращаются они; иначе возвращается одна виртуальная
  * секция с первой непустой строкой в роли заголовка и полным телом в роли
- * содержимого (дословно — без вставки `#`). Пустое тело — пустой массив
- * секций: адресовать нечего, и `sections[]` в ответе будет пустым.
+ * содержимого (дословно — без вставки `#`). Непустой вводный текст до
+ * первого заголовка тоже становится первой виртуальной секцией (ошибка
+ * a39046d9) — иначе он не адресуем и молча пропадает из `sections[]`.
+ * Пустое тело — пустой массив секций: адресовать нечего, и `sections[]`
+ * в ответе будет пустым.
  */
 function parseSections(body: string): Section[] {
   if (body === '') return [];
@@ -104,6 +112,19 @@ function parseSections(body: string): Section[] {
   }
   const lines = body.split('\n');
   const sections: Section[] = [];
+  // Вводный абзац (всё до первого `#`-заголовка) — виртуальная секция, если
+  // в нём есть хоть одна непустая строка. Пустой/пробельный префикс не
+  // порождает секции.
+  const firstHeadingLine = headings[0]!.line;
+  const preamble = lines.slice(0, firstHeadingLine).join('\n');
+  if (!BLANK_RE.test(preamble)) {
+    sections.push({
+      level: 1,
+      heading: virtualHeading(preamble),
+      content: preamble,
+      virtual: true,
+    });
+  }
   for (let i = 0; i < headings.length; i++) {
     const start = headings[i]!;
     const endLine = i + 1 < headings.length ? headings[i + 1]!.line : lines.length;
@@ -267,9 +288,19 @@ function replaceSection(body: string, section: string, text: string): string {
   if (found.virtual) {
     // Виртуальная секция: в исходном теле не было `#`-заголовка. Не вставляем
     // `#` ради замены — иначе сломается «Сам текст при этом НЕ меняется»
-    // (спека 154df95d). Заменяем содержимое тела как есть; если `text` сам
-    // содержит `#`-заголовки — последующие ops адресуются уже по ним.
-    return collapseBlankRuns(text);
+    // (спека 154df95d). Заменяем ТОЛЬКО содержимое виртуальной секции,
+    // сохраняя остальные: у вводного абзаца перед `#`-заголовками (ошибка
+    // a39046d9) соседние реальные секции обязаны уцелеть. Пустой текст
+    // удаляет вводный абзац целиком.
+    if (text === '') return collapseBlankRuns(joinSections(sections.slice(0, idx).concat(sections.slice(idx + 1))));
+    const replacement: Section = {
+      level: 1,
+      heading: virtualHeading(text),
+      content: collapseBlankRuns(text),
+      virtual: true,
+    };
+    const next = sections.slice(0, idx).concat([replacement], sections.slice(idx + 1));
+    return collapseBlankRuns(joinSections(next));
   }
   const replacement = buildReplacement(found.level, found.heading, text, false);
   // Разбираем replacement обратно в секции, чтобы подтянуть вложенные

@@ -481,6 +481,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // Задача d7177d1d (0.8.1) re-baselines до 85 000 B: описание
         // `etn.ontology.write` дополнено стороной привязки и единым
         // жизненным циклом свойства-связи ↔ link_type.
+        //
+        // 0.9.1: описания НЕ раздуваются — планка 41 000 / 36 000 сохранена.
+        // Контрактные уточнения 0.9.1 (`etn.thoughts.resolve` — причина
+        // `meta.permanent = null`, ошибка 3d1b1ce4; `etn.comments.edit` —
+        // адресуемый вводный абзац, ошибка a39046d9) добавили ~530 B, а на
+        // базе ветки `descriptions+inputSchema` уже был 36 177 B (> ADR-цели
+        // 36 000). Поэтому проза `etn.guide`/`etn.ops`/`etn.thoughts.write`/
+        // `etn.thoughts.get`/`etn.thoughts.resolve` сжата без потери контракта:
+        // 25 инструментов / ~40 580 B и ~35 815 B — обе планки соблюдены.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         // 0.8.3 (задача 86ef2ff4): редкие операции упакованы в `etn.guide` +
         // `etn.ops`; замер до/после — в хронике задачи. Было 66 инструментов /

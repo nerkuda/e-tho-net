@@ -49,15 +49,14 @@ export interface MdEditor {
 
 /** Syntax colours through the app's CSS variables (follows light/dark themes). */
 const mdHighlightStyle = HighlightStyle.define([
-  { tag: tags.heading, fontWeight: '700' },
+  // Насыщенность заголовка задаёт общее правило строки `.cm-md-h*` в
+  // `styles/editor.css` (единый источник с просмотром, ошибка 45989471) —
+  // здесь вес не дублируется.
   { tag: tags.strong, fontWeight: '700' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: tags.link, color: 'var(--accent)' },
   { tag: tags.monospace, fontFamily: 'var(--md-mono)' },
-  // Цитата: только цвет — рамку/отступ задаёт line-декорация md-live
-  // (span-класс подсветки обрамлял бы каждый «>» вложенных цитат).
-  { tag: tags.quote, color: 'var(--text-dim)' },
   { tag: tags.url, color: 'var(--accent)' },
   { tag: tags.meta, color: 'var(--text-dim)' },
 ]);
@@ -107,35 +106,10 @@ const mdTheme = EditorView.theme({
     padding: '2px 0',
   },
   '.cm-line': { padding: '0 4px 0 2px' },
-  // Цитата: рамка и отступ — на строке, как blockquote в просмотре
-  // (.comment-view blockquote). Line-декорацию ставит md-live (одна на
-  // строку, у вложенных цитат — только у внешней).
-  '.cm-md-quote-line': {
-    borderLeft: '3px solid var(--border-strong)',
-    paddingLeft: '10px',
-  },
-  // Заголовки: размеры и межстрочный интервал браузерных стилей h1–h6
-  // (просмотр их и использует) — паритет между режимами. Вертикальные
-  // отступы — padding, не margin: getBoundingClientRect() не включает
-  // margin, и карта высот CodeMirror разошлась бы с раскладкой (стрелки
-  // вверх/вниз прыгали бы через строки).
-  '.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6': {
-    fontWeight: '700',
-    paddingTop: '0.4em',
-    paddingBottom: '0.1em',
-  },
-  '.cm-md-h1': { fontSize: '2em', lineHeight: '1.25' },
-  '.cm-md-h2': { fontSize: '1.5em', lineHeight: '1.25' },
-  '.cm-md-h3': { fontSize: '1.17em', lineHeight: '1.25' },
-  '.cm-md-h4': { fontSize: '1em', lineHeight: '1.25' },
-  '.cm-md-h5': { fontSize: '0.83em', lineHeight: '1.25' },
-  '.cm-md-h6': { fontSize: '0.67em', lineHeight: '1.25' },
-  // Inline-код: плашка как у <code> в просмотре (.comment-view code).
-  '.cm-md-inline-code': {
-    background: 'var(--surface-2)',
-    padding: '1px 4px',
-    borderRadius: '4px',
-  },
+  // Размеры/отступы/цвета markdown-конструкций (заголовки `.cm-md-h1…h6`,
+  // цитата `.cm-md-quote-line`, плашка `.cm-md-inline-code`) задаются ОДНИМ
+  // правилом на оба режима в `styles/editor.css` (единый источник типографики
+  // просмотра и живого редактирования, ошибка 45989471) — здесь их копий нет.
   '&.cm-focused': { outline: 'none' },
   '.cm-cursor': { borderLeftColor: 'var(--accent)' },
   // Выделение текста (06b18f19/e8146cdc) красится в styles.css

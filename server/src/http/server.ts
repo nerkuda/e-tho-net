@@ -55,6 +55,7 @@ import { createTrashRoutes } from '../routes/trash.js';
 import { createActivityRoutes } from '../routes/activity.js';
 import { createLayersRoutes } from '../routes/layers.js';
 import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
+import { createStatisticsRoutes } from '../routes/statistics.js';
 import { systemLoggingRoutes } from '../routes/system-logging.js';
 import { FileLog, type FileLogLevel } from '../log/file-log.js';
 import { startEventLoopMonitor } from '../log/event-loop-monitor.js';
@@ -348,6 +349,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Change-layer routes (task S7, 03-server-api.md §5a): list/create/rename/
   // delete layers and switch the session's current layer.
   await app.register(createLayersRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Статистика мыслесети (задача c69b078d, 0.9.1): сводка по всей сети —
+  // сумма по всем слоям (`GET /networks/:id/statistics`).
+  await app.register(createStatisticsRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Import routes (phase P, P4): preview + commit a `.etnx` archive.
   await app.register(createImportRoutes(routeDeps), { prefix: '/api/v1' });
