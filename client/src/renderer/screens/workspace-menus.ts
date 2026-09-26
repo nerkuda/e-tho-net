@@ -13,9 +13,9 @@
  *   «бутерброд» (☰).
  * - Меню пользователя (верхняя строка, справа): «Администрирование» (только
  *   админу сервера), «Настройки» (объединённый диалог на вкладке
- *   «Пользователь») и «Отключиться». Команды открытия/создания мыслесети
- *   ушли в меню «Мыслесеть»; «О программе» остаётся на экране списка
- *   мыслесетей.
+ *   «Пользователь»), «О программе» и «Отключиться». Команды
+ *   открытия/создания мыслесети ушли в меню «Мыслесеть»; «О программе»
+ *   доступно и здесь, и на экране списка мыслесетей (прежняя точка входа).
  *
  * Меню «бутерброд» (☰, «Все настройки») упразднено: его «Все настройки»
  * дублировало пункт «Настройки» меню пользователя, а показ/скрытие редактора
@@ -42,6 +42,7 @@ import { showNetworkStatisticsDialog } from './network-stats.js';
 import { showSettingsDialog } from './settings.js';
 import { showThoughtTypesDialog } from './type-manager.js';
 import { showLinkTypesTreeDialog, showPropertyManagerDialog } from './property-manager.js';
+import { showAboutDialog } from './about-dialog.js';
 import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
 import { uiButton } from '../lib/ui/button.js';
@@ -392,12 +393,13 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 }
 
 /**
- * Builds the user menu items (H18, 08-ui-spec.md §8.2; задача a0cdd731).
- * Menu houses only: administration (admin only), the unified Settings dialog
- * on the «Пользователь» section, and disconnect. Opening/creating a network
- * moved to the «Мыслесеть» menu; «О программе» remains on the network list
- * screen (screens/networks.ts). Персональные настройки (display_name, размер
- * облачка, тема) живут в объединённом диалоге настроек.
+ * Builds the user menu items (H18, 08-ui-spec.md §8.2; задачи a0cdd731,
+ * ошибка 0e623d4c). Menu houses: administration (admin only), the unified
+ * Settings dialog on the «Пользователь» section, «О программе» (restored) and
+ * disconnect. Opening/creating a network moved to the «Мыслесеть» menu.
+ * «О программе» also stays on the network list screen
+ * (screens/networks.ts) — its original entry point. Персональные настройки
+ * (display_name, размер облачка, тема) живут в объединённом диалоге настроек.
  */
 export function buildUserMenuItems(): MenuItem[] {
   const items: MenuItem[] = [];
@@ -406,6 +408,11 @@ export function buildUserMenuItems(): MenuItem[] {
   }
   items.push(
     menuAction(t('userMenu.settings'), () => showSettingsDialog('user')),
+    // «О программе» (ошибка 0e623d4c): пункт вернулся в меню пользователя —
+    // его потеряли при перекомпоновке верхних меню (a0cdd731). Прежняя точка
+    // входа на экране списка мыслесетей (`screens/networks.ts`) сохранена,
+    // поэтому диалог доступен и без подключения к мыслесети.
+    menuAction(t('userMenu.about'), () => showAboutDialog()),
     menuAction(t('userMenu.disconnect'), () => void disconnect(), { danger: true }),
   );
   return items;
