@@ -48,7 +48,7 @@ interface WriteItemResult {
   matched_on: 'title' | 'synonym' | 'partial' | null;
   comment?: { id: string; version: number; action: 'created' | 'updated' };
   chronicle?: Array<{ id: string; version: number }>;
-  properties?: Record<string, { id: string | null }>;
+  properties?: Record<string, { id: string | null; targets?: string[] }>;
   links?: Array<{
     id: string;
     version: number;
@@ -1151,6 +1151,13 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           props[linkKey]?.id,
           null,
           `link property id must be null, got ${JSON.stringify(props[linkKey])}`,
+        );
+        // Осмысленное эхо (17cc0d54): `{id: null}` дополнен итоговым набором
+        // целей, иначе нельзя убедиться, что ребро встало, без перечитывания.
+        assert.deepEqual(
+          props[linkKey]?.targets,
+          [targetId],
+          `link property targets must echo the target id, got ${JSON.stringify(props[linkKey])}`,
         );
 
         // Ребро действительно создано (ответ не врёт об отсутствии записи).

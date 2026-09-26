@@ -35,6 +35,7 @@ import type {
   McpThoughtWriteLinkSpec,
   McpThoughtWriteParams,
   PropertyValue,
+  PropertyValueValue,
   ThoughtBundleInput,
   ThoughtCardWarning,
 } from '@etn/shared';
@@ -412,7 +413,13 @@ export function writeThoughts(
               properties: Object.fromEntries(
                 Object.entries(result.properties).map(([key, v]: [string, PropertyValue]) => [
                   key,
-                  { id: v.id },
+                  // Свойство-связь — проекция рёбер: строки `property_values`
+                  // нет (`id: null`), но эхо несёт ИТОГОВЫЙ набор целей —
+                  // иначе `{id: null}` не давал убедиться, что рёбра встали
+                  // (ошибка 17cc0d54).
+                  v.value_type === 'link'
+                    ? { id: null, targets: linkTargetIds(v.value) }
+                    : { id: v.id },
                 ]),
               ),
             }
@@ -532,4 +539,16 @@ export function writeThoughts(
 
     return { items, warnings, link_count: linkCount, thought_count: thoughtCount };
   });
+}
+
+/**
+ * Нормализовать значение свойства-связи в список id целей для эха ответа
+ * `etn.thoughts.write` (ошибка 17cc0d54): `setPropertyValue` отдаёт для связи
+ * одиночный id или массив — приводим к массиву, чтобы форма ответа была
+ * предсказуемой.
+ */
+function linkTargetIds(value: PropertyValueValue): string[] {
+  if (value === null) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v));
+  return [String(value)];
 }

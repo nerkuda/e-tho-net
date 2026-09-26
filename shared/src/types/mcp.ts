@@ -532,11 +532,13 @@ export interface McpThoughtWriteItemResult {
   /**
    * Per-key property value ids set in this batch. `id` — id строки
    * `property_values` для скалярного свойства; `null` для свойства-связи
-   * (её значение — проекция рёбер, отдельной строки нет; адрес ребра —
-   * `link_id` из чтения значений свойства-связи или `etn.properties.add`).
-   * Ошибка 5a50f906: раньше для свойства-связи отдавалась пустая строка.
+   * (её значение — проекция рёбер, отдельной строки нет). Для свойства-связи
+   * `targets` несёт ИТОГОВЫЙ набор целей ребра — по нему агент видит, что
+   * запись состоялась, не перечитывая карточку (ошибка 5a50f906: раньше для
+   * свойства-связи отдавалась пустая строка; ошибка 17cc0d54: `id: null` без
+   * целей бесполезен).
    */
-  properties?: Record<string, { id: string | null }>;
+  properties?: Record<string, { id: string | null; targets?: string[] }>;
   /** Link results: id + (if any) attached properties/comments. */
   links?: Array<{
     id: string;
