@@ -912,13 +912,80 @@
   padding: 3px 8px;
 }
 
+/* -------------------------------------------------------------------------
+   Markdown-контент: ЕДИНЫЙ источник типографики просмотра и живого
+   редактирования (ошибка 45989471).
+
+   Просмотр отдаёт HTML единого рендерера `@etn/markdown` внутри
+   `.comment-view` (элементы `<h1>`, `<blockquote>`, `<code>`). Живое
+   редактирование держит текст исходником и размечает строки/марки CodeMirror
+   теми же конструкциями (классы `.cm-md-*`), поэтому размеры/отступы заданы
+   ЗДЕСЬ, парным селектором `.comment-view <элемент>` + `.cm-editor .cm-line.…`
+   — значение объявлено один раз и обслуживает оба режима. Копий в теме
+   `editor/md-editor.ts` быть не должно.
+
+   Отличие применения отступа: у нормального потока просмотра это `margin`, у
+   строк CodeMirror — `padding` (margin не входит в `getBoundingClientRect()` и
+   сбивает карту высот редактора — стрелки вверх/вниз «прыгали»). Значение
+   задано одной переменной `--md-block-gap` на общем селекторе, применяется
+   каждый своим свойством — источник значения по-прежнему один.
+   ------------------------------------------------------------------------- */
+
+/* Заголовки h1–h6: размеры/насыщенность/межстрочный — браузерные (просмотр их
+   и использует, размеры совпадают с UA). */
+.comment-view h1,
+.cm-editor .cm-line.cm-md-h1,
+.comment-view h2,
+.cm-editor .cm-line.cm-md-h2,
+.comment-view h3,
+.cm-editor .cm-line.cm-md-h3,
+.comment-view h4,
+.cm-editor .cm-line.cm-md-h4,
+.comment-view h5,
+.cm-editor .cm-line.cm-md-h5,
+.comment-view h6,
+.cm-editor .cm-line.cm-md-h6 {
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.comment-view h1,
+.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-block-gap: 0.67em; }
+.comment-view h2,
+.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-block-gap: 0.83em; }
+.comment-view h3,
+.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-block-gap: 1em; }
+.comment-view h4,
+.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-block-gap: 1.33em; }
+.comment-view h5,
+.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-block-gap: 1.67em; }
+.comment-view h6,
+.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-block-gap: 2.33em; }
+
+/* Применение отступа: просмотр — внешние поля (как UA у h1–h6), редактор —
+   внутренние отступы строки (см. шапку блока). */
+.comment-view h1,
+.comment-view h2,
+.comment-view h3,
+.comment-view h4,
+.comment-view h5,
+.comment-view h6 {
+  margin-block: var(--md-block-gap);
+}
+
+.cm-editor .cm-line:is(.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6) {
+  padding-block: var(--md-block-gap);
+}
+
 .comment-view code,
-.comment-view pre {
+.comment-view pre,
+.cm-editor .cm-line .cm-md-inline-code {
   /* Тот же моно-стек, что и в редакторе (HighlightStyle tags.monospace). */
   font-family: var(--md-mono);
 }
 
-.comment-view code {
+.comment-view code,
+.cm-editor .cm-line .cm-md-inline-code {
   background: var(--surface-2);
   padding: 1px 4px;
   border-radius: 4px;
@@ -941,11 +1008,27 @@
   margin: 6px 0;
 }
 
-.comment-view blockquote {
-  margin: 6px 0;
+.comment-view blockquote,
+.cm-editor .cm-line.cm-md-quote-line {
   padding-left: 10px;
   border-left: 3px solid var(--border-strong);
   color: var(--text-dim);
+}
+
+/* Вертикальные отступы цитаты: просмотр — поля блока (6px сверху/снизу),
+   редактор — padding ТОЛЬКО первой и последней строки блока (между строками
+   одной цитаты отступа нет — как в просмотре, где строки образуют один абзац).
+   Классы `cm-md-quote-first`/`cm-md-quote-last` ставит `editor/md-live.ts`. */
+.comment-view blockquote {
+  margin-block: 6px;
+}
+
+.cm-editor .cm-line.cm-md-quote-first {
+  padding-top: 6px;
+}
+
+.cm-editor .cm-line.cm-md-quote-last {
+  padding-bottom: 6px;
 }
 
 /* Wiki-ссылки [[имя|алиас]] (M3): вид — как внутренние ссылки, клик — фокус мысли. */

@@ -92,7 +92,7 @@ test('line-декорации — нулевой длины (LineDecoration.rang
   const lineSpecs = allSpecs(state).filter(
     (r) =>
       typeof r.spec.class === 'string' &&
-      (r.spec.class.startsWith('cm-md-h') || r.spec.class === 'cm-md-quote-line'),
+      (r.spec.class.startsWith('cm-md-h') || r.spec.class.includes('cm-md-quote-line')),
   );
   assert.equal(lineSpecs.length, 3, 'заголовки + цитата');
   for (const r of lineSpecs) {
@@ -104,10 +104,12 @@ test('цитата: line-класс на строку; маркер «>» вид
   // Пустая строка отделяет «текст»: иначе он — ленивое продолжение
   // Blockquote, и каретка в конце документа всё ещё внутри блока.
   const doc = '> цитата\n> вторая\n\nтекст';
+  const quoteClass = (r: { spec: DecoSpec }): string =>
+    typeof r.spec.class === 'string' ? r.spec.class : '';
   // Две «>»-строки — один Blockquote: каретка внутри блока показывает
   // маркеры обеих строк (правило M6 — блоком владеет Blockquote).
   const inside = buildState(doc, 3);
-  const quoteLines = allSpecs(inside).filter((r) => r.spec.class === 'cm-md-quote-line');
+  const quoteLines = allSpecs(inside).filter((r) => quoteClass(r).includes('cm-md-quote-line'));
   assert.equal(quoteLines.length, 2, 'по line-классу на каждую строку цитаты');
   assert.equal(hasHiddenMark(inside, 0, 1), false, '«>» первой строки виден');
   assert.equal(hasHiddenMark(inside, 9, 10), false, '«>» второй строки виден');
@@ -115,13 +117,28 @@ test('цитата: line-класс на строку; маркер «>» вид
   const away = buildState(doc, doc.length);
   assert.equal(hasHiddenMark(away, 0, 1), true);
   assert.equal(hasHiddenMark(away, 9, 10), true);
-  assert.equal(allSpecs(away).filter((r) => r.spec.class === 'cm-md-quote-line').length, 2);
+  const awayLines = allSpecs(away).filter((r) => quoteClass(r).includes('cm-md-quote-line'));
+  assert.equal(awayLines.length, 2);
+  // Вертикальные отступы — только у краёв блока (единый источник стилей
+  // просмотра и редактора, ошибка 45989471): первая и последняя строка.
+  assert.equal(
+    awayLines.some((r) => quoteClass(r).includes('cm-md-quote-first')),
+    true,
+    'первая строка цитаты — с верхним отступом',
+  );
+  assert.equal(
+    awayLines.some((r) => quoteClass(r).includes('cm-md-quote-last')),
+    true,
+    'последняя строка цитаты — с нижним отступом',
+  );
 });
 
 test('вложенная цитата: line-класс только у внешнего блока — рамка не дублируется', () => {
   const doc = '> > вложенная\n';
   const state = buildState(doc, 5);
-  const quoteLines = allSpecs(state).filter((r) => r.spec.class === 'cm-md-quote-line');
+  const quoteLines = allSpecs(state).filter(
+    (r) => typeof r.spec.class === 'string' && r.spec.class.includes('cm-md-quote-line'),
+  );
   assert.equal(quoteLines.length, 1);
 });
 
