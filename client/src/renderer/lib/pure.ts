@@ -1544,15 +1544,15 @@ export function layerMenuTooltip(title: string | null | undefined): string {
 }
 
 /**
- * Метка кнопки-заголовка меню слоёв: имя текущего слоя, обрезанное до
- * {@link LAYER_MENU_LABEL_MAX} кодпоинтов с видимым «…» при переполнении;
+ * Метка кнопки-заголовка меню слоёв: имя текущего слоя, не длиннее
+ * {@link LAYER_MENU_LABEL_MAX} кодпоинтов — при переполнении последние
+ * влезающие символы заменяются видимым «…» (33-й кодпоинт уже не влезает);
  * слой не выбран — «Основа». Режем по кодпоинтам (не по UTF-16-единицам),
  * чтобы не разрывать суррогатную пару (эмодзи). Чистая — юнит-тест.
  */
 export function truncateLayerMenuLabel(title: string | null | undefined): string {
   const full = layerMenuTooltip(title);
   const points = Array.from(full);
-  return points.length > LAYER_MENU_LABEL_MAX
-    ? `${points.slice(0, LAYER_MENU_LABEL_MAX).join('')}…`
-    : full;
+  if (points.length <= LAYER_MENU_LABEL_MAX) return full;
+  return `${points.slice(0, LAYER_MENU_LABEL_MAX - 1).join('')}…`;
 }

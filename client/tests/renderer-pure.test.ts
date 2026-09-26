@@ -1378,11 +1378,11 @@ describe('formatFileSize — размер вложений (c69b078d)', () => {
 });
 
 describe('truncateLayerMenuLabel — заголовок меню слоёв (задача 4388305f)', () => {
-  it('длинное имя обрезается до 32 кодпоинтов с «…»', () => {
+  it('длинное имя обрезается: метка строго ≤32 кодпоинтов, последний — «…»', () => {
     const long = 'А'.repeat(40);
     const label = truncateLayerMenuLabel(long);
-    assert.equal(label, `${'А'.repeat(LAYER_MENU_LABEL_MAX)}…`);
-    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX + 1, '«…» навешивается поверх лимита');
+    assert.equal(label, `${'А'.repeat(LAYER_MENU_LABEL_MAX - 1)}…`);
+    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX, 'видимая метка не длиннее лимита');
   });
 
   it('короткое имя (≤32) отдаётся как есть, без «…»', () => {
@@ -1391,14 +1391,14 @@ describe('truncateLayerMenuLabel — заголовок меню слоёв (з�
     const exact = 'Б'.repeat(LAYER_MENU_LABEL_MAX);
     assert.equal(truncateLayerMenuLabel(exact), exact);
     const over = 'Б'.repeat(LAYER_MENU_LABEL_MAX + 1);
-    assert.equal(truncateLayerMenuLabel(over), `${'Б'.repeat(LAYER_MENU_LABEL_MAX)}…`);
+    assert.equal(truncateLayerMenuLabel(over), `${'Б'.repeat(LAYER_MENU_LABEL_MAX - 1)}…`);
   });
 
   it('резатся по кодпоинтам, а не по UTF-16-единицам (суррогатная пара цела)', () => {
     const emoji = '😀'.repeat(40);
     const label = truncateLayerMenuLabel(emoji);
-    assert.equal(label, `${'😀'.repeat(LAYER_MENU_LABEL_MAX)}…`);
-    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX + 1);
+    assert.equal(label, `${'😀'.repeat(LAYER_MENU_LABEL_MAX - 1)}…`);
+    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX);
   });
 
   it('слой не выбран — «Основа»', () => {
