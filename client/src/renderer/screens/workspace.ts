@@ -36,7 +36,12 @@ import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
 import { mountEventAreaResizer } from './event-area-resizer.js';
 import { mountSelectionResizer } from './selection-resizer.js';
-import { clampEventAreaW } from '../lib/pure.js';
+import {
+  clampEventAreaW,
+  LAYER_MENU_LABEL_FALLBACK,
+  layerMenuTooltip,
+  truncateLayerMenuLabel,
+} from '../lib/pure.js';
 import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 import { mountStructures } from './structures/structures.js';
@@ -142,9 +147,11 @@ export function buildWorkspace(): HTMLElement {
   // Layer menu (S11, 08-ui-spec.md §8.2; задача a0cdd731): идёт сразу после
   // закладок экранов, сам состав меню не меняется. Метка — заголовок текущего
   // слоя сессии («Основа» по умолчанию), поэтому меню само служит постоянным
-  // индикатором «где я» (§10.3).
-  const layerMenuButton = uiButton({ role: 'ghost', title: 'Слои изменений' });
-  const layerMenuLabel = span('Основа', 'tb-label');
+  // индикатором «где я» (§10.3). Метка обрезается до 32 кодпоинтов, а полное
+  // имя слоя несёт тултип кнопки (задача 4388305f): refresh() ниже выставляет
+  // и то, и другое.
+  const layerMenuButton = uiButton({ role: 'ghost', title: LAYER_MENU_LABEL_FALLBACK });
+  const layerMenuLabel = span(LAYER_MENU_LABEL_FALLBACK, 'tb-label');
   layerMenuButton.append(
     svgIcon('layers'),
     layerMenuLabel,
@@ -387,8 +394,11 @@ export function buildWorkspace(): HTMLElement {
     const st = store.state;
     const user = st.me?.display_name ?? st.me?.username ?? '—';
     userMenuLabel.textContent = user;
-    // The layer menu label is the current layer indicator (S11, §10.3).
-    layerMenuLabel.textContent = st.currentLayer?.title ?? 'Основа';
+    // The layer menu label is the current layer indicator (S11, §10.3): capped
+    // to 32 code points (задача 4388305f), while the button's tooltip always
+    // carries the full layer name (even when the label is not truncated).
+    layerMenuLabel.textContent = truncateLayerMenuLabel(st.currentLayer?.title);
+    setTooltip(layerMenuButton, layerMenuTooltip(st.currentLayer?.title));
     const glyph = statusGlyph(st.rtStatus);
     statusLeft.className = `status-light ${glyph.cls}`;
     setTooltip(statusLeft, glyph.text);

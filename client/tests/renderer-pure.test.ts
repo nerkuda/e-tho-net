@@ -70,6 +70,10 @@ import {
   flipTransform,
   planFocusTransition,
   resolveFocusFlightOrigin,
+  LAYER_MENU_LABEL_FALLBACK,
+  LAYER_MENU_LABEL_MAX,
+  layerMenuTooltip,
+  truncateLayerMenuLabel,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -1370,6 +1374,49 @@ describe('formatFileSize — размер вложений (c69b078d)', () => {
     assert.equal(formatFileSize(Number.NaN), '0 Б');
     assert.equal(formatFileSize(Number.POSITIVE_INFINITY), '0 Б');
     assert.equal(formatFileSize(1024.4), '1 КБ', 'дробные байты округляются вниз до целых');
+  });
+});
+
+describe('truncateLayerMenuLabel — заголовок меню слоёв (задача 4388305f)', () => {
+  it('длинное имя обрезается до 32 кодпоинтов с «…»', () => {
+    const long = 'А'.repeat(40);
+    const label = truncateLayerMenuLabel(long);
+    assert.equal(label, `${'А'.repeat(LAYER_MENU_LABEL_MAX)}…`);
+    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX + 1, '«…» навешивается поверх лимита');
+  });
+
+  it('короткое имя (≤32) отдаётся как есть, без «…»', () => {
+    assert.equal(truncateLayerMenuLabel('Основа'), 'Основа');
+    assert.equal(truncateLayerMenuLabel(''), '');
+    const exact = 'Б'.repeat(LAYER_MENU_LABEL_MAX);
+    assert.equal(truncateLayerMenuLabel(exact), exact);
+    const over = 'Б'.repeat(LAYER_MENU_LABEL_MAX + 1);
+    assert.equal(truncateLayerMenuLabel(over), `${'Б'.repeat(LAYER_MENU_LABEL_MAX)}…`);
+  });
+
+  it('резатся по кодпоинтам, а не по UTF-16-единицам (суррогатная пара цела)', () => {
+    const emoji = '😀'.repeat(40);
+    const label = truncateLayerMenuLabel(emoji);
+    assert.equal(label, `${'😀'.repeat(LAYER_MENU_LABEL_MAX)}…`);
+    assert.equal(Array.from(label).length, LAYER_MENU_LABEL_MAX + 1);
+  });
+
+  it('слой не выбран — «Основа»', () => {
+    assert.equal(truncateLayerMenuLabel(null), LAYER_MENU_LABEL_FALLBACK);
+    assert.equal(truncateLayerMenuLabel(undefined), LAYER_MENU_LABEL_FALLBACK);
+  });
+});
+
+describe('layerMenuTooltip — полное имя слоя в тултипе (задача 4388305f)', () => {
+  it('всегда отдаёт полное имя — и когда метка обрезана, и когда нет', () => {
+    const long = '0.9.1 — Дизайн-система клиентского интерфейса';
+    assert.equal(layerMenuTooltip(long), long);
+    assert.equal(layerMenuTooltip('В работе'), 'В работе');
+  });
+
+  it('слой не выбран — «Основа», тултип не пустой', () => {
+    assert.equal(layerMenuTooltip(null), LAYER_MENU_LABEL_FALLBACK);
+    assert.equal(layerMenuTooltip(undefined), LAYER_MENU_LABEL_FALLBACK);
   });
 });
 

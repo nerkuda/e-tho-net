@@ -1517,3 +1517,42 @@ export function formatFileSize(bytes: number): string {
   const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
   return `${text} ${FILE_SIZE_UNITS[unit]}`;
 }
+
+// ---------------------------------------------------------------------------
+// Заголовок меню слоёв: обрезка метки и полное имя в тултипе (задача 4388305f)
+// ---------------------------------------------------------------------------
+
+/**
+ * Предел длины метки-заголовка меню слоёв в кодпоинтах (задача 4388305f,
+ * решение пользователя 2026-09-26). Осознанное исключение из ADR 31e43436
+ * («Обрезка текста в интерфейсе — раскладкой, а не подсчётом символов»):
+ * ширина этого индикатора — часть контракта компоновки строки меню, поэтому
+ * показ ограничен числом кодпоинтов; полный текст всегда несёт тултип.
+ */
+export const LAYER_MENU_LABEL_MAX = 32;
+
+/** Метка заголовка меню слоёв, когда слой сессии не выбран (основа). */
+export const LAYER_MENU_LABEL_FALLBACK = 'Основа';
+
+/**
+ * Полное имя слоя для тултипа кнопки-заголовка: имя слоя, а для основы —
+ * «Основа». Тултип несёт полное имя всегда, независимо от того, обрезана ли
+ * метка (требование задачи 4388305f).
+ */
+export function layerMenuTooltip(title: string | null | undefined): string {
+  return title ?? LAYER_MENU_LABEL_FALLBACK;
+}
+
+/**
+ * Метка кнопки-заголовка меню слоёв: имя текущего слоя, обрезанное до
+ * {@link LAYER_MENU_LABEL_MAX} кодпоинтов с видимым «…» при переполнении;
+ * слой не выбран — «Основа». Режем по кодпоинтам (не по UTF-16-единицам),
+ * чтобы не разрывать суррогатную пару (эмодзи). Чистая — юнит-тест.
+ */
+export function truncateLayerMenuLabel(title: string | null | undefined): string {
+  const full = layerMenuTooltip(title);
+  const points = Array.from(full);
+  return points.length > LAYER_MENU_LABEL_MAX
+    ? `${points.slice(0, LAYER_MENU_LABEL_MAX).join('')}…`
+    : full;
+}
