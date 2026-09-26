@@ -163,8 +163,14 @@ export function finishFocusTransition(): void {
   const current = active;
   active = null;
   transitionGeneration++;
-  current.swap();
-  current.cleanup();
+  // `cleanup` owns the restoration of every inline style the transition
+  // mutated; if `swap` throws, running it from a `finally` is the difference
+  // between a settled canvas and permanently hidden clouds (ошибка 66deb70a).
+  try {
+    current.swap();
+  } finally {
+    current.cleanup();
+  }
 }
 
 /** Sets one inline style property (works against the test DOM shim too). */
@@ -315,107 +321,6 @@ export function playFocusTransition(
   let releasedFrom: RectLike | null = null;
   let hadFlyer = false;
 
-  // Held focus: a clone of the OLD focus cloud keeps the centre unchanged while
-  // the flyer travels; it is the only thing the user sees in the centre until
-  // the swap (the real new focus cloud is hidden below).
-  if (plan.focusChanged && oldFocus !== undefined) {
-    overlay = oldFocus.el.cloneNode(true) as HTMLElement;
-    setStyle(overlay, 'opacity', '1');
-    placeClone(overlay, toLocal(hostRect, oldFocus));
-    layer.append(overlay);
-  }
-
-  // Flyer: a clone of the NEW focus cloud starting exactly where the selection
-  // was — the selected cloud's old slot, or the clicked panel element (external
-  // origin), growing into the focus slot.
-  if (plan.focusChanged && newFocus !== undefined && flightOrigin !== null && tokens.flight > 0) {
-    flyer = newFocus.el.cloneNode(true) as HTMLElement;
-    setStyle(flyer, 'opacity', '1');
-    placeClone(flyer, toLocal(hostRect, newFocus));
-    layer.append(flyer);
-    hadFlyer = true;
-    play(flyer, [{ transform: flipTo(flightOrigin, newFocus) }, { transform: 'none' }], tokens.flight, tokens.ease);
-  }
-
-  // The real new focus cloud waits hidden at its final position.
-  if (plan.focusChanged && newFocus !== undefined) {
-    remember(newFocus.el);
-    setStyle(newFocus.el, 'opacity', '0');
-    setStyle(newFocus.el, 'pointer-events', 'none');
-    setStyle(newFocus.el, 'transform-origin', 'top left');
-  }
-
-  // The former focus's zone cloud must not show next to the held overlay yet;
-  // it takes over from the overlay at the swap (same spot — seamless).
-  if (plan.focusChanged && plan.releasedFocus !== null) {
-    const released = afterMap.get(plan.releasedFocus);
-    if (released !== undefined && oldFocus !== undefined) {
-      releasedEl = released.el;
-      releasedFrom = oldFocus;
-      remember(released.el);
-      setStyle(released.el, 'opacity', '0');
-      setStyle(released.el, 'transform-origin', 'top left');
-    }
-  }
-
-  // --- Phase 1: survivors that changed zone glide during the flight. -------
-  for (const id of plan.moving) {
-    const b = beforeMap.get(id);
-    const a = afterMap.get(id);
-    if (b === undefined || a === undefined) continue;
-    setStyle(a.el, 'transform-origin', 'top left');
-    play(a.el, [{ transform: flipTo(b, a) }, { transform: 'none' }], tokens.flight, tokens.ease);
-  }
-
-  // Survivors that only change slot: pinned at the old position for the flight,
-  // then settle into the new order (fill `backwards` holds the start keyframe
-  // through the delay).
-  for (const id of settleMoves) {
-    const b = beforeMap.get(id);
-    const a = afterMap.get(id);
-    if (b === undefined || a === undefined) continue;
-    setStyle(a.el, 'transform-origin', 'top left');
-    play(
-      a.el,
-      [{ transform: flipTo(b, a) }, { transform: 'none' }],
-      tokens.settle,
-      tokens.ease,
-      tokens.flight,
-      'backwards',
-    );
-  }
-
-  // Clouds leaving with the old focus fade out during the flight.
-  if (plan.leaving.length > 0 && tokens.fade > 0) {
-    ghosts = div('cloud-ghosts');
-    for (const id of plan.leaving) {
-      const b = beforeMap.get(id);
-      if (b === undefined) continue;
-      const ghost = b.el.cloneNode(true) as HTMLElement;
-      placeClone(ghost, toLocal(hostRect, b));
-      ghosts.append(ghost);
-      play(ghost, [{ opacity: '1' }, { opacity: '0' }], tokens.fade, 'ease-out', 0, 'forwards');
-    }
-    if (ghosts.childElementCount > 0) {
-      host.append(ghosts);
-      schedule(() => {
-        ghosts?.remove();
-        ghosts = null;
-      }, tokens.fade);
-    } else {
-      ghosts = null;
-    }
-  }
-
-  // Clouds new to the neighbourhood fade in after the flight.
-  for (const id of plan.entering) {
-    const a = afterMap.get(id);
-    if (a === undefined) continue;
-    remember(a.el);
-    setStyle(a.el, 'opacity', '0');
-    play(a.el, [{ opacity: '0' }, { opacity: '1' }], tokens.settle, 'ease-out', tokens.flight, 'backwards');
-  }
-
   // --- Swap: the flyer lands, content of the centre swaps. ------------------
   let swapped = false;
   const swap = (): void => {
@@ -525,8 +430,135 @@ export function playFocusTransition(
     }
   };
 
+  // The owner of every inline-style mutation below is registered BEFORE the
+  // first mutation (ошибка 66deb70a). The mutation block allocates clones and
+  // animations, and `cleanup` is the only thing that returns the clouds to the
+  // visibility captured above — anything that threw between a mutation and this
+  // registration would leave the canvas visibly empty with no owner: the next
+  // render's `finishFocusTransition` no-ops on `active === null`. Registering
+  // the owner first, and running the mutations under `try`, makes a «mutated
+  // but ownerless» canvas impossible.
   active = { swap, cleanup };
 
-  schedule(swap, tokens.flight);
-  schedule(complete, tokens.flight + tokens.settle);
+  try {
+    // Held focus: a clone of the OLD focus cloud keeps the centre unchanged
+    // while the flyer travels; it is the only thing the user sees in the centre
+    // until the swap (the real new focus cloud is hidden below).
+    if (plan.focusChanged && oldFocus !== undefined) {
+      overlay = oldFocus.el.cloneNode(true) as HTMLElement;
+      setStyle(overlay, 'opacity', '1');
+      placeClone(overlay, toLocal(hostRect, oldFocus));
+      layer.append(overlay);
+    }
+
+    // Flyer: a clone of the NEW focus cloud starting exactly where the
+    // selection was — the selected cloud's old slot, or the clicked panel
+    // element (external origin), growing into the focus slot.
+    if (plan.focusChanged && newFocus !== undefined && flightOrigin !== null && tokens.flight > 0) {
+      flyer = newFocus.el.cloneNode(true) as HTMLElement;
+      setStyle(flyer, 'opacity', '1');
+      placeClone(flyer, toLocal(hostRect, newFocus));
+      layer.append(flyer);
+      hadFlyer = true;
+      play(flyer, [{ transform: flipTo(flightOrigin, newFocus) }, { transform: 'none' }], tokens.flight, tokens.ease);
+    }
+
+    // The real new focus cloud waits hidden at its final position.
+    if (plan.focusChanged && newFocus !== undefined) {
+      remember(newFocus.el);
+      setStyle(newFocus.el, 'opacity', '0');
+      setStyle(newFocus.el, 'pointer-events', 'none');
+      setStyle(newFocus.el, 'transform-origin', 'top left');
+    }
+
+    // The former focus's zone cloud must not show next to the held overlay yet;
+    // it takes over from the overlay at the swap (same spot — seamless).
+    if (plan.focusChanged && plan.releasedFocus !== null) {
+      const released = afterMap.get(plan.releasedFocus);
+      if (released !== undefined && oldFocus !== undefined) {
+        releasedEl = released.el;
+        releasedFrom = oldFocus;
+        remember(released.el);
+        setStyle(released.el, 'opacity', '0');
+        setStyle(released.el, 'transform-origin', 'top left');
+      }
+    }
+
+    // --- Phase 1: survivors that changed zone glide during the flight. ------
+    for (const id of plan.moving) {
+      const b = beforeMap.get(id);
+      const a = afterMap.get(id);
+      if (b === undefined || a === undefined) continue;
+      setStyle(a.el, 'transform-origin', 'top left');
+      play(a.el, [{ transform: flipTo(b, a) }, { transform: 'none' }], tokens.flight, tokens.ease);
+    }
+
+    // Survivors that only change slot: pinned at the old position for the
+    // flight, then settle into the new order (fill `backwards` holds the start
+    // keyframe through the delay).
+    for (const id of settleMoves) {
+      const b = beforeMap.get(id);
+      const a = afterMap.get(id);
+      if (b === undefined || a === undefined) continue;
+      setStyle(a.el, 'transform-origin', 'top left');
+      play(
+        a.el,
+        [{ transform: flipTo(b, a) }, { transform: 'none' }],
+        tokens.settle,
+        tokens.ease,
+        tokens.flight,
+        'backwards',
+      );
+    }
+
+    // Clouds leaving with the old focus fade out during the flight.
+    if (plan.leaving.length > 0 && tokens.fade > 0) {
+      ghosts = div('cloud-ghosts');
+      for (const id of plan.leaving) {
+        const b = beforeMap.get(id);
+        if (b === undefined) continue;
+        const ghost = b.el.cloneNode(true) as HTMLElement;
+        placeClone(ghost, toLocal(hostRect, b));
+        ghosts.append(ghost);
+        play(ghost, [{ opacity: '1' }, { opacity: '0' }], tokens.fade, 'ease-out', 0, 'forwards');
+      }
+      if (ghosts.childElementCount > 0) {
+        host.append(ghosts);
+        schedule(() => {
+          ghosts?.remove();
+          ghosts = null;
+        }, tokens.fade);
+      } else {
+        ghosts = null;
+      }
+    }
+
+    // Clouds new to the neighbourhood fade in after the flight. `fill: 'both'`
+    // (not `'backwards'`) keeps the end keyframe applied once the animation
+    // finishes: with `'backwards'` the inline `opacity: 0` set below became
+    // effective again the moment the fade-in ended, so the clouds stayed
+    // visible only if a later restore (`complete`/`cleanup`) won the race
+    // (ошибка 90811979 — облачка отбора мелькали и исчезали).
+    for (const id of plan.entering) {
+      const a = afterMap.get(id);
+      if (a === undefined) continue;
+      remember(a.el);
+      setStyle(a.el, 'opacity', '0');
+      play(a.el, [{ opacity: '0' }, { opacity: '1' }], tokens.settle, 'ease-out', tokens.flight, 'both');
+    }
+
+    schedule(swap, tokens.flight);
+    schedule(complete, tokens.flight + tokens.settle);
+  } catch (err) {
+    // The choreography is decoration, never the data: a failure degrades to the
+    // settled layout rather than a half-mutated canvas. The full cleanup
+    // restores every captured inline style, cancels the animations, drops the
+    // clones/layers/timers and puts the link overlays back, so `render()` never
+    // sees a rejected promise and the canvas never stays visually empty
+    // (требование ошибки 66deb70a).
+    active = null;
+    cleanup();
+    drawLinks?.();
+    console.error('[focus-transition] choreography failed — snapped to the settled layout', err);
+  }
 }

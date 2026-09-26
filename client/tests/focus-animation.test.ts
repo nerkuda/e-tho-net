@@ -362,6 +362,74 @@ describe('transition: плавная смена фокуса (задача e9f0a
     );
     T.finishFocusTransition();
   });
+
+  it('сбой хореографии не оставляет облачка невидимыми (ошибка 66deb70a)', async () => {
+    const T = await load();
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80)), cloud('a', 'children', rect(100, 500))]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    // Смена фокуса приносит в нижнюю зону облачко отбора, которого раньше не
+    // было (plan.entering) — именно этот цикл прячет облачко инлайновым
+    // `opacity: 0` и проявляет анимацией.
+    const entering = cloud('v', 'children', rect(220, 500));
+    relayout(host, [cloud('x', 'focus', rect(400, 100, 200, 80)), entering]);
+    (entering as any).animate = () => {
+      throw new Error('animate unavailable');
+    };
+
+    // Хореография — украшение: её сбой обязан откатиться к собранной раскладке,
+    // а не выбрасывать исключение в точку входа рендера.
+    assert.doesNotThrow(() => {
+      T.playFocusTransition(host as unknown as HTMLElement, before);
+    }, 'сбой анимации не уходит наружу');
+
+    // Владелец мутаций зарегистрирован ДО мутаций, поэтому откат вернул все
+    // инлайновые стили: ни облачко отбора, ни новый фокус не остались скрытыми,
+    // и следующий рендер может начать новый переход.
+    assert.notEqual(entering.style.getPropertyValue('opacity'), '0', 'облачко отбора видимо');
+    const focusAfter = host.querySelectorAll('.cloud').find((c) => c.classList.contains('focus-cloud'));
+    assert.notEqual(focusAfter?.style.getPropertyValue('opacity'), '0', 'новый фокус видим');
+    assert.equal(layer(host), null, 'слой анимации снят откатом');
+    assert.equal(T.captureClouds(host as unknown as HTMLElement).length, 2, 'оба облачка на карте');
+  });
+
+  it('досрочная остановка восстанавливает стили даже при сбое свопа (ошибка 66deb70a)', async () => {
+    const T = await load();
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80)), cloud('a', 'children', rect(100, 500))]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    const released = cloud('f', 'children', rect(100, 500));
+    relayout(host, [cloud('a', 'focus', rect(400, 100, 200, 80)), released]);
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+    assert.equal(released.style.getPropertyValue('opacity'), '0', 'бывший фокус ждёт свопа скрытым');
+    // Своп падает: «бывший фокус» не умеет анимироваться.
+    (released as any).animate = () => {
+      throw new Error('swap failed');
+    };
+
+    // `finishFocusTransition` обязан снять владение мутациями даже при сбое
+    // `swap` — иначе облачка остаются невидимыми навсегда.
+    assert.throws(() => T.finishFocusTransition());
+    assert.equal(layer(host), null, 'слой снят, несмотря на сбой свопа');
+    assert.notEqual(released.style.getPropertyValue('opacity'), '0', 'бывший фокус снова видим');
+  });
+
+  it('проявление новых облачков удерживает финальный кадр (ошибка 90811979)', async () => {
+    const T = await load();
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80)), cloud('a', 'children', rect(100, 500))]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    const entering = cloud('v', 'children', rect(220, 500));
+    relayout(host, [cloud('x', 'focus', rect(400, 100, 200, 80)), entering]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+    const fadeIn = created.find((a) => a.keyframes[0]?.opacity === '0' && a.keyframes[1]?.opacity === '1');
+    assert.ok(fadeIn !== undefined, 'новое облачко проявляется');
+    // `fill: 'backwards'` удерживает только первый кадр: как только анимация
+    // заканчивается, снова действует инлайновый `opacity: 0`, и видимость
+    // облачка зависит от гонки с восстановлением стилей. `both` удерживает и
+    // финальный кадр — облачко не может исчезнуть.
+    assert.equal(fadeIn.options.fill, 'both', 'проявление удерживает и первый, и последний кадр');
+    advance(400 + 260);
+    assert.notEqual(entering.style.getPropertyValue('opacity'), '0', 'облачко видно после завершения');
+  });
 });
 
 describe('focus-origin: источник полёта при клике вне карты (дефект 2)', () => {
