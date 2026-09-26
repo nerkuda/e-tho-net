@@ -7,11 +7,12 @@
  * `GET /networks/{id}/statistics` и суммируются по всем слоям сети (в т.ч.
  * теневые копии слоёв — это объём хранения, а не число видимых сущностей).
  *
- * Каркас — общий `lib/dialog` (роль размера `m`), список — фасад
- * `lib/ui/table` (самодельные таблицы запрещены сторожем `guard-ui-tables`),
- * все строки — из словаря `lib/i18n`. Данные загружаются ДО открытия диалога,
- * поэтому содержимое стабильно и окно не «дёргается»: отказ запроса
- * показывается диалогом ошибки.
+ * Каркас — общий `lib/dialog` (роль размера `m` плюс модификатор `dialog-stats`:
+ * пять колонок не влезают в 560px роли, форма шире — 650px, ошибка 8ca000f0),
+ * список — фасад `lib/ui/table` (самодельные таблицы запрещены сторожем
+ * `guard-ui-tables`), все строки — из словаря `lib/i18n`. Данные загружаются ДО
+ * открытия диалога, поэтому содержимое стабильно и окно не «дёргается»: отказ
+ * запроса показывается диалогом ошибки.
  */
 
 import type { NetworkStats, StatsBreakdown } from '@etn/shared';
@@ -109,6 +110,11 @@ export function formatAttachmentsSummary(stats: NetworkStats): string {
   ]);
 }
 
+/** Ширина колонки со значением (ошибка 8ca000f0): числа узкие, колонки не
+ *  должны распирать форму — не более 90px. Колонка «Показатель» ширины не
+ *  задаёт и забирает остаток, поэтому имена показателей помещаются целиком. */
+const VALUE_COLUMN_WIDTH = '90px';
+
 /** Таблица показателей: колонка, «всего», «актуальные», «неактуальные», «корзина». */
 export function buildStatisticsTable(rows: readonly StatRow[]) {
   return createTable<StatRow>({
@@ -120,14 +126,14 @@ export function buildStatisticsTable(rows: readonly StatRow[]) {
       {
         key: 'total',
         header: t('stats.col.total'),
-        width: '9rem',
+        width: VALUE_COLUMN_WIDTH,
         align: 'end',
         sortable: false,
       },
       {
         key: 'active',
         header: t('stats.col.active'),
-        width: '8rem',
+        width: VALUE_COLUMN_WIDTH,
         align: 'end',
         sortable: false,
         // Пустая ячейка вместо «—»: у онтологии и слоёв разбивки не существует.
@@ -136,7 +142,7 @@ export function buildStatisticsTable(rows: readonly StatRow[]) {
       {
         key: 'inactive',
         header: t('stats.col.inactive'),
-        width: '8rem',
+        width: VALUE_COLUMN_WIDTH,
         align: 'end',
         sortable: false,
         empty: '',
@@ -144,7 +150,7 @@ export function buildStatisticsTable(rows: readonly StatRow[]) {
       {
         key: 'trashed',
         header: t('stats.col.trashed'),
-        width: '8rem',
+        width: VALUE_COLUMN_WIDTH,
         align: 'end',
         sortable: false,
         empty: '',
@@ -180,5 +186,10 @@ export async function showNetworkStatisticsDialog(): Promise<void> {
     size: 'm',
     body,
     buttons: [{ label: t('actions.close'), primary: true }],
+    // Ширина формы — 650px: роль `m` (560px) узка для пяти колонок. Ширину
+    // задаёт модификатор `dialog-stats` на боксе (styles/dialogs.css) через
+    // тот же `--dialog-w`, что и роли размера, — ширина приходит из CSS, не из
+    // inline-стиля. `onMount` — единственная точка доступа к боксу диалога.
+    onMount: (_close, box) => box.classList.add('dialog-stats'),
   });
 }

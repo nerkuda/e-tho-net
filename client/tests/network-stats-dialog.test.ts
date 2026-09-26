@@ -10,11 +10,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import type { NetworkStats } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import { readRendererCss } from './renderer-css.js';
+
+const RENDERER_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'src',
+  'renderer',
+);
 
 const FIXTURE: NetworkStats = {
   thought_types: 5,
@@ -146,6 +157,10 @@ describe('сборка диалога «Статистика мыслесети�
     const dialog = backdrop();
     assert.equal(dialog.querySelector('.dialog-title')?.textContent, 'Статистика мыслесети');
     assert.ok(
+      dialog.querySelector('.dialog-box')?.classList.contains('dialog-stats') === true,
+      'диалог несёт модификатор ширины dialog-stats (ошибка 8ca000f0)',
+    );
+    assert.ok(
       dialog.flatText().includes('Вложений: 5, файлов 2, общий размер 1,5 КБ'),
       'итог по вложениям виден в теле диалога',
     );
@@ -157,6 +172,28 @@ describe('сборка диалога «Статистика мыслесети�
       .findAll((n) => n.classList.contains('ui-btn'))
       .map((n) => n.textContent);
     assert.ok(labels.includes('Закрыть'), 'в футере есть «Закрыть»');
+  });
+
+  it('ширина формы — 650px токеном, шапка таблицы переносит строки (8ca000f0)', () => {
+    // Ширина — тот же `--dialog-w`, что у ролей размера, но от токена; селектор
+    // модификатора перебивает правило роли по специфичности.
+    assert.match(
+      readRendererCss(),
+      /\.dialog-box\[data-dialog-size\]\.dialog-stats\s*\{[^}]*--dialog-w:\s*var\(--dialog-w-stats\)/s,
+      'ширина диалога статистики не задана модификатором dialog-stats',
+    );
+    assert.match(
+      readFileSync(path.join(RENDERER_ROOT, 'styles', 'tokens.css'), 'utf8'),
+      /--dialog-w-stats:\s*650px\s*;/,
+      'ширина 650px обязана быть токеном --dialog-w-stats, а не литералом',
+    );
+    // Длинные заголовки колонок переносятся: шапке таблицы статистики разрешён
+    // перенос (иначе nowrap распирает узкие колонки значений, грабли f2a047ee).
+    assert.match(
+      readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'table.css'), 'utf8'),
+      /\.dialog-stats \.ui-table \.ui-table-grid::part\(header-cell\)\s*\{[^}]*white-space:\s*normal/s,
+      'шапке таблицы статистики не разрешён перенос строк',
+    );
   });
 
   it('ошибка запроса показывается диалогом ошибки, а не пустой сводкой', async () => {
