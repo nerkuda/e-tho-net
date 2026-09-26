@@ -303,35 +303,69 @@ export interface MigrationHelpersContext {
 }
 
 /**
+ * Register the SQL functions used by DOMAIN QUERIES on any network connection
+ * (bug 883267ea).
+ *
+ * These are not migration-only helpers — read paths call them at runtime, so
+ * every connection that may execute a query must have them, not just the main
+ * thread's:
+ *
+ *   * `type_name_key` — the normalized type-name key (trim + lowercase, same
+ *     as shared `typeNameKey`) is used both by migration 017's backfill and by
+ *     property-service reads (`WHERE p.name_key = type_name_key(?)`);
+ *   * `unicode_lower` — case-folds non-ASCII text (SQLite's built-in `LOWER()`
+ *     only handles ASCII); the structures keyword filter matches the permanent
+ *     comment case-insensitively with it (03-server-api.md §6.10, bug fix
+ *     0.5.5).
+ *
+ * Single setup point shared by the main-thread connection
+ * ({@link openNetworkDb} / {@link createInMemoryNetworkDb}) and every
+ * read-only reader-worker connection (`db/reader-worker.ts`). Before the fix
+ * the worker applied only the pragma profile and failed with
+ * `no such function: unicode_lower` on any comment-scope keyword search that
+ * went through the reader pool.
+ */
+export function registerQueryFunctions(db: Database.Database): void {
+  db.function('type_name_key', (value: unknown) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  );
+  db.function('unicode_lower', (value: unknown) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  );
+}
+
+/**
  * Register SQL helpers used by network migrations.
  *
- * `type_name_key` computes the normalized type-name key (trim + lowercase,
- * same as shared `typeNameKey`) for the backfill in migration 017; `gen_uuid`
- * supplies row ids for `thought_synonyms`/`comment_targets` rows created
- * without an explicit id (migration 025); `unicode_lower` case-folds
- * non-ASCII text (SQLite's built-in `LOWER()` only handles ASCII) — used by
- * the structures keyword filter to match the permanent comment
- * case-insensitively (03-server-api.md §6.10, bug fix 0.5.5). Deliberately
- * registered WITHOUT the `deterministic` flag: SQLite folds a deterministic
- * no-argument function into a constant per statement, so
- * `INSERT … SELECT gen_uuid()` in 025 would give every row the same UUID and
- * trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)` does not require determinism
- * (only generated columns and index expressions do), so nothing is lost by
- * leaving the flag off.
- * `etn_first_user_id` exposes the id of the server's root administrator
- * (`is_first_user = 1`) for migrations that need to backfill authorship — see
- * task 38ba3498 / migration 033. Returns the empty string when the helper
- * context is not provided (tests / in-memory DBs without `_system.db`); the
- * migration interprets that as "fall back to a sentinel".
- * `etn_pv_id(owner_type, owner_id, property_id)` computes the deterministic
- * `property_values` id from the natural key (bug dc119240, migration 036) —
- * the SAME TypeScript code the domain write path uses
- * (db/property-value-id.ts), so the migration and runtime can never disagree
- * on an id. Registered WITH the `deterministic` flag: the function is pure,
- * and unlike `gen_uuid` folding it into a constant per statement is exactly
- * the desired semantics.
- * Both must exist on the connection before `runMigrations` executes. Exported
- * so tests that apply migrations to their own connections can register the
+ * Migration-only helpers (not needed by plain reads):
+ *
+ *   * `gen_uuid` supplies row ids for `thought_synonyms`/`comment_targets`
+ *     rows created without an explicit id (migration 025). Deliberately
+ *     registered WITHOUT the `deterministic` flag: SQLite folds a
+ *     deterministic no-argument function into a constant per statement, so
+ *     `INSERT … SELECT gen_uuid()` in 025 would give every row the same UUID
+ *     and trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)` does not require
+ *     determinism (only generated columns and index expressions do), so
+ *     nothing is lost by leaving the flag off.
+ *   * `etn_first_user_id` exposes the id of the server's root administrator
+ *     (`is_first_user = 1`) for migrations that need to backfill authorship —
+ *     see task 38ba3498 / migration 033. Returns the empty string when the
+ *     helper context is not provided (tests / in-memory DBs without
+ *     `_system.db`); the migration interprets that as "fall back to a
+ *     sentinel".
+ *   * `etn_pv_id(owner_type, owner_id, property_id)` computes the
+ *     deterministic `property_values` id from the natural key (bug dc119240,
+ *     migration 036) — the SAME TypeScript code the domain write path uses
+ *     (db/property-value-id.ts), so the migration and runtime can never
+ *     disagree on an id. Registered WITH the `deterministic` flag: the
+ *     function is pure, and unlike `gen_uuid` folding it into a constant per
+ *     statement is exactly the desired semantics.
+ *
+ * Migrations also use `type_name_key` (017, 021, 032, 042), so this function
+ * delegates to {@link registerQueryFunctions} and existing tests that apply
+ * migrations on their own connections keep working unchanged. The functions
+ * must exist on the connection before `runMigrations` executes. Exported so
+ * tests that apply migrations to their own connections can register the
  * helpers the same way production code does.
  */
 export function registerMigrationHelpers(
@@ -339,13 +373,8 @@ export function registerMigrationHelpers(
   ctx: MigrationHelpersContext = {},
 ): void {
   const firstUserId = ctx.firstUserId ?? '';
-  db.function('type_name_key', (value: unknown) =>
-    typeof value === 'string' ? value.trim().toLowerCase() : value,
-  );
+  registerQueryFunctions(db);
   db.function('gen_uuid', () => randomUUID());
-  db.function('unicode_lower', (value: unknown) =>
-    typeof value === 'string' ? value.toLowerCase() : value,
-  );
   db.function('etn_first_user_id', () => firstUserId);
   db.function(
     'etn_pv_id',

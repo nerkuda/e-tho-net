@@ -72,5 +72,13 @@ describe('guard: reader-пул не пишет и не запускает миг
     const source = fs.readFileSync(path.join(SERVER_SRC_ROOT, WORKER_FILE), 'utf8');
     assert.match(source, /readonly:\s*true/, 'воркер обязан открывать data.db read-only');
     assert.match(source, /applyConnectionPragmas\(/, 'воркер переиспользует единый профиль прагм');
+    // Паритет SQL-функций с главным соединением (ошибка 883267ea): соединение
+    // воркера обязано получать тот же набор функций, что и главный поток, —
+    // иначе comment-scope keyword-поиск падает «no such function: unicode_lower».
+    assert.match(
+      source,
+      /registerQueryFunctions\(/,
+      'воркер регистрирует те же SQL-функции, что и главное соединение',
+    );
   });
 });

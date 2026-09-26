@@ -56,6 +56,13 @@ const NETWORK_ID = 'reader-pool-stand';
 const USER = 'reader-pool-user';
 const STAND_THOUGHTS = 1500;
 const STRUCTURAL_PARENTS_PROPERTY_ID = '00000000-0000-4000-8000-0000000000c1';
+/**
+ * Слово-маркер, встречающееся ТОЛЬКО в теле постоянного комментария (в
+ * верхнем регистре): comment-scope keyword обязан находить его через
+ * `unicode_lower` — встроенный `LOWER()` SQLite не сворачивает не-ASCII.
+ * Ошибка 883267ea: воркерное соединение открывалось без этой функции.
+ */
+const COMMENT_MARKER = 'ЗАМЕТКАПОИСКА';
 
 /** Наполнить сеть стендом: дерево структурных рёбер + типизированные рёбра. */
 function seedStand(ndb: NetworkDb): { homeId: string; parentId: string } {
@@ -112,6 +119,18 @@ describe(
       ndb = openNetworkDb(dataDir, NETWORK_ID);
       const { homeId, parentId: pid } = seedStand(ndb);
       parentId = pid;
+      // Постоянный комментарий-маркер для проверки comment-scope keyword
+      // поиска через пул (unicode_lower на воркерном соединении).
+      ndb
+        .prepare(
+          `INSERT INTO comments
+             (id, layer_id, deleted, base_version, owner_type, owner_id, kind, title,
+              body_md, body_html, valid_from, valid_to, version, created_at, updated_at, created_by, updated_by)
+           VALUES ('stand-permanent-comment', ?, 0, 0, 'thought', ?, 'permanent', NULL,
+                   ?, '<p>marker</p>', '2026-01-01T00:00:00Z', NULL, 1,
+                   '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?, ?)`,
+        )
+        .run(BASE_LAYER_ID, pid, `Тело комментария со словом ${COMMENT_MARKER} внутри`, USER, USER);
       emptyRequest = { sort: 'alpha', order: 'asc', limit: 50, offset: 0 };
       parentRequest = {
         ...emptyRequest,
@@ -161,6 +180,23 @@ describe(
       const syncSearch = search(ndb, { q: 'Мысль 42' });
       const viaPoolSearch = await searchAsync(ndb, { q: 'Мысль 42' });
       assert.deepEqual(viaPoolSearch, syncSearch);
+    });
+
+    it('comment-scope keyword-поиск через пул находит комментарий (unicode_lower)', async () => {
+      // Регресс ошибки 883267ea: keyword-поиск с областью `comment` использует
+      // `unicode_lower(c.body_md)`; воркер открывал соединение без регистрации
+      // SQL-функций и падал «no such function: unicode_lower». Маркер —
+      // в верхнем регистре, поэтому совпадение возможно только через функцию.
+      const request: ThoughtQueryRequest = {
+        ...emptyRequest,
+        keywords: COMMENT_MARKER.toLowerCase(),
+        keyword_scope: ['comment'],
+      };
+      const sync = queryThoughts(ndb, USER, request, { emptyFilterMode: 'all' });
+      const viaPool = await queryThoughtsAsync(ndb, USER, request, { emptyFilterMode: 'all' });
+      assert.ok(sync.items.length > 0, 'синхронный comment-scope поиск находит комментарий-маркер');
+      assert.deepEqual(viaPool.items, sync.items, 'comment-scope выборка через пул совпадает с синхронной');
+      assert.equal(viaPool.total, sync.total, 'total совпадает');
     });
 
     it('подграф через пул совпадает с синхронным обходом', async () => {

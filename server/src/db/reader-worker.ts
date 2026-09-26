@@ -3,8 +3,9 @@
  * требование 8e2fda79).
  *
  * Точка входа `worker_threads`: у каждого воркера — СВОЁ read-only соединение с
- * `data.db`, открытое с единым профилем прагм ({@link applyConnectionPragmas})
- * и своим контекстом слоя ({@link NetworkDb}). Воркер ничего не знает о
+ * `data.db`, открытое с единым профилем прагм ({@link applyConnectionPragmas}) и
+ * общим набором SQL-функций ({@link registerQueryFunctions}), и своим контекстом
+ * слоя ({@link NetworkDb}). Воркер ничего не знает о
  * состоянии сессии: контекст (файл БД, сеть, слой, версия схемы) приходит в
  * каждой задаче {@link ReaderTask}.
  *
@@ -38,7 +39,7 @@ import type {
 import { queryThoughts, queryThoughtIds } from '../domain/query-service.js';
 import { search } from '../domain/search-service.js';
 import { subgraph } from '../domain/graph-traversal.js';
-import { NetworkDb } from './network-db.js';
+import { NetworkDb, registerQueryFunctions } from './network-db.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
 /** Кэшированное соединение воркера вместе с контекстом, под который оно открыто. */
@@ -54,14 +55,20 @@ let cached: CachedConnection | null = null;
  * Открыть read-only соединение с профилем прагм и контекстом слоя.
  *
  * `openNetworkDb` здесь НЕ используется намеренно: он применяет миграции и
- * чистит `object_locks` — а это запись, запрещённая воркеру. Точка соединения
- * и профиль прагм при этом переиспользуются: `NetworkDb` (тот же конструктор с
- * `setupLayerContext`) и {@link applyConnectionPragmas}.
+ * чистит `object_locks` — а это запись, запрещённая воркеру. Точка соединения,
+ * профиль прагм и общие SQL-функции при этом переиспользуются: `NetworkDb` (тот
+ * же конструктор с `setupLayerContext`), {@link applyConnectionPragmas} и
+ * {@link registerQueryFunctions}.
  */
 function openConnection(context: ReaderTaskContext): NetworkDb {
   const db: Database.Database = new DatabaseConstructor(context.dbPath, { readonly: true });
   db.pragma('foreign_keys = ON');
   applyConnectionPragmas(db);
+  // Тот же набор SQL-функций, что и на главном соединении (`registerQueryFunctions`,
+  // вызывается из `openNetworkDb` через `registerMigrationHelpers`): чтения зовут
+  // `unicode_lower` в comment-scope keyword-поиске и `type_name_key` в запросах
+  // свойств. Без них воркер падал «no such function: unicode_lower» (ошибка 883267ea).
+  registerQueryFunctions(db);
   return new NetworkDb(db, context.networkId, context.dbPath, context.layerId);
 }
 
