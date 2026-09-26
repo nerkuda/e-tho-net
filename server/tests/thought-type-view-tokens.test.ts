@@ -36,6 +36,7 @@ import {
 } from '../src/domain/thought-type-views-service.js';
 import {
   buildResolveContext,
+  resolveGlobalDateTokens,
   resolveTokensInDefinition,
   scanStringForTokens,
   validateDefinitionForTokens,
@@ -685,3 +686,56 @@ describe(
 
 // Подавляем unused-warning у фиктивной переменной.
 void ({} as PropertyMeta[]);
+
+describe('токены границ недели/месяца и арифметика ±Nw/±Nmo (0.10.1, 91f8d8dd)', () => {
+  it('распознаёт $week.start/$week.end/$month.start/$month.end как глобальные', () => {
+    const result = scanStringForTokens(
+      '$week.start $week.end $month.start $month.end',
+    );
+    assert.equal(result.unknown.length, 0);
+    assert.deepEqual(
+      result.known.map((t) => t.kind),
+      ['global', 'global', 'global', 'global'],
+    );
+  });
+
+  it('распознаёт арифметику ±Nw и ±Nmo', () => {
+    const result = scanStringForTokens('$week.start-1w $month.end+1mo $today+2d');
+    assert.equal(result.unknown.length, 0);
+    assert.equal(result.known[0]!.weeksOffset, -1);
+    assert.equal(result.known[1]!.monthsOffset, 1);
+    assert.equal(result.known[2]!.daysOffset, 2);
+  });
+
+  it('неделя начинается с понедельника, месяц — по календарю (UTC)', () => {
+    // 2026-09-26 — суббота; неделя 2026-09-21 (пн) … 2026-09-27 (вс).
+    const now = (): Date => new Date('2026-09-26T12:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$week.start', { now }).value, '2026-09-21');
+    assert.equal(resolveGlobalDateTokens('$week.end', { now }).value, '2026-09-27');
+    assert.equal(resolveGlobalDateTokens('$month.start', { now }).value, '2026-09-01');
+    assert.equal(resolveGlobalDateTokens('$month.end', { now }).value, '2026-09-30');
+  });
+
+  it('арифметика недель и месяцев сдвигает границы', () => {
+    const now = (): Date => new Date('2026-09-26T12:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$week.start+1w', { now }).value, '2026-09-28');
+    assert.equal(resolveGlobalDateTokens('$week.end-1w', { now }).value, '2026-09-20');
+    assert.equal(resolveGlobalDateTokens('$month.start+1mo', { now }).value, '2026-10-01');
+    assert.equal(resolveGlobalDateTokens('$month.end-1mo', { now }).value, '2026-08-31');
+  });
+
+  it('месячная арифметика прижимает день к концу месяца', () => {
+    // 31 марта -1mo → 28 февраля (2026 не високосный).
+    const now = (): Date => new Date('2026-03-31T12:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$month.end-1mo', { now }).value, '2026-02-28');
+    // 31 марта +1mo → 30 апреля.
+    assert.equal(resolveGlobalDateTokens('$month.end+1mo', { now }).value, '2026-04-30');
+  });
+
+  it('период принимает новые токены (нет unresolved)', () => {
+    const now = (): Date => new Date('2026-09-26T12:00:00.000Z');
+    for (const token of ['$week.start-1w', '$month.start', '$month.end+1mo']) {
+      assert.equal(resolveGlobalDateTokens(token, { now }).unresolved.length, 0, token);
+    }
+  });
+});
