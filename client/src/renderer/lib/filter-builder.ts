@@ -830,6 +830,13 @@ export interface ChronicleCriteriaState extends FilterCriteriaState {
   /** Границы периода хроно-комментариев (`YYYY-MM-DD`). */
   dateFrom: string;
   dateTo: string;
+  /**
+   * Критерии целей записи (0.10.1, требование 306f74cc): тот же набор, что у
+   * панели «Структур» (типы, свойства и т.д.). Запись проходит отбор, если
+   * хотя бы одна её привязанная мысль удовлетворяет этим критериям; группа
+   * едет на сервер полем `targets` (`ChronicleFilter.targets`).
+   */
+  targets: FilterCriteriaState;
 }
 
 /** Пустой отбор «Хроники» — все мысли сети. */
@@ -841,6 +848,7 @@ export function defaultChronicleCriteriaState(): ChronicleCriteriaState {
     linkScope: 'both',
     dateFrom: '',
     dateTo: '',
+    targets: defaultFilterCriteriaState(),
   };
 }
 
@@ -863,6 +871,10 @@ export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
   if (scope === 'sources' || scope === 'targets' || scope === 'both') next.linkScope = scope;
   if (typeof parsed['date_from'] === 'string') next.dateFrom = parsed['date_from'];
   if (typeof parsed['date_to'] === 'string') next.dateTo = parsed['date_to'];
+  // Критерии целей — вложенное определение «Структур» (0.10.1, 306f74cc).
+  if (parsed['targets'] !== undefined && parsed['targets'] !== null) {
+    next.targets = parseFilterDefinition(parsed['targets']);
+  }
   // `parseFilterDefinition` читает только общие границы; у «Хроники» период —
   // свои поля, а `created_after`/`updated_*` в её определении не участвуют.
   next.createdAfter = '';
@@ -878,7 +890,10 @@ export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
  * Ключи совпадают с форматом сохранённых отборов — ранее сохранённое
  * читается и перезаписывается без потерь.
  */
-export function buildChronicleWire(state: ChronicleCriteriaState): ChronicleFilterDefinition {
+export function buildChronicleWire(
+  state: ChronicleCriteriaState,
+  registry: ReadonlyMap<string, NetworkProperty> = new Map(),
+): ChronicleFilterDefinition {
   const out: ChronicleFilterDefinition = { order: state.order };
   if (state.keywords.trim() !== '') out.keywords = state.keywords.trim();
   if (state.thoughtIds.length > 0) out.thought_ids = state.thoughtIds.slice();
@@ -890,6 +905,11 @@ export function buildChronicleWire(state: ChronicleCriteriaState): ChronicleFilt
   out.link_scope = state.linkScope;
   if (state.dateFrom.trim() !== '') out.date_from = state.dateFrom.trim();
   if (state.dateTo.trim() !== '') out.date_to = state.dateTo.trim();
+  // Критерии целей — тот же конвертер «Структур» (0.10.1, 306f74cc):
+  // пустая группа не отдаётся, иначе сервер отберёт записи без целей.
+  if (hasAnyFilterCriteria(state.targets)) {
+    out.targets = buildWireFilter(state.targets, registry, { activeMode: 'structures' });
+  }
   Object.assign(out, buildAuthorPair('created_by', state.authorOp, state.authorId, state.authorIds));
   Object.assign(out, buildAuthorPair('updated_by', state.editorOp, state.editorId, state.editorIds));
   return out;

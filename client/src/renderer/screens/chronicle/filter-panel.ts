@@ -13,7 +13,7 @@
  * период, направление сортировки, сохранённые отборы.
  */
 
-import { type ChronicleFilterDefinition } from '@etn/shared';
+import { type ChronicleFilterDefinition, type NetworkProperty } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
@@ -30,7 +30,7 @@ import {
 } from '../../lib/entity-picker.js';
 import {
   buildAuthorshipSection,
-  buildDatesSection,
+  buildConditionsSection,
   buildEntityChipSection,
   buildFilterBlock,
   buildFilterFooterButtons,
@@ -41,7 +41,14 @@ import {
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
-import { buildChronicleWire, parseChronicleCriteria, defaultChronicleCriteriaState, type ChronicleCriteriaState } from '../../lib/filter-builder.js';
+import {
+  buildChronicleWire,
+  parseChronicleCriteria,
+  defaultChronicleCriteriaState,
+  withReverseLinkPropertySides,
+  type ChronicleCriteriaState,
+} from '../../lib/filter-builder.js';
+import { buildPeriodEditor, type PeriodValue } from '../../lib/period-editor.js';
 import {
   buildSavedFilterBar,
   type SavedFilterBarHandle,
@@ -88,6 +95,10 @@ let authorCollapsed = false;
  * период пуст.
  */
 let periodCollapsed = true;
+/** Сворачивание группы «Критерии целей: свойства». */
+let targetsPropsCollapsed = true;
+/** Реестр свойств сети (для условий целей), один REST-вызов на открытие. */
+const propertyDefs = new Map<string, NetworkProperty>();
 
 /** Actions the panel delegates to the host module. */
 interface PanelActions {
@@ -199,7 +210,38 @@ export function clearFilter(): void {
   savedFilterId = null;
   filterName = '';
   periodCollapsed = true;
+  targetsPropsCollapsed = true;
   renderPanel();
+}
+
+/**
+ * Реестр свойств для конструктора условий целей: к загруженному реестру
+ * добавлены обратные стороны свойств-связей — тот же хелпер, что у панели
+ * «Структур» и диалога отбора типа (стандарт S4).
+ */
+function registryWithSides(): Map<string, NetworkProperty> {
+  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
+}
+
+/** Один REST-запрос реестра свойств сети на открытие панели. */
+async function loadPropertyDefs(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    const rows = await etn.propertyRegistry.list(networkId);
+    propertyDefs.clear();
+    for (const row of rows) propertyDefs.set(row.id, row);
+  } catch {
+    // Сеть недоступна — панель работает с пустым реестром.
+  }
+}
+
+/**
+ * Wire-определение текущего отбора (с реестром — условия целей без него
+ * потерялись бы). Единственная точка конвертации для запроса и персиста.
+ */
+export function chronicleDefinition(): ChronicleFilterDefinition {
+  return buildChronicleWire(filter, registryWithSides());
 }
 
 /** Секция «Мысли»: чип-поле + флаг «+подчинённые». */
@@ -278,29 +320,60 @@ function buildLinkScopeSection(ctx: FilterFormContext): FilterSection {
   return section;
 }
 
-/** Секция «Даты»: период хроно-комментариев (сворачиваемая, как в «Структурах»). */
+/**
+ * Секция «Период»: общий контрол периода `lib/period-editor.ts` (T5,
+ * ADR d4d53fe6). Свои поля дат панели запрещены сторожем
+ * `guard-period-editor`: единственный источник дат — этот контрол, его же
+ * поля пишет клик по календарю. Контрол лишь сообщает значение — применение
+ * делает вызывающий (кнопка «Применить»).
+ */
 function periodSection(ctx: FilterFormContext): FilterSection {
-  return buildDatesSection(
-    ctx,
-    { get: () => periodCollapsed, set: (v) => (periodCollapsed = v) },
-    {
-      title: 'Период',
-      ranges: [
-        {
-          label: 'Период',
-          getFrom: () => filter.dateFrom,
-          getTo: () => filter.dateTo,
-          setFrom: (v) => {
-            filter.dateFrom = v;
-          },
-          setTo: (v) => {
-            filter.dateTo = v;
-          },
-        },
-      ],
-      isNonEmpty: () => filter.dateFrom !== '' || filter.dateTo !== '',
+  const section = buildFilterBlock('Период', {
+    collapsible: true,
+    getCollapsed: () => periodCollapsed,
+    setCollapsed: (v) => (periodCollapsed = v),
+    isNonEmpty: () => filter.dateFrom !== '' || filter.dateTo !== '',
+  });
+  const editor = buildPeriodEditor({
+    mode: 'range',
+    value: { from: filter.dateFrom, to: filter.dateTo },
+    label: 'Период дневника',
+    onChange: (value: PeriodValue) => {
+      filter.dateFrom = value.from ?? '';
+      filter.dateTo = value.to ?? '';
+      ctx.touch();
     },
-  );
+  });
+  section.body.append(editor.root);
+  return section;
+}
+
+/**
+ * Секция «Критерии целей: типы мыслей» (0.10.1, требование 306f74cc): тот же
+ * набор критериев, что у панели «Структур», применённый к мыслям-целям записи.
+ */
+function targetsTypesSection(ctx: FilterFormContext): FilterSection {
+  return buildEntityChipSection(ctx, {
+    title: 'Критерии целей: типы мыслей',
+    getValues: () => filter.targets.typeIds,
+    setValues: (values) => {
+      filter.targets.typeIds = values;
+    },
+    loadOptions: (query) =>
+      filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
+    optionsHeader: 'Типы мыслей',
+    placeholder: 'Название типа…',
+    picker: {
+      label: 'список типов…',
+      open: () =>
+        pickEntitiesModal({
+          networkId: requireNetworkId(),
+          kind: 'thought-types',
+          title: 'Цели: типы мыслей',
+          currentIds: filter.targets.typeIds,
+        }),
+    },
+  });
 }
 
 /** Builds and mounts the filter panel into `host`; returns the root element. */
@@ -311,6 +384,8 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   host.append(panel);
   renderPanel();
   void reloadSavedFilters();
+  // Реестр свойств нужен условиям целей — рисуем панель ещё раз, когда он есть.
+  void loadPropertyDefs().then(() => renderPanel());
   return panel;
 }
 
@@ -326,8 +401,14 @@ function renderPanel(): void {
   const ctx: FilterFormContext = {
     networkId: requireNetworkId(),
     getState: () => filter,
-    registry: new Map(),
+    registry: registryWithSides(),
     touch,
+  };
+  // Критерии целей — та же модель, что у «Структур» (0.10.1, 306f74cc):
+  // контекст читает вложенное состояние `filter.targets`.
+  const targetsCtx: FilterFormContext = {
+    ...ctx,
+    getState: () => filter.targets,
   };
 
   thoughtsField = buildThoughtsSection(ctx);
@@ -400,6 +481,12 @@ function renderPanel(): void {
     buildLinkScopeSection(ctx),
     buildAuthorshipSection(ctx, { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) }),
     periodSection(ctx),
+    targetsTypesSection(targetsCtx),
+    buildConditionsSection(
+      targetsCtx,
+      { get: () => targetsPropsCollapsed, set: (v) => (targetsPropsCollapsed = v) },
+      { title: 'Критерии целей: свойства' },
+    ),
     buildSortSection(ctx, { showSort: false }),
   );
 
@@ -415,7 +502,7 @@ function renderPanel(): void {
     setName: (name) => {
       filterName = name;
     },
-    buildDefinition: () => buildChronicleWire(filter),
+    buildDefinition: () => chronicleDefinition(),
     applyEntry: (entry) => applySavedFilterEntry(entry),
     selectedId: () => savedFilterId,
     setSelectedId: (id) => {
