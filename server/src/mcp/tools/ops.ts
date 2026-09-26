@@ -1017,6 +1017,10 @@ const HANDLERS: Record<string, OpHandler> = {
     return runTool(async () => {
       const ndb = openMemberNetwork(rt, a.network_id);
       const format: ExportFormat = a.format ?? 'markdown';
+      // Имя сети-источника для манифеста `.etnx` — display_name из реестра,
+      // а не id (ошибка b52caa66); фолбэк на id, если записи нет.
+      const sourceNetworkName =
+        rt.deps.systemDb.getNetworkById(a.network_id)?.display_name ?? a.network_id;
       const result = await subgraphAsync(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
       if (format === 'markdown') {
         return { format, truncated: result.truncated, content: exportToMarkdown(ndb, result.nodes) };
@@ -1024,7 +1028,11 @@ const HANDLERS: Record<string, OpHandler> = {
       if (format === 'etnx') {
         const job = await startExportJob(ndb, result.nodes, format, {
           etnx: a.etnx_options ?? {},
-          source: { network_id: a.network_id, network_name: a.network_id, user_id: rt.deps.auth.userId },
+          source: {
+            network_id: a.network_id,
+            network_name: sourceNetworkName,
+            user_id: rt.deps.auth.userId,
+          },
         });
         const downloaded = getExportJobContent(job.job_id, format);
         if (downloaded === null) throw new Error('ETN error [INTERNAL]: export content unavailable');
@@ -1039,7 +1047,11 @@ const HANDLERS: Record<string, OpHandler> = {
         };
       }
       const job = await startExportJob(ndb, result.nodes, format, {
-        source: { network_id: a.network_id, network_name: a.network_id, user_id: rt.deps.auth.userId },
+        source: {
+          network_id: a.network_id,
+          network_name: sourceNetworkName,
+          user_id: rt.deps.auth.userId,
+        },
       });
       const downloaded = getExportJobContent(job.job_id, format);
       if (downloaded === null) throw new Error('ETN error [INTERNAL]: export content unavailable');

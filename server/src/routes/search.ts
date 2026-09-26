@@ -243,12 +243,15 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const etnxOpts = input.etnx as ExportEtnxOptions | undefined;
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Имя сети-источника для манифеста `.etnx` — display_name из реестра,
+        // а не id (ошибка b52caa66); фолбэк на id, если записи нет.
+        const networkName = app.systemDb.getNetworkById(networkId)?.display_name ?? networkId;
         // PDF is rejected by the service on MVP (VALIDATION_ERROR → 422).
         const job = await startExportJob(ndb, thoughtIds, format as ExportFormat, {
           etnx: etnxOpts,
           source: {
             network_id: networkId,
-            network_name: networkId,
+            network_name: networkName,
             user_id: req.auth!.user.id,
           },
         });

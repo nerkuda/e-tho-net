@@ -421,6 +421,24 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(doc.format, 'markdown');
         assert.match(doc.content, /Вторая мысль/);
         assert.match(doc.content, /HOME/);
+
+        // .etnx export: `source.network_name` — display_name сети, а не id
+        // (ошибка b52caa66). `import.dry_run` отдаёт имя из манифеста без
+        // распаковки zip — им и проверяем.
+        const exportedEtnx = await callOp(handle.client, 'export.subgraph', {
+          network_id: ctx.networkId,
+          seed_ids: [ctx.homeId],
+          radius: 1,
+          format: 'etnx',
+        });
+        const etnxDoc = toolJson<{ format: string; content_b64: string }>(exportedEtnx);
+        assert.equal(etnxDoc.format, 'etnx');
+        const dry = await callOp(handle.client, 'import.dry_run', {
+          network_id: ctx.networkId,
+          source: { kind: 'etnx_base64', content_base64: etnxDoc.content_b64 },
+        });
+        const plan = toolJson<{ source_network_name: string }>(dry);
+        assert.equal(plan.source_network_name, 'Test Net', 'имя сети-источника — display_name');
       } finally {
         await handle.close();
       }

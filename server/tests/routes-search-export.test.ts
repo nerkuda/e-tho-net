@@ -316,6 +316,10 @@ describe(
         assert.equal(manifest['format'], 'etnx');
         assert.equal(manifest['version'], '1.1');
         assert.equal(typeof manifest['exported_at'], 'string');
+        // source.network_name — display_name сети, а не её id (ошибка b52caa66).
+        const source = manifest['source'] as { network_id: string; network_name: string };
+        assert.equal(source.network_id, ctx.networkId);
+        assert.equal(source.network_name, 'Test Net', 'имя сети-источника — display_name');
         const thoughts = manifest['thoughts'] as Array<{ id: string; title: string }>;
         assert.ok(thoughts.some((t) => t.id === rootId && t.title === 'Корень экспорта'));
         assert.ok(thoughts.some((t) => t.id === childId && t.title === 'Потомок'));
