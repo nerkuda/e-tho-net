@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * «Хроника» view (L20, 08-ui-spec.md §17)
+ * Вид «Дневник» (рабочий стол) — 0.10.1, задача T6 (ранее «Хроника», L20)
  * ------------------------------------------------------------------------- */
 
 .chronicle {
@@ -9,15 +9,13 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* --layer-bg (0.6.4, 13-layers.md §2.2a): the chronicle canvas follows the
-   * active layer's background colour like the map does. */
+  /* --layer-bg (0.6.4, 13-layers.md §2.2a): полотно «Дневника» следует фону
+   * активного слоя, как карта. */
   background: var(--layer-bg, var(--bg));
 }
 
-/* Filter area: общий каркас отбора (lib/filter-form.ts) — прокручиваемый
- * список секций + приклеенный футер; область даёт высоту и границу. */
-/* Область панели отбора «Хроники»: размер и скрытость ведёт общий каркас
- * панели отбора (`.fp-host`, задача 2ebe4206); здесь только вид области. */
+/* Область панели отбора: размер и скрытость ведёт общий каркас
+ * (`.fp-host`, задача 2ebe4206); здесь только вид области. */
 .chron-filter-area {
   display: flex;
   flex-direction: column;
@@ -35,93 +33,265 @@
   gap: 8px;
 }
 
-/* `.chron-date` — ширина колонки даты в таблице «Хроники»; поле периода
- * панели отбора строит общий каркас (`.st-f-date-field`). */
-.chron-date {
-  width: 130px;
-}
-
 .chron-splitter {
-  /* The strip is a .row-splitter (grab glyph, pointer drag); this keeps its
-   * look consistent with the other horizontal splitters of the app. */
   flex: 0 0 auto;
 }
 
+/* Центр экрана: слева календарь + панель записи, справа лента. */
 .chron-main {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
 }
 
-/* The table block sizes to its content (default cap below), the bottom editor
- * takes the remaining space; the splitter between them changes the table's
- * max-height, so both areas resize together (like the «Хроника» tab, §6.6). */
-.chron-top {
+/* ---------------------------------------------------------------------------
+ * Левая колонка: календарь месяца + непрокручиваемая sticky-панель записи
+ * ------------------------------------------------------------------------- */
+
+.chron-side {
   flex: 0 0 auto;
+  width: 300px;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.chron-cal {
+  flex: 0 0 auto;
   overflow: hidden;
 }
 
-/* Default cap of the chronicle table before the first drag (five rows, §17).
- * Once the user drags the splitter, `applyGroupClamp` writes an exact inline
- * `height` plus `max-height: none` (list-heights.ts) — the two together, so
- * this fallback cap cannot clip a dragged height (bug 78562781). */
-.chron-table-wrap {
-  max-height: 240px;
-  min-height: 0;
-  overflow: auto;
-}
-
-.chron-pager {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+/* Непрокручиваемая sticky-панель: остаётся на месте при прокрутке ленты
+ * (элемент «Sticky-панель новой записи» a2b993d7). */
+.chron-add {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  padding-top: 6px;
   border-top: 1px solid var(--border);
 }
 
-/* Table rows: keyboard-navigable via the unit table facade (lib/ui/table.ts,
- * nav: 'cell'); the current row/cell highlight and the cell wrapper classes
- * live there (.ui-table*). Here only chronicle-specific cell content. */
-.chron-date {
-  white-space: nowrap;
+.diary-add-btn {
+  width: 100%;
 }
 
-.chron-title {
-  max-width: 220px;
+/* ---------------------------------------------------------------------------
+ * Календарь месяца
+ * ------------------------------------------------------------------------- */
+
+.cal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  user-select: none;
+}
+
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.cal-title {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.cal-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cal-row {
+  display: grid;
+  grid-template-columns: 2rem repeat(7, 1fr);
+  gap: 1px;
+}
+
+.cal-row-head {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cal-wd {
+  text-align: center;
+}
+
+.cal-week {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cal-day {
+  min-width: 0;
+  padding: 2px 0;
+  text-align: center;
+  border-radius: 4px;
+}
+
+.cal-day.is-out {
+  opacity: 0.4;
+}
+
+.cal-day.is-selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cal-day.is-today {
+  font-weight: 700;
+}
+
+.cal-day.has-records {
+  background: var(--accent-soft);
+}
+
+.cal-count {
+  display: block;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Лента: контейнер и блоки дней
+ * ------------------------------------------------------------------------- */
+
+.chron-feed-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* Лента занимает всю высоту центра: прежний потолок таблицы (240px) снят. */
+  max-height: none;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.chron-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chron-feed-status,
+.chron-feed-empty,
+.chron-feed-more {
+  padding: 8px 4px;
+}
+
+.diary-day {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diary-day-head {
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.diary-day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Запись дневника
+ * ------------------------------------------------------------------------- */
+
+.diary-record {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.diary-slot {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.diary-record-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diary-record-date {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.diary-record-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.diary-record-actions {
+  flex: 0 0 auto;
+}
+
+.diary-record-date-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.diary-record-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.diary-record-body {
+  min-height: 0;
+}
+
+.diary-snippet {
+  font-size: 13px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.chron-targets {
-  max-width: 430px;
-  vertical-align: top;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.chron-snippet {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.chron-snippet mark {
+.diary-snippet mark {
   background: var(--accent-soft);
   color: inherit;
   padding: 0 1px;
 }
 
-/* Target chips (thoughts with icon/style; links «src — type — dst»). */
-/* Target chips: fixed, uniform sizes — thoughts 150px, links 240px — in both
- * the table column and the bottom editor. Titles truncate with an ellipsis. */
+/* Крестик снятия привязки и «+» привязки — компактные кнопки внутри чипсов. */
+.diary-chip-remove,
+.diary-chip-add {
+  flex: 0 0 auto;
+  height: 18px;
+  min-height: 18px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Чипсы привязок (мысли с иконкой и оформлением; связи «источник — тип — цель»)
+ * ------------------------------------------------------------------------- */
+
 .chron-chip {
   display: inline-flex;
   align-items: center;
@@ -141,13 +311,11 @@
 }
 
 .chron-chip.thought {
-  width: 150px;
-  max-width: 150px;
+  max-width: 220px;
 }
 
 .chron-chip.link {
-  width: 240px;
-  max-width: 240px;
+  max-width: 300px;
 }
 
 .chron-chip:hover {
@@ -166,8 +334,7 @@
   overflow: hidden;
 }
 
-/* Image icons scale into the fixed chip-icon box — never their natural size
- * (the same rule as .mini-icon: a 64×64 PNG must not stretch the chip). */
+/* Картинки-иконки вписываются в фиксированный квадрат (не растягивают чип). */
 .chron-chip .chip-icon img {
   width: 100%;
   height: 100%;
@@ -180,14 +347,6 @@
   white-space: nowrap;
   flex: 0 1 auto;
   min-width: 0;
-}
-
-.chron-chip.thought .chip-title {
-  max-width: 112px;
-}
-
-.chron-chip.link .chip-title {
-  max-width: 72px;
 }
 
 .chron-chip .chip-type {
@@ -206,22 +365,3 @@
 .chron-chip.muted .chip-title {
   text-decoration: line-through;
 }
-
-/* Bottom editor: metadata row + target chips + markdown field. */
-.chron-editor {
-  flex: 1 1 auto;
-  min-height: 0;
-  border-top: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-}
-
-.chron-target-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-

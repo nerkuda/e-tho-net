@@ -183,7 +183,7 @@ export function buildWorkspace(): HTMLElement {
 
   const chronicleViewButton = iconButton({
     icon: svgIcon('calendar-month'),
-    title: 'Хроника',
+    title: 'Дневник',
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('chronicle'),
