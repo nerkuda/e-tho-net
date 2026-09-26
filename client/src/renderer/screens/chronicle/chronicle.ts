@@ -43,6 +43,7 @@ import {
 
 import { findRootThought, requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
+import { showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
@@ -713,6 +714,31 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
     if (target.kind === 'thought') void openChronicleThought(target.thought.id);
     else void openChronicleLinkById(target.link.id);
   });
+  // Правый клик. Облачко мысли получает общее меню мысли (спецификация
+  // «Контекстное меню мысли»; регресс 0.10.1 — правка T6 сняла его вместе с
+  // прежним самодельным `showTargetMenu`), а команды записи «Отвязать»/
+  // «Связать с…» добавляются блоком опций контекста. У чипа связи — своё
+  // короткое меню записи: общее меню мысли к связи неприменимо.
+  chip.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (target.kind === 'thought') {
+      showThoughtContextMenu(
+        event,
+        { id: target.thought.id, title: target.thought.title, dir: 'siblings' },
+        {
+          // Открытие из дневника — в редактор, фокус холста не двигаем.
+          openHandler: (id) => void openChronicleThought(id),
+          extraItems: [
+            menuAction(t('chrono.menu.detach'), () => void detachChip(rowId, target)),
+            menuAction(t('chrono.menu.attach'), () => void pickAndAttach(rowId)),
+          ],
+        },
+      );
+      return;
+    }
+    showDiaryLinkMenu(event, rowId, target);
+  });
   chip.append(
     uiButton({
       label: '✕',
@@ -727,6 +753,22 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
     }),
   );
   return chip;
+}
+
+/**
+ * Мини-меню чипа связи в ленте дневника. Общее меню мысли сюда не подходит
+ * (связь — не мысль), но операции контекста записи те же: открыть, отвязать,
+ * связать. Пункты собираются словарём `lib/menu.ts` (сторож
+ * `guard-canvas-menu-dictionary`).
+ */
+function showDiaryLinkMenu(event: MouseEvent, rowId: string, target: ChronicleTarget): void {
+  if (target.kind !== 'link') return;
+  showMenuAt(event.clientX, event.clientY, [
+    menuAction(t('chrono.menu.open'), () => void openChronicleLinkById(target.link.id)),
+    MENU_SEPARATOR,
+    menuAction(t('chrono.menu.detach'), () => void detachChip(rowId, target)),
+    menuAction(t('chrono.menu.attach'), () => void pickAndAttach(rowId)),
+  ]);
 }
 
 async function detachChip(rowId: string, target: ChronicleTarget): Promise<void> {
