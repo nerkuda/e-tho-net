@@ -7,6 +7,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
@@ -27,6 +29,12 @@ import {
   visibleChips,
   weekPeriod,
 } from '../src/renderer/screens/chronicle/diary.js';
+
+const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
+
+function read(rel: string): string {
+  return readFileSync(resolve(RENDERER, ...rel.split('/')), 'utf8');
+}
 
 /** Минимальная запись ленты. */
 function row(over: Partial<ChronicleRow>): ChronicleRow {
@@ -193,6 +201,19 @@ describe('diary: ленивое создание псевдо-записи (26f0
   it('удаление пустого слота не требует сети', () => {
     assert.equal(slotDeleteNeedsNetwork(null), false);
     assert.equal(slotDeleteNeedsNetwork('comment-1'), true);
+  });
+
+  it('создание записи без обходной меры-пробела (ошибка 00115e7b исправлена)', () => {
+    const src = read('screens/chronicle/chronicle.ts');
+    assert.ok(
+      !/\?\s*'\s'\s*:\s*body/.test(src),
+      'обходная мера «body_md из пробела» снята — сервер принимает пустой текст',
+    );
+    assert.match(
+      src,
+      /body_md:\s*body\b/,
+      'текст записи отправляется как есть (пустой допустим при заголовке/чипсе)',
+    );
   });
 });
 

@@ -855,12 +855,13 @@ async function ensureSlot(opts: {
     for (const id of extra) {
       if (id !== home) targets.push({ owner_type: 'thought', owner_id: id });
     }
-    // Временная мера до фикса ошибки 00115e7b: сервер требует непустой
-    // `body_md`; при создании записи без текста (заголовок/чипс) шлём пробел.
+    // Содержание записи держится на любом из: текст, заголовок, чипс
+    // (требование 26f0aa52). Сервер допускает пустой `body_md`, пока есть
+    // непустой заголовок или привязка вне HOME, поэтому текст шлём как есть.
     const created = await etn.comments.createMulti(networkId, targets, {
       kind: 'chronological',
       title: title.trim() || null,
-      body_md: body.trim() === '' ? ' ' : body,
+      body_md: body,
       valid_from: state.from,
       valid_to: state.from,
       use_time: false,

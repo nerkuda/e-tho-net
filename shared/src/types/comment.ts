@@ -69,11 +69,15 @@ export interface Comment {
 }
 
 /** Input accepted by `POST …/{id}/comments` (03-server-api.md §10).
- *  `valid_from`/`valid_to` are ignored for `kind = 'permanent'`. */
+ *  `valid_from`/`valid_to` are ignored for `kind = 'permanent'`.
+ *
+ *  `body_md` — необязателен для хронологической записи (требование 26f0aa52):
+ *  её содержание может держаться на непустом `title` или привязке вне HOME.
+ *  Для `kind = 'permanent'` домен по-прежнему требует непустой `body_md`. */
 export interface CommentInput {
   kind: CommentKind;
   title?: string | null;
-  body_md: string;
+  body_md?: string;
   valid_from?: string;
   valid_to?: string | null;
   /** Флаг «учитывать время»; по умолчанию выключен (0.10.1). */

@@ -59,10 +59,13 @@ export interface ThoughtBundleCommentInput {
 }
 
 /** Chronicle entry appended to the bundle owner's comment log (task 053751b5,
- *  0.7.2). Append-only — never overwrites existing entries. */
+ *  0.7.2). Append-only — never overwrites existing entries.
+ *
+ *  `body_md` необязателен (требование 26f0aa52): хроно-запись может быть
+ *  создана по непустому `title` без текста. */
 export interface ThoughtBundleChronicleItem {
   title?: string | null;
-  body_md: string;
+  body_md?: string;
   valid_from?: string;
   valid_to?: string | null;
   /** Флаг «учитывать время» (0.10.1); по умолчанию выключен. */

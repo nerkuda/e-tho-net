@@ -1070,7 +1070,9 @@ export const CommentsGet = defineContract('etn.comments.get', GetCommentFields, 
 const CommentChangesFields = z
   .object({
     title: z.string().nullable().optional(),
-    body_md: z.string().min(1).optional(),
+    // Непустоту `body_md` проверяет домен по виду комментария (ошибка 00115e7b):
+    // у хронологической пустое тело допустимо, пока есть заголовок/привязка.
+    body_md: z.string().optional(),
     valid_from: z.string().min(1).optional(),
     valid_to: z.string().nullable().optional(),
     use_time: z.boolean().optional(),
@@ -1947,11 +1949,11 @@ const commentFieldsRest = {
     from: { kind: 'body' },
     msg: 'kind обязателен (permanent|chronological).',
   },
-  body_md: {
-    from: { kind: 'body' },
-    msg: 'body_md обязателен и не может быть пустым.',
-    check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'body_md обязателен и не может быть пустым.' : null),
-  },
+  // `body_md` больше не «обязателен и непуст» на уровне контракта (ошибка
+  // 00115e7b): у хронологической записи содержание может держаться на
+  // заголовке или привязке вне HOME (требование 26f0aa52). Полную проверку
+  // содержания по виду комментария делает домен `comment-service`.
+  body_md: { from: { kind: 'body' } },
   title: { from: { kind: 'body' } },
   valid_from: { from: { kind: 'body' } },
   valid_to: { from: { kind: 'body' } },
@@ -1975,7 +1977,7 @@ export const RestCommentCreateOwner = defineContract(
     network_id: NetworkId,
     owner_id: z.string().min(1),
     kind: z.enum(COMMENT_KINDS),
-    body_md: z.string().min(1),
+    body_md: z.string().optional(),
     title: z.string().nullable().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
@@ -1994,7 +1996,7 @@ export const RestCommentCreateTargets = defineContract(
   z.object({
     network_id: NetworkId,
     kind: z.enum(COMMENT_KINDS),
-    body_md: z.string().min(1),
+    body_md: z.string().optional(),
     title: z.string().nullable().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
