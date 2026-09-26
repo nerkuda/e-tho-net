@@ -61,7 +61,6 @@ import {
   type EtnErrorCode,
   type LinkTypeFilterInput,
   type SearchRequest,
-  type SearchResponse,
   type StructureDirectionFlags,
   type SubgraphEdge,
   type ThoughtRef,

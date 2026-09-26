@@ -196,15 +196,14 @@ export class NetworkDb {
    * forwarded (getters like `reader` run with the real statement as `this`).
    */
   private guardSnapshotRead(stmt: Database.Statement): Database.Statement {
-    const db = this;
     return new Proxy(stmt, {
-      get(target, prop) {
+      get: (target, prop) => {
         if (prop === 'get' || prop === 'all' || prop === 'iterate') {
           const method = (target as unknown as Record<string, (...args: unknown[]) => unknown>)[
             prop as string
           ]!;
           return (...args: unknown[]): unknown => {
-            db.refreshLayerSnapshot();
+            this.refreshLayerSnapshot();
             return method.apply(target, args);
           };
         }
