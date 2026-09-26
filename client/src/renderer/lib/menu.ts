@@ -19,6 +19,7 @@
  */
 
 import { div, el, span } from './dom.js';
+import { noteFocusOrigin } from './focus-origin.js';
 
 /** A menu entry: leaf with `onClick` or a parent with `submenu`.
  *  `dragId` marks a row as a drag source for a thought (the history dropdown)
@@ -168,6 +169,11 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
     row.addEventListener('click', (event) => {
       event.stopPropagation();
       if (item.disabled === true) return;
+      // Строка-мысль (drop-меню закреплённых/истории, `dragId` — её id) —
+      // запоминаем её экранный прямоугольник как источник полёта к этой мысли
+      // ДО закрытия меню, пока строка ещё в раскладке (дефект 2 задачи
+      // e9f0af94).
+      if (item.dragId !== undefined) noteFocusOrigin(item.dragId, row);
       closeMenu();
       item.onClick?.();
     });

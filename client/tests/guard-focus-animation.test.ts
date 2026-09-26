@@ -24,6 +24,7 @@ import { readRendererCss } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TRANSITION = path.join(CLIENT_ROOT, 'src', 'renderer', 'canvas', 'transition.ts');
+const CANVAS = path.join(CLIENT_ROOT, 'src', 'renderer', 'canvas', 'canvas.ts');
 
 /** Токены, которыми живёт фазовая хореография. */
 const TOKENS = [
@@ -72,5 +73,23 @@ describe('guard: плавная смена фокуса — длительнос
         `${token} не обнулён при prefers-reduced-motion — reduce-motion пришлось бы дублировать в коде`,
       );
     }
+  });
+
+  // Дефект 1 приёмки e9f0af94: новый фокус мелькал в центре, потому что между
+  // пересборкой фокус-облачка и стартом перехода стоял `await` — браузер успевал
+  // нарисовать кадр с новым содержимым, пока переход ещё не спрятал его.
+  // Инвариант: пересборка и `playFocusTransition` обязаны быть в одной
+  // синхронной задаче.
+  it('canvas.ts: между пересборкой фокуса и стартом перехода нет await', () => {
+    const source = fs.readFileSync(CANVAS, 'utf8');
+    const start = source.indexOf('renderFocusRow(focus);');
+    const end = source.indexOf('playFocusTransition(host, snapshot');
+    assert.ok(start >= 0, 'в canvas.ts не найдена пересборка фокус-облачка');
+    assert.ok(end > start, 'в canvas.ts не найден запуск перехода после пересборки');
+    const between = source.slice(start, end);
+    assert.ok(
+      !/\bawait\b/.test(between),
+      'между renderFocusRow и playFocusTransition есть await — новый фокус мелькнёт в центре до начала полёта',
+    );
   });
 });

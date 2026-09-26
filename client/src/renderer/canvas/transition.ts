@@ -16,6 +16,14 @@
  *     old position; clouds gone with the new focus fade out; link overlays hide
  *     (and stop catching the pointer) for the whole move.
  *
+ * `playFocusTransition` MUST be called in the SAME synchronous task as the DOM
+ * rebuild of the focus row (`render()` in `canvas.ts`): it hides the real new
+ * focus cloud and lays the held overlay over it before returning, so the very
+ * first painted frame of the new state already shows the old content in the
+ * centre. An `await` between the rebuild and this call lets the browser paint a
+ * frame with the new focus content in place — the flicker the acceptance
+ * rejected (дефект 1 задачи e9f0af94). `guard-focus-animation` protects this.
+ *
  *   Swap — the flyer and the held overlay come off, the real new focus cloud
  *     appears exactly where the flyer landed, and the former focus hands off to
  *     its new zone cloud at the very spot it held.
@@ -41,6 +49,7 @@ import { div } from '../lib/dom.js';
 import {
   flipTransform,
   planFocusTransition,
+  resolveFocusFlightOrigin,
   type RectLike,
   type TransitionNode,
   type TransitionZone,
@@ -196,11 +205,18 @@ function placeClone(el: HTMLElement, local: RectLike): void {
   setStyle(el, 'transform-origin', 'top left');
 }
 
-/** Plays the transition after the re-render (see the module doc). */
+/** Plays the transition after the re-render (see the module doc).
+ *
+ *  `externalOrigin` — экранный прямоугольник кликнутого ВНЕ карты элемента
+ *  (облачко панели закреплённых/истории, строка поиска, `lib/focus-origin.ts`):
+ *  полёт стартует от него «со стороны клика» и имеет приоритет над слотом
+ *  выбранного облачка на карте. Без пригодного источника полёт не играется —
+ *  вызывающий мягко деградирует до свопа без клона. */
 export function playFocusTransition(
   host: HTMLElement,
   before: CloudSnapshot[],
   drawLinks?: () => void,
+  externalOrigin?: RectLike | null,
 ): void {
   finishFocusTransition();
   if (before.length === 0) {
@@ -288,7 +304,10 @@ export function playFocusTransition(
   // --- Special clouds of a focus change. -----------------------------------
   const oldFocus = plan.focusBefore === null ? undefined : beforeMap.get(plan.focusBefore);
   const newFocus = plan.focusAfter === null ? undefined : afterMap.get(plan.focusAfter);
-  const origin = plan.flyingId === null ? undefined : beforeMap.get(plan.flyingId);
+  // Flight source: a click outside the canvas wins over the cloud's old slot
+  // (the selected thought may not even be on the map) — see `resolveFocusFlightOrigin`.
+  const canvasOrigin = plan.flyingId === null ? null : beforeMap.get(plan.flyingId) ?? null;
+  const flightOrigin = resolveFocusFlightOrigin(canvasOrigin, externalOrigin ?? null);
 
   let overlay: HTMLElement | null = null;
   let flyer: HTMLElement | null = null;
@@ -306,15 +325,16 @@ export function playFocusTransition(
     layer.append(overlay);
   }
 
-  // Flyer: a clone of the NEW focus cloud starting exactly where the selected
-  // cloud was, growing into the focus slot.
-  if (plan.focusChanged && newFocus !== undefined && origin !== undefined && tokens.flight > 0) {
+  // Flyer: a clone of the NEW focus cloud starting exactly where the selection
+  // was — the selected cloud's old slot, or the clicked panel element (external
+  // origin), growing into the focus slot.
+  if (plan.focusChanged && newFocus !== undefined && flightOrigin !== null && tokens.flight > 0) {
     flyer = newFocus.el.cloneNode(true) as HTMLElement;
     setStyle(flyer, 'opacity', '1');
     placeClone(flyer, toLocal(hostRect, newFocus));
     layer.append(flyer);
     hadFlyer = true;
-    play(flyer, [{ transform: flipTo(origin, newFocus) }, { transform: 'none' }], tokens.flight, tokens.ease);
+    play(flyer, [{ transform: flipTo(flightOrigin, newFocus) }, { transform: 'none' }], tokens.flight, tokens.ease);
   }
 
   // The real new focus cloud waits hidden at its final position.

@@ -28,6 +28,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
+import { takeFocusOrigin } from '../lib/focus-origin.js';
 import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
@@ -587,6 +588,11 @@ async function render(): Promise<void> {
   const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
   zoneAnimationPending = false;
   const snapshot = animate ? captureClouds(host) : null;
+  // Source of the flight when the focus was picked OUTSIDE the map (pinned /
+  // history / search chip, `lib/focus-origin.ts`). Consumed on every focus
+  // change — even when this render turns out not to animate — so a stale click
+  // box never leaks into a later focus change.
+  const externalOrigin = focusChanged ? takeFocusOrigin(focus.focused.id) : null;
 
   // The focused thought is always fresh in the focus response — refresh the
   // neighbour cache so its (possibly just-edited) style, icon and title show
@@ -596,31 +602,41 @@ async function render(): Promise<void> {
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
   await enrichRefs(focus);
   relatedTitles = visibleRelatedTitles(focus);
-  renderFocusRow(focus);
-  // The strip must be in sync with the focus before we resolve the lower
-  // zone: its active mode decides whether the children zone shows real
-  // children or a view's run result.
+  // Resolve the filter strip and any active view result BEFORE rebuilding the
+  // DOM. The rebuild and the focus transition MUST share one synchronous task
+  // (дефект 1 задачи e9f0af94): otherwise the browser paints a frame with the
+  // NEW focus content in the centre after `renderFocusRow` and before
+  // `playFocusTransition` hides it — the new thought flashes in place, then the
+  // old focus "returns" as the held overlay. Hoisting every await above the
+  // rebuild means the first painted frame of the new state already holds the
+  // old content. `guard-focus-animation` guards the invariant.
   await renderFilterStrip(focus);
+  const stripMode = getStripActiveMode();
+  let viewResult: ViewResult | null = null;
+  if (stripMode.kind !== 'children') {
+    // Run the view against the focused thought (no-op if already cached).
+    // The mode change listener also calls `render()`; this call may execute
+    // repeatedly during a mode toggle, and the strip's run cancellation keeps
+    // stale responses from overwriting fresh ones.
+    viewResult = await runActiveViewIfNeeded(focus.focused.id);
+  }
+
+  // --- Rebuild + transition: one synchronous task, one paint --------------
+  renderFocusRow(focus);
   updateFocusBand();
   renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
   renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
-  // Lower zone: pick the strip's active mode and paint accordingly. View
-  // results share the children-zone DOM (same virtualization, same cloud
-  // shape) but the gestures that imply a parent/child link to the focus
-  // (manual order, double-click-to-add) are gated on `viewResultActive`.
-  const stripMode = getStripActiveMode();
+  // Lower zone: the strip's active mode decides whether it shows real children
+  // or a view's run result. View results share the children-zone DOM (same
+  // virtualization, same cloud shape) but the gestures that imply a
+  // parent/child link to the focus (manual order, double-click-to-add) are
+  // gated on `viewResultActive`.
   if (stripMode.kind === 'children') {
     renderZone('children', groupByThought(zoneNeighbors('children', focus)));
     setZoneAsViewResult(false, null);
   } else {
-    // Run the view against the focused thought (no-op if already cached)
-    // and paint the result as the children zone. The mode change listener
-    // also calls `render()`, so this branch may execute repeatedly during
-    // a mode toggle; the strip's run cancellation keeps stale responses
-    // from overwriting fresh ones.
-    const result = await runActiveViewIfNeeded(focus.focused.id);
-    renderZone('children', viewResultToZoneEntries(result, focus));
-    setZoneAsViewResult(true, result);
+    renderZone('children', viewResultToZoneEntries(viewResult, focus));
+    setZoneAsViewResult(true, viewResult);
   }
   lastFocusId = focus.focused.id;
   // The response is now on screen: a further store notification with the SAME
@@ -633,7 +649,7 @@ async function render(): Promise<void> {
   paintZoneIndicators();
   scheduleIndicatorLoads();
   if (snapshot !== null) {
-    playFocusTransition(host, snapshot, drawLinksNow);
+    playFocusTransition(host, snapshot, drawLinksNow, externalOrigin);
   } else {
     redrawLinks?.();
   }

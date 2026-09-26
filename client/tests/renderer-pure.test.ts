@@ -68,6 +68,7 @@ import {
   countVisibleProperties,
   flipTransform,
   planFocusTransition,
+  resolveFocusFlightOrigin,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -1112,6 +1113,36 @@ describe('planFocusTransition (focus-change choreography, задача e9f0af94)
 
     const cleared = planFocusTransition([n('f', 'focus')], []);
     assert.equal(cleared.hasChanges, false);
+  });
+});
+
+describe('resolveFocusFlightOrigin (источник полёта, дефект 2 задачи e9f0af94)', () => {
+  const canvas = { left: 100, top: 500, width: 100, height: 40 };
+  const external = { left: 700, top: 20, width: 120, height: 24 };
+
+  it('клик вне карты имеет приоритет над слотом на карте', () => {
+    assert.deepEqual(resolveFocusFlightOrigin(canvas, external), external);
+  });
+
+  it('без внешнего источника берётся старый слот облачка на карте', () => {
+    assert.deepEqual(resolveFocusFlightOrigin(canvas, null), canvas);
+    // Ненулевой прямоугольник обязателен — вырожденный внешний игнорируется.
+    assert.deepEqual(
+      resolveFocusFlightOrigin(canvas, { left: 0, top: 0, width: 0, height: 0 }),
+      canvas,
+    );
+  });
+
+  it('оба источника непригодны — null (мягкая деградация без полёта)', () => {
+    assert.equal(resolveFocusFlightOrigin(null, null), null);
+    assert.equal(resolveFocusFlightOrigin(null, { left: 5, top: 5, width: 0, height: 10 }), null);
+    assert.equal(
+      resolveFocusFlightOrigin(
+        { left: Number.NaN, top: 0, width: 10, height: 10 },
+        null,
+      ),
+      null,
+    );
   });
 });
 

@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ShimElement, type ShimRect } from './dom-shim.js';
+import { clearFocusOrigin, noteFocusOrigin, takeFocusOrigin } from '../src/renderer/lib/focus-origin.js';
 
 /** Значения токенов, которые «возвращает» getComputedStyle. */
 const ANIM_TOKENS: Record<string, string> = {
@@ -110,6 +111,7 @@ async function load(): Promise<any> {
   nextTimerId = 1;
   scheduled = [];
   reducedMotion = false;
+  clearFocusOrigin();
   return mod;
 }
 
@@ -308,5 +310,89 @@ describe('transition: плавная смена фокуса (задача e9f0a
 
     assert.equal(host.querySelectorAll('.focus-anim-layer').length, 1, 'ровно один слой анимации');
     T.finishFocusTransition();
+  });
+
+  it('клик вне карты: полёт стартует от прямоугольника источника (дефект 2)', async () => {
+    const T = await load();
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('a', 'children', rect(100, 500)),
+    ]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    // 'x' не было на карте — мысль пришла из панели закреплённых/истории.
+    relayout(host, [
+      cloud('x', 'focus', rect(400, 100, 200, 80)),
+      cloud('f', 'children', rect(100, 500)),
+    ]);
+    const chip = rect(700, 20, 120, 24); // экранный прямоугольник кликнутого чипа
+
+    T.playFocusTransition(host as unknown as HTMLElement, before, undefined, chip);
+
+    const anim = layer(host);
+    assert.equal(anim?.childElementCount, 2, 'удержанный старый фокус + летящий от чипа клон');
+    assert.equal(
+      host.querySelectorAll('.cloud').find((c) => c.classList.contains('focus-cloud'))?.style.getPropertyValue('opacity'),
+      '0',
+      'новый фокус спрятан до свопа — ни одного кадра с ним в центре',
+    );
+    // Полёт клона: dx = 700−400 = 300, dy = 20−100 = −80.
+    const flight = created.find(
+      (a) => a.keyframes[0]?.transform !== undefined && a.options.duration === 400,
+    );
+    assert.ok(flight !== undefined, 'запущен полёт клона');
+    assert.match(String(flight.keyframes[0].transform), /translate\(300px, -80px\)/);
+    T.finishFocusTransition();
+  });
+
+  it('клик вне карты без пригодного прямоугольника — мягкая деградация без полёта', async () => {
+    const T = await load();
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80))]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    relayout(host, [cloud('x', 'focus', rect(400, 100, 200, 80))]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before, undefined, null);
+
+    const anim = layer(host);
+    assert.ok(anim !== null, 'слой создан — старый фокус удерживается');
+    assert.equal(anim.childElementCount, 1, 'только удержанный фокус: клона-полёта нет');
+    assert.equal(
+      created.filter((a) => a.keyframes[0]?.transform !== undefined).length,
+      0,
+      'ни одной transform-анимации полёта',
+    );
+    T.finishFocusTransition();
+  });
+});
+
+describe('focus-origin: источник полёта при клике вне карты (дефект 2)', () => {
+  it('запоминает прямоугольник клика и отдаёт его по совпадению id', () => {
+    const chip = new ShimElement('div', 'pinned-chip');
+    chip.rect = rect(700, 20, 120, 24);
+    noteFocusOrigin('x', chip as unknown as Element);
+    assert.deepEqual(takeFocusOrigin('x'), { left: 700, top: 20, width: 120, height: 24 });
+    assert.equal(takeFocusOrigin('x'), null, 'источник одноразовый');
+  });
+
+  it('чужой id не отдаёт источник и очищает его', () => {
+    const chip = new ShimElement('div', 'history-cloud');
+    chip.rect = rect(10, 700, 90, 20);
+    noteFocusOrigin('x', chip as unknown as Element);
+    assert.equal(takeFocusOrigin('y'), null, 'чужой мысли источник не достаётся');
+    assert.equal(takeFocusOrigin('x'), null, 'и чужой запрос источник уже забрал');
+  });
+
+  it('клик по облачку внутри холста не регистрируется', () => {
+    const host = new ShimElement('div', 'canvas view-host');
+    const cloudEl = new ShimElement('div', 'cloud focus-cloud');
+    host.append(cloudEl);
+    noteFocusOrigin('x', cloudEl as unknown as Element);
+    assert.equal(takeFocusOrigin('x'), null, 'у облачка на карте свой слот — внешний источник не нужен');
+  });
+
+  it('элемент без раскладки — источник с null-прямоугольником (деградация)', () => {
+    const detached = new ShimElement('div', 'pinned-chip');
+    detached.rect = rect(0, 0, 0, 0);
+    noteFocusOrigin('x', detached as unknown as Element);
+    assert.equal(takeFocusOrigin('x'), null);
   });
 });

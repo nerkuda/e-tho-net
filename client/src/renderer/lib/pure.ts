@@ -1457,3 +1457,35 @@ export function planFocusTransition(
     hasChanges,
   };
 }
+
+/** Пригоден ли прямоугольник как стартовая точка полёта (ненулевой размер). */
+function isUsableFlightRect(rect: RectLike | null): rect is RectLike {
+  return (
+    rect !== null &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+/**
+ * Стартовый прямоугольник клона выбранной мысли (первый кейфрейм полёта).
+ *
+ * `externalOrigin` — экранные координаты кликнутого элемента ВНЕ карты
+ * (облачко панели закреплённых/истории, строка поиска): при смене фокуса
+ * оттуда клон обязан вылетать «со стороны клика», даже если эта мысль уже
+ * стоит где-то на карте, поэтому внешний источник имеет приоритет над
+ * старым слотом облачка. Пригодный внешний прямоугольник отсутствует — берём
+ * слот выбранного облачка на карте (`canvasOrigin`). Оба непригодны — `null`,
+ * и вызывающий мягко деградирует до мгновенного свопа без полёта.
+ */
+export function resolveFocusFlightOrigin(
+  canvasOrigin: RectLike | null,
+  externalOrigin: RectLike | null,
+): RectLike | null {
+  if (isUsableFlightRect(externalOrigin)) return externalOrigin;
+  return isUsableFlightRect(canvasOrigin) ? canvasOrigin : null;
+}
