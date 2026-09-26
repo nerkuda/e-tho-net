@@ -36,6 +36,8 @@ import {
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
+import { createTypeProperty } from '../src/domain/property-service.js';
 
 interface WriteItemResult {
   ref: string | null;
@@ -1160,6 +1162,76 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           )
           .get(ownerId, targetId, targetId, ownerId) as { c: number };
         assert.equal(edge.c, 1, 'the link property edge must exist');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('обязательное свойство-связь, заполненное links[] того же вызова, не даёт ложного REQUIRED_PROPERTY_MISSING (6f5812a3)', async () => {
+    // Симптом: warnings считались в фазе 2 (upsertThoughtBundle), ДО записи
+    // верхнеуровневых links[] фазы 3, поэтому обязательное свойство-связь,
+    // поставленное ребром того же батча, считалось незаполненным. Теперь
+    // warnings пересчитываются по итоговому состоянию карточки.
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const lt = createLinkType(
+        ndb,
+        { name_forward: 'TEST 6f5812a3 затрагивает', name_reverse: 'TEST 6f5812a3 затронут' },
+        ctx.adminId,
+      );
+      const type = createThoughtType(ndb, { name: 'TEST 6f5812a3 грабли' }, ctx.adminId);
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        type.id,
+        {
+          key: 'TEST 6f5812a3 затрагивает',
+          value_type: 'link',
+          required: true,
+          config: { link_type_id: lt.id, direction: 'out' },
+        },
+        ctx.adminId,
+      );
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const target = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'target', thought: { title: 'TEST 6f5812a3 цель' } }],
+            },
+          }),
+        );
+        const targetId = target.items[0]!.id;
+
+        const result = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                {
+                  ref: 'g',
+                  thought: { title: 'TEST 6f5812a3 грабля', type_id: type.id },
+                  // Обязательное свойство заполняется ребром того же вызова.
+                  links: [{ direction: 'child', target_id: targetId, type_id: lt.id }],
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(
+          result.items[0]!.warnings,
+          [],
+          `no warnings expected when the required link is filled via links[]: ${JSON.stringify(result.items[0]!.warnings)}`,
+        );
+        assert.deepEqual(result.warnings, [], 'aggregated warnings must be empty too');
       } finally {
         await handle.close();
       }

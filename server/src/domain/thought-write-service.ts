@@ -47,7 +47,7 @@ import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
 import { createLink } from './link-service.js';
 import { listComments } from './comment-service.js';
-import { getPropertyValues } from './property-service.js';
+import { computeThoughtCardWarnings, getPropertyValues } from './property-service.js';
 
 export { EtnError, MCP_MAX_THOUGHTS_PER_WRITE };
 
@@ -497,6 +497,28 @@ export function writeThoughts(
             : {}),
         });
         linkCount += 1;
+      }
+    }
+
+    // Phase 2 computed card warnings BEFORE phase 3 materialized the top-level
+    // `links[]` (upsertThoughtBundle does not see them), so a required
+    // link-property filled by an edge of the same batch kept a false
+    // `REQUIRED_PROPERTY_MISSING` (ошибка 6f5812a3). Recompute warnings against
+    // the FINAL card state once every link exists — this also refreshes the
+    // aggregated `warnings[]` so batch-level consumers see the same picture.
+    if (pendingLinks.some((p) => p.links !== undefined && p.links.length > 0)) {
+      warnings.length = 0;
+      for (const [index, it] of items.entries()) {
+        const fresh = computeThoughtCardWarnings(ndb, it.id);
+        it.warnings = fresh;
+        const source = resolved.thoughts[index]!;
+        warnings.push(
+          ...fresh.map((w) => ({
+            ...w,
+            ...(source.ref !== undefined ? { ref: source.ref } : {}),
+            ...(source.thought_id !== undefined ? { thought_id: source.thought_id } : {}),
+          })),
+        );
       }
     }
 
