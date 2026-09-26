@@ -42,10 +42,14 @@ function installShim(): void {
   const gridElement = (): ShimElement => {
     const el = new ShimElement('vaadin-grid') as ShimElement & {
       clearCache?: () => void;
+      generateCellPartNames?: () => void;
       scrollToIndex?: (index: number) => void;
       getEventContext?: () => null;
     };
     el.clearCache = () => undefined;
+    // Подсветка текущей строки (ошибка 85dea121) — лёгкая перегенерация частей
+    // видимых ячеек вместо clearCache; фасад зовёт её на смене текущей строки.
+    el.generateCellPartNames = () => undefined;
     el.scrollToIndex = () => undefined;
     el.getEventContext = () => null;
     return el;

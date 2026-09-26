@@ -347,6 +347,44 @@ describe('guard: единые правила диалогов-списков (11
     );
   });
 
+  it('R13: смена текущей строки не сдвигает прокрутку списка (85dea121)', () => {
+    // Подсветка текущей строки перекрашивается лёгкой перегенерацией частей
+    // видимых ячеек, БЕЗ clearCache: тот сбрасывал данные и прокрутку и
+    // «подбрасывал» кликнутую строку вверх (ошибка 85dea121). clearCache у
+    // сетки остаётся только у смены НАБОРА строк (`setItems`).
+    const grid = source('lib/ui/table-grid.ts');
+    const setActive = section(
+      grid,
+      'setActive(row: unknown | null): void {',
+      '},\n    setSelected',
+    );
+    assert.ok(
+      setActive.includes('generateCellPartNames'),
+      'lib/ui/table-grid: смена текущей строки обязана перегенерировать ' +
+        'part-имена видимых ячеек (generateCellPartNames), иначе подсветка не обновится',
+    );
+    assert.ok(
+      !setActive.includes('grid.clearCache'),
+      'lib/ui/table-grid: setActive не вызывает clearCache — тот сбрасывал данные ' +
+        'и прокрутку (ошибка 85dea121)',
+    );
+
+    const table = source('lib/ui/table.ts');
+    // Указатель (клик/меню/двойной клик) НЕ позиционирует список: строка уже
+    // под курсором, видимая часть не должна двигаться.
+    const pointer = section(table, 'adapter.onRowClick((index)', 'adapter.onSortRequest');
+    assert.ok(
+      !pointer.includes('scrollToRow'),
+      'lib/ui/table: клик/меню строки не должны прокручивать список (правило 13)',
+    );
+    // Клавиатура — явное действие: строку подводим к видимой (минимально).
+    assert.match(
+      table,
+      /applyCurrent\(target, true, true\)/,
+      'lib/ui/table: клавиатурная навигация обязана подводить текущую строку к видимой',
+    );
+  });
+
   it('правило о плейсхолдере краснеет на умышленной копии', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-list-dialogs-'));
     try {

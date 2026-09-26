@@ -7,7 +7,8 @@
  *  • получить/создать элемент `<vaadin-grid>`;
  *  • отдать ему готовое описание колонок и массив строк;
  *  • подсветить текущую (`activeItem`) и выделенные (`selectedItems`) строки;
- *  • прокрутить к строке (`scrollToIndex`);
+ *  • подвести строку к видимой (`scrollToRow` — `scrollIntoView({block:'nearest'})`
+ *    для отрисованной строки, иначе `scrollToIndex`);
  *  • перевести DOM-события сетки в индексы строк (`getEventContext`), собрав
  *    двойной клик из счётчика нажатий `click` (см. {@link GridTableAdapter.onRowDblClick});
  *  • попросить фасад пересчитать сортировку (`sort-changed`).
@@ -73,9 +74,11 @@ export interface GridTableAdapter {
   onRowClick(cb: (index: number, at: GridPoint) => void): void;
   /**
    * Подписка на двойной клик по строке. Адаптер собирает его из второго
-   * `click` (`MouseEvent.detail >= 2`), а не из нативного `dblclick`: смена
-   * текущей строки перерисовывает ячейки, и нативный `dblclick` теряется
-   * (ошибка d1a009fa).
+   * `click` (`MouseEvent.detail >= 2`), а не из нативного `dblclick`: строки
+   * сетки могут пересобираться между двумя кликами (смена набора данных), узел
+   * между нажатиями заменяется, и браузер `dblclick` не присылает — выбор в
+   * пикере не подтверждался (ошибка d1a009fa). `detail` ведёт браузер по
+   * времени и месту, а не по узлу, поэтому двойной клик доходит всегда.
    */
   onRowDblClick(cb: (index: number) => void): void;
   /** Подписка на контекстное меню строки (индекс + координаты). */
@@ -98,6 +101,13 @@ interface VaadinGridElement extends HTMLElement {
     | ((column: unknown, model: { item: unknown; index: number }) => string | null)
     | null;
   clearCache(): void;
+  /**
+   * Перегенерирует `part`-имена ТОЛЬКО у отрисованных (видимых) ячеек — без
+   * сброса кэша данных и пересчёта прокрутки (Vaadin StylingMixin). Лёгкий
+   * способ перекрасить подсветку текущей строки при смене `activeItem`
+   * (ошибка 85dea121): `clearCache` перезагружал данные и сдвигал список.
+   */
+  generateCellPartNames(): void;
   scrollToIndex(index: number): void;
   getEventContext(event: Event): { index?: number; item?: unknown } | null;
 }
@@ -147,8 +157,10 @@ export function vaadinGridAdapter(): GridTableAdapter {
    * Текущая строка (для `cellPartNameGenerator`). Подсветка — НЕ глобальным
    * токеном `--vaadin-grid-row-highlight-background-color` (он красил бы все
    * строки), а `part`-именем `row-current` только у ячеек текущей строки
-   * (ошибка 4f27f85c). Смена активной строки заставляет сетку перегенерировать
-   * части ячеек через {@link VaadinGridElement.clearCache}.
+   * (ошибка 4f27f85c). Смена активной строки перегенерирует части видимых
+   * ячеек через {@link VaadinGridElement.generateCellPartNames} — лёгкий путь
+   * без `clearCache`: тот перезагружал данные и сдвигал прокрутку, из-за чего
+   * клик по строке «подбрасывал» её вверх (ошибка 85dea121).
    */
   let activeRow: unknown = null;
   grid.cellPartNameGenerator = (_column, model): string | null =>
@@ -164,6 +176,34 @@ export function vaadinGridAdapter(): GridTableAdapter {
     return typeof context?.index === 'number' ? context.index : null;
   };
 
+  /**
+   * Готова ли теневая разметка сетки (контейнер строк `#items`). До первого
+   * рендера `this.$` у элемента ещё нет, и `generateCellPartNames` бросил бы
+   * ошибку; видимых ячеек в этот момент тоже нет — подсветка проставится при
+   * первой отрисовке строк (`cellPartNameGenerator`).
+   */
+  const cellPartsReady = (): boolean => {
+    const root = grid.shadowRoot;
+    if (root === null || root === undefined) return false;
+    return root.getElementById('items') !== null;
+  };
+
+  /**
+   * Отрисованная строка виртуального скролла по индексу (тень грида). Нужна,
+   * чтобы «подвести к видимой» минимально — `scrollIntoView({block:'nearest'})`
+   * вместо `scrollToIndex`, который ставит строку в начало (прыжок вверх,
+   * ошибка 85dea121). Строки вне окна виртуализации в DOM нет — тогда обычный
+   * `scrollToIndex`.
+   */
+  const renderedRowAt = (index: number): HTMLElement | null => {
+    const root = grid.shadowRoot;
+    if (root === null || root === undefined) return null;
+    for (const row of root.querySelectorAll<HTMLElement>('tr')) {
+      if ((row as HTMLElement & { index?: number }).index === index) return row;
+    }
+    return null;
+  };
+
   grid.addEventListener('sort-changed', (event: Event) => {
     // `detail.path` — ключ колонки (мы задаём его в `buildColumn`); фолбэк —
     // сам элемент колонки, если деталь не пришла.
@@ -177,11 +217,11 @@ export function vaadinGridAdapter(): GridTableAdapter {
     if (index === null) return;
     clickCb?.(index, { x: event.clientX, y: event.clientY });
     // Двойной клик распознаём по счётчику нажатий (`MouseEvent.detail`), а не
-    // нативным `dblclick`: фасад на смене текущей строки перерисовывает ячейки
-    // (`setActive` → `clearCache`), узел строки между двумя кликами заменяется,
-    // и браузер `dblclick` не присылает — выбор в пикере не подтверждался
-    // двойным кликом (ошибка d1a009fa). `detail` ведёт браузер по времени и
-    // месту, а не по узлу, поэтому двойной клик доходит всегда.
+    // нативным `dblclick`: строки сетки пересобираются при смене набора данных,
+    // узел строки между двумя кликами может замениться, и браузер `dblclick` не
+    // присылает — выбор в пикере не подтверждался (ошибка d1a009fa). `detail`
+    // ведёт браузер по времени и месту, а не по узлу, поэтому двойной клик
+    // доходит всегда.
     if (event.detail >= 2) dblCb?.(index);
   });
   grid.addEventListener('contextmenu', (event: MouseEvent) => {
@@ -203,16 +243,26 @@ export function vaadinGridAdapter(): GridTableAdapter {
     setActive(row: unknown | null): void {
       activeRow = row;
       grid.activeItem = row;
-      // Перерисовать видимые строки — перегенерировать part-имена ячеек под
-      // новую текущую строку (иначе подсветка осталась бы на прежней).
-      grid.clearCache();
+      // Перерисовать часть-имена видимых ячеек под новую текущую строку.
+      // Именно `generateCellPartNames`, а не `clearCache`: сброс кэша данных
+      // пересчитывал прокрутку и сдвигал список (ошибка 85dea121).
+      if (cellPartsReady()) grid.generateCellPartNames();
     },
     setSelected(rows: readonly unknown[]): void {
       grid.selectedItems = [...rows];
     },
     scrollToRow(row: unknown): void {
       const index = (grid.items ?? []).indexOf(row);
-      if (index >= 0) grid.scrollToIndex(index);
+      if (index < 0) return;
+      // Подсветка строки не должна двигать видимую часть: строку уже в окне
+      // подводим минимально (nearest), вне окна — обычным scrollToIndex
+      // (ошибка 85dea121).
+      const rendered = renderedRowAt(index);
+      if (rendered !== null && typeof rendered.scrollIntoView === 'function') {
+        rendered.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      grid.scrollToIndex(index);
     },
     onSortRequest(cb): void {
       sortCb = cb;

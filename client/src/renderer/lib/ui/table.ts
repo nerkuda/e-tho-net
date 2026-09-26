@@ -51,6 +51,16 @@
  * находит строку). Состав ячеек читается из DOM — вендорская виртуализация
  * отрисовывает видимые строки, текущая строка всегда видима.
  *
+ * **Смена текущей строки не двигает список (правило 13 требования
+ * 11ddd910, ошибка 85dea121).** Клик, двойной клик и контекстное меню строки
+ * делают её текущей, но НЕ меняют прокрутку: строка уже под курсором.
+ * Подсветка — `part(row-current)` вендорской сетки; при смене активной строки
+ * адаптер лишь перегенерирует части видимых ячеек (`generateCellPartNames`),
+ * без `clearCache` и переназначения items (прежний путь сбрасывал данные и
+ * прокрутку). Позиционирование — только при явных действиях: «Добавить» после
+ * записи (`setCurrent`, правило 7), поиск/фильтр, клавиатурная навигация — и то
+ * минимально (`scrollIntoView({block:'nearest'})`).
+ *
  * **Управляемая сортировка.** Колонка задаёт `sortValue` и (при
  * `sortMode: 'toggle'`) `defaultSortDir` — направление, с которого колонка
  * начинает сортировку. `sortMode` по умолчанию `'cycle'` (asc → desc → нет,
@@ -609,10 +619,11 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     return box;
   };
 
-  // Пользовательский рендер может зависеть от «текущая ли строка»: тогда после
-  // смены текущей строки освежаем видимые ячейки (переустановка строк дешевле
-  // пересборки колонок и не сбрасывает позицию виртуализации).
-  const hasCustomRender = columns.some((column) => column.render !== undefined);
+  // Пользовательский рендер НЕ перерисовывается на смену текущей строки:
+  // подсветку несёт `part(row-current)` вендорской сетки (перегенерация
+  // лёгкая, см. адаптер), а `isCurrent` в контексте рендера никто не
+  // использует. Прежняя переустановка строк при смене текущей сбрасывала
+  // прокрутку и «подбрасывала» кликнутую строку вверх (ошибка 85dea121).
 
   const renderColumns = (): void => {
     adapter.setColumns(
@@ -647,15 +658,22 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     }
   };
 
-  const applyCurrent = (index: number, notify: boolean): void => {
+  /**
+   * Делает строку текущей. `scroll` — подвести строку к видимой:
+   * • `false` (по умолчанию) — клик/контекстное меню: строка уже под курсором,
+   *   позиция видимой части НЕ меняется (правило 13 требования 11ddd910,
+   *   ошибка 85dea121);
+   * • `true` — клавиатура: крайнюю строку подводим минимально (nearest, см.
+   *   адаптер), остальные остаются на месте.
+   */
+  const applyCurrent = (index: number, notify: boolean, scroll = false): void => {
     const data = ordered();
     const row = data[index];
     if (row === undefined) return;
     currentKey = spec.rowKey(row, index);
     if (nav === 'cell') cellCursor = { row: index, col: cellCursor.col, item: 0 };
     adapter.setActive(row);
-    adapter.scrollToRow(row);
-    if (hasCustomRender) adapter.setItems(data); // освежить рендер «текущей» ячейки
+    if (scroll) adapter.scrollToRow(row);
     if (nav === 'cell') repaintCell();
     if (notify) spec.onCurrentChange?.(currentKey, row, index);
   };
@@ -756,7 +774,7 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       const data = ordered();
       const from = nav === 'cell' ? cellCursor.row : currentIndexOf(data);
       const target = nextRowIndex(key.key, from, data.length, pageStep);
-      if (target >= 0) applyCurrent(target, true);
+      if (target >= 0) applyCurrent(target, true, true); // стрелки подводят строку к видимой
       return;
     }
     if (key.key === 'Enter') {
@@ -862,7 +880,6 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       const index = currentIndexOf(data);
       adapter.setActive(index >= 0 ? data[index] : null);
       if (index >= 0) adapter.scrollToRow(data[index] as T);
-      if (hasCustomRender) adapter.setItems(data);
       if (nav === 'cell') {
         cellCursor = { row: index, col: cellCursor.col, item: 0 };
         repaintCell();

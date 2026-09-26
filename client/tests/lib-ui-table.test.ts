@@ -382,6 +382,30 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     assert.deepEqual(activated, ['c']);
   });
 
+  it('клик и меню строки НЕ прокручивают список, клавиатура подводит к видимой (85dea121)', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      rowMenu: () => [{ label: 'Открыть', onClick: () => undefined }],
+    });
+    const wrapper = t.element as unknown as ShimElement;
+
+    // Правило 13 требования 11ddd910: клик по строке только делает её текущей —
+    // позиция видимой части не меняется (ошибка 85dea121).
+    stub.emitClick(1);
+    stub.emitDblClick(2);
+    stub.emitContextMenu(0);
+    assert.equal(stub.scrolled.length, 0, 'клик/меню строки не прокручивают список');
+
+    // Явное действие пользователя — стрелка: строку подводим к видимой.
+    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    assert.equal(stub.scrolled.length, 1, 'клавиатура подводит текущую строку к видимой');
+  });
+
   it('onDblActivate: двойной клик зовёт его вместо onActivate, клик — только текущая', async () => {
     const { table } = await load();
     const stub = new StubAdapter();
