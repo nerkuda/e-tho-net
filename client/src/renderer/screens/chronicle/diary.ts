@@ -19,9 +19,10 @@ import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
 const BARE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** Голова глобального токена даты периода (0.10.1, требование 91f8d8dd). */
-const TOKEN_HEAD_RE = /^\$(today|now|week\.start|week\.end|month\.start|month\.end)/;
-/** Хвостовая арифметика токена: `±Nd` / `±Nw` / `±Nmo`. */
-const TOKEN_ARITH_RE = /^([+-])(\d+)(mo|w|d)$/;
+const TOKEN_HEAD_RE =
+  /^\$(today|now|week\.start|week\.end|month\.start|month\.end|year\.start|year\.end)/;
+/** Хвостовая арифметика токена: `±Nd` / `±Nw` / `±Nmo` / `±Ny`. */
+const TOKEN_ARITH_RE = /^([+-])(\d+)(mo|y|w|d)$/;
 
 /** Один день ленты: локальная дата `YYYY-MM-DD` и записи, видимые в этот день. */
 export interface DiaryDay {
@@ -79,6 +80,7 @@ export function resolveDateToken(text: string, today: string = todayLocal()): st
     const n = Number(m[2]) * (m[1] === '-' ? -1 : 1);
     if (m[3] === 'd') days = n;
     else if (m[3] === 'w') days = n * 7;
+    else if (m[3] === 'y') months = n * 12;
     else months = n;
   }
   switch (head[1]) {
@@ -95,11 +97,22 @@ export function resolveDateToken(text: string, today: string = todayLocal()): st
     }
     case 'month.start': {
       const first = `${today.slice(0, 7)}-01`;
-      return addMonths(first, months);
+      return addDays(addMonths(first, months), days);
     }
     case 'month.end': {
       const first = `${today.slice(0, 7)}-01`;
-      return monthEdge(addMonths(first, months), 'end');
+      // Арифметика месяцев — по ЯКОРЮ месяца, затем берётся последнее число.
+      return addDays(monthEdge(addMonths(first, months), 'end'), days);
+    }
+    case 'year.start': {
+      const first = `${today.slice(0, 4)}-01-01`;
+      return addDays(addMonths(first, months), days);
+    }
+    case 'year.end': {
+      const first = `${today.slice(0, 4)}-01-01`;
+      // Год = 12 месяцев: конец 12-месячного периода от сдвинутого 1 января.
+      const shiftedFirst = addMonths(first, months);
+      return addDays(monthEdge(addMonths(shiftedFirst, 11), 'end'), days);
     }
     default:
       return '';
@@ -155,10 +168,13 @@ export function resolvePeriodDay(value: string, today: string = todayLocal()): s
  * распознать ШАБЛОН и записать токены, а не точные даты:
  *
  *  * один день, равный сегодня → `$today`/`$today`;
+ *  * одиночный день не сегодня → день-арифметика `$today±Nd` на обеих границах;
  *  * ровно эта/прошлая/будущая неделя (пн…вс) → `$week.start`/`$week.end`
  *    с оффсетом `±1w`;
  *  * ровно этот/прошлый/будущий месяц → `$month.start`/`$month.end` с `±1mo`;
- *  * иначе — точные даты `YYYY-MM-DD`.
+ *  * ровно этот/прошлый/будущий год → `$year.start`/`$year.end` с `±1y`;
+ *  * иначе (произвольный интервал) → день-арифметика `$today±Nd` на «С» и «По»
+ *    (правило режима «Пресеты», приёмка №2 0.10.1).
  */
 export function periodTokensForRange(
   from: string,
@@ -166,7 +182,10 @@ export function periodTokensForRange(
   today: string = todayLocal(),
 ): PeriodRange {
   if (from === '' && to === '') return { from: '', to: '' };
-  if (from === to && from === today) return { from: '$today', to: '$today' };
+  if (from === to) {
+    const token = dayOffsetToken(from, today);
+    return { from: token, to: token };
+  }
 
   const weekAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
     { f: '$week.start', t: '$week.end', ...weekPeriod(today) },
@@ -184,7 +203,62 @@ export function periodTokensForRange(
   for (const mo of monthAnchors) {
     if (from === mo.from && to === mo.to) return { from: mo.f, to: mo.t };
   }
-  return { from, to };
+  const yearAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
+    { f: '$year.start', t: '$year.end', ...yearPeriod(today) },
+    { f: '$year.start-1y', t: '$year.end-1y', ...yearPeriod(addMonths(today, -12)) },
+    { f: '$year.start+1y', t: '$year.end+1y', ...yearPeriod(addMonths(today, 12)) },
+  ];
+  for (const y of yearAnchors) {
+    if (from === y.from && to === y.to) return { from: y.f, to: y.t };
+  }
+  // Произвольный интервал — день-арифметика относительно сегодня на обеих границах.
+  return { from: dayOffsetToken(from, today), to: dayOffsetToken(to, today) };
+}
+
+/** Период года (1 января — 31 декабря) для дня `day`. */
+function yearPeriod(day: string): PeriodRange {
+  return { from: `${day.slice(0, 4)}-01-01`, to: `${day.slice(0, 4)}-12-31` };
+}
+
+/**
+ * Токен одиночного дня относительно сегодня по правилу режима «Пресеты»:
+ * сегодня → `$today`, иначе `$today±Nd` (день-арифметика). Неразобранный день
+ * возвращается как есть.
+ */
+export function dayOffsetToken(day: string, today: string = todayLocal()): string {
+  const diff = dayDiff(day, today);
+  if (diff === null) return day;
+  if (diff === 0) return '$today';
+  return diff > 0 ? `$today+${diff}d` : `$today-${-diff}d`;
+}
+
+/** Разница в сутках `day - base` (UTC); `null` — дата не разобралась. */
+function dayDiff(day: string, base: string): number | null {
+  const a = BARE_DATE_RE.exec(day.trim());
+  const b = BARE_DATE_RE.exec(base.trim());
+  if (a === null || b === null) return null;
+  const ms =
+    Date.UTC(Number(a[1]), Number(a[2]) - 1, Number(a[3])) -
+    Date.UTC(Number(b[1]), Number(b[2]) - 1, Number(b[3]));
+  return Math.round(ms / 86_400_000);
+}
+
+/** Режим панельного периода (приёмка №2, 0.10.1): «Пресеты» или «Даты». */
+export type PeriodEditMode = 'presets' | 'dates';
+
+/**
+ * Значения полей периода для интервала календаря с учётом режима панели:
+ * `dates` — точные даты без токенов; `presets` — токены по правилу
+ * {@link periodTokensForRange}.
+ */
+export function periodValuesForRange(
+  from: string,
+  to: string,
+  today: string = todayLocal(),
+  mode: PeriodEditMode = 'presets',
+): PeriodRange {
+  if (mode === 'dates') return { from, to };
+  return periodTokensForRange(from, to, today);
 }
 
 /** Период месяца (первое — последнее число) для дня `day`. */

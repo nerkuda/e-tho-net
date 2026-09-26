@@ -319,3 +319,116 @@ describe('period-editor: ввод, валидация и onChange', () => {
     assert.equal(editor.errors().length, 1, 'токен без поддержки отвергается валидацией');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Панельный вариант: «Пресеты»/«Даты» (0.10.1, приёмка №2)
+// ---------------------------------------------------------------------------
+
+describe('period-editor: панельный вариант «Пресеты»/«Даты» (приёмка №2)', () => {
+  /** Конвертеры, как их задаёт панель «Дневника» (единый клиентский вычислитель). */
+  const resolveToken = (token: string): string =>
+    token === '$week.start' ? '2026-09-21' : token === '$week.end' ? '2026-09-27' : '';
+  const tokensForRange = (from: string, to: string): { from: string; to: string } => ({
+    from: from === '2026-09-21' ? '$week.start' : from,
+    to: to === '2026-09-27' ? '$week.end' : to,
+  });
+
+  it('умолчание — режим «Пресеты», границы-токены, выпадашка пресетов', () => {
+    installShim();
+    const editor = buildPeriodEditor({
+      variant: 'panel',
+      value: { from: '$week.start', to: '$week.end' },
+      resolveToken,
+      tokensForRange,
+    });
+    assert.equal(editor.getPanelMode(), 'presets');
+    assert.ok(rootShim(editor.root).querySelector('.pe-mode'), 'переключатель режима панели');
+    assert.ok(rootShim(editor.root).querySelector('.pe-presets'), 'выпадашка пресетов');
+    assert.equal(allFields(editor.root, 'pe-preset-bound').length, 2, 'две пресет-границы');
+    assert.equal(allFields(editor.root, '.pe-time-input').length, 0, 'без часов/минут');
+    assert.deepEqual(editor.getValue(), {
+      from: '$week.start',
+      to: '$week.end',
+      hasTime: false,
+      mode: 'presets',
+    });
+  });
+
+  it('смена на «Даты» конвертирует токены в даты и помечает значение mode', () => {
+    installShim();
+    const seen: Array<{ from?: string; mode?: string }> = [];
+    const editor = buildPeriodEditor({
+      variant: 'panel',
+      value: { from: '$week.start', to: '$week.end' },
+      resolveToken,
+      tokensForRange,
+      onChange: (v) => seen.push({ from: v.from, mode: v.mode }),
+    });
+    editor.setPanelMode('dates');
+    assert.equal(editor.getPanelMode(), 'dates');
+    const dates = allFields(editor.root, 'pe-date-input');
+    assert.equal(dates.length, 2, 'в режиме «Даты» — два поля дат');
+    assert.equal(dates[0]!.value, '2026-09-21', 'токен раскрыт в дату');
+    assert.deepEqual(editor.getValue(), {
+      from: '2026-09-21',
+      to: '2026-09-27',
+      hasTime: false,
+      mode: 'dates',
+    });
+  });
+
+  it('смена на «Пресеты» конвертирует даты в токены по правилу', () => {
+    installShim();
+    const editor = buildPeriodEditor({
+      variant: 'panel',
+      panelMode: 'dates',
+      value: { from: '2026-09-21', to: '2026-09-27' },
+      resolveToken,
+      tokensForRange,
+    });
+    editor.setPanelMode('presets');
+    assert.deepEqual(editor.getValue(), {
+      from: '$week.start',
+      to: '$week.end',
+      hasTime: false,
+      mode: 'presets',
+    });
+  });
+
+  it('в режиме «Пресеты» граница собирается из опоры и арифметики ±N', () => {
+    installShim();
+    const editor = buildPeriodEditor({
+      variant: 'panel',
+      value: { from: '$month.end-1mo', to: '$today' },
+      resolveToken,
+      tokensForRange,
+    });
+    // Первая граница — «конец месяца» с арифметикой −1 месяц.
+    const anchor = allFields(editor.root, 'pe-preset-anchor')[0]!;
+    const num = allFields(editor.root, 'pe-preset-num')[0]!;
+    const unit = allFields(editor.root, 'pe-preset-unit')[0]!;
+    assert.equal(anchor.value, '$month.end');
+    assert.equal(num.value, '-1');
+    assert.equal(unit.value, 'mo');
+    assert.equal(editor.getValue().from, '$month.end-1mo');
+  });
+
+  it('диапазон «Даты» редактируется датами и отдаёт точные даты', () => {
+    installShim();
+    const editor = buildPeriodEditor({
+      variant: 'panel',
+      panelMode: 'dates',
+      resolveToken,
+      tokensForRange,
+    });
+    const dates = allFields(editor.root, 'pe-date-input');
+    type(dates[0]!, '2026-09-10');
+    type(dates[1]!, '2026-09-12');
+    assert.deepEqual(editor.getValue(), {
+      from: '2026-09-10',
+      to: '2026-09-12',
+      hasTime: false,
+      mode: 'dates',
+    });
+  });
+});

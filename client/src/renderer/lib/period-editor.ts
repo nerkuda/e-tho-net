@@ -49,6 +49,9 @@ import { segmentedControl } from './ui/segmented.js';
 /** Режим контрола периода. */
 export type PeriodMode = 'date' | 'datetime' | 'range';
 
+/** Режим панельного варианта: «Пресеты» (токены) или «Даты» (точные даты). */
+export type PeriodPanelMode = 'presets' | 'dates';
+
 /** Типизированное значение периода (форма API элемента «Поле периода»). */
 export interface PeriodValue {
   /** Начало периода: дата, полный UTC-инстанс или токен. Пусто — не задано. */
@@ -62,6 +65,11 @@ export interface PeriodValue {
    * режимы `date`/`datetime`). В `range` границы-токены живут в `from`/`to`.
    */
   token?: string;
+  /**
+   * Режим панельного варианта (0.10.1, приёмка №2): «Пресеты» или «Даты».
+   * В варианте `editor` не заполняется.
+   */
+  mode?: PeriodPanelMode;
 }
 
 /** Опции {@link buildPeriodEditor}. */
@@ -81,12 +89,27 @@ export interface PeriodEditorOptions {
   /**
    * Вариант контрола. `editor` (по умолчанию) — с переключателем режимов
    * «Дата / Дата и время / Диапазон» (вкладка записи и лента). `panel` —
-   * панельный вариант элемента «Поле периода»: только диапазон «с»–«по»,
-   * без переключателя режимов, плюс выпадашка пресетов периода.
+   * панельный вариант элемента «Поле периода» (0.10.1, приёмка №2): всегда
+   * диапазон «с»–«по», БЕЗ часов/минут, со своим переключателем
+   * «Пресеты»/«Даты» и выпадашкой готовых пресетов. Режим «Пресеты» задаёт
+   * границы опорным токеном и арифметикой `±N<unit>`; «Даты» — точными датами.
    */
   variant?: 'editor' | 'panel';
   /** Пресеты панельного варианта; по умолчанию — {@link periodPresets}. */
   presets?: readonly PeriodPreset[];
+  /** Начальный режим панельного варианта (по умолчанию `presets`). */
+  panelMode?: PeriodPanelMode;
+  /**
+   * Раскрыть токен периода в локальную дату (переход «Пресеты» → «Даты»).
+   * Без резолвера токен остаётся текстом поля. Задаёт вызывающий (единый
+   * клиентский вычислитель токенов), чтобы язык не дублировался здесь.
+   */
+  resolveToken?: (token: string) => string;
+  /**
+   * Записать интервал в токены по правилу «Пресетов» (переход «Даты» →
+   * «Пресеты»). Без него точные даты остаются как есть.
+   */
+  tokensForRange?: (from: string, to: string) => { from: string; to: string };
   /** Поле и переключатель недоступны. */
   disabled?: boolean;
 }
@@ -103,6 +126,10 @@ export interface PeriodEditorHandle {
   getValue(): PeriodValue;
   /** Записать значение (режим не меняется). */
   setValue(value: PeriodValue | null): void;
+  /** Режим панельного варианта («Пресеты»/«Даты»); в `editor` — всегда `presets`. */
+  getPanelMode(): PeriodPanelMode;
+  /** Сменить режим панельного варианта (с конверсией значений, если возможно). */
+  setPanelMode(mode: PeriodPanelMode): void;
   /** Ошибки валидации введённых дат/токенов (пусто — всё корректно). */
   errors(): string[];
   /** Снять оконные слушатели выпадашки (при разборе контрола). */
@@ -114,14 +141,15 @@ export interface PeriodEditorHandle {
 // ---------------------------------------------------------------------------
 
 /**
- * Глобальный токен даты периода: `$today`/`$now`, границы недели/месяца
- * (`$week.start`/`$week.end`/`$month.start`/`$month.end`), необязательная
- * арифметика `±N<unit>` — `d` (дни), `w` (недели), `mo` (календарные месяцы).
+ * Глобальный токен даты периода: `$today`/`$now`, границы недели/месяца/года
+ * (`$week.start`/`$week.end`/`$month.start`/`$month.end`/`$year.start`/`$year.end`),
+ * необязательная арифметика `±N<unit>` — `d` (дни), `w` (недели), `mo`
+ * (календарные месяцы), `y` (календарные годы).
  * Только эта форма допустима в периоде: контекстных токенов `$thought.*` у
  * периода нет (требование 91f8d8dd).
  */
 export const GLOBAL_DATE_TOKEN_RE =
-  /^\$(?:today|now|week\.(?:start|end)|month\.(?:start|end))(?:(?:[+-])\d+(?:d|w|mo))?$/;
+  /^\$(?:today|now|week\.(?:start|end)|month\.(?:start|end)|year\.(?:start|end))(?:(?:[+-])\d+(?:d|w|mo|y))?$/;
 
 /** Является ли строка допустимым глобальным токеном даты периода. */
 export function isGlobalDateToken(text: string): boolean {
@@ -145,6 +173,10 @@ export const PERIOD_TOKEN_PRESETS: readonly { text: string; label: string }[] = 
   { text: '$month.end', label: '$month.end — конец месяца' },
   { text: '$month.start-1mo', label: '$month.start-1mo — начало прошлого месяца' },
   { text: '$month.end+1mo', label: '$month.end+1mo — конец будущего месяца' },
+  { text: '$year.start', label: '$year.start — начало года' },
+  { text: '$year.end', label: '$year.end — конец года' },
+  { text: '$year.start-1y', label: '$year.start-1y — начало прошлого года' },
+  { text: '$year.end+1y', label: '$year.end+1y — конец будущего года' },
   { text: '$today+7d', label: '$today+7d — через неделю' },
   { text: '$today-7d', label: '$today-7d — неделю назад' },
   { text: '$today+30d', label: '$today+30d — через месяц' },
@@ -181,6 +213,9 @@ export function periodPresets(): readonly PeriodPreset[] {
     { id: 'month', label: 'Этот месяц', from: '$month.start', to: '$month.end' },
     { id: 'month-prev', label: 'Прошлый месяц', from: '$month.start-1mo', to: '$month.end-1mo' },
     { id: 'month-next', label: 'Будущий месяц', from: '$month.start+1mo', to: '$month.end+1mo' },
+    { id: 'year', label: 'Этот год', from: '$year.start', to: '$year.end' },
+    { id: 'year-prev', label: 'Прошлый год', from: '$year.start-1y', to: '$year.end-1y' },
+    { id: 'year-next', label: 'Будущий год', from: '$year.start+1y', to: '$year.end+1y' },
     ...lastDaysPresets(),
   ];
 }
@@ -258,8 +293,8 @@ export function validatePeriodToken(text: string): string | null {
   if (isGlobalDateToken(value)) return null;
   return (
     `«${value}» — не токен периода: доступны $today/$now, $week.start/$week.end, ` +
-    '$month.start/$month.end и арифметика ±Nd/±Nw/±Nmo (токены $thought.* ' +
-    'требуют контекста мысли).'
+    '$month.start/$month.end, $year.start/$year.end и арифметика ±Nd/±Nw/±Nmo/±Ny ' +
+    '(токены $thought.* требуют контекста мысли).'
   );
 }
 
@@ -424,7 +459,7 @@ function boundError(bound: BoundState, allowTokens: boolean): string | null {
   const tokenError = validatePeriodToken(text);
   if (tokenError !== null) return tokenError;
   if (parseBound(text).kind !== 'invalid') return null;
-  return `«${text}» — ожидается ГГГГ-ММ-ДД, полный ISO-инстанс или токен ($today/$now±Nd).`;
+  return `«${text}» — ожидается ГГГГ-ММ-ДД, полный ISO-инстанс или токен ($today/$now, границы недели/месяца/года ± арифметика).`;
 }
 
 // ---------------------------------------------------------------------------
@@ -445,12 +480,80 @@ const DATE_CLASS = 'pe-date-input';
 const TIME_CLASS = 'pe-time-input';
 /** Класс строки ошибки. */
 const ERROR_CLASS = 'pe-error';
+/** Класс переключателя режима панели («Пресеты»/«Даты»). */
+const PANEL_MODE_CLASS = 'pe-mode';
+/** Класс строки пресет-границы. */
+const PRESET_BOUND_CLASS = 'pe-preset-bound';
+/** Класс выпадашки опорного токена пресета. */
+const PRESET_ANCHOR_CLASS = 'pe-preset-anchor';
+/** Класс поля числа арифметики пресета. */
+const PRESET_NUM_CLASS = 'pe-preset-num';
+/** Класс выпадашки единицы арифметики пресета. */
+const PRESET_UNIT_CLASS = 'pe-preset-unit';
 
 const MODE_ITEMS = [
   { id: 'date', label: 'Дата' },
   { id: 'datetime', label: 'Дата и время' },
   { id: 'range', label: 'Диапазон' },
 ] as const;
+
+const PANEL_MODE_ITEMS = [
+  { id: 'presets', label: 'Пресеты' },
+  { id: 'dates', label: 'Даты' },
+] as const;
+
+/**
+ * Опорные токены пресет-границы панели (0.10.1, приёмка №2): сама граница
+ * складывается из опоры и арифметики `±N<unit>`. `$now` — точный момент, у
+ * остальных границы дат.
+ */
+const PANEL_ANCHORS: readonly { id: string; label: string }[] = [
+  { id: '$today', label: 'сегодня' },
+  { id: '$now', label: 'сейчас' },
+  { id: '$week.start', label: 'начало недели' },
+  { id: '$week.end', label: 'конец недели' },
+  { id: '$month.start', label: 'начало месяца' },
+  { id: '$month.end', label: 'конец месяца' },
+  { id: '$year.start', label: 'начало года' },
+  { id: '$year.end', label: 'конец года' },
+];
+
+/** Единицы арифметики пресет-границы (код тока → подпись). */
+const PANEL_UNITS: readonly { id: string; label: string }[] = [
+  { id: 'd', label: 'дней' },
+  { id: 'w', label: 'недель' },
+  { id: 'mo', label: 'месяцев' },
+  { id: 'y', label: 'лет' },
+];
+
+/** Разбор панельного токена на опору и арифметику. */
+interface PanelTokenParts {
+  anchor: string;
+  n: number;
+  unit: string;
+}
+
+/** Разобрать панельный токен; `null` — строка не токен (дата/мусор). */
+function parsePanelToken(text: string): PanelTokenParts | null {
+  const value = text.trim();
+  const head = /^\$(today|now|week\.start|week\.end|month\.start|month\.end|year\.start|year\.end)/.exec(
+    value,
+  );
+  if (head === null) return null;
+  const rest = value.slice(head[0].length);
+  if (rest === '') return { anchor: head[0], n: 0, unit: 'd' };
+  const m = /^([+-])(\d+)(mo|y|w|d)$/.exec(rest);
+  if (m === null) return null;
+  const n = Number(m[2]) * (m[1] === '-' ? -1 : 1);
+  return { anchor: head[0], n, unit: m[3]! };
+}
+
+/** Собрать панельный токен из опоры и арифметики (N = 0 — чистая опора). */
+function composePanelToken(parts: PanelTokenParts): string {
+  if (parts.n === 0) return parts.anchor;
+  const sign = parts.n > 0 ? '+' : '-';
+  return `${parts.anchor}${sign}${Math.abs(parts.n)}${parts.unit}`;
+}
 
 /** Строит библиотечный контрол периода. */
 export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle {
@@ -459,8 +562,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   const panel = opts.variant === 'panel';
   const presets = opts.presets ?? (panel ? periodPresets() : []);
 
-  // Панельный вариант — всегда диапазон «с»–«по» и без переключателя режимов.
+  // Панельный вариант — всегда диапазон «с»–«по» и без переключателя режимов
+  // редактора; его собственный режим — «Пресеты»/«Даты».
   let mode: PeriodMode = panel ? 'range' : (opts.mode ?? 'date');
+  let panelMode: PeriodPanelMode = opts.panelMode ?? 'presets';
   let from = emptyBound();
   let to = emptyBound();
 
@@ -469,6 +574,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   root.setAttribute('aria-label', opts.label ?? 'Период');
 
   let modes: ReturnType<typeof segmentedControl> | null = null;
+  let panelModes: ReturnType<typeof segmentedControl> | null = null;
   if (!panel) {
     modes = segmentedControl({
       items: MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
@@ -480,9 +586,22 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       },
     });
     root.append(modes.root);
+  } else {
+    panelModes = segmentedControl({
+      items: PANEL_MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
+      activeId: panelMode,
+      extraClass: PANEL_MODE_CLASS,
+      ariaLabel: 'Режим периода: пресеты или даты',
+      size: 's',
+      onChange: (id) => {
+        applyPanelMode(id as PeriodPanelMode);
+      },
+    });
+    root.append(panelModes.root);
   }
 
   const fields = div(FIELDS_CLASS);
+  let presetSelect: HTMLSelectElement | null = null;
 
   /** Выпадашка пресетов панельного варианта: команда задаёт обе границы. */
   const buildPresetSelect = (): HTMLSelectElement => {
@@ -501,6 +620,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       if (picked === undefined) return;
       from = { text: picked.from, time: '', instant: null };
       to = { text: picked.to, time: '', instant: null };
+      if (panelMode !== 'presets') applyPanelMode('presets', false);
       normalizeTimes();
       repaint();
       emit();
@@ -508,13 +628,24 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     return select;
   };
 
-  if (panel && presets.length > 0) root.append(buildPresetSelect());
+  if (panel && presets.length > 0) {
+    presetSelect = buildPresetSelect();
+    root.append(presetSelect);
+  }
   root.append(fields);
 
   const suggestHandles: SuggestHandle[] = [];
 
   /** Значение из состояния. */
   const readValue = (): PeriodValue => {
+    if (panel) {
+      const fromValue = composeBound(from);
+      const toValue = composeBound(to);
+      const value: PeriodValue = { hasTime: false, mode: panelMode };
+      if (fromValue !== '') value.from = fromValue;
+      if (toValue !== '') value.to = toValue;
+      return value;
+    }
     if (mode === 'range') {
       const fromValue = composeBound(from);
       const toValue = composeBound(to);
@@ -544,7 +675,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     const out: string[] = [];
     const first = boundError(from, allowTokens);
     if (first !== null) out.push(first);
-    if (mode === 'range') {
+    if (panel || mode === 'range') {
       const second = boundError(to, allowTokens);
       if (second !== null) out.push(second);
     }
@@ -628,12 +759,107 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   /** Полная перерисовка полей (режим/состояние). */
   const repaint = (): void => {
     fields.replaceChildren();
+    if (panel) {
+      fields.append(
+        panelMode === 'dates'
+          ? buildPanelDateBound(from, 'с', 'Начало')
+          : buildPanelPresetBound(from, 'с', 'Начало'),
+        panelMode === 'dates'
+          ? buildPanelDateBound(to, 'по', 'Конец')
+          : buildPanelPresetBound(to, 'по', 'Конец'),
+      );
+      if (presetSelect !== null) presetSelect.hidden = panelMode !== 'presets';
+      return;
+    }
     if (mode === 'range') {
       fields.append(buildBound(from, 'с', 'Начало'), buildBound(to, 'по', 'Конец'));
     } else {
       fields.append(buildBound(from, null, 'Дата'));
     }
   };
+
+  /** Граница режима «Даты» панели: только дата, без времени и токенов. */
+  function buildPanelDateBound(bound: BoundState, tag: string, ariaPrefix: string): HTMLElement {
+    const box = div(BOUND_CLASS);
+    box.append(span(tag, TAG_CLASS));
+    const input = fieldInput({
+      type: 'date',
+      extraClass: DATE_CLASS,
+      value: dateOnly(bound.text),
+      ariaLabel: `${ariaPrefix} — дата`,
+      disabled: opts.disabled === true,
+    });
+    input.addEventListener('change', () => {
+      bound.text = input.value.trim();
+      bound.time = '';
+      bound.instant = null;
+      emit();
+    });
+    box.append(input);
+    const error = boundError(bound, false);
+    if (error !== null) box.append(span(error, ERROR_CLASS));
+    return box;
+  }
+
+  /** Граница режима «Пресеты» панели: опорный токен + арифметика ±N<unit>. */
+  function buildPanelPresetBound(bound: BoundState, tag: string, ariaPrefix: string): HTMLElement {
+    const box = div(PRESET_BOUND_CLASS);
+    box.append(span(tag, TAG_CLASS));
+    const parts = parsePanelToken(bound.text) ?? { anchor: '$today', n: 0, unit: 'd' };
+
+    const anchor = el('select', PRESET_ANCHOR_CLASS) as HTMLSelectElement;
+    anchor.setAttribute('aria-label', `${ariaPrefix} — опорный токен`);
+    for (const a of PANEL_ANCHORS) {
+      const o = el('option', '', a.label) as HTMLOptionElement;
+      o.value = a.id;
+      anchor.append(o);
+    }
+    anchor.value = parts.anchor;
+
+    const num = fieldInput({
+      type: 'number',
+      extraClass: PRESET_NUM_CLASS,
+      value: '0',
+      ariaLabel: `${ariaPrefix} — смещение (можно отрицательное)`,
+      disabled: opts.disabled === true,
+    });
+    num.type = 'number';
+    num.value = String(parts.n);
+    num.step = '1';
+
+    const unit = el('select', PRESET_UNIT_CLASS) as HTMLSelectElement;
+    unit.setAttribute('aria-label', `${ariaPrefix} — единица смещения`);
+    for (const u of PANEL_UNITS) {
+      const o = el('option', '', u.label) as HTMLOptionElement;
+      o.value = u.id;
+      unit.append(o);
+    }
+    unit.value = parts.unit;
+
+    const commit = (): void => {
+      const n = Number.parseInt(num.value, 10);
+      const next: PanelTokenParts = {
+        anchor: anchor.value,
+        n: Number.isFinite(n) ? n : 0,
+        unit: unit.value,
+      };
+      bound.text = composePanelToken(next);
+      bound.time = '';
+      bound.instant = null;
+      emit();
+    };
+    anchor.addEventListener('change', commit);
+    unit.addEventListener('change', commit);
+    num.addEventListener('change', () => {
+      commit();
+      repaint();
+    });
+
+    box.append(anchor, num, unit);
+    const error = boundError(bound, allowTokens);
+    if (error !== null) box.append(span(error, ERROR_CLASS));
+    return box;
+  }
 
   /**
    * Согласовать поля времени с режимом: `date` — времени нет; `datetime` —
@@ -666,9 +892,62 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     applyMode(next, false);
   };
 
+  /** Дата режима «Даты»: токен раскрывается (если есть резолвер), инстанс — в локальный день. */
+  function dateOnly(text: string): string {
+    const value = text.trim();
+    if (value === '') return '';
+    if (isGlobalDateToken(value)) return opts.resolveToken?.(value) ?? value;
+    const parsed = parseBound(value);
+    if (parsed.kind === 'instant') return instantToLocalDate(parsed.value);
+    return value;
+  }
+
+  /** Смена режима панели «Пресеты»/«Даты» с конверсией представления значений. */
+  function applyPanelMode(next: PeriodPanelMode, shouldEmit = true): void {
+    if (next === panelMode) return;
+    if (next === 'dates') {
+      from.text = dateOnly(from.text);
+      to.text = dateOnly(to.text);
+    } else {
+      const conv = opts.tokensForRange?.(from.text, to.text);
+      if (conv !== undefined) {
+        from.text = conv.from;
+        to.text = conv.to;
+      }
+    }
+    from.time = '';
+    to.time = '';
+    from.instant = null;
+    to.instant = null;
+    panelMode = next;
+    panelModes?.setActive(next);
+    repaint();
+    if (shouldEmit) emit();
+  }
+
+  /** Привести значение поля к текущему режиму панели (дата ↔ токен). */
+  function coercePanelValue(text: string): string {
+    if (!panel) return text;
+    if (panelMode === 'dates') return dateOnly(text);
+    if (text === '' || isGlobalDateToken(text)) return text;
+    const parsed = parseBound(text);
+    if (parsed.kind === 'date' && opts.tokensForRange !== undefined) {
+      return opts.tokensForRange(text, text).from;
+    }
+    return text;
+  }
+
   const setValue = (value: PeriodValue | null): void => {
     const next = value ?? {};
     const source = next.from ?? next.to ?? next.token ?? '';
+    if (panel) {
+      from = boundFromValue(coercePanelValue(source));
+      to = boundFromValue(coercePanelValue(next.to ?? ''));
+      from.time = '';
+      to.time = '';
+      repaint();
+      return;
+    }
     from = boundFromValue(source);
     if (mode === 'range') {
       to = boundFromValue(next.to ?? '');
@@ -686,6 +965,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   };
 
   // Начальное значение.
+  if (panel && opts.value?.mode !== undefined) {
+    panelMode = opts.value.mode;
+    panelModes?.setActive(panelMode);
+  }
   setValue(opts.value ?? null);
 
   return {
@@ -694,6 +977,8 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     setMode,
     getValue: readValue,
     setValue,
+    getPanelMode: () => panelMode,
+    setPanelMode: (next) => applyPanelMode(next, false),
     errors,
     dispose,
   };

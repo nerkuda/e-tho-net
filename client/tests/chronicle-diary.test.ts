@@ -25,6 +25,7 @@ import {
   isoWeekNumber,
   localDay,
   periodTokensForRange,
+  periodValuesForRange,
   resolveDateToken,
   resolvePeriodDay,
   rowDays,
@@ -300,14 +301,53 @@ describe('diary: синхронизация календаря и полей п�
     });
   });
 
-  it('произвольный период даёт точные даты', () => {
+  it('год (этот/прошлый/будущий) распознаётся в токены', () => {
+    assert.deepEqual(periodTokensForRange('2026-01-01', '2026-12-31', today), {
+      from: '$year.start',
+      to: '$year.end',
+    });
+    assert.deepEqual(periodTokensForRange('2025-01-01', '2025-12-31', today), {
+      from: '$year.start-1y',
+      to: '$year.end-1y',
+    });
+    assert.deepEqual(periodTokensForRange('2027-01-01', '2027-12-31', today), {
+      from: '$year.start+1y',
+      to: '$year.end+1y',
+    });
+  });
+
+  it('произвольный период и одиночный день дают день-арифметику (приёмка №2)', () => {
+    // Произвольный интервал — «$today±Nd» на каждой границе.
     assert.deepEqual(periodTokensForRange('2026-09-10', '2026-09-12', today), {
+      from: '$today-16d',
+      to: '$today-14d',
+    });
+    // Одиночный день не сегодня — тоже день-арифметика на обеих границах.
+    assert.deepEqual(periodTokensForRange('2026-09-06', '2026-09-06', today), {
+      from: '$today-20d',
+      to: '$today-20d',
+    });
+    assert.deepEqual(periodTokensForRange('2026-09-28', '2026-09-28', today), {
+      from: '$today+2d',
+      to: '$today+2d',
+    });
+  });
+
+  it('режим «Даты» пишет точные даты, «Пресеты» — токены (приёмка №2)', () => {
+    assert.deepEqual(periodValuesForRange('2026-09-10', '2026-09-12', today, 'dates'), {
       from: '2026-09-10',
       to: '2026-09-12',
     });
-    assert.deepEqual(periodTokensForRange('2026-09-06', '2026-09-06', today), {
-      from: '2026-09-06',
-      to: '2026-09-06',
+    assert.deepEqual(periodValuesForRange('2026-09-10', '2026-09-12', today, 'presets'), {
+      from: '$today-16d',
+      to: '$today-14d',
     });
+  });
+
+  it('раскрытие годовых токенов для подсветки календаря', () => {
+    assert.equal(resolveDateToken('$year.start', today), '2026-01-01');
+    assert.equal(resolveDateToken('$year.end', today), '2026-12-31');
+    assert.equal(resolveDateToken('$year.start-1y', today), '2025-01-01');
+    assert.equal(resolveDateToken('$year.end+1y', today), '2027-12-31');
   });
 });

@@ -57,6 +57,13 @@
   background: var(--surface);
 }
 
+/* Кнопка добавления и компактные иконки-кнопки групп дат — в строку, не во всю ширину. */
+.chron-addbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Календарь месяца — первый элемент панели отбора (элемент 9b424548). */
 .chron-cal {
   flex: 0 0 auto;
@@ -64,7 +71,9 @@
 }
 
 .diary-add-btn {
-  width: 100%;
+  /* Компактная кнопка, не во всю ширину — рядом иконки групп дат (приёмка №2). */
+  flex: 0 0 auto;
+  width: auto;
 }
 
 /* ---------------------------------------------------------------------------
@@ -201,11 +210,34 @@
 }
 
 .diary-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
   font-weight: 600;
   text-transform: capitalize;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
+  /* Дата-заголовок вдвое крупнее базового шрифта (0.10.1, приёмка №2). */
+  font-size: calc(var(--font-size-s) * 2);
+  line-height: 1.15;
+}
+
+.diary-day-head .ui-btn-icon,
+.diary-day-head svg {
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+
+.diary-day-head.is-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.diary-snippet-empty {
+  font-style: italic;
 }
 
 .diary-day-list {

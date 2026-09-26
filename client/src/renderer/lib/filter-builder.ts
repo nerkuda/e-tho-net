@@ -829,6 +829,13 @@ export interface ChronicleCriteriaState extends FilterCriteriaState {
   dateFrom: string;
   dateTo: string;
   /**
+   * Режим полей периода панели «Дневника» (0.10.1, приёмка №2): `presets` —
+   * границы заданы токенами (пресеты + арифметика), `dates` — точными датами.
+   * Хранится в сохранённом отборе (`date_mode`) и восстанавливается при
+   * применении; значения раскрываются в момент применения.
+   */
+  dateMode: 'presets' | 'dates';
+  /**
    * Критерии целей записи (0.10.1, требование 306f74cc): тот же набор, что у
    * панели «Структур» (типы, родительские мысли, свойства, дополнительно).
    * Запись проходит отбор, если хотя бы одна её привязанная мысль удовлетворяет
@@ -848,6 +855,7 @@ export function defaultChronicleCriteriaState(): ChronicleCriteriaState {
     keywordInComment: true,
     dateFrom: '',
     dateTo: '',
+    dateMode: 'presets',
     targets: defaultFilterCriteriaState(),
   };
 }
@@ -867,6 +875,11 @@ export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
   Object.assign(next, common);
   if (typeof parsed['date_from'] === 'string') next.dateFrom = parsed['date_from'];
   if (typeof parsed['date_to'] === 'string') next.dateTo = parsed['date_to'];
+  // Режим периода (0.10.1, приёмка №2): старые определения без него читаются
+  // как «Пресеты» — границы-токены прежнего поведения.
+  if (parsed['date_mode'] === 'dates' || parsed['date_mode'] === 'presets') {
+    next.dateMode = parsed['date_mode'];
+  }
   // Определение без `keyword_scope` читается как прежнее поведение — поиск по
   // всем областям (тело записи к области не относится).
   if (!Array.isArray(parsed['keyword_scope'])) {
@@ -908,6 +921,9 @@ export function buildChronicleWire(
   }
   if (state.dateFrom.trim() !== '') out.date_from = state.dateFrom.trim();
   if (state.dateTo.trim() !== '') out.date_to = state.dateTo.trim();
+  // Режим периода хранится как есть (0.10.1, приёмка №2); сами значения-токены
+  // раскрываются в момент применения отбора (требование 91f8d8dd).
+  out.date_mode = state.dateMode;
   // Критерии целей — тот же конвертер «Структур» (0.10.1, 306f74cc):
   // пустая группа не отдаётся, иначе сервер отберёт записи без целей.
   if (hasAnyFilterCriteria(state.targets)) {

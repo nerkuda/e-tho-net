@@ -338,6 +338,8 @@ export interface EntityChipSectionOptions {
   extraSources?: SuggestSource[];
   cloudOf?: (value: string) => ThoughtCloudInput | null;
   placeholder?: string;
+  /** Приглашение непустого поля («+ ещё один тип/мысль»), 0.10.1 приёмка №2. */
+  addPlaceholder?: string;
   tooltip?: string;
   /** Кнопка «выбрать…»: управляемое подмножество → новый список (null — отмена). */
   picker?: { label: string; open: (managed: readonly string[]) => Promise<string[] | null> };
@@ -365,6 +367,7 @@ export function buildEntityChipSection(ctx: FilterFormContext, opts: EntityChipS
     ...(opts.extraSources !== undefined ? { extraSources: opts.extraSources } : {}),
     ...(opts.cloudOf !== undefined ? { cloudOf: opts.cloudOf } : {}),
     ...(opts.placeholder !== undefined ? { placeholder: opts.placeholder } : {}),
+    ...(opts.addPlaceholder !== undefined ? { addPlaceholder: opts.addPlaceholder } : {}),
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
   });
   if (opts.tooltip !== undefined) setTooltip(field.root, opts.tooltip);

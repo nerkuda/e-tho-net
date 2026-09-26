@@ -70,7 +70,7 @@ import {
 } from '../../lib/saved-filter-bar.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
-import { SEARCH_DEBOUNCE_MS } from './diary.js';
+import { SEARCH_DEBOUNCE_MS, periodTokensForRange, resolveDateToken } from './diary.js';
 
 export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
 
@@ -316,9 +316,11 @@ export function chronicleDefinition(): ChronicleFilterDefinition {
 
 /**
  * Секция «Период»: панельный вариант общего контрола `lib/period-editor.ts`
- * (элемент 2f14de06, требование 91f8d8dd): поля «с»/«по» + выпадашка пресетов,
- * БЕЗ переключателя режимов. Контрол лишь сообщает значение — применение
- * делает кнопка «Применить».
+ * (элемент 2f14de06, требование 91f8d8dd, приёмка №2): переключатель
+ * «Пресеты»/«Даты», границы «с»/«по» без часов и минут + выпадашка готовых
+ * пресетов. Контрол лишь сообщает значение — применение делает кнопка
+ * «Применить». Режим едет в сохранённый отбор (`date_mode`); токены
+ * раскрываются для подсветки календаря общим клиентским вычислителем.
  */
 function periodSection(ctx: FilterFormContext): FilterSection {
   const section = buildFilterBlock('Период', {
@@ -329,11 +331,15 @@ function periodSection(ctx: FilterFormContext): FilterSection {
   });
   const editor = buildPeriodEditor({
     variant: 'panel',
-    value: { from: filter.dateFrom, to: filter.dateTo },
+    panelMode: filter.dateMode,
+    resolveToken: (token) => resolveDateToken(token),
+    tokensForRange: (from, to) => periodTokensForRange(from, to),
+    value: { from: filter.dateFrom, to: filter.dateTo, mode: filter.dateMode },
     label: 'Период дневника',
     onChange: (value: PeriodValue) => {
       filter.dateFrom = value.from ?? '';
       filter.dateTo = value.to ?? '';
+      if (value.mode !== undefined) filter.dateMode = value.mode;
       ctx.touch();
     },
   });
@@ -353,8 +359,9 @@ function targetsTypesSection(ctx: FilterFormContext): FilterSection {
       filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
     optionsHeader: 'Типы мыслей',
     placeholder: 'Название типа…',
+    addPlaceholder: '+ ещё один тип',
     picker: {
-      label: 'список типов…',
+      label: 'Открыть список типов',
       open: () =>
         pickEntitiesModal({
           networkId: requireNetworkId(),
@@ -378,8 +385,9 @@ function targetsLinkTypesSection(ctx: FilterFormContext): FilterSection {
       filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
     optionsHeader: 'Типы связей',
     placeholder: 'Название типа…',
+    addPlaceholder: '+ ещё один тип',
     picker: {
-      label: 'список типов…',
+      label: 'Открыть список типов',
       open: () =>
         pickEntitiesModal({
           networkId: requireNetworkId(),
@@ -406,9 +414,10 @@ function targetsParentsSection(ctx: FilterFormContext): EntityChipSection {
     optionsHeader: 'Мысли',
     cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
     placeholder: 'Название мысли…',
+    addPlaceholder: '+ ещё одну мысль',
     tooltip: 'Отобрать записи, цель которых подчинена указанным мыслям',
     picker: {
-      label: 'выбрать…',
+      label: 'Выбрать из списка',
       open: async () => {
         const result = await pickThoughtsDialog({
           networkId: requireNetworkId(),

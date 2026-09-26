@@ -54,6 +54,7 @@ import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
+import { svgIcon } from '../../lib/icons.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
@@ -63,7 +64,7 @@ import {
   type PeriodValue,
 } from '../../lib/period-editor.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
-import { uiButton } from '../../lib/ui/button.js';
+import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { operationError } from '../../lib/ui/messages.js';
@@ -82,7 +83,7 @@ import {
   hasRecordContent,
   isLastChip,
   localDay,
-  periodTokensForRange,
+  periodValuesForRange,
   recordPeriod,
   resolvePeriodDay,
   rowDays,
@@ -172,6 +173,47 @@ interface SlotState {
 
 let slot: SlotState | null = null;
 
+/** Свёрнутые группы дат ленты (0.10.1, приёмка №2); состояние — L4 `ui_state`. */
+const collapsedDays = new Set<string>();
+
+let collapsedDaysLoaded = false;
+
+/** Загрузить свёрнутые группы дат из клиентских настроек экрана (L4). */
+async function loadCollapsedDays(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null || collapsedDaysLoaded) return;
+  collapsedDaysLoaded = true;
+  try {
+    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.DIARY_COLLAPSED_DAYS);
+    collapsedDays.clear();
+    if (raw !== null && raw !== '') {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const day of parsed) if (typeof day === 'string') collapsedDays.add(day);
+      }
+    }
+  } catch {
+    // Настройка недоступна — считаем, что всё развёрнуто.
+  }
+}
+
+/** Сохранить свёрнутые группы дат в клиентские настройки экрана (L4). */
+function persistCollapsedDays(): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void etn.ui
+    .setState(networkId, UI_STATE_KEY.DIARY_COLLAPSED_DAYS, JSON.stringify([...collapsedDays]))
+    .catch(() => undefined);
+}
+
+/** Переключить свёрнутость группы даты и перерисовать ленту. */
+function toggleDayCollapsed(day: string): void {
+  if (collapsedDays.has(day)) collapsedDays.delete(day);
+  else collapsedDays.add(day);
+  persistCollapsedDays();
+  renderFeed();
+}
+
 // ---------------------------------------------------------------------------
 // Mount / init
 // ---------------------------------------------------------------------------
@@ -189,6 +231,8 @@ export async function ensureChronicleInitialised(): Promise<void> {
   total = 0;
   slot = null;
   month = null;
+  collapsedDaysLoaded = false;
+  collapsedDays.clear();
   // Переход поиска и временная выборка — состояние текущего входа, не персистятся.
   jumpHighlightId = null;
   temporarySelection = null;
@@ -213,6 +257,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
     // Fall back to the empty filter.
   }
   await getHome().catch(() => undefined);
+  await loadCollapsedDays();
   await reload();
   syncCalendar();
 }
@@ -278,14 +323,36 @@ export function mountChronicle(hostEl: HTMLElement): void {
     { header: [calWrap] },
   );
 
-  // Верхняя (непрокручиваемая) панель над лентой: кнопка «Добавить хроно-запись».
+  // Верхняя (непрокручиваемая) панель над лентой: кнопка «Добавить
+  // хроно-запись» и компактные иконки «Развернуть все»/«Свернуть все» рядом
+  // (0.10.1, приёмка №2 — кнопки не во всю ширину).
   const addBar = div('chron-addbar');
   addBar.append(
+    div('chron-addbar-actions'),
+  );
+  const addActions = addBar.firstElementChild as HTMLElement;
+  addActions.append(
     uiButton({
       label: t('diary.addRecord'),
       role: 'primary',
       class: 'diary-add-btn',
       onClick: () => startSlot(),
+    }),
+    iconButton({
+      icon: svgIcon('chevrons-down', 16),
+      title: t('diary.expandAll'),
+      role: 'ghost',
+      size: 's',
+      class: 'diary-expand-all',
+      onClick: () => setAllDaysCollapsed(false),
+    }),
+    iconButton({
+      icon: svgIcon('chevrons-up', 16),
+      title: t('diary.collapseAll'),
+      role: 'ghost',
+      size: 's',
+      class: 'diary-collapse-all',
+      onClick: () => setAllDaysCollapsed(true),
     }),
   );
 
@@ -389,9 +456,20 @@ function maybeLoadMore(): void {
   if (shouldLoadMore(counters, feedWrap)) void loadMore();
 }
 
+/**
+ * Открыт ли по месту редактор даты записи (0.10.1, приёмка №2, ошибка
+ * переключателя даты). Пока он открыт, перезапрос ленты откладывается:
+ * перерисовка карточки сносила живой контрол, и смена режима «Дата/Дата и
+ * время/Диапазон» выглядела как сброс обратно на «Дата».
+ */
+let recordDateEditorOpen = false;
+
 /** Debounced refresh (real-time comment/target events). */
 export function scheduleChronicleRefresh(): void {
   if (host === null) return;
+  // Не перерисовываем ленту под открытым редактором даты записи — контрол
+  // снесли бы вместе с карточкой (см. `recordDateEditorOpen`).
+  if (recordDateEditorOpen) return;
   if (refreshTimer !== null) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
@@ -465,14 +543,40 @@ function renderFeed(): void {
   feedList.replaceChildren(...nodes);
 }
 
+/** Свернуть/развернуть все показанные группы дат (кнопки верхней панели). */
+function setAllDaysCollapsed(collapsed: boolean): void {
+  collapsedDays.clear();
+  if (collapsed) {
+    const { from, to } = currentFromTo();
+    for (const day of groupByLocalDays(rows, { from, to })) collapsedDays.add(day.day);
+    if (slot !== null) collapsedDays.add(slot.day);
+  }
+  persistCollapsedDays();
+  renderFeed();
+}
+
 function buildDayBlock(day: string, dayRows: ChronicleRow[]): HTMLElement {
   const section = div('diary-day');
   section.dataset['day'] = day;
-  section.append(el('div', 'diary-day-head', formatDayLabel(day)));
+  const collapsed = collapsedDays.has(day);
+  if (collapsed) section.classList.add('is-collapsed');
+  // Заголовок — кнопка: клик сворачивает/разворачивает группу (0.10.1,
+  // приёмка №2). Шрифт даты — вдвое крупнее (CSS-токен темы).
+  const head = uiButton({
+    label: formatDayLabel(day),
+    role: 'ghost',
+    class: 'diary-day-head',
+    title: collapsed ? t('listActions.expand') : t('listActions.collapse'),
+    onClick: () => toggleDayCollapsed(day),
+  });
+  head.prepend(svgIcon('chevron-down', 18));
+  head.classList.toggle('is-collapsed', collapsed);
+  head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   const list = div('diary-day-list');
+  list.hidden = collapsed;
   if (slot !== null && slot.day === day) list.append(slot.root);
   for (const row of dayRows) list.append(buildRecordCard(row));
-  section.append(list);
+  section.append(head, list);
   return section;
 }
 
@@ -555,26 +659,50 @@ function recordMenuItems(row: ChronicleRow): MenuItem[] {
   ];
 }
 
-/** Тело записи: превью с подсветкой; двойной клик — правка по месту. */
+/**
+ * Тело записи: единая оболочка комментария (`lib/ui/comment.ts`) в режиме
+ * просмотра; двойной клик — правка тем же полем markdown, что в редакторе
+ * мысли. Пустая запись тоже даёт кликабельную область и приглашение
+ * (0.10.1, приёмка №2 — ошибка «пустую запись нельзя открыть»).
+ */
 function buildBody(row: ChronicleRow): HTMLElement {
   const body = div('diary-record-body');
-  const snippet = div('diary-snippet');
-  renderHtml(snippet, row.snippet);
-  body.append(snippet);
-  body.addEventListener('dblclick', () => void openBodyEditor(body, row));
+  const shell = commentShell({ variant: 'plain' });
+  renderSnippet(shell, row.snippet);
+  shell.root.addEventListener('dblclick', () => void openBodyEditor(body, row, shell));
+  body.append(shell.root);
   return body;
 }
 
+/** Показать превью текста записи в теле оболочки; пусто — приглашение. */
+function renderSnippet(shell: ReturnType<typeof commentShell>, snippet: string): void {
+  const view = div('diary-snippet');
+  if (snippet.trim() !== '') {
+    renderHtml(view, snippet);
+  } else {
+    view.append(el('span', 'diary-snippet-empty muted', t('diary.emptyRecordHint')));
+  }
+  shell.setField(view);
+  shell.setState({ kind: 'ready' });
+}
+
 /** Встроенная правка текста записи (оболочка комментария + поле markdown). */
-async function openBodyEditor(body: HTMLElement, row: ChronicleRow): Promise<void> {
+async function openBodyEditor(
+  body: HTMLElement,
+  row: ChronicleRow,
+  shell: ReturnType<typeof commentShell>,
+): Promise<void> {
+  // Уже в правке либо поле уже установлено — вложенное поле само откроет
+  // правку по двойному клику, повторный запрос не нужен.
+  if (shell.root.dataset['mode'] === 'edit' || body.querySelector('.md-field') !== null) return;
   const networkId = requireNetworkId();
   try {
     const comment = await etn.comments.get(networkId, row.id);
     if (!body.isConnected) return;
-    const shell = commentShell({ variant: 'plain' });
     const widget = createMarkdownField({
       md: comment.body_md,
       html: comment.body_html,
+      placeholder: t('diary.emptyRecordHint'),
       onSave: async (md) => {
         const fresh = await etn.comments.get(networkId, row.id);
         const updated = await etn.comments.update(networkId, row.id, { body_md: md }, fresh.version);
@@ -584,17 +712,26 @@ async function openBodyEditor(body: HTMLElement, row: ChronicleRow): Promise<voi
       onEditChange: (editing) => shell.setMode(editing ? 'edit' : 'view'),
     });
     shell.setField(widget);
-    shell.setState({ kind: 'ready' });
-    body.replaceChildren(shell.root);
+    shell.setMode('edit');
     editMarkdownField(widget);
   } catch (err) {
     notice(t('diary.loadFailed', [errText(err)]), 'error');
   }
 }
 
-/** Правка даты записи общим контролом периода (режим — по флагу времени). */
+/**
+ * Правка даты записи общим контролом периода (режим — по флагу времени).
+ *
+ * Пока контрол открыт, перезапрос ленты отложен (`recordDateEditorOpen`):
+ * иначе перерисовка карточки сносила контрол, и любая смена режима
+ * «Дата/Дата и время/Диапазон» выглядела как сброс на «Дата» (0.10.1,
+ * приёмка №2, ошибка переключателя даты). Сохранение идёт по каждому
+ * изменению, лента перечитывается при закрытии контрола.
+ */
 function openDateEditor(card: HTMLElement, row: ChronicleRow): void {
   const sameDay = localDay(row.valid_to ?? row.valid_from) === localDay(row.valid_from);
+  recordDateEditorOpen = true;
+  let closed = false;
   const editor = buildPeriodEditor({
     mode: row.use_time ? 'datetime' : sameDay ? 'date' : 'range',
     value: { from: row.valid_from, to: row.valid_to ?? row.valid_from },
@@ -607,15 +744,29 @@ function openDateEditor(card: HTMLElement, row: ChronicleRow): void {
       }),
   });
   const box = div('diary-record-date-editor');
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    recordDateEditorOpen = false;
+    box.remove();
+    scheduleChronicleRefresh();
+  };
   box.append(
     editor.root,
     uiButton({
       label: t('actions.apply'),
       role: 'secondary',
       size: 's',
-      onClick: () => box.remove(),
+      onClick: () => close(),
     }),
   );
+  // Esc — закрытие (сохранение уже сделано по изменениям).
+  box.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  });
   const head = card.querySelector('.diary-record-date');
   if (head !== null && head.parentElement !== null) {
     head.replaceWith(box);
@@ -900,15 +1051,22 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
     }),
   );
   const body = div('diary-record-body');
+  // Псевдо-запись — тоже через единую оболочку комментария (0.10.1, приёмка
+  // №2); пустое тело даёт область двойного клика для входа в правку.
+  const slotShell = commentShell({ variant: 'plain' });
   const widget = createMarkdownField({
     md: '',
     html: '',
+    placeholder: t('diary.emptyRecordHint'),
     onSave: async (md) => {
       const created = await ensureSlot({ body: md });
       return created?.body_html ?? md;
     },
+    onEditChange: (editing) => slotShell.setMode(editing ? 'edit' : 'view'),
   });
-  body.append(widget);
+  slotShell.setField(widget);
+  slotShell.setState({ kind: 'ready' });
+  body.append(slotShell.root);
 
   root.append(head, chipsBox, body);
   const state: SlotState = {
@@ -1011,11 +1169,14 @@ async function ensureSlot(opts: {
 
 /**
  * Клик календаря = «Применить» с новым периодом (остальные критерии целы).
- * Период пишется в поля панели: шаблон (день=сегодня, неделя, месяц)
- * распознаётся в токены, иначе — точные даты (требование 91f8d8dd).
+ * Период пишется в поля панели С УЧЁТОМ режима (приёмка №2, 0.10.1): в
+ * «Пресетах» шаблон (день=сегодня, неделя/месяц/год, иначе день-арифметика)
+ * распознаётся в токены, в «Датах» — точные даты (правило
+ * `periodValuesForRange`).
  */
 async function pickPeriod(period: { from: string; to: string }): Promise<void> {
-  const next = periodTokensForRange(period.from, period.to, todayLocal());
+  const mode = getFilterState().dateMode;
+  const next = periodValuesForRange(period.from, period.to, todayLocal(), mode);
   setFilterState(applyPeriodToFilter(getFilterState(), next));
   persistState();
   await applyFilter();
