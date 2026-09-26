@@ -44,6 +44,7 @@ import { importFromEtnx } from '../src/domain/import-service.js';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createComment, updateComment } from '../src/domain/comment-service.js';
+import { parseChronicleQueryBody, queryChronicle } from '../src/domain/chronicle-service.js';
 import { authHeaders, buildRestContext, closeRestContext } from './rest-helpers.js';
 import {
   buildMcpContext,
@@ -254,6 +255,59 @@ describe(
         });
         assert.equal(dateOnlyRows(ndb), 0);
         assert.equal(openChronoRows(ndb), 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('хроника: «голая дата» периода = сутки UTC (включительные границы)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        // Полдень 15 июня — попадает в сутки только при end-of-day для date_to.
+        createComment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'chronological', body_md: 'полдень', valid_from: '2024-06-15T12:00:00.000Z' },
+          USER,
+        );
+        const inside = queryChronicle(
+          ndb,
+          parseChronicleQueryBody({ thought_ids: [t], date_from: '2024-06-15', date_to: '2024-06-15' }, ''),
+        );
+        assert.equal(inside.total, 1, 'запись дня входит в сутки [start, end]');
+        const before = queryChronicle(
+          ndb,
+          parseChronicleQueryBody({ thought_ids: [t], date_from: '2024-06-14', date_to: '2024-06-14' }, ''),
+        );
+        assert.equal(before.total, 0, 'другой день не захватывается');
+        // Инстанс с офсентом приводится к UTC: 14:00..16:00 +03:00 = 11:00..13:00 UTC,
+        // запись 12:00Z попадает в интервал.
+        const offset = queryChronicle(
+          ndb,
+          parseChronicleQueryBody(
+            {
+              thought_ids: [t],
+              date_from: '2024-06-15T14:00:00+03:00',
+              date_to: '2024-06-15T16:00:00+03:00',
+            },
+            '',
+          ),
+        );
+        assert.equal(offset.total, 1, 'инстанс с поясом сравнивается в UTC');
+        const shifted = queryChronicle(
+          ndb,
+          parseChronicleQueryBody(
+            {
+              thought_ids: [t],
+              date_from: '2024-06-15T03:00:00+03:00',
+              date_to: '2024-06-15T06:00:00+03:00',
+            },
+            '',
+          ),
+        );
+        assert.equal(shifted.total, 0, 'интервал вне записи после приведения к UTC');
       } finally {
         ndb.close();
       }
