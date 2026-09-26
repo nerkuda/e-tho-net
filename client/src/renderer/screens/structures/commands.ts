@@ -81,23 +81,27 @@ const COLLECT_MAX_PAGES = 200;
 
 /**
  * Collects the ids of EVERY thought matching the applied filter — the whole
- * result, not just the visible page. Pages walk the same ordering as the
- * tree query, so offsets line up.
+ * result, not just the visible page. Continuation pages are addressed by the
+ * keyset cursor from the previous response (`next_cursor`, требование
+ * 3f2fdc41): `offset` stays 0, so deep pages do not degrade.
  */
 async function collectAllIds(ctx: FilterCommandsContext): Promise<string[]> {
   const networkId = store.state.networkId;
   if (networkId === null) return [];
   const ids: string[] = [];
+  let cursor: string | null = null;
   for (let page = 0; page < COLLECT_MAX_PAGES; page++) {
     const result = await etn.structures.queryIds(networkId, {
       ...ctx.filter,
       sort: ctx.sort,
       order: ctx.order,
       limit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
-      offset: ids.length,
+      offset: 0,
+      ...(cursor !== null ? { cursor } : {}),
     });
     ids.push(...result.ids);
-    if (ids.length >= result.total || result.ids.length === 0) return ids;
+    cursor = result.next_cursor ?? null;
+    if (cursor === null || result.ids.length === 0) return ids;
   }
   return ids;
 }

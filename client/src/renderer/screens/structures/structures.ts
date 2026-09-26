@@ -65,6 +65,7 @@ import {
 } from './layout.js';
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
 import { openFilterCommandsMenu } from './commands.js';
+import { StructuresPager } from './pagination.js';
 import {
   buildConditions,
   buildExtraFilter,
@@ -92,6 +93,12 @@ let resultsHost: HTMLElement | null = null;
 let resultIds: string[] = [];
 /** Unrestricted match count of the current filter. */
 let total = 0;
+/**
+ * Листание списка результатов (требование 3f2fdc41): продолжение читается по
+ * `next_cursor` предыдущего ответа, `offset` не растёт; смена
+ * фильтра/сортировки сбрасывает пейджер на первую страницу без курсора.
+ */
+const resultPager = new StructuresPager();
 
 /** True when the thought id is among the currently displayed results (M11). */
 export function isThoughtInResults(id: string): boolean {
@@ -165,6 +172,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
   edgesSignature = '';
   expansion = new Map();
   appliedQuery = null;
+  resultPager.reset();
   resetStructuresCursor();
 
   // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
@@ -315,11 +323,13 @@ async function applyQuery(reset: boolean): Promise<void> {
   inflightQuery?.abort();
   const controller = new AbortController();
   inflightQuery = controller;
-  const offset = reset ? 0 : resultIds.length;
-  // A fresh application re-anchors the bulk commands to the new result (L22).
+  // A fresh application re-anchors the bulk commands to the new result (L22)
+  // and drops the keyset cursor — next page starts from scratch.
   if (reset) {
     appliedQuery = { filter: buildFilter(), sort: state.sort, order: state.order };
+    resultPager.reset();
   }
+  const page = resultPager.address(reset);
   try {
     const result = await etn.structures.query(
       networkId,
@@ -328,11 +338,14 @@ async function applyQuery(reset: boolean): Promise<void> {
         sort: state.sort,
         order: state.order,
         limit: STRUCTURES_PAGE_SIZE,
-        offset,
+        offset: page.offset,
+        ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
       },
       { signal: controller.signal },
     );
     if (seq !== querySeq) return; // a newer query won the race
+    // Continuation rides the cursor of THIS page (requirement 3f2fdc41).
+    resultPager.accept(result.next_cursor);
     if (reset) {
       resultIds = result.items.map((r) => r.id);
       expansion = new Map();
@@ -680,8 +693,9 @@ function renderTree(): void {
     resultsHost.append(empty);
   }
 
-  // Pagination footer (§15.4).
-  if (resultIds.length < total) {
+  // Pagination footer (§15.4). Continuation is signalled by the keyset cursor
+  // of the last page (`total` feeds only the counter, requirement 3f2fdc41).
+  if (resultPager.hasMore) {
     const more = el('button', 'st-more', 'Показать ещё');
     more.type = 'button';
     more.addEventListener('click', () => void applyQuery(false));
