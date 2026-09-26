@@ -96,6 +96,15 @@ export interface CopySubtreeSummary {
   thought_id_map: Record<string, string>;
   /** Карта `linkIdentity(sourceId, targetId, typeId) → target_link_id`. */
   link_id_map: Record<string, string>;
+  /**
+   * id РЕАЛЬНО созданных в целевой сети мыслей. `thought_id_map` несёт две
+   * роли — remap для клиента и источник событий для `ops.ts`; вторая требует
+   * отличать созданное от переиспользованного (ошибка 0a30c5e4), поэтому
+   * фасад эмитит `thought.created` строго по этому списку.
+   */
+  created_thought_ids: string[];
+  /** id РЕАЛЬНО созданных в целевой сети связей (см. `created_thought_ids`). */
+  created_link_ids: string[];
   /** Конфликты при `duplicate_policy=fail`. */
   conflicts: Array<{ source_thought_id: string; target_thought_id: string; title: string }>;
 }
@@ -195,6 +204,8 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
       links_created: 0,
       thought_id_map: reusedThoughtIdMap,
       link_id_map: collectReusedLinkIds(target_ndb, built.copyInput.links, reusedThoughtIdMap),
+      created_thought_ids: [],
+      created_link_ids: [],
       conflicts: built.conflicts,
     };
   }
@@ -220,6 +231,8 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
     links_created: result.created_links.length,
     thought_id_map: thoughtIdMap,
     link_id_map: result.link_id_map,
+    created_thought_ids: result.created_thoughts.map((t) => t.id),
+    created_link_ids: result.created_links.map((l) => l.id),
     conflicts: built.conflicts,
   };
 }
@@ -681,6 +694,8 @@ function emptySummary(): CopySubtreeSummary {
     links_created: 0,
     thought_id_map: {},
     link_id_map: {},
+    created_thought_ids: [],
+    created_link_ids: [],
     conflicts: [],
   };
 }

@@ -205,6 +205,62 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
     }
   });
 
+  // Регресс ошибки 0a30c5e4: фасад `thoughts.copy_subtree` эмитил
+  // `thought.created`/`link.created` по ПОЛНЫМ картам id, включая
+  // переиспользованные сущности, — realtime/журнал сообщали о «создании»
+  // того, чего никто не создавал.
+  it('reuse: события и журнал только по реально созданным сущностям (ошибка 0a30c5e4)', async () => {
+    const w = await buildPair();
+    try {
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+
+      // Одинаковые мысль+связь в обеих сетях → полное переиспользование.
+      const srcRoot = createThought(ndbSrc, { title: 'Общий корень' }, w.src.adminId).id;
+      const srcChild = createThought(ndbSrc, { title: 'Общий потомок' }, w.src.adminId).id;
+      createLink(ndbSrc, { source_id: srcRoot, target_id: srcChild }, w.src.adminId);
+
+      const dstRoot = createThought(ndbDst, { title: 'Общий корень' }, w.dst.adminId).id;
+      const dstChild = createThought(ndbDst, { title: 'Общий потомок' }, w.dst.adminId).id;
+      createLink(ndbDst, { source_id: dstRoot, target_id: dstChild }, w.dst.adminId);
+
+      const reused = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(reused.isError, undefined, toolText(reused));
+      const rd = toolJson<{ thoughts_reused: number; thoughts_created: number }>(reused);
+      assert.equal(rd.thoughts_reused, 2);
+      assert.equal(rd.thoughts_created, 0);
+
+      const changes = await callOp(w.handle.client, 'changes.list', {
+        network_id: w.dst.networkId,
+        since_seq: 0,
+      });
+      assert.equal(changes.isError, undefined, toolText(changes));
+      const evs = toolJson<{ events: Array<{ type: string; data: unknown }> }>(changes).events;
+      const falseThoughtEvents = evs
+        .filter((e) => e.type === 'thought.created')
+        .map((e) => (e.data as { thought: { id: string } }).thought.id)
+        .filter((id) => id === dstRoot || id === dstChild);
+      assert.deepEqual(
+        falseThoughtEvents,
+        [],
+        'нет ложных thought.created для переиспользованных мыслей',
+      );
+      assert.equal(
+        evs.filter((e) => e.type === 'link.created').length,
+        0,
+        'нет ложного link.created при полном reuse',
+      );
+    } finally {
+      await w.closeAll();
+    }
+  });
+
   it('онтология целевой сети не покрывает подграф → VALIDATION_ERROR', async () => {
     const w = await buildPair();
     try {

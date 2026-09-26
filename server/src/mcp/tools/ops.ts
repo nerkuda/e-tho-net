@@ -777,14 +777,15 @@ const HANDLERS: Record<string, OpHandler> = {
         });
         const events: AnyWriteEvent[] = [];
         const activity: WriteActivityEntry[] = [];
-        for (const [, newId] of Object.entries(copied.thought_id_map)) {
-          if (newId === '') continue;
+        // События/журнал — строго по РЕАЛЬНО созданным сущностям (ошибка
+        // 0a30c5e4): `thought_id_map`/`link_id_map` включают при `reuse` и
+        // переиспользованные id, по ним события «создания» были бы ложными.
+        for (const newId of copied.created_thought_ids) {
           const thought = getThoughtOrThrow(targetNdb, newId);
           events.push({ type: 'thought.created', data: { thought } });
           activity.push({ kind: 'thought', action: 'created', thought });
         }
-        for (const [, newId] of Object.entries(copied.link_id_map)) {
-          if (newId === '') continue;
+        for (const newId of copied.created_link_ids) {
           const link = getLink(targetNdb, newId);
           if (link !== null) {
             events.push({ type: 'link.created', data: { link } });
