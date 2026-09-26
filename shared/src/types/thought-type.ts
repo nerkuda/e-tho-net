@@ -478,6 +478,14 @@ export interface PropertyValue {
   value_type: PropertyValueType;
   /** Value whose runtime type matches the definition's `value_type`. */
   value: PropertyValueValue;
+  /**
+   * Только для `value_type: "link"` и только на пути записи: id рёбер,
+   * СОЗДАННЫХ (в том числе восстановленных из корзины) этой записью. Нужны,
+   * чтобы фасады опубликовали `link.created` ровно для новых рёбер — так же,
+   * как это делает `etn.properties.add` (ошибка 1b719d76). На чтении не
+   * заполняется: адрес существующего ребра — `LinkPropertyValueItem.link_id`.
+   */
+  link_ids?: string[];
   updated_at: string;
   /**
    * Id пользователя, создавшего значение (требование e6d4165e; колонка

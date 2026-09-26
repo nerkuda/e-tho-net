@@ -1146,7 +1146,7 @@ function setLinkPropertyTargets(
   targetIds: string[],
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): string[] {
+): { targets: string[]; createdLinkIds: string[] } {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1178,6 +1178,7 @@ function setLinkPropertyTargets(
   }
 
   const result: string[] = [];
+  const createdLinkIds: string[] = [];
   targetIds.forEach((targetId, index) => {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     const current = existing.get(targetId);
@@ -1194,10 +1195,13 @@ function setLinkPropertyTargets(
         ? index
         : nextStructuralPosition(ndb, src)
       : 0;
-    insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId);
+    // `insertLinkRow` может восстановить корзинное ребро той же тройки — для
+    // наблюдателя оно так же становится живым, поэтому идёт в `created`
+    // (та же семантика, что у `etn.properties.add`: `created = no live edge`).
+    createdLinkIds.push(insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId));
     result.push(targetId);
   });
-  return result;
+  return { targets: result, createdLinkIds };
 }
 
 /**
@@ -4368,7 +4372,7 @@ function setPropertyValueForProperty(
         key: errKey.key,
       });
     }
-    const targetIds = setLinkPropertyTargets(
+    const { targets: targetIds, createdLinkIds } = setLinkPropertyTargets(
       ndb,
       ownerId,
       prop,
@@ -4384,6 +4388,8 @@ function setPropertyValueForProperty(
       // пустая строка-заглушка (ошибка 5a50f906 — `id: ""` в ответе читалось
       // как «id есть, но пустой»). Адрес ребра — `link_id` из
       // `LinkPropertyValueItem` (чтение значений) / `etn.properties.add`.
+      // `link_ids` — рёбра, СОЗДАННЫЕ этой записью: фасады публикуют по ним
+      // `link.created` (ошибка 1b719d76).
       id: null,
       owner_type: ownerType,
       owner_id: ownerId,
@@ -4392,6 +4398,7 @@ function setPropertyValueForProperty(
       property_name: prop.name,
       value_type: 'link',
       value: targetIds.length === 0 ? null : targetIds.length === 1 ? (targetIds[0] ?? null) : targetIds,
+      link_ids: createdLinkIds,
       updated_at: new Date(nowMs).toISOString(),
       created_by: actorUserId,
       updated_by: actorUserId,

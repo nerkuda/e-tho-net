@@ -536,9 +536,10 @@ export interface McpThoughtWriteItemResult {
    * `targets` несёт ИТОГОВЫЙ набор целей ребра — по нему агент видит, что
    * запись состоялась, не перечитывая карточку (ошибка 5a50f906: раньше для
    * свойства-связи отдавалась пустая строка; ошибка 17cc0d54: `id: null` без
-   * целей бесполезен).
+   * целей бесполезен). `link_ids` — id рёбер, СОЗДАННЫХ этой записью
+   * (ошибка 1b719d76: по ним публикуется `link.created`).
    */
-  properties?: Record<string, { id: string | null; targets?: string[] }>;
+  properties?: Record<string, { id: string | null; targets?: string[]; link_ids?: string[] }>;
   /** Link results: id + (if any) attached properties/comments. */
   links?: Array<{
     id: string;

@@ -418,7 +418,13 @@ export function writeThoughts(
                   // иначе `{id: null}` не давал убедиться, что рёбра встали
                   // (ошибка 17cc0d54).
                   v.value_type === 'link'
-                    ? { id: null, targets: linkTargetIds(v.value) }
+                    ? {
+                        id: null,
+                        targets: linkTargetIds(v.value),
+                        ...(v.link_ids !== undefined && v.link_ids.length > 0
+                          ? { link_ids: v.link_ids }
+                          : {}),
+                      }
                     : { id: v.id },
                 ]),
               ),

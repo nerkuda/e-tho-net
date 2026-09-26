@@ -320,6 +320,22 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
                 }
               }
             }
+            // Рёбра, созданные set-записью свойства-связи в `properties`, —
+            // публикуем `link.created` так же, как для `links[]` и
+            // `etn.properties.add` (ошибка 1b719d76): без этого подписчики и
+            // журнал `changes.list` не видели новых рёбер.
+            if (item.properties !== undefined) {
+              for (const pv of Object.values(item.properties)) {
+                if (pv.link_ids === undefined) continue;
+                for (const linkId of pv.link_ids) {
+                  const l = getLink(ndb, linkId);
+                  if (l !== null) {
+                    events.push({ type: 'link.created', data: { link: l } });
+                    activity.push({ kind: 'link', action: 'created', link: l });
+                  }
+                }
+              }
+            }
             if (item.attachments !== undefined) {
               for (const att of item.attachments) {
                 const a = getAttachment(ndb, att.id);

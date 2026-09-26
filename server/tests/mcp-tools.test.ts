@@ -2805,6 +2805,81 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('событие link.created публикуется для рёбер, созданных set-записью свойства-связи (1b719d76)', async () => {
+    // Симптом: рёбра, созданные записью свойства-связи через `properties`
+    // (set-запись `etn.thoughts.write`), не публиковали `link.created`, тогда
+    // как `etn.properties.add` — публикует; подписчики и журнал `changes.list`
+    // не видели новых рёбер. Теперь путь set-записи выровнен.
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const lt = createLinkType(
+        ndb,
+        { name_forward: 'TEST 1b719d76 затрагивает', name_reverse: 'TEST 1b719d76 затронут' },
+        ctx.adminId,
+      );
+      const type = createThoughtType(ndb, { name: 'TEST 1b719d76 носитель' }, ctx.adminId);
+      const prop = createTypeProperty(
+        ndb,
+        'thought_type',
+        type.id,
+        {
+          key: 'TEST 1b719d76 затрагивает',
+          value_type: 'link',
+          config: { link_type_id: lt.id, direction: 'out' },
+        },
+        ctx.adminId,
+      );
+      const linkKey = (
+        ndb.prepare('SELECT name FROM properties_v WHERE id = ?').get(prop.property_id) as {
+          name: string;
+        }
+      ).name;
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const target = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'TEST 1b719d76 цель',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+        });
+
+        const written = toolJson<{ items: Array<{ properties?: Record<string, { id: string | null; targets?: string[]; link_ids?: string[] }> }> }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                {
+                  ref: 'owner',
+                  thought: { title: 'TEST 1b719d76 носитель', type_id: type.id },
+                  properties: { [linkKey]: target.id },
+                },
+              ],
+            },
+          }),
+        );
+        const echo = written.items[0]!.properties?.[linkKey];
+        assert.deepEqual(echo?.targets, [target.id], `echo targets: ${JSON.stringify(echo)}`);
+        assert.equal(echo?.link_ids?.length, 1, `echo link_ids: ${JSON.stringify(echo)}`);
+
+        const body = toolJson<McpChangesListResult>(
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
+        );
+        const createdLinks = body.events.filter((e) => e.type === 'link.created');
+        assert.ok(
+          createdLinks.length >= 1,
+          `link.created must be published for the property-set edge: ${body.events.map((e) => e.type).join(',')}`,
+        );
+        const payload = createdLinks[createdLinks.length - 1]!.data as { link?: { id?: string } };
+        assert.equal(payload.link?.id, echo?.link_ids?.[0], 'event must carry the created link id');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('changes.list honours since_seq and limit (O9)', async () => {
     const ctx = await buildMcpContext();
     try {
