@@ -158,6 +158,68 @@ export interface LayerMergeReport {
 }
 
 // ---------------------------------------------------------------------------
+// Override reset / pending-conflict preview (задача 7cc34cf4, docs/13-layers.md
+// §8.5)
+// ---------------------------------------------------------------------------
+
+/** One copy column where the target's row («было в основе») and the layer's
+ * shadow row («стало в слое») differ — the side-by-side the reset must show
+ * (§8.5). Text values are clipped to keep the report bounded. */
+export interface LayerOverrideDiffField {
+  column: string;
+  base: string | number | boolean | null;
+  layer: string | number | boolean | null;
+}
+
+/** One shadow row of a layer described against the row it overrides. */
+export interface LayerOverrideRow {
+  table: string;
+  id: string;
+  /** `base_version` of the shadow row before the operation. */
+  previous_base_version: number;
+  /** Current version of the same logical row along the merge target chain —
+   * what `base_version` is re-pinned to. `0` when the target has no such row
+   * (the row is an insert, §5.1). */
+  current_version: number;
+  /** Shadow row version before the operation — moved to the target verbatim
+   * by the merge (§8.1). */
+  layer_version: number;
+  /** Version actually written to the shadow when it lagged behind the target
+   * (the merge must not walk the target's version backwards); `null` when the
+   * shadow was already ahead or level. */
+  version_raised_to: number | null;
+  /** Whether the target's row / the shadow is a tombstone. */
+  base_deleted: boolean;
+  layer_deleted: boolean;
+  /** Changed copy columns — «было в основе / стало в слое» (§8.5). */
+  diff: LayerOverrideDiffField[];
+}
+
+/** Read-only preview of the rows that would reject a merge (§8.5, работа
+ * `etn.ops { action: "layers.conflicts" }`). */
+export interface LayerPendingConflictsReport {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  /** Shadow rows the layer physically holds (live and tombstones alike) —
+   * the scope a reset can address. */
+  overridden: number;
+  /** Versioned shadow rows whose `base_version` lags behind the target. */
+  conflicts: LayerOverrideRow[];
+}
+
+/** Response of the override reset (§8.5, working
+ * `etn.ops { action: "layers.reset_override" }`). */
+export interface LayerResetOverrideReport {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  /** Rows whose `base_version` was re-pinned to the current target version. */
+  reset: LayerOverrideRow[];
+  /** Rows left untouched, with the reason: already in sync, or a table whose
+   * rows carry no version and therefore never conflict. */
+  unchanged: Array<{ table: string; id: string; reason: 'up_to_date' | 'not_versioned' }>;
+}
+
+// ---------------------------------------------------------------------------
 // Structural + textual layer diffs (task S11, docs/13-layers.md §10.3;
 // docs/03-server-api.md §5a.7)
 // ---------------------------------------------------------------------------

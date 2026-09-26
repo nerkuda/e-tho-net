@@ -667,6 +667,44 @@ export const LayersMerge = defineContract(
   },
 );
 
+/**
+ * MCP `etn.layers.conflicts` (задача 7cc34cf4, 13-layers.md §8.5).
+ *
+ * Read-only предпросмотр будущего отказа слияния: строки слоя, чей
+ * `base_version` отстал от текущей версии той же строки в предке. Пробное
+ * слияние для этой проверки не годится — слой без конфликтов слился бы рано.
+ * MCP-only: REST-маршрута нет.
+ */
+export const LayersConflicts = defineContract(
+  'etn.layers.conflicts',
+  z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+  }),
+  {},
+);
+
+/**
+ * MCP `etn.layers.reset_override` (задача 7cc34cf4, 13-layers.md §8.5).
+ *
+ * Сброс перекрытия выбранных строк слоя: `base_version` теневой строки
+ * переставляется на текущую версию строки в предке; содержимое слоя
+ * сохраняется, основа не меняется. Деструктивно по смыслу (теряется сигнал
+ * «основа менялась»), поэтому требует `confirm: true` на верхнем уровне
+ * `etn.ops`. Адресует конкретные строки, не слой целиком. MCP-only.
+ */
+export const LayersResetOverride = defineContract(
+  'etn.layers.reset_override',
+  z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+    tables: z.record(z.string(), z.array(z.string().min(1)).min(1)),
+  }),
+  {
+    tables: { from: { kind: 'body' }, msg: 'tables должен быть объектом { таблица: [id, …] }.' },
+  },
+);
+
 // ===========================================================================
 // Область: мысли — чтение (tools/thoughts-read.ts; REST-аналоги ниже по файлу)
 // ===========================================================================
