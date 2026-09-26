@@ -258,6 +258,20 @@ export function parseChronicleFilter(
   const dateTo = parseDateField(body, 'date_to', requestId);
   if (dateTo !== undefined) filter.date_to = dateTo;
 
+  // Режим полей периода панели «Дневника» (0.10.1, приёмка №2). На выборку не
+  // влияет — хранится в определении сохранённого отбора, чтобы применение
+  // восстановило «Пресеты»/«Даты»; значения-токены раскрываются отдельно.
+  const dateMode = body['date_mode'];
+  if (dateMode !== undefined) {
+    if (dateMode !== 'presets' && dateMode !== 'dates') {
+      throw new EtnError('VALIDATION_ERROR', 'Недопустимый date_mode.', {
+        field: 'date_mode',
+        allowed: ['presets', 'dates'],
+      }, requestId);
+    }
+    filter.date_mode = dateMode;
+  }
+
   // Фильтры авторства (задача 59119797, эволюция операторов): id
   // пользователя и оператор, применяется к колонкам `comments.created_by` /
   // `comments.updated_by` (миграция 033). Пустая строка и отсутствие

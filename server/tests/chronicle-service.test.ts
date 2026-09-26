@@ -554,6 +554,28 @@ describe(
       }
     });
 
+    it('режим периода (date_mode) сохраняется и валидируется (приёмка №2)', () => {
+      // Режим полей периода — часть определения сохранённого отбора.
+      const presets = parseChronicleFilterDefinition(
+        { date_from: '$week.start', date_to: '$week.end', date_mode: 'presets', order: 'asc' },
+        'r',
+      );
+      assert.equal(presets.date_mode, 'presets');
+      const dates = parseChronicleFilterDefinition(
+        { date_from: '2026-09-01', date_to: '2026-09-30', date_mode: 'dates', order: 'asc' },
+        'r',
+      );
+      assert.equal(dates.date_mode, 'dates');
+      // Неизвестный режим — VALIDATION_ERROR.
+      assert.throws(
+        () => parseChronicleFilterDefinition({ date_mode: 'years', order: 'asc' }, 'r'),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+      // Отсутствие режима — прежнее поведение (поле не появляется).
+      const legacy = parseChronicleFilterDefinition({ order: 'asc' }, 'r');
+      assert.equal(legacy.date_mode, undefined);
+    });
+
     it('period intersection boundaries are inclusive', () => {
       const ndb = createInMemoryNetworkDb();
       try {

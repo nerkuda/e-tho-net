@@ -199,6 +199,10 @@ export const UI_STATE_KEY = {
   /** Per-tab persisted filter of the «События» view (задача f27809d0). */
   ACTIVITY_STATE: 'activity_state',
   CHRONICLE_LIST_HEIGHTS: 'chronicle_list_heights',
+  /** Свёрнутые группы дат ленты «Дневника» (0.10.1, приёмка №2): JSON-массив
+   *  локальных дат `YYYY-MM-DD`, заголовки которых свёрнуты. Хранится локально
+   *  (L4 `ui_state`), как состояние вида. */
+  DIARY_COLLAPSED_DAYS: 'diary_collapsed_days',
   MD_ZOOM: 'md_zoom',
   /** Per-tab JSON map of `{ focusId: 'children' | viewId }` for the focus
    *  filter strip (task 02ba2ae7, spec 9984aa98). One row per focus;

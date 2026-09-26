@@ -739,3 +739,54 @@ describe('токены границ недели/месяца и арифмет�
     }
   });
 });
+
+describe('токены границ года и арифметика ±Ny (0.10.1, приёмка №2)', () => {
+  it('распознаёт $year.start/$year.end как глобальные', () => {
+    const result = scanStringForTokens('$year.start $year.end');
+    assert.equal(result.unknown.length, 0);
+    assert.deepEqual(
+      result.known.map((t) => t.kind),
+      ['global', 'global'],
+    );
+  });
+
+  it('распознаёт арифметику ±Ny', () => {
+    const result = scanStringForTokens('$year.start-1y $year.end+2y $month.end+1y');
+    assert.equal(result.unknown.length, 0);
+    assert.equal(result.known[0]!.yearsOffset, -1);
+    assert.equal(result.known[1]!.yearsOffset, 2);
+    assert.equal(result.known[2]!.yearsOffset, 1);
+  });
+
+  it('границы года — 1 января / 31 декабря', () => {
+    const now = (): Date => new Date('2026-09-26T12:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$year.start', { now }).value, '2026-01-01');
+    assert.equal(resolveGlobalDateTokens('$year.end', { now }).value, '2026-12-31');
+  });
+
+  it('годовая арифметика сдвигает границы года и не прижимает числа', () => {
+    const now = (): Date => new Date('2026-09-26T12:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$year.start+1y', { now }).value, '2027-01-01');
+    assert.equal(resolveGlobalDateTokens('$year.end-1y', { now }).value, '2025-12-31');
+    // Високосный 2028 год: конец года — 31 декабря.
+    assert.equal(resolveGlobalDateTokens('$year.end+2y', { now }).value, '2028-12-31');
+  });
+
+  it('±Ny = 12 календарных месяцев для произвольного якоря', () => {
+    const now = (): Date => new Date('2026-03-31T12:00:00.000Z');
+    // Конец месяца года назад: 31 марта −1 год → 31 марта 2025.
+    assert.equal(resolveGlobalDateTokens('$today-1y', { now }).value, '2025-03-31');
+    assert.equal(resolveGlobalDateTokens('$month.end+1y', { now }).value, '2027-03-31');
+  });
+
+  it('период принимает годовые токены (нет unresolved)', () => {
+    const now = (): Date => new Date('2026-09-26T12:00:00.000Z');
+    for (const token of ['$year.start', '$year.end', '$year.start-1y', '$year.end+1y']) {
+      assert.equal(
+        resolveGlobalDateTokens(token, { now }).unresolved.length,
+        0,
+        token,
+      );
+    }
+  });
+});
