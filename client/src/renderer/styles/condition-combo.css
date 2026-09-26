@@ -209,6 +209,57 @@
   padding: 3px 6px;
 }
 
+/* «Редактор периода» (0.10.1, lib/period-editor.ts; элемент «Поле периода»
+   2f14de06): переключатель режима и поля границ. Поле даты — текстовое: в
+   нативный `input[type=date]` токен `$today±Nd` не помещается (тот же приём,
+   что у ветки даты общего редактора значения). */
+.pe-root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.pe-fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pe-bound {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pe-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+
+.pe-date-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pe-time-input {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 92px;
+}
+
+.pe-error {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--danger);
+}
+
 /* Type/link-type picker dialog body (§15.3). */
 .st-f-picker {
   display: flex;
