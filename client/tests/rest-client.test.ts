@@ -70,6 +70,50 @@ function makeClient(fetchImpl: typeof fetch, extra: { random?: () => number } = 
   });
 }
 
+/**
+ * Yields to the macrotask queue so every pending microtask (lazy API-key
+ * resolution, fetch dispatch) has run.
+ */
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Fetch stub whose responses are released by the test, one body at a time —
+ * needed to pin the microtask ORDER of two concurrent responses (the race the
+ * regression tests below model). Each call gets a deferred body.
+ */
+function makeControlledFetch(): {
+  fetch: typeof fetch;
+  /** Releases the body of the n-th call (0-based) as a JSON success envelope. */
+  resolveBody: (index: number, body: unknown) => void;
+} {
+  let next = 0;
+  const releases = new Map<number, (payload: { body: string }) => void>();
+  const fetchStub = ((_url: string, _init?: RequestInit): Promise<Response> => {
+    const index = next++;
+    const bodyPromise = new Promise<{ body: string }>((res) => {
+      releases.set(index, res);
+    });
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async (): Promise<string> => (await bodyPromise).body,
+      json: async (): Promise<unknown> => JSON.parse((await bodyPromise).body),
+    } as unknown as Response;
+    return Promise.resolve(response);
+  }) as unknown as typeof fetch;
+  return {
+    fetch: fetchStub,
+    resolveBody: (index: number, body: unknown): void => {
+      const release = releases.get(index);
+      if (release === undefined) throw new Error(`no pending request #${index}`);
+      release({ body: JSON.stringify(body) });
+    },
+  };
+}
+
 describe('RestClient — headers', () => {
   it('attaches Authorization Bearer, Client-Id and Accept on GET', async () => {
     const { fetch, calls } = makeFetch([
@@ -267,7 +311,7 @@ describe('RestClient — превью соседей на холсте (ошиб
 });
 
 describe('RestClient — response parsing', () => {
-  it('returns the data field of the success envelope and captures meta', async () => {
+  it('returns the data field of the success envelope', async () => {
     const { fetch } = makeFetch([
       {
         status: 200,
@@ -277,8 +321,6 @@ describe('RestClient — response parsing', () => {
     const client = makeClient(fetch);
     const data = await client.getThought('net1', 't1');
     assert.deepEqual(data, { id: 't1', version: 3 });
-    assert.equal(client.lastMeta?.version, 3);
-    assert.equal(client.lastMeta?.request_id, 'r1');
   });
 
   it('treats 204 / empty body as undefined (DELETE)', async () => {
@@ -287,6 +329,54 @@ describe('RestClient — response parsing', () => {
     const result = await client.deleteThought('net1', 't1', 2);
     assert.equal(result, undefined);
     assert.equal(calls[0]!.init.method, 'DELETE');
+  });
+});
+
+describe('RestClient — метаданные ответа привязаны к своему ответу (ошибка 90811979)', () => {  /**
+   * Свойство полосы отборов (полоса фокуса) собирается из `data` И `meta`
+   * ОДНОГО ответа `GET …/thought-types/{id}/views`: `data` — собственные
+   * отборы типа, `meta.effective` — унаследованная цепочка. Пока обе части
+   * брались из общего поля клиента, ответ соседнего запроса, разобравшийся
+   * позже (но до продолжения читателя), подменял `meta.effective` пустым
+   * значением — полоса теряла отборы, режим откатывался на «Потомки», и нижняя
+   * зона оставалась пустой до ручного переключения режима.
+   */
+  it('читает meta.effective из своего ответа, а не из чужого (гонка разбора)', async () => {
+    const ctl = makeControlledFetch();
+    const client = makeClient(ctl.fetch);
+    const viewsPromise = client.listThoughtTypeViews('net1', 'type1', { includeEffective: true });
+    const otherPromise = client.getThought('net1', 't1');
+    await tick();
+    // Порядок разбора: сначала ответ полосы (со своим `effective`), затем
+    // ответ постороннего запроса с ДРУГОЙ meta. Продолжение читателя полосы
+    // выполняется уже после второго разбора.
+    ctl.resolveBody(0, {
+      data: [{ id: 'v1' }],
+      meta: { effective: [{ id: 'v1', name: 'отбор' }] },
+    });
+    ctl.resolveBody(1, { data: { id: 't1', version: 7 }, meta: { version: 7 } });
+    const [views, other] = await Promise.all([viewsPromise, otherPromise]);
+    assert.equal(other.id, 't1');
+    assert.deepEqual(
+      views.meta.effective.map((v) => v.id),
+      ['v1'],
+    );
+  });
+
+  it('не портит meta соседей: каждый читатель получает meta своего ответа', async () => {
+    const ctl = makeControlledFetch();
+    const client = makeClient(ctl.fetch);
+    const pagePromise = client.getNeighborsPage('net1', 't1', { dir: 'children' });
+    const activityPromise = client.listActivity('net1');
+    await tick();
+    ctl.resolveBody(0, { data: [{ id: 'n1' }], meta: { total: 5, limit: 1, offset: 0 } });
+    ctl.resolveBody(1, { data: [], meta: { total: 42 } });
+    const [page, activity] = await Promise.all([pagePromise, activityPromise]);
+    assert.deepEqual(
+      { items: page.items.map((n) => n.id), total: page.total, limit: page.limit },
+      { items: ['n1'], total: 5, limit: 1 },
+    );
+    assert.equal(activity.total, 42);
   });
 });
 
