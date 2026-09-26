@@ -663,9 +663,24 @@ function resolveTypeViews(
         { field: `type_views[${index}].action`, allowed: ['create', 'update', 'delete'] },
       );
     }
+    // XOR `id` / `ref_for_update`: отбор адресуется ровно одним способом.
+    // Оба заданы — операция применилась бы ДВАЖДЫ (ошибка ddb9ce53): сначала
+    // по `id`, затем по id, разрешённому из `ref_for_update` во втором проходе.
+    const hasId = item.id !== undefined && item.id !== null && item.id !== '';
+    const hasRefForUpdate =
+      item.ref_for_update !== undefined &&
+      item.ref_for_update !== null &&
+      item.ref_for_update !== '';
+    if (hasId && hasRefForUpdate) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `type_views[${index}] must set at most one of id or ref_for_update`,
+        { field: `type_views[${index}]` },
+      );
+    }
     let viewId: string | null = null;
-    if (item.id !== undefined && item.id !== undefined && item.id !== null) {
-      const existing = getThoughtTypeView(ndb, item.id);
+    if (hasId) {
+      const existing = getThoughtTypeView(ndb, item.id as string);
       if (existing === null) {
         throw new EtnError('NOT_FOUND', `thought_type_view ${item.id} not found`, {
           entity: 'thought_type_view',

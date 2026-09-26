@@ -535,6 +535,72 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Регресс ошибки ddb9ce53: `type_views[]` не проверял XOR `id` /
+  // `ref_for_update` — отбор с обоими заданными применялся ДВАЖДЫ (по `id`
+  // в первом проходе и по разрешённому `ref_for_update` во втором).
+  it('etn.ontology.write type_views: одновременные id и ref_for_update → VALIDATION_ERROR (ошибка ddb9ce53)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Заводим «другой» отбор — его id попадёт в конфликтующий батч.
+        const otherRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Другой',
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+              },
+            ],
+          },
+        });
+        assert.equal(otherRes.isError, undefined, toolText(otherRes));
+        const otherId = toolJson<{ type_views: Array<{ id: string }> }>(otherRes).type_views[0]!.id;
+
+        // Ровно сценарий ошибки: в одном батче create с `ref: "v"` и update,
+        // где заданы ОБА адреса — `id` другого отбора и `ref_for_update: "v"`.
+        const bad = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'v',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'A',
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+              },
+              { action: 'update', id: otherId, ref_for_update: 'v', name: 'B' },
+            ],
+          },
+        });
+        assert.equal(bad.isError, true, 'XOR id/ref_for_update должен падать');
+        assert.match(toolText(bad), /VALIDATION_ERROR/);
+        assert.match(toolText(bad), /at most one of id or ref_for_update/);
+
+        // Ни «A» (create откатился), ни правившееся имя другого отбора.
+        const names = (
+          ndb
+            .prepare('SELECT name FROM thought_type_views_v ORDER BY name')
+            .all() as Array<{ name: string }>
+        ).map((r) => r.name);
+        assert.deepEqual(names, ['Другой'], 'ничего не применено дважды');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.types.list видит отборы типа, заведённые в базовом слое, при работе из дочернего слоя (ошибка 24632488)', async () => {
     const ctx = await buildMcpContext();
     try {
