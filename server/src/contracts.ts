@@ -1073,6 +1073,7 @@ const CommentChangesFields = z
     body_md: z.string().min(1).optional(),
     valid_from: z.string().min(1).optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   })
   .refine((c) => Object.keys(c).length > 0, { message: 'changes must not be empty' });
 export const CommentsUpdate = defineContract(
@@ -1949,6 +1950,7 @@ const commentFieldsRest = {
   title: { from: { kind: 'body' } },
   valid_from: { from: { kind: 'body' } },
   valid_to: { from: { kind: 'body' } },
+  use_time: { from: { kind: 'body' } },
 } as const;
 
 /** GET …/comments — список комментариев владельца. */
@@ -1972,6 +1974,7 @@ export const RestCommentCreateOwner = defineContract(
     title: z.string().nullable().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -1990,6 +1993,7 @@ export const RestCommentCreateTargets = defineContract(
     title: z.string().nullable().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -2064,6 +2068,7 @@ export const RestCommentUpdate = defineContract(
     body_md: z.string().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },

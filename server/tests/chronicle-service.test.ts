@@ -94,7 +94,11 @@ describe(
         createComment(ndb, 'thought', a, { kind: 'permanent', body_md: 'perm' }, USER);
         const result = query(ndb, {});
         assert.equal(result.total, 2, 'only chronological comments');
-        assert.deepEqual(result.rows.map((r) => r.valid_from), ['2024-01-01', '2024-02-01']);
+        // 0.10.1: «голая дата» на записи нормализуется в полный UTC-инстанс.
+        assert.deepEqual(result.rows.map((r) => r.valid_from), [
+          '2024-01-01T00:00:00.000Z',
+          '2024-02-01T00:00:00.000Z',
+        ]);
       } finally {
         ndb.close();
       }
@@ -285,10 +289,10 @@ describe(
         const page = query(ndb, {}, { limit: 2, offset: 1 });
         assert.equal(page.total, 5);
         assert.equal(page.rows.length, 2);
-        assert.equal(page.rows[0]!.valid_from, '2024-01-02');
+        assert.equal(page.rows[0]!.valid_from, '2024-01-02T00:00:00.000Z');
 
         const desc = query(ndb, {}, { order: 'desc', limit: 50 });
-        assert.equal(desc.rows[0]!.valid_from, '2024-01-05');
+        assert.equal(desc.rows[0]!.valid_from, '2024-01-05T00:00:00.000Z');
       } finally {
         ndb.close();
       }

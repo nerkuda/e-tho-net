@@ -196,8 +196,11 @@ describe(
           { kind: 'chronological', body_md: 'two', valid_from: '2024-02-01', valid_to: '' },
           USER,
         );
-        assert.equal(c1.valid_from, '2024-01-01');
-        assert.equal(c2.valid_to, null, 'empty valid_to normalised to null');
+        // 0.10.1: date-only → полный UTC-инстанс; пустое окончание
+        // хронологической заполняется её началом (ADR 994d076a).
+        assert.equal(c1.valid_from, '2024-01-01T00:00:00.000Z');
+        assert.equal(c1.valid_to, c1.valid_from, 'valid_to по умолчанию = valid_from');
+        assert.equal(c2.valid_to, c2.valid_from, 'пустое valid_to = valid_from');
         const list = listComments(ndb, 'thought', t);
         assert.equal(list.length, 2);
         assert.deepEqual(

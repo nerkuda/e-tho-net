@@ -44,6 +44,7 @@ import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { REF_COLUMNS } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { normaliseInstant } from './dates.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
@@ -53,7 +54,15 @@ function placeholders(n: number): string {
   return Array.from({ length: n }, () => '?').join(', ');
 }
 
-/** Parse the `date_from`/`date_to` fields (empty/absent → `undefined`). */
+/**
+ * Parse the `date_from`/`date_to` fields (empty/absent → `undefined`).
+ *
+ * Даты приводятся к полному UTC-инстансу (0.10.1, требование «Голая дата во
+ * входных параметрах API = сутки UTC» 469d8d69): «голая дата» = сутки UTC —
+ * `date_from` берёт начало дня (`00:00:00.000Z`), `date_to` — конец
+ * (`23:59:59.999Z`), границы включительные; инстанс с поясом конвертируется в
+ * UTC. Это выравнивает REST и MCP и делает сравнение периодов однозначным.
+ */
 function parseDateField(
   body: Record<string, unknown>,
   field: 'date_from' | 'date_to',
@@ -66,7 +75,7 @@ function parseDateField(
       field,
     }, requestId);
   }
-  return raw.trim();
+  return normaliseInstant(raw, field, field === 'date_from' ? 'start' : 'end') ?? undefined;
 }
 
 /** Read a `ChronicleFilter` from an untrusted object (request body or saved JSON). */
@@ -421,22 +430,21 @@ function selectThoughts(
   return rows.map((r) => r.id);
 }
 
-/** Period-intersection SQL for `valid_from` (upper bound of the requested period). */
+/**
+ * Period-intersection SQL for `valid_from` (upper bound of the requested
+ * period). Границы уже приведены к полным UTC-инстансам (`date_to` — конец
+ * суток для «голой даты»), поэтому достаточно прямого сравнения — прежний
+ * LIKE-костыль под date-only не нужен (0.10.1).
+ */
 function validFromUpperCond(dateTo: string): [string, string[]] {
-  // A calendar date (YYYY-MM-DD) must also admit full timestamps of that day.
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
-    return ['(c.valid_from <= ? OR c.valid_from LIKE ? ESCAPE \'\\\')', [dateTo, `${dateTo}%`]];
-  }
   return ['c.valid_from <= ?', [dateTo]];
 }
 
 /** Period-intersection SQL for `valid_to` (lower bound of the requested period). */
 function validToLowerCond(dateFrom: string): [string, string[]] {
-  const cond = '(c.valid_to IS NULL OR c.valid_to >= ?';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
-    return [`${cond} OR c.valid_to LIKE ? ESCAPE '\\')`, [dateFrom, `${dateFrom}%`]];
-  }
-  return [`${cond})`, [dateFrom]];
+  // `valid_to IS NULL` оставлен страховкой для постоянных/наследных строк;
+  // у хронологических после 0.10.1 окончание всегда заполнено.
+  return ['(c.valid_to IS NULL OR c.valid_to >= ?)', [dateFrom]];
 }
 
 /** Phase 2 WHERE shared by the count and the page queries. */

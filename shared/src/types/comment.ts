@@ -34,10 +34,24 @@ export interface Comment {
   body_md: string;
   /** Pre-rendered HTML cached by the server. */
   body_html: string;
-  /** ISO-8601 date — equals `created_at` for permanent comments. */
+  /**
+   * Полный UTC-инстанс ISO-8601 с миллисекундами (0.10.1, ADR времени);
+   * у постоянного комментария равен `created_at`.
+   */
   valid_from: string;
-  /** ISO-8601 date or `null` (open-ended; always `null` for permanent). */
+  /**
+   * Полный UTC-инстанс ISO-8601 с миллисекундами. У хронологической записи
+   * всегда заполнен (незаданный равен `valid_from`), у постоянной — `null`.
+   */
   valid_to: string | null;
+  /**
+   * Флаг «учитывать время» (0.10.1, требование 91ba5b3f): хранение и
+   * синхронизация в клиенте; на формат `valid_from`/`valid_to` не влияет.
+   * Помечено `?` тем же приёмом, что `created_at_ms`: сервер всегда
+   * возвращает поле, а клиентские фикстуры до этапа интеграции (T5/T6)
+   * могут не задавать его.
+   */
+  use_time?: boolean;
   version: number;
   created_at: string;
   updated_at: string;
@@ -62,6 +76,8 @@ export interface CommentInput {
   body_md: string;
   valid_from?: string;
   valid_to?: string | null;
+  /** Флаг «учитывать время»; по умолчанию выключен (0.10.1). */
+  use_time?: boolean;
 }
 
 /** Input accepted by `PATCH /comments/{id}` (03-server-api.md §10). */
@@ -70,6 +86,7 @@ export interface CommentUpdateInput {
   body_md?: string;
   valid_from?: string;
   valid_to?: string | null;
+  use_time?: boolean;
 }
 
 /**

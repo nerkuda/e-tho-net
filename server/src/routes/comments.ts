@@ -82,6 +82,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             body_md: input.body_md,
             valid_from: input.valid_from,
             valid_to: input.valid_to,
+            use_time: input.use_time,
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
@@ -122,6 +123,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           body_md: input.body_md,
           valid_from: input.valid_from,
           valid_to: input.valid_to,
+          use_time: input.use_time,
         };
         const targets = input.targets as CommentTarget[];
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
@@ -171,6 +173,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.body_md !== undefined) changes.body_md = input.body_md;
         if (input.valid_from !== undefined) changes.valid_from = input.valid_from;
         if (input.valid_to !== undefined) changes.valid_to = input.valid_to;
+        if (input.use_time !== undefined) changes.use_time = input.use_time;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
           const updated = updateComment(

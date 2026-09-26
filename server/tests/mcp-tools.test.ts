@@ -1088,7 +1088,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           }>(got);
           assert.equal(after.body_md, 'Исправленный текст');
           assert.equal(after.title, 'Запись (правка)');
-          assert.equal(after.valid_from, '2026-08-01');
+          assert.equal(after.valid_from, '2026-08-01T00:00:00.000Z');
           assert.equal(after.version, 2);
 
           // Stale expected_version → VERSION_CONFLICT.

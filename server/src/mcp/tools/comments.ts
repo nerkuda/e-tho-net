@@ -71,10 +71,10 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
     {
       title: 'Изменить комментарий',
       description:
-        'Patch an existing comment (chronological or permanent) by `comment_id` — last-write-wins per ' +
-        'field. `valid_from`/`valid_to` apply to chronological entries only and are ignored for permanent ' +
-        'ones. `expected_version` enables optimistic concurrency — on mismatch the call fails with ' +
-        'VERSION_CONFLICT. Returns { id, version }.',
+        'Patch a comment (permanent or chronological) by `comment_id` — last-write-wins per field. ' +
+        '`valid_from`/`valid_to` apply to chronological entries (permanent ignores them). ' +
+        '`expected_version` enables optimistic concurrency — mismatch fails VERSION_CONFLICT. ' +
+        'Returns { id, version }.',
       inputSchema: CommentsUpdate.schema,
     },
     (args, extra) =>

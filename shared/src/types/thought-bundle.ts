@@ -65,6 +65,8 @@ export interface ThoughtBundleChronicleItem {
   body_md: string;
   valid_from?: string;
   valid_to?: string | null;
+  /** Флаг «учитывать время» (0.10.1); по умолчанию выключен. */
+  use_time?: boolean;
 }
 
 /**

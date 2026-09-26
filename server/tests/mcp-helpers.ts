@@ -289,6 +289,8 @@ export interface WriteThoughtFixture {
     body_md: string;
     valid_from?: string;
     valid_to?: string | null;
+    /** Флаг «учитывать время» (0.10.1). */
+    use_time?: boolean;
   }>;
   properties?: Record<string, unknown>;
   links?: Array<{

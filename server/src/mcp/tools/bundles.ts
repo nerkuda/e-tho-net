@@ -74,6 +74,8 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       body_md: z.string().min(1),
       valid_from: z.string().min(1).optional(),
       valid_to: z.string().nullable().optional(),
+      // Флаг «учитывать время» (0.10.1, требование 91ba5b3f).
+      use_time: z.boolean().optional(),
     })
     .strict();
   const WriteLinkSpecSchema = z

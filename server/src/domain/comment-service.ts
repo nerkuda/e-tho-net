@@ -10,8 +10,9 @@
  *     index `idx_comments_permanent_one`) and always exactly one target;
  *     `valid_from = created_at`, `valid_to = NULL`.
  *   * `chronological` — unrestricted count; carries `valid_from`/`valid_to`
- *     and 1..N targets. Detaching the last target re-attaches the comment to
- *     the network HOME thought.
+ *     (always full UTC instants; `valid_to` is never empty — unset equals
+ *     `valid_from`, 0.10.1) and 1..N targets. Detaching the last target
+ *     re-attaches the comment to the network HOME thought.
  *
  * The server renders and caches `body_html` from `body_md` via the safe
  * {@link renderMarkdown} renderer. Mutating calls accept an optional
@@ -41,6 +42,7 @@ import {
 import { renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
+import { normaliseInstant } from './dates.js';
 import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
@@ -60,6 +62,7 @@ interface CommentRow {
   body_html: string;
   valid_from: string;
   valid_to: string | null;
+  use_time: number;
   version: number;
   created_at: string;
   updated_at: string;
@@ -82,6 +85,7 @@ function rowToComment(row: CommentRow, targets: CommentTarget[] = []): Comment {
     body_html: row.body_html,
     valid_from: row.valid_from,
     valid_to: row.valid_to,
+    use_time: row.use_time === 1,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -451,8 +455,10 @@ export function createComment(
  *
  * For `kind = 'permanent'` the `valid_from`/`valid_to` inputs are ignored
  * (`valid_from` becomes `created_at`, `valid_to` is `NULL`). For chronological
- * comments `valid_from` defaults to now and `valid_to` defaults to `null`
- * (open-ended); an explicit empty string is normalised to `null`.
+ * comments `valid_from` defaults to now, `valid_to` defaults to `valid_from`
+ * (0.10.1: `valid_to` у хронологической обязателен). Входные даты принимаются
+ * как полный UTC-инстанс или «голая дата» (= сутки UTC) и нормализуются
+ * {@link normaliseInstant}; date-only в хранилище не попадает.
  */
 export function createCommentWithTargets(
   ndb: NetworkDb,
@@ -532,16 +538,24 @@ export function createCommentWithTargets(
     const now = new Date(nowMs).toISOString();
     const title = input.title === undefined ? null : input.title;
     // Permanent comments ignore the validity window (docs/02-data-model.md §3.8).
-    const validFrom = kind === 'permanent' ? now : (normaliseDate(input.valid_from) ?? now);
-    const validTo = kind === 'permanent' ? null : (normaliseDate(input.valid_to) ?? null);
+    const validFrom =
+      kind === 'permanent' ? now : (normaliseInstant(input.valid_from, 'valid_from', 'start') ?? now);
+    // У хронологической записи `valid_to` обязателен: не задан (или пуст) —
+    // равен `valid_from` (0.10.1, ADR 994d076a); у постоянной всегда NULL.
+    const validTo =
+      kind === 'permanent'
+        ? null
+        : (normaliseInstant(input.valid_to, 'valid_to', 'end') ?? validFrom);
+    // Флаг «учитывать время» — на формат дат не влияет; по умолчанию выключен.
+    const useTime = input.use_time === true ? 1 : 0;
 
     ndb
       .prepare(
         `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html,
-                               valid_from, valid_to, version,
+                               valid_from, valid_to, use_time, version,
                                created_at, updated_at, created_by, updated_by,
                                created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -554,6 +568,7 @@ export function createCommentWithTargets(
         bodyHtml,
         validFrom,
         validTo,
+        useTime,
         now,
         now,
         actorUserId,
@@ -625,14 +640,29 @@ export function updateComment(
       args.push(changes.body_md, renderMarkdown(changes.body_md));
     }
     if (current.kind === 'chronological') {
+      // Эффективное начало: правка `valid_from` либо текущее значение.
+      const nextFrom =
+        changes.valid_from === undefined
+          ? current.valid_from
+          : (normaliseInstant(changes.valid_from, 'valid_from', 'start') ?? new Date().toISOString());
       if (changes.valid_from !== undefined) {
         sets.push('valid_from = ?');
-        args.push(normaliseDate(changes.valid_from) ?? new Date().toISOString());
+        args.push(nextFrom);
       }
       if (changes.valid_to !== undefined) {
         sets.push('valid_to = ?');
-        args.push(normaliseDate(changes.valid_to) ?? null);
+        // Пустое окончание у хронологической = её началу (0.10.1, ADR 994d076a).
+        args.push(normaliseInstant(changes.valid_to, 'valid_to', 'end') ?? nextFrom);
+      } else if (changes.valid_from !== undefined && current.valid_to === null) {
+        // Наследная открытая запись: правка начала обязана закрыть интервал.
+        sets.push('valid_to = ?');
+        args.push(nextFrom);
       }
+    }
+    // Флаг «учитывать время» хранится на записи любого рода; на даты не влияет.
+    if (changes.use_time !== undefined) {
+      sets.push('use_time = ?');
+      args.push(changes.use_time ? 1 : 0);
     }
 
     const nowMs = Date.now();
@@ -955,20 +985,3 @@ function bumpVersion(ndb: NetworkDb, commentId: string, currentVersion: number, 
     .run(currentVersion + 1, now, actorUserId, nowMs, commentId, ndb.layerId);
 }
 
-/**
- * Normalise a date input to an ISO-8601 string. Accepts `Date`, an ISO string,
- * or a `YYYY-MM-DD` calendar date (stored verbatim to preserve the calendar
- * semantics of chronological comments). Empty/whitespace strings and `null`
- * yield `null`.
- */
-function normaliseDate(value: string | null | undefined | Date): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed === '') return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-    const parsed = new Date(trimmed);
-    return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString();
-  }
-  return value.toISOString();
-}
