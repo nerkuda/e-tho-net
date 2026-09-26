@@ -1455,7 +1455,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         .run(randomUUID(), sectionType.id, ctx.adminId, ctx.adminId);
       // A child thought of sectionA (so counters.parents_count > 0 on the child
       // is irrelevant; we just want a link from sectionA to a note to make
-      // usage_count sensible).
+      // deletion_blocks sensible).
       const note = randomUUID();
       ndb
         .prepare(
@@ -1504,7 +1504,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               parents_count: number;
               children_count: number;
               attachments_count: number;
-              usage_count: number;
+              deletion_blocks: number;
             };
           }>;
           thought_types: Record<string, { id: string; name: string }>;

@@ -421,9 +421,9 @@ describe(
         assert.equal(countThoughtRefUsages(ndb, owner), 0);
 
         // Зеркало в карточке мысли согласовано с проверкой удаления.
-        assert.equal(getThoughtMeta(ndb, value).usage_count, 1);
-        assert.equal(getThoughtMeta(ndb, value).usage_count, countThoughtRefUsages(ndb, value));
-        assert.equal(getThoughtMeta(ndb, owner).usage_count, countThoughtRefUsages(ndb, owner));
+        assert.equal(getThoughtMeta(ndb, value).deletion_blocks, 1);
+        assert.equal(getThoughtMeta(ndb, value).deletion_blocks, countThoughtRefUsages(ndb, value));
+        assert.equal(getThoughtMeta(ndb, owner).deletion_blocks, countThoughtRefUsages(ndb, owner));
 
         // «Очистить использование» снимает то же ребро (тот же резолв стороны).
         assert.equal(clearThoughtRefUsages(ndb, value), 1);

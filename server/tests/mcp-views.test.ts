@@ -65,7 +65,7 @@ interface ThoughtGetResponse {
     children_count: number;
     attachments_count: number;
     chrono_count: number;
-    usage_count: number;
+    deletion_blocks: number;
     permanent: unknown;
     link_stats: unknown;
     views: ThoughtMetaView[];

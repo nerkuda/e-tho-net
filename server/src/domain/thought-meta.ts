@@ -46,7 +46,7 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
   children_count: number;
   attachments_count: number;
   chrono_count: number;
-  usage_count: number;
+  deletion_blocks: number;
 } {
   const count = (sql: string, ...params: unknown[]): number =>
     (ndb.prepare(`SELECT COUNT(*) AS c FROM ${sql}`).get(...params) as { c: number }).c;
@@ -70,7 +70,10 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
     "comments_v WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'chronological'",
     thoughtId,
   );
-  // Использование — два плеча (миграция 040):
+  // Блокировки удаления — два плеча (миграция 040). Поле blocking-only и
+  // называется по смыслу — `deletion_blocks` (задача cfc55b01; прежнее имя
+  // `usage_count` вводило в заблуждение, потому что «Использование» после
+  // c0a2a2e6 показывает ВСЕ рёбра свойств-связей):
   //   * новое: рёбра блокирующих свойств-связей (0.8.1, dbf1e4aa). Направление
   //     свойства задаёт блокируемый конец: `out` — цель ребра, `in` — источник.
   //     Направление живёт в ПРИВЯЗКЕ (`type_properties.side`, миграция 042, ошибка
@@ -84,7 +87,7 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
   // (Зеркало countThoughtRefUsages в property-service; прямой импорт невозможен
   // из-за цикла thought-service → thought-meta. Направление по стороне привязки
   // обязано совпадать с этой функцией — согласованность держит тест
-  // thought-meta.test «usage_count согласован с countThoughtRefUsages».)
+  // thought-meta.test «deletion_blocks согласован с countThoughtRefUsages».)
   const legacyUsageCount = count(
     `property_values_v
      WHERE owner_type = 'thought'
@@ -120,7 +123,7 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
     children_count,
     attachments_count,
     chrono_count,
-    usage_count: legacyUsageCount + linkUsageCount,
+    deletion_blocks: legacyUsageCount + linkUsageCount,
   };
 }
 
