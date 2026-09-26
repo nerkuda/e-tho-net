@@ -1,16 +1,22 @@
 /**
- * Filter panel of the «Хроника» view (L20, 08-ui-spec.md §17).
+ * Панель отбора вида «Дневник» (L20, 0.10.1, элемент интерфейса 9b424548).
  *
- * Каркас формы (блоки с маркером, ключевые слова, чип-поля мыслей и типов,
- * автор/редактор, период, сортировка, футер) строит общий модуль
- * `lib/filter-form.ts`, критерии — единый конструктор `lib/filter-builder.ts`
- * (задача 3742dd59): своя модель (`ChronicleFilterState`), свой парсер
- * определения и свой конвертер в wire убраны — теперь их один экземпляр на
- * весь клиент.
+ * Состав панели — набор «Структур» (требование 306f74cc): календарь месяца
+ * (первый элемент, его строит хозяин экрана и передаёт header'ом), период
+ * «с»–«по» с пресетами токенов, ключевые слова с областью поиска, типы мыслей,
+ * типы связей, родительские мысли, свойства, дополнительно (актуальность +
+ * корзина), направление сортировки, футер «Применить/Очистить» + сохранённые
+ * отборы.
  *
- * Состав элементов панели (что именно отбирает «Хроника»): ключевые слова,
- * мысли (+подчинённые), типы мыслей и связей, сторона связи, автор/редактор,
- * период, направление сортировки, сохранённые отборы.
+ * Критерии ЗАПИСИ (ключевые слова/область, период, авторство) живут на верхнем
+ * уровне модели; критерии ЦЕЛЕЙ — во вложенной `targets` (тот же конструктор
+ * `lib/filter-builder.ts`, что у «Структур»; второй конструктор не рисуется).
+ * Двухпутевой поиск T7 (тела/заголовки записей + мыслевый путь) сохраняется в
+ * критерии «ключевые слова».
+ *
+ * Каркас формы — общий `lib/filter-form.ts`; контрол периода — общий
+ * `lib/period-editor.ts` (панельный вариант: поля «с»/«по» + пресеты, без
+ * переключателя режимов); сохранённые отборы — `lib/saved-filter-bar.ts`.
  */
 
 import {
@@ -22,7 +28,7 @@ import {
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
-import { div, el, fmtDate } from '../../lib/dom.js';
+import { div, fmtDate } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   filterEntityOptions,
@@ -33,7 +39,6 @@ import {
   type EntityOption,
 } from '../../lib/entity-picker.js';
 import {
-  buildAuthorshipSection,
   buildConditionsSection,
   buildEntityChipSection,
   buildFilterBlock,
@@ -41,6 +46,9 @@ import {
   buildFilterForm,
   buildKeywordsSection,
   buildSortSection,
+  buildTrashedRow,
+  buildTriRow,
+  extrasActive,
   type EntityChipSection,
   type FilterFormContext,
   type FilterSection,
@@ -62,20 +70,12 @@ import {
 } from '../../lib/saved-filter-bar.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
-import { checkboxRow } from '../../lib/ui/choice-row.js';
 import { SEARCH_DEBOUNCE_MS } from './diary.js';
 
 export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
 
-/** Ключ истории ввода строки поиска Хроники (общий механизм recent-values). */
-const KEYWORDS_HISTORY_KEY = 'chronicle.keywords';
-
-/** Подписи сторон связи (поле `link_scope`). */
-const LINK_SCOPE_LABELS: Record<ChronicleCriteriaState['linkScope'], string> = {
-  sources: 'только источники связей',
-  targets: 'только назначения связей',
-  both: 'источники и назначения связей',
-};
+/** Ключ истории ввода строки поиска «Дневника» (общий механизм recent-values). */
+const KEYWORDS_HISTORY_KEY = 'diary.keywords';
 
 /** Модель отбора — общая модель конструктора. */
 type FilterState = ChronicleCriteriaState;
@@ -83,26 +83,22 @@ type FilterState = ChronicleCriteriaState;
 let filter: FilterState = defaultChronicleCriteriaState();
 /** Ref of the selected saved filter (null — not saved yet / custom). */
 let savedFilterId: string | null = null;
-/** Chip meta of the «мысли» field, resolved by id (not persisted). */
-const thoughtClouds = new Map<string, ThoughtCloudInput>();
+/** Chip meta of the «Родительские мысли» field, resolved by id (not persisted). */
+const parentClouds = new Map<string, ThoughtCloudInput>();
 /** Строка сохранённых отборов (общий модуль `lib/saved-filter-bar.ts`). */
 let savedBar: SavedFilterBarHandle | null = null;
 /** Имя отбора в поле строки — переживает перерисовку панели. */
 let filterName = '';
 
 let panel: HTMLElement | null = null;
-/** Чип-поле «Мысли» текущей отрисовки (для внешнего добавления/drop). */
-let thoughtsField: EntityChipSection | null = null;
-/** Сворачивание группы «Автор / Редактор» (по умолчанию раскрыта). */
-let authorCollapsed = false;
-/**
- * Сворачивание группы «Период» (задача 2ebe4206): «Хроника» повторяет принцип
- * эталона «Структур» — группа сворачивается; по умолчанию свёрнута, пока
- * период пуст.
- */
+/** Узлы-заголовки панели (календарь) — переносятся при каждой перерисовке. */
+let headerNodes: readonly HTMLElement[] = [];
+/** Сворачивание группы «Период» (по умолчанию свёрнута, пока период пуст). */
 let periodCollapsed = true;
-/** Сворачивание группы «Критерии целей: свойства». */
-let targetsPropsCollapsed = true;
+/** Сворачивание группы «Свойства». */
+let propertiesCollapsed = true;
+/** Сворачивание группы «Дополнительно». */
+let extrasCollapsed = true;
 /** Реестр свойств сети (для условий целей), один REST-вызов на открытие. */
 const propertyDefs = new Map<string, NetworkProperty>();
 
@@ -112,6 +108,12 @@ interface PanelActions {
   apply: () => void;
   /** Переход к найденной записи (строка поиска выбрала запись). */
   jumpToRecord?: (row: ChronicleRow) => void;
+}
+
+/** Дополнения сборки панели. */
+interface PanelOptions {
+  /** Узлы над секциями (календарь месяца — первый элемент панели). */
+  header?: readonly HTMLElement[];
 }
 
 let actions: PanelActions = { apply: () => undefined };
@@ -136,7 +138,7 @@ function scheduleSearchApply(): void {
 
 /**
  * Источник «найденные записи» строки поиска (T7): живой поиск по телам и
- * заголовкам записей через критерий `keywords` хроники. Период и прочие
+ * заголовкам записей через критерий `keywords` «Дневника». Период и прочие
  * критерии здесь не применяются — иначе не найти запись вне текущего периода,
  * а её и открывает переход. Выбор строки — не подстановка текста, а переход.
  */
@@ -172,12 +174,12 @@ function recordSearchSource(): SuggestSource {
 
 /** Returns the current filter state. */
 export function getFilterState(): FilterState {
-  return { ...filter };
+  return { ...filter, targets: { ...filter.targets } };
 }
 
 /** Replaces the filter state and repaints the panel (L4 restore / saved filter). */
 export function setFilterState(next: FilterState): void {
-  filter = { ...next };
+  filter = { ...next, targets: { ...next.targets } };
   periodCollapsed = next.dateFrom === '' && next.dateTo === '';
   renderPanel();
 }
@@ -192,22 +194,22 @@ export function getSavedFilterId(): string | null {
   return savedFilterId;
 }
 
-/** Adds a thought to the «мысли» field (external drop / picker). */
+/** Adds a parent thought to the goals criteria (external drop / picker). */
 export function addThoughtToFilter(id: string): void {
-  if (!filter.thoughtIds.includes(id)) {
-    filter = { ...filter, thoughtIds: [...filter.thoughtIds, id] };
-    void syncChipsFromIds().then(() => thoughtsField?.fieldRefresh());
+  if (!filter.targets.parentIds.includes(id)) {
+    filter.targets = { ...filter.targets, parentIds: [...filter.targets.parentIds, id] };
+    void syncParentChips().then(() => renderPanel());
   }
 }
 
-/** Resolves chip metadata for the current ids (missing thoughts dropped). */
-async function syncChipsFromIds(): Promise<void> {
-  thoughtClouds.clear();
-  const ids = filter.thoughtIds;
+/** Resolves chip metadata for the current parent ids (missing thoughts dropped). */
+async function syncParentChips(): Promise<void> {
+  parentClouds.clear();
+  const ids = filter.targets.parentIds;
   if (ids.length === 0) return;
   try {
     const refs = await etn.thoughts.resolve(requireNetworkId(), ids);
-    for (const ref of refs) thoughtClouds.set(ref.id, { ...ref });
+    for (const ref of refs) parentClouds.set(ref.id, { ...ref });
   } catch {
     // Keep whatever chips we had (offline) — the ids stay in the filter.
   }
@@ -218,7 +220,7 @@ export async function reloadSavedFilters(): Promise<void> {
   await savedBar?.reload();
 }
 
-/** REST-хранилище отборов вида «Хроника» (`/saved-filters?view=chronicle`). */
+/** REST-хранилище отборов вида «Дневник» (`/saved-filters?view=chronicle`). */
 function savedFilterStore(): SavedFilterStore {
   return {
     list: async () =>
@@ -277,7 +279,8 @@ export function clearFilter(): void {
   savedFilterId = null;
   filterName = '';
   periodCollapsed = true;
-  targetsPropsCollapsed = true;
+  propertiesCollapsed = true;
+  extrasCollapsed = true;
   renderPanel();
 }
 
@@ -311,88 +314,11 @@ export function chronicleDefinition(): ChronicleFilterDefinition {
   return buildChronicleWire(filter, registryWithSides());
 }
 
-/** Секция «Мысли»: чип-поле + флаг «+подчинённые». */
-function buildThoughtsSection(ctx: FilterFormContext): EntityChipSection {
-  const section = buildEntityChipSection(ctx, {
-    title: 'Мысли',
-    getValues: () => filter.thoughtIds,
-    setValues: (values) => {
-      filter.thoughtIds = values;
-    },
-    loadOptions: (query) => thoughtsOptions(query),
-    optionsHeader: 'Мысли',
-    cloudOf: (id) => (id.startsWith('$') ? null : (thoughtClouds.get(id) ?? null)),
-    placeholder: 'Название мысли…',
-    picker: {
-      label: 'выбрать…',
-      open: async () => {
-        const result = await pickThoughtsDialog({
-          networkId: requireNetworkId(),
-          allowCreate: false,
-          allowLinkType: false,
-          selectedIds: filter.thoughtIds,
-        });
-        return result === null ? null : pickedThoughtIds(result);
-      },
-    },
-  });
-  const subtreeRow = div('st-f-tri-row');
-  const subtreeLabel = checkboxRow({
-    label: '+подчинённые мысли',
-    checked: filter.includeSubtree,
-    onChange: (checked) => {
-      filter.includeSubtree = checked;
-      ctx.touch();
-    },
-  }).row;
-  subtreeRow.append(el('span', 'st-f-tri-label', 'Подчинённые'), subtreeLabel);
-  section.body.append(subtreeRow);
-  // Облачка уже выбранных мыслей — догрузка по id.
-  void syncChipsFromIds().then(() => section.fieldRefresh());
-  return section;
-}
-
-/** Живой поиск мыслей для поля «Мысли» (общий пикер подсказок). */
-async function thoughtsOptions(query: string): Promise<EntityOption[]> {
-  const needle = query.trim();
-  if (needle === '') return [];
-  try {
-    const hits = await etn.thoughts.findDuplicates(requireNetworkId(), needle, [], []);
-    return hits.map((hit) => {
-      thoughtClouds.set(hit.id, { ...hit });
-      return thoughtEntityOption(hit);
-    });
-  } catch {
-    return [];
-  }
-}
-
-/** Секция «Сторона связи» (поле `link_scope`). */
-function buildLinkScopeSection(ctx: FilterFormContext): FilterSection {
-  const section = buildFilterBlock('Сторона связи', {
-    isNonEmpty: () => filter.linkScope !== 'both',
-  });
-  const select = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const scope of ['sources', 'targets', 'both'] as Array<ChronicleCriteriaState['linkScope']>) {
-    const option = el('option', '', LINK_SCOPE_LABELS[scope]) as HTMLOptionElement;
-    option.value = scope;
-    select.append(option);
-  }
-  select.value = filter.linkScope;
-  select.addEventListener('change', () => {
-    filter.linkScope = select.value as ChronicleCriteriaState['linkScope'];
-    ctx.touch();
-  });
-  section.body.append(select);
-  return section;
-}
-
 /**
- * Секция «Период»: общий контрол периода `lib/period-editor.ts` (T5,
- * ADR d4d53fe6). Свои поля дат панели запрещены сторожем
- * `guard-period-editor`: единственный источник дат — этот контрол, его же
- * поля пишет клик по календарю. Контрол лишь сообщает значение — применение
- * делает вызывающий (кнопка «Применить»).
+ * Секция «Период»: панельный вариант общего контрола `lib/period-editor.ts`
+ * (элемент 2f14de06, требование 91f8d8dd): поля «с»/«по» + выпадашка пресетов,
+ * БЕЗ переключателя режимов. Контрол лишь сообщает значение — применение
+ * делает кнопка «Применить».
  */
 function periodSection(ctx: FilterFormContext): FilterSection {
   const section = buildFilterBlock('Период', {
@@ -402,7 +328,7 @@ function periodSection(ctx: FilterFormContext): FilterSection {
     isNonEmpty: () => filter.dateFrom !== '' || filter.dateTo !== '',
   });
   const editor = buildPeriodEditor({
-    mode: 'range',
+    variant: 'panel',
     value: { from: filter.dateFrom, to: filter.dateTo },
     label: 'Период дневника',
     onChange: (value: PeriodValue) => {
@@ -415,16 +341,13 @@ function periodSection(ctx: FilterFormContext): FilterSection {
   return section;
 }
 
-/**
- * Секция «Критерии целей: типы мыслей» (0.10.1, требование 306f74cc): тот же
- * набор критериев, что у панели «Структур», применённый к мыслям-целям записи.
- */
+/** Секция «Типы мыслей» критериев целей (набор «Структур»). */
 function targetsTypesSection(ctx: FilterFormContext): FilterSection {
   return buildEntityChipSection(ctx, {
-    title: 'Критерии целей: типы мыслей',
-    getValues: () => filter.targets.typeIds,
+    title: 'Типы мыслей',
+    getValues: () => ctx.getState().typeIds,
     setValues: (values) => {
-      filter.targets.typeIds = values;
+      ctx.getState().typeIds = values;
     },
     loadOptions: (query) =>
       filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
@@ -436,16 +359,138 @@ function targetsTypesSection(ctx: FilterFormContext): FilterSection {
         pickEntitiesModal({
           networkId: requireNetworkId(),
           kind: 'thought-types',
-          title: 'Цели: типы мыслей',
-          currentIds: filter.targets.typeIds,
+          title: 'Типы мыслей целей',
+          currentIds: ctx.getState().typeIds,
         }),
     },
   });
 }
 
+/** Секция «Типы связей» критериев целей. */
+function targetsLinkTypesSection(ctx: FilterFormContext): FilterSection {
+  return buildEntityChipSection(ctx, {
+    title: 'Типы связей',
+    getValues: () => ctx.getState().linkTypeIds,
+    setValues: (values) => {
+      ctx.getState().linkTypeIds = values;
+    },
+    loadOptions: (query) =>
+      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
+    optionsHeader: 'Типы связей',
+    placeholder: 'Название типа…',
+    picker: {
+      label: 'список типов…',
+      open: () =>
+        pickEntitiesModal({
+          networkId: requireNetworkId(),
+          kind: 'link-types',
+          title: 'Типы связей целей',
+          currentIds: ctx.getState().linkTypeIds,
+        }),
+    },
+  });
+}
+
+/**
+ * Секция «Родительские мысли» критериев целей: отбор записей, у которых есть
+ * цель, подчинённая любой из указанных мыслей.
+ */
+function targetsParentsSection(ctx: FilterFormContext): EntityChipSection {
+  const section = buildEntityChipSection(ctx, {
+    title: 'Родительские мысли',
+    getValues: () => ctx.getState().parentIds,
+    setValues: (values) => {
+      ctx.getState().parentIds = values;
+    },
+    loadOptions: (query) => parentThoughtOptions(query),
+    optionsHeader: 'Мысли',
+    cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
+    placeholder: 'Название мысли…',
+    tooltip: 'Отобрать записи, цель которых подчинена указанным мыслям',
+    picker: {
+      label: 'выбрать…',
+      open: async () => {
+        const result = await pickThoughtsDialog({
+          networkId: requireNetworkId(),
+          allowCreate: false,
+          allowLinkType: false,
+          selectedIds: ctx.getState().parentIds,
+          title: 'Родительские мысли',
+        });
+        return result === null ? null : pickedThoughtIds(result);
+      },
+    },
+  });
+  void syncParentChips().then(() => section.fieldRefresh());
+  return section;
+}
+
+/**
+ * Секция «Дополнительно» критериев целей: только актуальность и корзина
+ * (элемент 9b424548). Флажки гаснут, когда соответствующее содержимое
+ * настройками скрыто — как у панели «Структур».
+ */
+function targetsExtrasSection(ctx: FilterFormContext): FilterSection {
+  const section = buildFilterBlock('Дополнительно', {
+    collapsible: true,
+    getCollapsed: () => extrasCollapsed,
+    setCollapsed: (v) => (extrasCollapsed = v),
+    isNonEmpty: () => extrasActive(ctx.getState()),
+  });
+  section.body.append(
+    buildTriRow(
+      ctx,
+      'Только актуальные',
+      () => ctx.getState().active,
+      (v) => (ctx.getState().active = v),
+      {
+        yes: 'актуальные',
+        no: 'не актуальные',
+        ...(store.state.showInactive
+          ? {}
+          : {
+              disabled: true,
+              tooltip:
+                'Доступно при включённой настройке «Показывать неактуальные мысли и связи» (Настройки мыслесети → Видимость)',
+            }),
+      },
+    ),
+    buildTrashedRow(ctx, 'Включая помеченные на удаление', {
+      ...(store.state.showTrash
+        ? {}
+        : {
+            disabled: true,
+            tooltip:
+              'Доступно при включённой настройке «Показывать содержимое корзины» (Настройки мыслесети → Видимость)',
+          }),
+    }),
+  );
+  return section;
+}
+
+/** Живой поиск мыслей для поля «Родительские мысли». */
+async function parentThoughtOptions(query: string): Promise<EntityOption[]> {
+  const needle = query.trim();
+  if (needle === '') return [];
+  try {
+    const hits = await etn.thoughts.findDuplicates(requireNetworkId(), needle, [], []);
+    return hits.map((hit) => {
+      parentClouds.set(hit.id, { ...hit });
+      return thoughtEntityOption(hit);
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** Builds and mounts the filter panel into `host`; returns the root element. */
-export function mountChronicleFilterPanel(host: HTMLElement, panelActions: PanelActions): HTMLElement {
+export function mountChronicleFilterPanel(
+  host: HTMLElement,
+  panelActions: PanelActions,
+  opts: PanelOptions = {},
+): HTMLElement {
   actions = panelActions;
+  headerNodes = opts.header ?? [];
   host.replaceChildren();
   panel = div('chron-filter');
   host.append(panel);
@@ -471,23 +516,23 @@ function renderPanel(): void {
     registry: registryWithSides(),
     touch,
   };
-  // Критерии целей — та же модель, что у «Структур» (0.10.1, 306f74cc):
-  // контекст читает вложенное состояние `filter.targets`.
+  // Критерии целей — вложенная модель `filter.targets` (0.10.1, 306f74cc).
   const targetsCtx: FilterFormContext = {
     ...ctx,
     getState: () => filter.targets,
   };
 
-  thoughtsField = buildThoughtsSection(ctx);
   sections.push(
+    periodSection(ctx),
     buildKeywordsSection(ctx, {
-      title: 'Поиск',
+      title: 'Ключевые слова',
       placeholder: 'Поиск по записям: счет* -вод*',
+      showScope: true,
       tooltip:
         'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. ' +
-        'Ищется в телах и заголовках записей, а также в названиях, синонимах и ' +
-        'комментариях их мыслей. Подсказка «Найденные записи» открывает запись ' +
-        'переходом (период из записи, прокрутка и подсветка).',
+        'Ищется в телах и заголовках записей, а также в выбранных областях их мыслей. ' +
+        'Подсказка «Найденные записи» открывает запись переходом ' +
+        '(период из записи, прокрутка и подсветка).',
       onInput: () => scheduleSearchApply(),
       extraSources: [recordSearchSource()],
       onPickEntry: (entry) => {
@@ -514,58 +559,14 @@ function renderPanel(): void {
         }
       },
     }),
-    thoughtsField,
-    buildEntityChipSection(ctx, {
-      title: 'Типы мыслей',
-      getValues: () => filter.typeIds,
-      setValues: (values) => {
-        filter.typeIds = values;
-      },
-      loadOptions: (query) =>
-        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
-      optionsHeader: 'Типы мыслей',
-      placeholder: 'Название типа…',
-      picker: {
-        label: 'список типов…',
-        open: () =>
-          pickEntitiesModal({
-            networkId: requireNetworkId(),
-            kind: 'thought-types',
-            title: 'Типы мыслей',
-            currentIds: filter.typeIds,
-          }),
-      },
-    }),
-    buildEntityChipSection(ctx, {
-      title: 'Типы связей',
-      getValues: () => filter.linkTypeIds,
-      setValues: (values) => {
-        filter.linkTypeIds = values;
-      },
-      loadOptions: (query) =>
-        filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
-      optionsHeader: 'Типы связей',
-      placeholder: 'Название типа…',
-      picker: {
-        label: 'список типов…',
-        open: () =>
-          pickEntitiesModal({
-            networkId: requireNetworkId(),
-            kind: 'link-types',
-            title: 'Типы связей',
-            currentIds: filter.linkTypeIds,
-          }),
-      },
-    }),
-    buildLinkScopeSection(ctx),
-    buildAuthorshipSection(ctx, { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) }),
-    periodSection(ctx),
     targetsTypesSection(targetsCtx),
-    buildConditionsSection(
-      targetsCtx,
-      { get: () => targetsPropsCollapsed, set: (v) => (targetsPropsCollapsed = v) },
-      { title: 'Критерии целей: свойства' },
-    ),
+    targetsLinkTypesSection(targetsCtx),
+    targetsParentsSection(targetsCtx),
+    buildConditionsSection(targetsCtx, {
+      get: () => propertiesCollapsed,
+      set: (v) => (propertiesCollapsed = v),
+    }),
+    targetsExtrasSection(targetsCtx),
     buildSortSection(ctx, { showSort: false }),
   );
 
@@ -589,10 +590,15 @@ function renderPanel(): void {
     },
   });
 
-  buildFilterForm({ sections, footer: [btnRow, savedBar.root], mount: panel });
+  buildFilterForm({
+    sections,
+    header: [...headerNodes],
+    footer: [btnRow, savedBar.root],
+    mount: panel,
+  });
 }
 
-/** Global Ctrl+Enter shortcut for the chronicle view (hosted by the table). */
+/** Global Ctrl+Enter shortcut for the diary view (hosted by the feed). */
 export function wireChronicleApplyShortcut(container: HTMLElement): void {
   container.addEventListener('keydown', (event) => {
     if (event.ctrlKey && event.key === 'Enter') {

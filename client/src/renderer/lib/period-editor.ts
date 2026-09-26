@@ -37,7 +37,7 @@
  * (сторож `guard-period-editor`).
  */
 
-import { div, span } from './dom.js';
+import { div, el, span } from './dom.js';
 import { optionsSuggestSource, wireSuggest, type SuggestHandle } from './suggest-dropdown.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
@@ -78,6 +78,15 @@ export interface PeriodEditorOptions {
   allowTokens?: boolean;
   /** Токены-кандидаты подсказок; по умолчанию — {@link PERIOD_TOKEN_PRESETS}. */
   tokenOptions?: readonly string[];
+  /**
+   * Вариант контрола. `editor` (по умолчанию) — с переключателем режимов
+   * «Дата / Дата и время / Диапазон» (вкладка записи и лента). `panel` —
+   * панельный вариант элемента «Поле периода»: только диапазон «с»–«по»,
+   * без переключателя режимов, плюс выпадашка пресетов периода.
+   */
+  variant?: 'editor' | 'panel';
+  /** Пресеты панельного варианта; по умолчанию — {@link periodPresets}. */
+  presets?: readonly PeriodPreset[];
   /** Поле и переключатель недоступны. */
   disabled?: boolean;
 }
@@ -105,11 +114,14 @@ export interface PeriodEditorHandle {
 // ---------------------------------------------------------------------------
 
 /**
- * Глобальный токен даты периода: `$today`/`$now`, необязательная арифметика
- * `±Nd` (целое число дней). Только эта форма допустима в периоде: контекстных
- * токенов `$thought.*` у периода нет (требование 91f8d8dd).
+ * Глобальный токен даты периода: `$today`/`$now`, границы недели/месяца
+ * (`$week.start`/`$week.end`/`$month.start`/`$month.end`), необязательная
+ * арифметика `±N<unit>` — `d` (дни), `w` (недели), `mo` (календарные месяцы).
+ * Только эта форма допустима в периоде: контекстных токенов `$thought.*` у
+ * периода нет (требование 91f8d8dd).
  */
-export const GLOBAL_DATE_TOKEN_RE = /^\$(?:today|now)(?:[+-]\d+d)?$/;
+export const GLOBAL_DATE_TOKEN_RE =
+  /^\$(?:today|now|week\.(?:start|end)|month\.(?:start|end))(?:(?:[+-])\d+(?:d|w|mo))?$/;
 
 /** Является ли строка допустимым глобальным токеном даты периода. */
 export function isGlobalDateToken(text: string): boolean {
@@ -118,18 +130,80 @@ export function isGlobalDateToken(text: string): boolean {
 
 /**
  * Токены-кандидаты для подсказок контрола: глобальные токены и типовые
- * смещения дней. Значения — ровно то, что уйдёт строкой на сервер.
+ * смещения. Значения — ровно то, что уйдёт строкой на сервер.
  */
 export const PERIOD_TOKEN_PRESETS: readonly { text: string; label: string }[] = [
   { text: '$today', label: '$today — сегодня' },
   { text: '$now', label: '$now — текущий момент' },
   { text: '$today+1d', label: '$today+1d — завтра' },
   { text: '$today-1d', label: '$today-1d — вчера' },
+  { text: '$week.start', label: '$week.start — начало недели (пн)' },
+  { text: '$week.end', label: '$week.end — конец недели (вс)' },
+  { text: '$week.start-1w', label: '$week.start-1w — начало прошлой недели' },
+  { text: '$week.start+1w', label: '$week.start+1w — начало будущей недели' },
+  { text: '$month.start', label: '$month.start — начало месяца' },
+  { text: '$month.end', label: '$month.end — конец месяца' },
+  { text: '$month.start-1mo', label: '$month.start-1mo — начало прошлого месяца' },
+  { text: '$month.end+1mo', label: '$month.end+1mo — конец будущего месяца' },
   { text: '$today+7d', label: '$today+7d — через неделю' },
   { text: '$today-7d', label: '$today-7d — неделю назад' },
   { text: '$today+30d', label: '$today+30d — через месяц' },
   { text: '$today-30d', label: '$today-30d — месяц назад' },
 ];
+
+/**
+ * Пресет периода панели (0.10.1, элемент 2f14de06, панельный вариант):
+ * одна строка выпадашки сразу задаёт обе границы «с»/«по» токенами.
+ */
+export interface PeriodPreset {
+  /** Устойчивый идентификатор (для тестов/сохранения). */
+  id: string;
+  /** Подпись в выпадашке. */
+  label: string;
+  /** Начало периода (дата или токен). */
+  from: string;
+  /** Конец периода (дата или токен). */
+  to: string;
+}
+
+/**
+ * Пресеты панели периода «Дневника» (требование 91f8d8dd, задача 0.10.1):
+ * сегодня; границы этой/прошлой/будущей недели и месяца; N последних/будущих
+ * дней (включая сегодня). Неделя с понедельника. Строки — ровно то, что уйдёт
+ * на сервер; клиент раскрывает их для подсветки календаря.
+ */
+export function periodPresets(): readonly PeriodPreset[] {
+  return [
+    { id: 'today', label: 'Сегодня', from: '$today', to: '$today' },
+    { id: 'week', label: 'Эта неделя', from: '$week.start', to: '$week.end' },
+    { id: 'week-prev', label: 'Прошлая неделя', from: '$week.start-1w', to: '$week.end-1w' },
+    { id: 'week-next', label: 'Будущая неделя', from: '$week.start+1w', to: '$week.end+1w' },
+    { id: 'month', label: 'Этот месяц', from: '$month.start', to: '$month.end' },
+    { id: 'month-prev', label: 'Прошлый месяц', from: '$month.start-1mo', to: '$month.end-1mo' },
+    { id: 'month-next', label: 'Будущий месяц', from: '$month.start+1mo', to: '$month.end+1mo' },
+    ...lastDaysPresets(),
+  ];
+}
+
+/** Пресеты «N последних/будущих дней» (включая сегодня): формула требования 91f8d8dd. */
+function lastDaysPresets(): PeriodPreset[] {
+  const out: PeriodPreset[] = [];
+  for (const n of [5, 7, 30]) {
+    out.push({
+      id: `last-${n}`,
+      label: `${n} последних дней`,
+      from: n === 1 ? '$today' : `$today-${n - 1}d`,
+      to: '$today',
+    });
+    out.push({
+      id: `next-${n}`,
+      label: `${n} будущих дней`,
+      from: '$today',
+      to: n === 1 ? '$today' : `$today+${n - 1}d`,
+    });
+  }
+  return out;
+}
 
 /** Разобранная граница периода. */
 export type ParsedBound =
@@ -183,8 +257,9 @@ export function validatePeriodToken(text: string): string | null {
   if (!value.includes('$')) return null;
   if (isGlobalDateToken(value)) return null;
   return (
-    `«${value}» — не токен периода: доступны только $today/$now ` +
-    'и арифметика ±Nd (токены $thought.* требуют контекста мысли).'
+    `«${value}» — не токен периода: доступны $today/$now, $week.start/$week.end, ` +
+    '$month.start/$month.end и арифметика ±Nd/±Nw/±Nmo (токены $thought.* ' +
+    'требуют контекста мысли).'
   );
 }
 
@@ -381,8 +456,11 @@ const MODE_ITEMS = [
 export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle {
   const allowTokens = opts.allowTokens !== false;
   const tokenPresets = opts.tokenOptions ?? PERIOD_TOKEN_PRESETS.map((t) => t.text);
+  const panel = opts.variant === 'panel';
+  const presets = opts.presets ?? (panel ? periodPresets() : []);
 
-  let mode: PeriodMode = opts.mode ?? 'date';
+  // Панельный вариант — всегда диапазон «с»–«по» и без переключателя режимов.
+  let mode: PeriodMode = panel ? 'range' : (opts.mode ?? 'date');
   let from = emptyBound();
   let to = emptyBound();
 
@@ -390,18 +468,47 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', opts.label ?? 'Период');
 
-  const modes = segmentedControl({
-    items: MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
-    activeId: mode,
-    ariaLabel: 'Режим периода',
-    size: 's',
-    onChange: (id) => {
-      applyMode(id as PeriodMode, true);
-    },
-  });
-  root.append(modes.root);
+  let modes: ReturnType<typeof segmentedControl> | null = null;
+  if (!panel) {
+    modes = segmentedControl({
+      items: MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
+      activeId: mode,
+      ariaLabel: 'Режим периода',
+      size: 's',
+      onChange: (id) => {
+        applyMode(id as PeriodMode, true);
+      },
+    });
+    root.append(modes.root);
+  }
 
   const fields = div(FIELDS_CLASS);
+
+  /** Выпадашка пресетов панельного варианта: команда задаёт обе границы. */
+  const buildPresetSelect = (): HTMLSelectElement => {
+    const select = el('select', 'pe-presets') as HTMLSelectElement;
+    const placeholder = el('option', '', '— пресет периода —') as HTMLOptionElement;
+    placeholder.value = '';
+    select.append(placeholder);
+    for (const p of presets) {
+      const o = el('option', '', p.label) as HTMLOptionElement;
+      o.value = p.id;
+      select.append(o);
+    }
+    select.addEventListener('change', () => {
+      const picked = presets.find((p) => p.id === select.value);
+      select.value = '';
+      if (picked === undefined) return;
+      from = { text: picked.from, time: '', instant: null };
+      to = { text: picked.to, time: '', instant: null };
+      normalizeTimes();
+      repaint();
+      emit();
+    });
+    return select;
+  };
+
+  if (panel && presets.length > 0) root.append(buildPresetSelect());
   root.append(fields);
 
   const suggestHandles: SuggestHandle[] = [];
@@ -550,7 +657,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     }
     mode = next;
     normalizeTimes();
-    modes.setActive(next);
+    modes?.setActive(next);
     repaint();
     if (shouldEmit) emit();
   }

@@ -21,8 +21,11 @@ import {
   groupByLocalDays,
   hasRecordContent,
   isLastChip,
+  isPeriodToken,
   isoWeekNumber,
   localDay,
+  periodTokensForRange,
+  resolveDateToken,
   resolvePeriodDay,
   rowDays,
   slotDeleteNeedsNetwork,
@@ -231,5 +234,80 @@ describe('diary: чипсы записи (c81964c7)', () => {
     assert.equal(isLastChip([]), true);
     assert.equal(isLastChip([thoughtTarget('a')]), true);
     assert.equal(isLastChip([thoughtTarget('a'), thoughtTarget('b')]), false);
+  });
+});
+
+describe('diary: раскрытие токенов дат периода (0.10.1, 91f8d8dd)', () => {
+  const today = '2026-09-26'; // суббота
+
+  it('границы недели/месяца раскрываются относительно локального дня', () => {
+    assert.equal(resolveDateToken('$today', today), '2026-09-26');
+    assert.equal(resolveDateToken('$week.start', today), '2026-09-21');
+    assert.equal(resolveDateToken('$week.end', today), '2026-09-27');
+    assert.equal(resolveDateToken('$month.start', today), '2026-09-01');
+    assert.equal(resolveDateToken('$month.end', today), '2026-09-30');
+  });
+
+  it('арифметика ±Nd/±Nw/±Nmo сдвигает границы', () => {
+    assert.equal(resolveDateToken('$today-1d', today), '2026-09-25');
+    assert.equal(resolveDateToken('$week.start-1w', today), '2026-09-14');
+    assert.equal(resolveDateToken('$week.end+1w', today), '2026-10-04');
+    assert.equal(resolveDateToken('$month.start-1mo', today), '2026-08-01');
+    assert.equal(resolveDateToken('$month.end+1mo', today), '2026-10-31');
+  });
+
+  it('resolvePeriodDay понимает прежние и новые токены', () => {
+    assert.equal(resolvePeriodDay('$today+1d', today), '2026-09-27');
+    assert.equal(resolvePeriodDay('$month.end', today), '2026-09-30');
+    assert.equal(isPeriodToken('$week.start'), true);
+    assert.equal(isPeriodToken('$thought.id'), false);
+    assert.equal(localDay('$week.start'), '', 'токен — не «голая дата»');
+  });
+
+  it('месячная арифметика прижимает день к концу месяца', () => {
+    assert.equal(resolveDateToken('$month.end', '2026-03-31'), '2026-03-31');
+    assert.equal(resolveDateToken('$month.end+1mo', '2026-03-31'), '2026-04-30');
+  });
+});
+
+describe('diary: синхронизация календаря и полей периода (91f8d8dd)', () => {
+  const today = '2026-09-26'; // суббота
+
+  it('день=сегодня, неделя и месяц распознаются в токены', () => {
+    assert.deepEqual(periodTokensForRange('2026-09-26', '2026-09-26', today), {
+      from: '$today',
+      to: '$today',
+    });
+    assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today), {
+      from: '$week.start',
+      to: '$week.end',
+    });
+    assert.deepEqual(periodTokensForRange('2026-09-14', '2026-09-20', today), {
+      from: '$week.start-1w',
+      to: '$week.end-1w',
+    });
+    assert.deepEqual(periodTokensForRange('2026-09-28', '2026-10-04', today), {
+      from: '$week.start+1w',
+      to: '$week.end+1w',
+    });
+    assert.deepEqual(periodTokensForRange('2026-09-01', '2026-09-30', today), {
+      from: '$month.start',
+      to: '$month.end',
+    });
+    assert.deepEqual(periodTokensForRange('2026-08-01', '2026-08-31', today), {
+      from: '$month.start-1mo',
+      to: '$month.end-1mo',
+    });
+  });
+
+  it('произвольный период даёт точные даты', () => {
+    assert.deepEqual(periodTokensForRange('2026-09-10', '2026-09-12', today), {
+      from: '2026-09-10',
+      to: '2026-09-12',
+    });
+    assert.deepEqual(periodTokensForRange('2026-09-06', '2026-09-06', today), {
+      from: '2026-09-06',
+      to: '2026-09-06',
+    });
   });
 });

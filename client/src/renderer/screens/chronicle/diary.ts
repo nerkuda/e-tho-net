@@ -18,8 +18,10 @@ import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
 /** «Голая дата» `YYYY-MM-DD`. */
 const BARE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Глобальный токен даты периода: `$today`/`$now` с арифметикой `±Nd`. */
-const TOKEN_RE = /^\$(?:today|now)([+-](\d+)d)?$/;
+/** Голова глобального токена даты периода (0.10.1, требование 91f8d8dd). */
+const TOKEN_HEAD_RE = /^\$(today|now|week\.start|week\.end|month\.start|month\.end)/;
+/** Хвостовая арифметика токена: `±Nd` / `±Nw` / `±Nmo`. */
+const TOKEN_ARITH_RE = /^([+-])(\d+)(mo|w|d)$/;
 
 /** Один день ленты: локальная дата `YYYY-MM-DD` и записи, видимые в этот день. */
 export interface DiaryDay {
@@ -47,10 +49,81 @@ export function localDay(iso: string): string {
   if (value === '') return '';
   const bare = BARE_DATE_RE.exec(value);
   if (bare !== null) return value;
-  if (TOKEN_RE.test(value)) return '';
+  if (isPeriodToken(value)) return '';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '';
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** Является ли строка глобальным токеном даты периода (новая грамматика). */
+export function isPeriodToken(text: string): boolean {
+  return TOKEN_HEAD_RE.test(text.trim());
+}
+
+/**
+ * Раскрыть глобальный токен даты относительно локального дня наблюдателя
+ * (`today`) — зеркало серверного раскрытия для подсветки календаря. Неделя
+ * начинается с понедельника; месячная арифметика сдвигает ЯКОРЬ месяца
+ * (границы — первое/последнее число нужного месяца). `''` — не токен.
+ */
+export function resolveDateToken(text: string, today: string = todayLocal()): string {
+  const value = text.trim();
+  const head = TOKEN_HEAD_RE.exec(value);
+  if (head === null) return '';
+  const rest = value.slice(head[0].length);
+  let days = 0;
+  let months = 0;
+  if (rest !== '') {
+    const m = TOKEN_ARITH_RE.exec(rest);
+    if (m === null) return '';
+    const n = Number(m[2]) * (m[1] === '-' ? -1 : 1);
+    if (m[3] === 'd') days = n;
+    else if (m[3] === 'w') days = n * 7;
+    else months = n;
+  }
+  switch (head[1]) {
+    case 'today':
+    case 'now':
+      return addMonths(addDays(today, days), months);
+    case 'week.start': {
+      const monday = addDays(today, -mondayIndex(today));
+      return addMonths(addDays(monday, days), months);
+    }
+    case 'week.end': {
+      const sunday = addDays(today, 6 - mondayIndex(today));
+      return addMonths(addDays(sunday, days), months);
+    }
+    case 'month.start': {
+      const first = `${today.slice(0, 7)}-01`;
+      return addMonths(first, months);
+    }
+    case 'month.end': {
+      const first = `${today.slice(0, 7)}-01`;
+      return monthEdge(addMonths(first, months), 'end');
+    }
+    default:
+      return '';
+  }
+}
+
+/** Сдвиг «голой даты» на `n` календарных месяцев с прижатием дня к концу месяца. */
+function addMonths(day: string, n: number): string {
+  if (n === 0) return day;
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return day;
+  const year = Number(m[1]);
+  const month = Number(m[2]) - 1 + n;
+  const date = Number(m[3]);
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date, lastDay))).toISOString().slice(0, 10);
+}
+
+/** Граница месяца `day` (должен быть первым числом): `start` — само число, `end` — последнее. */
+function monthEdge(firstOfMonth: string, edge: 'start' | 'end'): string {
+  const m = BARE_DATE_RE.exec(firstOfMonth.trim());
+  if (m === null) return '';
+  if (edge === 'start') return firstOfMonth;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)).toISOString().slice(0, 10);
 }
 
 /** Сдвиг календарного дня на `n` суток (арифметика в UTC — без переходов DST). */
@@ -72,12 +145,52 @@ export function resolvePeriodDay(value: string, today: string = todayLocal()): s
   if (text === '') return '';
   const bare = BARE_DATE_RE.exec(text);
   if (bare !== null) return text;
-  const token = TOKEN_RE.exec(text);
-  if (token !== null) {
-    const shift = token[2] !== undefined ? Number(token[2]) * (text.includes('-') ? -1 : 1) : 0;
-    return addDays(today, shift);
-  }
+  if (isPeriodToken(text)) return resolveDateToken(text, today);
   return localDay(text);
+}
+
+/**
+ * Обратное преобразование периода календаря в значения полей панели
+ * (требование 91f8d8dd, элемент 55b07702): клик по дате/неделе пытается
+ * распознать ШАБЛОН и записать токены, а не точные даты:
+ *
+ *  * один день, равный сегодня → `$today`/`$today`;
+ *  * ровно эта/прошлая/будущая неделя (пн…вс) → `$week.start`/`$week.end`
+ *    с оффсетом `±1w`;
+ *  * ровно этот/прошлый/будущий месяц → `$month.start`/`$month.end` с `±1mo`;
+ *  * иначе — точные даты `YYYY-MM-DD`.
+ */
+export function periodTokensForRange(
+  from: string,
+  to: string,
+  today: string = todayLocal(),
+): PeriodRange {
+  if (from === '' && to === '') return { from: '', to: '' };
+  if (from === to && from === today) return { from: '$today', to: '$today' };
+
+  const weekAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
+    { f: '$week.start', t: '$week.end', ...weekPeriod(today) },
+    { f: '$week.start-1w', t: '$week.end-1w', ...weekPeriod(addDays(today, -7)) },
+    { f: '$week.start+1w', t: '$week.end+1w', ...weekPeriod(addDays(today, 7)) },
+  ];
+  for (const w of weekAnchors) {
+    if (from === w.from && to === w.to) return { from: w.f, to: w.t };
+  }
+  const monthAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
+    { f: '$month.start', t: '$month.end', ...monthPeriod(today) },
+    { f: '$month.start-1mo', t: '$month.end-1mo', ...monthPeriod(addMonths(today, -1)) },
+    { f: '$month.start+1mo', t: '$month.end+1mo', ...monthPeriod(addMonths(today, 1)) },
+  ];
+  for (const mo of monthAnchors) {
+    if (from === mo.from && to === mo.to) return { from: mo.f, to: mo.t };
+  }
+  return { from, to };
+}
+
+/** Период месяца (первое — последнее число) для дня `day`. */
+function monthPeriod(day: string): PeriodRange {
+  const first = `${day.slice(0, 7)}-01`;
+  return { from: first, to: monthEdge(first, 'end') };
 }
 
 /**
