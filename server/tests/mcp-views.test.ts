@@ -354,6 +354,187 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Регресс ошибки 78fd39b7: write-фаза `type_views` безусловно требовала
+  // `thought_type`/`thought_type_ref` даже для `update`/`delete`, где тип
+  // выводится из адресуемого отбора (`id` XOR `ref_for_update`) и указывать
+  // его не нужно.
+  it('etn.ontology.write type_views: update/delete по id без thought_type (ошибка 78fd39b7)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // create — тип-владелец обязателен, отбор создаётся.
+        const createRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'v1',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Работы версии',
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+                position: 0,
+                is_default: false,
+              },
+            ],
+          },
+        });
+        assert.equal(createRes.isError, undefined, toolText(createRes));
+        const created = toolJson<{
+          type_views: Array<{ id: string; action: string }>;
+        }>(createRes);
+        assert.equal(created.type_views[0]!.action, 'created');
+        const viewId = created.type_views[0]!.id;
+        assert.ok(viewId);
+
+        // update по id БЕЗ thought_type/thought_type_ref.
+        const updateRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [{ action: 'update', id: viewId, name: 'Работы версии (правка)' }],
+          },
+        });
+        assert.equal(updateRes.isError, undefined, toolText(updateRes));
+        const updated = toolJson<{
+          type_views: Array<{ id: string; action: string; thought_type_id: string }>;
+        }>(updateRes);
+        assert.equal(updated.type_views[0]!.action, 'updated');
+        assert.equal(updated.type_views[0]!.id, viewId);
+        assert.ok(updated.type_views[0]!.thought_type_id, 'тип-владелец выведен из отбора');
+        const afterUpdate = ndb
+          .prepare('SELECT name FROM thought_type_views_v WHERE id = ?')
+          .get(viewId) as { name: string } | undefined;
+        assert.equal(afterUpdate?.name, 'Работы версии (правка)', 'правка реально применена');
+
+        // update по id С thought_type — тоже работает (обратная совместимость).
+        const updateWithType = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              { action: 'update', id: viewId, thought_type: 'версия', description: 'с типом' },
+            ],
+          },
+        });
+        assert.equal(updateWithType.isError, undefined, toolText(updateWithType));
+
+        // delete по id БЕЗ thought_type.
+        const deleteRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [{ action: 'delete', id: viewId }],
+          },
+        });
+        assert.equal(deleteRes.isError, undefined, toolText(deleteRes));
+        const deleted = toolJson<{ type_views: Array<{ id: string; action: string }> }>(deleteRes);
+        assert.equal(deleted.type_views[0]!.action, 'deleted');
+        assert.equal(deleted.type_views[0]!.id, viewId);
+
+        // create без типа — валидация сохраняется.
+        const badRes = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                action: 'create',
+                name: 'Без типа',
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+              },
+            ],
+          },
+        });
+        assert.equal(badRes.isError, true, 'create без типа должен падать');
+        assert.match(toolText(badRes), /thought_type/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.ontology.write type_views: update/delete по ref_for_update без thought_type (ошибка 78fd39b7)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // create + update в одном батче: update адресует созданный отбор
+        // через `ref_for_update`, тип явно не указан.
+        const updateBatch = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'v1',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Черновик',
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+              },
+              { action: 'update', ref_for_update: 'v1', name: 'Финал' },
+            ],
+          },
+        });
+        assert.equal(updateBatch.isError, undefined, toolText(updateBatch));
+        const upd = toolJson<{
+          type_views: Array<{ id: string; action: string }>;
+        }>(updateBatch);
+        assert.equal(upd.type_views[0]!.action, 'created');
+        assert.equal(upd.type_views[1]!.action, 'updated');
+        assert.equal(upd.type_views[1]!.id, upd.type_views[0]!.id);
+        const row = ndb
+          .prepare('SELECT name FROM thought_type_views_v WHERE id = ?')
+          .get(upd.type_views[0]!.id) as { name: string } | undefined;
+        assert.equal(row?.name, 'Финал');
+
+        // create + delete в одном батче: delete адресует созданный отбор
+        // через `ref_for_update`, тип явно не указан.
+        const deleteBatch = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'v2',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Временный',
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+              },
+              { action: 'delete', ref_for_update: 'v2' },
+            ],
+          },
+        });
+        assert.equal(deleteBatch.isError, undefined, toolText(deleteBatch));
+        const del = toolJson<{
+          type_views: Array<{ id: string; action: string }>;
+        }>(deleteBatch);
+        assert.equal(del.type_views[1]!.action, 'deleted');
+        assert.equal(del.type_views[1]!.id, del.type_views[0]!.id);
+        const gone = ndb
+          .prepare('SELECT id FROM thought_type_views_v WHERE id = ?')
+          .get(del.type_views[0]!.id);
+        assert.equal(gone, undefined, 'отбор удалён');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.types.list видит отборы типа, заведённые в базовом слое, при работе из дочернего слоя (ошибка 24632488)', async () => {
     const ctx = await buildMcpContext();
     try {
