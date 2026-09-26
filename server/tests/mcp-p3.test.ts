@@ -31,9 +31,14 @@ import { createThought } from '../src/domain/thought-service.js';
 import { createLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
-import { createAttachment } from '../src/domain/attachment-service.js';
+import { createAttachment, listAttachments } from '../src/domain/attachment-service.js';
 import { createComment } from '../src/domain/comment-service.js';
-import { createNetworkProperty } from '../src/domain/property-service.js';
+import {
+  createNetworkProperty,
+  createTypeProperty,
+  getPropertyValues,
+  setPropertyValue,
+} from '../src/domain/property-service.js';
 
 // ---------------------------------------------------------------------------
 // Вспомогательные хелперы — отдельные сети, типы, простые деревья.
@@ -256,6 +261,111 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
         0,
         'нет ложного link.created при полном reuse',
       );
+    } finally {
+      await w.closeAll();
+    }
+  });
+
+  // Ошибка af4f6568: политика `reuse` обещает «копируются только связи/
+  // свойства/вложения, которых у существующей мысли ещё нет», но код их не
+  // докопировал. Проверяем докопирование и идемпотентность повтора.
+  it('reuse докопирует отсутствующие связи/свойства/вложения идемпотентно (ошибка af4f6568)', async () => {
+    const w = await buildPair();
+    try {
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+
+      // Одноимённое свойство, привязанное к корневому типу мысли (id
+      // корневого типа един во всех сетях) — тогда оно доступно типовым
+      // мыслям и в src, и в dst.
+      const rootTypeId = (
+        ndbSrc.prepare('SELECT id FROM thought_types_v WHERE is_root = 1 LIMIT 1').get() as {
+          id: string;
+        }
+      ).id;
+      createTypeProperty(
+        ndbSrc,
+        'thought_type',
+        rootTypeId,
+        { key: 'Ключ', value_type: 'text' },
+        w.src.adminId,
+      );
+      createTypeProperty(
+        ndbDst,
+        'thought_type',
+        rootTypeId,
+        { key: 'Ключ', value_type: 'text' },
+        w.dst.adminId,
+      );
+
+      const srcRoot = createThought(ndbSrc, { title: 'Корень докопирования' }, w.src.adminId).id;
+      const srcChild = createThought(ndbSrc, { title: 'Потомок докопирования' }, w.src.adminId).id;
+      createLink(ndbSrc, { source_id: srcRoot, target_id: srcChild }, w.src.adminId);
+      setPropertyValue(ndbSrc, 'thought', srcRoot, 'Ключ', 'значение', w.src.adminId);
+      createAttachment(
+        ndbSrc,
+        'thought',
+        srcRoot,
+        { kind: 'url', url: 'https://example.org/dokopirovanie' },
+        w.src.adminId,
+      );
+
+      // В целевой — те же мысли, но без связи, свойства и вложения.
+      const dstRoot = createThought(ndbDst, { title: 'Корень докопирования' }, w.dst.adminId).id;
+      const dstChild = createThought(ndbDst, { title: 'Потомок докопирования' }, w.dst.adminId).id;
+
+      const first = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(first.isError, undefined, toolText(first));
+      const fd = toolJson<{
+        thoughts_reused: number;
+        thoughts_created: number;
+        links_created: number;
+      }>(first);
+      assert.equal(fd.thoughts_reused, 2, 'обе мысли переиспользованы');
+      assert.equal(fd.thoughts_created, 0);
+      assert.equal(fd.links_created, 1, 'докопирована отсутствующая связь');
+      assert.ok(
+        ndbDst
+          .prepare('SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND active = 1')
+          .get(dstRoot, dstChild) !== undefined,
+        'связь появилась в целевой сети',
+      );
+      const props = getPropertyValues(ndbDst, 'thought', dstRoot).filter(
+        (p) => p.property_name === 'Ключ',
+      );
+      assert.equal(props.length, 1, 'свойство докопировано');
+      assert.equal(props[0]!.value, 'значение');
+      const atts = listAttachments(ndbDst, 'thought', dstRoot);
+      assert.equal(atts.length, 1, 'вложение докопировано');
+      assert.equal(atts[0]!.url, 'https://example.org/dokopirovanie');
+
+      // Повторное копирование идемпотентно — ничего не дублируется.
+      const second = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 3,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(second.isError, undefined, toolText(second));
+      assert.equal(
+        toolJson<{ links_created: number }>(second).links_created,
+        0,
+        'повтор не создаёт связей',
+      );
+      assert.equal(
+        getPropertyValues(ndbDst, 'thought', dstRoot).filter((p) => p.property_name === 'Ключ')
+          .length,
+        1,
+        'повтор не дублирует свойство',
+      );
+      assert.equal(listAttachments(ndbDst, 'thought', dstRoot).length, 1, 'повтор не дублирует вложение');
     } finally {
       await w.closeAll();
     }

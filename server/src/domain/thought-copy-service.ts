@@ -80,8 +80,12 @@ function resolveThoughtTypeId(ndb: NetworkDb, snap: ThoughtCopySnapshot): string
  * Resolve a link type for a snapshot: by id, then by `name_forward`, then
  * by `name_reverse`. Ambiguity or absence degrades to `null` rather than
  * failing the whole paste.
+ *
+ * Экспортируется, чтобы `copy_subtree` при `duplicate_policy=reuse`
+ * докопировал отсутствующие связи тех же переиспользованных мыслей тем же
+ * правилом резолва (одна каноническая реализация, без дубля).
  */
-function resolveLinkTypeId(
+export function resolveCopyLinkTypeId(
   ndb: NetworkDb,
   snap: ThoughtCopyLink['type'],
 ): string | null {
@@ -385,7 +389,7 @@ function createOneLink(
   const targetId = thoughtIdMap[link.target_id];
   if (sourceId === undefined || targetId === undefined) return null;
   if (sourceId === targetId) return null;
-  const typeId = resolveLinkTypeId(ndb, link.type);
+  const typeId = resolveCopyLinkTypeId(ndb, link.type);
   const created = createLink(
     ndb,
     {
