@@ -153,10 +153,11 @@ export function buildWorkspace(): HTMLElement {
 
   // View switcher (L15, 08-ui-spec.md §15.1; задача a0cdd731): ПЕРВАЯ группа
   // строки меню мыслесети — закладки-ярлыки экранов. Класс `view-tab` даёт
-  // относительные размеры закладок и разделители (styles/layout.css):
-  // каждая крупнее прочих кнопок меню, активная — ещё крупнее и сливается с
-  // экраном ниже. Закладки стоят вплотную (общий `.view-switch` без gap),
-  // чтобы вертикальные разделители были между ними, а не в воздухе.
+  // «блокнотную» рамку закладок, относительные размеры и разделители
+  // (styles/layout.css): скруглены только верхние углы, активная подсвечена
+  // рамкой цвета выделения и сливается с экраном ниже. Закладки стоят вплотную
+  // (общий `.view-switch` без gap), чтобы вертикальные границы были между ними,
+  // а не в воздухе.
   const mapViewButton = iconButton({
     icon: svgIcon('mindmap'),
     title: 'Карта мыслей',
@@ -174,7 +175,7 @@ export function buildWorkspace(): HTMLElement {
   });
 
   const chronicleViewButton = iconButton({
-    icon: svgIcon('history'),
+    icon: svgIcon('calendar-month'),
     title: 'Хроника',
     role: 'ghost',
     class: 'view-tab',
