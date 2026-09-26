@@ -54,9 +54,10 @@ import type { NetworkDb } from '../db/network-db.js';
 import { listAttachments } from './attachment-service.js';
 import { listComments } from './comment-service.js';
 import { traverse } from './graph-traversal.js';
+import { findLinksBetween } from './link-service.js';
 import { findDuplicates } from './search-service.js';
 import { getThought } from './thought-service.js';
-import { copyThoughtsBatch } from './thought-copy-service.js';
+import { copyThoughtsBatch, linkIdentity } from './thought-copy-service.js';
 import { getLinkType } from './link-type-service.js';
 import { getThoughtType } from './thought-type-service.js';
 
@@ -178,15 +179,22 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
     target_parent_thought_id,
   );
 
-  // 7. Если после применения политики нечего копировать — выходим.
+  // 7. Если после применения политики нечего копировать (полное
+  // переиспользование) — материализация не нужна, но карты всё равно
+  // заполняем: без них результат не сообщает, куда легли переиспользованные
+  // мысли/связи (ошибка b7533b9c), тогда как основной путь (шаг 9) их вливает.
   if (built.copyInput.thoughts.length === 0) {
+    const reusedThoughtIdMap: Record<string, string> = {};
+    for (const [srcId, tgtId] of duplicateMap.reusedIds) {
+      if (tgtId !== '') reusedThoughtIdMap[srcId] = tgtId;
+    }
     return {
       thoughts_created: 0,
       thoughts_reused: built.reused,
       thoughts_skipped: built.skipped,
       links_created: 0,
-      thought_id_map: {},
-      link_id_map: {},
+      thought_id_map: reusedThoughtIdMap,
+      link_id_map: collectReusedLinkIds(target_ndb, built.copyInput.links, reusedThoughtIdMap),
       conflicts: built.conflicts,
     };
   }
@@ -635,6 +643,35 @@ function lookupLinkType(
 // ---------------------------------------------------------------------------
 // Misc
 // ---------------------------------------------------------------------------
+
+/**
+ * Карта `linkIdentity → id` для путей, где связи НЕ создаются (полное
+ * переиспользование мыслей, ошибка b7533b9c). Для каждого ребра снапшота,
+ * оба конца которого переиспользованы, находим уже существующую связь в
+ * целевой сети по тем же концам и типу. Тип связи резолвится по id — при
+ * полном reuse проверка покрытия онтологии уже гарантировала, что целевая
+ * сеть содержит тот же `type_id` (иначе был бы `VALIDATION_ERROR`).
+ *
+ * Семантика ключа совпадает с основным путём (`linkIdentity` из
+ * `thought-copy-service`), чтобы клиент одинаково переписывал ссылки.
+ */
+function collectReusedLinkIds(
+  target: NetworkDb,
+  links: ReadonlyArray<ThoughtCopyLink>,
+  thoughtIdMap: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const link of links) {
+    const sourceId = thoughtIdMap[link.source_id];
+    const targetId = thoughtIdMap[link.target_id];
+    if (sourceId === undefined || targetId === undefined) continue;
+    const existing = findLinksBetween(target, sourceId, targetId, link.type.id ?? null).find(
+      (l) => l.active,
+    );
+    if (existing !== undefined) out[linkIdentity(link)] = existing.id;
+  }
+  return out;
+}
 
 function emptySummary(): CopySubtreeSummary {
   return {

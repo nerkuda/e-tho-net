@@ -236,7 +236,7 @@ export function copyThoughtsBatch(
 // ---------------------------------------------------------------------------
 
 /** Stable identity of a link snapshot for the client-side id_map. */
-function linkIdentity(link: ThoughtCopyLink): string {
+export function linkIdentity(link: ThoughtCopyLink): string {
   return `${link.source_id}:${link.target_id}:${link.type.id ?? ''}`;
 }
 

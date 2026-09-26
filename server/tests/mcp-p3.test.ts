@@ -314,9 +314,45 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
       const rd = toolJson<{
         thoughts_reused: number;
         thoughts_created: number;
+        thought_id_map: Record<string, string>;
+        link_id_map: Record<string, string>;
       }>(reused);
       assert.equal(rd.thoughts_reused, 2, 'обе импортированные копии переиспользованы');
       assert.equal(rd.thoughts_created, 0);
+      // Регресс ошибки b7533b9c: при полном переиспользовании карты тоже
+      // заполняются — «куда легли» переиспользованные мысли и связи.
+      assert.equal(
+        Object.keys(rd.thought_id_map).length,
+        2,
+        'thought_id_map заполнен при полном reuse',
+      );
+      assert.equal(
+        typeof rd.thought_id_map[root],
+        'string',
+        'переиспользованному корню сопоставлен id в целевой сети',
+      );
+      assert.ok(
+        rd.thought_id_map[root] !== root,
+        'id переиспользованной мысли — это существующая копия в целевой сети',
+      );
+      assert.ok(
+        Object.keys(rd.link_id_map).length >= 1,
+        'link_id_map отражает переиспользованную связь',
+      );
+      // Карта непуста и указывает на РЕАЛЬНЫЕ живые сущности целевой сети.
+      const ndbDstCheck = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+      for (const [, tgtId] of Object.entries(rd.thought_id_map)) {
+        assert.ok(
+          ndbDstCheck.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(tgtId) !== undefined,
+          `id ${tgtId} из thought_id_map существует в целевой сети`,
+        );
+      }
+      for (const [, linkId] of Object.entries(rd.link_id_map)) {
+        assert.ok(
+          ndbDstCheck.prepare('SELECT 1 FROM links_v WHERE id = ?').get(linkId) !== undefined,
+          `id ${linkId} из link_id_map существует в целевой сети`,
+        );
+      }
 
       // 4) create_always + target_parent_thought_id: новый корень подвешен к HOME целевой сети.
       const created = await callOp(w.handle.client, 'thoughts.copy_subtree', {
