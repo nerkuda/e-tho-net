@@ -148,6 +148,42 @@ describe(
       }
     });
 
+    it('matches Cyrillic keywords case-insensitively in names and comment texts', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Смоук B');
+        const b = seedThought(ndb, 'Иная');
+        createComment(
+          ndb,
+          'thought',
+          a,
+          { kind: 'chronological', body_md: 'хроно B: создана', valid_from: '2024-01-01' },
+          USER,
+        );
+        createComment(
+          ndb,
+          'thought',
+          b,
+          { kind: 'chronological', body_md: 'ХРОНО прочее', valid_from: '2024-01-02' },
+          USER,
+        );
+        ndb
+          .prepare('INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)')
+          .run(b, 'Псевдоним', 'псевдоним');
+
+        // Название: кириллица в другом регистре должна матчиться (ошибка 2f27f244).
+        assert.equal(query(ndb, { keywords: 'Смоук' }).total, 1, 'title, capitalised');
+        assert.equal(query(ndb, { keywords: 'СМОУК' }).total, 1, 'title, all caps');
+        // Синоним — тоже нормализованно.
+        assert.equal(query(ndb, { keywords: 'ПСЕВДОНИМ' }).total, 1, 'synonym, all caps');
+        // Текст комментария — через unicode_lower, оба регистра.
+        assert.equal(query(ndb, { keywords: 'хроно' }).total, 2, 'comment body, lower case');
+        assert.equal(query(ndb, { keywords: 'ХРОНО' }).total, 2, 'comment body, upper case');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('excludes thoughts via minus-words and intersects the period', () => {
       const ndb = createInMemoryNetworkDb();
       try {
