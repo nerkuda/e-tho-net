@@ -64,6 +64,7 @@ import {
   clampTypeEditorSplit,
   parseTypeEditorSplit,
   splitRatioFromPx,
+  formDirty,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -1170,3 +1171,60 @@ describe('type-editor property split (ошибка 58807d03)', () => {
     assert.equal(splitRatioFromPx(190, 200), TYPE_EDITOR_SPLIT_MAX);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Сравнение черновика формы с загруженным снимком (требование b58f6aad)
+// ---------------------------------------------------------------------------
+
+describe('formDirty: сравнение черновика формы', () => {
+  it('примитивы, строки и null', () => {
+    assert.equal(formDirty('a', 'a'), false);
+    assert.equal(formDirty('a', 'b'), true);
+    assert.equal(formDirty('', ''), false);
+    assert.equal(formDirty(null, null), false);
+    assert.equal(formDirty(null, ''), true);
+    assert.equal(formDirty(0, 0), false);
+    assert.equal(formDirty(0, 1), true);
+    assert.equal(formDirty(true, false), true);
+  });
+
+  it('плоские объекты: отличие в любом поле', () => {
+    const base = { name: 'Тип', parentId: null, bold: false };
+    assert.equal(formDirty(base, { ...base }), false);
+    assert.equal(formDirty(base, { ...base, name: 'Иной' }), true);
+    assert.equal(formDirty(base, { ...base, bold: true }), true);
+    assert.equal(formDirty(base, { ...base, parentId: 'tt-2' }), true);
+  });
+
+  it('порядок ключей не важен', () => {
+    assert.equal(formDirty({ a: 1, b: 2 }, { b: 2, a: 1 }), false);
+  });
+
+  it('разная длина и содержимое массивов', () => {
+    assert.equal(formDirty([1, 2], [1, 2]), false);
+    assert.equal(formDirty([1, 2], [2, 1]), true);
+    assert.equal(formDirty([1, 2], [1, 2, 3]), true);
+    assert.equal(formDirty([], []), false);
+  });
+
+  it('вложенные структуры (черновик привязок)', () => {
+    const base = { rows: [{ id: 'a', required: false }], config: { multiple: true } };
+    const clone = structuredClone(base);
+    assert.equal(formDirty(base, clone), false);
+    const changed = structuredClone(base);
+    changed.rows[0]!.required = true;
+    assert.equal(formDirty(base, changed), true);
+    const extra = structuredClone(base);
+    extra.rows.push({ id: 'b', required: false });
+    assert.equal(formDirty(base, extra), true);
+    const config = structuredClone(base);
+    config.config.multiple = false;
+    assert.equal(formDirty(base, config), true);
+  });
+
+  it('разный набор ключей объекта — отличие', () => {
+    assert.equal(formDirty({ a: 1 }, { a: 1, b: 2 }), true);
+    assert.equal(formDirty({ a: 1, b: 2 }, { a: 1 }), true);
+  });
+});
+

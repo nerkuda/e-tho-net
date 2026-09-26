@@ -13,6 +13,12 @@
  * declare `dedupeKey` (the entity it edits), and the caller first asks
  * {@link raiseOpenDialog} — a repeated click on the same row raises and focuses
  * the already-open editor instead of stacking a second one (ошибка c2d243bb).
+ *
+ * Entity editors also declare a dirty guard ({@link DialogDirtyGuard},
+ * требование b58f6aad): when the form has unsaved changes, closing by Esc or ×
+ * is intercepted by a confirmation («Данные изменены. Сохранить изменения?»)
+ * offering «Сохранить» / «Не сохранять» / «Отменить закрытие». An explicit
+ * footer button (including «Отмена») still closes silently.
  */
 
 import { div, el, errText } from './dom.js';
@@ -41,9 +47,30 @@ export interface DialogTab {
 }
 
 
+/**
+ * Признак «есть несохранённые изменения» и команда записи диалога-редактора
+ * (требование b58f6aad «Закрытие диалога-редактора с изменениями требует
+ * подтверждения»). Форма объявляет грязность сама: каркас не знает её полей.
+ * Если {@link isDirty} вернула `true`, закрытие диалога по Esc или крестику
+ * перехватывается — вместо закрытия показывается подтверждение
+ * «Данные изменены. Сохранить изменения?» с кнопками «Сохранить» /
+ * «Не сохранять» / «Отменить закрытие». Явные кнопки футера (в т.ч. «Отмена»)
+ * закрывают диалог молча, как и раньше.
+ */
+export interface DialogDirtyGuard {
+  /** Есть ли расхождение текущих значений формы с загруженными. */
+  isDirty: () => boolean;
+  /**
+   * Записать изменения и закрыть — ТОТ ЖЕ путь, что у кнопки сохранения
+   * редактора: получает `close` каркаса и зовёт его сам при успехе; при ошибке
+   * показывает её и оставляет редактор открытым (кнопка «Сохранить»
+   * подтверждения закрывается в любом случае).
+   */
+  save: (close: () => void) => void;
+}
+
 /** A dialog footer button. */
-export interface DialogButton {
-  label: string;
+export interface DialogButton {  label: string;
   primary?: boolean;
   danger?: boolean;
   /**
@@ -169,6 +196,13 @@ export interface DialogOptions {
    * an entity identity leave it unset and always stack.
    */
   dedupeKey?: string;
+  /**
+   * Признак несохранённых изменений формы (требование b58f6aad). Задан —
+   * закрытие по Esc или крестику при {@link DialogDirtyGuard.isDirty} проверяется
+   * подтверждением; не задан (списки, подтверждения, пикеры, панели) — закрытие
+   * как всегда. Явные кнопки футера закрывают молча в любом случае.
+   */
+  dirty?: DialogDirtyGuard;
 }
 
 /** Open dialogs, bottom first. */
@@ -407,7 +441,7 @@ export function showDialog(opts: DialogOptions): () => void {
     title: t('actions.closeShortcut', 'Esc'),
     role: 'ghost',
     size: 's',
-    onClick: () => close(),
+    onClick: () => requestClose(),
   });
   header.append(closeBtn);
   box.append(header);
@@ -484,6 +518,45 @@ export function showDialog(opts: DialogOptions): () => void {
     if (index >= 0) stack.splice(index, 1);
     backdrop.remove();
   };
+  /**
+   * Показать подтверждение закрытия «грязного» редактора (требование
+   * b58f6aad): три решения — «Сохранить» (записать и закрыть), «Не сохранять»
+   * (закрыть без записи), «Отменить закрытие» (ничего не делать). Отдельный
+   * диалог поверх редактора; его собственное закрытие (Esc/крестик) означает
+   * «Отменить закрытие» — редактор остаётся открытым.
+   */
+  const confirmDirtyClose = (): void => {
+    showDialog({
+      title: t('dialog.unsaved.title'),
+      size: 's',
+      body: el('p', 'dialog-text', t('dialog.unsaved.message')),
+      // Порядок: «отказ от закрытия» → «закрыть без записи» → «записать и
+      // закрыть» (главное действие справа, как в остальных футерах).
+      buttons: [
+        { label: t('dialog.unsaved.stay') },
+        { label: t('dialog.unsaved.discard'), onClick: () => close() },
+        {
+          label: t('dialog.unsaved.save'),
+          primary: true,
+          confirm: true,
+          onClick: () => opts.dirty?.save(close),
+        },
+      ],
+    });
+  };
+  /**
+   * Закрытие диалога для путей Esc и крестика. При объявленном
+   * {@link DialogOptions.dirty} и наличии изменений закрытие перехватывается
+   * подтверждением; иначе — как раньше. Явные кнопки футера зовут `close`
+   * напрямую (в т.ч. «Отмена» — молча, требование b58f6aad, п. 3).
+   */
+  const requestClose = (): void => {
+    if (opts.dirty !== undefined && opts.dirty.isDirty()) {
+      confirmDirtyClose();
+      return;
+    }
+    close();
+  };
   const onKey = (event: KeyboardEvent): void => {
     // Lower dialogs ignore Escape even though they see the event too —
     // same-target capture listeners run in registration order.
@@ -494,7 +567,7 @@ export function showDialog(opts: DialogOptions): () => void {
       // closed the whole stack). Key auto-repeat is ignored for the same
       // reason: a held Escape would otherwise walk the stack down.
       event.preventDefault();
-      close();
+      requestClose();
     }
   };
   window.addEventListener('keydown', onKey, true);

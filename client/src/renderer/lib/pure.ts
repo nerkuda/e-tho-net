@@ -68,6 +68,40 @@ const TITLE_LINE_FACTOR = 1.35;
 /** Indicators line-height factor relative to the font size (incl. 1px gap). */
 const IND_LINE_FACTOR = 1.1;
 
+/**
+ * Расхождение черновика формы с загруженным снимком (требование b58f6aad
+ * «Закрытие диалога-редактора с изменениями требует подтверждения»): `true`,
+ * если текущее значение отличается от исходного хотя бы в одном поле.
+ *
+ * Сравнение структурное (примитивы, массивы, простые объекты) — черновики
+ * диалогов-редакторов плоские. Годится только для сериализуемых значений
+ * полей: черновик, хранящий DOM-узлы или функции, таким снимком не покрыть
+ * (сравнивать нужно отдельно взятые значения полей, а не объект целиком).
+ */
+export function formDirty(initial: unknown, current: unknown): boolean {
+  return !sameField(initial, current);
+}
+
+/** Структурное равенство значений черновика (см. {@link formDirty}). */
+function sameField(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameField(item, b[index]));
+  }
+  if (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null) {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    if (keys.length !== Object.keys(right).length) return false;
+    return keys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) && sameField(left[key], right[key]),
+    );
+  }
+  return false;
+}
+
 /** Clamps a number into `[min, max]`. */
 export function clip(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
