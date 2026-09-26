@@ -149,6 +149,59 @@ describe('horizontal anchor regression (приёмочный дефект f45ffc
   });
 });
 
+/**
+ * The anchored element is the zone's `.zone-grid`. `gridTemplateColumns` pins
+ * every `cols` column, so the grid BOX spans all of them — but the visible
+ * content of a zone with fewer clouds than columns is only the widest ROW.
+ * Anchoring the FULL box translated its empty trailing columns past the zone's
+ * right edge and produced a horizontal scrollbar in a zone holding a single
+ * thought (ошибка 1deced69). The fix narrows the box to `zoneContentWidth`
+ * before anchoring; these cases pin why that width — and not the box — must be
+ * anchored.
+ */
+describe('horizontal overflow of the anchored grid box (ошибка 1deced69)', () => {
+  const width = 200;
+  const gap = 12;
+
+  /** Grid box as `gridTemplateColumns: repeat(cols, width)` sizes it. */
+  const boxWidth = (cols: number): number => cols * width + (cols - 1) * gap;
+
+  it('the widest-row box never leaves the container, for every anchor', () => {
+    for (const cols of [1, 2, 3, 4, 5]) {
+      // Zone content box that fits exactly `cols` columns (as `zoneGridOf`
+      // computes it: `cols = floor(avail / (width + gap))`).
+      const avail = boxWidth(cols);
+      for (const count of [1, 2, cols]) {
+        const content = {
+          width: zoneContentWidth(cols, count, width, gap),
+          height: 46,
+        };
+        for (const anchor of ANCHORS) {
+          const origin = anchorOffset({ width: avail, height: 300 }, content, anchor);
+          assert.ok(
+            origin.x + content.width <= avail + 1e-9,
+            `${anchor}: cols=${cols} count=${count} — box вылезает за зону`,
+          );
+        }
+      }
+    }
+  });
+
+  it('the previous full-box anchoring overflowed — regression guard', () => {
+    // cols=3, one thought: visible content is a single cloud, the box is 3.
+    const cols = 3;
+    const avail = boxWidth(cols);
+    const content = { width: zoneContentWidth(cols, 1, width, gap), height: 46 };
+    const origin = anchorOffset({ width: avail, height: 300 }, content, 'right-bottom');
+    assert.ok(
+      origin.x + boxWidth(cols) > avail,
+      'полная колонковая коробка обязана вылезать за зону — иначе этот тест не про тот дефект',
+    );
+    // ... while the widest-row box fits (that is the fix).
+    assert.ok(origin.x + content.width <= avail + 1e-9);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Invariants relied on by the map
 // ---------------------------------------------------------------------------

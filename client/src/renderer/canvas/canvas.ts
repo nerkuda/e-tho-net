@@ -1538,6 +1538,13 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     });
   });
 
+  // A host resize — editor dock switch, panel/window splitter drag, plain
+  // window resize — changes the zone box: recompute the column count and
+  // re-anchor the grid right away, otherwise the clouds keep the previous
+  // width's layout and a bottom/right-anchored zone grows a horizontal
+  // scrollbar (ошибка 1deced69). Deliberately re-laid out in place instead of
+  // through `render()`: `render()` starts with `finishFocusTransition()`, so a
+  // resize mid-flight would snap a running focus animation.
   new ResizeObserver(() => {
     if (host?.isConnected === true) void renderZoneContent(dir);
   }).observe(zone);
@@ -1681,6 +1688,9 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     spacer.style.height = '0px';
     empty.classList.remove('hidden');
     clear(grid);
+    // Drop the previous render's content width: a leftover box would keep the
+    // empty zone horizontally scrollable (ошибка 1deced69).
+    grid.style.width = '';
     // The children zone carries a view-result empty state when the active
     // strip mode is a view (spec 9984aa98). Distinguish three cases:
     //   * "unresolved" — the filter referenced a token that did not bind;
@@ -1772,6 +1782,18 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     { width: contentWidth, height: contentHeight },
     ZONE_ANCHOR_BY_DIR[dir],
   );
+  // The grid BOX must be no wider than the visible content (ошибка 1deced69).
+  // `gridTemplateColumns` pins all `cols` columns, so the box spans almost the
+  // whole zone even when the only row uses a fraction of them. Anchoring such a
+  // box by `origin.x` pushed its EMPTY trailing columns past the zone's right
+  // edge — a horizontal scrollbar appeared in a zone holding a single thought
+  // (bottom/right-anchored zones), and the scrollbar only disappeared once the
+  // rows happened to fill all columns. Narrowing the box to the widest ROW
+  // removes the phantom scroll WITHOUT moving a cloud: the trailing columns
+  // hold no items, and a full grid (`contentWidth` = every column) is unchanged.
+  // The box still overflows — and the scrollbar is legitimate — when a single
+  // cloud is genuinely wider than the zone (`cols === 1`).
+  grid.style.width = `${contentWidth}px`;
   grid.style.transform = `translate(${origin.x}px, ${origin.y + prefix[startRow]!}px)`;
 
   clear(grid);
