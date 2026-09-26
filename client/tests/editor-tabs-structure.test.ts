@@ -133,15 +133,15 @@ describe('вкладка «Граф» — мини-граф на всю высо
     );
   });
 
-  it('editor.ts содержит вкладку «Граф» между «Хроника» и «Метаданные» и «Упоминания»', () => {
+  it('editor.ts содержит вкладку «Граф» между «Дневник» и «Метаданные» и «Упоминания»', () => {
     const editorSrc = readText(SRC.editor);
     assert.ok(editorSrc.includes("title: 'Упоминания'"), '«Упоминания» tab title present');
     assert.ok(editorSrc.includes("title: 'Граф'"), '«Граф» tab title present');
-    const chronoIdx = editorSrc.indexOf("title: 'Хроника'");
+    const chronoIdx = editorSrc.indexOf("title: 'Дневник'");
     const graphIdx = editorSrc.indexOf("title: 'Граф'");
     const metadataIdx = editorSrc.indexOf("title: 'Метаданные'");
     assert.ok(chronoIdx >= 0 && graphIdx >= 0 && metadataIdx >= 0, 'all three titles present');
-    assert.ok(chronoIdx < graphIdx && graphIdx < metadataIdx, '«Граф» sits between «Хроника» and «Метаданные»');
+    assert.ok(chronoIdx < graphIdx && graphIdx < metadataIdx, '«Граф» sits between «Дневник» and «Метаданные»');
   });
 
   it('CSS даёт мини-графу flex-растяжение при fillHeight', () => {
@@ -362,7 +362,7 @@ describe('набор вкладок зависит от сущности (0.8.1,
     assert.ok(link.includes("title: 'Мысли'"), '«Мысли» present in the link set');
     assert.ok(link.includes("title: 'Метаданные'"), '«Метаданные» present in the link set');
     // Вкладок, осмысленных только для мысли, у связи нет.
-    for (const gone of ["'Свойства'", "'Вложения'", "'Хроника'", "'Граф'", "'Упоминания'"]) {
+    for (const gone of ["'Свойства'", "'Вложения'", "'Дневник'", "'Граф'", "'Упоминания'"]) {
       assert.ok(!link.includes(gone), `link tab set must not contain ${gone}`);
     }
     // id вкладки «Мысли» — тот же `links`, что у «Упоминаний» мысли: id-контракт

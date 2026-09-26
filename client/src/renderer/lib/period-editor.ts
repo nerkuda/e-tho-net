@@ -251,6 +251,40 @@ export function composeInstant(isoDate: string, hhmm: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString();
 }
 
+/** Одна граница значения периода → полный UTC-инстанс ('' — не задана). */
+function resolveBoundInstant(raw: string | undefined, previous: string): string {
+  if (raw === undefined || raw.trim() === '') return '';
+  const parsed = parseBound(raw);
+  if (parsed.kind === 'instant') return parsed.value;
+  // «Голая дата» меняет только дату, время суток исходного инстанса остаётся
+  // (ADR 994d076a). Токены здесь не раскрываются — потребитель с
+  // `allowTokens: false` их не порождает.
+  if (parsed.kind === 'date') return setInstantDate(previous, parsed.value);
+  return '';
+}
+
+/**
+ * Значение контрола периода → полные UTC-инстансы записи. «Голая дата» меняет
+ * только дату, сохраняя время суток исходного инстанса (ADR 994d076a);
+ * незаданный конец равен началу, поэтому `to` непуст (требование d58aa1a4:
+ * `valid_to` NOT NULL). Потребители, которым нужны не даты, а инстансы
+ * (вкладка «Дневник» редактора), применяют эту функцию вместо «сырого»
+ * `getValue()`.
+ *
+ * @param value    значение из `getValue()`/`onChange`.
+ * @param previous предыдущие инстансы записи — источник времени суток и даты
+ *                 для незаполненных/частичных границ.
+ */
+export function resolvePeriodInstants(
+  value: PeriodValue,
+  previous: { from: string; to: string },
+): { from: string; to: string } {
+  const from = resolveBoundInstant(value.from, previous.from);
+  const to = resolveBoundInstant(value.to, previous.to);
+  const nextFrom = from !== '' ? from : previous.from;
+  return { from: nextFrom, to: to !== '' ? to : nextFrom };
+}
+
 // ---------------------------------------------------------------------------
 // Состояние одной границы
 // ---------------------------------------------------------------------------

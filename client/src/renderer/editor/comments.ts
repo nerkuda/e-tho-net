@@ -9,7 +9,7 @@
  * change. The field always opens in view mode — a saved draft never forces
  * editing (stale drafts whose text matches the saved value are dropped);
  * editing starts on double-click only (08-ui-spec.md §6.4). Chronological
- * comments live in the «Хроника» tab (chrono-tab.ts).
+ * comments live in the «Дневник» tab (chrono-tab.ts).
  */
 
 import type { Comment } from '@etn/shared';
@@ -114,7 +114,7 @@ function wireCommentRealtime(): void {
   });
 }
 
-/** Registers the permanent-comment section and the «Хроника» tab (L7). */
+/** Registers the permanent-comment section and the «Дневник» tab (L7). */
 export function registerCommentSections(): void {
   registerMainSection((ctx) => ({
     id: 'permanent',
