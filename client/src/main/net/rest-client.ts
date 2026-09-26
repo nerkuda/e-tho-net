@@ -64,6 +64,47 @@ const RETRY_MAX_DELAY_MS = 5_000;
 /** Response timeout applied to every request, in milliseconds (03-server-api.md §4.1). */
 const RESPONSE_TIMEOUT_MS = 30_000;
 
+/**
+ * Префикс курсора-заглушки для сервера старше этапа 4 (нет `count`/`cursor` в
+ * строгом контракте запроса, ошибка da2c68a7). Такой сервер листает список
+ * только через `offset`, поэтому деградация кодирует продолжение в тот же
+ * непрозрачный `next_cursor` (`offset:<N>`): экран «Структуры» и сбор id для
+ * команд листаются как прежде, не зная о разнице, а транспорт на входе
+ * разворачивает токен обратно в `offset`.
+ */
+const LEGACY_CURSOR_PREFIX = 'offset:';
+
+/** `offset`, закодированный в курсоре-заглушке, либо `undefined`. */
+function legacyCursorOffset(cursor: unknown): number | undefined {
+  if (typeof cursor !== 'string' || !cursor.startsWith(LEGACY_CURSOR_PREFIX)) return undefined;
+  const parsed = Number.parseInt(cursor.slice(LEGACY_CURSOR_PREFIX.length), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Курсор-заглушка продолжения offset-листания: есть ли ещё страница и с какого
+ * `offset` читать. `total` может быть `null` (COUNT не считался) — тогда
+ * признаком «есть ещё» служит полная страница.
+ */
+function legacyNextCursor(startOffset: number, pageLength: number, limit: number, total: number | null): string | null {
+  const fullPage = limit > 0 && pageLength >= limit;
+  const more = fullPage && (total === null || startOffset + pageLength < total);
+  return more ? `${LEGACY_CURSOR_PREFIX}${startOffset + pageLength}` : null;
+}
+
+/**
+ * Отверг ли сервер запрос выборки из-за неизвестных ему полей `count`/`cursor`
+ * (сервер старше этапа 4 тех.проекта e29c0f00): REST-контракт запроса —
+ * строгий, лишнее поле роняет весь отбор с `VALIDATION_ERROR`. Это признак
+ * старого сервера, а не ошибки отбора, — транспорт повторяет запрос без этих
+ * полей (ошибка da2c68a7).
+ */
+function isUnknownStructureFieldError(err: unknown): boolean {
+  if (!(err instanceof EtnError) || err.code !== 'VALIDATION_ERROR') return false;
+  const fields = (err.details as { fields?: unknown } | undefined)?.fields;
+  return Array.isArray(fields) && fields.some((f) => f === 'count' || f === 'cursor');
+}
+
 /** Constructor options for {@link RestClient}. */
 export interface RestClientOptions {
   /** Server base URL, e.g. `http://localhost:3000`. Trailing slash is stripped. */
@@ -123,6 +164,14 @@ export class RestClient {
    * realtime freshness is preserved.
    */
   private readonly inflightGets = new Map<string, Promise<unknown>>();
+
+  /**
+   * Сервер не знает полей `count`/`cursor` запроса выборки (старше этапа 4,
+   * ошибка da2c68a7) — устанавливается при первом `VALIDATION_ERROR` на эти
+   * поля и дальше запросы уходят без них, с offset-листанием. Флаг — свойство
+   * соединения (сервер-профиль), потому живёт на клиенте.
+   */
+  private legacyStructureQuery = false;
 
   /** Metadata of the most recent successful response (version/request_id). */
   public lastMeta: ApiSuccess<unknown>['meta'] | undefined;
@@ -2147,6 +2196,38 @@ export class RestClient {
   }
 
   /**
+   * Выполняет `POST /networks/{nid}/thoughts/query` с деградацией на сервер
+   * старше этапа 4 (ошибка da2c68a7): если сервер отверг `count`/`cursor` как
+   * неизвестные поля строгого контракта, клиент запоминает это
+   * ({@link legacyStructureQuery}) и повторяет запрос один раз без них. Дальше
+   * все вызовы этого соединения уходят в совместимом режиме. `buildBody`
+   * собирает тело для нужного режима (в legacy — без `count`/`cursor`, с
+   * offset-продолжением).
+   */
+  private async postStructureQuery<T>(
+    networkId: string,
+    buildBody: (legacy: boolean) => Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<T> {
+    const send = (legacy: boolean): Promise<T> =>
+      this.request<T>('POST', `/networks/${encodeURIComponent(networkId)}/thoughts/query`, {
+        body: buildBody(legacy),
+        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      });
+    if (this.legacyStructureQuery) return send(true);
+    try {
+      return await send(false);
+    } catch (err) {
+      // Не признак ошибки отбора: сервер просто не знает новых полей. Повтор
+      // без них возвращает экран к работе; отменённый запрос сюда не попадёт
+      // (AbortError не VALIDATION_ERROR).
+      if (!isUnknownStructureFieldError(err)) throw err;
+      this.legacyStructureQuery = true;
+      return send(true);
+    }
+  }
+
+  /**
    * `POST /networks/{nid}/thoughts/query` с `network_ids` в теле —
    * кросс-сетевая структурная выборка (задача eb1a3f43, требование
    * c98d5d19). `networkIds` — массив дополнительных сетей веера;
@@ -2159,10 +2240,14 @@ export class RestClient {
     networkIds: string[],
     request: import('@etn/shared').StructureQueryRequest,
   ): Promise<import('@etn/shared').CrossNetworkStructureQueryResponse> {
-    const items = await this.request<import('@etn/shared').ThoughtRef[]>(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: { ...request, count: request.count ?? true, network_ids: networkIds } },
+    const items = await this.postStructureQuery<import('@etn/shared').ThoughtRef[]>(
+      networkId,
+      (legacy) => {
+        const body: Record<string, unknown> = { ...request, network_ids: networkIds };
+        if (legacy) delete body['count'];
+        else body['count'] = request.count ?? true;
+        return body;
+      },
     );
     const meta = this.lastMeta as
       | {
@@ -2194,16 +2279,34 @@ export class RestClient {
    * нужен счётчик «показано N из M» (требование 5adebf61 — сервер считает
    * COUNT только по флагу). `request.count` остаётся за вызывающим.
    * `options.signal` отменяет устаревший запрос (требование ebed4980).
+   *
+   * На сервере старше этапа 4 (нет `count`/`cursor`) запрос повторяется без этих
+   * полей, а продолжение кодируется offset-курсором (ошибка da2c68a7) — экран
+   * получает рабочий отбор и листание без изменений на своей стороне.
    */
   public async queryStructureThoughts(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
     options?: { signal?: AbortSignal },
   ): Promise<import('@etn/shared').StructureQueryResponse> {
-    const items = await this.request<import('@etn/shared').ThoughtRef[]>(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      { body: { ...request, count: request.count ?? true }, ...(options?.signal !== undefined ? { signal: options.signal } : {}) },
+    // Offset продолжения: у нового сервера его всегда задаёт курсор (0), у
+    // старого — сам offset или развёрнутый из курсора-заглушки.
+    const startOffset = legacyCursorOffset(request.cursor) ?? request.offset ?? 0;
+    const items = await this.postStructureQuery<import('@etn/shared').ThoughtRef[]>(
+      networkId,
+      (legacy) => {
+        const body: Record<string, unknown> = { ...request };
+        if (legacy) {
+          // Старый сервер курсора не знает — продолжение задаёт offset, сам
+          // курсор-заглушку из тела убираем.
+          body['offset'] = startOffset;
+          delete body['cursor'];
+        } else {
+          body['count'] = request.count ?? true;
+        }
+        return body;
+      },
+      options,
     );
     const meta = this.lastMeta as
       | {
@@ -2213,11 +2316,14 @@ export class RestClient {
         }
       | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : items.length;
+    const limit = request.limit ?? items.length;
     return {
       items,
       total,
       directions: meta?.directions ?? {},
-      next_cursor: meta?.next_cursor ?? null,
+      next_cursor: this.legacyStructureQuery
+        ? legacyNextCursor(startOffset, items.length, limit, typeof meta?.total === 'number' ? meta.total : null)
+        : meta?.next_cursor ?? null,
     };
   }
 
@@ -2228,25 +2334,37 @@ export class RestClient {
    *
    * `count` запрашивается явно по умолчанию: bulk-командам нужен полный объём
    * (`ids.length < total`) для добора следующих страниц. `options.signal`
-   * отменяет устаревший запрос (требование ebed4980).
+   * отменяет устаревший запрос (требование ebed4980). На старом сервере — та же
+   * деградация, что у {@link queryStructureThoughts} (ошибка da2c68a7).
    */
   public async queryStructureThoughtIds(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
     options?: { signal?: AbortSignal },
   ): Promise<import('@etn/shared').StructureIdsQueryResult> {
-    const body = await this.request<import('@etn/shared').StructureIdsQueryResponse>(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
-      {
-        body: { ...request, ids_only: true, count: request.count ?? true },
-        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    const startOffset = legacyCursorOffset(request.cursor) ?? request.offset ?? 0;
+    const body = await this.postStructureQuery<import('@etn/shared').StructureIdsQueryResponse>(
+      networkId,
+      (legacy) => {
+        const out: Record<string, unknown> = { ...request, ids_only: true };
+        if (legacy) {
+          out['offset'] = startOffset;
+          delete out['cursor'];
+        } else {
+          out['count'] = request.count ?? true;
+        }
+        return out;
       },
+      options,
     );
+    const total = typeof body.total === 'number' ? body.total : body.ids.length;
+    const limit = request.limit ?? body.ids.length;
     return {
       ids: body.ids,
-      total: typeof body.total === 'number' ? body.total : body.ids.length,
-      next_cursor: body.next_cursor ?? null,
+      total,
+      next_cursor: this.legacyStructureQuery
+        ? legacyNextCursor(startOffset, body.ids.length, limit, typeof body.total === 'number' ? body.total : null)
+        : body.next_cursor ?? null,
     };
   }
 

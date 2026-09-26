@@ -824,3 +824,123 @@ describe('RestClient — structures query: COUNT, курсор и отмена',
     assert.equal(res.total, 0);
   });
 });
+
+/**
+ * Ошибка da2c68a7: клиент 0.9.1 всегда шлёт `count` (и `cursor` на продолжении),
+ * а сервер старше этапа 4 тех.проекта e29c0f00 держит строгий REST-контракт
+ * запроса — лишнее поле роняет весь отбор `VALIDATION_ERROR`, и экран
+ * «Структуры» остаётся пустым при любом фильтре. Транспорт обязан деградировать
+ * на старый сервер: повторить запрос без новых полей и листать по `offset`.
+ */
+describe('RestClient — деградация выборки на сервер без count/cursor (da2c68a7)', () => {
+  /** Ответ старого сервера на неизвестное поле строгого контракта. */
+  function unknownField(field: string): { status: number; body: unknown } {
+    return {
+      status: 422,
+      body: {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Неизвестные поля: ${field}.`,
+          details: { fields: [field] },
+        },
+      },
+    };
+  }
+
+  /** Список-конверт старого сервера: `total` без `next_cursor`. */
+  function oldList(items: unknown[], total: number): { status: number; body: unknown } {
+    return {
+      status: 200,
+      body: { data: items, meta: { total, offset: 0, limit: items.length, directions: {} } },
+    };
+  }
+
+  /** Минимальная мысль-ссылка для страницы. */
+  function ref(id: string): { id: string; title: string; type_id: null; active: boolean } {
+    return { id, title: id, type_id: null, active: true };
+  }
+
+  it('повторяет запрос без count и листает offset-курсором', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ref(`t${i}`));
+    const { fetch, calls } = makeFetch([
+      unknownField('count'),
+      oldList(page1, 250),
+      oldList([ref('t100')], 250),
+    ]);
+    const client = makeClient(fetch);
+    const request = {
+      sort: 'created',
+      order: 'asc',
+      limit: 100,
+      offset: 0,
+    } as Parameters<RestClient['queryStructureThoughts']>[1];
+
+    const res = await client.queryStructureThoughts('net1', request);
+
+    assert.equal(res.items.length, 100, 'отбор снова возвращает результат');
+    assert.equal(res.total, 250, 'счётчик берётся из meta.total старого сервера');
+    assert.equal(res.next_cursor, 'offset:100', 'продолжение задаётся offset-курсором');
+    // Первый запрос нёс count (и был отвергнут), повтор — уже нет.
+    assert.equal((JSON.parse(String(calls[0]!.init.body)) as { count?: boolean }).count, true);
+    const retry = JSON.parse(String(calls[1]!.init.body)) as { count?: boolean; offset?: number };
+    assert.equal(retry.count, undefined, 'повтор уходит без неизвестного поля count');
+    assert.equal(retry.offset, 0);
+
+    // Следующая страница: транспорт разворачивает offset-курсор обратно в offset.
+    const res2 = await client.queryStructureThoughts('net1', {
+      ...request,
+      cursor: res.next_cursor ?? undefined,
+    });
+    const page2 = JSON.parse(String(calls[2]!.init.body)) as {
+      count?: boolean;
+      offset?: number;
+      cursor?: string;
+    };
+    assert.equal(page2.count, undefined);
+    assert.equal(page2.offset, 100);
+    assert.equal(page2.cursor, undefined, 'курсор-заглушка не уходит на старый сервер');
+    assert.equal(res2.items.length, 1);
+    assert.equal(res2.next_cursor, null, 'последняя страница закрывает листание');
+  });
+
+  it('на новом сервере count запрашивается, а реальный курсор не теряется', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [], meta: { total: 0, directions: {}, next_cursor: null } } },
+    ]);
+    const client = makeClient(fetch);
+    await client.queryStructureThoughts('net1', {
+      sort: 'created',
+      order: 'asc',
+      limit: 100,
+      offset: 0,
+      cursor: 'real-keyset-cursor',
+    } as Parameters<RestClient['queryStructureThoughts']>[1]);
+
+    const body = JSON.parse(String(calls[0]!.init.body)) as { count?: boolean; cursor?: string };
+    assert.equal(body.count, true);
+    assert.equal(body.cursor, 'real-keyset-cursor', 'keyset-курсор нового сервера обязан уходить в тело');
+  });
+
+  it('ids_only на старом сервере тоже листается offset-курсором', async () => {
+    const ids = Array.from({ length: 2000 }, (_, i) => `i${i}`);
+    const { fetch, calls } = makeFetch([
+      unknownField('count'),
+      { status: 200, body: { data: { ids, total: 5000 } } },
+    ]);
+    const client = makeClient(fetch);
+
+    const res = await client.queryStructureThoughtIds('net1', {
+      sort: 'created',
+      order: 'asc',
+      limit: 2000,
+      offset: 0,
+    } as Parameters<RestClient['queryStructureThoughtIds']>[1]);
+
+    assert.equal(res.ids.length, 2000);
+    assert.equal(res.total, 5000);
+    assert.equal(res.next_cursor, 'offset:2000');
+    const retry = JSON.parse(String(calls[1]!.init.body)) as { count?: boolean; cursor?: string };
+    assert.equal(retry.count, undefined);
+    assert.equal(retry.cursor, undefined);
+  });
+});
