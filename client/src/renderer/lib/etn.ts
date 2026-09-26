@@ -9,10 +9,20 @@
  * capture `undefined` if this module is evaluated a tick before the
  * `contextBridge` exposes the API; the Proxy sidesteps that race entirely.
  *
+ * The public surface is the renderer-facing {@link EtnApi}. The raw bridge is
+ * {@link EtnBridgeApi} — it differs in the cancellable `structures.query` /
+ * `queryIds` (ошибка b7cbd0e0): `AbortSignal` is a host object and does NOT
+ * survive `contextBridge` argument serialization (it arrives in preload as an
+ * empty `{}`). So the `abort` listener lives HERE, in the renderer context
+ * where the signal is real, and only a primitive `requestId` crosses the
+ * bridge; `cancelRequest(requestId)` is a fire-and-forget message to main.
+ * This module is where the two shapes are adapted, so every call site keeps
+ * the stable `structures.query(networkId, request, { signal })` signature.
+ *
  * The `typeof window` guard keeps the module importable from Node unit tests.
  */
 
-import type { EtnApi } from '../../main/ipc/contract.js';
+import type { EtnApi, EtnBridgeApi } from '../../main/ipc/contract.js';
 
 /**
  * Resolves the current `window.etn` lazily. `lib/etn.ts` is imported by the
@@ -22,13 +32,62 @@ import type { EtnApi } from '../../main/ipc/contract.js';
  * both worlds without imposing a load-order constraint on the test
  * bootstrap.
  */
-function readWindow(): { etn?: EtnApi } | null {
+function readWindow(): { etn?: EtnBridgeApi } | null {
   if (typeof window === 'undefined') {
-    return (globalThis as { etn?: EtnApi }).etn !== undefined
-      ? (globalThis as unknown as { etn?: EtnApi })
+    return (globalThis as { etn?: EtnBridgeApi }).etn !== undefined
+      ? (globalThis as unknown as { etn?: EtnBridgeApi })
       : null;
   }
-  return window as unknown as { etn?: EtnApi };
+  return window as unknown as { etn?: EtnBridgeApi };
+}
+
+/**
+ * Renderer-side adapter for the cancellable bridge calls (требование
+ * ebed4980, ошибка b7cbd0e0). Registers the `abort` listener on the REAL
+ * signal here and hands the bridge a primitive `requestId`; on abort it calls
+ * `cancel(requestId)`. Without a signal the call stays uncancellable and no
+ * `requestId` is sent. After the promise settles the listener is removed, so a
+ * late abort does not fire a stale cancellation.
+ */
+function callCancellable<T>(
+  call: (requestId: string | undefined) => Promise<T>,
+  cancel: (requestId: string) => void,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return call(undefined);
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+  }
+  const requestId = crypto.randomUUID();
+  const onAbort = (): void => cancel(requestId);
+  signal.addEventListener('abort', onAbort, { once: true });
+  return call(requestId).finally(() => signal.removeEventListener('abort', onAbort));
+}
+
+/**
+ * Builds the renderer-facing `structures` facade from the raw bridge: the
+ * cancellable methods get the signal→requestId adapter, the rest pass through
+ * unchanged.
+ */
+function structuresFacade(bridge: EtnBridgeApi): EtnApi['structures'] {
+  return {
+    query: (networkId, request, options) =>
+      callCancellable(
+        (requestId) => bridge.structures.query(networkId, request, requestId),
+        (requestId) => bridge.cancelRequest(requestId),
+        options?.signal,
+      ),
+    queryIds: (networkId, request, options) =>
+      callCancellable(
+        (requestId) => bridge.structures.queryIds(networkId, request, requestId),
+        (requestId) => bridge.cancelRequest(requestId),
+        options?.signal,
+      ),
+    hierarchy: (networkId, thoughtId, query) =>
+      bridge.structures.hierarchy(networkId, thoughtId, query),
+    edges: (networkId, ids, showInactive) =>
+      bridge.structures.edges(networkId, ids, showInactive),
+  };
 }
 
 export const etn: EtnApi = new Proxy(
@@ -44,6 +103,7 @@ export const etn: EtnApi = new Proxy(
             'Ensure the preload script has loaded.',
         );
       }
+      if (prop === 'structures') return structuresFacade(api);
       return (api as unknown as Record<string, unknown>)[prop];
     },
   },

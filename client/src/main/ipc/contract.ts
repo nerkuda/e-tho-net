@@ -1286,3 +1286,50 @@ export interface EtnApi {
    */
   logEvent(name: string, data?: unknown): void;
 }
+
+/**
+ * Мост-форма отменяемых выборок «Структур» (требование ebed4980, ошибка
+ * b7cbd0e0). Отличается от публичной {@link EtnApi['structures']} только
+ * парой `query`/`queryIds`.
+ *
+ * Почему отдельный тип: `AbortSignal` — host-объект, он НЕ переживает
+ * `contextBridge`-сериализацию аргументов и приезжает в preload пустым
+ * объектом. Поэтому за мост уходит только примитив `requestId`, а слушатель
+ * `abort` живёт в renderer-контексте. Публичную форму (с `{ signal }`)
+ * renderer получает из фасада `renderer/lib/etn.ts`, который приводит её к
+ * этой мост-форме.
+ */
+export type EtnBridgeStructures = Omit<EtnApi['structures'], 'query' | 'queryIds'> & {
+  /**
+   * `POST /thoughts/query` с отменяемым `requestId`: main регистрирует по нему
+   * `AbortController`; сообщение `etn:cancel { requestId }` гасит fetch.
+   * Без `requestId` вызов неотменяем.
+   */
+  query(
+    networkId: string,
+    request: StructureQueryRequest,
+    requestId?: string,
+  ): Promise<StructureQueryResponse>;
+  /** `queryIds` — тот же отменяемый путь, что и {@link EtnBridgeStructures.query}. */
+  queryIds(
+    networkId: string,
+    request: StructureQueryRequest,
+    requestId?: string,
+  ): Promise<StructureIdsQueryResult>;
+};
+
+/**
+ * Сырая поверхность, которую preload выставляет в renderer через
+ * `contextBridge.exposeInMainWorld('etn', …)` — то, чем реально является
+ * `window.etn`. Renderer-код работает с ней через фасад `renderer/lib/etn.ts`,
+ * типизированный публичной {@link EtnApi} (сигнатура с `AbortSignal`).
+ */
+export type EtnBridgeApi = Omit<EtnApi, 'structures'> & {
+  structures: EtnBridgeStructures;
+  /**
+   * Fire-and-forget отмена вызова по `requestId` (требование ebed4980): шлёт
+   * `etn:cancel` в main, ответа не ждёт. Вызывается renderer-фасадом из
+   * слушателя `abort` — сигнал за мост не уходит (ошибка b7cbd0e0).
+   */
+  cancelRequest(requestId: string): void;
+};

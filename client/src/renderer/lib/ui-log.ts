@@ -15,7 +15,7 @@
  * instruments — hence the soft guard and the swallowed errors.
  */
 
-import type { EtnApi } from '../../main/ipc/contract.js';
+import type { EtnBridgeApi } from '../../main/ipc/contract.js';
 
 /** Milestone names emitted from the renderer (08-ui-spec.md §9.7). */
 export type UiEventName =
@@ -32,7 +32,7 @@ export type UiEventName =
  */
 export function logUiEvent(name: UiEventName, data?: Record<string, unknown>): void {
   try {
-    const api = (typeof window === 'undefined' ? undefined : (window as { etn?: EtnApi }).etn);
+    const api = (typeof window === 'undefined' ? undefined : (window as { etn?: EtnBridgeApi }).etn);
     api?.logEvent(name, data);
   } catch {
     // Diagnostics must never break the code they instrument.
