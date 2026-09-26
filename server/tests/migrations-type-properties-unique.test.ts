@@ -48,27 +48,41 @@ import { networkMigrationsDir } from '../src/paths.js';
 /** Файл миграции, ради которой заведён этот набор. */
 const MIGRATION = '043_type_properties_canonical_unique.sql';
 
-/** Миграции, которые могут идти после 043 — после неё добавлен 044
- *  (cross_network_ref, задача 7849008a). pre043Db оставляет «после 042» в
- *  состоянии «до 043», и тесты должны явно забывать и 043, и всех его
- *  последователей, чтобы прогон `runMigrations` не натыкался на 044. */
+/** Миграции, добавленные после 043; pre043Db оставляет «после 042» в состоянии
+ *  «до 043», и первый прогон `runMigrations` применяет их все. */
 const MIGRATIONS_AFTER_043: readonly string[] = [
+  MIGRATION,
+  '044_cross_network_ref.sql',
+  '045_links_covering_indexes.sql',
+  '046_comments_time.sql',
+];
+
+/**
+ * Подмножество «повторно прогоняемых» миграций после 043: тесты дважды гоняют
+ * `runMigrations` на одном соединении, доказывая идемпотентность пересборки
+ * 043. 046 (`ALTER TABLE comments ADD COLUMN use_time`) неидемпотентна — в
+ * SQLite нет `ADD COLUMN IF NOT EXISTS` (та же особенность у 033); повторно она
+ * не проигрывается, как и в реальном миграторе, который помнит применённый файл.
+ */
+const REPLAYED_AFTER_043: readonly string[] = [
   MIGRATION,
   '044_cross_network_ref.sql',
   '045_links_covering_indexes.sql',
 ];
 
-/** Забыть регистрацию MIGRATIONS_AFTER_043 — чтобы `runMigrations` применил
- *  их заново, как если бы тест шёл от состояния «после 042». */
+/** Забыть регистрацию повторно прогоняемых миграций — чтобы `runMigrations`
+ *  применил их заново, как если бы тест шёл от состояния «после 042». */
 function forgetMigrationsAfter043(db: Database.Database): void {
-  for (const name of MIGRATIONS_AFTER_043) {
+  for (const name of REPLAYED_AFTER_043) {
     db.prepare('DELETE FROM _migrations WHERE name = ?').run(name);
   }
 }
 
-/** Ожидаемый список применённых миграций после `forgetMigrationsAfter043`:
- *  сам 043 плюс его непосредственные последователи (сейчас только 044). */
-const EXPECTED_APPLIED_AFTER_043 = [...MIGRATIONS_AFTER_043];
+/** Ожидание первого прогона из состояния «после 042» — все файлы после 043. */
+const EXPECTED_APPLIED_FROM_042 = [...MIGRATIONS_AFTER_043];
+
+/** Ожидание повторного прогона: 043–045 переприменяются, 046 пропускается. */
+const EXPECTED_APPLIED_REPLAY = [...REPLAYED_AFTER_043];
 
 /** Автор записей в тесте. */
 const ACTOR = '11111111-1111-4111-8111-111111111111';
@@ -232,7 +246,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
       // После 043 теперь идёт 044 (cross_network_ref) — тест проверяет,
       // что оба файла применены и итоговое состояние схемы каноническое.
       const res = runMigrations(db, networkMigrationsDir());
-      assert.deepEqual(res.applied, EXPECTED_APPLIED_AFTER_043);
+      assert.deepEqual(res.applied, EXPECTED_APPLIED_FROM_042);
       assert.deepEqual(uniqueKeys(db), ['id, layer_id', ON_CONFLICT_TARGET]);
 
       // Та же привязка тем же доменным путём проходит.
@@ -276,7 +290,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
       assert.ok(before.rows.length > 0, 'снимок должен быть непустым');
 
       forgetMigrationsAfter043(db);
-      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_AFTER_043);
+      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_FROM_042);
 
       const after = snapshot(db);
       assert.deepEqual(after.rows, before.rows, 'строки не должны меняться');
@@ -307,7 +321,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
       seedBinding(db, { pk: 15, id: 'dup-3-second', ownerId: type.id, propertyId: 'p-3', side: null });
 
       forgetMigrationsAfter043(db);
-      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_AFTER_043);
+      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_FROM_042);
 
       const rows = db
         .prepare(
@@ -324,7 +338,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
 
       // Повторный прогон на каноничной таблице результат не меняет.
       forgetMigrationsAfter043(db);
-      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_AFTER_043);
+      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_REPLAY);
       const again = db
         .prepare(
           `SELECT pk, id, side FROM type_properties
@@ -350,7 +364,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
       forgetMigrationsAfter043(db);
       // Без `PRAGMA legacy_alter_table = ON` внутри 043 подмена падает:
       // `error in view type_properties_v: no such table: main.type_properties`.
-      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_AFTER_043);
+      assert.deepEqual(runMigrations(db, networkMigrationsDir()).applied, EXPECTED_APPLIED_FROM_042);
 
       assert.deepEqual(snapshot(db).rows, before.rows, 'строки должны пережить пересборку');
       const visible = db.prepare('SELECT COUNT(*) AS c FROM type_properties_v').get() as {
