@@ -195,7 +195,13 @@ export function showPropertyManagerDialog(): void {
     },
   });
 
-  const body = div('form-stack');
+  // Тело диалога-списка несёт раскладку `.list-dialog-body` САМО (прямой
+  // ребёнок `.dialog-body`): только тогда его `height: 100%` разрешается от
+  // фиксированной высоты роли, а обёртка списка (`.property-list-wrap`) тянется
+  // на свободное место. Класс на вложенном `list.root` процент не разрешает —
+  // под таблицей остаётся пустота (ошибка 1902a115, правило 9 требования
+  // 11ddd910).
+  const body = div('form-stack list-dialog-body');
   body.append(list.root);
 
   function onChanged(): void {
