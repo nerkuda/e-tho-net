@@ -433,6 +433,11 @@ export function writeThoughts(
         // `links` filled in phase 3 below — we still want a placeholder so
         // the array order matches the request when the agent reads items[].
         links: [],
+        // Рёбра link-дефолтов типа при создании мысли — по ним фасад
+        // публикует `link.created` (ошибка 8655842b).
+        ...(result.default_link_ids !== undefined
+          ? { default_link_ids: result.default_link_ids }
+          : {}),
         ...(result.attachments !== undefined && result.attachments.length > 0
           ? { attachments: result.attachments.map((a) => ({ id: a.id })) }
           : {}),

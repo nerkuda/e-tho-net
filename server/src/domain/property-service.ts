@@ -1212,6 +1212,11 @@ function setLinkPropertyTargets(
  * живость (отбор `allowed_type_ids` не применяется: значения — сторона
  * источников). Самосвязь молча пропускается. Полная замена набора:
  * недостающие рёбра создаются, лишние помечаются на удаление.
+ *
+ * Возвращает и итоговый набор источников (`targets`), и id рёбер, созданных
+ * (в том числе восстановленных из корзины) этой записью, — по ним фасады
+ * публикуют `link.created` (ошибка 8655842b, тот же контракт, что у
+ * {@link setLinkPropertyTargets}).
  */
 export function setLinkPropertySourcesForTarget(
   ndb: NetworkDb,
@@ -1219,7 +1224,7 @@ export function setLinkPropertySourcesForTarget(
   prop: PropertyLike,
   sourceIds: string[],
   actorUserId: string,
-): string[] {
+): { targets: string[]; createdLinkIds: string[] } {
   return ndb.transaction(() => {
     const cfg = prop.config ?? {};
     const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1230,16 +1235,17 @@ export function setLinkPropertySourcesForTarget(
       if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
     }
     const result: string[] = [];
+    const createdLinkIds: string[] = [];
     for (const sourceId of sourceIds) {
       if (sourceId === ownerId) continue;
       if (existing.has(sourceId)) {
         result.push(sourceId);
         continue;
       }
-      insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId);
+      createdLinkIds.push(insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId));
       result.push(sourceId);
     }
-    return result;
+    return { targets: result, createdLinkIds };
   });
 }
 

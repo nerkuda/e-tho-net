@@ -78,7 +78,7 @@ import {
 } from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
-import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
+import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import {
   clearThoughtRefUsages,
   findThoughtUsage,
@@ -379,11 +379,21 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseThoughtCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const created = createThought(ndb, input, req.auth!.user.id);
+          // Рёбра link-дефолтов типа при создании мысли — в события
+          // (ошибка 8655842b): иначе они появлялись без `link.created`.
+          const defaultLinkIds: string[] = [];
+          const created = createThought(ndb, input, req.auth!.user.id, defaultLinkIds);
           const events: AnyWriteEvent[] = [{ type: 'thought.created', data: { thought: created } }];
           const activity: WriteActivityEntry[] = [
             { kind: 'thought', action: 'created', thought: created },
           ];
+          for (const linkId of defaultLinkIds) {
+            const link = getLink(ndb, linkId);
+            if (link !== null) {
+              events.push({ type: 'link.created', data: { link } });
+              activity.push({ kind: 'link', action: 'created', link });
+            }
+          }
           if (input.create_link) {
             // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
             // parent: target sources a link to the new thought; child: the new

@@ -161,6 +161,9 @@ export function copyThoughtsBatch(
     const createdThoughts: Thought[] = [];
     const createdLinks: Link[] = [];
     const createdAttachments: Attachment[] = [];
+    /** Рёбра link-дефолтов типа у скопированных мыслей (ошибка 8655842b) —
+     *  добавляются в `created_links` готовой формой в самом конце. */
+    const defaultLinkIds: string[] = [];
 
     // A copied thought must keep its parent-link only when its parent also
     // belongs to the selection (else the link would dangle); on the paste
@@ -184,6 +187,10 @@ export function copyThoughtsBatch(
       const { sourceId, thought } = created;
       thoughtIdMap[sourceId] = thought.id;
       createdThoughts.push(thought);
+      // Рёбра link-дефолтов типа — в общий список созданных связей, чтобы по
+      // ним ушёл `link.created` (ошибка 8655842b). Идентичность рёбер здесь не
+      // нужна: `link_id_map` заполняется только по `input.links` ниже.
+      defaultLinkIds.push(...created.defaultLinkIds);
 
       // Skip the parent-link for internal thoughts (they already have a
       // copied parent) and for the trivial self-loop case where the paste
@@ -208,8 +215,11 @@ export function copyThoughtsBatch(
 
     // Re-read the freshly created links so the result carries the canonical
     // `version`/`updated_at` values (the realtime layer broadcasts them
-    // as-is).
-    const finalLinks = createdLinks.map((l) => reReadLink(ndb, l.id));
+    // as-is). Рёбра link-дефолтов типа добавляются сюда же (ошибка 8655842b).
+    const finalLinks = [
+      ...createdLinks.map((l) => reReadLink(ndb, l.id)),
+      ...defaultLinkIds.map((id) => reReadLink(ndb, id)),
+    ];
 
     return {
       thought_id_map: thoughtIdMap,
@@ -247,7 +257,7 @@ function createOneThought(
   item: ThoughtCopyItem,
   actorUserId: string,
   createdAttachments: Attachment[],
-): { sourceId: string; thought: Thought } | null {
+): { sourceId: string; thought: Thought; defaultLinkIds: string[] } | null {
   const snap = item.thought;
   const trimmedTitle = snap.title.trim();
   if (trimmedTitle === '') return null;
@@ -255,6 +265,9 @@ function createOneThought(
   const typeId = resolveThoughtTypeId(ndb, snap);
   const { icon, iconKind } = normaliseIcon(snap.icon, snap.icon_kind);
 
+  // Рёбра link-дефолтов типа копируемой мысли (ошибка 8655842b) — возвращаем
+  // наверх, чтобы они попали в `created_links` и по ним ушёл `link.created`.
+  const defaultLinkIds: string[] = [];
   const thought = createThought(
     ndb,
     {
@@ -272,6 +285,7 @@ function createOneThought(
       ...(snap.font_strike !== null ? { font_strike: snap.font_strike } : {}),
     },
     actorUserId,
+    defaultLinkIds,
   );
 
   if (item.permanent_comment !== undefined && item.permanent_comment !== null) {
@@ -328,7 +342,7 @@ function createOneThought(
     }
   }
 
-  return { sourceId: snapshotSourceId(item), thought };
+  return { sourceId: snapshotSourceId(item), thought, defaultLinkIds };
 }
 
 /** Read the original thought id the client tagged this snapshot with. */

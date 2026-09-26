@@ -18,7 +18,12 @@ import { createApiKeyAuthProvider } from '../src/mcp/auth.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
-import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/domain/property-service.js';
+import {
+  createNetworkProperty,
+  createTypeProperty,
+  setTypePropertyDefaultOverride,
+  setTypePropertyDescriptionOverride,
+} from '../src/domain/property-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
@@ -29,10 +34,10 @@ import {
   closeMcpContext,
   connectMcpClient,
   createThoughtViaWrite,
+  toolText,
   nativeAvailable,
   setPropertiesViaWrite,
   toolJson,
-  toolText,
   upsertPermanentViaWrite,
 } from './mcp-helpers.js';
 import type { WriteThoughtFixture } from './mcp-helpers.js';
@@ -2880,8 +2885,101 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('changes.list honours since_seq and limit (O9)', async () => {
+  it('событие link.created публикуется для рёбер link-дефолтов при создании мысли (8655842b)', async () => {
+    // Симптом: создание мысли типа с непустым link-дефолтом материализовало
+    // рёбра (обе стороны привязки), но не публиковало `link.created` — ни
+    // подписчики, ни журнал `changes.list` их не видели. Теперь путь создания
+    // мысли выровнен с `links[]`, set-записью свойств и `etn.properties.add`.
     const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const sourceType = createThoughtType(ndb, { name: 'TEST 8655842b источник' }, ctx.adminId);
+      const targetType = createThoughtType(ndb, { name: 'TEST 8655842b назначение' }, ctx.adminId);
+      const prop = createNetworkProperty(
+        ndb,
+        {
+          name: 'TEST 8655842b дефолт',
+          value_type: 'link',
+          name_forward: 'TEST 8655842b дефолт',
+          name_reverse: 'TEST 8655842b дефолт обратно',
+        },
+        ctx.adminId,
+      );
+      // Обе стороны привязки: сторона источника (значение — цели) и сторона
+      // назначения (значение — источники) создают рёбра разными ветками
+      // createThought.
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        sourceType.id,
+        { key: 'TEST 8655842b дефолт', value_type: 'link', side: 'source' },
+        ctx.adminId,
+      );
+      createTypeProperty(
+        ndb,
+        'thought_type',
+        targetType.id,
+        { key: 'TEST 8655842b дефолт', value_type: 'link', side: 'target' },
+        ctx.adminId,
+      );
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Мысли-значения дефолтов создаём ДО установки override и с нужными
+        // типами: сторона источника допускает в цели только тип назначения
+        // (привязки свойства), а типы без default-значений создаются чисто.
+        const target = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'TEST 8655842b цель',
+          type_id: targetType.id,
+        });
+        const source = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'TEST 8655842b мысль-источник',
+          type_id: sourceType.id,
+        });
+        // Цель для дефолта стороны источника, источник — для стороны назначения.
+        setTypePropertyDefaultOverride(ndb, 'thought_type', sourceType.id, prop.id, [target.id], ctx.adminId);
+        setTypePropertyDefaultOverride(ndb, 'thought_type', targetType.id, prop.id, [source.id], ctx.adminId);
+
+        const written = toolJson<{
+          items: Array<{ id: string; default_link_ids?: string[] }>;
+        }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                { ref: 's', thought: { title: 'TEST 8655842b новая-источник', type_id: sourceType.id } },
+                { ref: 't', thought: { title: 'TEST 8655842b новая-назначение', type_id: targetType.id } },
+              ],
+            },
+          }),
+        );
+        const sourceEdgeIds = written.items[0]?.default_link_ids ?? [];
+        const targetEdgeIds = written.items[1]?.default_link_ids ?? [];
+        assert.equal(sourceEdgeIds.length, 1, `source-side default edge: ${JSON.stringify(written.items[0])}`);
+        assert.equal(targetEdgeIds.length, 1, `target-side default edge: ${JSON.stringify(written.items[1])}`);
+
+        const body = toolJson<McpChangesListResult>(
+          await callOp(handle.client, 'changes.list', { network_id: ctx.networkId, since_seq: 0 }),
+        );
+        const publishedIds = body.events
+          .filter((e) => e.type === 'link.created')
+          .map((e) => (e.data as { link?: { id?: string } }).link?.id);
+        for (const linkId of [...sourceEdgeIds, ...targetEdgeIds]) {
+          assert.ok(
+            publishedIds.includes(linkId),
+            `link.created must be published for the default edge ${linkId}: ${publishedIds.join(',')}`,
+          );
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list honours since_seq and limit (O9)', async () => {    const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {

@@ -345,6 +345,19 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
                 }
               }
             }
+            // Рёбра, материализованные link-дефолтами типа при создании мысли,
+            // — публикуем `link.created` так же, как для `links[]` и set-записи
+            // свойств (ошибка 8655842b): без этого подписчики и журнал
+            // `changes.list` не видели новых рёбер.
+            if (item.default_link_ids !== undefined) {
+              for (const linkId of item.default_link_ids) {
+                const l = getLink(ndb, linkId);
+                if (l !== null) {
+                  events.push({ type: 'link.created', data: { link: l } });
+                  activity.push({ kind: 'link', action: 'created', link: l });
+                }
+              }
+            }
           }
 
           return {

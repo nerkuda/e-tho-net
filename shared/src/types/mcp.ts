@@ -550,6 +550,14 @@ export interface McpThoughtWriteItemResult {
   }>;
   /** Attachment ids added in this batch. */
   attachments?: Array<{ id: string }>;
+  /**
+   * Id рёбер, материализованных применением link-дефолтов типа при создании
+   * мысли (ошибка 8655842b). Не путать с `links` (явные `links[]` запроса) и
+   * с `properties[].link_ids` (рёбра set-записи свойства). По ним публикуется
+   * `link.created` — иначе создание мысли с непустым link-дефолтом ставило
+   * рёбра «молча». Пусто/не задано — дефолтов-связей не было.
+   */
+  default_link_ids?: string[];
   /** Card-completeness warnings (task O6) for this item. */
   warnings: ThoughtCardWarning[];
 }

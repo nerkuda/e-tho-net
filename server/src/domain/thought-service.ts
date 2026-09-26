@@ -769,11 +769,18 @@ function createLinkForNewThought(
  * @param ndb - open network database.
  * @param input - creation payload (title required, rest optional).
  * @param actorUserId - user performing the creation (stored as created_by/updated_by).
+ * @param createdLinkIds - необязательный коллектор: в него добавляются id рёбер,
+ *   созданных применением link-дефолтов типа (ошибка 8655842b). Фасад по ним
+ *   публикует `link.created`, иначе создание мысли с непустым link-дефолтом
+ *   материализовало рёбра «молча» — ни подписчики, ни журнал `changes.list`
+ *   их не видели. Форма «массив-коллектор» оставлена, чтобы не менять
+ *   возвращаемый тип `Thought` у десятков вызывающих (тестов в том числе).
  */
 export function createThought(
   ndb: NetworkDb,
   input: ThoughtCreateInput,
   actorUserId: string,
+  createdLinkIds?: string[],
 ): Thought {
   const title = validateTitle(input.title);
   const id = randomUUID();
@@ -865,19 +872,23 @@ export function createThought(
           if (side === 'target') {
             const sources = filterApplicableLinkDefaultSources(ndb, values);
             if (sources.length > 0) {
-              setLinkPropertySourcesForTarget(
+              const applied = setLinkPropertySourcesForTarget(
                 ndb,
                 id,
                 { id: def.property_id, name: def.key, value_type: 'link', config: def.config },
                 sources,
                 actorUserId,
               );
+              // id рёбер, попавших в коллектор, фасад публикует как `link.created`
+              // (ошибка 8655842b).
+              createdLinkIds?.push(...applied.createdLinkIds);
             }
             continue;
           }
           const ids = filterApplicableLinkDefaultTargets(ndb, def.config ?? null, values);
           if (ids.length > 0) {
-            setPropertyValueById(ndb, 'thought', id, def.property_id, ids, actorUserId);
+            const appliedValue = setPropertyValueById(ndb, 'thought', id, def.property_id, ids, actorUserId);
+            createdLinkIds?.push(...(appliedValue.link_ids ?? []));
           }
           continue;
         }
