@@ -188,6 +188,27 @@
   padding: 8px 4px;
 }
 
+/* Плашка «Временная выборка — отбор сброшен»: над лентой, залипает при прокрутке. */
+.diary-temp-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--warn-strong);
+}
+
+.diary-temp-banner .diary-temp-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .diary-day {
   display: flex;
   flex-direction: column;
@@ -225,6 +246,12 @@
 .diary-slot {
   border-style: dashed;
   border-color: var(--accent);
+}
+
+/* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
+.diary-record-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .diary-record-head {

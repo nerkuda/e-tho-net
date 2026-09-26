@@ -150,6 +150,49 @@ export function dayPeriod(day: string): PeriodRange {
   return { from: day, to: day };
 }
 
+/**
+ * Задержка применения строки поиска «Дневника» (0.10.1, T7): ввод-критерий
+ * применяется не на каждое нажатие, а через паузу — как живой поиск клиента.
+ */
+export const SEARCH_DEBOUNCE_MS = 300;
+
+/** Начало локального дня наблюдателя как полный UTC-инстанс. */
+function localDayStart(day: string): string {
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+/** Конец локального дня наблюдателя как полный UTC-инстанс (включительно). */
+function localDayEnd(day: string): string {
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+/**
+ * Период панели для перехода к записи (0.10.1, T7; элемент «Поиск в
+ * дневниковой ленте»): диапазон записи `valid_from`/`valid_to`, развёрнутый в
+ * ЛОКАЛЬНЫЕ сутки наблюдателя — точечная запись даёт одни сутки. Границы —
+ * полные UTC-инстансы начала/конца локального дня, поэтому запись у полуночи
+ * не выпадает из UTC-суток, а лента показывает весь её день. `''` — дата не
+ * разобралась.
+ */
+export function recordPeriod(row: {
+  valid_from: string;
+  valid_to: string | null;
+}): PeriodRange {
+  let from = localDay(row.valid_from);
+  let to = row.valid_to !== null ? localDay(row.valid_to) : from;
+  if (from === '') return { from: '', to: '' };
+  if (to === '') to = from;
+  if (to < from) [from, to] = [to, from];
+  return { from: localDayStart(from), to: localDayEnd(to) };
+}
+
+
 /** Индекс дня недели с понедельника (0 — понедельник … 6 — воскресенье). */
 function mondayIndex(day: string): number {
   const d = new Date(`${day}T00:00:00Z`);

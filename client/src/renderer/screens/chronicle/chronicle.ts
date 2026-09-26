@@ -62,7 +62,7 @@ import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
-import { parseChronicleCriteria } from '../../lib/filter-builder.js';
+import { parseChronicleCriteria, defaultChronicleCriteriaState } from '../../lib/filter-builder.js';
 import { buildMonthCalendar, type MonthCalendarHandle } from './calendar.js';
 import {
   applyPeriodToFilter,
@@ -72,6 +72,7 @@ import {
   hasRecordContent,
   isLastChip,
   localDay,
+  recordPeriod,
   resolvePeriodDay,
   slotDeleteNeedsNetwork,
   todayLocal,
@@ -124,6 +125,19 @@ let calendar: MonthCalendarHandle | null = null;
 let month: { year: number; month: number } | null = null;
 /** Счётчики записей по дням (для календаря), пересчитываются при отрисовке. */
 const dayCounts = new Map<string, number>();
+/** Запись, к которой выполнен переход: карточка подсвечена до следующего применения. */
+let jumpHighlightId: string | null = null;
+/** Плашка «Временная выборка» над лентой (0.10.1, T7). */
+let tempBanner: HTMLElement | null = null;
+/**
+ * Активная временная выборка (T7): запись не прошла отбор кроме периода —
+ * критерии сброшены, период оставлен; здесь хранится прежний отбор для возврата.
+ */
+let temporarySelection: {
+  filter: ReturnType<typeof getFilterState>;
+  savedFilterId: string | null;
+  period: { from: string; to: string };
+} | null = null;
 
 // ---------------------------------------------------------------------------
 // Pseudo-record (slot) state
@@ -157,6 +171,10 @@ export async function ensureChronicleInitialised(): Promise<void> {
   total = 0;
   slot = null;
   month = null;
+  // Переход поиска и временная выборка — состояние текущего входа, не персистятся.
+  jumpHighlightId = null;
+  temporarySelection = null;
+  tempBanner = null;
 
   try {
     let raw: string | null = null;
@@ -216,7 +234,10 @@ export function mountChronicle(hostEl: HTMLElement): void {
     maxSizeTop: 800,
   });
 
-  mountChronicleFilterPanel(filterArea, { apply: () => void applyFilter() });
+  mountChronicleFilterPanel(filterArea, {
+    apply: () => void applyFilter(),
+    jumpToRecord: (row) => void jumpToRecord(row),
+  });
 
   // Left column: month calendar + non-scrollable sticky add panel.
   const side = div('chron-side');
@@ -281,6 +302,10 @@ export function mountChronicle(hostEl: HTMLElement): void {
 
 /** Applies the current filter from scratch (the «Применить» path). */
 async function applyFilter(): Promise<void> {
+  // Ручное применение завершает временную выборку и снимает подсветку перехода.
+  clearTemporarySelection();
+  jumpHighlightId = null;
+  persistState();
   await getHome().catch(() => undefined);
   await reload();
   syncCalendar();
@@ -443,6 +468,8 @@ function formatDayLabel(day: string): string {
 function buildRecordCard(row: ChronicleRow): HTMLElement {
   const card = div('diary-record');
   card.dataset[TABLE_ROW_KEY_ATTR] = row.id;
+  // Запись, к которой выполнен переход поиска, подсвечена (T7).
+  if (row.id === jumpHighlightId) card.classList.add('diary-record-target');
 
   const head = div('diary-record-head');
   head.append(
@@ -895,6 +922,110 @@ function syncCalendar(): void {
   const filter = getFilterState();
   calendar.setSelection(resolvePeriodDay(filter.dateFrom), resolvePeriodDay(filter.dateTo));
   month = calendar.getMonth();
+}
+
+// ---------------------------------------------------------------------------
+// Search jump (0.10.1, T7; элемент «Поиск в дневниковой ленте»)
+// ---------------------------------------------------------------------------
+
+/** Прокручивает ленту к записи и подсвечивает её карточку. */
+function focusRecord(id: string): void {
+  jumpHighlightId = id;
+  renderFeed();
+  const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
+  card?.scrollIntoView({ block: 'center' });
+}
+
+/** Догружает страницы ленты, пока запись не появится (она внутри периода). */
+async function loadUntilRecord(id: string): Promise<boolean> {
+  while (!rows.some((r) => r.id === id) && rows.length < total) {
+    const before = rows.length;
+    await loadMore();
+    if (rows.length === before) break; // догрузка не продвинулась — не крутимся
+  }
+  return rows.some((r) => r.id === id);
+}
+
+/**
+ * Переход к найденной записи (T7): период панели ← диапазон записи,
+ * программное «Применить», прокрутка ленты и подсветка записи. Если запись
+ * скрыта активным отбором (кроме периода) — временная выборка с плашкой и
+ * возвратом отбора.
+ */
+async function jumpToRecord(row: ChronicleRow): Promise<void> {
+  const period = recordPeriod(row);
+  if (period.from === '') return;
+  const previous = { filter: getFilterState(), savedFilterId: getSavedFilterId() };
+  setFilterState(applyPeriodToFilter(getFilterState(), period));
+  persistState();
+  await getHome().catch(() => undefined);
+  await reload();
+  syncCalendar();
+  if (await loadUntilRecord(row.id)) {
+    focusRecord(row.id);
+    return;
+  }
+  await startTemporarySelection(previous, period, row.id);
+}
+
+/** Временная выборка: критерии кроме периода сброшены, запись открывается. */
+async function startTemporarySelection(
+  previous: { filter: ReturnType<typeof getFilterState>; savedFilterId: string | null },
+  period: { from: string; to: string },
+  recordId: string,
+): Promise<void> {
+  const fresh = defaultChronicleCriteriaState();
+  fresh.dateFrom = period.from;
+  fresh.dateTo = period.to;
+  setFilterState(fresh);
+  setSavedFilterId(null);
+  temporarySelection = { ...previous, period };
+  renderTemporaryBanner();
+  persistState();
+  await reload();
+  syncCalendar();
+  await loadUntilRecord(recordId);
+  focusRecord(recordId);
+}
+
+/** Плашка «Временная выборка — отбор сброшен» с кнопкой возврата. */
+function renderTemporaryBanner(): void {
+  if (feedWrap === null) return;
+  tempBanner?.remove();
+  tempBanner = null;
+  if (temporarySelection === null) return;
+  tempBanner = div('diary-temp-banner');
+  tempBanner.append(
+    span(t('diary.tempSelection'), 'diary-temp-text'),
+    uiButton({
+      label: t('diary.restoreFilter'),
+      role: 'secondary',
+      size: 's',
+      class: 'diary-temp-restore',
+      onClick: () => void restoreFilter(),
+    }),
+  );
+  feedWrap.insertBefore(tempBanner, feedWrap.firstChild);
+}
+
+/** Возврат прежнего отбора после временной выборки. */
+async function restoreFilter(): Promise<void> {
+  const saved = temporarySelection;
+  if (saved === null) return;
+  temporarySelection = null;
+  tempBanner?.remove();
+  tempBanner = null;
+  setFilterState(saved.filter);
+  setSavedFilterId(saved.savedFilterId);
+  await applyFilter();
+}
+
+/** Снимает плашку временной выборки (ручное применение/очистка отбора). */
+function clearTemporarySelection(): void {
+  if (temporarySelection === null && tempBanner === null) return;
+  temporarySelection = null;
+  tempBanner?.remove();
+  tempBanner = null;
 }
 
 // ---------------------------------------------------------------------------

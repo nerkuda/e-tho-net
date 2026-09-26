@@ -56,7 +56,7 @@ import {
   type PropertyConditionState,
   type TriState,
 } from './filter-builder.js';
-import type { SuggestSource } from './suggest-dropdown.js';
+import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
 import { wireSuggest } from './suggest-dropdown.js';
 
 /** Контекст, в котором строится форма: общий для всех секций. */
@@ -150,12 +150,27 @@ export interface KeywordsSectionOptions {
   /** Источник подсказок поля (история значений, токены отбора). */
   suggestSource?: SuggestSource;
   /**
+   * Дополнительные источники подсказок рядом с основным (0.10.1, T7: строка
+   * поиска «Дневника» показывает ещё и найденные записи для перехода).
+   */
+  extraSources?: readonly SuggestSource[];
+  /**
+   * Выбор строки дополнительного источника: `true` — вызывающий обработал
+   * строку сам (переход к записи), и подстановка текста не делается.
+   */
+  onPickEntry?: (entry: SuggestEntry) => boolean;
+  /**
    * Составное поле: подсказка фильтруется по слову у каретки, а выбор токена
    * заменяет только это слово (поле «Ключевые слова» диалога отбора типа).
    */
   composite?: boolean;
   /** Enter в поле (в «Структурах» — применить отбор). */
   onEnter?: () => void;
+  /**
+   * Каждое изменение текста поля (0.10.1, T7: строка поиска «Дневника» шлёт
+   * отсюда debounce-применение отбора).
+   */
+  onInput?: (value: string) => void;
   /** Уход фокуса (в «Хронике» — запись значения в историю). */
   onBlur?: (value: string) => void;
 }
@@ -178,18 +193,26 @@ export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSecti
   input.addEventListener('input', () => {
     ctx.getState().keywords = input.value;
     ctx.touch();
+    opts.onInput?.(input.value);
   });
-  if (opts.suggestSource !== undefined) {
-    // Составное поле: подсказка фильтруется по слову у каретки, а не по всему
-    // значению; выбор токена затем заменяет только это слово.
-    const source =
-      opts.composite === true
-        ? { ...opts.suggestSource, load: () => opts.suggestSource!.load(compositeQueryOf(input)) }
-        : opts.suggestSource;
+  if (opts.suggestSource !== undefined || (opts.extraSources ?? []).length > 0) {
+    const sources: SuggestSource[] = [];
+    if (opts.suggestSource !== undefined) {
+      // Составное поле: подсказка фильтруется по слову у каретки, а не по всему
+      // значению; выбор токена затем заменяет только это слово.
+      sources.push(
+        opts.composite === true
+          ? { ...opts.suggestSource, load: () => opts.suggestSource!.load(compositeQueryOf(input)) }
+          : opts.suggestSource,
+      );
+    }
+    for (const extra of opts.extraSources ?? []) sources.push(extra);
     wireSuggest(input, {
-      sources: [{ ...source, when: source.when ?? 'always' }],
+      sources,
       pickFirstOnEnter: false,
       onPick: (entry) => {
+        // Строку-запись обрабатывает вызывающий (переход), текст не подставляем.
+        if (opts.onPickEntry?.(entry) === true) return;
         if (opts.composite === true) {
           replaceTrailingWord(input, entry.value, (v) => {
             ctx.getState().keywords = v;

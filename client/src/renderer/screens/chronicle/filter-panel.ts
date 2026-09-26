@@ -13,12 +13,16 @@
  * период, направление сортировки, сохранённые отборы.
  */
 
-import { type ChronicleFilterDefinition, type NetworkProperty } from '@etn/shared';
+import {
+  type ChronicleFilterDefinition,
+  type ChronicleRow,
+  type NetworkProperty,
+} from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
-import { div, el } from '../../lib/dom.js';
+import { div, el, fmtDate } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   filterEntityOptions,
@@ -49,6 +53,7 @@ import {
   type ChronicleCriteriaState,
 } from '../../lib/filter-builder.js';
 import { buildPeriodEditor, type PeriodValue } from '../../lib/period-editor.js';
+import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import {
   buildSavedFilterBar,
   type SavedFilterBarHandle,
@@ -58,6 +63,7 @@ import {
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
 import { checkboxRow } from '../../lib/ui/choice-row.js';
+import { SEARCH_DEBOUNCE_MS } from './diary.js';
 
 export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
 
@@ -104,9 +110,65 @@ const propertyDefs = new Map<string, NetworkProperty>();
 interface PanelActions {
   /** «Применить» pressed (or Ctrl+Enter) — run the query. */
   apply: () => void;
+  /** Переход к найденной записи (строка поиска выбрала запись). */
+  jumpToRecord?: (row: ChronicleRow) => void;
 }
 
 let actions: PanelActions = { apply: () => undefined };
+
+/** Найденные записи строки поиска по id (для перехода при выборе строки). */
+const recordHits = new Map<string, ChronicleRow>();
+/** Таймер debounce строки поиска (0.10.1, T7). */
+let searchTimer: number | null = null;
+
+/**
+ * Применяет отбор через паузу после ввода (debounce строки поиска, T7): не
+ * каждое нажатие запускает запрос, но панель не требует явного «Применить»
+ * для текстового критерия.
+ */
+function scheduleSearchApply(): void {
+  if (searchTimer !== null) window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    searchTimer = null;
+    actions.apply();
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+/**
+ * Источник «найденные записи» строки поиска (T7): живой поиск по телам и
+ * заголовкам записей через критерий `keywords` хроники. Период и прочие
+ * критерии здесь не применяются — иначе не найти запись вне текущего периода,
+ * а её и открывает переход. Выбор строки — не подстановка текста, а переход.
+ */
+async function searchRecordOptions(query: string): Promise<SuggestEntry[]> {
+  const needle = query.trim();
+  if (needle === '') return [];
+  try {
+    const result = await etn.chronicle.query(requireNetworkId(), {
+      keywords: needle,
+      order: 'desc',
+      limit: 10,
+      offset: 0,
+    });
+    const out: SuggestEntry[] = [];
+    for (const row of result.rows) {
+      recordHits.set(row.id, row);
+      out.push({
+        value: row.id,
+        label: `${fmtDate(row.valid_from)} — ${row.title ?? 'Запись'}`,
+        recordId: row.id,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Источник подсказок строки поиска — найденные записи. */
+function recordSearchSource(): SuggestSource {
+  return { when: 'typed', header: 'Найденные записи', load: (query) => searchRecordOptions(query) };
+}
 
 /** Returns the current filter state. */
 export function getFilterState(): FilterState {
@@ -206,6 +268,11 @@ function applySavedFilterEntry(entry: SavedFilterEntry): void {
 
 /** Clears every filter field (keeps the panel, does not apply). */
 export function clearFilter(): void {
+  // Снимаем отложенное применение поиска: очистка не должна тут же перезапускать отбор.
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer);
+    searchTimer = null;
+  }
   filter = defaultChronicleCriteriaState();
   savedFilterId = null;
   filterName = '';
@@ -414,9 +481,21 @@ function renderPanel(): void {
   thoughtsField = buildThoughtsSection(ctx);
   sections.push(
     buildKeywordsSection(ctx, {
-      placeholder: 'Строка поиска: счет* -вод*',
+      title: 'Поиск',
+      placeholder: 'Поиск по записям: счет* -вод*',
       tooltip:
-        'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. Ищется в названиях, синонимах и комментариях мыслей и связей.',
+        'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. ' +
+        'Ищется в телах и заголовках записей, а также в названиях, синонимах и ' +
+        'комментариях их мыслей. Подсказка «Найденные записи» открывает запись ' +
+        'переходом (период из записи, прокрутка и подсветка).',
+      onInput: () => scheduleSearchApply(),
+      extraSources: [recordSearchSource()],
+      onPickEntry: (entry) => {
+        if (entry.recordId === undefined) return false;
+        const row = recordHits.get(entry.recordId);
+        if (row !== undefined) actions.jumpToRecord?.(row);
+        return true;
+      },
       suggestSource: {
         when: 'always',
         load: () =>
