@@ -5,7 +5,7 @@
  * ┌──────────────────────────────────────────────────────────────────┐
  * │ [Tab1 *][Tab2][Tab3][+] [▾N]                       [👤 User ▾]   │ ← top row (Q3)
  * ├──────────────────────────────────────────────────────────────────┤
- * │ [🌐 Мыслесеть ▾] [🗺][🌳][📜] [📌 закреплённые мысли…]            │ ← toolbar (виды)
+ * │ [🗺][🌳][📜][🕓] [▾ Слой] [📌 закреплённые…]        [🌐 Мыслесеть] │ ← toolbar (виды)
  * ├──────────────────────────────────────────────────────────────────┤
  * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
@@ -28,7 +28,7 @@ import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
-import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
+import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
@@ -60,8 +60,6 @@ export interface WorkspaceHandles {
   layerMenuLabel: HTMLSpanElement;
   userMenuButton: HTMLButtonElement;
   userMenuLabel: HTMLSpanElement;
-  /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
-  viewMenuButton: HTMLButtonElement;
   /** View switcher segment (L15/L20, задача f27809d0): map / structures / chronicle / activity. */
   mapViewButton: HTMLButtonElement;
   structuresViewButton: HTMLButtonElement;
@@ -130,9 +128,10 @@ export function buildWorkspace(): HTMLElement {
   // --- toolbar ---------------------------------------------------------------
   const toolbar = div('toolbar');
 
-  // Network menu (Q3-bugfix, 08-ui-spec.md §8.1): sits in the toolbar to the
-  // left of the view switcher. The label is fixed ("Мыслесеть") — the active
-  // tab is the source of truth for the current network's name.
+  // Network menu (Q3-bugfix, 08-ui-spec.md §8.1; задача a0cdd731): прижато к
+  // ПРАВОМУ краю строки меню мыслесети (полоса закреплённых мыслей растягивается
+  // и оттесняет его вправо). Метка фиксирована («Мыслесеть») — имя открытой
+  // мыслесети показывает активная вкладка.
   const netMenuButton = uiButton({ role: 'ghost', title: 'Меню мыслесети' });
   netMenuButton.append(
     svgIcon('network'),
@@ -140,9 +139,10 @@ export function buildWorkspace(): HTMLElement {
     svgIcon('chevron-down', 12),
   );
 
-  // Layer menu (S11, 08-ui-spec.md §8.2): right after «Мыслесеть». The label
-  // is the session's current layer title — «Основа» by default — which makes
-  // the menu itself the constant «where am I» indicator (§10.3).
+  // Layer menu (S11, 08-ui-spec.md §8.2; задача a0cdd731): идёт сразу после
+  // закладок экранов, сам состав меню не меняется. Метка — заголовок текущего
+  // слоя сессии («Основа» по умолчанию), поэтому меню само служит постоянным
+  // индикатором «где я» (§10.3).
   const layerMenuButton = uiButton({ role: 'ghost', title: 'Слои изменений' });
   const layerMenuLabel = span('Основа', 'tb-label');
   layerMenuButton.append(
@@ -151,12 +151,17 @@ export function buildWorkspace(): HTMLElement {
     svgIcon('chevron-down', 12),
   );
 
-  // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
-  // menu. The pressed button marks the active view.
+  // View switcher (L15, 08-ui-spec.md §15.1; задача a0cdd731): ПЕРВАЯ группа
+  // строки меню мыслесети — закладки-ярлыки экранов. Класс `view-tab` даёт
+  // относительные размеры закладок и разделители (styles/layout.css):
+  // каждая крупнее прочих кнопок меню, активная — ещё крупнее и сливается с
+  // экраном ниже. Закладки стоят вплотную (общий `.view-switch` без gap),
+  // чтобы вертикальные разделители были между ними, а не в воздухе.
   const mapViewButton = iconButton({
     icon: svgIcon('mindmap'),
     title: 'Карта мыслей',
     role: 'ghost',
+    class: 'view-tab',
     onClick: () => setActiveView('map'),
   });
 
@@ -164,6 +169,7 @@ export function buildWorkspace(): HTMLElement {
     icon: svgIcon('tree'),
     title: 'Структуры мыслей',
     role: 'ghost',
+    class: 'view-tab',
     onClick: () => setActiveView('structures'),
   });
 
@@ -171,6 +177,7 @@ export function buildWorkspace(): HTMLElement {
     icon: svgIcon('history'),
     title: 'Хроника',
     role: 'ghost',
+    class: 'view-tab',
     onClick: () => setActiveView('chronicle'),
   });
 
@@ -180,8 +187,12 @@ export function buildWorkspace(): HTMLElement {
     icon: svgIcon('activity'),
     title: 'События',
     role: 'ghost',
+    class: 'view-tab',
     onClick: () => setActiveView('activity'),
   });
+
+  const viewSwitch = div('view-switch');
+  viewSwitch.append(mapViewButton, structuresViewButton, chronicleViewButton, activityViewButton);
 
   // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
   // switcher, visible in both views.
@@ -203,30 +214,26 @@ export function buildWorkspace(): HTMLElement {
   const userMenuLabel = span('—', 'tb-label');
   userMenuButton.append(svgIcon('user'), userMenuLabel, svgIcon('chevron-down', 12));
 
-  // Workspace-layout commands menu (replaces the duplicated status dot — the
-  // connection indicator lives in the status bar). First command toggles the
-  // editor panel, which is otherwise unreachable once hidden.
-  const viewMenuButton = iconButton({ icon: svgIcon('menu'), title: 'Вид', role: 'ghost' });
-
-  // The pinned panel (L18) stretches across the whole free toolbar width —
-  // it is one big drop target between the view switcher and the user menu.
+  // Строка меню мыслесети (задача a0cdd731), слева направо: закладки экранов,
+  // меню слоя, полоса закреплённых мыслей, меню «Мыслесеть» (прижато вправо —
+  // полоса закреплённых растягивается и оттесняет его). Меню «бутерброд» (☰)
+  // упразднено: показ/скрытие редактора переехало в меню «Мыслесеть».
   toolbar.append(
-    netMenuButton,
+    viewSwitch,
     layerMenuButton,
-    mapViewButton,
-    structuresViewButton,
-    chronicleViewButton,
-    activityViewButton,
     pinnedHost,
+    netMenuButton,
   );
 
-  // --- top row (Q3) — tab strip + user/view ----------------------------------
-  // Mounts the tab strip; user/view menus live here. The network menu used to
-  // sit in this row (Q3); it moved into the toolbar (Q3-bugfix).
+  // --- top row (Q3) — tab strip + user menu ----------------------------------
+  // Mounts the tab strip; the user menu lives here. The network menu used to
+  // sit in this row (Q3); it moved into the toolbar (Q3-bugfix). The «Вид»
+  // (☰) menu was removed in задача a0cdd731 — its commands moved to the
+  // «Мыслесеть»/user menus.
   const tabStripHost = div('tab-strip-host');
   const topRow = div('top-row');
   const topRight = div('top-right');
-  topRight.append(userMenuButton, viewMenuButton);
+  topRight.append(userMenuButton);
   topRow.append(tabStripHost, topRight);
   mountTabStrip(tabStripHost);
 
@@ -330,7 +337,6 @@ export function buildWorkspace(): HTMLElement {
     layerMenuLabel,
     userMenuButton,
     userMenuLabel,
-    viewMenuButton,
     mapViewButton,
     structuresViewButton,
     chronicleViewButton,
@@ -361,7 +367,6 @@ export function buildWorkspace(): HTMLElement {
   // moment a layer write happens, not on the next layer/tab switch.
   initLayerOverridesTracking();
   wireUserMenu(handles);
-  wireViewMenu(handles);
   mountCanvas(canvasHost);
   mountHistoryBar(historyHost);
   mountPinnedBar(pinnedHost);

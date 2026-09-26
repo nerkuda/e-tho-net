@@ -65,6 +65,7 @@ import {
   parseTypeEditorSplit,
   splitRatioFromPx,
   formDirty,
+  countVisibleProperties,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -1228,3 +1229,14 @@ describe('formDirty: сравнение черновика формы', () => {
   });
 });
 
+
+describe('countVisibleProperties — счётчик «Свойства мыслей» (a0cdd731)', () => {
+  it('не считает системные структурные свойства «Родители»/«Потомки»', () => {
+    assert.equal(countVisibleProperties([]), 0);
+    assert.equal(
+      countVisibleProperties([{ config: null }, { config: { structural: true } }, { config: {} }]),
+      2,
+    );
+    assert.equal(countVisibleProperties([{ config: { structural: true } }]), 0);
+  });
+});

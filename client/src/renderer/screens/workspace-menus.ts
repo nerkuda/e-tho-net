@@ -1,34 +1,36 @@
 /**
- * Toolbar menus of the workspace (08-ui-spec.md §8, H3/H18, Q3-bugfix).
+ * Toolbar menus of the workspace (08-ui-spec.md §8, H3/H18, Q3-bugfix;
+ * задача a0cdd731 — компоновка верхних меню).
  *
- * Three menus split by concern (Q3-bugfix):
+ * Две группы меню:
  *
- * - «Мыслесеть» menu (in the toolbar, to the left of the view switcher):
- *   members (owner), leave network (non-owner), thought/link type catalogues
- *   (a network-level concern), and the network section of the unified
- *   Settings dialog. The network menu used to live in the top row; it
- *   moved here because the active tab already shows the network name.
- * - User menu (top row, right): open/create network (program-level actions
- *   on the workspace), administration (when admin), disconnect. Personal
- *   preferences (display_name, cloud sizing, theme) live in the Settings
- *   dialog.
- * - View menu (☰, top row, right): show/hide editor and the unified
- *   Settings entry («Все настройки», with a gear icon). The type catalogues
- *   moved to «Мыслесеть»; the network-scoped Settings entry («Настройки
- *   мыслесети») lives there too and opens the same dialog straight on the
- *   «Мыслесеть» section.
+ * - «Мыслесеть» (правый край строки меню мыслесети, прижата вправо): всё,
+ *   что относится к ОТКРЫТОЙ мыслесети — счётчики и входы в каталоги типов
+ *   мыслей/связей и свойства мыслей, корзина, «Настройка мыслесети»,
+ *   участники и выход, открытие/создание мыслесети, показ/скрытие редактора
+ *   мысли. Команды «Открыть сеть (список)»/«Создать сеть» переехали сюда из
+ *   меню пользователя, а показ/скрытие редактора — из упразднённого меню
+ *   «бутерброд» (☰).
+ * - Меню пользователя (верхняя строка, справа): «Администрирование» (только
+ *   админу сервера), «Настройки» (объединённый диалог на вкладке
+ *   «Пользователь») и «Отключиться». Команды открытия/создания мыслесети
+ *   ушли в меню «Мыслесеть»; «О программе» остаётся на экране списка
+ *   мыслесетей.
  *
- * Menus are built lazily on click from the current store state.
+ * Меню «бутерброд» (☰, «Все настройки») упразднено: его «Все настройки»
+ * дублировало пункт «Настройки» меню пользователя, а показ/скрытие редактора
+ * переехал в меню «Мыслесеть».
+ *
+ * Меню собираются лениво по клику из текущего состояния store.
  */
 
 import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { openAdminPanel } from '../admin/admin.js';
-import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
-import { svgIcon } from '../lib/icons.js';
+import { countVisibleProperties } from '../lib/pure.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { MENU_SEPARATOR, menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -44,52 +46,80 @@ import type { NetworkMember, User } from '@etn/shared';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
 
-/** Wires the toolbar network menu button. */
+/**
+ * Счётчики для меню «Мыслесеть», которых нет в store: корзина и число свойств
+ * реестра. Числа типов мыслей и типов связей читаются из store прямо в
+ * {@link buildNetMenuItems}.
+ */
+export interface NetMenuCounts {
+  /** Число «Свойств мыслей» (реестр без системных «Родители»/«Потомки»). */
+  properties: number;
+  /** Число сущностей в корзине (мысли + связи). */
+  trash: number;
+}
+
+/** Wires the toolbar network menu button (правый край строки меню мыслесети). */
 export function wireNetMenu(handles: WorkspaceHandles): void {
   handles.netMenuButton.addEventListener('click', (event) => {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    // «Корзина (N)» needs a fresh count (08-ui-spec.md §8.1) — fetched once
-    // per menu open rather than kept live in the store.
+    // Счётчики «Корзина (N)» и «Свойства мыслей (N)» (08-ui-spec.md §8.1) —
+    // не в store: тянем оба одним параллельным запросом на открытие меню.
     void (async () => {
       const networkId = store.state.networkId;
       let trashCount = 0;
+      let propertyCount = 0;
       if (networkId !== null) {
-        try {
-          const trash = await etn.trash.list(networkId);
-          trashCount = trash.thoughts.length + trash.links.length;
-        } catch {
-          trashCount = 0;
-        }
+        const [trash, registry] = await Promise.all([
+          etn.trash.list(networkId).catch(() => null),
+          etn.propertyRegistry.list(networkId).catch(() => null),
+        ]);
+        if (trash !== null) trashCount = trash.thoughts.length + trash.links.length;
+        if (registry !== null) propertyCount = countVisibleProperties(registry);
       }
-      showMenuAt(rect.left, rect.bottom + 4, buildNetMenuItems(trashCount));
+      showMenuAt(
+        rect.right - 200,
+        rect.bottom + 4,
+        buildNetMenuItems({ properties: propertyCount, trash: trashCount }),
+      );
     })();
   });
 }
 
 /**
  * Builds the «Мыслесеть» menu items from the current state (Q3-bugfix,
- * 08-ui-spec.md §8.1). The menu houses commands that act on the **open**
- * network: members, leaving, type catalogues (a network-level concern),
- * the trash (S13), and the network section of the unified Settings dialog.
+ * 08-ui-spec.md §8.1; задача a0cdd731). Состав и порядок — по карточке задачи
+ * a0cdd731: счётчики каталогов и корзины, затем настройка/участники/выход/
+ * открытие/создание мыслесети, затем показ/скрытие редактора мысли. Числа
+ * типов мыслей и типов связей — из store (`thoughtTypes`/`linkTypes`).
  */
-export function buildNetMenuItems(trashCount = 0): MenuItem[] {
+export function buildNetMenuItems(counts: NetMenuCounts): MenuItem[] {
   const net = store.state.network;
   const meId = store.state.me?.id ?? null;
   const isOwner = net !== null && net.owner_id === meId;
+  const editorHidden = store.state.editorPosition === 'hidden';
   return [
-    menuAction(t('netMenu.members'), () => void membersDialog(), { disabled: !isOwner }),
-    menuAction(t('netMenu.leave'), () => void leaveNetwork(), { disabled: isOwner, danger: true }),
-    MENU_SEPARATOR,
-    menuAction(t('thoughtTypes.title'), () => showThoughtTypesDialog()),
-    menuAction(t('netMenu.linkTypes'), () => showLinkTypesTreeDialog()),
-    menuAction(t('netMenu.properties'), () => showPropertyManagerDialog()),
-    MENU_SEPARATOR,
-    menuAction(t('netMenu.trash', trashCount), () => {
+    menuAction(t('netMenu.thoughtTypes', store.state.thoughtTypes.length), () =>
+      showThoughtTypesDialog(),
+    ),
+    menuAction(t('netMenu.linkTypes', store.state.linkTypes.length), () =>
+      showLinkTypesTreeDialog(),
+    ),
+    menuAction(t('netMenu.properties', counts.properties), () => showPropertyManagerDialog()),
+    menuAction(t('netMenu.trash', counts.trash), () => {
       const networkId = store.state.networkId;
       if (networkId !== null) void openTrashDialog(networkId);
     }),
     MENU_SEPARATOR,
     menuAction(t('netMenu.settings'), () => showSettingsDialog('network')),
+    menuAction(t('netMenu.members'), () => void membersDialog(), { disabled: !isOwner }),
+    menuAction(t('netMenu.leave'), () => void leaveNetwork(), { disabled: isOwner, danger: true }),
+    menuAction(t('netMenu.openNetwork'), () => backToNetworks()),
+    menuAction(t('netMenu.createNetwork'), () => void showCreateNetworkDialog()),
+    MENU_SEPARATOR,
+    menuAction(
+      editorHidden ? t('netMenu.showEditor') : t('netMenu.hideEditor'),
+      () => void toggleEditorVisibility(),
+    ),
   ];
 }
 
@@ -360,58 +390,21 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 }
 
 /**
- * Builds the user menu items (H18, Q3-bugfix, 08-ui-spec.md §8.2). Houses
- * program-level commands: opening/creating networks (workspace-wide
- * actions), administration (when admin), the About dialog, disconnect.
- * Personal preferences (display_name, cloud sizing, theme) live in the
- * unified Settings dialog (`showSettingsDialog`, opened from the
- * «Мыслесеть» menu).
+ * Builds the user menu items (H18, 08-ui-spec.md §8.2; задача a0cdd731).
+ * Menu houses only: administration (admin only), the unified Settings dialog
+ * on the «Пользователь» section, and disconnect. Opening/creating a network
+ * moved to the «Мыслесеть» menu; «О программе» remains on the network list
+ * screen (screens/networks.ts). Персональные настройки (display_name, размер
+ * облачка, тема) живут в объединённом диалоге настроек.
  */
 export function buildUserMenuItems(): MenuItem[] {
-  const items: MenuItem[] = [
-    menuAction(t('userMenu.openNetwork'), () => backToNetworks()),
-    menuAction(t('userMenu.createNetwork'), () => void showCreateNetworkDialog()),
-  ];
+  const items: MenuItem[] = [];
   if (store.state.me?.is_admin === true) {
-    items.push(MENU_SEPARATOR, menuAction(t('userMenu.admin'), () => openAdminPanel()));
+    items.push(menuAction(t('userMenu.admin'), () => openAdminPanel()), MENU_SEPARATOR);
   }
   items.push(
-    MENU_SEPARATOR,
-    menuAction(t('userMenu.about'), () => showAboutDialog()),
+    menuAction(t('userMenu.settings'), () => showSettingsDialog('user')),
     menuAction(t('userMenu.disconnect'), () => void disconnect(), { danger: true }),
   );
   return items;
-}
-
-/** Wires the toolbar "View" menu button (08-ui-spec.md §8.3). */
-export function wireViewMenu(handles: WorkspaceHandles): void {
-  handles.viewMenuButton.addEventListener('click', (event) => {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    showMenuAt(rect.right - 200, rect.bottom + 4, buildViewMenuItems());
-  });
-}
-
-/**
- * Builds the «Вид» menu items from the current state (Q3-bugfix,
- * 08-ui-spec.md §8.3). Houses the layout toggle (show/hide editor) and
- * the unified Settings dialog entry («Все настройки», opens with the
- * default section). The type catalogues moved to the «Мыслесеть» menu
- * (they are network-level concerns, not workspace-layout); the
- * network-scoped entry «Настройки мыслесети» lives in the same menu
- * and opens the same dialog straight on the «Мыслесеть» section.
- */
-export function buildViewMenuItems(): MenuItem[] {
-  const hidden = store.state.editorPosition === 'hidden';
-  // `MenuItem.icon` accepts a text glyph or a DOM node; passing the SVG
-  // node directly (instead of innerHTML) keeps `lib/menu.ts` safe —
-  // textContent-escaping would otherwise turn the markup into literal text.
-  const gear = svgIcon('settings', 14);
-  return [
-    menuAction(
-      hidden ? t('viewMenu.showEditor') : t('viewMenu.hideEditor'),
-      () => void toggleEditorVisibility(),
-    ),
-    MENU_SEPARATOR,
-    menuAction(t('viewMenu.allSettings'), () => showSettingsDialog(), { icon: gear }),
-  ];
 }

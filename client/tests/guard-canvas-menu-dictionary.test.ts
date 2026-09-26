@@ -48,7 +48,11 @@ const CANVAS_MENU = 'canvas/context-menu.ts';
 const MENU_FUNCTIONS: Array<{ file: string; functions: string[]; requires: string[] }> = [
   {
     file: 'screens/workspace-menus.ts',
-    functions: ['buildNetMenuItems', 'buildUserMenuItems', 'buildViewMenuItems'],
+    // Меню «Вид» (☰) упразднено задачей a0cdd731 — его команды переехали в
+    // меню «Мыслесеть»/пользователя, поэтому `buildViewMenuItems` из перечня
+    // убран; новые пункты меню «Мыслесеть»/пользователя собираются тем же
+    // словарём `lib/menu.ts`.
+    functions: ['buildNetMenuItems', 'buildUserMenuItems'],
     requires: ['menuAction', 'MENU_SEPARATOR'],
   },
   {

@@ -39,6 +39,7 @@ import {
   SELECTION_W_MIN,
   splitCompoundTitle,
   type AnyRealtimeEvent,
+  type PropertyConfig,
   type RealtimeEventType,
 } from '@etn/shared';
 
@@ -1275,4 +1276,17 @@ export function duplicateFilterName(name: string, existingNames: readonly string
 export function moveSavedFilterCursor(index: number, count: number, delta: number): number {
   if (count <= 0) return -1;
   return Math.min(count - 1, Math.max(0, index + delta));
+}
+
+/**
+ * Число «Свойств мыслей» для счётчика меню «Мыслесеть»: строки реестра
+ * свойств без системных структурных «Родители»/«Потомки» (у них
+ * `config.structural === true`, заводит миграция 039 — они не пользовательские
+ * свойства и в счётчик не входят). Реестр не хранится в store, поэтому счётчик
+ * считается из ответа `GET /networks/{nid}/properties` при открытии меню.
+ */
+export function countVisibleProperties(
+  rows: readonly { config: PropertyConfig | null }[],
+): number {
+  return rows.filter((row) => row.config?.structural !== true).length;
 }

@@ -33,6 +33,50 @@
   flex: 1;
 }
 
+/* ----- закладки-переключатели экранов (задача a0cdd731) ------------------- */
+/* Первая группа строки меню мыслесети: «Карта мыслей / Структуры мыслей /
+   Хроника / События». Закладки стоят вплотную (без gap), поэтому вертикальные
+   разделители видны между соседними закладками, а не в воздухе. */
+.view-switch {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+
+/* Закладка: на всю высоту строки меню, на 5% крупнее прочих кнопок меню.
+   Числа — токены-шкалы (`--view-tab-*`), не магические значения. */
+.toolbar .view-tab {
+  align-self: stretch;
+  font-size: var(--view-tab-icon);
+}
+
+.toolbar .view-tab svg {
+  width: var(--view-tab-icon);
+  height: var(--view-tab-icon);
+}
+
+/* Вертикальная линия между соседними закладками (специфичнее `border: 0`
+   ghost-роли `.ui-btn--ghost`). */
+.view-tab + .view-tab {
+  border-left: 1px solid var(--border);
+}
+
+/* Активная закладка: ещё на 10% крупнее закладки, подсвечена и без нижней
+   границы — сливается с экраном ниже. `margin-bottom: -1px` заводит её на
+   волосяную линию строки меню, а её собственная нижняя граница цвета фона
+   закладки эту линию перекрывает. */
+.toolbar .view-tab.ui-btn--active {
+  font-size: var(--view-tab-icon-active);
+  margin-bottom: -1px;
+  border-bottom: 1px solid var(--accent-soft);
+}
+
+.toolbar .view-tab.ui-btn--active svg {
+  width: var(--view-tab-icon-active);
+  height: var(--view-tab-icon-active);
+}
+
 /* ----- top row (Q3, 08-ui-spec.md §1) ------------------------------------- */
 
 .top-row {

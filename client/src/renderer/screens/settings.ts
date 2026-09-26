@@ -791,7 +791,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   }
 
   closeDialog = showDialog({
-    title: 'Настройки',
+    title: t('settings.title'),
     size: 'l',
     // Высота фиксируется ролью: разделы разной высоты (Пользователь / Мыслесеть
     // / Клиент / Логирование) при переключении больше не меняют высоту окна —
