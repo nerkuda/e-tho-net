@@ -258,15 +258,21 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
     effectiveViews = [];
     return;
   }
+  const focusChanged = focus.focused.id !== currentFocusId;
   currentFocusId = focus.focused.id;
   currentFocusTypeId = focus.focused.type_id ?? null;
-  // Reset view-result cache for the new focus.
-  lastResult = null;
-  // Сбрасываем кеш `sort`/`order` отбора — для нового фокуса отборы могут
-  // быть другими. Перечитываем заново при следующем `runActiveViewIfNeeded`.
-  invalidateViewSortCache();
-  // Сообщение о неподдерживаемой сортировке — тоже заново на новый фокус.
-  unsupportedSortNotified = null;
+  // Per-focus bookkeeping resets ONLY on a real focus change. `renderStrip`
+  // runs on EVERY canvas render (a store notification, the zone pager, a
+  // realtime refresh of the same focus), not just on a focus switch: dropping
+  // the cached run result there let a superseded run hand `null` to the canvas
+  // and paint the lower zone empty until the user toggled the mode by hand
+  // (ошибка 90811979). The sort cache is dropped with it and re-read lazily.
+  if (focusChanged) {
+    lastResult = null;
+    invalidateViewSortCache();
+    // Сообщение о неподдерживаемой сортировке — тоже заново на новый фокус.
+    unsupportedSortNotified = null;
+  }
   // Resolve the effective chain. The focus endpoint doesn't ship
   // `meta.views` yet, so the strip reads the focus via `thoughts.get` and
   // falls back to a `thoughtTypeViews.list` direct call for typed thoughts
@@ -951,8 +957,14 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
         ? undefined
         : { sort: sortOrder.sort, order: sortOrder.order },
     );
-    // Stale response (focus changed or user re-clicked) — drop it.
-    if (seq !== runSeq) return lastResult;
+    // Stale response (the focus changed or the user re-clicked) — drop it.
+    // Hand back only a cached result that belongs to THIS focus: a result for
+    // another focus would paint foreign thoughts into the lower zone, and
+    // `null` must mean "no fresh result", never "the view is empty"
+    // (ошибка 90811979).
+    if (seq !== runSeq) {
+      return lastResult !== null && lastResult.focusId === focusId ? lastResult : null;
+    }
     const unresolved = resp.meta.unresolved;
     const hasUnresolved = Array.isArray(unresolved) && unresolved.length > 0;
     const items = resp.data;
@@ -999,6 +1011,10 @@ async function refreshStripFromRealtime(
   const focus = store.state.focus;
   if (focus === null) return;
   const seq = ++realtimeRebuildSeq;
+  // The event carries a view definition change: the cached `sort`/`order` of
+  // the views may be stale, while the focus itself did not change (so
+  // `renderStrip` no longer drops the cache on its own).
+  invalidateViewSortCache();
   await renderStrip(focus);
   if (seq !== realtimeRebuildSeq) return;
   // The mode may have shifted to a default view after the rebuild; the
