@@ -1432,6 +1432,30 @@ function buildQuery(
 }
 
 /**
+ * Подзапрос `SELECT t.id FROM thoughts_v t … WHERE …` по критериям выборки
+ * мыслей — тот же построитель, что у {@link queryThoughts}/{@link queryThoughtIds},
+ * но без сортировки, лимита и курсора. Нужен для встраивания критериев в
+ * чужой SQL (`IN (<подзапрос>)`): например, критерии целей хроники (0.10.1)
+ * проверяются через `comment_targets.owner_id IN (…этот подзапрос…)` — модель
+ * критериев не дублируется.
+ *
+ * `emptyFilterMode: 'all'`: пустой фильтр — все мысли (для встраивания в
+ * `IN` это корректно); `home_orphans` здесь не имеет смысла.
+ */
+export function buildThoughtIdSelect(
+  ndb: NetworkDb,
+  userId: string,
+  req: ThoughtQueryRequest,
+  requestId?: string,
+): { sql: string; params: unknown[] } {
+  const built = buildQuery(ndb, userId, req, 'all', requestId);
+  return {
+    sql: `SELECT t.id ${built.sql.baseSql}`,
+    params: [...built.sql.joinParams, ...built.sql.params],
+  };
+}
+
+/**
  * Единый движок выборки мыслей по критериям — одна реализация операции для
  * REST и MCP (задача c5265deb). См. описание модуля.
  *

@@ -498,6 +498,74 @@ export function resolveTokensInDefinition(
 }
 
 /**
+ * Результат {@link resolveGlobalDateTokens}.
+ */
+export interface GlobalTokenResolveResult {
+  /** Строка с подставленными глобальными токенами (без изменений при ошибке). */
+  value: string;
+  /** Неразрешимые токены; непусто — строку использовать нельзя. */
+  unresolved: TokenIssue[];
+}
+
+/**
+ * Раскрыть в одной строке только глобальные токены (`$today`/`$now`/`$user`)
+ * и арифметику `±Nd`. Токены контекста мысли (`$thought.*`, `$thought.[…]`)
+ * неразрешимы без мысли и попадают в `unresolved` — вызывающий решает, что
+ * делать (период хроники отвергает их `VALIDATION_ERROR`, требование 91f8d8dd:
+ * «период принимает динамические токены дат, язык — из отбора мыслей»).
+ *
+ * Живёт здесь, а не в хронике, чтобы синтаксис и семантика токенов не
+ * дублировались (ADR 7c1c5bf5 «Токены отбора — закрытое пространство имён»).
+ */
+export function resolveGlobalDateTokens(
+  value: string,
+  opts: { now?: () => Date; userId?: string } = {},
+): GlobalTokenResolveResult {
+  const { known, unknown } = scanStringForTokens(value);
+  const unresolved: TokenIssue[] = [];
+  for (const u of unknown) {
+    unresolved.push({
+      path: '',
+      token: u.raw,
+      reason: 'unknown_token',
+      message: `Неизвестный токен «${u.raw}».`,
+    });
+  }
+  for (const tok of known) {
+    if (tok.kind !== 'global') {
+      unresolved.push({
+        path: '',
+        token: tok.raw,
+        reason: 'unknown_token',
+        message: `Токен «${tok.raw}» требует контекста мысли и в периоде недопустим; доступны $today/$now и арифметика ±Nd.`,
+      });
+    }
+  }
+  if (unresolved.length > 0) return { value, unresolved };
+
+  const nowFn = opts.now ?? ((): Date => new Date());
+  // Контекст-заглушка: глобальные токены мысль и свойства не читают.
+  const ctx: ResolveContext = {
+    thought: {
+      id: '',
+      title: '',
+      synonyms: [],
+      type_id: null,
+      active: true,
+      created_by: '',
+      updated_by: '',
+      created_at: '',
+      updated_at: '',
+    },
+    properties: new Map(),
+    userId: opts.userId ?? '',
+    now: nowFn,
+  };
+  const out = resolveString(value, '', ctx, nowFn, unresolved);
+  return { value: Array.isArray(out) ? out.join(', ') : out, unresolved };
+}
+
+/**
  * Подставить токены в одной строке. На неразрешимом токене возвращаем
  * исходный фрагмент (`$thought.[…]`) — чтобы ничего не молча подменялось.
  *

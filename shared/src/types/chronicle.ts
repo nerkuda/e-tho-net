@@ -10,7 +10,7 @@
  */
 
 import type { ChronicleLinkScope, SavedFilterView, SortOrder } from '../enums.js';
-import type { StructureAuthorOp } from './structure.js';
+import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */
@@ -28,9 +28,23 @@ export interface ChronicleFilter {
   link_type_ids?: string[];
   /** Which endpoint of a link must be a selected thought (03-server-api.md §20). */
   link_scope?: ChronicleLinkScope;
-  /** Period start (YYYY-MM-DD or ISO-8601); empty = unbounded. */
+  /**
+   * Критерии целей записи — тот же набор, что у панели «Структур»
+   * (`StructureFilter`: типы, ключевые слова с `keyword_scope`, свойства,
+   * даты, автор и т. д.). Запись проходит отбор, если хотя бы одна её
+   * привязанная мысль (`comment_targets`, включая вторичные) удовлетворяет
+   * этим критериям; комбинируются с критериями записи по AND (0.10.1,
+   * требование 306f74cc).
+   */
+  targets?: StructureFilter;
+  /**
+   * Period start — полный UTC-инстанс, «голая дата» (`YYYY-MM-DD` = сутки
+   * UTC) или динамический токен дат (`$today`, `$now`, арифметика `±Nd`);
+   * empty = unbounded. Токен раскрывается в момент применения отбора
+   * (0.10.1, требование 91f8d8dd).
+   */
   date_from?: string | null;
-  /** Period end; empty = unbounded. */
+  /** Period end; форма значения — как у {@link date_from}; empty = unbounded. */
   date_to?: string | null;
   /**
    * Автор хроно-комментария — id пользователя (`created_by`); absent —
@@ -53,7 +67,10 @@ export interface ChronicleFilter {
 
 /** Filter + paging of `POST /chronicle/query`. */
 export interface ChronicleQueryRequest extends ChronicleFilter {
-  /** Sort direction of (`valid_from`, `valid_to`, `title`). */
+  /**
+   * Sort direction of the whole sort key (0.10.1): класс записи → `valid_from`
+   * → `valid_to` → `created_at` → `id`.
+   */
   order: SortOrder;
   limit: number;
   offset: number;
@@ -83,6 +100,12 @@ export interface ChronicleRow {
   title: string | null;
   valid_from: string;
   valid_to: string | null;
+  /**
+   * Флаг «учитывать время» записи (0.10.1, требование 91ba5b3f). Клиент
+   * показывает/правит время суток только при `true`; на хранение дат не
+   * влияет.
+   */
+  use_time: boolean;
   version: number;
   created_at: string;
   updated_at: string;

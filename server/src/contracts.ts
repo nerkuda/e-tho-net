@@ -1590,6 +1590,11 @@ export const ChronicleQuery = defineContract(
     link_scope: z.enum(['sources', 'targets', 'both']).optional(),
     date_from: z.string().min(1).optional(),
     date_to: z.string().min(1).optional(),
+    // Критерии целей записи (0.10.1): набор полей «Структур»
+    // (05-mcp-server.md §4.1), разбирается доменным `parseStructureFilter`.
+    // Компактная форма — свободный объект: tools/list держит бюджет размера
+    // (сторож mcp-telemetry), а состав полей валидируется в домене.
+    targets: z.record(z.string(), z.unknown()).optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),

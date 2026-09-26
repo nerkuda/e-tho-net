@@ -20,9 +20,8 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
     {
       title: 'Запрос хроники',
       description:
-        'Двухфазный запрос хроники (паритет `POST /chronicle/query`): фаза 1 — мысли по ' +
-        '`keywords`/`thought_ids`/`include_subtree`/`type[]`; фаза 2 — хроно-комментарии к ним ' +
-        'или их связям с фильтрами `link_type[]`/`link_scope`/`date_from/to`. `{ rows[], meta }`.',
+        'Запрос хроники (паритет `POST /chronicle/query`): мысли по фильтру, их ' +
+        'хроно-комментарии и комментарии связей; `targets` — критерии целей («Структур»).',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },
@@ -51,11 +50,12 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         if (args.link_scope !== undefined) body.link_scope = args.link_scope;
         if (args.date_from !== undefined) body.date_from = args.date_from;
         if (args.date_to !== undefined) body.date_to = args.date_to;
+        if (args.targets !== undefined) body.targets = args.targets;
         if (args.order !== undefined) body.order = args.order;
         if (args.limit !== undefined) body.limit = args.limit;
         if (args.offset !== undefined) body.offset = args.offset;
         const request = parseChronicleQueryBody(body, '');
-        const result = queryChronicle(ndb, request);
+        const result = queryChronicle(ndb, request, { userId: rt.deps.auth.userId });
         return {
           rows: result.rows,
           meta: { total: result.total, offset: request.offset, limit: request.limit },

@@ -36,7 +36,7 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const query = parseChronicleQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = queryChronicle(ndb, query);
+        const result = queryChronicle(ndb, query, { userId: req.auth!.user.id });
         sendList(reply, result.rows, result.total, query.offset, query.limit);
       },
     );

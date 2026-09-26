@@ -9,7 +9,8 @@
  *      comments and of their incident links' comments on both sides);
  *   2. list **chronological comments** attached to the selected thoughts or to
  *      their links (link types / link scope filter), intersected with the
- *      requested date range, sorted by (valid_from, valid_to, title) and paged.
+ *      requested date range, sorted by record class, `valid_from`, `valid_to`,
+ *      `created_at`, `id` and paged.
  *
  * Row snippets reuse {@link makeSnippet} from the search service (same
  * `<mark>` highlight convention); targets are resolved to `ThoughtRef`s /
@@ -42,9 +43,11 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { REF_COLUMNS } from './query-service.js';
+import { buildThoughtIdSelect, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { normaliseInstant } from './dates.js';
+import { isFilterEmpty, parseStructureFilter } from './structure-service.js';
+import { resolveGlobalDateTokens, scanStringForTokens } from './thought-type-view-tokens.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
@@ -57,11 +60,14 @@ function placeholders(n: number): string {
 /**
  * Parse the `date_from`/`date_to` fields (empty/absent → `undefined`).
  *
- * Даты приводятся к полному UTC-инстансу (0.10.1, требование «Голая дата во
- * входных параметрах API = сутки UTC» 469d8d69): «голая дата» = сутки UTC —
- * `date_from` берёт начало дня (`00:00:00.000Z`), `date_to` — конец
- * (`23:59:59.999Z`), границы включительные; инстанс с поясом конвертируется в
- * UTC. Это выравнивает REST и MCP и делает сравнение периодов однозначным.
+ * Значение — полный UTC-инстанс, «голая дата» (= сутки UTC) или динамический
+ * токен дат (`$today`/`$now`, арифметика `±Nd`; требование 91f8d8dd).
+ * «Голая дата» приводится к полному UTC-инстансу сразу (0.10.1, требование
+ * 469d8d69): `date_from` берёт начало дня (`00:00:00.000Z`), `date_to` — конец
+ * (`23:59:59.999Z`), границы включительные. Токен СОХРАНЯЕТСЯ как есть
+ * (не раскрывается при сохранении отбора) и раскрывается в момент применения
+ * в {@link resolvePeriodField}; в периоде допустимы только глобальные токены
+ * (контекста мысли у периода нет) — остальные отвергаются `VALIDATION_ERROR`.
  */
 function parseDateField(
   body: Record<string, unknown>,
@@ -75,7 +81,55 @@ function parseDateField(
       field,
     }, requestId);
   }
-  return normaliseInstant(raw, field, field === 'date_from' ? 'start' : 'end') ?? undefined;
+  const trimmed = raw.trim();
+  const { known, unknown } = scanStringForTokens(trimmed);
+  if (unknown.length > 0) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: неизвестный токен «${unknown[0]!.raw}».`, {
+      field,
+      token: unknown[0]!.raw,
+    }, requestId);
+  }
+  if (known.length > 0) {
+    const bad = known.find((t) => t.kind !== 'global');
+    if (bad !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${field}: токен «${bad.raw}» требует контекста мысли и в периоде недопустим.`,
+        { field, token: bad.raw },
+        requestId,
+      );
+    }
+    return trimmed;
+  }
+  return normaliseInstant(trimmed, field, field === 'date_from' ? 'start' : 'end') ?? undefined;
+}
+
+/**
+ * Раскрыть токены периода (`$today`/`$now`, арифметика) в момент применения
+ * отбора и привести результат к полному UTC-инстансу (требование 91f8d8dd).
+ * Значение без токенов уже нормализовано на разборе — возвращается как есть.
+ */
+function resolvePeriodField(
+  value: string | null | undefined,
+  field: 'date_from' | 'date_to',
+  now?: () => Date,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const { known, unknown } = scanStringForTokens(value);
+  if (known.length === 0 && unknown.length === 0) return value;
+  const { value: resolved, unresolved } = resolveGlobalDateTokens(
+    value,
+    now === undefined ? {} : { now },
+  );
+  if (unresolved.length > 0) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: ${unresolved[0]!.message}`, {
+      field,
+      token: unresolved[0]!.token,
+    });
+  }
+  return (
+    normaliseInstant(resolved, field, field === 'date_from' ? 'start' : 'end') ?? undefined
+  );
 }
 
 /** Read a `ChronicleFilter` from an untrusted object (request body or saved JSON). */
@@ -161,6 +215,21 @@ export function parseChronicleFilter(
       }, requestId);
     }
     filter.link_scope = linkScope as ChronicleLinkScope;
+  }
+
+  // Критерии целей записи (0.10.1, требование 306f74cc) — тот же набор, что у
+  // панели «Структур»: разбираем общим доменным парсером, чтобы модель
+  // критериев не дублировалась. Запись проходит, если хотя бы одна её
+  // привязанная мысль удовлетворяет (см. `buildRowsWhere`).
+  const targets = body['targets'];
+  if (targets !== undefined) {
+    if (typeof targets !== 'object' || targets === null || Array.isArray(targets)) {
+      throw new EtnError('VALIDATION_ERROR', 'targets должен быть объектом критериев.', {
+        field: 'targets',
+      }, requestId);
+    }
+    const parsedTargets = parseStructureFilter(targets as Record<string, unknown>, requestId);
+    if (!isFilterEmpty(parsedTargets)) filter.targets = parsedTargets;
   }
 
   const dateFrom = parseDateField(body, 'date_from', requestId);
@@ -450,6 +519,7 @@ function validToLowerCond(dateFrom: string): [string, string[]] {
 /** Phase 2 WHERE shared by the count and the page queries. */
 function buildRowsWhere(
   ndb: NetworkDb,
+  userId: string,
   selectedIds: string[],
   request: ChronicleQueryRequest,
 ): { cond: string; args: unknown[] } {
@@ -491,6 +561,32 @@ function buildRowsWhere(
   thoughtConds.push(linkCond);
 
   conds.push(`(${thoughtConds.join(' OR ')})`);
+
+  // Критерии целей (0.10.1, требование 306f74cc): запись проходит, если ХОТЯ
+  // БЫ ОДНА её привязанная мысль (`comment_targets`, включая вторичные)
+  // удовлетворяет критериям набора «Структур». Критерии строит единый движок
+  // выборки мыслей (`buildThoughtIdSelect`) — модель не дублируется; здесь
+  // подзапрос встраивается в `IN`, поэтому обход индексный по
+  // `comment_targets.comment_id`, без N+1 по записям.
+  if (request.targets !== undefined) {
+    const targetSelect = buildThoughtIdSelect(
+      ndb,
+      userId,
+      structureRequestToQuery({
+        ...request.targets,
+        sort: 'alpha',
+        order: 'asc',
+        limit: 1,
+        offset: 0,
+      }),
+    );
+    conds.push(
+      `EXISTS (SELECT 1 FROM comment_targets_v cttg
+         WHERE cttg.comment_id = c.id AND cttg.owner_type = 'thought'
+           AND cttg.owner_id IN (${targetSelect.sql}))`,
+    );
+    args.push(...targetSelect.params);
+  }
 
   if (request.date_from !== undefined && request.date_from !== null) {
     const [cond, more] = validToLowerCond(request.date_from);
@@ -550,6 +646,7 @@ function buildRows(
       title: row.title,
       valid_from: row.valid_from,
       valid_to: row.valid_to,
+      use_time: row.use_time === 1,
       version: row.version,
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -570,6 +667,8 @@ interface Row {
   body_md: string;
   valid_from: string;
   valid_to: string | null;
+  /** 0/1 — флаг «учитывать время» (миграция 046). */
+  use_time: number;
   version: number;
   created_at: string;
   updated_at: string;
@@ -579,25 +678,56 @@ interface Row {
 }
 
 /**
+ * Класс записи (0.10.1, требование c6ddc1ea): `0` — привязка только к HOME
+ * («запись дня», все цели — корень сети), `1` — все прочие. Считается по
+ * `comment_targets`: запись класса 0 не имеет ни одной цели, отличной от
+ * корневой мысли (ни чужой мысли, ни связи).
+ */
+const RECORD_CLASS_SQL = `CASE WHEN EXISTS (
+  SELECT 1 FROM comment_targets_v ct_class
+  LEFT JOIN thoughts_v ht ON ht.id = ct_class.owner_id AND ct_class.owner_type = 'thought'
+  WHERE ct_class.comment_id = c.id
+    AND (ct_class.owner_type <> 'thought' OR ht.is_root <> 1)
+) THEN 1 ELSE 0 END`;
+
+/**
  * Run the two-phase chronicle query (docs/03-server-api.md §20).
  *
  * Phase 1 selects thoughts; phase 2 lists chronological comments attached to
  * them or to their links. Returns the paged rows with the total count.
+ *
+ * Сортировка (0.10.1, требование c6ddc1ea): класс записи → `valid_from` →
+ * `valid_to` → `created_at` → `id`, все ключи в направлении `order`. Прежние
+ * тайбрейкеры (NULL-обработка `valid_to`, `title`) отменены — порядок
+ * детерминирован уникальным `id`.
+ *
+ * `opts.userId` — контекст исполнения критериев целей (движок выборки мыслей);
+ * `opts.now` — часы для раскрытия токенов периода (тесты).
  */
 export function queryChronicle(
   ndb: NetworkDb,
   request: ChronicleQueryRequest,
+  opts: { userId?: string; now?: () => Date } = {},
 ): ChronicleQueryResponse {
+  const userId = opts.userId ?? '';
+  // Токены периода раскрываются в момент применения отбора (требование
+  // 91f8d8dd), затем значения сравниваются как полные UTC-инстансы.
+  const dateFrom = resolvePeriodField(request.date_from, 'date_from', opts.now);
+  const dateTo = resolvePeriodField(request.date_to, 'date_to', opts.now);
+  const resolved: ChronicleQueryRequest = { ...request };
+  if (dateFrom !== undefined) resolved.date_from = dateFrom;
+  if (dateTo !== undefined) resolved.date_to = dateTo;
+
   const { include: includeWords, exclude: excludeWords } = parseFilterKeywords(
-    request.keywords ?? '',
+    resolved.keywords ?? '',
   );
-  const baseIds = collectRootAndSubtreeIds(ndb, request);
-  let selectedIds = selectThoughts(ndb, baseIds, request.type_ids ?? [], includeWords, []);
+  const baseIds = collectRootAndSubtreeIds(ndb, resolved);
+  let selectedIds = selectThoughts(ndb, baseIds, resolved.type_ids ?? [], includeWords, []);
   // Excluded words: drop every thought where the word occurs anywhere in the
   // same searched texts (titles, synonyms, thought/link comments).
   if (excludeWords.length > 0) {
     const excluded = new Set(
-      selectThoughts(ndb, baseIds, request.type_ids ?? [], excludeWords, []),
+      selectThoughts(ndb, baseIds, resolved.type_ids ?? [], excludeWords, []),
     );
     selectedIds = selectedIds.filter((id) => !excluded.has(id));
   }
@@ -605,8 +735,8 @@ export function queryChronicle(
     return { rows: [], total: 0 };
   }
 
-  const { cond, args } = buildRowsWhere(ndb, selectedIds, request);
-  const dir = request.order === 'desc' ? 'DESC' : 'ASC';
+  const { cond, args } = buildRowsWhere(ndb, userId, selectedIds, resolved);
+  const dir = resolved.order === 'desc' ? 'DESC' : 'ASC';
   const totalRow = ndb
     .prepare(`SELECT COUNT(*) AS c FROM comments_v c WHERE ${cond}`)
     .get(...args) as { c: number };
@@ -615,17 +745,17 @@ export function queryChronicle(
   const rows = ndb
     .prepare(
       `SELECT c.id, c.owner_type, c.owner_id, c.title, c.body_md, c.valid_from, c.valid_to,
-              c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
+              c.use_time, c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
        FROM comments_v c
        WHERE ${cond}
-       ORDER BY c.valid_from ${dir},
-                (c.valid_to IS NULL) ASC,
+       ORDER BY ${RECORD_CLASS_SQL} ${dir},
+                c.valid_from ${dir},
                 c.valid_to ${dir},
-                c.title COLLATE NOCASE ${dir},
-                c.id ASC
+                c.created_at ${dir},
+                c.id ${dir}
        LIMIT ? OFFSET ?`,
     )
-    .all(...args, request.limit, request.offset) as Row[];
+    .all(...args, resolved.limit, resolved.offset) as Row[];
 
   // Resolve targets: collect all thought ids and link ids of the page.
   const thoughtIds = new Set<string>();
