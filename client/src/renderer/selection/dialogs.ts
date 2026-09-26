@@ -166,6 +166,13 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     title: 'Значения свойств выделенных мыслей',
     body,
     size: 'm',
+    // Грязная форма (требование b58f6aad): Esc/крестик при заполненных
+    // значениях требуют подтверждения; «Сохранить» идёт тем же путём, что
+    // «Применить». Явное «Закрыть» закрывает молча.
+    dirty: {
+      isDirty: () => [...rows.values()].some((row) => row.value !== null && row.value !== ''),
+      save: (close) => void applyAll(close),
+    },
     buttons: [{ label: t('actions.close'), onClick: () => undefined }, applyBtn],
   });
 

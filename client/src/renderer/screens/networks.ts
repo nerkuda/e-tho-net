@@ -157,6 +157,27 @@ export async function showCreateNetworkDialog(): Promise<void> {
 
   let creating = false;
   await new Promise<void>((resolve) => {
+    /** Создание сети и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+    async function create(close: () => void): Promise<void> {
+      if (creating) return;
+      const name = nameInput.value.trim();
+      if (name === '') {
+        errorLine.show('Введите название сети.', { field: () => nameInput });
+        return;
+      }
+      creating = true;
+      try {
+        const description = descInput.value.trim() || undefined;
+        const network = await etn.networks.create(name, description);
+        close();
+        await openNetwork(network.id);
+      } catch (err) {
+        errorLine.show(errText(err));
+      } finally {
+        creating = false;
+        resolve();
+      }
+    }
     showDialog({
       title: 'Создать мыслесеть',
       body,
@@ -164,34 +185,19 @@ export async function showCreateNetworkDialog(): Promise<void> {
       // Ошибка создания — в панели кнопок, единственное обязательное место
       // ошибки диалога (требование 397c5a56).
       footerError: errorLine,
+      // Грязная форма (требование b58f6aad): Esc/крестик при заполненных полях
+      // требуют подтверждения; «Сохранить» идёт тем же путём, что «Создать».
+      dirty: {
+        isDirty: () => nameInput.value.trim() !== '' || descInput.value.trim() !== '',
+        save: (close) => void create(close),
+      },
       buttons: [
         { label: t('actions.cancel'), onClick: () => resolve() },
         {
           label: 'Создать',
           primary: true,
           keepOpen: true,
-          onClick: (close) => {
-            void (async () => {
-              if (creating) return;
-              const name = nameInput.value.trim();
-              if (name === '') {
-                errorLine.show('Введите название сети.', { field: () => nameInput });
-                return;
-              }
-              creating = true;
-              try {
-                const description = descInput.value.trim() || undefined;
-                const network = await etn.networks.create(name, description);
-                close();
-                await openNetwork(network.id);
-              } catch (err) {
-                errorLine.show(errText(err));
-              } finally {
-                creating = false;
-                resolve();
-              }
-            })();
-          },
+          onClick: (close) => void create(close),
         },
       ],
       onMount: () => nameInput.focus(),

@@ -62,6 +62,7 @@ import {
   type FilterSection,
 } from '../../lib/filter-form.js';
 import { notice } from '../../lib/notice.js';
+import { formDirty } from '../../lib/pure.js';
 import {
   buildEntityChipField,
   filterEntityOptions,
@@ -210,6 +211,10 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // Criteria builder. Self-contained: it owns the criteria state for the
   // dialog lifetime.
   const criteria = buildCriteriaBuilder({ networkId, initial, registryById });
+  /** Определение условий на момент открытия — база «грязной» проверки
+   *  (требование b58f6aad). Снимок — из того же конструктора, поэтому
+   *  нетронутая форма не считается изменённой. */
+  const criteriaBase = criteria.buildWire();
 
   // Section title — жирный, чтобы «Критерии отбора» читались как заголовок.
   const criteriaLabel = el('div', 'view-editor-section-title', 'Критерии отбора');
@@ -219,6 +224,21 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // 4. Show the dialog. The Save button keeps itself open on validation
   //    failure; we close only when the IPC call resolves.
   let saveBtn: HTMLButtonElement | null = null;
+  /** Контекст сохранения — общий для кнопки «Применить» и подтверждения
+   *  «Сохранить» при закрытии «грязного» редактора (требование b58f6aad). */
+  const saveCtx = (close: () => void): SaveCtx => ({
+    close,
+    saveBtn,
+    opts,
+    name: nameInput.value,
+    description: descInput.value,
+    isDefault: defaultCheckbox.checked,
+    version: initialVersion,
+    criteria,
+    errorLine,
+    nameError,
+    nameAddress: { field: () => nameInput },
+  });
   showDialog({
     title,
     body,
@@ -226,6 +246,17 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях имени,
+    // описания, «по умолчанию» или условий отбора требуют подтверждения;
+    // «Сохранить» идёт тем же путём, что «Применить».
+    dirty: {
+      isDirty: () =>
+        nameInput.value !== initialName ||
+        descInput.value !== initialDescription ||
+        defaultCheckbox.checked !== initialIsDefault ||
+        formDirty(criteriaBase, criteria.buildWire()),
+      save: (close) => void onSave(saveCtx(close)),
+    },
     buttons: [
       { label: t('actions.cancel') },
       {
@@ -236,19 +267,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
           saveBtn = b;
         },
         onClick: (close) => {
-          void onSave({
-            close,
-            saveBtn,
-            opts,
-            name: nameInput.value,
-            description: descInput.value,
-            isDefault: defaultCheckbox.checked,
-            version: initialVersion,
-            criteria,
-            errorLine,
-            nameError,
-            nameAddress: { field: () => nameInput },
-          });
+          void onSave(saveCtx(close));
         },
       },
     ],

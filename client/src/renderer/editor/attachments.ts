@@ -886,6 +886,46 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const body = div('form-stack');
     body.append(fieldRow({ label: 'Режим', control: tabRow }), createPanel, searchPanel);
 
+    /** Создание вложения и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+    async function addNew(close: () => void): Promise<void> {
+      // The «Добавить» button only applies to the «Создать новое» tab —
+      // the search tab commits immediately on row click.
+      if (!tabCreate.checked) return;
+      const kind = kindFile.checked ? 'file' : 'url';
+      const location = locationInput.value.trim();
+      if (location === '') {
+        errorLine.show('Укажите адрес или путь.');
+        return;
+      }
+      try {
+        if (kind === 'file') {
+          // Upload the content so the server keeps a copy (preview,
+          // other clients) — a bare file_path would only register it.
+          const name = location.split(/[\\/]/).pop() ?? location;
+          await uploadLocalFile(
+            networkId,
+            ctx.ownerType,
+            ctx.ownerId,
+            location,
+            titleInput.value.trim() || name,
+            descInput.value.trim() || null,
+          );
+        } else {
+          await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+            kind,
+            url: location,
+            title: titleInput.value.trim() || null,
+            description: descInput.value.trim() || null,
+          });
+        }
+        invalidateIndicators(ctx.ownerId);
+        close();
+        await reload();
+      } catch (err) {
+        errorLine.show(errText(err));
+      }
+    }
+
     showDialog({
       title: 'Добавить вложение',
       body,
@@ -894,52 +934,24 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       // (ошибка add8d09d); на вкладке «Найти существующее» своя строка
       // `searchError` для ошибок поиска (локальная операция вкладки).
       footerError: errorLine,
+      // Грязная форма (требование b58f6aad): Esc/крестик при заполненной форме
+      // создания вложения требуют подтверждения; «Сохранить» идёт тем же путём,
+      // что «Добавить». Вкладка поиска — выбор строки, не форма.
+      dirty: {
+        isDirty: () =>
+          tabCreate.checked &&
+          (locationInput.value.trim() !== '' ||
+            titleInput.value.trim() !== '' ||
+            descInput.value.trim() !== ''),
+        save: (close) => void addNew(close),
+      },
       buttons: [
         { label: t('actions.cancel') },
         {
           label: 'Добавить',
           primary: true,
           keepOpen: true,
-          onClick: (close) => {
-            // The «Добавить» button only applies to the «Создать новое» tab —
-            // the search tab commits immediately on row click.
-            if (!tabCreate.checked) return;
-            void (async () => {
-              const kind = kindFile.checked ? 'file' : 'url';
-              const location = locationInput.value.trim();
-              if (location === '') {
-                errorLine.show('Укажите адрес или путь.');
-                return;
-              }
-              try {
-                if (kind === 'file') {
-                  // Upload the content so the server keeps a copy (preview,
-                  // other clients) — a bare file_path would only register it.
-                  const name = location.split(/[\\/]/).pop() ?? location;
-                  await uploadLocalFile(
-                    networkId,
-                    ctx.ownerType,
-                    ctx.ownerId,
-                    location,
-                    titleInput.value.trim() || name,
-                    descInput.value.trim() || null,
-                  );
-                } else {
-                  await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
-                    kind,
-                    url: location,
-                    title: titleInput.value.trim() || null,
-                    description: descInput.value.trim() || null,
-                  });
-                }
-                invalidateIndicators(ctx.ownerId);
-                close();
-                await reload();
-              } catch (err) {
-                errorLine.show(errText(err));
-              }
-            })();
-          },
+          onClick: (close) => void addNew(close),
         },
       ],
     });

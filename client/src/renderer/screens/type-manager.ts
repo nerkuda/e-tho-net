@@ -104,6 +104,7 @@ import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { uiSplitter } from '../lib/ui/splitter.js';
 import {
   TYPE_EDITOR_SPLIT_DEFAULT,
+  formDirty,
   parseTypeEditorSplit,
   splitRatioFromPx,
 } from '../lib/pure.js';
@@ -959,6 +960,13 @@ export function showThoughtTypeEditor(
   };
   /** Draft of the comment template (staged like everything else). */
   let templateMd = type?.comment_template_md ?? '';
+  /**
+   * Снимок полей формы на момент открытия — база проверки «есть несохранённые
+   * изменения» (требование b58f6aad). Обновляется после успешной записи
+   * (`apply`), чтобы «Записать» не оставляло форму «грязной».
+   */
+  let dirtyBase = { ...draft };
+  let templateBase = templateMd;
 
   // Top row: icon · name · settings (⚙) — all active from the very start.
   const topRow = div('editor-top-row');
@@ -1335,6 +1343,10 @@ export function showThoughtTypeEditor(
       renderMetadataPane();
       void viewsTab.refresh();
       onChanged(current.id);
+      // Запись успешна — обновляем базу «грязной» проверки (b58f6aad): после
+      // «Записать» диалог не считается изменённым.
+      dirtyBase = { ...draft };
+      templateBase = templateMd;
       if (mode === 'close') close();
     } catch (err) {
       errorLine.show(errText(err));
@@ -1406,6 +1418,15 @@ export function showThoughtTypeEditor(
       // Ошибка записи живёт в панели кнопок, а не в теле вкладки: она должна
       // быть видна на любой вкладке диалога (ошибка add8d09d).
       footerError: errorLine,
+      // Грязная форма (требование b58f6aad): Esc/крестик при изменениях
+      // перехватываются подтверждением. «Сохранить» подтверждения идёт тем же
+      // путём, что «Применить и закрыть»; явная «Отмена» в футере закрывает
+      // молча, отбрасывая черновик.
+      dirty: {
+        isDirty: () =>
+          formDirty(dirtyBase, draft) || templateMd !== templateBase || props.hasChanges(),
+        save: (close) => void apply('close', close),
+      },
       buttons: [
         { label: t('actions.cancel') },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
@@ -1465,6 +1486,12 @@ interface StagedPropertySection {
    * re-diffs only what is still missing.
    */
   applyChanges(typeId: string): Promise<boolean>;
+  /**
+   * Есть ли подготовленные, но не записанные изменения собственных привязок
+   * (добавление/снятие/порядок/`required`) или их дефолтов — база проверки
+   * «есть несохранённые изменения» редактора типа (требование b58f6aad).
+   */
+  hasChanges(): boolean;
   /**
    * Команда «Сохранить» из заглушки несохранённого типа (задача e7352642):
    * та же логика, что у кнопки «Записать» в футере диалога — запись без
@@ -2299,6 +2326,9 @@ function buildStagedPropertySection(opts: {
       if (draftEntry !== undefined) draftEntry.initial = draftEntry.value;
     }
     deletedIds = [];
+    // Черновик привязок записан — «грязного» состояния больше нет (b58f6aad):
+    // следующий Esc/крестик не должен требовать подтверждения.
+    draftTouched = false;
     errorLine.clear();
     render();
     // Refresh the inherited view too: reparenting on the same apply may have
@@ -2314,6 +2344,16 @@ function buildStagedPropertySection(opts: {
       if (liveTypeId === null) void reload();
     },
     applyChanges,
+    hasChanges: (): boolean => {
+      // Подготовленные действия над привязками помечаются `draftTouched`
+      // (добавление, снятие, порядок, `required`), дефолты — сравнением
+      // черновика с загруженным снимком строки «По умолчанию».
+      if (draftTouched) return true;
+      for (const entry of bindingDefaults.values()) {
+        if (formDirty(entry.initial, entry.value)) return true;
+      }
+      return false;
+    },
     onSave,
   };
 }
@@ -2714,6 +2754,12 @@ function openDescriptionOverrideDialog(opts: {
     size: 's',
     // Ошибка записи — в панели кнопок (требование 397c5a56).
     footerError: errorLine,
+    // Грязная форма (требование b58f6aad): Esc/крестик при правке описания
+    // требуют подтверждения; «Сохранить» идёт тем же путём, что «Применить».
+    dirty: {
+      isDirty: () => area.value !== (def.description ?? ''),
+      save: (close) => void apply(close),
+    },
     buttons: [
       { label: t('actions.cancel') },
       ...(def.description_overridden

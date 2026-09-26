@@ -141,41 +141,47 @@ export function mountPicker(host: HTMLElement): void {
 
     const { showDialog } = await import('../../lib/dialog.js');
     let busy = false;
+    /** Создание сети и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+    async function create(close: () => void): Promise<void> {
+      if (busy) return;
+      const name = nameInput.value.trim();
+      if (name === '') {
+        dialogError.show('Введите название сети.', { field: () => nameInput });
+        return;
+      }
+      busy = true;
+      try {
+        const network = await etn.networks.create(name, descInput.value.trim() || undefined);
+        close();
+        // Refresh the cache BEFORE opening so the tab strip can show
+        // the freshly-created network's display_name right away.
+        await refreshNetworkList();
+        await pickNetwork(network.id);
+      } catch (err) {
+        dialogError.show(errText(err));
+      } finally {
+        busy = false;
+      }
+    }
     showDialog({
       title: 'Создать мыслесеть',
       body,
       size: 's',
       // Ошибка создания — в панели кнопок (требование 397c5a56).
       footerError: dialogError,
+      // Грязная форма (требование b58f6aad): Esc/крестик при заполненных полях
+      // требуют подтверждения; «Сохранить» идёт тем же путём, что «Создать».
+      dirty: {
+        isDirty: () => nameInput.value.trim() !== '' || descInput.value.trim() !== '',
+        save: (close) => void create(close),
+      },
       buttons: [
         { label: t('actions.cancel') },
         {
           label: 'Создать',
           primary: true,
           keepOpen: true,
-          onClick: (close) => {
-            void (async () => {
-              if (busy) return;
-              const name = nameInput.value.trim();
-              if (name === '') {
-                dialogError.show('Введите название сети.', { field: () => nameInput });
-                return;
-              }
-              busy = true;
-              try {
-                const network = await etn.networks.create(name, descInput.value.trim() || undefined);
-                close();
-                // Refresh the cache BEFORE opening so the tab strip can show
-                // the freshly-created network's display_name right away.
-                await refreshNetworkList();
-                await pickNetwork(network.id);
-              } catch (err) {
-                dialogError.show(errText(err));
-              } finally {
-                busy = false;
-              }
-            })();
-          },
+          onClick: (close) => void create(close),
         },
       ],
       onMount: () => nameInput.focus(),

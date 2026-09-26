@@ -89,6 +89,7 @@ import {
   showDialog,
 } from '../lib/dialog.js';
 import { div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { formDirty } from '../lib/pure.js';
 import { footerErrorLine, operationError, operationErrorText } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
@@ -978,6 +979,18 @@ export function openPropertyManagerEditor(
     typeRows: [],
   };
 
+  /**
+   * Снимок полей формы на момент открытия — база проверки «есть несохранённые
+   * изменения» (требование b58f6aad). `null` — снимок ещё не снят (идёт
+   * синхронная сборка черновика из DTO). Асинхронные догрузки (привязки к
+   * типам, недостающий тип связи) обновляют снимок по завершении: загрузка
+   * серверных данных — не правка пользователя.
+   */
+  let dirtyBase: PropertyDraft | null = null;
+  function snapshotDraft(): void {
+    dirtyBase = structuredClone(draft);
+  }
+
   // Restore scalar / link extras from the stored config.
   if (draft.valueType === 'link') {
     const ltId = property?.config?.link_type_id;
@@ -992,7 +1005,11 @@ export function openPropertyManagerEditor(
       // отстаёт, либо свойство открывают сразу после создания). Догружаем
       // link_type по id и заполняем draft + форму; без этого «Имя в
       // источнике»/«Имя в назначении» остаются пустыми.
-      void loadLinkTypeIntoDraft(networkId, ltId, draft);
+      void loadLinkTypeIntoDraft(networkId, ltId, draft).then(() => {
+        // Догрузка серверного типа связи — не правка пользователя: обновляем
+        // базу «грязной» проверки (b58f6aad).
+        snapshotDraft();
+      });
     }
     draft.showOnMap = property?.config?.show_on_map === true;
     draft.blocksTargetDeletion = property?.config?.blocks_target_deletion === true;
@@ -1025,6 +1042,14 @@ export function openPropertyManagerEditor(
       },
     ];
   }
+
+  /**
+   * Снимок полей формы на момент открытия — база проверки «есть несохранённые
+   * изменения» (требование b58f6aad). Асинхронные догрузки (привязки к типам,
+   * недостающий тип связи) обновляют снимок по завершении: загрузка серверных
+   * данных — не правка пользователя.
+   */
+  snapshotDraft();
 
   // ---- Вид значения (value_type) -----------------------------------------
   const typeSelect = el('select', 'select-input') as HTMLSelectElement;
@@ -1522,6 +1547,9 @@ export function openPropertyManagerEditor(
     typeRowsSnapshot = collected.flatMap((row) =>
       row.id === null ? [] : [{ id: row.id, thoughtTypeId: row.thoughtTypeId }],
     );
+    // Загрузка строк привязок — не правка пользователя: обновляем базу
+    // «грязной» проверки (b58f6aad).
+    snapshotDraft();
     rerenderBody();
   }
 
@@ -1865,6 +1893,13 @@ export function openPropertyManagerEditor(
     // всегда (ошибка c83f0215 — осиротевшая строка в теле молча глотала
     // ошибки записи; приём и требование — ошибка add8d09d).
     footerError: errorLine,
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях
+    // перехватываются подтверждением. «Сохранить» подтверждения идёт тем же
+    // путём, что «Применить и закрыть»; явная «Отмена» закрывает молча.
+    dirty: {
+      isDirty: () => dirtyBase !== null && formDirty(dirtyBase, draft),
+      save: (close) => void apply(close),
+    },
     buttons: [
       { label: t('actions.cancel') },
       {

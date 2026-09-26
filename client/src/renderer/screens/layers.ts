@@ -357,10 +357,15 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
   const themeLabel = theme === 'dark' ? 'тёмной' : 'светлой';
   let stripeRow: ReturnType<typeof colorPickerRow> | null = null;
   let bgRow: ReturnType<typeof colorPickerRow> | null = null;
+  /** Исходные цвета пары при открытии — база «грязной» проверки (b58f6aad). */
+  let stripeInitial: string | null = null;
+  let bgInitial: string | null = null;
   if (!layer.is_base) {
     const defaults = defaultLayerColors();
     const initialStripe = layer.colors?.focus_stripe[theme] ?? defaults.focus_stripe[theme];
     const initialBg = layer.colors?.background[theme] ?? defaults.background[theme];
+    stripeInitial = initialStripe;
+    bgInitial = initialBg;
     stripeRow = colorPickerRow('Полоса фокуса', initialStripe);
     bgRow = colorPickerRow('Фон холста', initialBg);
     const hint = div('layer-hint');
@@ -374,55 +379,64 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     body.append(colorsBlock);
   }
 
+  /** Запись изменений слоя и закрытие — общий путь кнопки и подтверждения. */
+  async function save(close: () => void): Promise<void> {
+    const title = titleInput.value.trim();
+    const comment = commentInput.value.trim();
+    if (!layer.is_base && title.length === 0) return;
+    // Colours: `undefined` — untouched, an object — the picked pair
+    // plus the inverted opposite theme (§2.2a). There is no «off»
+    // switch anymore: the shown pair is always what gets saved, so a
+    // layer without stored colours picks up the shown defaults.
+    let colors: LayerColors | undefined;
+    if (stripeRow !== null && bgRow !== null) {
+      const next: LayerColors = {
+        focus_stripe: invertThemeColor(
+          { dark: stripeRow.get(), light: stripeRow.get() },
+          theme,
+        ),
+        background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
+      };
+      if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
+    }
+    try {
+      const updated = await etn.layers.update(
+        networkId,
+        layer.id,
+        {
+          ...(layer.is_base || title === layer.title ? {} : { title }),
+          ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),
+          ...(colors !== undefined ? { colors } : {}),
+        },
+        layer.version,
+      );
+      close();
+      await syncLayersForTab(networkId, store.state.currentLayer?.id ?? null);
+      void updated;
+    } catch (err) {
+      errorDialog('Не удалось сохранить слой', err);
+    }
+  }
+
   showDialog({
     title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
     body,
     // Роль `m` (требование 13464c39): имя, комментарий и парные цветовые поля
     // (в одну строку) помещаются без прокрутки (ошибка 57e05439).
     size: 'm',
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях требуют
+    // подтверждения; «Сохранить» идёт тем же путём, что «Применить».
+    dirty: {
+      isDirty: () =>
+        (!layer.is_base && titleInput.value.trim() !== layer.title) ||
+        commentInput.value.trim() !== (layer.comment ?? '') ||
+        (stripeRow !== null && stripeRow.get() !== stripeInitial) ||
+        (bgRow !== null && bgRow.get() !== bgInitial),
+      save: (close) => void save(close),
+    },
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
-      {
-        label: t('actions.apply'),
-        primary: true,
-        onClick: async (close) => {
-          const title = titleInput.value.trim();
-          const comment = commentInput.value.trim();
-          if (!layer.is_base && title.length === 0) return;
-          // Colours: `undefined` — untouched, an object — the picked pair
-          // plus the inverted opposite theme (§2.2a). There is no «off»
-          // switch anymore: the shown pair is always what gets saved, so a
-          // layer without stored colours picks up the shown defaults.
-          let colors: LayerColors | undefined;
-          if (stripeRow !== null && bgRow !== null) {
-            const next: LayerColors = {
-              focus_stripe: invertThemeColor(
-                { dark: stripeRow.get(), light: stripeRow.get() },
-                theme,
-              ),
-              background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
-            };
-            if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
-          }
-          try {
-            const updated = await etn.layers.update(
-              networkId,
-              layer.id,
-              {
-                ...(layer.is_base || title === layer.title ? {} : { title }),
-                ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),
-                ...(colors !== undefined ? { colors } : {}),
-              },
-              layer.version,
-            );
-            close();
-            await syncLayersForTab(networkId, store.state.currentLayer?.id ?? null);
-            void updated;
-          } catch (err) {
-            errorDialog('Не удалось сохранить слой', err);
-          }
-        },
-      },
+      { label: t('actions.apply'), primary: true, onClick: (close) => void save(close) },
     ],
     onMount: () => titleInput.focus(),
   });
@@ -449,39 +463,47 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     colorsHint,
   );
 
+  /** Создание слоя и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
+  async function create(close: () => void): Promise<void> {
+    const title = titleInput.value.trim();
+    if (title.length === 0) return;
+    const comment = commentInput.value.trim();
+    const gitBranch = branchInput.value.trim();
+    try {
+      // Creation defaults (0.6.4 §2.2a): the layer is immediately
+      // visually distinct from the base; the opposite theme's pair is
+      // the lightness inversion of these.
+      const layer = await etn.layers.create(networkId, {
+        title,
+        ...(comment.length > 0 ? { comment } : {}),
+        ...(gitBranch.length > 0 ? { git_branch: gitBranch } : {}),
+        colors: defaultLayerColors(),
+      });
+      close();
+      await selectLayerForTab(networkId, layer.id);
+    } catch (err) {
+      errorDialog('Не удалось создать слой', err);
+    }
+  }
+
   showDialog({
     title: 'Новый слой изменений',
     body,
     // Роль `m` (требование 13464c39): подсказки, имя, комментарий и ветка
     // помещаются без прокрутки (ошибка 57e05439).
     size: 'm',
+    // Грязная форма (требование b58f6aad): Esc/крестик при заполненной форме
+    // требуют подтверждения; «Сохранить» идёт тем же путём, что «Создать».
+    dirty: {
+      isDirty: () =>
+        titleInput.value.trim() !== '' ||
+        commentInput.value.trim() !== '' ||
+        branchInput.value.trim() !== '',
+      save: (close) => void create(close),
+    },
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
-      {
-        label: 'Создать',
-        primary: true,
-        onClick: async (close) => {
-          const title = titleInput.value.trim();
-          if (title.length === 0) return;
-          const comment = commentInput.value.trim();
-          const gitBranch = branchInput.value.trim();
-          try {
-            // Creation defaults (0.6.4 §2.2a): the layer is immediately
-            // visually distinct from the base; the opposite theme's pair is
-            // the lightness inversion of these.
-            const layer = await etn.layers.create(networkId, {
-              title,
-              ...(comment.length > 0 ? { comment } : {}),
-              ...(gitBranch.length > 0 ? { git_branch: gitBranch } : {}),
-              colors: defaultLayerColors(),
-            });
-            close();
-            await selectLayerForTab(networkId, layer.id);
-          } catch (err) {
-            errorDialog('Не удалось создать слой', err);
-          }
-        },
-      },
+      { label: 'Создать', primary: true, onClick: (close) => void create(close) },
     ],
     extraShortcuts: undefined,
     onMount: () => titleInput.focus(),

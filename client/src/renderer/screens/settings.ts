@@ -801,6 +801,14 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     fixedHeight: true,
     body,
     customFooter: footer,
+    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях требуют
+    // подтверждения; «Сохранить» подтверждения идёт тем же путём, что кнопка
+    // «Применить и закрыть» (запись + закрытие). Явная «Отмена» в футере по-
+    // прежнему закрывает молча.
+    dirty: {
+      isDirty: () => isDirtyDraft(draft, original),
+      save: () => void applyDraft(true),
+    },
     extraShortcuts: {
       shiftEnter: () => void applyDraft(false),
     },
