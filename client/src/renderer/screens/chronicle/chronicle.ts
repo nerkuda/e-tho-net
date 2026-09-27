@@ -1079,6 +1079,16 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
         {
           // Открытие из дневника — в редактор, фокус холста не двигаем.
           openHandler: (id) => void openChronicleThought(id),
+          // Рядом с открытием обязателен «В фокус» (спецификация «Контекстное
+          // меню мысли»): поставить мысль в фокус и переключить экран на «Карту
+          // мыслей». Единый путь — общий `focusThoughtOnMap` (ошибка 562356a9),
+          // а не пара «setActiveView + setFocus» копией. Импорт ленивый:
+          // active-view статически тянет chronicle — замкнул бы цикл.
+          focusHandler: () => {
+            void import('../active-view.js').then(({ focusThoughtOnMap }) =>
+              focusThoughtOnMap(target.thought.id),
+            );
+          },
           extraItems: [
             menuAction(t('chrono.menu.detach'), () => void detachChip(rowId, target)),
             menuAction(t('chrono.menu.attach'), () => void pickAndAttach(rowId)),
