@@ -11,9 +11,10 @@
  * (Node 22). Разбор сценария вынесен в `./ui-probe-scenario.mjs` и покрыт
  * юнит-тестами.
  *
- * Запуск клиента для проверок. Рекомендуется обёртка `./ui-probe-launch.mjs`:
- * она сама генерирует изолированный профиль, ставит `ETN_HIDDEN_WINDOW=1` и
- * ждёт готовности CDP.
+ * Запуск клиента для проверок — только через обёртку `./ui-probe-launch.mjs`
+ * (обёртка работает с СОБРАННЫМ клиентом `client/out`; сборка —
+ * `npm -w @etn/client run build`): она сама генерирует изолированный профиль,
+ * ставит `ETN_HIDDEN_WINDOW=1`, включает CDP и ждёт его готовности.
  *
  *   # клиент без окна и фокуса + порт отладки + УНИКАЛЬНЫЙ профиль
  *   node client/scripts/ui-probe-launch.mjs --port 9333
@@ -21,19 +22,9 @@
  *   # прогон сценария (порт — тот же, что у клиента)
  *   node client/scripts/ui-probe.mjs --scenario scenario.json --out .tmp/verify/out --port 9333
  *
- * Запускать клиент вручную тоже можно, но `--user-data-dir` ОБЯЗАТЕЛЕН: без
- * него `ETN_HIDDEN_WINDOW=1` отказывается стартовать (защита от запуска на
- * профиле пользователя). Дефолтный профиль общий с работающим клиентом
- * пользователя — тестовый экземпляр поднял бы ЕГО окно и отобрал фокус.
- *
- *   ETN_HIDDEN_WINDOW=1 REMOTE_DEBUGGING_PORT=9333 \
- *     ELECTRON_CLI_ARGS='["--user-data-dir=C:/R/ETN/.tmp/verify/profile"]' \
- *     npm -w @etn/client run dev
- *
- * `REMOTE_DEBUGGING_PORT` по умолчанию включает `--remote-debugging-port`;
- * дополнительные аргументы Electron задаются JSON-массивом в
- * `ELECTRON_CLI_ARGS` (обе переменные читает electron-vite, см.
- * `startElectron` в его сборке).
+ * Изолированный профиль обязателен: без него `ETN_HIDDEN_WINDOW=1`
+ * отказывается стартовать — дефолтный профиль общий с работающим клиентом
+ * пользователя, и тестовый экземпляр поднял бы ЕГО окно и отобрал фокус.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -69,22 +60,18 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
 Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага; 2 — ошибка
 вызова, сценария или подключения к CDP.
 
-Как запустить клиент для проверок (рекомендуется обёртка — один вызов):
+Как запустить клиент для проверок (единственный штатный путь — обёртка):
 
   node client/scripts/ui-probe-launch.mjs --port 9333
 
-  Обёртка генерирует уникальный изолированный профиль, ставит
-  ETN_HIDDEN_WINDOW=1, включает CDP и ждёт готовности. Вручную:
-
-  ETN_HIDDEN_WINDOW=1 REMOTE_DEBUGGING_PORT=9333 \\
-    ELECTRON_CLI_ARGS='["--user-data-dir=C:/R/ETN/.tmp/verify/profile"]' \\
-    npm -w @etn/client run dev
-
+  Обёртка работает с собранным клиентом (npm -w @etn/client run build),
+  генерирует уникальный изолированный профиль, ставит ETN_HIDDEN_WINDOW=1,
+  включает CDP и ждёт готовности.
   ETN_HIDDEN_WINDOW=1 — окно невидимо (opacity 0), не в панели задач и не
   забирает фокус; рендер при этом живой, Page.captureScreenshot даёт кадр.
-  --user-data-dir ОБЯЗАТЕЛЕН: на дефолтном профиле (общем с клиентом
-  пользователя) тестовый режим отказывается стартовать — иначе тестовый
-  экземпляр поднял бы окно пользователя и отобрал фокус.
+  Изолированный профиль обязателен: на дефолтном (общем с клиентом
+  пользователя) тестовый режим отказывается стартовать — иначе поднял бы
+  окно пользователя и отобрал фокус.
 
 Шаги сценария (ровно одно действие на шаг, плюс необязательные name/timeout):
   { "key": "ArrowDown", "modifiers": ["shift"] }   стрелки, Tab, Enter, Esc…
@@ -483,9 +470,9 @@ async function runScenario(cdp, scenario, outDir, base) {
     const started = Date.now();
     const entry = { index: step.index, kind: step.kind, name: step.name, status: 'ok', ms: 0 };
     try {
-      const promise = runStep(cdp, step, outDir, entry, report);
-      if (step.kind === 'waitFor') await promise;
-      else await withTimeout(step.timeout, promise, step.name);
+      // Every step — including `waitFor` by frames — is bounded by the step
+      // deadline, so a stalled frame supply cannot hang the run.
+      await withTimeout(step.timeout, runStep(cdp, step, outDir, entry, report), step.name);
     } catch (err) {
       entry.status = 'failed';
       entry.error = err instanceof Error ? err.message : String(err);
