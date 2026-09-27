@@ -24,13 +24,47 @@ import {
   instantToLocalDate,
   instantToLocalTime,
   resolvePeriodInstants,
+  setInstantTime,
 } from '../src/renderer/lib/period-editor.js';
+import { ShimElement } from './dom-shim.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const CHRONICLE_TS = resolve(RENDERER, 'screens', 'chronicle', 'chronicle.ts');
 
 function source(): string {
   return readFileSync(CHRONICLE_TS, 'utf8');
+}
+
+/** Минимальный DOM-шим: хватает для сборки диалога «Дата/период». */
+function installShim(): void {
+  const body = new ShimElement('body');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    createTextNode: (text: string) => new ShimElement('#text', undefined, text),
+    body,
+    activeElement: body,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = ((globalThis as any).window ?? ((globalThis as any).window = {})) as Record<
+    string,
+    unknown
+  >;
+  win['setTimeout'] = setTimeout;
+  win['clearTimeout'] = clearTimeout;
+  win['innerWidth'] = 1200;
+  win['innerHeight'] = 800;
+  win['addEventListener'] = () => undefined;
+  win['removeEventListener'] = () => undefined;
+  win['dispatchEvent'] = () => undefined;
+}
+
+/** Первый элемент с классом (рекурсивно). */
+function byClass(root: ShimElement, className: string): ShimElement | undefined {
+  return root.querySelector(`.${className}`) ?? undefined;
 }
 
 describe('«Дневник»: смена только даты сохраняет время суток (f45fac74)', () => {
@@ -126,5 +160,79 @@ describe('«Дневник»: запись дат идёт через resolvePer
       !/valid_to:\s*(?:null|['"]['"])/.test(src),
       'valid_to хронологической записи не бывает пустым (d58aa1a4)',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Приёмка №6: время включается из диалога у записи без `use_time`
+// ---------------------------------------------------------------------------
+
+describe('«Дневник»: включение времени из диалога у записи без use_time (приёмка №6)', () => {
+  it('запись без use_time: кнопка «С указанием времени», 10:15 → инстансы со временем', async () => {
+    installShim();
+    const { buildDatePeriodDialog, datePeriodValueFromInstants, formatDatePeriodValue } =
+      await import('../src/renderer/lib/date-period-dialog.js');
+
+    // Запись, время которой сейчас скрыто: полный UTC-инстанс без флага.
+    const previous = { from: '2026-09-26T07:30:45.123Z', to: '2026-09-26T07:30:45.123Z' };
+    const dialog = buildDatePeriodDialog({
+      allowPeriod: true,
+      allowTime: true,
+      initial: datePeriodValueFromInstants(previous.from, previous.to, false, true),
+    });
+    const root = dialog.root as unknown as ShimElement;
+    assert.equal(dialog.getValue().hasTime, false, 'время скрыто, пока его не включили');
+    const toggle = byClass(root, 'dpd-time-toggle');
+    assert.ok(toggle !== undefined, 'кнопка «С указанием времени» доступна и без use_time');
+
+    toggle!.click();
+    assert.equal(dialog.getValue().hasTime, true, 'кнопка включила время');
+    const timeInput = byClass(root, 'dpd-time');
+    assert.ok(timeInput !== undefined, 'появилось поле времени');
+    timeInput!.value = '10:15';
+    timeInput!.emit('change');
+    assert.equal(dialog.getValue().fromTime, '10:15', 'введённое время принято');
+
+    // Путь сохранения экрана: resolvePeriodInstants + setInstantTime (ADR 994d076a).
+    const value = dialog.getValue();
+    const period = {
+      from: value.from,
+      to: value.mode === 'date' ? value.from : value.to,
+      hasTime: value.hasTime,
+    };
+    const base = resolvePeriodInstants(period, previous);
+    const from = value.hasTime ? setInstantTime(base.from, value.fromTime) : base.from;
+    assert.equal(instantToLocalDate(from), '2026-09-26', 'дата записи сохранена');
+    assert.equal(instantToLocalTime(from), '10:15', 'инстанс начала — 10:15 наблюдателя');
+    assert.match(from, /:45\.123Z$/, 'секунды/мс исходного инстанса сохранены');
+    assert.equal(value.hasTime, true, 'use_time уйдёт true (`value.hasTime === true`)');
+
+    // Отображение в ленте: `use_time` включён → «дата + время».
+    assert.equal(
+      formatDatePeriodValue({ ...value, hasTime: true }),
+      '2026-09-26 10:15',
+      'подпись записи в ленте — дата со временем',
+    );
+  });
+
+  it('лента: allowTime всегда, начальное время — по use_time записи', () => {
+    const src = source();
+    assert.match(src, /allowTime: true/, 'время в диалоге записи разрешено всегда');
+    assert.match(
+      src,
+      /datePeriodValueFromInstants\(\s*previous\.from,\s*previous\.to,\s*row\.use_time === true,\s*true,?\s*\)/,
+      'время стартует показанным только при use_time, но доступно кнопкой',
+    );
+    assert.match(src, /use_time: value\.hasTime === true/, 'hasTime диалога → use_time записи');
+  });
+
+  it('вкладка редактора: включение времени в диалоге синхронизирует флажок', () => {
+    const src = readFileSync(resolve(RENDERER, 'editor', 'chrono-tab.ts'), 'utf8');
+    assert.match(
+      src,
+      /useTimeInput\.input\.checked\s*=\s*result\.hasTime/,
+      'флажок «учитывать время» едет за hasTime диалога',
+    );
+    assert.match(src, /allowTime: true/, 'вкладка тоже разрешает время в диалоге');
   });
 });

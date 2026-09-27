@@ -412,7 +412,9 @@ describe('приёмка №5, п.1: компоновка карточки за�
 describe('приёмка №5, п.4: применения диалога', () => {
   it('лента открывает диалог и переводит результат общим помощником', () => {
     assert.match(CHRONICLE, /openDatePeriodDialog\(\{/);
-    assert.match(CHRONICLE, /allowTime: row\.use_time === true/, 'время — по флагу записи');
+    // Время разрешено ВСЕГДА (кнопка «С указанием времени» — часть диалога,
+    // приёмка №6): запись без `use_time` тоже может включить время.
+    assert.match(CHRONICLE, /allowTime: true/, 'время доступно в диалоге записи');
     assert.match(CHRONICLE, /resolvePeriodInstants\(period, previous\)/);
   });
 

@@ -723,23 +723,26 @@ async function openBodyEditor(
 }
 
 /**
- * Правка даты записи диалогом «Дата/период» (0.10.1, приёмка №5). Инлайн-контрол
+ * Правка даты записи диалогом «Дата/период» (0.10.1, приёмка №5/№6). Инлайн-контрол
  * с переключателем режимов упразднён: клик по значению открывает модальный
- * диалог; период разрешён, время — по флагу `use_time` записи. «ОК» применяет
- * значение, Esc/«Отмена» ничего не меняют.
+ * диалог; период разрешён. Время РАЗРЕШЕНО ВСЕГДА (кнопка «С указанием времени» —
+ * часть диалога): у записи без `use_time` время стартует скрытым, пользователь
+ * включает его кнопкой, вводит значение — «ОК» пишет `use_time: true` и инстансы
+ * со временем (путь сохранения — `saveRecordDates`). «ОК» применяет значение,
+ * Esc/«Отмена» ничего не меняют.
  */
 async function editRecordDates(row: ChronicleRow): Promise<void> {
   const previous = { from: row.valid_from, to: row.valid_to ?? row.valid_from };
-  const value = datePeriodValueFromInstants(
-    previous.from,
-    previous.to,
-    row.use_time === true,
-    row.use_time === true,
-  );
   const result = await openDatePeriodDialog({
     allowPeriod: true,
-    allowTime: row.use_time === true,
-    initial: value,
+    allowTime: true,
+    // Время показано, только когда запись его уже учитывает; иначе — скрыто.
+    initial: datePeriodValueFromInstants(
+      previous.from,
+      previous.to,
+      row.use_time === true,
+      true,
+    ),
   });
   if (result === null) return;
   await saveRecordDates(row.id, result, previous);
