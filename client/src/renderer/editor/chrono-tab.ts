@@ -15,8 +15,10 @@
  *    opens the shared «Дата/период» dialog — and a title input filling the rest
  *    of the width) plus a markdown field that behaves exactly like the permanent
  *    comment — HTML view, double-click edits, blur autosaves and returns to the
- *    view, Esc reverts. The first non-empty blur of a new comment creates it;
- *    metadata edits save on blur. With nothing selected the area shows a hint.
+ *    view, Esc reverts. The first non-empty blur (title or text) of a new record
+ *    creates it — the same content rule as the diary screen (`hasRecordContent`,
+ *    requirement 26f0aa52); metadata edits of an existing record save on blur.
+ *    With nothing selected the area shows a hint.
  *
  * Даты записи — полные UTC-инстансы с миллисекундами (требование d58aa1a4);
  * `valid_to` непуст (незаполненное = `valid_from`). Смена только даты сохраняет
@@ -284,18 +286,41 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     const metaRow = div('chrono-meta-row');
     metaRow.append(dateBtn, titleInput);
 
-    /** Сохраняет метаданные существующей записи (заголовок, даты, показ времени). */
+    /**
+     * Сохраняет метаданные записи (заголовок, даты, показ времени). У
+     * псевдо-записи (`commentId === null`) непустой заголовок сам по себе —
+     * содержание: запись создаётся (паритет с экраном «Дневник», правило
+     * `hasRecordContent`, требование 26f0aa52). Пустой заголовок и одни даты
+     * запись не создают. Иначе метаданные существующей записи обновляются.
+     */
     const commitMeta = (): void => {
-      if (commentId === null) return;
       void (async () => {
         try {
-          const updated = await etn.comments.update(networkId, commentId!, {
-            title: titleInput.value.trim() || null,
-            valid_from: fromInstant,
-            valid_to: toInstant,
-            use_time: useTime,
-          }, version);
-          version = updated.version;
+          const title = titleInput.value.trim() || null;
+          if (commentId === null) {
+            if (title === null) return;
+            const created = await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
+              kind: 'chronological',
+              title,
+              body_md: '',
+              valid_from: fromInstant,
+              valid_to: toInstant,
+              use_time: useTime,
+            });
+            commentId = created.id;
+            version = created.version;
+            selectedId = created.id;
+            activeRowId = created.id;
+          } else {
+            const id = commentId;
+            const updated = await etn.comments.update(networkId, id, {
+              title,
+              valid_from: fromInstant,
+              valid_to: toInstant,
+              use_time: useTime,
+            }, version);
+            version = updated.version;
+          }
           invalidateIndicators(ctx.ownerId);
           await reload();
         } catch (err) {
