@@ -377,7 +377,6 @@ function periodSection(ctx: FilterFormContext): FilterSection {
           to: current.to || resolveDateToken('$today'),
           hasTime: false,
         },
-        title: 'Период дневника',
       }).then((result) => (result === null ? null : { from: result.from, to: result.to })),
     onChange: (value: PeriodValue) => {
       filter.dateFrom = value.from ?? '';

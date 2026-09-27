@@ -134,6 +134,15 @@ export interface DialogOptions {
    * пределах роли и «дёргается» (ошибка 0ab63eac — настройки).
    */
   fixedHeight?: boolean;
+  /**
+   * Диалог «по содержимому»: окно растёт под своё содержимое, тело НЕ
+   * прокручивается внутри — все контролы видны одновременно. Роль {@link size}
+   * задаёт нижнюю границу ширины (чтобы сетка/поля не сжимались), высота не
+   * ограничивается; при переполнении экрана прокручивается подложка, а не тело
+   * диалога (ошибка 214ab5da — календарь даты/периода обрезался прокруткой).
+   * Несовместим по смыслу с {@link fixedHeight} и {@link tabs}.
+   */
+  fitContent?: boolean;
   buttons?: DialogButton[];
   /**
    * Sticky custom footer element. When provided, {@link buttons} is ignored:
@@ -430,6 +439,13 @@ export function showDialog(opts: DialogOptions): () => void {
   // ролью явно — тело тогда прокручивается, а окно не «дёргается» (ошибка
   // 0ab63eac, требование 13464c39).
   if (opts.fixedHeight === true) box.dataset['dialogFixedHeight'] = 'true';
+  // Диалог «по содержимому»: окно растёт под содержимое, тело не прокручивается,
+  // переполнение уходит в подложку (ошибка 214ab5da). Разметку задаёт CSS по
+  // атрибуту, прокрутку подложки подключает класс на ней же.
+  if (opts.fitContent === true) {
+    box.dataset['dialogFit'] = 'true';
+    backdrop.classList.add('dialog-backdrop-scroll');
+  }
 
   /** Confirm button of this dialog — Ctrl+Enter clicks it. */
   let primaryBtn: HTMLButtonElement | null = null;

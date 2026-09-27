@@ -382,7 +382,12 @@ export function openDatePeriodDialog(
     const dialog = buildDatePeriodDialog(opts);
     showDialog({
       title: opts.title ?? 'Дата/период',
+      // Роль `s` — нижняя граница ширины (хватает сетке Пн–Вс на 7 колонок);
+      // `fitContent` снимает потолок высоты и прокрутку тела, чтобы календарь
+      // (до 6 недель), переключатель, время, значение и футер были видны
+      // одновременно (ошибка 214ab5da).
       size: 's',
+      fitContent: true,
       body: dialog.root,
       buttons: [
         { label: 'Отмена', onClick: () => finish(null) },

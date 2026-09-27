@@ -52,6 +52,39 @@
   height: min(var(--dialog-h, 560px), calc(100vh - 60px));
 }
 
+/* Диалог «по содержимому» (опция `fitContent`, lib/dialog.ts; ошибка 214ab5da —
+   календарь даты/периода обрезался прокруткой роли `s`): окно растёт под своё
+   содержимое, тело НЕ прокручивается — сетка, переключатель, время, значение и
+   футер видны одновременно. Роль размера задаёт нижнюю границу ширины, высота
+   не ограничивается (max-height снимается); при переполнении экрана
+   прокручивается подложка, а не диалог. `height: fit-content` вместо `auto` —
+   авто-высота каркаса запрещена сторожем guard-ui-dialog (требование 13464c39). */
+.dialog-box[data-dialog-fit='true'] {
+  width: fit-content;
+  min-width: min(var(--dialog-w, 320px), calc(100vw - 40px));
+  max-width: calc(100vw - 40px);
+  height: fit-content;
+  max-height: none;
+}
+
+.dialog-box[data-dialog-fit='true'] .dialog-body {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 12px 14px;
+}
+
+/* Подложка диалога «по содержимому»: если окно выше экрана — прокручивается она
+   (страница модального слоя), а диалог остаётся целым. `margin: auto` на окне
+   сохраняет центрирование, пока места хватает, и даёт добраться до верха при
+   переполнении. */
+.dialog-backdrop-scroll {
+  overflow-y: auto;
+}
+
+.dialog-backdrop-scroll .dialog-box {
+  margin: auto;
+}
+
 /* Роли размера: s / m / l / xl (lib/dialog.ts, DialogSize). */
 .dialog-box[data-dialog-size='s'] {
   --dialog-w: 460px;

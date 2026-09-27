@@ -82,7 +82,12 @@ describe('вкладка «Дневник»: диалог даты/период�
     const src = read(SRC.tab);
     assert.match(src, /from '\.\.\/lib\/date-period-dialog\.js'/, 'импорт компонента диалога');
     assert.match(src, /openDatePeriodDialog\(\{/, 'диалог открывается');
-    assert.ok(src.includes("title: 'Дата записи'"), 'заголовок диалога');
+    // Заголовок диалога не подменяется — дефолт «Дата/период» (ошибка 214ab5da).
+    const dialogCall = src.slice(
+      src.indexOf('openDatePeriodDialog({'),
+      src.indexOf('});', src.indexOf('openDatePeriodDialog({')),
+    );
+    assert.ok(!/\btitle:/.test(dialogCall), 'заголовок диалога — дефолтный «Дата/период»');
     assert.match(src, /resolveDatePeriodInstants\(/, 'значение диалога переводится в инстансы');
     assert.ok(!/\.type\s*=\s*['"](?:date|datetime-local|time)['"]/.test(src), 'своих полей дат периода нет');
   });

@@ -740,7 +740,6 @@ async function editRecordDates(row: ChronicleRow): Promise<void> {
     allowPeriod: true,
     allowTime: row.use_time === true,
     initial: value,
-    title: 'Дата записи',
   });
   if (result === null) return;
   await saveRecordDates(row.id, result, previous);

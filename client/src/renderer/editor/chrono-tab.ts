@@ -306,7 +306,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
           useTimeInput.input.checked,
           true,
         ),
-        title: 'Дата записи',
       });
       if (result === null) return;
       const next = resolveDatePeriodInstants(result, { from: fromInstant, to: toInstant });
