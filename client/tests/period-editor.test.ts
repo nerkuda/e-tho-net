@@ -18,11 +18,15 @@ import { describe, it } from 'node:test';
 import {
   buildPeriodEditor,
   composeInstant,
+  composeLocalBound,
+  formatPeriodLocalDisplay,
   GLOBAL_DATE_TOKEN_RE,
+  hasExplicitTime,
   instantToLocalDate,
   instantToLocalTime,
   isGlobalDateToken,
   parseBound,
+  parseLocalBound,
   PERIOD_TOKEN_PRESETS,
   setInstantDate,
   setInstantTime,
@@ -442,5 +446,100 @@ describe('period-editor: панельный вариант «Пресеты»/«
       hasTime: false,
       mode: 'dates',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Вариант «dialog»: поле-значение периода (0.10.1, задача 12a5e719)
+// ---------------------------------------------------------------------------
+
+describe('period-editor: вариант «dialog» — поле-значение периода (12a5e719)', () => {
+  it('чистые помощники: локальное представление, сборка и признак времени', () => {
+    assert.deepEqual(parseLocalBound('2026-09-26T10:30:00'), { date: '2026-09-26', time: '10:30' });
+    assert.deepEqual(parseLocalBound('2026-09-26'), { date: '2026-09-26', time: '' });
+    assert.deepEqual(parseLocalBound(''), { date: '', time: '' });
+    assert.equal(hasExplicitTime('00:00'), false, 'полночь — времени нет');
+    assert.equal(hasExplicitTime('10:00'), true);
+    assert.equal(hasExplicitTime(''), false);
+    assert.equal(composeLocalBound('2026-09-26', ''), '2026-09-26');
+    assert.match(composeLocalBound('2026-09-26', '10:30'), /Z$/);
+    assert.equal(composeLocalBound('', '10:30'), '');
+    assert.equal(formatPeriodLocalDisplay('2026-09-26', '2026-09-28'), '2026-09-26 - 2026-09-28');
+    assert.equal(formatPeriodLocalDisplay('2026-09-26T10:30:00', '2026-09-26T00:00:00'), '2026-09-26 10:30 - 2026-09-26');
+    assert.equal(formatPeriodLocalDisplay('', ''), '');
+  });
+
+  it('пустое значение: заглушка, крестик скрыт, индикатора нет, переключателей нет', () => {
+    installShim();
+    const editor = buildPeriodEditor({ variant: 'dialog' });
+    assert.ok(rootShim(editor.root).querySelector('.pe-dialog-value'), 'кнопка-значение периода');
+    assert.equal(field(editor.root, 'pe-dialog-clear').hidden, true, 'крестик у пустого скрыт');
+    assert.equal(field(editor.root, 'pe-dialog-time').hidden, true, 'индикатора времени нет');
+    assert.equal(allFields(editor.root, 'pe-mode').length, 0, 'переключателя режимов нет');
+    assert.deepEqual(editor.getValue(), { hasTime: false });
+  });
+
+  it('историческая «наивная» дата-время читается и показывает время', () => {
+    installShim();
+    const editor = buildPeriodEditor({
+      variant: 'dialog',
+      value: { from: '2024-02-01T10:30:00', to: '2024-02-28T00:00:00' },
+    });
+    assert.equal(
+      field(editor.root, 'pe-dialog-value').textContent,
+      '2024-02-01 10:30 - 2024-02-28',
+    );
+    assert.equal(field(editor.root, 'pe-dialog-time').hidden, false, 'время не полночь — индикатор виден');
+    assert.equal(editor.getValue().from, '2024-02-01T10:30:00', 'историческое значение не искажено');
+    assert.equal(editor.getValue().hasTime, true);
+  });
+
+  it('обе границы — полночь: индикатор скрыт', () => {
+    installShim();
+    const editor = buildPeriodEditor({
+      variant: 'dialog',
+      value: { from: '2024-02-01T00:00:00', to: '2024-02-28T00:00:00' },
+    });
+    assert.equal(field(editor.root, 'pe-dialog-time').hidden, true);
+    assert.equal(editor.getValue().hasTime, false);
+  });
+
+  it('крестик очищает период и сообщает onChange', () => {
+    installShim();
+    const seen: Array<{ from?: string; to?: string }> = [];
+    const editor = buildPeriodEditor({
+      variant: 'dialog',
+      value: { from: '2026-09-26', to: '2026-09-28' },
+      onChange: (v) => seen.push({ from: v.from, to: v.to }),
+    });
+    field(editor.root, 'pe-dialog-clear').click();
+    assert.deepEqual(editor.getValue(), { hasTime: false });
+    assert.equal(seen.length, 1, 'onChange вызван один раз');
+    assert.equal(seen[0]!.from, undefined);
+    assert.equal(seen[0]!.to, undefined);
+  });
+
+  it('клик по значению открывает диалог и применяет новые границы', async () => {
+    installShim();
+    const seen: unknown[] = [];
+    const source = '2026-10-01T08:00:00.000Z';
+    const editor = buildPeriodEditor({
+      variant: 'dialog',
+      value: { from: '2026-09-26' },
+      onChange: (v) => seen.push(v),
+      openPeriodDialog: async () => ({
+        from: source,
+        to: '2026-10-05T20:00:00.000Z',
+      }),
+    });
+    field(editor.root, 'pe-dialog-value').click();
+    await Promise.resolve();
+    await Promise.resolve();
+    const value = editor.getValue();
+    assert.equal(instantToLocalDate(value.from ?? ''), instantToLocalDate(source));
+    assert.equal(instantToLocalTime(value.from ?? ''), instantToLocalTime(source));
+    assert.equal(value.hasTime, true);
+    assert.equal(seen.length, 1, 'onChange вызван после применения');
+    assert.equal(field(editor.root, 'pe-dialog-time').hidden, false);
   });
 });

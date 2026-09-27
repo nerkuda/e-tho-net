@@ -11,6 +11,16 @@
  *  * `datetime` — одна дата + время суток (часы:минуты);
  *  * `range`    — диапазон: начало и конец, время опционально в каждой границе.
  *
+ * **Варианты сборки** (`variant`):
+ *  * `editor` (умолчание) — переключатель режимов «Дата/Дата и время/Диапазон»
+ *    и поля границ (лента «Дневника», вкладка записи);
+ *  * `panel` — панель отбора «Дневника»: диапазон «с»–«по» со своим
+ *    переключателем «Пресеты»/«Даты»;
+ *  * `dialog` — панельное ПОЛЕ-ЗНАЧЕНИЕ периода (0.10.1, задача 12a5e719):
+ *    одна кликабельная строка с периодом, «крестик» очистки и авто-индикатор
+ *    «Учитывать время»; правка — диалогом «Дата/период» (строит потребитель).
+ *    Часов/минут в строке нет: значение несёт их в самом инстансе границы.
+ *
  * **Значение.** Граница — «голая дата» `YYYY-MM-DD` (сутки UTC — нормализует
  * сервер), полный UTC-инстанс ISO-8601 (когда задано время) либо динамический
  * токен (`$today`, `$now`, арифметика `±Nd`). Полный инстанс строится по
@@ -40,7 +50,9 @@
 import { div, el, span } from './dom.js';
 import { setPeriodFrom, setPeriodTo } from './dates.js';
 import { dateField } from './date-field.js';
+import { svgIcon } from './icons.js';
 import { optionsSuggestSource, wireSuggest, type SuggestHandle } from './suggest-dropdown.js';
+import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
 
@@ -96,8 +108,21 @@ export interface PeriodEditorOptions {
    * «Пресеты»/«Даты». В режиме «Пресеты» каждая граница — комбобокс базовых
    * пресетов и компактный сдвиг ±N/единица; поле показывает человекочитаемую
    * композицию, наружу уходит канонический токен. «Даты» — точные даты.
+   * `dialog` — панельное поле-значение периода (0.10.1, задача 12a5e719):
+   * одна строка с периодом, «крестик» очистки, авто-индикатор «Учитывать
+   * время»; правка — внешним диалогом ({@link PeriodEditorOptions.openPeriodDialog}).
    */
-  variant?: 'editor' | 'panel';
+  variant?: 'editor' | 'panel' | 'dialog';
+  /**
+   * Вариант `dialog`: открыть диалог «Дата/период» из строки значения и вернуть
+   * новые границы (в формате значения контрола — «голая дата»/UTC-инстанс) либо
+   * `null` (отказ). Диалог строит потребитель (`lib/date-period-dialog.ts`) —
+   * модуль периода его не импортирует.
+   */
+  openPeriodDialog?: (current: {
+    from: string;
+    to: string;
+  }) => Promise<{ from: string; to: string } | null>;
   /** Начальный режим панельного варианта (по умолчанию `presets`). */
   panelMode?: PeriodPanelMode;
   /**
@@ -359,6 +384,80 @@ export function resolvePeriodInstants(
 }
 
 // ---------------------------------------------------------------------------
+// Локальное представление границы (вариант `dialog`)
+// ---------------------------------------------------------------------------
+
+/**
+ * «Наивная» локальная дата-время `YYYY-MM-DDTHH:MM[:SS[.sss]]` без пояса —
+ * исторический формат границ панели «Структур» (нативные `datetime-local`,
+ * задача 7032e55a). Принимается вариантом `dialog`, чтобы прежде сохранённые
+ * отборы читались без потерь; как инстанс (`parseBound`) он невалиден.
+ */
+const LEGACY_LOCAL_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,3})?)?$/;
+
+/**
+ * Локальные дата и время границы для отображения и диалога: «голая дата»,
+ * полный UTC-инстанс, историческая наивная дата-время. Токен и нераспознанное
+ * значение возвращаются датой как есть (времени нет).
+ */
+export function parseLocalBound(raw: string): { date: string; time: string } {
+  const value = (raw ?? '').trim();
+  if (value === '') return { date: '', time: '' };
+  const parsed = parseBound(value);
+  if (parsed.kind === 'instant') {
+    return { date: instantToLocalDate(parsed.value), time: instantToLocalTime(parsed.value) };
+  }
+  if (parsed.kind === 'date') return { date: parsed.value, time: '' };
+  const legacy = LEGACY_LOCAL_RE.exec(value);
+  if (legacy !== null) {
+    return { date: `${legacy[1]}-${legacy[2]}-${legacy[3]}`, time: `${legacy[4]}:${legacy[5]}` };
+  }
+  return { date: value, time: '' };
+}
+
+/**
+ * Собрать строку границы из локальных даты и времени: пустое время — «голая
+ * дата», иначе полный UTC-инстанс (локальное время наблюдателя уходит в UTC —
+ * ADR времени 994d076a). Пустая дата — пустая строка.
+ */
+export function composeLocalBound(date: string, time: string): string {
+  const day = date.trim();
+  if (day === '') return '';
+  const hhmm = time.trim();
+  if (hhmm === '') return day;
+  const instant = composeInstant(day, hhmm);
+  return instant !== '' ? instant : day;
+}
+
+/**
+ * Несёт ли граница время суток, ОТЛИЧНОЕ от полуночи (`00:00`): по этому
+ * признаку показывается индикатор «Учитывать время» (задача 12a5e719).
+ */
+export function hasExplicitTime(time: string): boolean {
+  const value = (time ?? '').trim();
+  return value !== '' && value !== '00:00';
+}
+
+/** Человекочитаемая строка периода для варианта `dialog` (локальные даты/время). */
+export function formatPeriodLocalDisplay(fromRaw: string, toRaw: string): string {
+  const part = (raw: string): string => {
+    const bound = parseLocalBound(raw);
+    // Время суток показываем, только если оно отлично от полуночи — тем же
+    // признаком, что и индикатор «Учитывать время» (иначе «00:00» в строке
+    // выглядит временем, которого пользователь не задавал).
+    return hasExplicitTime(bound.time) ? `${bound.date} ${bound.time}` : bound.date;
+  };
+  const fromText = part(fromRaw);
+  const toText = part(toRaw);
+  if (fromText === '' && toText === '') return '';
+  if (fromText === '') return `по ${toText}`;
+  if (toText === '') return `с ${fromText}`;
+  if (fromText === toText) return fromText;
+  return `${fromText} - ${toText}`;
+}
+
+// ---------------------------------------------------------------------------
 // Состояние одной границы
 // ---------------------------------------------------------------------------
 
@@ -457,6 +556,18 @@ const PRESET_CARET_CLASS = 'pe-preset-caret';
 const PRESET_NUM_CLASS = 'pe-preset-num';
 /** Класс выпадашки единицы арифметики пресета. */
 const PRESET_UNIT_CLASS = 'pe-preset-unit';
+/** Класс-модификатор варианта `dialog` (поле-значение периода). */
+const DIALOG_CLASS = 'pe-dialog';
+/** Класс строки поля-значения периода. */
+const DIALOG_ROW_CLASS = 'pe-dialog-row';
+/** Класс кнопки-значения периода (открывает диалог). */
+const DIALOG_VALUE_CLASS = 'pe-dialog-value';
+/** Класс кнопки очистки периода. */
+const DIALOG_CLEAR_CLASS = 'pe-dialog-clear';
+/** Класс индикатора «Учитывать время». */
+const DIALOG_TIME_CLASS = 'pe-dialog-time';
+/** Подпись незаданного периода. */
+const DIALOG_PLACEHOLDER = 'Период не задан';
 
 const MODE_ITEMS = [
   { id: 'date', label: 'Дата' },
@@ -546,10 +657,12 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   const allowTokens = opts.allowTokens !== false;
   const tokenPresets = opts.tokenOptions ?? PERIOD_TOKEN_PRESETS.map((t) => t.text);
   const panel = opts.variant === 'panel';
+  const dialog = opts.variant === 'dialog';
 
   // Панельный вариант — всегда диапазон «с»–«по» и без переключателя режимов
-  // редактора; его собственный режим — «Пресеты»/«Даты».
-  let mode: PeriodMode = panel ? 'range' : (opts.mode ?? 'date');
+  // редактора; его собственный режим — «Пресеты»/«Даты». Вариант `dialog` —
+  // тоже диапазон, но правка идёт внешним диалогом.
+  let mode: PeriodMode = panel || dialog ? 'range' : (opts.mode ?? 'date');
   let panelMode: PeriodPanelMode = opts.panelMode ?? 'presets';
   let from = emptyBound();
   let to = emptyBound();
@@ -559,12 +672,15 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   // модификатор корня, раскладка колонкой задана в CSS. Вариант `editor`
   // (даты записи, вкладка редактора) сохраняет однострочную раскладку.
   if (panel) root.classList.add(PANEL_CLASS);
+  if (dialog) root.classList.add(DIALOG_CLASS);
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', opts.label ?? 'Период');
 
   let modes: ReturnType<typeof segmentedControl> | null = null;
   let panelModes: ReturnType<typeof segmentedControl> | null = null;
-  if (!panel) {
+  if (dialog) {
+    // Вариант `dialog` переключателей режима не имеет: правка — внешним диалогом.
+  } else if (!panel) {
     modes = segmentedControl({
       items: MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
       activeId: mode,
@@ -596,6 +712,18 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
 
   /** Значение из состояния. */
   const readValue = (): PeriodValue => {
+    if (dialog) {
+      const fromValue = composeBound(from);
+      const toValue = composeBound(to);
+      const value: PeriodValue = {};
+      if (fromValue !== '') value.from = fromValue;
+      if (toValue !== '') value.to = toValue;
+      // Индикатор и флаг времени — по значению: время суток, отличное от полуночи.
+      value.hasTime =
+        hasExplicitTime(parseLocalBound(fromValue).time) ||
+        hasExplicitTime(parseLocalBound(toValue).time);
+      return value;
+    }
     if (panel) {
       const fromValue = composeBound(from);
       const toValue = composeBound(to);
@@ -630,6 +758,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
 
   /** Валидация всех видимых границ. */
   const errors = (): string[] => {
+    // Вариант `dialog` значения не вводит текстом: границы приходят из диалога
+    // либо из ранее сохранённого отбора (в том числе историческая «наивная»
+    // дата-время, невалидная для `parseBound`) — ошибок не порождает.
+    if (dialog) return [];
     const out: string[] = [];
     const first = boundError(from, allowTokens);
     if (first !== null) out.push(first);
@@ -714,6 +846,72 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     return box;
   };
 
+  /** Открыть внешний диалог и применить возвращённые границы (вариант `dialog`). */
+  const openDialog = (): void => {
+    const open = opts.openPeriodDialog;
+    if (open === undefined) return;
+    void open({ from: composeBound(from), to: composeBound(to) })
+      .then((result) => {
+        if (result === null) return;
+        from = boundFromValue(result.from);
+        to = boundFromValue(result.to);
+        repaint();
+        emit();
+      })
+      .catch(() => undefined);
+  };
+
+  /** Очистить период одним кликом (вариант `dialog`). */
+  const clearDialog = (): void => {
+    from = emptyBound();
+    to = emptyBound();
+    repaint();
+    emit();
+  };
+
+  /**
+   * Поле-значение периода варианта `dialog` (0.10.1, задача 12a5e719): кнопка
+   * с периодом (открывает диалог), «крестик» очистки (у пустого скрыт) и
+   * индикатор «Учитывать время» (виден при часах:минутах, отличных от `00:00`).
+   */
+  const buildDialogField = (): HTMLElement => {
+    const row = div(DIALOG_ROW_CLASS);
+    const fromValue = composeBound(from);
+    const toValue = composeBound(to);
+    const empty = fromValue === '' && toValue === '';
+    const hasTime =
+      hasExplicitTime(parseLocalBound(fromValue).time) ||
+      hasExplicitTime(parseLocalBound(toValue).time);
+
+    const valueBtn = uiButton({
+      label: formatPeriodLocalDisplay(fromValue, toValue) || DIALOG_PLACEHOLDER,
+      role: 'ghost',
+      size: 's',
+      class: DIALOG_VALUE_CLASS,
+      title: 'Изменить период',
+      disabled: opts.disabled === true,
+      onClick: openDialog,
+    });
+    if (empty) valueBtn.classList.add('pe-dialog-value-empty');
+
+    const clearBtn = iconButton({
+      icon: svgIcon('x', 16),
+      title: 'Очистить период',
+      role: 'ghost',
+      size: 's',
+      class: DIALOG_CLEAR_CLASS,
+      disabled: opts.disabled === true,
+      onClick: clearDialog,
+    });
+    clearBtn.hidden = empty;
+
+    const time = span('Учитывать время', DIALOG_TIME_CLASS);
+    time.hidden = !hasTime;
+
+    row.append(valueBtn, clearBtn, time);
+    return row;
+  };
+
   /** Полная перерисовка полей (режим/состояние). */
   const repaint = (): void => {
     // Поля пересобираются — снимаем выпадашки прошлой сборки (иначе их
@@ -721,6 +919,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     for (const handle of suggestHandles) handle.dispose();
     suggestHandles.length = 0;
     fields.replaceChildren();
+    if (dialog) {
+      fields.append(buildDialogField());
+      return;
+    }
     if (panel) {
       fields.append(
         panelMode === 'dates'
@@ -992,6 +1194,14 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       to = boundFromValue(coercePanelValue(next.to ?? ''));
       from.time = '';
       to.time = '';
+      repaint();
+      return;
+    }
+    if (dialog) {
+      // Границы хранятся как пришли (дата/инстанс/историческая наивная строка):
+      // отображение разбирает их через `parseLocalBound`, значение не теряется.
+      from = boundFromValue(source);
+      to = boundFromValue(next.to ?? '');
       repaint();
       return;
     }

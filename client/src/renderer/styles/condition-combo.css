@@ -328,6 +328,50 @@
   color: var(--danger);
 }
 
+/* Вариант `dialog` (0.10.1, задача 12a5e719): поле-значение периода — строка с
+   периодом, «крестик» очистки и авто-индикатор «Учитывать время». Часов/минут в
+   строке нет (время суток несёт сам инстанс границы); правка — диалогом. */
+.pe-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.pe-dialog-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pe-dialog-value-empty {
+  color: var(--text-dim);
+}
+
+.pe-dialog-clear {
+  flex: 0 0 auto;
+}
+
+.pe-dialog-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Обёртка поля периода в строке дат общего каркаса (`lib/filter-form.ts`). */
+.st-f-date-period {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* Компонентное поле даты (0.10.1, итерация приёмки №8, п.4; `lib/date-field.ts`):
    редактируемый ввод «голой даты» + иконочные кнопки «календарь» и «очистка»
    справа. Используется полями «Даты» панели периода. */

@@ -606,7 +606,7 @@ function renderPanel(): void {
     buildTraversalSection(ctx),
     buildConditionsSection(ctx, { get: () => propertiesCollapsed, set: (v) => (propertiesCollapsed = v) }),
     buildAuthorshipSection(ctx, { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) }),
-    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }, { mode: 'datetime' }),
+    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }, { mode: 'period' }),
     buildExtrasSection(
       ctx,
       { get: () => extraCollapsed, set: (v) => (extraCollapsed = v) },

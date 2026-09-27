@@ -373,6 +373,7 @@ function renderFilterPanel(): void {
       { get: () => periodCollapsed, set: (v) => (periodCollapsed = v) },
       {
         title: "Период",
+        mode: "period",
         ranges: [
           {
             label: "Период",
