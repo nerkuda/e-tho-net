@@ -860,9 +860,11 @@ const RECORD_CLASS_SQL = `CASE WHEN EXISTS (
  * them or to their links. Returns the paged rows with the total count.
  *
  * Сортировка (0.10.1, требование c6ddc1ea): класс записи → `valid_from` →
- * `valid_to` → `created_at` → `id`, все ключи в направлении `order`. Прежние
- * тайбрейкеры (NULL-обработка `valid_to`, `title`) отменены — порядок
- * детерминирован уникальным `id`.
+ * `valid_to` → `created_at` → `id`. Класс записи (`0` — запись дня, `1` —
+ * прочие) сортируется ВСЕГДА по возрастанию — направление `order` к нему не
+ * применяется; направление действует только на `valid_from`/`valid_to` и
+ * тайбрейкеры `created_at`/`id`. Прежние тайбрейкеры (NULL-обработка
+ * `valid_to`, `title`) отменены — порядок детерминирован уникальным `id`.
  *
  * `opts.userId` — контекст исполнения критериев целей (движок выборки мыслей);
  * `opts.now` — часы для раскрытия токенов периода (тесты).
@@ -929,7 +931,7 @@ export function queryChronicle(
               c.use_time, c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
        FROM comments_v c
        WHERE ${cond}
-       ORDER BY ${RECORD_CLASS_SQL} ${dir},
+       ORDER BY ${RECORD_CLASS_SQL} ASC,
                 c.valid_from ${dir},
                 c.valid_to ${dir},
                 c.created_at ${dir},

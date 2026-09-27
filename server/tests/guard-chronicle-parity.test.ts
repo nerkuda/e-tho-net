@@ -164,6 +164,38 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         [cAlpha.id, cBoth.id].sort(),
         'targets отсёк запись, привязанную только к Beta',
       );
+
+      // Класс-first при «убывании» (требование c6ddc1ea): запись дня (единственная
+      // цель — HOME) обязана быть ПЕРВОЙ, хотя её дата позже всех. Оба фасада
+      // должны вернуть один и тот же класс-first порядок.
+      const cHome = createComment(
+        ndb,
+        'thought',
+        rest.homeId,
+        { kind: 'chronological', body_md: 'запись дня', valid_from: '2024-02-01' },
+        USER,
+      );
+      const descFilter = { order: 'desc' };
+      const restDesc = await rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+        headers: authHeaders(rest),
+        payload: descFilter,
+      });
+      assert.equal(restDesc.statusCode, 200);
+      const restDescRows = restDesc.json().data as Array<{ id: string }>;
+      const mcpDesc = await handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: { network_id: rest.networkId, ...descFilter },
+      });
+      const mcpDescRows = toolJson<{ rows: Array<{ id: string }> }>(mcpDesc).rows;
+      assert.equal(restDescRows[0]!.id, cHome.id, 'REST: класс 0 первым при «убывании»');
+      assert.equal(mcpDescRows[0]!.id, cHome.id, 'MCP: класс 0 первым при «убывании»');
+      assert.deepEqual(
+        mcpDescRows.map((r) => r.id),
+        restDescRows.map((r) => r.id),
+        'класс-first порядок совпадает у REST и MCP',
+      );
     } finally {
       await handle.close();
       await closeMcpContext(mcp, {
