@@ -81,6 +81,7 @@ import { parseChronicleCriteria, defaultChronicleCriteriaState } from '../../lib
 import { buildMonthCalendar, type MonthCalendarHandle } from '../../lib/month-calendar.js';
 import {
   applyPeriodToFilter,
+  attachmentOwnerForRow,
   clampPseudoDate,
   compareDays,
   dayPeriod,
@@ -408,6 +409,8 @@ export function mountChronicle(hostEl: HTMLElement): void {
   feedNav = attachFeedNav(feedWrap, {
     onSetDayCollapsed: (day, collapsed) => setDayCollapsed(day, collapsed),
     onEditBody: (_id, card) => openCardBodyEditor(card),
+    onEditDates: (_id, card) => editCardDates(card),
+    onAddThought: (id) => void pickAndAttach(id),
   });
 
   main.append(addBar, feedWrap);
@@ -811,6 +814,17 @@ function openCardBodyEditor(card: HTMLElement): void {
   void openBodyEditor(handle.body, handle.row, handle.shell);
 }
 
+/**
+ * Вход в диалог «Дата/период» по клавиатурной навигации (Enter на поле
+ * «дата/период», требование 165323a7): строка записи берётся из дескриптора
+ * карточки, переданной контроллером.
+ */
+function editCardDates(card: HTMLElement): void {
+  const handle = recordShells.get(card);
+  if (handle === undefined) return;
+  void editRecordDates(handle.row);
+}
+
 /** Встроенная правка текста записи (оболочка комментария + поле markdown). */
 async function openBodyEditor(
   body: HTMLElement,
@@ -824,10 +838,15 @@ async function openBodyEditor(
   try {
     const comment = await etn.comments.get(networkId, row.id);
     if (!body.isConnected) return;
+    // Вставка картинки из буфера (приёмка №10, ошибка 8f090884): цель вложения —
+    // первая привязанная мысль записи, иначе HOME (паритет с постоянным
+    // комментарием мысли). Владелец не задан — поле просто пропускает файлы.
+    const owner = attachmentOwnerForRow(row.targets, homeId);
     const widget = createMarkdownField({
       md: comment.body_md,
       html: comment.body_html,
       placeholder: t('diary.emptyRecordHint'),
+      ...(owner !== null ? { attachmentsOwner: owner } : {}),
       onSave: async (md) => {
         const fresh = await etn.comments.get(networkId, row.id);
         const updated = await etn.comments.update(networkId, row.id, { body_md: md }, fresh.version);
@@ -1149,10 +1168,16 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
   // Псевдо-запись — тоже через единую оболочку комментария (0.10.1, приёмка
   // №2); пустое тело даёт область двойного клика для входа в правку.
   const slotShell = commentShell({ variant: 'plain' });
+  // Вставка картинки из буфера в псевдо-записи (приёмка №10): пока чипсов нет,
+  // цель вложения — первая заданная мысль (drop) либо HOME.
+  const slotOwnerId = presetThoughtIds[0] ?? homeId;
   const widget = createMarkdownField({
     md: '',
     html: '',
     placeholder: t('diary.emptyRecordHint'),
+    ...(slotOwnerId !== null
+      ? { attachmentsOwner: { ownerType: 'thought' as const, ownerId: slotOwnerId } }
+      : {}),
     onSave: async (md) => {
       const created = await ensureSlot({ body: md });
       return created?.body_html ?? md;

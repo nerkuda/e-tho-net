@@ -77,10 +77,11 @@ async function navModule(): Promise<typeof import('../src/renderer/screens/chron
 }
 
 /** Нажатие клавиши на ленте; `target` — узел, где случилось событие. */
-function press(root: ShimElement, key: string, target?: ShimElement): void {
+function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
   let prevented = false;
   root.emit('keydown', {
     key,
+    shiftKey: shift,
     target: target ?? root,
     preventDefault: () => {
       prevented = true;
@@ -176,28 +177,56 @@ describe('приёмка №9, п.2: клавиатурная навигация
     assert.deepEqual(calls.at(-1), { day: '2026-09-11', collapsed: false }, '«вправо» разворачивает');
   });
 
-  it('Enter на записи шагает по элементам: дата → мысли → заголовок → комментарий', async () => {
+  it('Enter входит в поля, Tab/Shift+Tab ходят по полям, Enter — действие поля', async () => {
     const feed = buildFeed([{ day: '2026-09-11', records: ['r1'] }]);
     const edits: string[] = [];
-    const { handle } = await attach(feed.root, [], edits);
-    const { FEED_NAV_ELEMENT_CLASS } = await navModule();
+    const dates: string[] = [];
+    const thoughts: string[] = [];
+    const { attachFeedNav, FEED_NAV_ELEMENT_CLASS, FEED_NAV_CURRENT_CLASS } = await navModule();
+    const handle = attachFeedNav(feed.root as unknown as HTMLElement, {
+      onSetDayCollapsed: () => undefined,
+      onEditBody: (id) => edits.push(id),
+      onEditDates: (id) => dates.push(id),
+      onAddThought: (id) => thoughts.push(id),
+    });
     press(feed.root, 'ArrowDown'); // группа
     press(feed.root, 'ArrowDown'); // запись
     assert.deepEqual(handle.current(), { kind: 'record', key: 'r1' });
 
+    press(feed.root, 'Enter'); // вход в режим полей
+    assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'первое поле — дата/период');
+
+    press(feed.root, 'Enter'); // действие поля «дата»
+    assert.deepEqual(dates, ['r1'], 'Enter на дате открывает диалог');
+
+    press(feed.root, 'Tab');
+    assert.ok(feed.chips('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Tab → мысли');
     press(feed.root, 'Enter');
-    assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'текущий элемент — дата');
+    assert.deepEqual(thoughts, ['r1'], 'Enter на мыслях открывает выбор мысли');
+
+    press(feed.root, 'Tab');
+    assert.ok(feed.title('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Tab → заголовок');
     press(feed.root, 'Enter');
-    assert.ok(feed.chips('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'текущий элемент — мысли');
+    assert.equal(feed.title('r1').focused, true, 'Enter на заголовке входит в правку');
+    press(feed.root, 'Escape', feed.title('r1')); // Esc из правки заголовка — назад к полям
+    assert.equal(feed.title('r1').focused, false, 'правка заголовка завершена');
+    assert.ok(feed.title('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'выделение поля сохранено');
+
+    press(feed.root, 'Tab');
+    assert.ok(feed.body('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Tab → комментарий достижим');
     press(feed.root, 'Enter');
-    assert.ok(feed.title('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'текущий элемент — заголовок');
-    assert.equal(feed.title('r1').focused, true, 'заголовок получил фокус (правка)');
-    press(feed.root, 'Enter');
-    assert.ok(feed.body('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'текущий элемент — комментарий');
     assert.deepEqual(edits, ['r1'], 'Enter на комментарии входит в правку текста');
-    // По кругу — снова дата.
-    press(feed.root, 'Enter');
-    assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'шаг идёт по кругу');
+
+    // По кругу и назад.
+    press(feed.root, 'Tab');
+    assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Tab с комментария — снова дата');
+    press(feed.root, 'Tab', undefined, true);
+    assert.ok(feed.body('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Shift+Tab с даты — комментарий');
+
+    // Esc — выход из режима полей, запись остаётся текущей «единой строкой».
+    press(feed.root, 'Escape');
+    assert.ok(!feed.body('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'выделение поля снято');
+    assert.ok(feed.card('r1').classList.contains(FEED_NAV_CURRENT_CLASS), 'выделение записи сохранено');
   });
 
   it('в режиме правки стрелки/Enter не двигают навигацию, Esc возвращает фокус', async () => {

@@ -573,3 +573,24 @@ export function visibleChips(
 export function isLastChip(chips: readonly unknown[]): boolean {
   return chips.length <= 1;
 }
+
+/**
+ * Владелец файлового вложения для вставки картинки из буфера в правку
+ * комментария записи (0.10.1, итерация приёмки №10, задача 197b3b05; ошибка
+ * 8f090884). Паритет с постоянным комментарием мысли: цель вложения — первая
+ * ПРИВЯЗАННАЯ МЫСЛЬ записи (первый thought-чипс среди видимых привязок); если
+ * среди привязок мыслей нет (пусто или только чипсы-связи) — первичный
+ * владелец записи HOME. `null` — ни привязок, ни HOME (вложение невозможно).
+ */
+export function attachmentOwnerForRow(
+  targets: readonly ChronicleTarget[],
+  homeId: string | null,
+): { ownerType: 'thought'; ownerId: string } | null {
+  for (const target of visibleChips(targets, homeId)) {
+    if (target.kind === 'thought') {
+      return { ownerType: 'thought', ownerId: target.thought.id };
+    }
+  }
+  if (homeId !== null) return { ownerType: 'thought', ownerId: homeId };
+  return null;
+}
