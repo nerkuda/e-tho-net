@@ -363,27 +363,66 @@ export function formatDayLabel(day: string): string {
 }
 
 /**
- * Вставить строку в локальный список ленты по дню и направлению сортировки
- * (0.10.1, итерация приёмки №8, п.2): локально созданная запись встаёт на своё
- * место без полной перерисовки. Порядок внутри одного дня не пересчитывается —
- * он серверный (`order` совпадает с направлением запроса).
+ * Класс записи (0.10.1, требование c6ddc1ea): `0` — все привязки записи — это
+ * HOME («запись дня»), `1` — есть хотя бы одна привязка вне HOME (мысль или
+ * связь). Локальная строка (`localRowFromComment`) уже отбрасывает HOME из
+ * `targets`, поэтому у неё класс 0 = пустой список привязок; для серверных
+ * строк HOME приходит в `targets` и сверяется с `homeId`.
+ */
+export function recordClass(row: ChronicleRow, homeId: string | null = null): 0 | 1 {
+  const isHomeOnly = row.targets.every(
+    (target) =>
+      target.kind === 'thought' && homeId !== null && target.thought.id === homeId,
+  );
+  return isHomeOnly ? 0 : 1;
+}
+
+/**
+ * Порядок записей ленты (требование c6ddc1ea): класс записи ВСЕГДА по
+ * возрастанию (0 первыми) — направление к нему НЕ применяется; затем
+ * `valid_from` → `valid_to` → `created_at` → `id` в направлении `order`.
+ * Та же модель, что у серверного `ORDER BY`, — клиентская локальная вставка не
+ * расходится с порядком страницы.
+ */
+export function compareRecords(
+  a: ChronicleRow,
+  b: ChronicleRow,
+  order: SortOrder = 'asc',
+  homeId: string | null = null,
+): number {
+  const cls = recordClass(a, homeId) - recordClass(b, homeId);
+  if (cls !== 0) return cls;
+  const dir = order === 'desc' ? -1 : 1;
+  const byDate = a.valid_from === b.valid_from ? 0 : a.valid_from < b.valid_from ? -1 : 1;
+  if (byDate !== 0) return byDate * dir;
+  const at = a.valid_to ?? '';
+  const bt = b.valid_to ?? '';
+  const byTo = at === bt ? 0 : at < bt ? -1 : 1;
+  if (byTo !== 0) return byTo * dir;
+  const byCreated = a.created_at === b.created_at ? 0 : a.created_at < b.created_at ? -1 : 1;
+  if (byCreated !== 0) return byCreated * dir;
+  if (a.id === b.id) return 0;
+  return (a.id < b.id ? -1 : 1) * dir;
+}
+
+/**
+ * Вставить строку в локальный список ленты (0.10.1, итерация приёмки №8, п.2 и
+ * №9, п.1): локально созданная запись встаёт на своё место без полной
+ * перерисовки, по тому же порядку, что серверный (`compareRecords`): класс
+ * записи — всегда первым, затем даты/тайбрейкеры в направлении отбора.
+ * Поэтому запись дня (класс 0) при «убывании» всё равно попадает в верхний
+ * блок своего дня, а не в конец списка.
  */
 export function insertRowByDay(
   list: readonly ChronicleRow[],
   row: ChronicleRow,
   order: SortOrder = 'asc',
+  homeId: string | null = null,
 ): ChronicleRow[] {
-  const day = localDay(row.valid_from);
   const out = [...list];
-  for (let i = 0; i < out.length; i += 1) {
-    const other = localDay(out[i]!.valid_from);
-    const insertHere = order === 'desc' ? other < day : other > day;
-    if (insertHere) {
-      out.splice(i, 0, row);
-      return out;
-    }
-  }
-  out.push(row);
+  let i = 0;
+  while (i < out.length && compareRecords(out[i]!, row, order, homeId) <= 0) i += 1;
+  out.splice(i, 0, row);
   return out;
 }
 
