@@ -75,8 +75,11 @@ describe('приёмка «Дневника» 0.10.1: псевдо-запись 
 describe('приёмка «Дневника» 0.10.1: счётчики календаря (пункт 5)', () => {
   it('счётчики считаются отдельным запросом по месяцу, без периода', () => {
     assert.match(CHRONICLE, /async function refreshCalendarCounts\(\)/);
-    assert.match(CHRONICLE, /date_from: first/, 'границы месяца в запросе счётчиков');
-    assert.match(CHRONICLE, /date_to: last/);
+    // Границы месяца — ЛОКАЛЬНЫЕ сутки (приёмка №4, задача fd9eef49): «голая
+    // дата» на сервере = сутки UTC и запись у локальной полуночи выпадала бы
+    // из счётчиков месяца.
+    assert.match(CHRONICLE, /date_from: localDayStart\(first\)/, 'начало локальных суток месяца');
+    assert.match(CHRONICLE, /date_to: localDayEnd\(last\)/, 'конец локальных суток месяца');
     assert.ok(
       !/dayCounts\.set\(day\.day, day\.rows\.length\)/.test(CHRONICLE),
       'счётчики больше не берутся из периода-фильтрованной ленты',
