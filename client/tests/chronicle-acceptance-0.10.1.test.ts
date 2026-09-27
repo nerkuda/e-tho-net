@@ -89,11 +89,14 @@ describe('приёмка «Дневника» 0.10.1: счётчики кале�
 });
 
 describe('приёмка «Дневника» 0.10.1: состав панели — «Структуры» (пункт 6)', () => {
-  it('период — панельный вариант без переключателя режимов и с пресетами', () => {
+  it('период — панельный вариант с режимами «Пресеты»/«Даты» и виджетом «список + сдвиг»', () => {
     assert.match(PANEL, /variant: 'panel'/);
     assert.match(PERIOD_EDITOR, /variant === 'panel'/);
-    assert.match(PERIOD_EDITOR, /pe-presets/, 'выпадашка пресетов панели');
-    assert.match(PERIOD_EDITOR, /export function periodPresets\(\)/);
+    assert.match(PERIOD_EDITOR, /pe-preset-bound/, 'строка пресет-границы');
+    // Приёмка №3 (0.10.1): составная выпадашка пресетов убрана — её место
+    // заняли комбобокс базовых пресетов и сдвиг ±N в каждой границе.
+    assert.ok(!/pe-presets/.test(PERIOD_EDITOR), 'составной выпадашки пресетов нет');
+    assert.ok(!/periodPresets/.test(PERIOD_EDITOR), 'список составных пресетов удалён');
   });
 
   it('секции идут набором «Структур», критерии целей — в targets', () => {

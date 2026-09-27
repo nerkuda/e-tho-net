@@ -254,6 +254,39 @@
   min-width: 92px;
 }
 
+/* Панельная пресет-граница (0.10.1, приёмка №3): комбобокс базового пресета и
+   сдвиг ±N/единица одной строкой. Поле комбобокса — только чтение: значение
+   задаётся списком и сдвигом, токен-строк в поле нет. */
+.pe-preset-bound {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pe-preset-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.pe-preset-caret {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.pe-preset-num {
+  flex: 0 0 auto;
+  width: 56px;
+}
+
+.pe-preset-unit {
+  flex: 0 0 auto;
+}
+
 .pe-error {
   flex: 1 1 100%;
   font-size: 11px;

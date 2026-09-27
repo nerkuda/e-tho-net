@@ -89,14 +89,13 @@ export interface PeriodEditorOptions {
   /**
    * Вариант контрола. `editor` (по умолчанию) — с переключателем режимов
    * «Дата / Дата и время / Диапазон» (вкладка записи и лента). `panel` —
-   * панельный вариант элемента «Поле периода» (0.10.1, приёмка №2): всегда
+   * панельный вариант элемента «Поле периода» (0.10.1, приёмка №3): всегда
    * диапазон «с»–«по», БЕЗ часов/минут, со своим переключателем
-   * «Пресеты»/«Даты» и выпадашкой готовых пресетов. Режим «Пресеты» задаёт
-   * границы опорным токеном и арифметикой `±N<unit>`; «Даты» — точными датами.
+   * «Пресеты»/«Даты». В режиме «Пресеты» каждая граница — комбобокс базовых
+   * пресетов и компактный сдвиг ±N/единица; поле показывает человекочитаемую
+   * композицию, наружу уходит канонический токен. «Даты» — точные даты.
    */
   variant?: 'editor' | 'panel';
-  /** Пресеты панельного варианта; по умолчанию — {@link periodPresets}. */
-  presets?: readonly PeriodPreset[];
   /** Начальный режим панельного варианта (по умолчанию `presets`). */
   panelMode?: PeriodPanelMode;
   /**
@@ -184,61 +183,12 @@ export const PERIOD_TOKEN_PRESETS: readonly { text: string; label: string }[] = 
 ];
 
 /**
- * Пресет периода панели (0.10.1, элемент 2f14de06, панельный вариант):
- * одна строка выпадашки сразу задаёт обе границы «с»/«по» токенами.
+ * Пресет-граница панельного варианта (0.10.1, приёмка №3, задача 9bef6a27):
+ * каждая граница — КОМБОБКС базовых пресетов плюс компактный сдвиг ±N/единица.
+ * Поле показывает ЧЕЛОВЕКОЧИТАЕМУЮ композицию опоры и сдвига («начало недели
+ * − 1 нед»), а не токен; на сервер уходит канонический токен единого языка
+ * (требование 91f8d8dd) — новых токенов виджет не вводит.
  */
-export interface PeriodPreset {
-  /** Устойчивый идентификатор (для тестов/сохранения). */
-  id: string;
-  /** Подпись в выпадашке. */
-  label: string;
-  /** Начало периода (дата или токен). */
-  from: string;
-  /** Конец периода (дата или токен). */
-  to: string;
-}
-
-/**
- * Пресеты панели периода «Дневника» (требование 91f8d8dd, задача 0.10.1):
- * сегодня; границы этой/прошлой/будущей недели и месяца; N последних/будущих
- * дней (включая сегодня). Неделя с понедельника. Строки — ровно то, что уйдёт
- * на сервер; клиент раскрывает их для подсветки календаря.
- */
-export function periodPresets(): readonly PeriodPreset[] {
-  return [
-    { id: 'today', label: 'Сегодня', from: '$today', to: '$today' },
-    { id: 'week', label: 'Эта неделя', from: '$week.start', to: '$week.end' },
-    { id: 'week-prev', label: 'Прошлая неделя', from: '$week.start-1w', to: '$week.end-1w' },
-    { id: 'week-next', label: 'Будущая неделя', from: '$week.start+1w', to: '$week.end+1w' },
-    { id: 'month', label: 'Этот месяц', from: '$month.start', to: '$month.end' },
-    { id: 'month-prev', label: 'Прошлый месяц', from: '$month.start-1mo', to: '$month.end-1mo' },
-    { id: 'month-next', label: 'Будущий месяц', from: '$month.start+1mo', to: '$month.end+1mo' },
-    { id: 'year', label: 'Этот год', from: '$year.start', to: '$year.end' },
-    { id: 'year-prev', label: 'Прошлый год', from: '$year.start-1y', to: '$year.end-1y' },
-    { id: 'year-next', label: 'Будущий год', from: '$year.start+1y', to: '$year.end+1y' },
-    ...lastDaysPresets(),
-  ];
-}
-
-/** Пресеты «N последних/будущих дней» (включая сегодня): формула требования 91f8d8dd. */
-function lastDaysPresets(): PeriodPreset[] {
-  const out: PeriodPreset[] = [];
-  for (const n of [5, 7, 30]) {
-    out.push({
-      id: `last-${n}`,
-      label: `${n} последних дней`,
-      from: n === 1 ? '$today' : `$today-${n - 1}d`,
-      to: '$today',
-    });
-    out.push({
-      id: `next-${n}`,
-      label: `${n} будущих дней`,
-      from: '$today',
-      to: n === 1 ? '$today' : `$today+${n - 1}d`,
-    });
-  }
-  return out;
-}
 
 /** Разобранная граница периода. */
 export type ParsedBound =
@@ -484,8 +434,10 @@ const ERROR_CLASS = 'pe-error';
 const PANEL_MODE_CLASS = 'pe-mode';
 /** Класс строки пресет-границы. */
 const PRESET_BOUND_CLASS = 'pe-preset-bound';
-/** Класс выпадашки опорного токена пресета. */
+/** Класс поля-комбобокса базового пресета (показывает композицию, не токен). */
 const PRESET_ANCHOR_CLASS = 'pe-preset-anchor';
+/** Класс каретки ▾ комбобокса базового пресета. */
+const PRESET_CARET_CLASS = 'pe-preset-caret';
 /** Класс поля числа арифметики пресета. */
 const PRESET_NUM_CLASS = 'pe-preset-num';
 /** Класс выпадашки единицы арифметики пресета. */
@@ -503,9 +455,10 @@ const PANEL_MODE_ITEMS = [
 ] as const;
 
 /**
- * Опорные токены пресет-границы панели (0.10.1, приёмка №2): сама граница
- * складывается из опоры и арифметики `±N<unit>`. `$now` — точный момент, у
- * остальных границы дат.
+ * Базовые пресеты-опоры комбобокса панельной границы (0.10.1, приёмка №3):
+ * сегодня; границы недели/месяца/года. `$now` — точный момент, оставлен для
+ * совместимости прежде сохранённых отборов. Значение строки списка — токен
+ * единого языка; в поле показывается человекочитаемая подпись, не токен.
  */
 const PANEL_ANCHORS: readonly { id: string; label: string }[] = [
   { id: '$today', label: 'сегодня' },
@@ -518,11 +471,11 @@ const PANEL_ANCHORS: readonly { id: string; label: string }[] = [
   { id: '$year.end', label: 'конец года' },
 ];
 
-/** Единицы арифметики пресет-границы (код тока → подпись). */
+/** Единицы арифметики пресет-границы (код тока → краткая подпись). */
 const PANEL_UNITS: readonly { id: string; label: string }[] = [
-  { id: 'd', label: 'дней' },
-  { id: 'w', label: 'недель' },
-  { id: 'mo', label: 'месяцев' },
+  { id: 'd', label: 'дн' },
+  { id: 'w', label: 'нед' },
+  { id: 'mo', label: 'мес' },
   { id: 'y', label: 'лет' },
 ];
 
@@ -555,12 +508,29 @@ function composePanelToken(parts: PanelTokenParts): string {
   return `${parts.anchor}${sign}${Math.abs(parts.n)}${parts.unit}`;
 }
 
+/** Человекочитаемая подпись базового пресета-опоры (неизвестная — как есть). */
+export function panelAnchorLabel(anchor: string): string {
+  return PANEL_ANCHORS.find((a) => a.id === anchor)?.label ?? anchor;
+}
+
+/**
+ * Человекочитаемая композиция пресет-границы: «начало недели − 1 нед»,
+ * «сегодня», «конец месяца + 2 мес». Токен в поле НЕ показывается никогда
+ * (0.10.1, приёмка №3). Сдвиг `0` не выводится.
+ */
+export function composePanelLabel(parts: PanelTokenParts): string {
+  const base = panelAnchorLabel(parts.anchor);
+  if (parts.n === 0) return base;
+  const unit = PANEL_UNITS.find((u) => u.id === parts.unit)?.label ?? parts.unit;
+  // Минус — типографский U+2212: композиция читается как подпись, не как код.
+  return `${base} ${parts.n > 0 ? '+' : '−'} ${Math.abs(parts.n)} ${unit}`;
+}
+
 /** Строит библиотечный контрол периода. */
 export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle {
   const allowTokens = opts.allowTokens !== false;
   const tokenPresets = opts.tokenOptions ?? PERIOD_TOKEN_PRESETS.map((t) => t.text);
   const panel = opts.variant === 'panel';
-  const presets = opts.presets ?? (panel ? periodPresets() : []);
 
   // Панельный вариант — всегда диапазон «с»–«по» и без переключателя режимов
   // редактора; его собственный режим — «Пресеты»/«Даты».
@@ -601,37 +571,6 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   }
 
   const fields = div(FIELDS_CLASS);
-  let presetSelect: HTMLSelectElement | null = null;
-
-  /** Выпадашка пресетов панельного варианта: команда задаёт обе границы. */
-  const buildPresetSelect = (): HTMLSelectElement => {
-    const select = el('select', 'pe-presets') as HTMLSelectElement;
-    const placeholder = el('option', '', '— пресет периода —') as HTMLOptionElement;
-    placeholder.value = '';
-    select.append(placeholder);
-    for (const p of presets) {
-      const o = el('option', '', p.label) as HTMLOptionElement;
-      o.value = p.id;
-      select.append(o);
-    }
-    select.addEventListener('change', () => {
-      const picked = presets.find((p) => p.id === select.value);
-      select.value = '';
-      if (picked === undefined) return;
-      from = { text: picked.from, time: '', instant: null };
-      to = { text: picked.to, time: '', instant: null };
-      if (panelMode !== 'presets') applyPanelMode('presets', false);
-      normalizeTimes();
-      repaint();
-      emit();
-    });
-    return select;
-  };
-
-  if (panel && presets.length > 0) {
-    presetSelect = buildPresetSelect();
-    root.append(presetSelect);
-  }
   root.append(fields);
 
   const suggestHandles: SuggestHandle[] = [];
@@ -758,6 +697,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
 
   /** Полная перерисовка полей (режим/состояние). */
   const repaint = (): void => {
+    // Поля пересобираются — снимаем выпадашки прошлой сборки (иначе их
+    // оконные слушатели копились бы на каждой смене режима/значения).
+    for (const handle of suggestHandles) handle.dispose();
+    suggestHandles.length = 0;
     fields.replaceChildren();
     if (panel) {
       fields.append(
@@ -768,7 +711,6 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
           ? buildPanelDateBound(to, 'по', 'Конец')
           : buildPanelPresetBound(to, 'по', 'Конец'),
       );
-      if (presetSelect !== null) presetSelect.hidden = panelMode !== 'presets';
       return;
     }
     if (mode === 'range') {
@@ -801,25 +743,36 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     return box;
   }
 
-  /** Граница режима «Пресеты» панели: опорный токен + арифметика ±N<unit>. */
+  /**
+   * Граница режима «Пресеты» панели (0.10.1, приёмка №3): КОМБОБКС базовых
+   * пресетов + компактный сдвиг ±N/единица. Поле показывает человекочитаемую
+   * композицию («начало недели − 1 нед», «сегодня»), а НЕ токен; наружу
+   * (`bound.text`) уходит канонический токен единого языка. Список рисует
+   * общая выпадашка `lib/suggest-dropdown.ts` — своей выпадашки виджет не
+   * заводит.
+   */
   function buildPanelPresetBound(bound: BoundState, tag: string, ariaPrefix: string): HTMLElement {
     const box = div(PRESET_BOUND_CLASS);
     box.append(span(tag, TAG_CLASS));
     const parts = parsePanelToken(bound.text) ?? { anchor: '$today', n: 0, unit: 'd' };
+    let anchorToken = parts.anchor;
 
-    const anchor = el('select', PRESET_ANCHOR_CLASS) as HTMLSelectElement;
-    anchor.setAttribute('aria-label', `${ariaPrefix} — опорный токен`);
-    for (const a of PANEL_ANCHORS) {
-      const o = el('option', '', a.label) as HTMLOptionElement;
-      o.value = a.id;
-      anchor.append(o);
-    }
-    anchor.value = parts.anchor;
+    // Поле-комбобокс: показывает композицию, ввод текста запрещён — значение
+    // задаётся списком базовых пресетов и сдвигом.
+    const input = fieldInput({
+      extraClass: PRESET_ANCHOR_CLASS,
+      readonly: true,
+      value: composePanelLabel(parts),
+      ariaLabel: `${ariaPrefix} — базовый пресет`,
+      disabled: opts.disabled === true,
+    });
+    input.type = 'text';
+    input.autocomplete = 'off';
 
     const num = fieldInput({
       type: 'number',
       extraClass: PRESET_NUM_CLASS,
-      value: '0',
+      value: String(parts.n),
       ariaLabel: `${ariaPrefix} — смещение (можно отрицательное)`,
       disabled: opts.disabled === true,
     });
@@ -836,26 +789,56 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     }
     unit.value = parts.unit;
 
-    const commit = (): void => {
+    /** Синхронизировать поле-композицию и канонический токен из контролов. */
+    const sync = (): void => {
       const n = Number.parseInt(num.value, 10);
       const next: PanelTokenParts = {
-        anchor: anchor.value,
+        anchor: anchorToken,
         n: Number.isFinite(n) ? n : 0,
         unit: unit.value,
       };
       bound.text = composePanelToken(next);
       bound.time = '';
       bound.instant = null;
-      emit();
+      input.value = composePanelLabel(next);
     };
-    anchor.addEventListener('change', commit);
-    unit.addEventListener('change', commit);
+
+    let handle: SuggestHandle | null = null;
+    if (opts.disabled !== true) {
+      handle = wireSuggest(input, {
+        sources: [
+          {
+            when: 'always',
+            header: 'Базовые пресеты',
+            load: () => PANEL_ANCHORS.map((a) => ({ value: a.id, label: a.label })),
+          },
+        ],
+        pickFirstOnEnter: false,
+        onPick: (entry) => {
+          anchorToken = entry.value;
+          sync();
+          emit();
+        },
+      });
+      suggestHandles.push(handle);
+    }
+
+    // Каретка ▾ — явное открытие полного списка (фокус открывает список сам).
+    const caret = span('▾', PRESET_CARET_CLASS);
+    caret.setAttribute('title', 'Показать список пресетов');
+    caret.addEventListener('mousedown', (event) => event.preventDefault());
+    caret.addEventListener('click', () => handle?.open());
+
     num.addEventListener('change', () => {
-      commit();
-      repaint();
+      sync();
+      emit();
+    });
+    unit.addEventListener('change', () => {
+      sync();
+      emit();
     });
 
-    box.append(anchor, num, unit);
+    box.append(input, caret, num, unit);
     const error = boundError(bound, allowTokens);
     if (error !== null) box.append(span(error, ERROR_CLASS));
     return box;

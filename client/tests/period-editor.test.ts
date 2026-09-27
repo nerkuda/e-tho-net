@@ -333,7 +333,7 @@ describe('period-editor: панельный вариант «Пресеты»/«
     to: to === '2026-09-27' ? '$week.end' : to,
   });
 
-  it('умолчание — режим «Пресеты», границы-токены, выпадашка пресетов', () => {
+  it('умолчание — режим «Пресеты», границы-комбобоксы со сдвигом', () => {
     installShim();
     const editor = buildPeriodEditor({
       variant: 'panel',
@@ -343,8 +343,8 @@ describe('period-editor: панельный вариант «Пресеты»/«
     });
     assert.equal(editor.getPanelMode(), 'presets');
     assert.ok(rootShim(editor.root).querySelector('.pe-mode'), 'переключатель режима панели');
-    assert.ok(rootShim(editor.root).querySelector('.pe-presets'), 'выпадашка пресетов');
     assert.equal(allFields(editor.root, 'pe-preset-bound').length, 2, 'две пресет-границы');
+    assert.equal(allFields(editor.root, 'pe-preset-anchor').length, 2, 'два комбобокса пресетов');
     assert.equal(allFields(editor.root, '.pe-time-input').length, 0, 'без часов/минут');
     assert.deepEqual(editor.getValue(), {
       from: '$week.start',
@@ -395,22 +395,31 @@ describe('period-editor: панельный вариант «Пресеты»/«
     });
   });
 
-  it('в режиме «Пресеты» граница собирается из опоры и арифметики ±N', () => {
+  it('в режиме «Пресеты» поле показывает композицию, а наружу уходит канонический токен', () => {
     installShim();
+    const seen: Array<string | undefined> = [];
     const editor = buildPeriodEditor({
       variant: 'panel',
       value: { from: '$month.end-1mo', to: '$today' },
       resolveToken,
       tokensForRange,
+      onChange: (v) => seen.push(v.from),
     });
-    // Первая граница — «конец месяца» с арифметикой −1 месяц.
+    // Поле-комбобокс — только чтение и человекочитаемая композиция, без токена.
     const anchor = allFields(editor.root, 'pe-preset-anchor')[0]!;
+    assert.equal(anchor.readOnly, true, 'ввод токена в поле запрещён');
+    assert.equal(anchor.value, 'конец месяца − 1 мес');
+    assert.ok(!anchor.value.includes('$'), 'токен-строки в поле нет');
     const num = allFields(editor.root, 'pe-preset-num')[0]!;
     const unit = allFields(editor.root, 'pe-preset-unit')[0]!;
-    assert.equal(anchor.value, '$month.end');
     assert.equal(num.value, '-1');
     assert.equal(unit.value, 'mo');
     assert.equal(editor.getValue().from, '$month.end-1mo');
+    // Смена единицы сдвига пересобирает токен и обновляет композицию поля.
+    type(unit, 'w');
+    assert.equal(editor.getValue().from, '$month.end-1w');
+    assert.equal(anchor.value, 'конец месяца − 1 нед');
+    assert.deepEqual(seen, ['$month.end-1w']);
   });
 
   it('диапазон «Даты» редактируется датами и отдаёт точные даты', () => {
