@@ -395,12 +395,12 @@ describe('приёмка №5, п.1: компоновка карточки за�
   it('строка 2 — заголовок, далее оболочка комментария', () => {
     assert.match(
       CHRONICLE,
-      /card\.append\(head, buildTitleInput\(row\), buildBody\(row\)\)/,
+      /card\.append\(head, buildTitleInput\(row\), buildRecordBody\(row, card\)\)/,
       'порядок: строка 1, заголовок (строка 2), тело',
     );
     assert.match(
       CHRONICLE,
-      /function buildBody\(row: ChronicleRow\)[\s\S]*renderRecordView\(shell, row\)/,
+      /function buildRecordBody\(row: ChronicleRow, card: HTMLElement\)[\s\S]*renderRecordView\(shell, row\)/,
     );
   });
 });

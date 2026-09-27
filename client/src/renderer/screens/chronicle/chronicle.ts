@@ -111,6 +111,7 @@ import {
   setSavedFilterId,
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
+import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 
@@ -154,6 +155,17 @@ let homePromise: Promise<string> | null = null;
 let feedWrap: HTMLElement | null = null;
 /** Stable list element re-rendered inside the container (never rebuilt). */
 let feedList: HTMLElement | null = null;
+/** Контроллер клавиатурной навигации ленты (0.10.1, приёмка №9). */
+let feedNav: FeedNavHandle | null = null;
+/**
+ * Обработчики карточек записей (оболочка комментария + строка), заведённые при
+ * сборке карточки: вход в правку текста по навигации идёт от DOM-узла карточки
+ * (требование 165323a7), а не от повторного поиска строки.
+ */
+const recordShells = new WeakMap<
+  HTMLElement,
+  { row: ChronicleRow; shell: ReturnType<typeof commentShell>; body: HTMLElement }
+>();
 let statusEl: HTMLElement | null = null;
 let calendar: MonthCalendarHandle | null = null;
 /** Persisted month of the calendar (`chronicle_state.month`). */
@@ -224,8 +236,17 @@ function persistCollapsedDays(): void {
 
 /** Переключить свёрнутость группы даты и перерисовать ленту. */
 function toggleDayCollapsed(day: string): void {
-  if (collapsedDays.has(day)) collapsedDays.delete(day);
-  else collapsedDays.add(day);
+  setDayCollapsed(day, !collapsedDays.has(day));
+}
+
+/**
+ * Привести свёрнутость группы дня к заданному состоянию (0.10.1, приёмка №9):
+ * единая точка для клика по заголовку и для клавиатуры (Enter/«влево»/«вправо»).
+ */
+function setDayCollapsed(day: string, collapsed: boolean): void {
+  if (collapsedDays.has(day) === collapsed) return;
+  if (collapsed) collapsedDays.add(day);
+  else collapsedDays.delete(day);
   persistCollapsedDays();
   renderFeed();
 }
@@ -297,6 +318,8 @@ function persistState(): void {
 export function mountChronicle(hostEl: HTMLElement): void {
   host = hostEl;
   hostEl.replaceChildren();
+  feedNav?.destroy();
+  feedNav = null;
 
   const filterArea = div('chron-filter-area');
   const splitter = splitterElement('chron-splitter');
@@ -379,6 +402,13 @@ export function mountChronicle(hostEl: HTMLElement): void {
   statusEl.hidden = true;
   feedWrap.append(statusEl, feedList);
   feedWrap.addEventListener('scroll', () => maybeLoadMore());
+  // Лента — фокусируемая область: клавиатурная навигация слушает keydown здесь
+  // (требование 165323a7). Клик по карточке/заголовку тоже делает сущность текущей.
+  feedWrap.tabIndex = 0;
+  feedNav = attachFeedNav(feedWrap, {
+    onSetDayCollapsed: (day, collapsed) => setDayCollapsed(day, collapsed),
+    onEditBody: (_id, card) => openCardBodyEditor(card),
+  });
 
   main.append(addBar, feedWrap);
   void refreshCalendarCounts();
@@ -556,6 +586,9 @@ function renderFeed(): void {
     nodes.push(el('div', 'chron-feed-more muted', t('diary.moreLeft', [rows.length, total])));
   }
   feedList.replaceChildren(...nodes);
+  // Переприменить выделение «текущей» сущности после перерисовки (требование
+  // 165323a7): оно сохраняется, если сущность ещё видима, и сбрасывается иначе.
+  feedNav?.refresh();
 }
 
 /**
@@ -617,12 +650,13 @@ function insertCreatedRecord(row: ChronicleRow): void {
   const card = buildRecordCard(row);
   const inPlace = slotRoot !== null && slotRoot.parentElement !== null;
   if (inPlace) slotRoot!.replaceWith(card);
-  rows = insertRowByDay(rows, row, getFilterState().order);
+  rows = insertRowByDay(rows, row, getFilterState().order, homeId);
   total += 1;
   pendingReconcile = true;
   slot = null;
   if (inPlace) updateMoreLine();
   else renderFeed();
+  feedNav?.refresh();
 }
 
 /** Свернуть/развернуть все показанные группы дат (кнопки верхней панели). */
@@ -706,7 +740,7 @@ function buildRecordCard(row: ChronicleRow): HTMLElement {
     }),
   );
   // Строка 2 — заголовок, далее оболочка комментария.
-  card.append(head, buildTitleInput(row), buildBody(row));
+  card.append(head, buildTitleInput(row), buildRecordBody(row, card));
   return card;
 }
 
@@ -752,14 +786,29 @@ function recordMenuItems(row: ChronicleRow): MenuItem[] {
  * тела вынесена в `./record-body.js` ради поведенческого теста. Двойной клик —
  * правка тем же полем markdown, что в редакторе мысли. Пустая запись тоже даёт
  * кликабельную область и приглашение (0.10.1, приёмка №2).
+ *
+ * Дескриптор оболочки кладётся в `recordShells` под узел карточки: вход в правку
+ * текста по клавиатуре (Enter на элементе «комментарий», требование 165323a7)
+ * идёт от DOM-узла, который передаёт контроллер навигации.
  */
-function buildBody(row: ChronicleRow): HTMLElement {
+function buildRecordBody(row: ChronicleRow, card: HTMLElement): HTMLElement {
   const body = div('diary-record-body');
   const shell = commentShell({ variant: 'plain' });
   renderRecordView(shell, row);
   shell.root.addEventListener('dblclick', () => void openBodyEditor(body, row, shell));
   body.append(shell.root);
+  recordShells.set(card, { row, shell, body });
   return body;
+}
+
+/**
+ * Вход в правку текста записи по клавиатурной навигации (Enter на элементе
+ * «комментарий»): карточка → её оболочка комментария (требование 165323a7).
+ */
+function openCardBodyEditor(card: HTMLElement): void {
+  const handle = recordShells.get(card);
+  if (handle === undefined) return;
+  void openBodyEditor(handle.body, handle.row, handle.shell);
 }
 
 /** Встроенная правка текста записи (оболочка комментария + поле markdown). */
@@ -785,7 +834,12 @@ async function openBodyEditor(
         scheduleChronicleRefresh();
         return updated.body_html;
       },
-      onEditChange: (editing) => shell.setMode(editing ? 'edit' : 'view'),
+      onEditChange: (editing) => {
+        shell.setMode(editing ? 'edit' : 'view');
+        // Выход из правки (Esc/клик вне, требование 165323a7) — фокус
+        // возвращается в навигацию записи.
+        if (!editing) feedNav?.focusNavigation();
+      },
     });
     shell.setField(widget);
     shell.setMode('edit');
