@@ -42,12 +42,11 @@ import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldInput } from '../lib/ui/field.js';
 import {
-  buildPeriodEditor,
-  instantToLocalDate,
-  resolvePeriodInstants,
-  type PeriodMode,
-  type PeriodValue,
-} from '../lib/period-editor.js';
+  datePeriodValueFromInstants,
+  formatDatePeriodValue,
+  openDatePeriodDialog,
+  resolveDatePeriodInstants,
+} from '../lib/date-period-dialog.js';
 
 /** Registers the «Дневник» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
@@ -279,8 +278,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     let toInstant = existing?.valid_to ?? fromInstant;
 
     const useTime = existing?.use_time === true;
-    const sameDay = instantToLocalDate(fromInstant) === instantToLocalDate(toInstant);
-    const initialMode: PeriodMode = useTime ? 'datetime' : sameDay ? 'date' : 'range';
 
     const useTimeInput = checkboxRow({
       label: 'учитывать время',
@@ -291,35 +288,52 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     let commentId: string | null = existing?.id ?? null;
     let version = existing?.version ?? 0;
 
-    /** Значение контрола → полные инстансы, время суток сохраняется (ADR). */
-    const applyPeriod = (value: PeriodValue): void => {
-      const next = resolvePeriodInstants(value, { from: fromInstant, to: toInstant });
-      fromInstant = next.from;
-      toInstant = next.to;
+    /** Подпись значения даты/периода (время — по флагу «учитывать время»). */
+    const refreshDateLabel = (): void => {
+      dateBtn.textContent = formatDatePeriodValue(
+        datePeriodValueFromInstants(fromInstant, toInstant, useTimeInput.input.checked, true),
+      );
     };
 
-    const period = buildPeriodEditor({
-      mode: initialMode,
-      // Время показываем только при включённом флаге: выключен — границы заданы
-      // «голыми» локальными датами (поля времени скрыты), а исходное время суток
-      // хранят `fromInstant`/`toInstant`.
-      value: useTime
-        ? { from: fromInstant, to: toInstant }
-        : { from: instantToLocalDate(fromInstant), to: instantToLocalDate(toInstant) },
-      allowTokens: false,
-      label: 'Дата записи',
-      onChange: (value) => {
-        // Явная правка времени включает флаг (требование 91ba5b3f).
-        if (value.hasTime !== useTimeInput.input.checked) {
-          useTimeInput.input.checked = value.hasTime === true;
-        }
-        applyPeriod(value);
-        commitMeta();
-      },
+    /** Открыть диалог «Дата/период» (период разрешён, время — по флагу). */
+    const openPeriodDialog = async (): Promise<void> => {
+      const result = await openDatePeriodDialog({
+        allowPeriod: true,
+        allowTime: true,
+        initial: datePeriodValueFromInstants(
+          fromInstant,
+          toInstant,
+          useTimeInput.input.checked,
+          true,
+        ),
+        title: 'Дата записи',
+      });
+      if (result === null) return;
+      const next = resolveDatePeriodInstants(result, { from: fromInstant, to: toInstant });
+      fromInstant = next.from;
+      toInstant = next.to;
+      // Явная правка времени включает флаг (требование 91ba5b3f).
+      if (useTimeInput.input.checked !== result.hasTime) {
+        useTimeInput.input.checked = result.hasTime;
+      }
+      refreshDateLabel();
+      commitMeta();
+    };
+
+    // Дата/период правятся диалогом (0.10.1, приёмка №5): значение —
+    // кликабельная подпись, инлайн-контрол периода упразднён.
+    const dateBtn = uiButton({
+      label: '',
+      role: 'ghost',
+      size: 's',
+      class: 'chrono-date-value',
+      title: 'Дата записи',
+      onClick: () => void openPeriodDialog(),
     });
+    refreshDateLabel();
 
     const metaRow = div('chrono-meta-row');
-    metaRow.append(titleInput, period.root, useTimeInput.row);
+    metaRow.append(titleInput, dateBtn, useTimeInput.row);
     if (existing !== null) {
       metaRow.append(
         uiButton({
@@ -335,7 +349,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     /** Сохраняет метаданные существующей записи (заголовок, даты, флаг). */
     const commitMeta = (): void => {
       if (commentId === null) return;
-      applyPeriod(period.getValue());
       void (async () => {
         try {
           const updated = await etn.comments.update(networkId, commentId!, {
@@ -353,22 +366,10 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       })();
     };
 
-    // Флаг времени: включён — показываем время суток записи; выключен — прячем
-    // (границы остаются полными инстансами, время суток не теряется).
+    // Флаг времени: включён — в подписи и диалоге видно время суток; выключен —
+    // время скрыто (границы остаются полными инстансами, время не теряется).
     useTimeInput.input.addEventListener('change', () => {
-      const checked = useTimeInput.input.checked;
-      const mode = period.getMode();
-      if (checked) {
-        if (mode === 'date') period.setMode('datetime');
-        period.setValue({ from: fromInstant, to: toInstant });
-      } else {
-        if (mode === 'datetime') period.setMode('date');
-        period.setValue({
-          from: instantToLocalDate(fromInstant),
-          to: instantToLocalDate(toInstant),
-        });
-      }
-      applyPeriod(period.getValue());
+      refreshDateLabel();
       commitMeta();
     });
 
@@ -394,7 +395,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       },
       onSave: async (md) => {
         if (md.trim() === '' && commentId === null) return '';
-        applyPeriod(period.getValue());
         let html: string;
         if (commentId === null) {
           const created = await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {

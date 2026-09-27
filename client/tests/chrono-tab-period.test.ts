@@ -71,19 +71,19 @@ describe('resolvePeriodInstants: время по ADR и непустой valid_t
   });
 });
 
-describe('вкладка «Дневник»: поле периода и флаг «учитывать время»', () => {
+describe('вкладка «Дневник»: диалог даты/периода и флаг «учитывать время»', () => {
   it('вкладка переименована в «Дневник» (требование 80b31f7a)', () => {
     const editorSrc = read(SRC.editor);
     assert.ok(editorSrc.includes("title: 'Дневник'"), 'вкладка подписана «Дневник»');
     assert.ok(!editorSrc.includes("title: 'Хроника'"), 'прежняя подпись «Хроника» убрана');
   });
 
-  it('даты правятся общим контролом периода, а не своими полями', () => {
+  it('даты правятся диалогом даты/периода, а не своими полями', () => {
     const src = read(SRC.tab);
-    assert.match(src, /from '\.\.\/lib\/period-editor\.js'/, 'импорт общего контрола');
-    assert.match(src, /buildPeriodEditor\(\{/, 'контрол периода строится');
-    assert.ok(src.includes("label: 'Дата записи'"), 'доступное имя контрола');
-    assert.ok(src.includes('period.root'), 'контрол встроен в строку метаданных');
+    assert.match(src, /from '\.\.\/lib\/date-period-dialog\.js'/, 'импорт компонента диалога');
+    assert.match(src, /openDatePeriodDialog\(\{/, 'диалог открывается');
+    assert.ok(src.includes("title: 'Дата записи'"), 'заголовок диалога');
+    assert.match(src, /resolveDatePeriodInstants\(/, 'значение диалога переводится в инстансы');
     assert.ok(!/\.type\s*=\s*['"](?:date|datetime-local|time)['"]/.test(src), 'своих полей дат периода нет');
   });
 
@@ -95,28 +95,26 @@ describe('вкладка «Дневник»: поле периода и флаг
     assert.ok(src.includes('use_time: useTimeInput.input.checked'), 'флаг уходит в create/update');
   });
 
-  it('включён флаг — время видно; выключен — поля времени скрыты', () => {
+  it('время показывается по флагу, подпись — общий рендерер значения', () => {
     const src = read(SRC.tab);
-    // Режим контрола выбирается по флагу: выключен — дата/диапазон, включён — время.
+    // Подпись значения строится общим рендерером диалога; время — по флагу.
+    assert.match(src, /formatDatePeriodValue\(/, 'подпись — общий рендерер значения');
     assert.match(
       src,
-      /useTime\s*\?\s*'datetime'\s*:\s*sameDay\s*\?\s*'date'\s*:\s*'range'/,
-      'режим контрола зависит от флага и совпадения дней',
+      /datePeriodValueFromInstants\(\s*fromInstant,\s*toInstant,\s*useTimeInput\.input\.checked/,
+      'hasTime диалога берётся из флага',
     );
-    // При выключенном флаге границы задаются «голыми» локальными датами — поля
-    // времени в контроле пусты (время хранят инстансы, ADR 994d076a).
-    assert.ok(
-      src.includes('instantToLocalDate(fromInstant)') && src.includes('instantToLocalDate(toInstant)'),
-      'без флага времени границы — локальные даты',
+    // Явная правка времени в диалоге включает флаг (требование 91ba5b3f).
+    assert.match(
+      src,
+      /useTimeInput\.input\.checked !== result\.hasTime/,
+      'правка времени синхронизирует флаг',
     );
-    // Переключатель прячет/показывает время в контроле.
-    assert.ok(src.includes("period.setMode('datetime')"), 'включение показывает время');
-    assert.ok(src.includes("period.setMode('date')"), 'выключение скрывает время');
   });
 
   it('правка дат — полные UTC-инстансы, время суток сохраняет общий помощник', () => {
     const src = read(SRC.tab);
-    assert.match(src, /resolvePeriodInstants\(/, 'значение контрола переводится в инстансы');
+    assert.match(src, /resolveDatePeriodInstants\(/, 'значение диалога переводится в инстансы');
     const create = src.slice(src.indexOf('etn.comments.create('), src.indexOf('invalidateIndicators(ctx.ownerId);', src.indexOf('etn.comments.create(')));
     assert.ok(create.includes('valid_from: fromInstant'), 'create: полный инстанс начала');
     assert.ok(create.includes('valid_to: toInstant'), 'create: полный инстанс конца');

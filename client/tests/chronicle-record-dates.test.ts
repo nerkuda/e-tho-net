@@ -83,13 +83,18 @@ describe('«Дневник»: запись дат идёт через resolvePer
     const src = source();
     assert.match(
       src,
-      /saveRecordDates\(\s*row\.id,\s*value,\s*\{\s*from:\s*row\.valid_from/,
+      /saveRecordDates\(\s*row\.id,\s*result,\s*previous\)/,
       'предыдущие инстансы записи передаются в saveRecordDates',
     );
     assert.match(
       src,
-      /resolvePeriodInstants\(value,\s*previous\)/,
-      'saveRecordDates переводит значение контрола в инстансы',
+      /resolvePeriodInstants\(period,\s*previous\)/,
+      'saveRecordDates переводит даты диалога в инстансы общим помощником',
+    );
+    assert.match(
+      src,
+      /setInstantTime\(base\.from,\s*value\.fromTime\)/,
+      'время суток диалога выставляется с сохранением секунд (ADR 994d076a)',
     );
   });
 

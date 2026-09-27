@@ -63,6 +63,7 @@ import {
   type ChronicleCriteriaState,
 } from '../../lib/filter-builder.js';
 import { buildPeriodEditor, type PeriodValue } from '../../lib/period-editor.js';
+import { openDatePeriodDialog } from '../../lib/date-period-dialog.js';
 import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import {
   buildSavedFilterBar,
@@ -364,6 +365,20 @@ function periodSection(ctx: FilterFormContext): FilterSection {
     tokensForRange: (from, to) => periodTokensForRange(from, to),
     value: { from: filter.dateFrom, to: filter.dateTo, mode: filter.dateMode },
     label: 'Период дневника',
+    // Режим «Даты» (приёмка №5): клик по полю открывает диалог даты/периода
+    // (период разрешён, время — нет); «Пресеты» не затрагиваются.
+    openDatesDialog: (current) =>
+      openDatePeriodDialog({
+        allowPeriod: true,
+        allowTime: false,
+        initial: {
+          mode: 'period',
+          from: current.from || resolveDateToken('$today'),
+          to: current.to || resolveDateToken('$today'),
+          hasTime: false,
+        },
+        title: 'Период дневника',
+      }).then((result) => (result === null ? null : { from: result.from, to: result.to })),
     onChange: (value: PeriodValue) => {
       filter.dateFrom = value.from ?? '';
       filter.dateTo = value.to ?? '';

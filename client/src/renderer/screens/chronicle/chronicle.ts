@@ -56,13 +56,18 @@ import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
 import { svgIcon } from '../../lib/icons.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
-import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
 import {
-  buildPeriodEditor,
   resolvePeriodInstants,
+  setInstantTime,
   type PeriodValue,
 } from '../../lib/period-editor.js';
+import {
+  datePeriodValueFromInstants,
+  formatDatePeriodValue,
+  openDatePeriodDialog,
+  type DatePeriodValue,
+} from '../../lib/date-period-dialog.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
@@ -74,7 +79,7 @@ import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.j
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
 import { parseChronicleCriteria, defaultChronicleCriteriaState } from '../../lib/filter-builder.js';
-import { buildMonthCalendar, type MonthCalendarHandle } from './calendar.js';
+import { buildMonthCalendar, type MonthCalendarHandle } from '../../lib/month-calendar.js';
 import {
   applyPeriodToFilter,
   clampPseudoDate,
@@ -82,7 +87,6 @@ import {
   groupByLocalDays,
   hasRecordContent,
   isLastChip,
-  localDay,
   localDayEnd,
   localDayStart,
   periodValuesForRange,
@@ -460,20 +464,9 @@ function maybeLoadMore(): void {
   if (shouldLoadMore(counters, feedWrap)) void loadMore();
 }
 
-/**
- * Открыт ли по месту редактор даты записи (0.10.1, приёмка №2, ошибка
- * переключателя даты). Пока он открыт, перезапрос ленты откладывается:
- * перерисовка карточки сносила живой контрол, и смена режима «Дата/Дата и
- * время/Диапазон» выглядела как сброс обратно на «Дата».
- */
-let recordDateEditorOpen = false;
-
 /** Debounced refresh (real-time comment/target events). */
 export function scheduleChronicleRefresh(): void {
   if (host === null) return;
-  // Не перерисовываем ленту под открытым редактором даты записи — контрол
-  // снесли бы вместе с карточкой (см. `recordDateEditorOpen`).
-  if (recordDateEditorOpen) return;
   if (refreshTimer !== null) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
@@ -609,6 +602,8 @@ function buildRecordCard(row: ChronicleRow): HTMLElement {
   // Запись, к которой выполнен переход поиска, подсвечена (T7).
   if (row.id === jumpHighlightId) card.classList.add('diary-record-target');
 
+  // Строка 1: значение даты/периода (клик — диалог «Дата/период»), облачка
+  // привязок, кнопка «+ мысль», у правого края «бутерброд» меню записи.
   const head = div('diary-record-head');
   head.append(
     uiButton({
@@ -616,28 +611,42 @@ function buildRecordCard(row: ChronicleRow): HTMLElement {
       role: 'ghost',
       size: 's',
       class: 'diary-record-date',
-      title: 'Изменить дату записи',
-      onClick: () => openDateEditor(card, row),
+      title: 'Период дневниковой записи',
+      onClick: () => void editRecordDates(row),
     }),
-    buildTitleInput(row),
+    buildChipsRow(row),
     uiButton({
-      label: 'Действия…',
+      label: '+ мысль',
+      role: 'ghost',
+      size: 's',
+      class: 'diary-chip-add',
+      title: 'Добавить мысль',
+      onClick: () => void pickAndAttach(row.id),
+    }),
+    iconButton({
+      icon: svgIcon('menu', 16),
+      title: 'Действия с дневниковой записью',
       role: 'ghost',
       size: 's',
       class: 'diary-record-actions',
       onClick: (event) => showMenuAt(event.clientX, event.clientY, recordMenuItems(row)),
     }),
   );
-  card.append(head, buildChipsRow(row), buildBody(row));
+  // Строка 2 — заголовок, далее оболочка комментария.
+  card.append(head, buildTitleInput(row), buildBody(row));
   return card;
 }
 
-/** Подпись даты/времени записи (время — только при флаге «учитывать время»). */
+/** Подпись даты/периода записи общим рендерером диалога даты/периода. */
 function recordDateLabel(row: ChronicleRow): string {
-  const from = row.use_time ? formatDateTime(row.valid_from) : fmtDate(row.valid_from);
-  if (row.valid_to === null || localDay(row.valid_to) === localDay(row.valid_from)) return from;
-  const to = row.use_time ? formatDateTime(row.valid_to) : fmtDate(row.valid_to);
-  return `${from} — ${to}`;
+  return formatDatePeriodValue(
+    datePeriodValueFromInstants(
+      row.valid_from,
+      row.valid_to ?? row.valid_from,
+      row.use_time === true,
+      row.use_time === true,
+    ),
+  );
 }
 
 /** Инпут заголовка записи: правка по месту с сохранением по blur. */
@@ -714,73 +723,56 @@ async function openBodyEditor(
 }
 
 /**
- * Правка даты записи общим контролом периода (режим — по флагу времени).
- *
- * Пока контрол открыт, перезапрос ленты отложен (`recordDateEditorOpen`):
- * иначе перерисовка карточки сносила контрол, и любая смена режима
- * «Дата/Дата и время/Диапазон» выглядела как сброс на «Дата» (0.10.1,
- * приёмка №2, ошибка переключателя даты). Сохранение идёт по каждому
- * изменению, лента перечитывается при закрытии контрола.
+ * Правка даты записи диалогом «Дата/период» (0.10.1, приёмка №5). Инлайн-контрол
+ * с переключателем режимов упразднён: клик по значению открывает модальный
+ * диалог; период разрешён, время — по флагу `use_time` записи. «ОК» применяет
+ * значение, Esc/«Отмена» ничего не меняют.
  */
-function openDateEditor(card: HTMLElement, row: ChronicleRow): void {
-  const sameDay = localDay(row.valid_to ?? row.valid_from) === localDay(row.valid_from);
-  recordDateEditorOpen = true;
-  let closed = false;
-  const editor = buildPeriodEditor({
-    mode: row.use_time ? 'datetime' : sameDay ? 'date' : 'range',
-    value: { from: row.valid_from, to: row.valid_to ?? row.valid_from },
-    allowTokens: false,
-    label: 'Дата записи',
-    onChange: (value: PeriodValue) =>
-      void saveRecordDates(row.id, value, {
-        from: row.valid_from,
-        to: row.valid_to ?? row.valid_from,
-      }),
-  });
-  const box = div('diary-record-date-editor');
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    recordDateEditorOpen = false;
-    box.remove();
-    scheduleChronicleRefresh();
-  };
-  box.append(
-    editor.root,
-    uiButton({
-      label: t('actions.apply'),
-      role: 'secondary',
-      size: 's',
-      onClick: () => close(),
-    }),
+async function editRecordDates(row: ChronicleRow): Promise<void> {
+  const previous = { from: row.valid_from, to: row.valid_to ?? row.valid_from };
+  const value = datePeriodValueFromInstants(
+    previous.from,
+    previous.to,
+    row.use_time === true,
+    row.use_time === true,
   );
-  // Esc — закрытие (сохранение уже сделано по изменениям).
-  box.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      close();
-    }
+  const result = await openDatePeriodDialog({
+    allowPeriod: true,
+    allowTime: row.use_time === true,
+    initial: value,
+    title: 'Дата записи',
   });
-  const head = card.querySelector('.diary-record-date');
-  if (head !== null && head.parentElement !== null) {
-    head.replaceWith(box);
-  }
+  if (result === null) return;
+  await saveRecordDates(row.id, result, previous);
 }
 
 /**
- * Сохраняет даты записи. Значение контрола переводится в полные UTC-инстансы
- * общим помощником `resolvePeriodInstants` (ADR 994d076a): смена только даты
- * сохраняет время суток, незаданный конец равен началу, поэтому `valid_to`
- * остаётся непустым (требование d58aa1a4). `previous` — исходные инстансы
- * записи, источник времени суток при «голой дате».
+ * Сохраняет даты записи. Даты диалога переводятся общим помощником
+ * `resolvePeriodInstants` (ADR 994d076a): смена только даты сохраняет время
+ * суток, незаданный конец равен началу, поэтому `valid_to` остаётся непустым
+ * (требование d58aa1a4). Время суток (при `hasTime`) выставляется полем диалога
+ * с сохранением секунд/миллисекунд (`setInstantTime`). `previous` — исходные
+ * инстансы записи.
  */
 async function saveRecordDates(
   id: string,
-  value: PeriodValue,
+  value: DatePeriodValue,
   previous: { from: string; to: string },
 ): Promise<void> {
-  if ((value.from ?? '') === '') return;
-  const { from, to } = resolvePeriodInstants(value, previous);
+  if (value.from === '') return;
+  const period: PeriodValue = {
+    from: value.from,
+    to: value.mode === 'date' ? value.from : value.to,
+    hasTime: value.hasTime,
+  };
+  const base = resolvePeriodInstants(period, previous);
+  const from = value.hasTime ? setInstantTime(base.from, value.fromTime) : base.from;
+  const to =
+    value.mode === 'date'
+      ? from
+      : value.hasTime
+        ? setInstantTime(base.to, value.toTime)
+        : base.to;
   const networkId = requireNetworkId();
   try {
     const fresh = await etn.comments.get(networkId, id);
@@ -862,16 +854,6 @@ function repaintChips(box: HTMLElement, row: ChronicleRow): void {
   box.replaceChildren();
   const chips = visibleChips(row.targets, homeId);
   for (const target of chips) box.append(buildChip(target, row.id));
-  box.append(
-    uiButton({
-      label: '+',
-      role: 'ghost',
-      size: 's',
-      class: 'diary-chip-add',
-      title: 'Привязать мысль',
-      onClick: () => void pickAndAttach(row.id),
-    }),
-  );
 }
 
 function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
@@ -1036,11 +1018,11 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
   const chipsBox = div('diary-record-chips');
   chipsBox.append(
     uiButton({
-      label: '+',
+      label: '+ мысль',
       role: 'ghost',
       size: 's',
       class: 'diary-chip-add',
-      title: 'Привязать мысль',
+      title: 'Добавить мысль',
       onClick: () => void addSlotChip(),
     }),
   );

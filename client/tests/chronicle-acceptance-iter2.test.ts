@@ -102,14 +102,14 @@ describe('приёмка №2, п.4: группы дат', () => {
   });
 });
 
-describe('приёмка №2, п.5: переключатель даты записи не сбрасывается', () => {
-  it('перезапрос ленты отложен, пока открыт редактор даты', () => {
-    assert.match(CHRONICLE, /recordDateEditorOpen/);
-    assert.match(
-      CHRONICLE,
-      /scheduleChronicleRefresh\(\): void \{[\s\S]*if \(recordDateEditorOpen\) return/,
-      'лента не перерисовывается под открытым контролом',
-    );
+describe('приёмка №2/№5: дата записи правится модальным диалогом', () => {
+  it('инлайн-редактор даты упразднён — дата открывается диалогом', () => {
+    // Приёмка №5 (задача 7ce662c4): инлайн-контрол периода с переключателем
+    // режимов заменён модальным диалогом, поэтому перерисовка ленты его больше
+    // не сносит — прежний флаг отсрочки перезапроса не нужен.
+    assert.match(CHRONICLE, /openDatePeriodDialog\(/);
+    assert.ok(!CHRONICLE.includes('recordDateEditorOpen'), 'прежний флаг отсрочки снят');
+    assert.ok(!CHRONICLE.includes('diary-record-date-editor'), 'инлайн-редактор даты убран');
   });
 });
 
