@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildMonthWeeks } from '../src/renderer/screens/chronicle/calendar.js';
+import { buildMonthWeeks } from '../src/renderer/lib/month-calendar.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 
@@ -66,10 +66,10 @@ describe('переименование «Хроника» → «Дневник»
     assert.match(ru, /'diary\.feedEmpty': 'Дневниковых записей нет/);
   });
 
-  it('экран — лента с общим контролом периода, а не таблица', () => {
+  it('экран — лента с общим календарём и диалогом даты, а не таблица', () => {
     const src = read('screens/chronicle/chronicle.ts');
     assert.match(src, /buildMonthCalendar\(/, 'календарь месяца встроен в экран');
-    assert.match(src, /buildPeriodEditor\(/, 'даты записи идут через общий контрол периода');
+    assert.match(src, /openDatePeriodDialog\(/, 'дата записи правится диалогом даты/периода');
     assert.ok(!src.includes('createTable<'), 'табличный фасад больше не собирается');
     assert.ok(!src.includes('rowSplitter('), 'сплиттер таблицы убран');
     assert.ok(!/\.type\s*=\s*['"]date['"]/.test(src), 'своих полей даты у экрана нет');

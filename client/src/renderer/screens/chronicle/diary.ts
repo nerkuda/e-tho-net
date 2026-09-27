@@ -15,8 +15,12 @@
 
 import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
 
-/** «Голая дата» `YYYY-MM-DD`. */
-const BARE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+import { BARE_DATE_RE, addDays, mondayIndex, pad2, todayLocal } from '../../lib/dates.js';
+
+// Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
+// библиотеку, приёмка №5). Реэкспорт сохраняет прежние точки импорта у
+// потребителей (`addDays`/`isoWeekNumber`/`todayLocal` из этого модуля).
+export { addDays, isoWeekNumber, todayLocal } from '../../lib/dates.js';
 
 /** Голова глобального токена даты периода (0.10.1, требование 91f8d8dd). */
 const TOKEN_HEAD_RE =
@@ -28,16 +32,6 @@ const TOKEN_ARITH_RE = /^([+-])(\d+)(mo|y|w|d)$/;
 export interface DiaryDay {
   day: string;
   rows: ChronicleRow[];
-}
-
-/** Двузначная запись числа. */
-function pad2(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-/** Локальная дата сегодняшнего дня наблюдателя (`YYYY-MM-DD`). */
-export function todayLocal(now: Date = new Date()): string {
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 }
 
 /**
@@ -137,14 +131,6 @@ function monthEdge(firstOfMonth: string, edge: 'start' | 'end'): string {
   if (m === null) return '';
   if (edge === 'start') return firstOfMonth;
   return new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)).toISOString().slice(0, 10);
-}
-
-/** Сдвиг календарного дня на `n` суток (арифметика в UTC — без переходов DST). */
-export function addDays(day: string, n: number): string {
-  const m = BARE_DATE_RE.exec(day.trim());
-  if (m === null) return day;
-  const base = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + n * 86_400_000;
-  return new Date(base).toISOString().slice(0, 10);
 }
 
 /**
@@ -428,12 +414,6 @@ export function recordPeriod(row: {
 }
 
 
-/** Индекс дня недели с понедельника (0 — понедельник … 6 — воскресенье). */
-function mondayIndex(day: string): number {
-  const d = new Date(`${day}T00:00:00Z`);
-  return (d.getUTCDay() + 6) % 7;
-}
-
 /** Период недели (клик по номеру/строке недели): понедельник — воскресенье. */
 export function weekPeriod(day: string): PeriodRange {
   const monday = addDays(day, -mondayIndex(day));
@@ -497,22 +477,4 @@ export function visibleChips(
 /** Является ли привязка снятием последнего чипса (тогда нужно подтверждение). */
 export function isLastChip(chips: readonly unknown[]): boolean {
   return chips.length <= 1;
-}
-
-/**
- * Номер ISO-недели календарного дня (для подписи строки недели). Чистая
- * арифметика через четверг той же недели (ISO-8601).
- */
-export function isoWeekNumber(day: string): number {
-  const m = BARE_DATE_RE.exec(day.trim());
-  if (m === null) return 0;
-  const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  // Четверг текущей недели определяет ISO-год и номер недели.
-  const thursday = new Date(date.getTime());
-  thursday.setUTCDate(date.getUTCDate() - mondayIndex(day) + 3);
-  // Четверг первой ISO-недели года — четверг недели, содержащей 4 января.
-  const jan4 = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 4));
-  const week1Thursday = new Date(jan4.getTime());
-  week1Thursday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + 3);
-  return Math.round((thursday.getTime() - week1Thursday.getTime()) / (7 * 86_400_000)) + 1;
 }

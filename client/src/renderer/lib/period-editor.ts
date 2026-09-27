@@ -111,6 +111,17 @@ export interface PeriodEditorOptions {
   tokensForRange?: (from: string, to: string) => { from: string; to: string };
   /** Поле и переключатель недоступны. */
   disabled?: boolean;
+  /**
+   * Панельный вариант, режим «Даты» (0.10.1, приёмка №5): клик по полю даты
+   * открывает диалог «Дата/период» (период разрешён, время — нет). Задано —
+   * нативные поля дат заменяются кликабельными (только чтение), а контрол сам
+   * применяет возвращённые даты и сообщает значение. Диалог строит потребитель
+   * (`lib/date-period-dialog.ts`), модуль периода его не импортирует.
+   */
+  openDatesDialog?: (current: {
+    from: string;
+    to: string;
+  }) => Promise<{ from: string; to: string } | null>;
 }
 
 /** Рукоятка построенного контрола. */
@@ -730,6 +741,37 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   function buildPanelDateBound(bound: BoundState, tag: string, ariaPrefix: string): HTMLElement {
     const box = div(BOUND_CLASS);
     box.append(span(tag, TAG_CLASS));
+    // Приёмка №5: клик по полю даты открывает диалог «Дата/период» (без
+    // времени, с периодом). Поле — только чтение, нативный ввод убран.
+    if (opts.openDatesDialog !== undefined) {
+      const display = fieldInput({
+        extraClass: DATE_CLASS,
+        value: dateOnly(bound.text),
+        readonly: true,
+        ariaLabel: `${ariaPrefix} — дата`,
+        disabled: opts.disabled === true,
+      });
+      display.type = 'text';
+      display.title = 'Открыть диалог даты/периода';
+      display.addEventListener('click', () => {
+        void opts.openDatesDialog!({
+          from: dateOnly(from.text),
+          to: dateOnly(to.text),
+        }).then((result) => {
+          if (result === null) return;
+          from.text = result.from;
+          to.text = result.to;
+          from.time = '';
+          to.time = '';
+          from.instant = null;
+          to.instant = null;
+          repaint();
+          emit();
+        });
+      });
+      box.append(display);
+      return box;
+    }
     const input = fieldInput({
       type: 'date',
       extraClass: DATE_CLASS,

@@ -46,6 +46,9 @@ const PERIOD_EDITOR = 'lib/period-editor.ts';
  */
 const ALLOWED_DATE_INPUT_FILES = new Set([
   PERIOD_EDITOR,
+  // Диалог даты/периода (0.10.1, приёмка №5): поля времени `HH:MM` — часть
+  // того же контрола даты/периода, вынесенного в библиотечный компонент.
+  'lib/date-period-dialog.ts',
   // Общий редактор значения — свойства-даты (сюда же попадает тикет-ветка
   // редактора свойств), не период «Дневника».
   'editor/value-editor.ts',
@@ -113,6 +116,7 @@ describe('guard: даты периода задаёт только редакт�
     assert.deepEqual(allowed, [
       'admin/admin.ts',
       'editor/value-editor.ts',
+      'lib/date-period-dialog.ts',
       'lib/filter-form.ts',
       'lib/period-editor.ts',
       'screens/activity/activity.ts',

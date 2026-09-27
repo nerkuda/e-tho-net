@@ -643,6 +643,7 @@ const DIALOG_FILES = new Set([
   'editor/wiki-link.ts',
   'import-export/export-dialog.ts',
   'import-export/import-dialog.ts',
+  'lib/date-period-dialog.ts',
   'lib/entity-picker.ts',
   'lib/saved-filter-bar.ts',
   'pinned/pins.ts',

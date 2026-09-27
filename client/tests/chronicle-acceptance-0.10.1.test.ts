@@ -26,7 +26,7 @@ function read(rel: string): string {
 }
 
 const CHRONICLE = read('screens/chronicle/chronicle.ts');
-const CALENDAR = read('screens/chronicle/calendar.ts');
+const CALENDAR = read('lib/month-calendar.ts');
 const PANEL = read('screens/chronicle/filter-panel.ts');
 const BUILDER = read('lib/filter-builder.ts');
 const PERIOD_EDITOR = read('lib/period-editor.ts');
@@ -56,9 +56,10 @@ describe('приёмка «Дневника» 0.10.1: JS-ошибка data-row-k
 
 describe('приёмка «Дневника» 0.10.1: кнопка «Сегодня» (пункт 3)', () => {
   it('календарь несёт кнопку и сообщает хосту', () => {
-    assert.match(CALENDAR, /label: 'Сегодня'/);
+    // Приёмка №5: текстовая «Сегодня» заменена на «○» (общая навигация < ○ >).
+    assert.match(CALENDAR, /label: '○'/);
     assert.match(CALENDAR, /class: 'cal-today'/);
-    assert.match(CALENDAR, /onClick: \(\) => opts\.onToday\(\)/);
+    assert.match(CALENDAR, /onClick: \(\) => goToday\(\)/);
     assert.match(CHRONICLE, /onToday: \(\) => goToday\(\)/);
     assert.match(CHRONICLE, /calendar\?\.showDate\(today\)/, 'переход к текущему месяцу');
   });

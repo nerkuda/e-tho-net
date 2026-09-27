@@ -90,13 +90,34 @@
 .cal-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 4px;
 }
 
-.cal-title {
+.cal-head-spacer {
+  flex: 1 1 auto;
+}
+
+/* Месяц и год — отдельные кликабельные кнопки заголовка. */
+.cal-month,
+.cal-year {
+  flex: 0 0 auto;
   font-weight: 600;
   text-transform: capitalize;
+}
+
+.cal-year-input {
+  width: 5.5rem;
+}
+
+/* Список месяцев (январь–декабрь) под заголовком. */
+.cal-months {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.cal-months[hidden] {
+  display: none;
 }
 
 .cal-grid {
@@ -109,6 +130,11 @@
   display: grid;
   grid-template-columns: 2rem repeat(7, 1fr);
   gap: 1px;
+}
+
+/* Диалог даты/периода: недель нет — сетка без колонки номеров недель. */
+.cal--no-weeks .cal-row {
+  grid-template-columns: repeat(7, 1fr);
 }
 
 .cal-row-head {
@@ -141,6 +167,13 @@
   outline-offset: -1px;
 }
 
+/* Края диапазона выделены плотнее (диалог даты/периода). */
+.cal-day.is-selected-from,
+.cal-day.is-selected-to {
+  background: var(--accent-soft);
+  font-weight: 700;
+}
+
 .cal-day.is-today {
   font-weight: 700;
 }
@@ -154,6 +187,40 @@
   font-size: 10px;
   line-height: 1;
   color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Диалог даты/периода (lib/date-period-dialog.ts)
+ * ------------------------------------------------------------------------- */
+
+.dpd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 260px;
+}
+
+.dpd-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dpd-times {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dpd-time {
+  width: 6.5rem;
+}
+
+.dpd-value {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------------------------
@@ -296,15 +363,10 @@
   font-weight: 600;
 }
 
+/* «Бутерброд» меню записи прижат к правому краю строки 1. */
 .diary-record-actions {
   flex: 0 0 auto;
-}
-
-.diary-record-date-editor {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .diary-record-chips {
