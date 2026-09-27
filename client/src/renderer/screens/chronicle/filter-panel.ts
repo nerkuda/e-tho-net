@@ -72,7 +72,12 @@ import {
 } from '../../lib/saved-filter-bar.js';
 import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { store } from '../../state.js';
-import { SEARCH_DEBOUNCE_MS, periodTokensForRange, resolveDateToken } from './diary.js';
+import {
+  SEARCH_DEBOUNCE_MS,
+  periodTokensForRange,
+  resolveDateToken,
+  resolvePeriodForQuery,
+} from './diary.js';
 
 export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
 
@@ -314,6 +319,25 @@ async function loadPropertyDefs(): Promise<void> {
  */
 export function chronicleDefinition(): ChronicleFilterDefinition {
   return buildChronicleWire(filter, registryWithSides());
+}
+
+/**
+ * Определение отбора для ЗАПРОСА ленты (0.10.1, приёмка №4, задача fd9eef49):
+ * как {@link chronicleDefinition}, но границы периода-токены раскрыты в
+ * ЛОКАЛЬНЫЕ календарные даты наблюдателя (`resolvePeriodForQuery`). Панель и
+ * сохранённый отбор хранят токены, а на сервер уходит «голая дата» — сутки UTC
+ * (требование 469d8d69), поэтому результат выборки согласован с локальным днём
+ * принадлежности записи и с подсветкой календаря. Полные инстансы (переход к
+ * записи) проходят как есть.
+ */
+export function chronicleQueryDefinition(): ChronicleFilterDefinition {
+  const def = chronicleDefinition();
+  const { from, to } = resolvePeriodForQuery(filter.dateFrom, filter.dateTo);
+  delete def.date_from;
+  delete def.date_to;
+  if (from !== '') def.date_from = from;
+  if (to !== '') def.date_to = to;
+  return def;
 }
 
 /**

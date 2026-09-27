@@ -83,6 +83,8 @@ import {
   hasRecordContent,
   isLastChip,
   localDay,
+  localDayEnd,
+  localDayStart,
   periodValuesForRange,
   recordPeriod,
   resolvePeriodDay,
@@ -95,6 +97,7 @@ import {
 import {
   addThoughtToFilter,
   chronicleDefinition,
+  chronicleQueryDefinition,
   getFilterState,
   getSavedFilterId,
   mountChronicleFilterPanel,
@@ -412,7 +415,7 @@ async function reload(): Promise<void> {
   const seq = ++querySeq;
   renderStatus('loading');
   try {
-    const def = chronicleDefinition();
+    const def = chronicleQueryDefinition();
     const result = await etn.chronicle.query(networkId, {
       ...def,
       limit: CHRONICLE_PAGE_SIZE,
@@ -436,7 +439,7 @@ async function loadMore(): Promise<void> {
   const seq = querySeq;
   try {
     const result = await etn.chronicle.query(networkId, {
-      ...chronicleDefinition(),
+      ...chronicleQueryDefinition(),
       limit: CHRONICLE_PAGE_SIZE,
       offset: rows.length,
     });
@@ -1208,8 +1211,11 @@ async function refreshCalendarCounts(): Promise<void> {
     for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
       const res = await etn.chronicle.query(networkId, {
         ...def,
-        date_from: first,
-        date_to: last,
+        // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
+        // сервере = сутки UTC (469d8d69) и запись у локальной полуночи первого/1-го
+        // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
+        date_from: localDayStart(first),
+        date_to: localDayEnd(last),
         limit: CHRONICLE_QUERY_MAX_LIMIT,
         offset,
       });

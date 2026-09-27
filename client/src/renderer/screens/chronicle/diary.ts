@@ -247,6 +247,54 @@ function dayDiff(day: string, base: string): number | null {
 export type PeriodEditMode = 'presets' | 'dates';
 
 /**
+ * Привести ОДНУ границу периода к полному UTC-инстансу для запроса ленты:
+ * токен → ЛОКАЛЬНАЯ календарная дата наблюдателя (тот же вычислитель, что и
+ * для подсветки календаря, {@link resolveDateToken}), «голая дата» — локальная
+ * календарная дата, полный инстанс — как есть; затем дата раскрывается в
+ * начало (`edge: 'start'`) или конец (`edge: 'end'`) ЛОКАЛЬНЫХ суток. `''` —
+ * граница не задана.
+ */
+export function resolvePeriodBoundForQuery(
+  value: string,
+  edge: 'start' | 'end',
+  today: string = todayLocal(),
+): string {
+  const text = value.trim();
+  if (text === '') return '';
+  const day = isPeriodToken(text) ? resolveDateToken(text, today) : text;
+  if (day === '') return '';
+  // Полный инстанс (переход к записи) — как есть; «голая дата» — локальные сутки.
+  if (BARE_DATE_RE.exec(day) === null) return day;
+  return edge === 'start' ? localDayStart(day) : localDayEnd(day);
+}
+
+/**
+ * Границы периода для ЗАПРОСА ленты (0.10.1, приёмка №4, задача fd9eef49):
+ * каждая граница приводится к полному UTC-инстансу ЛОКАЛЬНЫХ суток наблюдателя
+ * («с» — начало локального дня, «по» — конец `23:59:59.999`).
+ *
+ * Зачем: день принадлежности записи клиент считает в ЛОКАЛЬНОМ поясе (ADR
+ * времени 994d076a, требование d58aa1a4) и группирует ленту по локальным дням.
+ * Серверное раскрытие токена и «голая дата» опираются на UTC-сутки (требование
+ * 469d8d69) и запись у локальной полуночи не покрывают: запись за 26.09 по
+ * Москве хранится как `2026-09-25T21:00Z` и «выпадала» из своего дня, оставаясь
+ * видимой в неделе. Полные инстансы передаются серверу как есть (469d8d69:
+ * «полный инстанс — как есть») и согласованы с подсветкой календаря.
+ * Сохранённый отбор по-прежнему хранит токен; раскрытие — в момент применения
+ * (требование 91f8d8dd).
+ */
+export function resolvePeriodForQuery(
+  from: string,
+  to: string,
+  today: string = todayLocal(),
+): PeriodRange {
+  return {
+    from: resolvePeriodBoundForQuery(from, 'start', today),
+    to: resolvePeriodBoundForQuery(to, 'end', today),
+  };
+}
+
+/**
  * Значения полей периода для интервала календаря с учётом режима панели:
  * `dates` — точные даты без токенов; `presets` — токены по правилу
  * {@link periodTokensForRange}.
@@ -344,7 +392,7 @@ export function dayPeriod(day: string): PeriodRange {
 export const SEARCH_DEBOUNCE_MS = 300;
 
 /** Начало локального дня наблюдателя как полный UTC-инстанс. */
-function localDayStart(day: string): string {
+export function localDayStart(day: string): string {
   const m = BARE_DATE_RE.exec(day.trim());
   if (m === null) return '';
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
@@ -352,7 +400,7 @@ function localDayStart(day: string): string {
 }
 
 /** Конец локального дня наблюдателя как полный UTC-инстанс (включительно). */
-function localDayEnd(day: string): string {
+export function localDayEnd(day: string): string {
   const m = BARE_DATE_RE.exec(day.trim());
   if (m === null) return '';
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
