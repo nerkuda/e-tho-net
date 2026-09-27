@@ -328,6 +328,27 @@
   color: var(--danger);
 }
 
+/* Компонентное поле даты (0.10.1, итерация приёмки №8, п.4; `lib/date-field.ts`):
+   редактируемый ввод «голой даты» + иконочные кнопки «календарь» и «очистка»
+   справа. Используется полями «Даты» панели периода. */
+.date-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.date-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.date-field-pick,
+.date-field-clear {
+  flex: 0 0 auto;
+}
+
 /* Type/link-type picker dialog body (§15.3). */
 .st-f-picker {
   display: flex;

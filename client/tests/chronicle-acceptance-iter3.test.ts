@@ -218,7 +218,9 @@ describe('приёмка №3, п.3: период «список + сдвиг ±
       value: { from: '2026-09-10', to: '2026-09-12' },
     });
     assert.equal(dates.getPanelMode(), 'dates');
-    const dateInputs = allFields(dates.root, 'pe-date-input');
+    // Компонентное поле даты (итерация приёмки №8, п.4) несёт класс
+    // `.date-field-input`; значения границ доступны для правки.
+    const dateInputs = allFields(dates.root, 'date-field-input');
     assert.equal(dateInputs.length, 2);
     assert.equal(dateInputs[0]!.value, '2026-09-10');
     assert.equal(dateInputs[1]!.value, '2026-09-12');

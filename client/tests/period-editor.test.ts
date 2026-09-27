@@ -366,7 +366,7 @@ describe('period-editor: панельный вариант «Пресеты»/«
     });
     editor.setPanelMode('dates');
     assert.equal(editor.getPanelMode(), 'dates');
-    const dates = allFields(editor.root, 'pe-date-input');
+    const dates = allFields(editor.root, 'date-field-input');
     assert.equal(dates.length, 2, 'в режиме «Даты» — два поля дат');
     assert.equal(dates[0]!.value, '2026-09-21', 'токен раскрыт в дату');
     assert.deepEqual(editor.getValue(), {
@@ -430,9 +430,12 @@ describe('period-editor: панельный вариант «Пресеты»/«
       resolveToken,
       tokensForRange,
     });
-    const dates = allFields(editor.root, 'pe-date-input');
+    // Компонентные поля даты (итерация приёмки №8, п.4): правка «С»/«По»
+    // пересобирает строки (автоподгон «С» ≤ «По») — поле берём заново.
+    const dates = allFields(editor.root, 'date-field-input');
     type(dates[0]!, '2026-09-10');
-    type(dates[1]!, '2026-09-12');
+    const afterFrom = allFields(editor.root, 'date-field-input');
+    type(afterFrom[1]!, '2026-09-12');
     assert.deepEqual(editor.getValue(), {
       from: '2026-09-10',
       to: '2026-09-12',

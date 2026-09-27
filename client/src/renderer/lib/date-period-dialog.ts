@@ -30,7 +30,7 @@ import {
 } from './period-editor.js';
 import { showDialog } from './dialog.js';
 import { buildMonthCalendar } from './month-calendar.js';
-import { todayLocal } from './dates.js';
+import { isValidLocalDay, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
 import { setButtonActive, uiButton } from './ui/button.js';
@@ -136,28 +136,10 @@ export function formatDatePeriodDialogValue(value: DatePeriodValue): string {
 }
 
 /**
- * Назначить «С» периода: при «С» > «По» конец автоматически становится равен
- * началу (валидация диалога — «По» не меньше «С»).
+ * Назначить «С»/«По» периода — реэкспорт общих чистых помощников
+ * `lib/dates.ts` (одна точка правды с полями «Даты» панели).
  */
-export function setPeriodFrom(
-  from: string,
-  to: string,
-  day: string,
-): { from: string; to: string } {
-  return { from: day, to: to < day ? day : to };
-}
-
-/**
- * Назначить «По» периода: при «По» < «С» начало автоматически становится равно
- * концу (валидация диалога).
- */
-export function setPeriodTo(
-  from: string,
-  to: string,
-  day: string,
-): { from: string; to: string } {
-  return { from: day < from ? day : from, to: day };
-}
+export { setPeriodFrom, setPeriodTo };
 
 /** Одна граница значения → полный UTC-инстанс (сохраняя секунды исходного). */
 function applyBound(base: string, day: string, time: string | null): string {
@@ -215,13 +197,11 @@ export const DPD_SEP_CLASS = 'dpd-sep';
  */
 export const DPD_DEFAULT_TIME = '10:00';
 
-/** Локальная дата `YYYY-MM-DD` корректна (существует в календаре). */
-export function isValidLocalDay(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return false;
-  return date.toISOString().slice(0, 10) === value;
-}
+/**
+ * Локальная дата `YYYY-MM-DD` корректна (существует в календаре). Реэкспорт
+ * общего валидатора `lib/dates.ts` — историческая точка импорта сохранена.
+ */
+export { isValidLocalDay };
 
 /** Время `HH:MM` корректно (00:00–23:59). */
 export function isValidTime(value: string): boolean {
@@ -461,19 +441,52 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     });
   }
 
+  /**
+   * Считать «живые» значения полей нижней строки (0.10.1, итерация приёмки №8,
+   * п.1). `getValue()` не доверяет кэшу состояния: пользователь мог ввести
+   * время (или дату) и сразу нажать «ОК», не сместив фокус — событие `change`
+   * тогда ещё не отработало, а введённое значение обязано попасть в результат.
+   * Принимаются только валидные значения (та же валидация, что у обработчиков
+   * `change`); невалидное игнорируется и остаётся прежнее состояние.
+   */
+  function commitLiveInputs(): void {
+    if (dateFromInput !== null) {
+      const day = dateFromInput.value.trim();
+      if (isValidLocalDay(day)) {
+        from = day;
+        if (mode === 'date') to = day;
+      }
+    }
+    if (dateToInput !== null) {
+      const day = dateToInput.value.trim();
+      if (isValidLocalDay(day)) to = day;
+    }
+    if (timeFromInput !== null) {
+      const time = timeFromInput.value.trim();
+      if (isValidTime(time)) fromTime = time;
+    }
+    if (timeToInput !== null) {
+      const time = timeToInput.value.trim();
+      if (isValidTime(time)) toTime = time;
+    }
+  }
+
   repaint();
 
   return {
     root,
     getMode: () => mode,
-    getValue: () => ({
-      mode,
-      from,
-      to: mode === 'date' ? from : to,
-      hasTime,
-      fromTime,
-      toTime,
-    }),
+    getValue: () => {
+      commitLiveInputs();
+      return {
+        mode,
+        from,
+        to: mode === 'date' ? from : to,
+        hasTime,
+        fromTime,
+        toTime,
+      };
+    },
   };
 }
 

@@ -59,13 +59,12 @@ import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib
 import { notice } from '../../lib/notice.js';
 import {
   resolvePeriodInstants,
-  setInstantTime,
-  type PeriodValue,
 } from '../../lib/period-editor.js';
 import {
   datePeriodValueFromInstants,
   formatDatePeriodValue,
   openDatePeriodDialog,
+  resolveDatePeriodInstants,
   type DatePeriodValue,
 } from '../../lib/date-period-dialog.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
@@ -83,9 +82,12 @@ import { buildMonthCalendar, type MonthCalendarHandle } from '../../lib/month-ca
 import {
   applyPeriodToFilter,
   clampPseudoDate,
+  compareDays,
   dayPeriod,
+  formatDayLabel,
   groupByLocalDays,
   hasRecordContent,
+  insertRowByDay,
   isLastChip,
   localDayEnd,
   localDayStart,
@@ -138,6 +140,12 @@ let total = 0;
 /** Loading guard so a stale page does not clobber a newer one. */
 let querySeq = 0;
 let loadingMore = false;
+/**
+ * Локально вставленная запись ещё не подтверждена серверной страницей
+ * (0.10.1, итерация приёмки №8, п.2): следующий запрос «+50» идёт полной
+ * перезагрузкой, а не offset-пагинацией, чтобы не потерять/не удвоить строку.
+ */
+let pendingReconcile = false;
 let refreshTimer: number | null = null;
 /** Id of the HOME (root) thought — primary owner of a day record. */
 let homeId: string | null = null;
@@ -428,6 +436,7 @@ async function reload(): Promise<void> {
     if (seq !== querySeq) return;
     rows = result.rows;
     total = result.total;
+    pendingReconcile = false;
     renderFeed();
   } catch (err) {
     if (seq !== querySeq) return;
@@ -439,6 +448,12 @@ async function reload(): Promise<void> {
 async function loadMore(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || loadingMore || rows.length >= total) return;
+  // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
+  // страницу заново (данные важнее экономии запроса).
+  if (pendingReconcile) {
+    await reload();
+    return;
+  }
   loadingMore = true;
   const seq = querySeq;
   try {
@@ -519,7 +534,10 @@ function renderFeed(): void {
   feedList.hidden = false;
 
   const { from, to } = currentFromTo();
-  const days = groupByLocalDays(rows, { from, to });
+  // Направление сортировки ленты (0.10.1, итерация приёмки №8, п.3): сервер
+  // отдаёт строки в выбранном порядке, клиент уважает его и в группировке дней.
+  const order = getFilterState().order;
+  const days = groupByLocalDays(rows, { from, to, order });
   // Счётчики календаря приходят из отдельного запроса по месяцу
   // (`refreshCalendarCounts`) — они не зависят от применённого периода, поэтому
   // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
@@ -527,7 +545,7 @@ function renderFeed(): void {
   // нём ещё нет записей (элемент «Sticky-панель новой записи»).
   if (slot !== null && !days.some((d) => d.day === slot!.day)) {
     days.push({ day: slot.day, rows: [] });
-    days.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+    days.sort((a, b) => compareDays(a.day, b.day, order));
   }
 
   const nodes: HTMLElement[] = [];
@@ -538,6 +556,73 @@ function renderFeed(): void {
     nodes.push(el('div', 'chron-feed-more muted', t('diary.moreLeft', [rows.length, total])));
   }
   feedList.replaceChildren(...nodes);
+}
+
+/**
+ * Строка ленты из только что созданной записи (0.10.1, итерация приёмки №8,
+ * п.2). `Comment` не несёт развёрнутых целей, поэтому не-HOME привязки
+ * доразрешаются точечным чтением мысли (`etn.thoughts.get`; `Thought`
+ * структурно включает `ThoughtRef`). Любая неурядица возвращает `null` —
+ * вызывающий откатывается на полную перезагрузку ленты (в этом случае
+ * спокойствие позиции не гарантируется, зато данные точны).
+ */
+async function localRowFromComment(
+  comment: Comment,
+  home: string,
+): Promise<ChronicleRow | null> {
+  const networkId = requireNetworkId();
+  const targets: ChronicleTarget[] = [];
+  for (const target of comment.targets) {
+    if (target.owner_type !== 'thought') return null;
+    if (target.owner_id === home) continue;
+    try {
+      const thought = await etn.thoughts.get(networkId, target.owner_id);
+      targets.push({ kind: 'thought', thought });
+    } catch {
+      return null;
+    }
+  }
+  return {
+    id: comment.id,
+    title: comment.title,
+    valid_from: comment.valid_from,
+    valid_to: comment.valid_to,
+    use_time: comment.use_time === true,
+    version: comment.version,
+    created_at: comment.created_at,
+    updated_at: comment.updated_at,
+    created_by: comment.created_by,
+    updated_by: comment.updated_by,
+    snippet: '',
+    body_html: comment.body_html,
+    targets,
+  };
+}
+
+/** Обновить строку «осталось N» без перерисовки ленты (её счётчик сдвинулся). */
+function updateMoreLine(): void {
+  if (feedList === null) return;
+  const more = feedList.querySelector<HTMLElement>('.chron-feed-more');
+  if (more !== null) more.textContent = t('diary.moreLeft', [rows.length, total]);
+}
+
+/**
+ * Локальная вставка созданной записи: слот превращается в карточку записи на
+ * месте (0.10.1, итерация приёмки №8, п.2) — DOM-позиция и скролл сохраняются,
+ * соседние карточки не пересобираются. `feedList` при этом не перерисовывается
+ * целиком; счётчики календаря обновляются отдельным запросом (фоном).
+ */
+function insertCreatedRecord(row: ChronicleRow): void {
+  const slotRoot = slot?.root ?? null;
+  const card = buildRecordCard(row);
+  const inPlace = slotRoot !== null && slotRoot.parentElement !== null;
+  if (inPlace) slotRoot!.replaceWith(card);
+  rows = insertRowByDay(rows, row, getFilterState().order);
+  total += 1;
+  pendingReconcile = true;
+  slot = null;
+  if (inPlace) updateMoreLine();
+  else renderFeed();
 }
 
 /** Свернуть/развернуть все показанные группы дат (кнопки верхней панели). */
@@ -575,18 +660,6 @@ function buildDayBlock(day: string, dayRows: ChronicleRow[]): HTMLElement {
   for (const row of dayRows) list.append(buildRecordCard(row));
   section.append(head, list);
   return section;
-}
-
-/** Подпись дня ленты в локальной зоне наблюдателя. */
-function formatDayLabel(day: string): string {
-  const d = new Date(`${day}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return day;
-  return new Intl.DateTimeFormat('ru-RU', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(d);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,12 +822,14 @@ async function editRecordDates(row: ChronicleRow): Promise<void> {
 }
 
 /**
- * Сохраняет даты записи. Даты диалога переводятся общим помощником
- * `resolvePeriodInstants` (ADR 994d076a): смена только даты сохраняет время
- * суток, незаданный конец равен началу, поэтому `valid_to` остаётся непустым
- * (требование d58aa1a4). Время суток (при `hasTime`) выставляется полем диалога
- * с сохранением секунд/миллисекунд (`setInstantTime`). `previous` — исходные
- * инстансы записи.
+ * Сохраняет даты записи. Значение диалога переводится ЕГО ЖЕ помощником
+ * `resolveDatePeriodInstants` (0.10.1, итерация приёмки №8, п.1): раньше экран
+ * повторял ту же конверсию своими строками (`resolvePeriodInstants` +
+ * `setInstantTime`), и расхождение двух реализаций не ловилось тестом на
+ * диалоге. Теперь источник конверсии один — компонент диалога: смена только
+ * даты сохраняет время суток, незаданный конец равен началу (`valid_to` непуст,
+ * требование d58aa1a4), при `hasTime` время выставляется с сохранением
+ * секунд/миллисекунд (ADR 994d076a). `previous` — исходные инстансы записи.
  */
 async function saveRecordDates(
   id: string,
@@ -762,19 +837,7 @@ async function saveRecordDates(
   previous: { from: string; to: string },
 ): Promise<void> {
   if (value.from === '') return;
-  const period: PeriodValue = {
-    from: value.from,
-    to: value.mode === 'date' ? value.from : value.to,
-    hasTime: value.hasTime,
-  };
-  const base = resolvePeriodInstants(period, previous);
-  const from = value.hasTime ? setInstantTime(base.from, value.fromTime) : base.from;
-  const to =
-    value.mode === 'date'
-      ? from
-      : value.hasTime
-        ? setInstantTime(base.to, value.toTime)
-        : base.to;
+  const { from, to } = resolveDatePeriodInstants(value, previous);
   const networkId = requireNetworkId();
   try {
     const fresh = await etn.comments.get(networkId, id);
@@ -1130,10 +1193,21 @@ async function ensureSlot(opts: {
       valid_to: validTo,
       use_time: false,
     });
-    slot = null;
-    state.root.remove();
-    await reload();
-    syncCalendar();
+    // Спокойная лента (0.10.1, итерация приёмки №8, п.2): слот превращается в
+    // карточку записи НА МЕСТЕ, без полной перерисовки ленты и перескока
+    // скролла. Если локальную строку собрать не удалось (нестандартные цели) —
+    // откат на полную перезагрузку ради точности данных.
+    const localRow = await localRowFromComment(created, home);
+    if (localRow !== null) {
+      insertCreatedRecord(localRow);
+      syncCalendar();
+      void refreshCalendarCounts();
+    } else {
+      slot = null;
+      state.root.remove();
+      await reload();
+      syncCalendar();
+    }
     return created;
   } catch (err) {
     notice(t('diary.createFailed', [errText(err)]), 'error');

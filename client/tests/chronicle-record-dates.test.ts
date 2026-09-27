@@ -120,15 +120,17 @@ describe('«Дневник»: запись дат идёт через resolvePer
       /saveRecordDates\(\s*row\.id,\s*result,\s*previous\)/,
       'предыдущие инстансы записи передаются в saveRecordDates',
     );
+    // Конверсию значения диалога делает САМ диалог (итерация приёмки №8, п.1):
+    // своя копия `resolvePeriodInstants` + `setInstantTime` устранена — иначе
+    // две реализации одной конверсии расходятся и тест на диалоге их не ловит.
     assert.match(
       src,
-      /resolvePeriodInstants\(period,\s*previous\)/,
-      'saveRecordDates переводит даты диалога в инстансы общим помощником',
+      /resolveDatePeriodInstants\(value,\s*previous\)/,
+      'значение диалога переводится помощником компонента диалога',
     );
-    assert.match(
-      src,
-      /setInstantTime\(base\.from,\s*value\.fromTime\)/,
-      'время суток диалога выставляется с сохранением секунд (ADR 994d076a)',
+    assert.ok(
+      !src.includes('setInstantTime(base.from'),
+      'своя реализация конверсии дат у экрана устранена',
     );
   });
 

@@ -111,7 +111,11 @@ describe('приёмка №4, п.1: группа «Период» — две с
     const rows = fields.children.filter((child) => child.className.includes('pe-bound'));
     assert.equal(rows.length, 2, 'две строки дат «С»/«По»');
     for (const row of rows) {
-      assert.equal(row.querySelectorAll('.pe-date-input').length, 1, 'date-input — в своей строке');
+      assert.equal(
+        row.querySelectorAll('.date-field-input').length,
+        1,
+        'date-field-input — в своей строке',
+      );
       assert.equal(row.querySelectorAll('.pe-tag').length, 1, 'метка — в своей строке');
     }
   });

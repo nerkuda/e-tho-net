@@ -415,7 +415,9 @@ describe('приёмка №5, п.4: применения диалога', () =>
     // Время разрешено ВСЕГДА (кнопка «С указанием времени» — часть диалога,
     // приёмка №6): запись без `use_time` тоже может включить время.
     assert.match(CHRONICLE, /allowTime: true/, 'время доступно в диалоге записи');
-    assert.match(CHRONICLE, /resolvePeriodInstants\(period, previous\)/);
+    // Экран переводит значение ДИАЛОГА его же помощником (итерация приёмки №8,
+    // п.1): своя реализация конверсии устранена — источник правды один.
+    assert.match(CHRONICLE, /resolveDatePeriodInstants\(value, previous\)/);
   });
 
   it('вкладка «Дневник» редактора — диалог вместо инлайн-контрола', () => {
@@ -432,7 +434,7 @@ describe('приёмка №5, п.4: применения диалога', () =>
     assert.match(src, /openDatePeriodDialog\(\{/);
   });
 
-  it('панельный контрол: клик по полю даты отдаёт текущий период и применяет результат', async () => {
+  it('панельный контрол: кнопка-календарь отдаёт текущий период и применяет результат', async () => {
     installShim();
     const { buildPeriodEditor } = await import('../src/renderer/lib/period-editor.js');
     let asked: { from: string; to: string } | null = null;
@@ -449,9 +451,15 @@ describe('приёмка №5, п.4: применения диалога', () =>
       },
     });
     const root = editor.root as unknown as ShimElement;
-    const fields = root.querySelectorAll('.pe-date-input');
-    assert.equal(fields.length, 2, 'две границы режима «Даты»');
-    fields[0]!.click();
+    // Компонентные поля дат (итерация приёмки №8, п.4): редактируемый ввод +
+    // кнопка-календарь + крестик очистки у каждой границы.
+    const inputs = root.querySelectorAll('.date-field-input');
+    assert.equal(inputs.length, 2, 'две границы режима «Даты» — редактируемые поля');
+    assert.equal(inputs[0]!.value, '2026-09-10', 'значение «С» показано в поле');
+    assert.equal(root.querySelectorAll('.date-field-clear').length, 2, 'у полей есть очистка');
+    const picks = root.querySelectorAll('.date-field-pick');
+    assert.equal(picks.length, 2, 'у полей есть кнопка-календарь');
+    picks[0]!.click();
     assert.deepEqual(asked, { from: '2026-09-10', to: '2026-09-12' }, 'диалог получил текущий период');
     resolveDialog!({ from: '2026-10-01', to: '2026-10-05' });
     await new Promise((r) => setTimeout(r, 0));

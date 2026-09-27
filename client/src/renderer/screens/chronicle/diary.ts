@@ -13,7 +13,7 @@
  * поясе наблюдателя (ADR времени 994d076a).
  */
 
-import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
+import type { ChronicleRow, ChronicleTarget, SortOrder } from '@etn/shared';
 
 import { BARE_DATE_RE, addDays, mondayIndex, pad2, todayLocal } from '../../lib/dates.js';
 
@@ -336,17 +336,73 @@ export function rowDays(row: ChronicleRow, from = '', to = ''): string[] {
 }
 
 /**
+ * Сравнение двух локальных дней `YYYY-MM-DD` по направлению сортировки
+ * (0.10.1, итерация приёмки №8, п.3). Одна точка правды для группировки ленты
+ * и для вставки дня слота псевдо-записи.
+ */
+export function compareDays(a: string, b: string, order: SortOrder = 'asc'): number {
+  if (a === b) return 0;
+  const asc = a < b ? -1 : 1;
+  return order === 'desc' ? -asc : asc;
+}
+
+/**
+ * Заголовок группы дат ленты в локальной зоне наблюдателя: «Четверг, 24 сентября
+ * 2026» (0.10.1, итерация приёмки №8, п.5). Собирается из частей вручную:
+ * `Intl` с `year: 'numeric'` дописывает «г.» («24 сентября 2026 г.»), а в
+ * заголовке год нужен без него. Год берётся у самого `Date`, месяц — `Intl`
+ * (длинное имя в нужном падеже).
+ */
+export function formatDayLabel(day: string): string {
+  const d = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return day;
+  const weekday = new Intl.DateTimeFormat('ru-RU', { weekday: 'long' }).format(d);
+  const dayMonth = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(d);
+  const cap = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  return `${cap}, ${dayMonth} ${d.getFullYear()}`;
+}
+
+/**
+ * Вставить строку в локальный список ленты по дню и направлению сортировки
+ * (0.10.1, итерация приёмки №8, п.2): локально созданная запись встаёт на своё
+ * место без полной перерисовки. Порядок внутри одного дня не пересчитывается —
+ * он серверный (`order` совпадает с направлением запроса).
+ */
+export function insertRowByDay(
+  list: readonly ChronicleRow[],
+  row: ChronicleRow,
+  order: SortOrder = 'asc',
+): ChronicleRow[] {
+  const day = localDay(row.valid_from);
+  const out = [...list];
+  for (let i = 0; i < out.length; i += 1) {
+    const other = localDay(out[i]!.valid_from);
+    const insertHere = order === 'desc' ? other < day : other > day;
+    if (insertHere) {
+      out.splice(i, 0, row);
+      return out;
+    }
+  }
+  out.push(row);
+  return out;
+}
+
+/**
  * Группировка записей по локальным дням наблюдателя. Порядок записей внутри дня
  * — серверный (класс → `valid_from` → `valid_to` → `created_at` → `id`,
- * требование c6ddc1ea): клиент его не пересортировывает. Дни — по возрастанию.
- * `from`/`to` — развёрнутые границы периода (см. {@link resolvePeriodDay}).
+ * требование c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок
+ * входа (сервер уже отдал строки в выбранном направлении). Дни сортируются по
+ * `order` (0.10.1, итерация приёмки №8, п.3: «Убывание» — дни по убыванию,
+ * записи внутри — серверный порядок выбранного направления). `from`/`to` —
+ * развёрнутые границы периода (см. {@link resolvePeriodDay}).
  */
 export function groupByLocalDays(
   rows: readonly ChronicleRow[],
-  opts: { from?: string; to?: string } = {},
+  opts: { from?: string; to?: string; order?: SortOrder } = {},
 ): DiaryDay[] {
   const from = opts.from ?? '';
   const to = opts.to ?? '';
+  const order = opts.order ?? 'asc';
   const byDay = new Map<string, ChronicleRow[]>();
   for (const row of rows) {
     for (const day of rowDays(row, from, to)) {
@@ -356,7 +412,7 @@ export function groupByLocalDays(
     }
   }
   return [...byDay.entries()]
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .sort((a, b) => compareDays(a[0], b[0], order))
     .map(([day, list]) => ({ day, rows: list }));
 }
 

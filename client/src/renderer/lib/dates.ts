@@ -27,6 +27,44 @@ export function todayLocal(now: Date = new Date()): string {
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 }
 
+/**
+ * Локальная дата `YYYY-MM-DD` корректна (такая дата существует в календаре).
+ * Общий валидатор «голых дат»: им пользуются диалог «Дата/период» и
+ * компонентное поле даты (`lib/date-field.ts`) — одна точка правды
+ * (итерация приёмки №8, п.4).
+ */
+export function isValidLocalDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * Назначить «С» периода: при «С» > «По» конец автоматически становится равен
+ * началу (валидация периода — «По» не меньше «С»). Общая точка правды для
+ * диалога даты/периода и полей «Даты» панели отбора (итерация приёмки №8, п.4).
+ */
+export function setPeriodFrom(
+  from: string,
+  to: string,
+  day: string,
+): { from: string; to: string } {
+  return { from: day, to: to < day ? day : to };
+}
+
+/**
+ * Назначить «По» периода: при «По» < «С» начало автоматически становится равно
+ * концу (валидация периода).
+ */
+export function setPeriodTo(
+  from: string,
+  to: string,
+  day: string,
+): { from: string; to: string } {
+  return { from: day < from ? day : from, to: day };
+}
+
 /** Сдвиг календарного дня на `n` суток (арифметика в UTC — без переходов DST). */
 export function addDays(day: string, n: number): string {
   const m = BARE_DATE_RE.exec(day.trim());

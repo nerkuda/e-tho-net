@@ -38,6 +38,8 @@
  */
 
 import { div, el, span } from './dom.js';
+import { setPeriodFrom, setPeriodTo } from './dates.js';
+import { dateField } from './date-field.js';
 import { optionsSuggestSource, wireSuggest, type SuggestHandle } from './suggest-dropdown.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
@@ -722,10 +724,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     if (panel) {
       fields.append(
         panelMode === 'dates'
-          ? buildPanelDateBound(from, 'с', 'Начало')
+          ? buildPanelDateBound(from, 'from', 'с', 'Начало')
           : buildPanelPresetBound(from, 'с', 'Начало'),
         panelMode === 'dates'
-          ? buildPanelDateBound(to, 'по', 'Конец')
+          ? buildPanelDateBound(to, 'to', 'по', 'Конец')
           : buildPanelPresetBound(to, 'по', 'Конец'),
       );
       return;
@@ -737,55 +739,69 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     }
   };
 
-  /** Граница режима «Даты» панели: только дата, без времени и токенов. */
-  function buildPanelDateBound(bound: BoundState, tag: string, ariaPrefix: string): HTMLElement {
+  /**
+   * Граница режима «Даты» панели (0.10.1, приёмка №5; итерация приёмки №8,
+   * п.4): КОМПОНЕНТНОЕ поле даты `lib/date-field.ts` — редактируемый ввод
+   * «голой даты» без времени, справа иконочные кнопки «календарь» (открывает
+   * диалог даты/периода, без времени) и «крестик» (очистка). Редактирование —
+   * с той же валидацией, что в диалоге: «С» ≤ «По» с автоподгоном обеих границ
+   * (`setPeriodFrom`/`setPeriodTo`). Изменение поля сообщается через `emit`
+   * (подсветка календаря — у потребителя).
+   */
+  function buildPanelDateBound(
+    bound: BoundState,
+    which: 'from' | 'to',
+    tag: string,
+    ariaPrefix: string,
+  ): HTMLElement {
     const box = div(BOUND_CLASS);
     box.append(span(tag, TAG_CLASS));
-    // Приёмка №5: клик по полю даты открывает диалог «Дата/период» (без
-    // времени, с периодом). Поле — только чтение, нативный ввод убран.
-    if (opts.openDatesDialog !== undefined) {
-      const display = fieldInput({
-        extraClass: DATE_CLASS,
-        value: dateOnly(bound.text),
-        readonly: true,
-        ariaLabel: `${ariaPrefix} — дата`,
-        disabled: opts.disabled === true,
-      });
-      display.type = 'text';
-      display.title = 'Открыть диалог даты/периода';
-      display.addEventListener('click', () => {
-        void opts.openDatesDialog!({
-          from: dateOnly(from.text),
-          to: dateOnly(to.text),
-        }).then((result) => {
-          if (result === null) return;
-          from.text = result.from;
-          to.text = result.to;
-          from.time = '';
-          to.time = '';
-          from.instant = null;
-          to.instant = null;
-          repaint();
-          emit();
-        });
-      });
-      box.append(display);
-      return box;
-    }
-    const input = fieldInput({
-      type: 'date',
-      extraClass: DATE_CLASS,
+    const field = dateField({
       value: dateOnly(bound.text),
       ariaLabel: `${ariaPrefix} — дата`,
       disabled: opts.disabled === true,
+      // Кнопка-календарь открывает диалог выбора даты/периода; диалог задаёт
+      // ОБЕ границы, поле возвращает значение своей границы.
+      onPick:
+        opts.openDatesDialog === undefined
+          ? undefined
+          : async () => {
+              const result = await opts.openDatesDialog!({
+                from: dateOnly(from.text),
+                to: dateOnly(to.text),
+              });
+              if (result === null) return null;
+              from.text = result.from;
+              to.text = result.to;
+              from.time = '';
+              to.time = '';
+              from.instant = null;
+              to.instant = null;
+              repaint();
+              emit();
+              return dateOnly(which === 'from' ? from.text : to.text);
+            },
+      onChange: (value) => {
+        // Автоподгон «С» ≤ «По» (как в диалоге): правка одной границы двигает
+        // противоположную, чтобы порядок сохранялся.
+        if (which === 'from') {
+          const next = setPeriodFrom(value, dateOnly(to.text), value);
+          from.text = next.from;
+          to.text = next.to;
+        } else {
+          const next = setPeriodTo(dateOnly(from.text), value, value);
+          from.text = next.from;
+          to.text = next.to;
+        }
+        from.time = '';
+        to.time = '';
+        from.instant = null;
+        to.instant = null;
+        repaint();
+        emit();
+      },
     });
-    input.addEventListener('change', () => {
-      bound.text = input.value.trim();
-      bound.time = '';
-      bound.instant = null;
-      emit();
-    });
-    box.append(input);
+    box.append(field.root);
     const error = boundError(bound, false);
     if (error !== null) box.append(span(error, ERROR_CLASS));
     return box;
