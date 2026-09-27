@@ -461,19 +461,38 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         : (section.dataset?.['day'] ?? section.getAttribute?.('data-day') ?? '');
     if (card !== null && (card.getAttribute?.('data-row-key') ?? '') !== '' && day !== '') {
       if (target.classList?.contains('diary-slot')) return;
-      setCurrent({ kind: 'record', key: card.getAttribute('data-row-key') ?? '' }, day);
+      const key = card.getAttribute('data-row-key') ?? '';
+      // Клик внутри ТЕКУЩЕЙ записи (по её полям, чипсам, кнопкам) режим полей не
+      // сбрасывает: выделение записи и текущего поля сохраняются.
+      if (current?.kind === 'record' && current.key === key && currentDay === day) return;
+      setCurrent({ kind: 'record', key }, day);
       return;
     }
     if (section !== null && day !== '') {
       setCurrent({ kind: 'day', key: day });
       return;
     }
-    // Клик вне записи/группы — выход из режима полей.
+    // Клик внутри ленты, но вне записи/группы — выход из режима полей.
     exitFieldMode();
   }
 
+  /**
+   * Клик вне ленты (календарь, панель отбора, остальной интерфейс) — тоже выход
+   * из режима полей (требование 165323a7). Слушатель на документе в фазе
+   * перехвата: клики по самой ленте обрабатывает её собственный {@link onClick},
+   * здесь они пропускаются. Документ может отсутствовать в DOM-тестах — тогда
+   * режим полей снимается только внутри ленты.
+   */
+  function onDocumentClick(event: { target?: unknown | null }): void {
+    const target = (event.target ?? null) as HTMLElement | null;
+    if (target !== null && root.contains?.(target) === true) return;
+    exitFieldMode();
+  }
+
+  const ownerDocument = (globalThis as { document?: Document }).document;
   root.addEventListener('keydown', onKeyDown as EventListener);
   root.addEventListener('click', onClick as EventListener);
+  ownerDocument?.addEventListener('click', onDocumentClick as EventListener, true);
 
   return {
     refresh(): void {
@@ -493,6 +512,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     destroy(): void {
       root.removeEventListener('keydown', onKeyDown as EventListener);
       root.removeEventListener('click', onClick as EventListener);
+      ownerDocument?.removeEventListener('click', onDocumentClick as EventListener, true);
     },
   };
 }

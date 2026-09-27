@@ -193,6 +193,60 @@ describe('приёмка №10, п.2–3: режим полей записи', (
     assert.deepEqual(handle.current(), { kind: 'record', key: 'r1' });
   });
 
+  it('клик вне ленты снимает режим полей; клик по полю записи — не снимает', async () => {
+    // Документ-шим: feed-nav вешает на документ перехват «клик вне ленты».
+    const listeners: Record<string, Array<(event: unknown) => void>> = {};
+    const prevDoc = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = {
+      addEventListener: (type: string, handler: (event: unknown) => void) => {
+        (listeners[type] ??= []).push(handler);
+      },
+      removeEventListener: (type: string, handler: (event: unknown) => void) => {
+        listeners[type] = (listeners[type] ?? []).filter((fn) => fn !== handler);
+      },
+    };
+    try {
+      const { attachFeedNav, FEED_NAV_ELEMENT_CLASS, FEED_NAV_CURRENT_CLASS } = await navModule();
+      const feed = buildFeed([{ day: '2026-09-11', records: ['r1'] }]);
+      const handle = attachFeedNav(feed.root as unknown as HTMLElement, {
+        onSetDayCollapsed: () => undefined,
+        onEditBody: () => undefined,
+      });
+      press(feed.root, 'ArrowDown');
+      press(feed.root, 'ArrowDown'); // запись
+      press(feed.root, 'Enter'); // режим полей → дата
+      assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS));
+
+      // Клик по полю ТЕКУЩЕЙ записи режим полей не сбрасывает.
+      feed.root.emit('click', { target: feed.date('r1') });
+      assert.ok(
+        feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS),
+        'клик по полю записи сохранил режим полей',
+      );
+      assert.ok(feed.cardIn('2026-09-11', 'r1').classList.contains(FEED_NAV_CURRENT_CLASS));
+
+      // Клик вне ленты (календарь/панель отбора) — выход из режима полей.
+      const calendar = new ShimElement('button', 'chron-cal-day');
+      for (const dispatch of listeners['click'] ?? []) dispatch({ target: calendar });
+      assert.ok(
+        !feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS),
+        'клик вне ленты снял режим полей',
+      );
+      assert.ok(
+        feed.cardIn('2026-09-11', 'r1').classList.contains(FEED_NAV_CURRENT_CLASS),
+        'выделение записи сохранено',
+      );
+      assert.deepEqual(handle.current(), { kind: 'record', key: 'r1' });
+
+      // destroy снимает слушатель документа.
+      handle.destroy();
+      assert.equal((listeners['click'] ?? []).length, 0, 'слушатель документа снят');
+    } finally {
+      if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = prevDoc;
+    }
+  });
+
   it('Tab не входит в поля до Enter, а после Esc снова обычная навигация', async () => {
     const { attachFeedNav } = await navModule();
     const feed = buildFeed([{ day: '2026-09-11', records: ['r1', 'r2'] }]);
