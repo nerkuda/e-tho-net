@@ -71,9 +71,14 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   const WriteChronicleItemSchema = z
     .object({
       title: z.string().nullable().optional(),
-      body_md: z.string().min(1),
+      // `body_md` необязателен (ошибка 00115e7b): хроно-запись создаётся и по
+      // непустому заголовку. Полную проверку содержания делает домен
+      // (требование 26f0aa52).
+      body_md: z.string().optional(),
       valid_from: z.string().min(1).optional(),
       valid_to: z.string().nullable().optional(),
+      // Флаг «учитывать время» (0.10.1, требование 91ba5b3f).
+      use_time: z.boolean().optional(),
     })
     .strict();
   const WriteLinkSpecSchema = z

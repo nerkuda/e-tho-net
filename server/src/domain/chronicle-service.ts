@@ -6,10 +6,12 @@
  *      with their undirected subordinates up to {@link TRAVERSAL_DEFAULTS.MAX_DEPTH}
  *      levels, then filtered by thought types and the keywords mini-syntax
  *      (`*`/`-`, searched in titles, synonyms, and the texts of the thoughts'
- *      comments and of their incident links' comments on both sides);
+ *      permanent comments and of their incident links' comments on both sides);
  *   2. list **chronological comments** attached to the selected thoughts or to
- *      their links (link types / link scope filter), intersected with the
- *      requested date range, sorted by (valid_from, valid_to, title) and paged.
+ *      their links (link types / link scope filter) OR matching the keywords in
+ *      their OWN body/title (0.10.1, T7 — так сужаются и записи дня на HOME),
+ *      intersected with the requested date range, sorted by record class,
+ *      `valid_from`, `valid_to`, `created_at`, `id` and paged.
  *
  * Row snippets reuse {@link makeSnippet} from the search service (same
  * `<mark>` highlight convention); targets are resolved to `ThoughtRef`s /
@@ -37,13 +39,17 @@ import {
   type ChronicleTargetLink,
   type SortOrder,
   type StructureAuthorOp,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { REF_COLUMNS } from './query-service.js';
+import { buildThoughtIdSelect, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { normaliseInstant } from './dates.js';
+import { isFilterEmpty, parseStructureFilter } from './structure-service.js';
+import { resolveGlobalDateTokens, scanStringForTokens } from './thought-type-view-tokens.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
@@ -53,7 +59,18 @@ function placeholders(n: number): string {
   return Array.from({ length: n }, () => '?').join(', ');
 }
 
-/** Parse the `date_from`/`date_to` fields (empty/absent → `undefined`). */
+/**
+ * Parse the `date_from`/`date_to` fields (empty/absent → `undefined`).
+ *
+ * Значение — полный UTC-инстанс, «голая дата» (= сутки UTC) или динамический
+ * токен дат (`$today`/`$now`, арифметика `±Nd`; требование 91f8d8dd).
+ * «Голая дата» приводится к полному UTC-инстансу сразу (0.10.1, требование
+ * 469d8d69): `date_from` берёт начало дня (`00:00:00.000Z`), `date_to` — конец
+ * (`23:59:59.999Z`), границы включительные. Токен СОХРАНЯЕТСЯ как есть
+ * (не раскрывается при сохранении отбора) и раскрывается в момент применения
+ * в {@link resolvePeriodField}; в периоде допустимы только глобальные токены
+ * (контекста мысли у периода нет) — остальные отвергаются `VALIDATION_ERROR`.
+ */
 function parseDateField(
   body: Record<string, unknown>,
   field: 'date_from' | 'date_to',
@@ -66,7 +83,55 @@ function parseDateField(
       field,
     }, requestId);
   }
-  return raw.trim();
+  const trimmed = raw.trim();
+  const { known, unknown } = scanStringForTokens(trimmed);
+  if (unknown.length > 0) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: неизвестный токен «${unknown[0]!.raw}».`, {
+      field,
+      token: unknown[0]!.raw,
+    }, requestId);
+  }
+  if (known.length > 0) {
+    const bad = known.find((t) => t.kind !== 'global');
+    if (bad !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${field}: токен «${bad.raw}» требует контекста мысли и в периоде недопустим.`,
+        { field, token: bad.raw },
+        requestId,
+      );
+    }
+    return trimmed;
+  }
+  return normaliseInstant(trimmed, field, field === 'date_from' ? 'start' : 'end') ?? undefined;
+}
+
+/**
+ * Раскрыть токены периода (`$today`/`$now`, арифметика) в момент применения
+ * отбора и привести результат к полному UTC-инстансу (требование 91f8d8dd).
+ * Значение без токенов уже нормализовано на разборе — возвращается как есть.
+ */
+function resolvePeriodField(
+  value: string | null | undefined,
+  field: 'date_from' | 'date_to',
+  now?: () => Date,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const { known, unknown } = scanStringForTokens(value);
+  if (known.length === 0 && unknown.length === 0) return value;
+  const { value: resolved, unresolved } = resolveGlobalDateTokens(
+    value,
+    now === undefined ? {} : { now },
+  );
+  if (unresolved.length > 0) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: ${unresolved[0]!.message}`, {
+      field,
+      token: unresolved[0]!.token,
+    });
+  }
+  return (
+    normaliseInstant(resolved, field, field === 'date_from' ? 'start' : 'end') ?? undefined
+  );
 }
 
 /** Read a `ChronicleFilter` from an untrusted object (request body or saved JSON). */
@@ -84,6 +149,25 @@ export function parseChronicleFilter(
       }, requestId);
     }
     if (keywords.trim() !== '') filter.keywords = keywords;
+  }
+
+  // Область поиска ключевых слов (0.10.1, элемент 2f14de06/91f8d8dd): чекбоксы
+  // «наименование/синонимы/комментарий». Пустой набор/отсутствие — поиск по
+  // всем областям (поведение до 0.10.1).
+  const keywordScope = body['keyword_scope'];
+  if (keywordScope !== undefined) {
+    if (
+      !Array.isArray(keywordScope) ||
+      keywordScope.some((v) => v !== 'title' && v !== 'synonyms' && v !== 'comment')
+    ) {
+      throw new EtnError('VALIDATION_ERROR', 'Недопустимый keyword_scope.', {
+        field: 'keyword_scope',
+        allowed: ['title', 'synonyms', 'comment'],
+      }, requestId);
+    }
+    if (keywordScope.length > 0) {
+      filter.keyword_scope = [...new Set(keywordScope)] as StructureKeywordScope[];
+    }
   }
 
   const thoughtIds = body['thought_ids'];
@@ -154,10 +238,39 @@ export function parseChronicleFilter(
     filter.link_scope = linkScope as ChronicleLinkScope;
   }
 
+  // Критерии целей записи (0.10.1, требование 306f74cc) — тот же набор, что у
+  // панели «Структур»: разбираем общим доменным парсером, чтобы модель
+  // критериев не дублировалась. Запись проходит, если хотя бы одна её
+  // привязанная мысль удовлетворяет (см. `buildRowsWhere`).
+  const targets = body['targets'];
+  if (targets !== undefined) {
+    if (typeof targets !== 'object' || targets === null || Array.isArray(targets)) {
+      throw new EtnError('VALIDATION_ERROR', 'targets должен быть объектом критериев.', {
+        field: 'targets',
+      }, requestId);
+    }
+    const parsedTargets = parseStructureFilter(targets as Record<string, unknown>, requestId);
+    if (!isFilterEmpty(parsedTargets)) filter.targets = parsedTargets;
+  }
+
   const dateFrom = parseDateField(body, 'date_from', requestId);
   if (dateFrom !== undefined) filter.date_from = dateFrom;
   const dateTo = parseDateField(body, 'date_to', requestId);
   if (dateTo !== undefined) filter.date_to = dateTo;
+
+  // Режим полей периода панели «Дневника» (0.10.1, приёмка №2). На выборку не
+  // влияет — хранится в определении сохранённого отбора, чтобы применение
+  // восстановило «Пресеты»/«Даты»; значения-токены раскрываются отдельно.
+  const dateMode = body['date_mode'];
+  if (dateMode !== undefined) {
+    if (dateMode !== 'presets' && dateMode !== 'dates') {
+      throw new EtnError('VALIDATION_ERROR', 'Недопустимый date_mode.', {
+        field: 'date_mode',
+        allowed: ['presets', 'dates'],
+      }, requestId);
+    }
+    filter.date_mode = dateMode;
+  }
 
   // Фильтры авторства (задача 59119797, эволюция операторов): id
   // пользователя и оператор, применяется к колонкам `comments.created_by` /
@@ -358,21 +471,59 @@ function collectRootAndSubtreeIds(
   return rows.map((r) => r.id);
 }
 
-/** Keywords condition for one word against a thought (titles, synonyms, comment
- *  texts of the thought and of its incident links on both sides). */
-const THOUGHT_KEYWORD_COND = `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
+/**
+ * Keywords condition for one word against a thought: the thought's own title,
+ * its synonyms, its **permanent** comment and the comment texts of its incident
+ * links on both sides.
+ *
+ * Хронологические комментарии мысли здесь НЕ ищутся (0.10.1, T7): совпадение в
+ * теле записи должно отбирать саму запись, а не её цель. Иначе для записи дня
+ * (единственная цель — HOME) слово в теле выбирало бы корень и возвращало все
+ * его записи. Поиск по телам/заголовкам записей делает {@link RECORD_KEYWORD_COND}
+ * в фазе 2.
+ *
+ * Область (`keyword_scope`) сужает набор сравнений (0.10.1): `comment` —
+ * постоянный комментарий мысли и комментарии её связей. Отсутствие области —
+ * все сравнения (поведение до 0.10.1).
+ */
+function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
+  sql: string;
+  argCount: number;
+} {
+  const enabled = (name: StructureKeywordScope): boolean =>
+    scope === undefined || scope.length === 0 || scope.includes(name);
+  const parts: string[] = [];
+  if (enabled('title')) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+  if (enabled('synonyms')) {
+    parts.push(`EXISTS (
   SELECT 1 FROM thought_synonyms_v ts
   WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
-) OR EXISTS (
+)`);
+  }
+  if (enabled('comment')) {
+    parts.push(`EXISTS (
   SELECT 1 FROM comments_v c1
   JOIN comment_targets_v ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
-  WHERE ct1.owner_id = t.id AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
-) OR EXISTS (
+  WHERE ct1.owner_id = t.id AND c1.kind = 'permanent' AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
+)`);
+    parts.push(`EXISTS (
   SELECT 1 FROM comments_v c2
   JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
   JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
   WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
-))`;
+)`);
+  }
+  if (parts.length === 0) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+  return { sql: `(${parts.join(' OR ')})`, argCount: parts.length };
+}
+
+/**
+ * Keywords condition for one word against the RECORD itself (0.10.1, T7):
+ * тело и заголовок хроно-комментария. Это и есть «поиск фильтрует ленту» —
+ * запись проходит по собственному тексту независимо от того, попала ли в
+ * отбор её мысль-цель (иначе записи дня на HOME не сужались бы).
+ */
+const RECORD_KEYWORD_COND = `(unicode_lower(c.body_md) LIKE ? ESCAPE '\\' OR unicode_lower(IFNULL(c.title, '')) LIKE ? ESCAPE '\\')`;
 
 /**
  * Phase 1 SQL — filter the (possibly subtree-expanded) thought set by type and
@@ -384,6 +535,7 @@ function selectThoughts(
   typeIds: string[],
   includeWords: string[],
   excludeWords: string[],
+  scope?: StructureKeywordScope[],
 ): string[] {
   // An empty root set short-circuits: `IN ()` is invalid SQL and there is
   // nothing left to filter anyway.
@@ -402,71 +554,69 @@ function selectThoughts(
       args.push(...expanded);
     }
   }
+  const cond = thoughtKeywordCond(scope);
   for (const word of includeWords) {
     // `toLowerCase()` — LIKE в SQLite регистронезависим только для ASCII, а
     // `title_norm`/`synonym_norm`/`unicode_lower(body_md)` уже в нижнем
     // регистре: без нормализации слова кириллица в другом регистре не
     // матчилась (ошибка 2f27f244). Тот же приём, что в query-service.
     const pattern = buildLikePattern(word.toLowerCase());
-    where.push(THOUGHT_KEYWORD_COND);
-    args.push(pattern, pattern, pattern, pattern);
+    where.push(cond.sql);
+    for (let i = 0; i < cond.argCount; i += 1) args.push(pattern);
   }
   for (const word of excludeWords) {
     const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${THOUGHT_KEYWORD_COND}`);
-    args.push(pattern, pattern, pattern, pattern);
+    where.push(`NOT ${cond.sql}`);
+    for (let i = 0; i < cond.argCount; i += 1) args.push(pattern);
   }
   const sql = `SELECT t.id FROM thoughts_v t ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}`;
   const rows = ndb.prepare(sql).all(...args) as Array<{ id: string }>;
   return rows.map((r) => r.id);
 }
 
-/** Period-intersection SQL for `valid_from` (upper bound of the requested period). */
+/**
+ * Period-intersection SQL for `valid_from` (upper bound of the requested
+ * period). Границы уже приведены к полным UTC-инстансам (`date_to` — конец
+ * суток для «голой даты»), поэтому достаточно прямого сравнения — прежний
+ * LIKE-костыль под date-only не нужен (0.10.1).
+ */
 function validFromUpperCond(dateTo: string): [string, string[]] {
-  // A calendar date (YYYY-MM-DD) must also admit full timestamps of that day.
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
-    return ['(c.valid_from <= ? OR c.valid_from LIKE ? ESCAPE \'\\\')', [dateTo, `${dateTo}%`]];
-  }
   return ['c.valid_from <= ?', [dateTo]];
 }
 
 /** Period-intersection SQL for `valid_to` (lower bound of the requested period). */
 function validToLowerCond(dateFrom: string): [string, string[]] {
-  const cond = '(c.valid_to IS NULL OR c.valid_to >= ?';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
-    return [`${cond} OR c.valid_to LIKE ? ESCAPE '\\')`, [dateFrom, `${dateFrom}%`]];
-  }
-  return [`${cond})`, [dateFrom]];
+  // `valid_to IS NULL` оставлен страховкой для постоянных/наследных строк;
+  // у хронологических после 0.10.1 окончание всегда заполнено.
+  return ['(c.valid_to IS NULL OR c.valid_to >= ?)', [dateFrom]];
 }
 
-/** Phase 2 WHERE shared by the count and the page queries. */
-function buildRowsWhere(
+/**
+ * Attachment condition for a set of selected thought ids: the comment is
+ * attached to one of them, or to a link whose endpoint (per `link_scope`) is.
+ */
+function attachmentCond(
   ndb: NetworkDb,
-  selectedIds: string[],
+  ids: string[],
   request: ChronicleQueryRequest,
-): { cond: string; args: unknown[] } {
-  const conds: string[] = ["c.kind = 'chronological'"];
-  const args: unknown[] = [];
-
-  // Attachment to a selected thought…
-  const thoughtConds: string[] = [];
-  thoughtConds.push(
+  args: unknown[],
+): string {
+  const parts: string[] = [
     `EXISTS (SELECT 1 FROM comment_targets_v ct
              WHERE ct.comment_id = c.id AND ct.owner_type = 'thought'
-               AND ct.owner_id IN (${placeholders(selectedIds.length)}))`,
-  );
-  args.push(...selectedIds);
+               AND ct.owner_id IN (${placeholders(ids.length)}))`,
+  ];
+  args.push(...ids);
 
-  // …or to a link whose source/target is selected (per the link scope).
   const scope = request.link_scope ?? 'both';
   const endpointConds: string[] = [];
   if (scope === 'sources' || scope === 'both') {
-    endpointConds.push(`l.source_id IN (${placeholders(selectedIds.length)})`);
-    args.push(...selectedIds);
+    endpointConds.push(`l.source_id IN (${placeholders(ids.length)})`);
+    args.push(...ids);
   }
   if (scope === 'targets' || scope === 'both') {
-    endpointConds.push(`l.target_id IN (${placeholders(selectedIds.length)})`);
-    args.push(...selectedIds);
+    endpointConds.push(`l.target_id IN (${placeholders(ids.length)})`);
+    args.push(...ids);
   }
   let linkCond = `EXISTS (SELECT 1 FROM comment_targets_v ctl
     JOIN links_v l ON l.id = ctl.owner_id AND ctl.owner_type = 'link'
@@ -480,9 +630,145 @@ function buildRowsWhere(
     }
   }
   linkCond += ')';
-  thoughtConds.push(linkCond);
+  parts.push(linkCond);
+  return `(${parts.join(' OR ')})`;
+}
 
-  conds.push(`(${thoughtConds.join(' OR ')})`);
+/**
+ * «У записи есть хоть одна привязка» — дешёвая замена перебора всех id, когда
+ * структурный отбор мыслей не сужен (нет `thought_ids`/`type_ids`): тот же
+ * результат, но без огромного `IN (…)` в списке параметров.
+ */
+function anyAttachmentCond(): string {
+  return `EXISTS (SELECT 1 FROM comment_targets_v cta WHERE cta.comment_id = c.id)`;
+}
+
+/**
+ * Текстовое условие по телу и заголовку САМОЙ записи (0.10.1, T7): каждое
+ * включающее слово обязано встретиться, ни одно исключающее — нет.
+ * `null` — слов нет.
+ */
+function recordTextCond(
+  includeWords: string[],
+  excludeWords: string[],
+  args: unknown[],
+): string | null {
+  const parts: string[] = [];
+  for (const word of includeWords) {
+    const pattern = buildLikePattern(word.toLowerCase());
+    parts.push(RECORD_KEYWORD_COND);
+    args.push(pattern, pattern);
+  }
+  for (const word of excludeWords) {
+    const pattern = buildLikePattern(word.toLowerCase());
+    parts.push(`NOT ${RECORD_KEYWORD_COND}`);
+    args.push(pattern, pattern);
+  }
+  return parts.length > 0 ? parts.join(' AND ') : null;
+}
+
+/**
+ * Включена ли область `comment` в `keyword_scope`. Отсутствие области (или
+ * пустой массив) — прежнее поведение «все области»; иначе область должна быть
+ * названа явно. Одна точка правды для пути Б (текст/заголовок записи).
+ */
+export function commentScopeEnabled(scope: StructureKeywordScope[] | undefined): boolean {
+  return scope === undefined || scope.length === 0 || scope.includes('comment');
+}
+
+/**
+ * Phase 2 WHERE shared by the count and the page queries.
+ *
+ * `scopeIds` — мысли структурного отбора (без ключевых слов); `keywordIds` —
+ * мысли, прошедшие мыслевой путь ключевых слов (пусто, если ни одна не
+ * прошла). Записи отбираются как объединение: (путь А, только при включающих
+ * словах) привязанные к `keywordIds`, ИЛИ (путь Б) привязанные к области
+ * отбора И совпавшие по собственному тексту (включающие есть / исключающих
+ * нет).
+ *
+ * Путь Б — это область `comment` (0.10.1, задача 46057359): «Комментарии»
+ * относятся к постоянным комментариям мыслей И к дневниковым записям, а
+ * «наименование»/«синонимы» — только к мыслям. Поэтому совпадение по
+ * телу/заголовку САМОЙ записи ищется, только когда `keyword_scope` содержит
+ * `comment`; выключенный флаг «Комментарии» оставляет записи лишь мыслевому
+ * пути (наименование/синонимы целей).
+ */
+function buildRowsWhere(
+  ndb: NetworkDb,
+  userId: string,
+  scopeIds: string[],
+  keywordIds: string[],
+  scopeRestricted: boolean,
+  includeWords: string[],
+  excludeWords: string[],
+  request: ChronicleQueryRequest,
+): { cond: string; args: unknown[] } {
+  const conds: string[] = ["c.kind = 'chronological'"];
+  const args: unknown[] = [];
+
+  // Порядок вызовов = порядок `?` в итоговом SQL. Мыслевой путь (А) — только
+  // при включающих словах: чисто исключающие слова работают по тексту записи
+  // (путь Б), иначе прежнее «вычитание мыслей» возвращало бы записи их соседей.
+  const parts: string[] = [];
+  if (includeWords.length > 0 && keywordIds.length > 0) {
+    parts.push(attachmentCond(ndb, keywordIds, request, args));
+  }
+  // Путь Б — только при включённой области `comment`.
+  if (
+    commentScopeEnabled(request.keyword_scope) &&
+    (includeWords.length > 0 || excludeWords.length > 0)
+  ) {
+    const text = recordTextCond(includeWords, excludeWords, args);
+    if (text !== null) {
+      const attach = scopeRestricted
+        ? attachmentCond(ndb, scopeIds, request, args)
+        : anyAttachmentCond();
+      parts.push(`(${text} AND ${attach})`);
+    }
+  }
+  if (parts.length > 0) {
+    // Скобки обязательны: без них `kind='chronological' AND A OR B` разбирается
+    // как `(kind AND A) OR B`, и путь Б (текст записи) вернул бы в ленту
+    // постоянные комментарии (дефект приёмки 0.10.1).
+    conds.push(`(${parts.join(' OR ')})`);
+  } else if (includeWords.length > 0) {
+    // Включающие слова заданы, но ни один путь не дал условий: при выключенной
+    // области `comment` совпадение по тексту записи не ищется, а мыслевого
+    // совпадения нет — записей нет (иначе запрос отдал бы ВСЕ записи области).
+    conds.push('0');
+  } else if (scopeIds.length > 0) {
+    conds.push(
+      scopeRestricted ? attachmentCond(ndb, scopeIds, request, args) : anyAttachmentCond(),
+    );
+  } else {
+    conds.push('0');
+  }
+
+  // Критерии целей (0.10.1, требование 306f74cc): запись проходит, если ХОТЯ
+  // БЫ ОДНА её привязанная мысль (`comment_targets`, включая вторичные)
+  // удовлетворяет критериям набора «Структур». Критерии строит единый движок
+  // выборки мыслей (`buildThoughtIdSelect`) — модель не дублируется; здесь
+  // подзапрос встраивается в `IN`, поэтому обход индексный по
+  // `comment_targets.comment_id`, без N+1 по записям.
+  if (request.targets !== undefined) {
+    const targetSelect = buildThoughtIdSelect(
+      ndb,
+      userId,
+      structureRequestToQuery({
+        ...request.targets,
+        sort: 'alpha',
+        order: 'asc',
+        limit: 1,
+        offset: 0,
+      }),
+    );
+    conds.push(
+      `EXISTS (SELECT 1 FROM comment_targets_v cttg
+         WHERE cttg.comment_id = c.id AND cttg.owner_type = 'thought'
+           AND cttg.owner_id IN (${targetSelect.sql}))`,
+    );
+    args.push(...targetSelect.params);
+  }
 
   if (request.date_from !== undefined && request.date_from !== null) {
     const [cond, more] = validToLowerCond(request.date_from);
@@ -542,12 +828,14 @@ function buildRows(
       title: row.title,
       valid_from: row.valid_from,
       valid_to: row.valid_to,
+      use_time: row.use_time === 1,
       version: row.version,
       created_at: row.created_at,
       updated_at: row.updated_at,
       created_by: row.created_by,
       updated_by: row.updated_by,
       snippet: row.snippet,
+      body_html: row.body_html,
       targets,
     };
   });
@@ -560,8 +848,15 @@ interface Row {
   owner_id: string;
   title: string | null;
   body_md: string;
+  /**
+   * Полный HTML тела записи (0.10.1, приёмка №3): лента показывает запись
+   * целиком, а не `snippet`.
+   */
+  body_html: string;
   valid_from: string;
   valid_to: string | null;
+  /** 0/1 — флаг «учитывать время» (миграция 046). */
+  use_time: number;
   version: number;
   created_at: string;
   updated_at: string;
@@ -571,34 +866,84 @@ interface Row {
 }
 
 /**
+ * Класс записи (0.10.1, требование c6ddc1ea): `0` — привязка только к HOME
+ * («запись дня», все цели — корень сети), `1` — все прочие. Считается по
+ * `comment_targets`: запись класса 0 не имеет ни одной цели, отличной от
+ * корневой мысли (ни чужой мысли, ни связи).
+ */
+const RECORD_CLASS_SQL = `CASE WHEN EXISTS (
+  SELECT 1 FROM comment_targets_v ct_class
+  LEFT JOIN thoughts_v ht ON ht.id = ct_class.owner_id AND ct_class.owner_type = 'thought'
+  WHERE ct_class.comment_id = c.id
+    AND (ct_class.owner_type <> 'thought' OR ht.is_root <> 1)
+) THEN 1 ELSE 0 END`;
+
+/**
  * Run the two-phase chronicle query (docs/03-server-api.md §20).
  *
  * Phase 1 selects thoughts; phase 2 lists chronological comments attached to
  * them or to their links. Returns the paged rows with the total count.
+ *
+ * Сортировка (0.10.1, требование c6ddc1ea): класс записи → `valid_from` →
+ * `valid_to` → `created_at` → `id`. Класс записи (`0` — запись дня, `1` —
+ * прочие) сортируется ВСЕГДА по возрастанию — направление `order` к нему не
+ * применяется; направление действует только на `valid_from`/`valid_to` и
+ * тайбрейкеры `created_at`/`id`. Прежние тайбрейкеры (NULL-обработка
+ * `valid_to`, `title`) отменены — порядок детерминирован уникальным `id`.
+ *
+ * `opts.userId` — контекст исполнения критериев целей (движок выборки мыслей);
+ * `opts.now` — часы для раскрытия токенов периода (тесты).
  */
 export function queryChronicle(
   ndb: NetworkDb,
   request: ChronicleQueryRequest,
+  opts: { userId?: string; now?: () => Date } = {},
 ): ChronicleQueryResponse {
+  const userId = opts.userId ?? '';
+  // Токены периода раскрываются в момент применения отбора (требование
+  // 91f8d8dd), затем значения сравниваются как полные UTC-инстансы.
+  const dateFrom = resolvePeriodField(request.date_from, 'date_from', opts.now);
+  const dateTo = resolvePeriodField(request.date_to, 'date_to', opts.now);
+  const resolved: ChronicleQueryRequest = { ...request };
+  if (dateFrom !== undefined) resolved.date_from = dateFrom;
+  if (dateTo !== undefined) resolved.date_to = dateTo;
+
   const { include: includeWords, exclude: excludeWords } = parseFilterKeywords(
-    request.keywords ?? '',
+    resolved.keywords ?? '',
   );
-  const baseIds = collectRootAndSubtreeIds(ndb, request);
-  let selectedIds = selectThoughts(ndb, baseIds, request.type_ids ?? [], includeWords, []);
-  // Excluded words: drop every thought where the word occurs anywhere in the
-  // same searched texts (titles, synonyms, thought/link comments).
-  if (excludeWords.length > 0) {
-    const excluded = new Set(
-      selectThoughts(ndb, baseIds, request.type_ids ?? [], excludeWords, []),
-    );
-    selectedIds = selectedIds.filter((id) => !excluded.has(id));
-  }
-  if (selectedIds.length === 0) {
+  const baseIds = collectRootAndSubtreeIds(ndb, resolved);
+  const typeIds = resolved.type_ids ?? [];
+  // Область структурного отбора (мысли без ключевых слов) — в неё обязан
+  // попасть путь Б: «запись совпала по своему тексту».
+  const scopeIds = selectThoughts(ndb, baseIds, typeIds, [], []);
+  if (scopeIds.length === 0) {
     return { rows: [], total: 0 };
   }
+  // Путь А: мысли, прошедшие мыслевой поиск (название, синонимы, постоянный
+  // комментарий, комментарии связей), минус исключающие слова.
+  let keywordIds = scopeIds;
+  if (includeWords.length > 0 || excludeWords.length > 0) {
+    keywordIds = selectThoughts(ndb, baseIds, typeIds, includeWords, [], resolved.keyword_scope);
+    if (excludeWords.length > 0) {
+      const excluded = new Set(
+        selectThoughts(ndb, baseIds, typeIds, excludeWords, [], resolved.keyword_scope),
+      );
+      keywordIds = keywordIds.filter((id) => !excluded.has(id));
+    }
+  }
+  const scopeRestricted = baseIds !== null || typeIds.length > 0;
 
-  const { cond, args } = buildRowsWhere(ndb, selectedIds, request);
-  const dir = request.order === 'desc' ? 'DESC' : 'ASC';
+  const { cond, args } = buildRowsWhere(
+    ndb,
+    userId,
+    scopeIds,
+    keywordIds,
+    scopeRestricted,
+    includeWords,
+    excludeWords,
+    resolved,
+  );
+  const dir = resolved.order === 'desc' ? 'DESC' : 'ASC';
   const totalRow = ndb
     .prepare(`SELECT COUNT(*) AS c FROM comments_v c WHERE ${cond}`)
     .get(...args) as { c: number };
@@ -607,17 +952,18 @@ export function queryChronicle(
   const rows = ndb
     .prepare(
       `SELECT c.id, c.owner_type, c.owner_id, c.title, c.body_md, c.valid_from, c.valid_to,
-              c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
+              c.body_html,
+              c.use_time, c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
        FROM comments_v c
        WHERE ${cond}
-       ORDER BY c.valid_from ${dir},
-                (c.valid_to IS NULL) ASC,
+       ORDER BY ${RECORD_CLASS_SQL} ASC,
+                c.valid_from ${dir},
                 c.valid_to ${dir},
-                c.title COLLATE NOCASE ${dir},
-                c.id ASC
+                c.created_at ${dir},
+                c.id ${dir}
        LIMIT ? OFFSET ?`,
     )
-    .all(...args, request.limit, request.offset) as Row[];
+    .all(...args, resolved.limit, resolved.offset) as Row[];
 
   // Resolve targets: collect all thought ids and link ids of the page.
   const thoughtIds = new Set<string>();

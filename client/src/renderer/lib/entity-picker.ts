@@ -901,6 +901,12 @@ export interface EntityChipFieldOptions {
    * сохраняются.
    */
   picker?: { label: string; open(managed: readonly string[]): Promise<string[] | null> };
+  /**
+   * Приглашение непустого поля. Поле выбора сущностей едино с полем значения
+   * свойства-связи в редакторе мысли (0.10.1, приёмка №2): пусто — `placeholder`
+   * («Название мысли…»), есть значения — `addPlaceholder` («+ ещё одну мысль»).
+   */
+  addPlaceholder?: string;
   /** Начальное состояние «поле недоступно» (поле ввода и кнопка пикера). */
   disabled?: boolean;
 }
@@ -970,7 +976,11 @@ function restoreKeyboardFocus(
  */
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
   const root = div('entity-chip-field st-f-fieldrow');
-  const field = div('st-f-chipfield entity-chip-field-inner');
+  // Разметку чип-поля даёт общая `.link-value-wrap/field/corner` — та же, что
+  // у поля значения свойства-связи в редакторе мысли (0.10.1, приёмка №2):
+  // облачка значений, поле живого поиска, угловые «…» (список) и «✕» (очистка).
+  const wrap = div('link-value-wrap');
+  const field = div('st-f-chipfield entity-chip-field-inner link-value-field');
   const input = fieldInput({ extraClass: 'entity-chip-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
@@ -981,8 +991,20 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
 
   /** Заблокировано ли поле (выключатель зоны настроек поиска, задача a3247f84). */
   let disabled = opts.disabled === true;
-  /** Кнопка модального пикера — создаётся ниже, если пикер задан. */
+  /** Угловая кнопка «…» — создаётся ниже, если пикер задан. */
   let pickBtn: HTMLButtonElement | null = null;
+  /** Угловая кнопка «✕» — очистка всего значения. */
+  const clearBtn = uiButton({
+    label: '✕',
+    role: 'ghost',
+    class: 'link-value-corner-btn',
+    title: 'Очистить значение',
+    onClick: () => {
+      if (disabled || opts.getValues().length === 0) return;
+      opts.onChange([]);
+      renderChips();
+    },
+  });
 
   const commit = (raw: string): void => {
     const value = raw.trim();
@@ -1044,6 +1066,12 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
     field.replaceChildren(...chips, input);
+    // Приглашение: пусто — «Название…», есть значения — «+ ещё один …»
+    // (единый вид с полем значения свойства-связи, приёмка №2).
+    const empty = opts.getValues().length === 0;
+    input.placeholder = empty
+      ? (opts.placeholder ?? 'Добавить значение…')
+      : (opts.addPlaceholder ?? opts.placeholder ?? 'Добавить значение…');
     // Перерисовку может затеять и вызывающий (асинхронная догрузка каталога) —
     // его фокус не перехватываем, возвращаем только потерянный здесь.
     restoreKeyboardFocus(input, hadFocus, false);
@@ -1058,28 +1086,36 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
 
   field.append(input);
   renderChips();
-  root.append(field);
+  // Угловые кнопки поля: «…» (список) — когда задан пикер, «✕» — очистка всего.
+  const corner = div('link-value-corner');
+  if (opts.picker !== undefined) {
+    const { picker } = opts;
+    const managed = (): string[] => opts.getValues().filter((v) => !v.startsWith('$'));
+    pickBtn = uiButton({
+      label: '…',
+      role: 'ghost',
+      class: 'link-value-corner-btn',
+      title: picker.label,
+      onClick: () => {
+        if (disabled) return;
+        void picker.open(managed()).then((next) => {
+          if (next === null) return;
+          const kept = opts.getValues().filter((v) => v.startsWith('$'));
+          opts.onChange([...kept, ...next]);
+          renderChips();
+        });
+      },
+    });
+    corner.append(pickBtn);
+  }
+  corner.append(clearBtn);
+  wrap.append(field, corner);
+  root.append(wrap);
 
   // Первичная загрузка каталога — облачка уже выбранных значений (типы,
   // пользователи) видны до первого фокуса в поле.
   if ((opts.optionsWhen ?? 'always') === 'always') {
     void Promise.resolve(source.load('')).then(() => renderChips());
-  }
-
-  if (opts.picker !== undefined) {
-    const { picker } = opts;
-    const managed = (): string[] => opts.getValues().filter((v) => !v.startsWith('$'));
-    pickBtn = uiButton({ label: picker.label, size: 's', class: 'entity-chip-pick' });
-    pickBtn.addEventListener('click', () => {
-      if (disabled) return;
-      void picker.open(managed()).then((next) => {
-        if (next === null) return;
-        const kept = opts.getValues().filter((v) => v.startsWith('$'));
-        opts.onChange([...kept, ...next]);
-        renderChips();
-      });
-    });
-    root.append(pickBtn);
   }
 
   applyDisabled();

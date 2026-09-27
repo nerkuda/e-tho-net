@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * «Хроника» view (L20, 08-ui-spec.md §17)
+ * Вид «Дневник» (рабочий стол) — 0.10.1, задача T6 (ранее «Хроника», L20)
  * ------------------------------------------------------------------------- */
 
 .chronicle {
@@ -9,17 +9,14 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* --layer-bg (0.6.4, 13-layers.md §2.2a): the chronicle canvas follows the
-   * active layer's background colour like the map does. */
+  /* --layer-bg (0.6.4, 13-layers.md §2.2a): полотно «Дневника» следует фону
+   * активного слоя, как карта. */
   background: var(--layer-bg, var(--bg));
 }
 
-/* Filter area: общий каркас отбора (lib/filter-form.ts) — прокручиваемый
- * список секций + приклеенный футер; область даёт высоту и границу. */
-/* Область панели отбора «Хроники»: размер и скрытость ведёт общий каркас
- * панели отбора (`.fp-host`, задача 2ebe4206); здесь только вид области. */
-.chron-filter-area {
-  display: flex;
+/* Область панели отбора: размер и скрытость ведёт общий каркас
+ * (`.fp-host`, задача 2ebe4206); здесь только вид области. */
+.chron-filter-area {  display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 10px 12px;
@@ -35,18 +32,11 @@
   gap: 8px;
 }
 
-/* `.chron-date` — ширина колонки даты в таблице «Хроники»; поле периода
- * панели отбора строит общий каркас (`.st-f-date-field`). */
-.chron-date {
-  width: 130px;
-}
-
 .chron-splitter {
-  /* The strip is a .row-splitter (grab glyph, pointer drag); this keeps its
-   * look consistent with the other horizontal splitters of the app. */
   flex: 0 0 auto;
 }
 
+/* Центр экрана: сверху непрокручиваемая панель добавления, ниже — лента. */
 .chron-main {
   flex: 1;
   min-height: 0;
@@ -55,73 +45,406 @@
   overflow: hidden;
 }
 
-/* The table block sizes to its content (default cap below), the bottom editor
- * takes the remaining space; the splitter between them changes the table's
- * max-height, so both areas resize together (like the «Хроника» tab, §6.6). */
-.chron-top {
+/* ---------------------------------------------------------------------------
+ * Верхняя панель над лентой: кнопка «Добавить хроно-запись» (элемент 9b424548)
+ * ------------------------------------------------------------------------- */
+
+.chron-addbar {
   flex: 0 0 auto;
-  min-height: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* Кнопка добавления и компактные иконки-кнопки групп дат — в строку, не во всю ширину. */
+.chron-addbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Календарь месяца — первый элемент панели отбора (элемент 9b424548). */
+.chron-cal {
+  flex: 0 0 auto;
+  padding: 0 0 8px;
+}
+
+.diary-add-btn {
+  /* Компактная кнопка, не во всю ширину — рядом иконки групп дат (приёмка №2). */
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * Календарь месяца
+ * ------------------------------------------------------------------------- */
+
+.cal {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 4px;
+  user-select: none;
 }
 
-/* Default cap of the chronicle table before the first drag (five rows, §17).
- * Once the user drags the splitter, `applyGroupClamp` writes an exact inline
- * `height` plus `max-height: none` (list-heights.ts) — the two together, so
- * this fallback cap cannot clip a dragged height (bug 78562781). */
-.chron-table-wrap {
-  max-height: 240px;
+.cal-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cal-head-spacer {
+  flex: 1 1 auto;
+}
+
+/* Месяц и год — отдельные кликабельные кнопки заголовка. */
+.cal-month,
+.cal-year {
+  flex: 0 0 auto;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+/* Ячейка года: подпись и поле ввода стоят на одном месте. */
+.cal-year-cell {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+/* Поле года — под 4 цифры (инлайн-замена подписи, не строка во всю ширину). */
+.cal-year-input {
+  width: 4.5rem;
+}
+
+/* Список месяцев (январь–декабрь) — тело выпадающего поповера. */
+.cal-months {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.cal-months[hidden] {
+  display: none;
+}
+
+.cal-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cal-row {
+  display: grid;
+  grid-template-columns: 2rem repeat(7, 1fr);
+  gap: 1px;
+}
+
+/* Диалог даты/периода: недель нет — сетка без колонки номеров недель. */
+.cal--no-weeks .cal-row {
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.cal-row-head {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cal-wd {
+  text-align: center;
+}
+
+.cal-week {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cal-day {
+  min-width: 0;
+  padding: 2px 0;
+  text-align: center;
+  border-radius: 4px;
+}
+
+.cal-day.is-out {
+  opacity: 0.4;
+}
+
+.cal-day.is-selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Края диапазона выделены плотнее (диалог даты/периода). */
+.cal-day.is-selected-from,
+.cal-day.is-selected-to {
+  background: var(--accent-soft);
+  font-weight: 700;
+}
+
+.cal-day.is-today {
+  font-weight: 700;
+}
+
+.cal-day.has-records {
+  background: var(--accent-soft);
+}
+
+.cal-count {
+  display: block;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Диалог даты/периода (lib/date-period-dialog.ts)
+ * ------------------------------------------------------------------------- */
+
+.dpd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 260px;
+}
+
+/* Кнопка «С указанием времени» — компактная, не во всю ширину диалога. */
+.dpd-extras {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Пустой блок (время не разрешено) не занимает места. */
+.dpd-extras[hidden] {
+  display: none;
+}
+
+.dpd-sep {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+/* Нижняя строка значения — ОДНА строка: поля ввода не переносятся на другую
+   строку и не растягиваются на ширину диалога (итерация приёмки №7, задача
+   c4a7e9e3). */
+.dpd-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Поля строки значения — узкие фиксированные: дата ~116px, время ~96px.
+   Селектор из двух классов осознанно специфичнее `.ui-input { width: 100% }`,
+   поэтому вид не зависит от порядка CSS `lib/ui` и прикладных модулей
+   (грабли 36889dd6).
+
+   Ширина времени: у `input[type=time]` Chromium держит внутри справа
+   нативную иконку-пикер («часики»). При 70px её контент-бокс (~54px) не
+   вмещал `HH:MM` вместе с иконкой — разряды минут уезжали под индикатор
+   (ошибка c4eea7aa). 96px даёт запас: замер Chromium-рендера клиента
+   показывает полное `10:00` без перекрытия иконкой. */
+.dpd-value .dpd-date {
+  flex: 0 0 auto;
+  width: 116px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dpd-value .dpd-time {
+  flex: 0 0 auto;
+  width: 96px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+ * Лента: контейнер и блоки дней
+ * ------------------------------------------------------------------------- */
+
+.chron-feed-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
+  /* Лента занимает всю высоту центра: прежний потолок таблицы (240px) снят. */
+  max-height: none;
   overflow: auto;
+  padding: 10px 12px;
 }
 
-.chron-pager {
+.chron-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chron-feed-status,
+.chron-feed-empty,
+.chron-feed-more {
+  padding: 8px 4px;
+}
+
+.diary-day {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diary-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  /* Дата-заголовок вдвое крупнее базового шрифта (0.10.1, приёмка №2). */
+  font-size: calc(var(--font-size-s) * 2);
+  line-height: 1.15;
+}
+
+.diary-day-head .ui-btn-icon,
+.diary-day-head svg {
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+
+.diary-day-head.is-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.diary-snippet-empty {
+  font-style: italic;
+}
+
+.diary-day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Свёрнутая группа дня СКРЫВАЕТ свой список записей (0.10.1, приёмка №3).
+ * Без этого правила `display: flex` выше перебивал атрибут `hidden` на
+ * списке, и записи свёрнутого дня оставались видны. */
+.diary-day.is-collapsed .diary-day-list {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Запись дневника
+ * ------------------------------------------------------------------------- */
+
+.diary-record {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.diary-slot {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+/* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
+.diary-record-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* Клавиатурная навигация ленты (0.10.1, итерация приёмки №9, требование
+ * 165323a7): «текущая группа дат», «текущая запись» и текущий элемент записи
+ * получают видимое выделение клиента. Клик мышью делает сущность текущей. */
+.diary-day-head.diary-nav-current {
+  color: var(--accent-strong);
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 6px;
+}
+
+.diary-record.diary-nav-current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.diary-record .diary-nav-el {
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.diary-record-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  border-top: 1px solid var(--border);
 }
 
-/* Table rows: keyboard-navigable via the unit table facade (lib/ui/table.ts,
- * nav: 'cell'); the current row/cell highlight and the cell wrapper classes
- * live there (.ui-table*). Here only chronicle-specific cell content. */
-.chron-date {
+.diary-record-date {
+  flex: 0 0 auto;
   white-space: nowrap;
+  color: var(--muted);
 }
 
-.chron-title {
-  max-width: 220px;
+.diary-record-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+
+/* «Бутерброд» меню записи прижат к правому краю строки 1. */
+.diary-record-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.diary-record-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.diary-record-body {
+  min-height: 0;
+}
+
+/* Тело записи в режиме просмотра: полный HTML записи (0.10.1, приёмка №3). */
+.diary-body {
+  font-size: 13px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.chron-targets {
-  max-width: 430px;
-  vertical-align: top;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.chron-snippet {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.chron-snippet mark {
+.diary-body mark {
   background: var(--accent-soft);
   color: inherit;
   padding: 0 1px;
 }
 
-/* Target chips (thoughts with icon/style; links «src — type — dst»). */
-/* Target chips: fixed, uniform sizes — thoughts 150px, links 240px — in both
- * the table column and the bottom editor. Titles truncate with an ellipsis. */
+/* Крестик снятия привязки и «+» привязки — компактные кнопки внутри чипсов. */
+.diary-chip-remove,
+.diary-chip-add {
+  flex: 0 0 auto;
+  height: 18px;
+  min-height: 18px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Чипсы привязок (мысли с иконкой и оформлением; связи «источник — тип — цель»)
+ * ------------------------------------------------------------------------- */
+
 .chron-chip {
   display: inline-flex;
   align-items: center;
@@ -141,13 +464,11 @@
 }
 
 .chron-chip.thought {
-  width: 150px;
-  max-width: 150px;
+  max-width: 220px;
 }
 
 .chron-chip.link {
-  width: 240px;
-  max-width: 240px;
+  max-width: 300px;
 }
 
 .chron-chip:hover {
@@ -166,8 +487,7 @@
   overflow: hidden;
 }
 
-/* Image icons scale into the fixed chip-icon box — never their natural size
- * (the same rule as .mini-icon: a 64×64 PNG must not stretch the chip). */
+/* Картинки-иконки вписываются в фиксированный квадрат (не растягивают чип). */
 .chron-chip .chip-icon img {
   width: 100%;
   height: 100%;
@@ -180,14 +500,6 @@
   white-space: nowrap;
   flex: 0 1 auto;
   min-width: 0;
-}
-
-.chron-chip.thought .chip-title {
-  max-width: 112px;
-}
-
-.chron-chip.link .chip-title {
-  max-width: 72px;
 }
 
 .chron-chip .chip-type {
@@ -207,21 +519,53 @@
   text-decoration: line-through;
 }
 
-/* Bottom editor: metadata row + target chips + markdown field. */
-.chron-editor {
+/* ---------------------------------------------------------------------------
+ * Строка поиска дневниковых записей (lib/record-search.ts, 0.10.1, 46057359)
+ * ------------------------------------------------------------------------- */
+
+/* Полотно экрана — колонка: строка поиска над каркасом панели отбора и лентой.
+ * Строка занимает всю ширину области дневника (правый край — у сплиттера
+ * редактора), поэтому класс `.view-host` остаётся на внешнем контейнере. */
+.chron-frame {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
-  border-top: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 10px 12px;
   display: flex;
-  flex-direction: column;
 }
 
-.chron-target-chips {
+/* Строка поиска: поле на всю ширину, панель результатов позиционируется
+ * относительно неё (JS-анкеринг, как у поиска карты, не нужен). */
+.record-search {
+  position: relative;
+  flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
   align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
+.record-search .record-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Выпадающая панель результатов — под строкой, во всю её ширину. Перебивает
+ * `right: 10%` и `max-height: 50%` панели поиска карты: процент считался бы от
+ * высоты строки. */
+.record-search .search-panel.record-search-panel {
+  left: 10px;
+  right: 10px;
+  top: 100%;
+  max-height: min(420px, 60vh);
+}
+
+.record-search .search-hit-lead {
+  flex: 0 0 auto;
+  line-height: 1.4;
+}
+
+.chron-search-area {
+  flex: 0 0 auto;
+}

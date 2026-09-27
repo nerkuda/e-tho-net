@@ -55,6 +55,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { propertyValueId } from '../db/property-value-id.js';
 import type { Logger } from '../logger.js';
 import { parseManifest } from './etnx-format.js';
+import { normaliseInstant } from './dates.js';
 import { normalizeTitle } from './thought-service.js';
 
 // ---------------------------------------------------------------------------
@@ -878,6 +879,15 @@ function insertComment(
   actorUserId: string,
   now: string,
 ): 'created' | 'updated' {
+  // 0.10.1: архив несёт полные UTC-инстансы, но старые/внешние .etnx могут
+  // содержать «голую дату» или пустое окончание хронологической — приводим
+  // их к конвенции записи, иначе импорт нарушил бы инвариант хранилища.
+  const validFrom = normaliseInstant(c.valid_from, 'valid_from', 'start') ?? c.created_at;
+  const validTo =
+    c.kind === 'permanent'
+      ? null
+      : (normaliseInstant(c.valid_to, 'valid_to', 'end') ?? validFrom);
+  const useTime = c.use_time === true ? 1 : 0;
   if (c.kind === 'permanent') {
     const existing = ndb
       .prepare(
@@ -887,19 +897,19 @@ function insertComment(
     if (existing !== undefined) {
       ndb
         .prepare(
-          `UPDATE comments SET title = ?, body_md = ?, body_html = ?, version = version + 1,
+          `UPDATE comments SET title = ?, body_md = ?, body_html = ?, use_time = ?, version = version + 1,
              updated_at = ?, updated_by = ? WHERE id = ?`,
         )
-        .run(c.title, c.body_md, c.body_html, now, actorUserId, existing.id);
+        .run(c.title, c.body_md, c.body_html, useTime, now, actorUserId, existing.id);
       return 'updated';
     }
     ndb
       .prepare(
         `INSERT OR IGNORE INTO comments (
            id, owner_type, owner_id, kind, title, body_md, body_html,
-           valid_from, valid_to, version, created_at, created_by,
+           valid_from, valid_to, use_time, version, created_at, created_by,
            updated_at, updated_by
-         ) VALUES (?, 'thought', ?, 'permanent', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, 'thought', ?, 'permanent', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         c.id,
@@ -907,8 +917,9 @@ function insertComment(
         c.title,
         c.body_md,
         c.body_html,
-        c.valid_from,
-        c.valid_to,
+        validFrom,
+        validTo,
+        useTime,
         c.version,
         c.created_at,
         c.created_by,
@@ -924,9 +935,9 @@ function insertComment(
     .prepare(
       `INSERT OR IGNORE INTO comments (
          id, owner_type, owner_id, kind, title, body_md, body_html,
-         valid_from, valid_to, version, created_at, created_by,
+         valid_from, valid_to, use_time, version, created_at, created_by,
          updated_at, updated_by
-       ) VALUES (?, 'thought', ?, 'chronological', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, 'thought', ?, 'chronological', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       c.id,
@@ -934,8 +945,9 @@ function insertComment(
       c.title,
       c.body_md,
       c.body_html,
-      c.valid_from,
-      c.valid_to,
+      validFrom,
+      validTo,
+      useTime,
       c.version,
       c.created_at,
       c.created_by,

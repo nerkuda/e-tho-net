@@ -1,16 +1,31 @@
 /**
- * Editor tab «Хроника (N)» — chronological comments (H9 → L7,
- * 08-ui-spec.md §6.6).
+ * Editor tab «Дневник (N)» — chronological comments (H9 → L7,
+ * 08-ui-spec.md §6.6; переименование «Хроника» → «Дневник» — требование
+ * 80b31f7a, ревизия 0.10.1).
  *
  * Two areas separated by a splitter:
- *  - the table (title / С / По / short text, at most five visible rows,
- *    vertical scroll beyond that). Click selects a comment for viewing,
- *    double-click selects and enters edit mode; «Добавить» starts a new one.
- *  - the inline editor: compact metadata row (title, valid_from, valid_to) and
- *    a markdown field that behaves exactly like the permanent comment — HTML
- *    view, double-click edits, blur autosaves and returns to the view, Esc
- *    reverts. The first non-empty blur of a new comment creates it; metadata
- *    edits save on blur. «Удалить» removes the selected comment.
+ *  - the table of chronological records: three columns «Период» / «Заголовок» /
+ *    «Редактор», built on the shared list facade `lib/ui/table.ts` (keyboard
+ *    navigation, row context menu, one-line ellipsis cells with a full-text
+ *    tooltip). Click selects a record for viewing, double click (or Enter)
+ *    selects and enters edit mode; «Добавить» starts a new one and immediately
+ *    opens it for editing. The row menu offers «Открыть в дневнике» (switch to
+ *    the diary screen on this record) and «Удалить» (with confirmation).
+ *  - the inline editor area: a one-line record header (period value — click
+ *    opens the shared «Дата/период» dialog — and a title input filling the rest
+ *    of the width) plus a markdown field that behaves exactly like the permanent
+ *    comment — HTML view, double-click edits, blur autosaves and returns to the
+ *    view, Esc reverts. The first non-empty blur (title or text) of a new record
+ *    creates it — the same content rule as the diary screen (`hasRecordContent`,
+ *    requirement 26f0aa52); metadata edits of an existing record save on blur.
+ *    With nothing selected the area shows a hint.
+ *
+ * Даты записи — полные UTC-инстансы с миллисекундами (требование d58aa1a4);
+ * `valid_to` непуст (незаполненное = `valid_from`). Смена только даты сохраняет
+ * время суток, правка часов:минут — секунды/мс (ADR времени 994d076a). Флаг
+ * `use_time` (показ времени) задаётся диалогом «Дата/период» (его `hasTime`) и
+ * управляет показом времени через единый помощник `formatRecordPeriod`
+ * (`lib/date-period-dialog.ts`) — тем же, что и в ленте экрана «Дневник».
  *
  * The tab content is built only when the tab is active; the `(N)` badge in the
  * tab title is refreshed after every change.
@@ -22,10 +37,11 @@ import { t } from '../lib/i18n.js';
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { div, el, errText, fmtDate } from '../lib/dom.js';
+import { div, errText } from '../lib/dom.js';
+import { MENU_SEPARATOR, menuAction, type MenuItem } from '../lib/menu.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
-import { formatDateTime, renderAuthorPair } from '../lib/metadata.js';
+import { ensureLoaded, resolve as resolveUser } from '../lib/users.js';
 import { notice } from '../lib/notice.js';
 import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext } from './editor.js';
 import { createMarkdownField, editMarkdownField } from './markdown-field.js';
@@ -33,8 +49,18 @@ import { rowSplitter } from './splitter.js';
 import { commentShell } from '../lib/ui/comment.js';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
+import { createTable, type TableHandle } from '../lib/ui/table.js';
+import {
+  datePeriodValueFromInstants,
+  formatRecordPeriod,
+  openDatePeriodDialog,
+  resolveDatePeriodInstants,
+} from '../lib/date-period-dialog.js';
 
-/** Registers the «Хроника» tab content and its badge counter (L7). */
+/** Сколько символов первой непустой строки заметки берём в колонку «Заголовок». */
+const TITLE_FROM_BODY_MAX = 250;
+
+/** Registers the «Дневник» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
   registerTabContent('chrono', buildChronoTab);
   registerTabCount('chrono', async (ctx) => {
@@ -51,17 +77,13 @@ export function registerChronoTab(): void {
   });
 }
 
-/** Local today in YYYY-MM-DD (input[type=date] format). */
-function todayIso(): string {
-  const now = new Date();
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-/** Builds the whole «Хроника» tab pane content for the entity. */
+/** Builds the whole «Дневник» tab pane content for the entity. */
 function buildChronoTab(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const root = div('chrono-tab');
+  // Имена «Редактор»/авторов берём из кэша пользователей (best-effort): пока он
+  // не загружен, ячейка показывает id в скобках, после — имя.
+  ensureLoaded();
 
   const top = div('chrono-top');
   const toolbar = div('chrono-toolbar');
@@ -87,13 +109,54 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   );
 
   let selectedId: string | null = null;
-  /** Row elements of the current table, by comment id (highlight updates). */
-  const rowById = new Map<string, HTMLTableRowElement>();
-  /** Active sort column and direction (задача 04cd9794 «колонки автора в Хронике»). */
-  type SortKey = 'created_at_ms' | 'updated_at_ms';
-  type SortDir = 'asc' | 'desc';
-  let sortKey: SortKey = 'created_at_ms';
-  let sortDir: SortDir = 'desc';
+  /** Markdown field of the record currently shown below (for Enter/dblclick edit). */
+  let activeWidget: HTMLElement | null = null;
+  /** Row id the active editor area belongs to; `null` for a brand-new record. */
+  let activeRowId: string | null = null;
+
+  // Таблица — единый фасад списков `lib/ui/table.ts`: колонки, сортировка,
+  // клавиатурная навигация (стрелки, Home/End, PgUp/PgDn, Enter), контекстное
+  // меню строки и подсказка с полным текстом обрезанной ячейки — из коробки.
+  const table: TableHandle<Comment> = createTable<Comment>({
+    columns: [
+      {
+        key: 'period',
+        header: t('chrono.col.period'),
+        sortable: true,
+        sortValue: (c) => c.valid_from,
+        render: (c) => formatRecordPeriod(c.valid_from, c.valid_to, c.use_time === true),
+      },
+      {
+        key: 'title',
+        header: t('chrono.col.title'),
+        render: (c) => recordTitle(c),
+      },
+      {
+        key: 'editor',
+        header: t('chrono.col.editor'),
+        render: (c) => userLabel(c.updated_by),
+      },
+    ],
+    rows: [],
+    rowKey: (c) => c.id,
+    emptyText: t('chrono.empty'),
+    emptyHint: t('chrono.emptyHint'),
+    ariaLabel: t('chrono.aria'),
+    sortMode: 'toggle',
+    defaultSort: { key: 'period', dir: 'desc' },
+    onCurrentChange: (key, row) => {
+      selectedId = key;
+      if (row !== null) buildEditor(row);
+    },
+    // Enter и двойной клик — «выбрать и перевести в редактирование».
+    onActivate: (row) => {
+      selectedId = row.id;
+      if (activeRowId === row.id && activeWidget !== null) editMarkdownField(activeWidget);
+      else buildEditor(row, true);
+    },
+    rowMenu: (row) => recordMenuItems(row),
+  });
+  tableWrap.append(table.element);
 
   void reload();
   // The tab opens with an empty editor area — a comment is picked by a click
@@ -102,11 +165,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
 
   /** Loads and renders the chronological table. */
   async function reload(keepSelection = true): Promise<void> {
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let comments: Comment[];
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
+      table.element.hidden = true;
       tableWrap.replaceChildren(operationError(err));
       return;
     }
@@ -115,178 +178,149 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       selectedId = null;
     }
     refreshTabCount('chrono');
+    tableWrap.replaceChildren(table.element);
+    table.element.hidden = false;
+    table.setRows(chrono);
+    if (selectedId !== null) table.setCurrent(selectedId);
+  }
 
-    // Сортировка по миллисекундным меткам (задача 04cd9794). Дефолт — DESC
-    // по `created_at_ms` (новые сверху); фолбэк на ISO-парсинг, когда сервер
-    // ещё не успел проставить `*_ms` для старых строк (миграция 033 их
-    // бэкфилит, но на всякий случай — дешёвый парс).
-    const sortValue = (c: Comment): number => {
-      if (sortKey === 'updated_at_ms') {
-        if (typeof c.updated_at_ms === 'number') return c.updated_at_ms;
-        const t = Date.parse(c.updated_at);
-        return Number.isNaN(t) ? 0 : t;
-      }
-      if (typeof c.created_at_ms === 'number') return c.created_at_ms;
-      const t = Date.parse(c.created_at);
-      return Number.isNaN(t) ? 0 : t;
-    };
-    const sorted = chrono.slice().sort((a, b) => {
-      const diff = sortValue(a) - sortValue(b);
-      return sortDir === 'desc' ? -diff : diff;
+  /** Opens the diary screen on this record (calendar date + current record). */
+  async function openInDiary(comment: Comment): Promise<void> {
+    // Ленивый импорт: статический замкнул бы цикл editor → chronicle → editor.
+    const { openChronicleRecord } = await import('../screens/chronicle/chronicle.js');
+    await openChronicleRecord({
+      id: comment.id,
+      valid_from: comment.valid_from,
+      valid_to: comment.valid_to,
     });
-
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Заголовок'),
-      el('th', undefined, 'С'),
-      el('th', undefined, 'По'),
-      sortableHeader('Автор', undefined, undefined),
-      el('th', undefined, 'Создан'),
-      sortableHeader('Изменён', 'updated_at_ms', 'updated'),
-      el('th', undefined, 'Кратко'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    rowById.clear();
-    if (sorted.length === 0) {
-      const row = el('tr');
-      const cell = el('td', 'muted', 'Комментариев нет.');
-      cell.colSpan = 7;
-      row.append(cell);
-      tbody.append(row);
-    } else {
-      for (const comment of sorted) {
-        const row = el('tr');
-        if (comment.id === selectedId) row.classList.add('selected');
-        rowById.set(comment.id, row);
-        const authorCell = el('td', 'author-cell');
-        authorCell.append(
-          renderAuthorPair(
-            comment.created_by,
-            comment.updated_by,
-            comment.updated_at_ms ?? comment.updated_at,
-            comment.created_at_ms ?? comment.created_at,
-          ),
-        );
-        row.append(
-          el('td', undefined, comment.title ?? '—'),
-          el('td', undefined, fmtDate(comment.valid_from)),
-          el('td', undefined, comment.valid_to === null ? '…' : fmtDate(comment.valid_to)),
-          authorCell,
-          el('td', 'date-cell', formatDateTime(comment.created_at_ms ?? comment.created_at)),
-          el('td', 'date-cell', formatDateTime(comment.updated_at_ms ?? comment.updated_at)),
-          el('td', undefined, shortText(comment.body_md)),
-        );
-        row.addEventListener('click', () => select(comment));
-        row.addEventListener('dblclick', () => {
-          select(comment, true);
-        });
-        tbody.append(row);
-      }
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-
-    /** A clickable header that toggles the chrono sort. */
-    function sortableHeader(label: string, key: SortKey | undefined, hint: 'created' | 'updated' | undefined): HTMLTableCellElement {
-      const th = el('th', 'sortable') as HTMLTableCellElement;
-      const isActive = hint === 'updated' ? sortKey === 'updated_at_ms' : hint === undefined && sortKey === 'created_at_ms';
-      th.append(el('span', undefined, label));
-      if (isActive) th.append(el('span', 'sort-marker', sortDir === 'desc' ? ' ▼' : ' ▲'));
-      th.addEventListener('click', () => {
-        if (key === undefined) return; // не сортируемая колонка
-        if (sortKey === key) {
-          sortDir = sortDir === 'desc' ? 'asc' : 'desc';
-        } else {
-          sortKey = key;
-          sortDir = key === 'updated_at_ms' ? 'desc' : 'desc';
-        }
-        void reload();
-      });
-      return th;
-    }
   }
 
-  /** Selects a comment for viewing (or viewing + editing on double-click). */
-  function select(comment: Comment, edit = false): void {
-    selectedId = comment.id;
-    // A click does not change the data — only move the row highlight instead
-    // of refetching the whole list (bug 2528f51b).
-    setHighlight(comment.id);
-    buildEditor(comment, edit);
-  }
-
-  /** Moves the `selected` highlight to the row, leaving the table intact. */
-  function setHighlight(commentId: string | null): void {
-    for (const row of rowById.values()) row.classList.remove('selected');
-    if (commentId !== null) rowById.get(commentId)?.classList.add('selected');
+  /** Row context menu: open the record in the diary screen, or delete it. */
+  function recordMenuItems(comment: Comment): MenuItem[] {
+    return [
+      menuAction(t('chrono.menu.openInDiary'), () => void openInDiary(comment)),
+      MENU_SEPARATOR,
+      menuAction(t('actions.delete'), () => void removeComment(comment), { danger: true }),
+    ];
   }
 
   /** Resets the editor area for a brand-new comment (edit mode at once). */
   function startNew(): void {
     selectedId = null;
-    setHighlight(null);
+    activeRowId = null;
+    table.setCurrent(null);
     buildEditor(null, true);
   }
 
   /** Shows an empty editor area — nothing is selected yet (§6.6). */
   function showEmptyEditor(): void {
     selectedId = null;
+    activeRowId = null;
+    activeWidget = null;
     const shell = commentShell({
       variant: 'fill',
-      state: { kind: 'empty', text: t('comment.emptySelection') },
+      state: { kind: 'empty', text: t('chrono.emptyEditor') },
     });
     bottom.replaceChildren(shell.root);
   }
 
   /**
-   * Builds the inline editor area: metadata row + markdown field. `existing`
-   * is null for a new comment; the first non-empty text blur creates it.
+   * Builds the inline editor area: one-line record header (period + title) and
+   * markdown field. `existing` is null for a new comment; the first non-empty
+   * text blur creates it.
    */
-  function buildEditor(existing: Comment | null, startEdit: boolean): void {
+  function buildEditor(existing: Comment | null, startEdit = false): void {
     const titleInput = fieldInput({ extraClass: 'chrono-meta-input' });
     titleInput.type = 'text';
     titleInput.value = existing?.title ?? '';
     titleInput.maxLength = 200;
     titleInput.placeholder = 'Заголовок';
-    const fromInput = fieldInput({ extraClass: 'chrono-meta-input' });
-    fromInput.type = 'date';
-    fromInput.value = existing?.valid_from.slice(0, 10) ?? todayIso();
-    const toInput = fieldInput({ extraClass: 'chrono-meta-input' });
-    toInput.type = 'date';
-    toInput.value = existing?.valid_to?.slice(0, 10) ?? '';
+
+    // Даты записи — полные UTC-инстансы (требование d58aa1a4). У новой записи
+    // «С = По = сегодня»: текущий момент (дата + текущее время, ADR 994d076a).
+    const now = new Date().toISOString();
+    let fromInstant = existing?.valid_from ?? now;
+    let toInstant = existing?.valid_to ?? fromInstant;
+    // Показ времени записью; задаётся ответом диалога «Дата/период» (hasTime).
+    let useTime = existing?.use_time === true;
 
     let commentId: string | null = existing?.id ?? null;
     let version = existing?.version ?? 0;
 
-    const metaRow = div('chrono-meta-row');
-    metaRow.append(titleInput, fromInput, toInput);
-    if (existing !== null) {
-      metaRow.append(
-        uiButton({
-          label: t('actions.delete'),
-          role: 'danger',
-          size: 's',
-          title: 'Удалить хронологический комментарий',
-          onClick: () => void removeComment(),
-        }),
-      );
-    }
+    /** Подпись периода записи — единый помощник (одна точка правды с лентой). */
+    const refreshDateLabel = (): void => {
+      dateBtn.textContent = formatRecordPeriod(fromInstant, toInstant, useTime);
+    };
 
-    /** Saves the metadata fields of an existing comment. */
+    /** Открыть диалог «Дата/период» (период и время разрешены). */
+    const openPeriodDialog = async (): Promise<void> => {
+      const result = await openDatePeriodDialog({
+        allowPeriod: true,
+        allowTime: true,
+        initial: datePeriodValueFromInstants(fromInstant, toInstant, useTime, true),
+      });
+      if (result === null) return;
+      const next = resolveDatePeriodInstants(result, { from: fromInstant, to: toInstant });
+      fromInstant = next.from;
+      toInstant = next.to;
+      // Ответ диалога задаёт показ времени (отдельного флажка в шапке нет).
+      useTime = result.hasTime === true;
+      refreshDateLabel();
+      commitMeta();
+    };
+
+    // Дата/период правятся диалогом (0.10.1): значение — кликабельная подпись,
+    // инлайн-контрол периода упразднён.
+    const dateBtn = uiButton({
+      label: '',
+      role: 'ghost',
+      size: 's',
+      class: 'chrono-date-value',
+      title: 'Дата записи',
+      onClick: () => void openPeriodDialog(),
+    });
+    refreshDateLabel();
+
+    // Шапка записи — одна строка: период (клик — диалог) и заголовок во всю
+    // оставшуюся ширину. Удаление — в контекстном меню строки таблицы.
+    const metaRow = div('chrono-meta-row');
+    metaRow.append(dateBtn, titleInput);
+
+    /**
+     * Сохраняет метаданные записи (заголовок, даты, показ времени). У
+     * псевдо-записи (`commentId === null`) непустой заголовок сам по себе —
+     * содержание: запись создаётся (паритет с экраном «Дневник», правило
+     * `hasRecordContent`, требование 26f0aa52). Пустой заголовок и одни даты
+     * запись не создают. Иначе метаданные существующей записи обновляются.
+     */
     const commitMeta = (): void => {
-      if (commentId === null) return;
       void (async () => {
         try {
-          const updated = await etn.comments.update(networkId, commentId!, {
-            title: titleInput.value.trim() || null,
-            valid_from: fromInput.value,
-            valid_to: toInput.value === '' ? null : toInput.value,
-          }, version);
-          version = updated.version;
+          const title = titleInput.value.trim() || null;
+          if (commentId === null) {
+            if (title === null) return;
+            const created = await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
+              kind: 'chronological',
+              title,
+              body_md: '',
+              valid_from: fromInstant,
+              valid_to: toInstant,
+              use_time: useTime,
+            });
+            commentId = created.id;
+            version = created.version;
+            selectedId = created.id;
+            activeRowId = created.id;
+          } else {
+            const id = commentId;
+            const updated = await etn.comments.update(networkId, id, {
+              title,
+              valid_from: fromInstant,
+              valid_to: toInstant,
+              use_time: useTime,
+            }, version);
+            version = updated.version;
+          }
           invalidateIndicators(ctx.ownerId);
           await reload();
         } catch (err) {
@@ -294,12 +328,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         }
       })();
     };
-    titleInput.addEventListener('blur', commitMeta);
-    fromInput.addEventListener('blur', commitMeta);
-    toInput.addEventListener('blur', commitMeta);
 
-    // Оболочка комментария: панель действий — метаданные и удаление, тело —
-    // встроенное поле markdown, режим зеркалится в `data-mode` (задача 9cb87c42).
+    titleInput.addEventListener('blur', commitMeta);
+
+    // Оболочка комментария: панель действий — шапка записи, тело — встроенное
+    // поле markdown, режим зеркалится в `data-mode` (задача 9cb87c42).
     const shell = commentShell({ variant: 'fill', tools: [metaRow] });
 
     const widget = createMarkdownField({
@@ -308,7 +341,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       // Контекст комментария для флоу «создать мысль по legacy-ссылке»
       // (карточка ETN 34ffbd75): после замены ссылок поле перерисовывается,
-      // а таблица хроно — обновляет колонку «Кратко».
+      // а таблица — обновляет колонку «Заголовок».
       commentContext: {
         ownerType: ctx.ownerType,
         ownerId: ctx.ownerId,
@@ -324,15 +357,22 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
             kind: 'chronological',
             title: titleInput.value.trim() || null,
             body_md: md,
-            valid_from: fromInput.value,
-            valid_to: toInput.value === '' ? null : toInput.value,
+            valid_from: fromInstant,
+            valid_to: toInstant,
+            use_time: useTime,
           });
           commentId = created.id;
           version = created.version;
           selectedId = created.id;
+          activeRowId = created.id;
           html = created.body_html;
         } else {
-          const updated = await etn.comments.update(networkId, commentId, { body_md: md }, version);
+          const updated = await etn.comments.update(networkId, commentId, {
+            body_md: md,
+            valid_from: fromInstant,
+            valid_to: toInstant,
+            use_time: useTime,
+          }, version);
           version = updated.version;
           html = updated.body_html;
         }
@@ -346,26 +386,27 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     shell.setField(widget);
     shell.setState({ kind: 'ready' });
     bottom.replaceChildren(shell.root);
+    activeWidget = widget;
+    activeRowId = existing?.id ?? null;
     if (startEdit) editMarkdownField(widget);
   }
 
-  /** Deletes the selected comment (confirmation) and starts a new one. */
-  async function removeComment(): Promise<void> {
-    if (selectedId === null) return;
+  /** Deletes the given record (confirmation) and clears the editor area. */
+  async function removeComment(comment: Comment): Promise<void> {
     const ok = await confirmDialog(
-      'Удалить комментарий',
-      'Удалить хронологический комментарий?',
+      t('diary.deleteTitle'),
+      t('diary.deleteQuestion'),
       true,
     );
     if (!ok) return;
     try {
       // Remove by id: the version is re-read to survive intermediate autosaves.
       const comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
-      const current = comments.find((c) => c.id === selectedId);
+      const current = comments.find((c) => c.id === comment.id);
       if (current === undefined) return;
       await etn.comments.remove(networkId, current.id, current.version);
       invalidateIndicators(ctx.ownerId);
-      startNew();
+      if (selectedId === comment.id) showEmptyEditor();
       await reload();
     } catch (err) {
       notice(`Не удалось удалить: ${errText(err)}`, 'error');
@@ -375,11 +416,20 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   return root;
 }
 
-/** One-line preview of a comment body. */
-function shortText(markdown: string): string {
-  const plain = markdown
-    .replace(/[#*_>`[\]]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return plain.length > 80 ? `${plain.slice(0, 80)}…` : plain;
+/** Title for the «Заголовок» cell: `title`, else the first non-empty body line. */
+function recordTitle(comment: Comment): string {
+  const title = (comment.title ?? '').trim();
+  if (title !== '') return title;
+  for (const line of comment.body_md.split(/\r?\n/)) {
+    const text = line.trim();
+    if (text === '') continue;
+    return text.length > TITLE_FROM_BODY_MAX ? `${text.slice(0, TITLE_FROM_BODY_MAX)}…` : text;
+  }
+  return '';
+}
+
+/** Author name for the «Редактор» cell (falls back to the raw id in brackets). */
+function userLabel(userId: string | null): string {
+  if (userId === null || userId === '') return '';
+  return resolveUser(userId) ?? `(${userId})`;
 }

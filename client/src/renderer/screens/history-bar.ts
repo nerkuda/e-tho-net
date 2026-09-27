@@ -26,6 +26,10 @@
  *   (map view) or opens the thought without moving the canvas focus
  *   (structures/chronicle view) — the current-thought frame follows the pick
  *   on every screen;
+ * - right-click on a chip (or a dropdown row) shows the shared thought
+ *   context menu — the same command set as on the canvas and the pinned chips
+ *   (спецификация «Контекстное меню мысли»); opening from the menu routes
+ *   exactly like a click ({@link openEntry});
  * - entries drag onto the canvas like zone clouds (§11.1): link onto a cloud,
  *   Ctrl for reparent, drop into parents/children to link to focus; a canvas
  *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
@@ -37,6 +41,7 @@ import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
 // Мини-облачка истории и строки её дропдауна собирает общая фабрика:
@@ -255,6 +260,9 @@ function openHistoryMenu(
     if (row === undefined) return;
     wireExternalDragSource(row, id, 'history', { fromMenu: true });
     markThoughtCommentPreview(row, id, ref?.title ?? id);
+    // Строка дропдауна — та же мысль, что и чип полосы: правый клик даёт общее
+    // меню мысли (`showMenuAt` внутри закроет сам дропдаун).
+    wireHistoryContextMenu(row, id, ref?.title ?? id);
   });
 }
 
@@ -292,6 +300,19 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
       profile: 'chip',
       actions: {
         onClick: (targetId) => openEntry(targetId),
+        // Контекстное меню — то же общее меню мысли, что у облачка на холсте и
+        // чипа закреплённых (спецификация «Контекстное меню мысли»: меню
+        // доступно во всех отображениях, включая чипы истории).
+        onContextMenu: (event, targetId) => {
+          event.stopPropagation();
+          showThoughtContextMenu(
+            event,
+            { id: targetId, title: ref?.title ?? id, dir: 'siblings' },
+            // Открытие из меню идёт тем же путём, что и клик по чипу: на карте —
+            // в фокус, в структурах/дневнике — в редактор без смены фокуса.
+            { openHandler: (openId) => openEntry(openId) },
+          );
+        },
       },
     },
   );
@@ -301,4 +322,21 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
   // permanent comment.
   markThoughtCommentPreview(chip, id, ref?.title ?? id);
   return chip;
+}
+
+/**
+ * Вешает общее меню мысли на строку дропдауна истории (её строит `showMenuAt`,
+ * а не фабрика облачка, поэтому жест подключается здесь). `preventDefault` +
+ * `stopPropagation` — правый клик не должен «протечь» на панель/холст.
+ */
+function wireHistoryContextMenu(el: HTMLElement, id: string, title: string): void {
+  el.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showThoughtContextMenu(
+      event,
+      { id, title, dir: 'siblings' },
+      { openHandler: (openId) => openEntry(openId) },
+    );
+  });
 }

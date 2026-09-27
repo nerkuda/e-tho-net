@@ -209,6 +209,190 @@
   padding: 3px 6px;
 }
 
+/* «Редактор периода» (0.10.1, lib/period-editor.ts; элемент «Поле периода»
+   2f14de06): переключатель режима и поля границ. Поле даты — текстовое: в
+   нативный `input[type=date]` токен `$today±Nd` не помещается (тот же приём,
+   что у ветки даты общего редактора значения). */
+.pe-root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.pe-fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pe-bound {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pe-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+
+.pe-date-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pe-time-input {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 92px;
+}
+
+/* Панельная пресет-граница (0.10.1, приёмка №3): комбобокс базового пресета и
+   сдвиг ±N/единица одной строкой. Поле комбобокса — только чтение: значение
+   задаётся списком и сдвигом, токен-строк в поле нет. */
+.pe-preset-bound {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pe-preset-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.pe-preset-caret {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.pe-preset-num {
+  flex: 0 0 auto;
+  width: 56px;
+}
+
+.pe-preset-unit {
+  flex: 0 0 auto;
+}
+
+/* Панельный вариант (0.10.1, приёмка №4, задача fd9eef49): по строке на границу
+   периода — «С» и «По» в отдельных контейнерах-строках, поля идут колонкой.
+   Метка границы — фиксированная колонка, контролы читаемого размера, ширины
+   заданы явно (ни микроскопических, ни гигантских). Вариант `editor` выше не
+   затронут и остаётся однострочным. */
+.pe-panel .pe-fields {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.pe-panel .pe-bound,
+.pe-panel .pe-preset-bound {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.pe-panel .pe-tag {
+  width: 22px;
+}
+
+.pe-panel .pe-date-input,
+.pe-panel .pe-preset-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pe-panel .pe-preset-num {
+  width: 64px;
+}
+
+.pe-panel .pe-preset-unit {
+  width: 64px;
+}
+
+.pe-error {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+/* Вариант `dialog` (0.10.1, задача 12a5e719): поле-значение периода — строка с
+   периодом, «крестик» очистки и авто-индикатор «Учитывать время». Часов/минут в
+   строке нет (время суток несёт сам инстанс границы); правка — диалогом. */
+.pe-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.pe-dialog-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pe-dialog-value-empty {
+  color: var(--text-dim);
+}
+
+.pe-dialog-clear {
+  flex: 0 0 auto;
+}
+
+.pe-dialog-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Обёртка поля периода в строке дат общего каркаса (`lib/filter-form.ts`). */
+.st-f-date-period {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Компонентное поле даты (0.10.1, итерация приёмки №8, п.4; `lib/date-field.ts`):
+   редактируемый ввод «голой даты» + иконочные кнопки «календарь» и «очистка»
+   справа. Используется полями «Даты» панели периода. */
+.date-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.date-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.date-field-pick,
+.date-field-clear {
+  flex: 0 0 auto;
+}
+
 /* Type/link-type picker dialog body (§15.3). */
 .st-f-picker {
   display: flex;

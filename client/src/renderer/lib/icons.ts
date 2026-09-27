@@ -20,6 +20,10 @@ export type IconName =
   | 'user'
   | 'menu'
   | 'chevron-down'
+  // Группы дат ленты «Дневника» (0.10.1, приёмка №2): «Развернуть все» —
+  // двойной шеврон вниз, «Свернуть все» — двойной шеврон вверх.
+  | 'chevrons-down'
+  | 'chevrons-up'
   | 'arrow-left'
   | 'search'
   | 'alert'
@@ -75,6 +79,8 @@ const PATHS: Record<IconName, string> = {
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   menu: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>',
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+  'chevrons-down': '<path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/>',
+  'chevrons-up': '<path d="m7 11 5-5 5 5"/><path d="m7 18 5-5 5 5"/>',
   'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   alert:

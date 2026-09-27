@@ -50,6 +50,30 @@ export function parseUserDataDirArg(argv: string[]): string | null {
 }
 
 /**
+ * Is `userDataDir` the app's *default* profile — the one an ordinary launch
+ * uses (Electron's `<appData>/<app name>` when `--user-data-dir` is absent)?
+ *
+ * Used by the hidden-window test mode (task 5c5b30e2) to refuse to start on the
+ * user's real profile: a test run must never open the user's `local.db` nor —
+ * via the single-instance lock — wake their running client. Taking `appDataDir`
+ * and `appName` as arguments keeps this a pure, Electron-free helper.
+ *
+ * Paths are compared after `path.resolve`; on Windows the comparison is
+ * case-insensitive (the filesystem is).
+ */
+export function isDefaultUserDataDir(
+  userDataDir: string,
+  appDataDir: string,
+  appName: string,
+): boolean {
+  const normalize = (p: string): string => {
+    const resolved = path.resolve(p);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(userDataDir) === normalize(path.join(appDataDir, appName));
+}
+
+/**
  * Parses the `--logging` / `--no-logging` CLI switches (docs/07-client-electron.md,
  * task f051bf95): they override the stored `client_meta.log_enabled` value for
  * this run and become the new stored value.

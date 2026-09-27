@@ -86,16 +86,13 @@ describe('единая модель состояния переживает со
     assert.equal(wire1.created_by_op, 'empty', 'оператор автора empty выражается без значения');
   });
 
-  it('«Хроника»: определение → модель → определение идемпотентно', () => {
+  it('«Дневник»: определение → модель → определение идемпотентно', () => {
     const saved = {
       keywords: 'x',
-      thought_ids: ['a', 'b'],
-      include_subtree: true,
-      type_ids: ['t1'],
-      link_type_ids: ['l1'],
-      link_scope: 'targets' as const,
+      keyword_scope: ['title', 'synonyms'] as const,
       date_from: '2024-01-01',
       date_to: '2024-02-01',
+      targets: { type_ids: ['t1'], link_type_ids: ['l1'], parent_ids: ['p1'] },
       created_by: 'u1',
       updated_by: 'u2',
       order: 'desc' as const,
@@ -104,15 +101,16 @@ describe('единая модель состояния переживает со
     const wire1 = buildChronicleWire(state);
     const wire2 = buildChronicleWire(parseChronicleCriteria(wire1));
     assert.deepEqual(wire2, wire1, 'ранее сохранённый отбор читается без потерь');
-    assert.equal(state.thoughtIds.length, 2);
-    assert.equal(state.linkScope, 'targets');
+    assert.deepEqual(state.targets.typeIds, ['t1']);
+    assert.deepEqual(state.targets.parentIds, ['p1']);
+    assert.equal(state.keywordInComment, false);
   });
 
-  it('«Хроника»: пустой отбор даёт минимальное определение', () => {
+  it('«Дневник»: пустой отбор даёт минимальное определение', () => {
     const wire = buildChronicleWire(defaultChronicleCriteriaState());
     assert.equal(wire.keywords, undefined);
-    assert.equal(wire.thought_ids, undefined);
-    assert.equal(wire.link_scope, 'both');
+    assert.equal(wire.targets, undefined);
+    assert.equal(wire.link_scope, undefined);
     assert.equal(wire.order, 'asc');
   });
 

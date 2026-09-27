@@ -289,6 +289,7 @@ describe(
           '043_type_properties_canonical_unique.sql',
           '044_cross_network_ref.sql',
           '045_links_covering_indexes.sql',
+          '046_comments_time.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

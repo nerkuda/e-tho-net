@@ -1,0 +1,80 @@
+{
+  "name": "diary-feed-nav",
+  "description": "Дымовой сценарий Дневника: лента по дням, клавиатурная навигация, поля записи, живой поиск. Требует активного подключения к сети с дневниковыми записями (открыт экран «Хроника»/«Дневник»).",
+  "timeout": 15000,
+  "steps": [
+    {
+      "name": "wait-feed",
+      "waitFor": { "expression": "document.querySelectorAll('.diary-record').length > 0", "frames": 2 }
+    },
+    {
+      "name": "feed-counts",
+      "probe": {
+        "name": "feed",
+        "expression": "({ days: document.querySelectorAll('.diary-day').length, records: document.querySelectorAll('.diary-record').length })"
+      }
+    },
+    { "name": "focus-on-load", "probe": { "name": "hasFocusOnLoad", "expression": "document.hasFocus()" } },
+    { "name": "full-shot", "shot": { "file": "01-feed.png" } },
+
+    { "name": "reset-fields", "key": "Escape" },
+    { "name": "click-record", "click": { "selector": ".diary-record", "at": [40, 4] } },
+    {
+      "name": "wait-current",
+      "waitFor": { "expression": "document.querySelector('.diary-nav-current.diary-record') !== null" }
+    },
+    {
+      "name": "current-record",
+      "probe": {
+        "name": "currentRow",
+        "expression": "document.querySelector('.diary-nav-current')?.getAttribute('data-row-key') ?? null"
+      }
+    },
+
+    { "name": "enter-fields", "key": "Enter" },
+    {
+      "name": "field-after-enter",
+      "probe": { "name": "fieldAfterEnter", "expression": "document.querySelector('.diary-nav-el')?.className ?? null" }
+    },
+    { "name": "tab-next", "key": "Tab" },
+    {
+      "name": "field-after-tab",
+      "probe": { "name": "fieldAfterTab", "expression": "document.querySelector('.diary-nav-el')?.className ?? null" }
+    },
+    { "name": "record-shot", "shot": { "file": "02-record-fields.png", "clip": ".diary-nav-current" } },
+    { "name": "escape-fields", "key": "Escape" },
+    {
+      "name": "fields-off",
+      "probe": { "name": "fieldAfterEscape", "expression": "document.querySelector('.diary-nav-el') === null" }
+    },
+
+    { "name": "arrow-down", "key": "ArrowDown" },
+    {
+      "name": "current-after-arrow",
+      "probe": { "name": "currentAfterArrow", "expression": "document.querySelector('.diary-nav-current')?.className ?? null" }
+    },
+
+    { "name": "click-search", "click": "input[placeholder^=\"Поиск по записям\"]" },
+    { "name": "type-search", "text": "мысль" },
+    {
+      "name": "search-value",
+      "probe": {
+        "name": "searchValue",
+        "expression": "document.querySelector('input[placeholder^=\"Поиск по записям\"]')?.value ?? null"
+      }
+    },
+    { "name": "filter-shot", "shot": { "file": "03-filter-search.png", "clip": ".chron-filter-area" } },
+    { "name": "clear-search", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "clear-search-backspace", "key": "Backspace" },
+    {
+      "name": "search-cleared",
+      "probe": {
+        "name": "searchValueAfterClear",
+        "expression": "document.querySelector('input[placeholder^=\"Поиск по записям\"]')?.value ?? null"
+      }
+    },
+
+    { "name": "focus-after-input", "probe": { "name": "hasFocusAfterInput", "expression": "document.hasFocus()" } },
+    { "name": "visibility", "probe": { "name": "visibility", "expression": "document.visibilityState" } }
+  ]
+}

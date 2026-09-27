@@ -395,9 +395,12 @@ export type McpSubgraphTruncationReason =
 /** Один элемент хронологической записи в `etn.thoughts.write`. */
 export interface McpThoughtWriteChronicleItem {
   title?: string | null;
-  body_md: string;
+  /** Необязателен (требование 26f0aa52): хроно-запись создаётся и по заголовку. */
+  body_md?: string;
   valid_from?: string;
   valid_to?: string | null;
+  /** Флаг «учитывать время» (0.10.1, требование 91ba5b3f). */
+  use_time?: boolean;
 }
 
 /** Одна вложенная единица знания на связи внутри батча:

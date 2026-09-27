@@ -38,11 +38,18 @@ import type {
 import { t } from './i18n.js';
 
 import { buildValueEditor } from '../editor/value-editor.js';
-import { wrapClearable } from './ui/field.js';
 import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
 import { buildEntityChipField, type EntityOption } from './entity-picker.js';
 import { collapsibleSection } from './ui/collapsible.js';
+import { DPD_DEFAULT_TIME, openDatePeriodDialog } from './date-period-dialog.js';
+import {
+  buildPeriodEditor,
+  composeLocalBound,
+  hasExplicitTime,
+  parseLocalBound,
+} from './period-editor.js';
+import { todayLocal } from './dates.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
 import {
   FILTER_ORDERS,
@@ -56,7 +63,7 @@ import {
   type PropertyConditionState,
   type TriState,
 } from './filter-builder.js';
-import type { SuggestSource } from './suggest-dropdown.js';
+import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
 import { wireSuggest } from './suggest-dropdown.js';
 
 /** Контекст, в котором строится форма: общий для всех секций. */
@@ -150,12 +157,27 @@ export interface KeywordsSectionOptions {
   /** Источник подсказок поля (история значений, токены отбора). */
   suggestSource?: SuggestSource;
   /**
+   * Дополнительные источники подсказок рядом с основным (0.10.1, T7: строка
+   * поиска «Дневника» показывает ещё и найденные записи для перехода).
+   */
+  extraSources?: readonly SuggestSource[];
+  /**
+   * Выбор строки дополнительного источника: `true` — вызывающий обработал
+   * строку сам (переход к записи), и подстановка текста не делается.
+   */
+  onPickEntry?: (entry: SuggestEntry) => boolean;
+  /**
    * Составное поле: подсказка фильтруется по слову у каретки, а выбор токена
    * заменяет только это слово (поле «Ключевые слова» диалога отбора типа).
    */
   composite?: boolean;
   /** Enter в поле (в «Структурах» — применить отбор). */
   onEnter?: () => void;
+  /**
+   * Каждое изменение текста поля (0.10.1, T7: строка поиска «Дневника» шлёт
+   * отсюда debounce-применение отбора).
+   */
+  onInput?: (value: string) => void;
   /** Уход фокуса (в «Хронике» — запись значения в историю). */
   onBlur?: (value: string) => void;
 }
@@ -178,18 +200,26 @@ export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSecti
   input.addEventListener('input', () => {
     ctx.getState().keywords = input.value;
     ctx.touch();
+    opts.onInput?.(input.value);
   });
-  if (opts.suggestSource !== undefined) {
-    // Составное поле: подсказка фильтруется по слову у каретки, а не по всему
-    // значению; выбор токена затем заменяет только это слово.
-    const source =
-      opts.composite === true
-        ? { ...opts.suggestSource, load: () => opts.suggestSource!.load(compositeQueryOf(input)) }
-        : opts.suggestSource;
+  if (opts.suggestSource !== undefined || (opts.extraSources ?? []).length > 0) {
+    const sources: SuggestSource[] = [];
+    if (opts.suggestSource !== undefined) {
+      // Составное поле: подсказка фильтруется по слову у каретки, а не по всему
+      // значению; выбор токена затем заменяет только это слово.
+      sources.push(
+        opts.composite === true
+          ? { ...opts.suggestSource, load: () => opts.suggestSource!.load(compositeQueryOf(input)) }
+          : opts.suggestSource,
+      );
+    }
+    for (const extra of opts.extraSources ?? []) sources.push(extra);
     wireSuggest(input, {
-      sources: [{ ...source, when: source.when ?? 'always' }],
+      sources,
       pickFirstOnEnter: false,
       onPick: (entry) => {
+        // Строку-запись обрабатывает вызывающий (переход), текст не подставляем.
+        if (opts.onPickEntry?.(entry) === true) return;
         if (opts.composite === true) {
           replaceTrailingWord(input, entry.value, (v) => {
             ctx.getState().keywords = v;
@@ -315,6 +345,8 @@ export interface EntityChipSectionOptions {
   extraSources?: SuggestSource[];
   cloudOf?: (value: string) => ThoughtCloudInput | null;
   placeholder?: string;
+  /** Приглашение непустого поля («+ ещё один тип/мысль»), 0.10.1 приёмка №2. */
+  addPlaceholder?: string;
   tooltip?: string;
   /** Кнопка «выбрать…»: управляемое подмножество → новый список (null — отмена). */
   picker?: { label: string; open: (managed: readonly string[]) => Promise<string[] | null> };
@@ -342,6 +374,7 @@ export function buildEntityChipSection(ctx: FilterFormContext, opts: EntityChipS
     ...(opts.extraSources !== undefined ? { extraSources: opts.extraSources } : {}),
     ...(opts.cloudOf !== undefined ? { cloudOf: opts.cloudOf } : {}),
     ...(opts.placeholder !== undefined ? { placeholder: opts.placeholder } : {}),
+    ...(opts.addPlaceholder !== undefined ? { addPlaceholder: opts.addPlaceholder } : {}),
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
   });
   if (opts.tooltip !== undefined) setTooltip(field.root, opts.tooltip);
@@ -844,9 +877,11 @@ export function buildAuthorConditionSection(
 export interface DateRangeOptions {
   /**
    * Вид поля: `editor` — общий редактор значения (дата + токены отбора);
-   * `datetime` — нативное поле `datetime-local` (точность до секунды).
+   * `period` — общее поле периода `lib/period-editor.ts` (вариант `dialog`,
+   * задача 12a5e719): строка периода с «крестиком» очистки, авто-индикатором
+   * «Учитывать время» и правкой диалогом «Дата/период».
    */
-  mode?: 'editor' | 'datetime';
+  mode?: 'editor' | 'period';
   label: string;
   after: string;
   before: string;
@@ -856,29 +891,68 @@ export interface DateRangeOptions {
   suggestSource?: SuggestSource;
 }
 
+/**
+ * Поле периода режима `period`: общий контрол `lib/period-editor.ts`
+ * (вариант `dialog`). Диалог «Дата/период» строит каркас (сам контрол его не
+ * импортирует); возвращённые локальные даты/время конвертируются в границы
+ * значения — пустое время даёт «голую дату», иначе UTC-инстанс.
+ */
+function buildPeriodField(opts: DateRangeOptions): HTMLElement {
+  const editor = buildPeriodEditor({
+    variant: 'dialog',
+    label: opts.label,
+    value: { from: opts.after, to: opts.before },
+    onChange: (value) => {
+      opts.onAfterChange(value.from ?? '');
+      opts.onBeforeChange(value.to ?? '');
+    },
+    openPeriodDialog: async (current) => {
+      const from = parseLocalBound(current.from);
+      const to = parseLocalBound(current.to);
+      const withTime = hasExplicitTime(from.time) || hasExplicitTime(to.time);
+      const period = from.date !== '' && to.date !== '' && from.date !== to.date;
+      const fallback = from.date === '' ? todayLocal() : from.date;
+      const result = await openDatePeriodDialog({
+        allowPeriod: true,
+        allowTime: true,
+        title: opts.label,
+        initial: {
+          mode: period ? 'period' : 'date',
+          from: fallback,
+          to: to.date === '' ? fallback : to.date,
+          hasTime: withTime,
+          fromTime: from.time === '' ? DPD_DEFAULT_TIME : from.time,
+          toTime: to.time === '' ? (from.time === '' ? DPD_DEFAULT_TIME : from.time) : to.time,
+        },
+      });
+      if (result === null) return null;
+      return {
+        from: composeLocalBound(result.from, result.hasTime ? result.fromTime : ''),
+        to: composeLocalBound(
+          result.mode === 'date' ? result.from : result.to,
+          result.hasTime ? result.toTime : '',
+        ),
+      };
+    },
+  });
+  const field = div('st-f-date-period');
+  field.append(editor.root);
+  return field;
+}
+
 /** Строка «от / до» одной временной группы. */
 export function buildDateRangeRow(ctx: FilterFormContext, opts: DateRangeOptions): HTMLElement {
   const row = div('st-f-date-row');
   row.append(el('span', 'st-f-date-label', opts.label));
 
+  if ((opts.mode ?? 'editor') === 'period') {
+    row.append(buildPeriodField(opts));
+    return row;
+  }
+
   const buildField = (value: string, tag: string, set: (v: string) => void): HTMLElement => {
     const wrap = div('st-f-date-field');
     wrap.append(el('span', 'st-f-date-tag', tag));
-    if ((opts.mode ?? 'editor') === 'datetime') {
-      const input = el('input', 'st-f-input') as HTMLInputElement;
-      input.type = 'datetime-local';
-      input.step = '1';
-      input.value = value;
-      setTooltip(input, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
-      input.addEventListener('input', () => set(input.value));
-      wrap.append(
-        wrapClearable(input, () => {
-          input.value = '';
-          set('');
-        }),
-      );
-      return wrap;
-    }
     wrap.append(
       buildValueEditor({
         networkId: ctx.networkId,
@@ -904,7 +978,7 @@ export function buildDateRangeRow(ctx: FilterFormContext, opts: DateRangeOptions
 }
 
 export interface DatesSectionOptions {
-  mode?: 'editor' | 'datetime';
+  mode?: 'editor' | 'period';
   title?: string;
   /**
    * Пары «от/до» группы. По умолчанию — «Создано»/«Изменено» по общим полям

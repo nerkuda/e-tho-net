@@ -152,6 +152,17 @@
   color: var(--accent);
 }
 
+/* Включённое состояние обычной кнопки-переключателя (`secondary`): залита
+   акцентом — выраженное «включено» (кнопка «С указанием времени» диалога
+   даты/периода, задача c4a7e9e3). Вторая строка селектора удерживает заливку
+   при наведении и нажатии — иначе общие `:hover`/`:active` перебили бы её. */
+.ui-btn--secondary.ui-btn--active,
+.ui-btn--secondary.ui-btn--active:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
 /* Ghost-иконочная: не квадрат — кнопка-иконка с паддингами тулбара.
    `m` — тулбар/панели (был `.tb-btn.tb-icon`), `s` — крестик диалога. */
 .ui-btn--ghost.ui-btn--icon {

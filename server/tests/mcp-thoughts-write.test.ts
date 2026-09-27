@@ -1387,9 +1387,17 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.ok(got.messages.length > 0);
         const text = got.messages[0]?.content;
         if (typeof text === 'object' && text !== null && 'text' in text) {
+          const promptText = (text as { text: string }).text;
+          assert.ok(promptText.includes('etn.thoughts.write'), 'prompt must mention etn.thoughts.write');
+          // Контрактная формулировка `chronicle[]` (ошибка a6cbcdc3): поле
+          // `use_time` обязано быть задокументировано в тексте контракта —
+          // рантайм его принимает (`WriteChronicleItemSchema`, коммит a3d8168f),
+          // и оно влияет на показ времени в клиенте. Гайд и промпт черпают
+          // текст отсюда (`writeBatchHowToText`), поэтому рассинхрон описания
+          // и кода тут не пройдёт незамеченным.
           assert.ok(
-            (text as { text: string }).text.includes('etn.thoughts.write'),
-            'prompt must mention etn.thoughts.write',
+            promptText.includes('use_time'),
+            'prompt must document chronicle[].use_time (contract a6cbcdc3)',
           );
         }
       } finally {

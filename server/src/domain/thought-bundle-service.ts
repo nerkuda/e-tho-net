@@ -229,6 +229,7 @@ export function upsertThoughtBundle(
             body_md: c.body_md,
             ...(c.valid_from === undefined ? {} : { valid_from: c.valid_from }),
             ...(c.valid_to === undefined ? {} : { valid_to: c.valid_to }),
+            ...(c.use_time === undefined ? {} : { use_time: c.use_time }),
           },
           actorUserId,
         ),

@@ -41,6 +41,7 @@ import {
   EtnError,
   ETNX_SUBTREE_DEPTH_MAX,
   SORT_KINDS,
+  STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_SORTS,
   STRUCTURES_QUERY_MAX_LIMIT,
   SORT_ORDERS,
@@ -1070,9 +1071,12 @@ export const CommentsGet = defineContract('etn.comments.get', GetCommentFields, 
 const CommentChangesFields = z
   .object({
     title: z.string().nullable().optional(),
-    body_md: z.string().min(1).optional(),
+    // Непустоту `body_md` проверяет домен по виду комментария (ошибка 00115e7b):
+    // у хронологической пустое тело допустимо, пока есть заголовок/привязка.
+    body_md: z.string().optional(),
     valid_from: z.string().min(1).optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   })
   .refine((c) => Object.keys(c).length > 0, { message: 'changes must not be empty' });
 export const CommentsUpdate = defineContract(
@@ -1580,6 +1584,11 @@ export const ChronicleQuery = defineContract(
   z.object({
     network_id: NetworkId,
     keywords: z.string().optional(),
+    // Область поиска ключевых слов (0.10.1, задача 46057359): `comment`
+    // покрывает постоянные комментарии мыслей И текст/заголовок самих записей;
+    // выключенная область `comment` (в т.ч. `['title','synonyms']`) отключает
+    // путь по тексту записи. Паритет с REST-телом (`parseChronicleQueryBody`).
+    keyword_scope: z.array(z.enum(STRUCTURE_KEYWORD_SCOPES)).optional(),
     thought_ids: z.array(ThoughtId).optional(),
     include_subtree: z.boolean().optional(),
     type: z.string().min(1).optional(),
@@ -1589,6 +1598,11 @@ export const ChronicleQuery = defineContract(
     link_scope: z.enum(['sources', 'targets', 'both']).optional(),
     date_from: z.string().min(1).optional(),
     date_to: z.string().min(1).optional(),
+    // Критерии целей записи (0.10.1): набор полей «Структур»
+    // (05-mcp-server.md §4.1), разбирается доменным `parseStructureFilter`.
+    // Компактная форма — свободный объект: tools/list держит бюджет размера
+    // (сторож mcp-telemetry), а состав полей валидируется в домене.
+    targets: z.record(z.string(), z.unknown()).optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
@@ -1941,14 +1955,15 @@ const commentFieldsRest = {
     from: { kind: 'body' },
     msg: 'kind обязателен (permanent|chronological).',
   },
-  body_md: {
-    from: { kind: 'body' },
-    msg: 'body_md обязателен и не может быть пустым.',
-    check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'body_md обязателен и не может быть пустым.' : null),
-  },
+  // `body_md` больше не «обязателен и непуст» на уровне контракта (ошибка
+  // 00115e7b): у хронологической записи содержание может держаться на
+  // заголовке или привязке вне HOME (требование 26f0aa52). Полную проверку
+  // содержания по виду комментария делает домен `comment-service`.
+  body_md: { from: { kind: 'body' } },
   title: { from: { kind: 'body' } },
   valid_from: { from: { kind: 'body' } },
   valid_to: { from: { kind: 'body' } },
+  use_time: { from: { kind: 'body' } },
 } as const;
 
 /** GET …/comments — список комментариев владельца. */
@@ -1968,10 +1983,11 @@ export const RestCommentCreateOwner = defineContract(
     network_id: NetworkId,
     owner_id: z.string().min(1),
     kind: z.enum(COMMENT_KINDS),
-    body_md: z.string().min(1),
+    body_md: z.string().optional(),
     title: z.string().nullable().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -1986,10 +2002,11 @@ export const RestCommentCreateTargets = defineContract(
   z.object({
     network_id: NetworkId,
     kind: z.enum(COMMENT_KINDS),
-    body_md: z.string().min(1),
+    body_md: z.string().optional(),
     title: z.string().nullable().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -2064,6 +2081,7 @@ export const RestCommentUpdate = defineContract(
     body_md: z.string().optional(),
     valid_from: z.string().optional(),
     valid_to: z.string().nullable().optional(),
+    use_time: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -2076,6 +2094,10 @@ export const RestCommentUpdate = defineContract(
     body_md: { from: { kind: 'body' } },
     valid_from: { from: { kind: 'body' } },
     valid_to: { from: { kind: 'body' } },
+    // Флаг «учитывать время» обязан читаться из тела: без записи в REST-карте
+    // `parseRest` его не вернёт, и PATCH молча терял бы флаг (ошибка f45fac74,
+    // итерация приёмки №11 0.10.1). Создание (`commentFieldsRest`) флаг уже чтит.
+    use_time: { from: { kind: 'body' } },
   },
 );
 

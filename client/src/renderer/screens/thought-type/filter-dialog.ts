@@ -520,7 +520,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
     cloudOf: (value) => (value.startsWith('$') ? null : (parentClouds.get(value) ?? null)),
     placeholder: 'Название мысли или токен…',
     tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
-    picker: { label: 'выбрать…', open: (managed) => pickParentThoughts(networkId, managed) },
+    picker: { label: 'Выбрать из списка', open: (managed) => pickParentThoughts(networkId, managed) },
   });
   sections.push(parentSection);
   // Догрузить облачка уже выбранных мыслей (в каталоге живого поиска их нет).
@@ -539,7 +539,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
       optionsHeader: 'Типы мыслей',
       extraSources: [tokenSourceFor({ kind: 'thought_type' })],
       placeholder: 'Название типа или токен…',
-      picker: { label: 'список типов…', open: (managed) => openThoughtTypesPicker(networkId, managed) },
+      picker: { label: 'Открыть список типов', open: (managed) => openThoughtTypesPicker(networkId, managed) },
     }),
     buildEntityChipSection(ctx, {
       title: 'Типы связей',
@@ -552,7 +552,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
       optionsHeader: 'Типы связей',
       extraSources: [tokenSourceFor({ kind: 'link_type' })],
       placeholder: 'Название типа или токен…',
-      picker: { label: 'список типов…', open: (managed) => openLinkTypesPicker(networkId, managed) },
+      picker: { label: 'Открыть список типов', open: (managed) => openLinkTypesPicker(networkId, managed) },
     }),
   );
 

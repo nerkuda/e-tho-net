@@ -20,9 +20,8 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
     {
       title: 'Запрос хроники',
       description:
-        'Двухфазный запрос хроники (паритет `POST /chronicle/query`): фаза 1 — мысли по ' +
-        '`keywords`/`thought_ids`/`include_subtree`/`type[]`; фаза 2 — хроно-комментарии к ним ' +
-        'или их связям с фильтрами `link_type[]`/`link_scope`/`date_from/to`. `{ rows[], meta }`.',
+        'Запрос хроники (паритет `POST /chronicle/query`): хроно-комментарии по ' +
+        'фильтру мыслей; `targets` — критерии целей.',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },
@@ -44,6 +43,7 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         // повторяет ключи REST с минимальной правкой имён.
         const body: Record<string, unknown> = {};
         if (args.keywords !== undefined) body.keywords = args.keywords;
+        if (args.keyword_scope !== undefined) body.keyword_scope = args.keyword_scope;
         if (args.thought_ids !== undefined) body.thought_ids = args.thought_ids;
         if (args.include_subtree !== undefined) body.include_subtree = args.include_subtree;
         if (typeIds !== undefined) body.type_ids = typeIds;
@@ -51,11 +51,12 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         if (args.link_scope !== undefined) body.link_scope = args.link_scope;
         if (args.date_from !== undefined) body.date_from = args.date_from;
         if (args.date_to !== undefined) body.date_to = args.date_to;
+        if (args.targets !== undefined) body.targets = args.targets;
         if (args.order !== undefined) body.order = args.order;
         if (args.limit !== undefined) body.limit = args.limit;
         if (args.offset !== undefined) body.offset = args.offset;
         const request = parseChronicleQueryBody(body, '');
-        const result = queryChronicle(ndb, request);
+        const result = queryChronicle(ndb, request, { userId: rt.deps.auth.userId });
         return {
           rows: result.rows,
           meta: { total: result.total, offset: request.offset, limit: request.limit },

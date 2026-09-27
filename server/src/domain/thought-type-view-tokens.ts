@@ -23,11 +23,17 @@
  *     `$thought.created` / `$thought.updated` — поля мысли;
  *   * `$thought.[<имя свойства>]` — значение свойства мысли;
  *   * `$today` / `$now` — текущая дата (YYYY-MM-DD) / момент (ISO-8601);
+ *   * `$week.start` / `$week.end` — понедельник / воскресенье текущей недели;
+ *   * `$month.start` / `$month.end` — первый / последний день текущего месяца;
+ *   * `$year.start` / `$year.end` — первое / последнее число текущего года;
  *   * `$user` — id текущего пользователя.
  *
- * Арифметика — только над датами и только в днях: `$today+7d`,
- * `$thought.[Плановый срок]-3d`. Шаблон: `$TOKEN±Nd`, где N — целое,
- * `d` — литерал. Никаких часов, недель, месяцев и составных выражений.
+ * Арифметика — только над датами: `$today+7d`,
+ * `$thought.[Плановый срок]-3d`, `$week.start-1w`, `$month.end+1mo`,
+ * `$year.start-1y`. Шаблон: `$TOKEN±<N><unit>`, где N — целое, unit — `d`
+ * (дни), `w` (недели, ровно 7 суток), `mo` (календарные месяцы, день при
+ * переполнении прижимается к концу месяца) или `y` (календарные годы =
+ * 12 месяцев). Никаких часов и составных выражений.
  */
 
 import { EtnError, type PropertyValueType } from '@etn/shared';
@@ -84,8 +90,20 @@ export interface ParsedToken {
   field?: ThoughtField;
   /** Заполнен при `kind: 'thought_property'`. */
   propertyName?: string;
-  /** Смещение в днях: `+N` или `-N`; `undefined` — без арифметики. */
+  /** Смещение в днях: `+N` или `-N`; `undefined` — без арифметики в днях. */
   daysOffset?: number;
+  /** Смещение в неделях (`±Nw`); `undefined` — без недельной арифметики. */
+  weeksOffset?: number;
+  /**
+   * Смещение в календарных месяцах (`±Nmo`); `undefined` — без месячной
+   * арифметики. Месяц при переполнении прижимается к концу месяца.
+   */
+  monthsOffset?: number;
+  /**
+   * Смещение в календарных годах (`±Ny`); `undefined` — без годовой
+   * арифметики. Год = 12 календарных месяцев (прижимание дня к концу месяца).
+   */
+  yearsOffset?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,26 +117,31 @@ export interface ParsedToken {
  *   * `thought` — псевдоним `$thought.id`;
  *   * `thought.<id|title|synonyms|type|active|author|editor|created|updated>`;
  *   * `thought.[<любой текст без `]`>]` — свойство;
- *   * `today` / `now` / `user` — глобальные.
+ *   * `today` / `now` / `user` — глобальные;
+ *   * `week.start` / `week.end` / `month.start` / `month.end` /
+ *     `year.start` / `year.end` — границы текущих недели/месяца/года
+ *     (неделя с понедельника).
  *
  * Вариант «`thought.foo`» НЕ совпадёт ни с одной веткой → попадёт в
  * {@link POTENTIAL_TOKEN_RE} как неизвестный токен.
  */
 const TOKEN_HEAD_RE =
-  /\$(thought(?:\.(?:id|title|synonyms|type|active|author|editor|created|updated))?(?:\.\[[^\]]+\])?|today|now|user)/g;
+  /\$(thought(?:\.(?:id|title|synonyms|type|active|author|editor|created|updated))?(?:\.\[[^\]]+\])?|today|now|user|week\.(?:start|end)|month\.(?:start|end)|year\.(?:start|end))/g;
 
 /**
- * Хвостовая арифметика дат: `+7d`, `-3d`. Только целые и только `d`. Пробелы
- * недопустимы — `$today + 7d` останется двумя фрагментами и второй уйдёт
- * валидатору как «мусор после токена».
+ * Хвостовая арифметика дат: `+7d`, `-3d`, `+1w`, `-1mo`, `+2y`. Единицы:
+ * `d` (дни), `w` (недели = 7 суток), `mo` (календарные месяцы), `y`
+ * (календарные годы = 12 месяцев). Пробелы недопустимы — `$today + 7d`
+ * останется двумя фрагментами и второй уйдёт валидатору как «мусор после
+ * токена».
  *
  * Якорь `$` намеренно опущен: `tail` после головы токена содержит хвост
- * строки, и нужно проверить только префикс `+Nd`. С `$` на конце регулярка
- * совпала бы только при пустом tail после арифметики, что для всех
+ * строки, и нужно проверить только префикс `+N<unit>`. С `$` на конце
+ * регулярка совпала бы только при пустом tail после арифметики, что для всех
  * реальных строк ложно — баг найден на этапе 20b2fca0 (тест
  * «распознаёт хвостовую арифметику ±Nd» в thought-type-view-tokens.test.ts).
  */
-const ARITHMETIC_RE = /^([+-])(\d+)d/;
+const ARITHMETIC_RE = /^([+-])(\d+)(mo|y|w|d)/;
 
 /**
  * Любой фрагмент, начинающийся с `$<буква>` — кандидат в токен.
@@ -177,15 +200,23 @@ function parseKnownTokens(s: string): ParsedToken[] {
     const headStart = m.index + 1; // пропустили ведущий `$`
     const headEnd = headStart + head.length;
     let daysOffset: number | undefined;
+    let weeksOffset: number | undefined;
+    let monthsOffset: number | undefined;
+    let yearsOffset: number | undefined;
     let totalEnd = headEnd;
-    // Хвост после головы — пробуем трактовать как арифметику `±Nd`.
+    // Хвост после головы — пробуем трактовать как арифметику `±N<unit>`.
     const tail = s.slice(headEnd);
     const arithMatch = ARITHMETIC_RE.exec(tail);
     if (arithMatch !== null) {
-      daysOffset = Number.parseInt(arithMatch[2]!, 10) * (arithMatch[1] === '-' ? -1 : 1);
+      const count = Number.parseInt(arithMatch[2]!, 10) * (arithMatch[1] === '-' ? -1 : 1);
+      const unit = arithMatch[3]!;
+      if (unit === 'd') daysOffset = count;
+      else if (unit === 'w') weeksOffset = count;
+      else if (unit === 'y') yearsOffset = count;
+      else monthsOffset = count;
       totalEnd = headEnd + arithMatch[0].length;
       // Сдвигаем lastIndex, чтобы при следующем проходе не зациклиться на пустом
-      // совпадении после `d`.
+      // совпадении после единицы.
       TOKEN_HEAD_RE.lastIndex = totalEnd;
     }
     const token: ParsedToken = {
@@ -194,6 +225,9 @@ function parseKnownTokens(s: string): ParsedToken[] {
       end: totalEnd,
       kind: classifyHead(head),
       daysOffset,
+      weeksOffset,
+      monthsOffset,
+      yearsOffset,
     };
     if (token.kind === 'thought_field') {
       token.field = extractField(head) ?? 'id';
@@ -207,6 +241,9 @@ function parseKnownTokens(s: string): ParsedToken[] {
 
 function classifyHead(head: string): TokenKind {
   if (head === 'today' || head === 'now' || head === 'user') return 'global';
+  if (head.startsWith('week.') || head.startsWith('month.') || head.startsWith('year.')) {
+    return 'global';
+  }
   if (head === 'thought') return 'thought_field';
   if (head.startsWith('thought.')) {
     const after = head.slice('thought.'.length);
@@ -344,7 +381,7 @@ export function validateDefinitionForTokens(
         path,
         token: u.raw,
         reason: 'unknown_token',
-        message: `Неизвестный токен «${u.raw}»: разрешены только $today, $now, $user, $thought.* и $thought.[имя свойства].`,
+        message: `Неизвестный токен «${u.raw}»: разрешены только $today, $now, $user, $week.start/$week.end, $month.start/$month.end, $year.start/$year.end, $thought.* и $thought.[имя свойства].`,
       });
     }
     // Проверка совместимости операций и множественных свойств — только для
@@ -495,6 +532,76 @@ export function resolveTokensInDefinition(
   });
 
   return { definition: out, unresolved };
+}
+
+/**
+ * Результат {@link resolveGlobalDateTokens}.
+ */
+export interface GlobalTokenResolveResult {
+  /** Строка с подставленными глобальными токенами (без изменений при ошибке). */
+  value: string;
+  /** Неразрешимые токены; непусто — строку использовать нельзя. */
+  unresolved: TokenIssue[];
+}
+
+/**
+ * Раскрыть в одной строке только глобальные токены (`$today`/`$now`/`$user`,
+ * `$week.start`/`$week.end`, `$month.start`/`$month.end`,
+ * `$year.start`/`$year.end`) и арифметику `±Nd`/`±Nw`/`±Nmo`/`±Ny`.
+ * Токены контекста мысли (`$thought.*`, `$thought.[…]`)
+ * неразрешимы без мысли и попадают в `unresolved` — вызывающий решает, что
+ * делать (период хроники отвергает их `VALIDATION_ERROR`, требование 91f8d8dd:
+ * «период принимает динамические токены дат, язык — из отбора мыслей»).
+ *
+ * Живёт здесь, а не в хронике, чтобы синтаксис и семантика токенов не
+ * дублировались (ADR 7c1c5bf5 «Токены отбора — закрытое пространство имён»).
+ */
+export function resolveGlobalDateTokens(
+  value: string,
+  opts: { now?: () => Date; userId?: string } = {},
+): GlobalTokenResolveResult {
+  const { known, unknown } = scanStringForTokens(value);
+  const unresolved: TokenIssue[] = [];
+  for (const u of unknown) {
+    unresolved.push({
+      path: '',
+      token: u.raw,
+      reason: 'unknown_token',
+      message: `Неизвестный токен «${u.raw}».`,
+    });
+  }
+  for (const tok of known) {
+    if (tok.kind !== 'global') {
+      unresolved.push({
+        path: '',
+        token: tok.raw,
+        reason: 'unknown_token',
+        message: `Токен «${tok.raw}» требует контекста мысли и в периоде недопустим; доступны $today/$now, $week.start/$week.end, $month.start/$month.end, $year.start/$year.end и арифметика ±Nd/±Nw/±Nmo/±Ny.`,
+      });
+    }
+  }
+  if (unresolved.length > 0) return { value, unresolved };
+
+  const nowFn = opts.now ?? ((): Date => new Date());
+  // Контекст-заглушка: глобальные токены мысль и свойства не читают.
+  const ctx: ResolveContext = {
+    thought: {
+      id: '',
+      title: '',
+      synonyms: [],
+      type_id: null,
+      active: true,
+      created_by: '',
+      updated_by: '',
+      created_at: '',
+      updated_at: '',
+    },
+    properties: new Map(),
+    userId: opts.userId ?? '',
+    now: nowFn,
+  };
+  const out = resolveString(value, '', ctx, nowFn, unresolved);
+  return { value: Array.isArray(out) ? out.join(', ') : out, unresolved };
 }
 
 /**
@@ -662,16 +769,90 @@ function resolveGlobal(
   if (head === 'today') raw = todayIso(now());
   else if (head === 'now') raw = now().toISOString();
   else if (head === 'user') raw = ctx.userId;
-  else return null;
+  else if (head === 'week.start') raw = weekStartIso(now());
+  else if (head === 'week.end') raw = addDaysIso(weekStartIso(now()), 6);
+  else if (head === 'month.start' || head === 'month.end' || head === 'year.start' || head === 'year.end') {
+    // Месячную/годовую арифметику применяем к ЯКОРЮ месяца/года, а не к его
+    // последнему дню: `$month.end-1mo` — последний день прошлого месяца, а не
+    // «минус месяц от последнего дня» (иначе 30 сентября −1 мес дало бы
+    // 30 августа). Год = 12 календарных месяцев.
+    const monthsTotal = (tok.monthsOffset ?? 0) + (tok.yearsOffset ?? 0) * 12;
+    const isYear = head === 'year.start' || head === 'year.end';
+    const edge = head === 'month.start' || head === 'year.start' ? 'start' : 'end';
+    const anchor = isYear
+      ? yearBoundIso(now(), monthsTotal, edge)
+      : monthBoundIso(now(), monthsTotal, edge);
+    return applyDateArithmetic(
+      { ...tok, monthsOffset: undefined, yearsOffset: undefined },
+      anchor,
+      head,
+      ctx,
+      now,
+      unresolved,
+      path,
+    );
+  } else return null;
   return applyDateArithmetic(tok, raw, head, ctx, now, unresolved, path);
 }
 
 /**
- * Применить суффикс `±Nd` к дате/дате-времени. Для не-дат — ошибка
- * `syntax_error` в списке неразрешённых. Поддерживает `$today`,
- * `$now`, `$thought.created`, `$thought.updated`,
- * `$thought.[<свойство даты>]`. В остальных случаях арифметика
- * бессмысленна — фиксируем как неразрешимый.
+ * Граница года, сдвинутого на `nMonths` календарных месяцев от даты `d`
+ * (UTC): `start` — 1 января, `end` — 31 декабря. Год = 12 месяцев, поэтому
+ * `±Ny` приходит сюда как `nMonths = N*12`.
+ */
+function yearBoundIso(d: Date, nMonths: number, edge: 'start' | 'end'): string {
+  const year = d.getUTCFullYear() + Math.floor(nMonths / 12);
+  const monthShift = ((nMonths % 12) + 12) % 12;
+  if (edge === 'start') {
+    return new Date(Date.UTC(year, monthShift, 1)).toISOString().slice(0, 10);
+  }
+  // Конец года — последний день 12-месячного периода от начала.
+  return new Date(Date.UTC(year, monthShift + 12, 0)).toISOString().slice(0, 10);
+}
+
+/** Понедельник недели даты (UTC, ISO-неделя). */
+function weekStartIso(d: Date): string {
+  const day = todayIso(d);
+  const wd = (new Date(`${day}T00:00:00.000Z`).getUTCDay() + 6) % 7; // 0 — понедельник
+  return addDaysIso(day, -wd);
+}
+
+/**
+ * Граница месяца, сдвинутого на `n` календарных месяцев от даты `d` (UTC):
+ * `start` — первое число, `end` — последнее.
+ */
+function monthBoundIso(d: Date, n: number, edge: 'start' | 'end'): string {
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth() + n; // может выйти за 0..11 — Date нормализует
+  if (edge === 'start') return new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  return new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10);
+}
+
+/** Сдвиг даты `YYYY-MM-DD` на сутки в UTC (пустая строка — вход не разобран). */
+function addDaysIso(day: string, n: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (m === null) return day;
+  const base = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + n * 86_400_000;
+  return new Date(base).toISOString().slice(0, 10);
+}
+
+/** Сдвиг даты на `n` календарных месяцев с прижатием дня к концу месяца. */
+function addMonthsClamped(d: Date, n: number): Date {
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth();
+  const day = d.getUTCDate();
+  const targetMonth = month + n;
+  // Последний день целевого месяца: нулевой день следующего.
+  const lastDay = new Date(Date.UTC(year, targetMonth + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, targetMonth, Math.min(day, lastDay)));
+}
+
+/**
+ * Применить суффикс арифметики (`±Nd` / `±Nw` / `±Nmo` / `±Ny`) к дате/дате-времени.
+ * Для не-дат — ошибка `syntax_error` в списке неразрешённых. Поддерживает
+ * `$today`, `$now`, `$week.*`, `$month.*`, `$year.*`, `$thought.created`,
+ * `$thought.updated`, `$thought.[<свойство даты>]`. В остальных случаях
+ * арифметика бессмысленна — фиксируем как неразрешимый.
  */
 function applyDateArithmetic(
   tok: ParsedToken,
@@ -682,7 +863,12 @@ function applyDateArithmetic(
   unresolved: TokenIssue[],
   path: string,
 ): string | number | boolean | string[] | null {
-  if (tok.daysOffset === undefined) {
+  const hasArithmetic =
+    tok.daysOffset !== undefined ||
+    tok.weeksOffset !== undefined ||
+    tok.monthsOffset !== undefined ||
+    tok.yearsOffset !== undefined;
+  if (!hasArithmetic) {
     if (Array.isArray(raw)) return raw;
     return raw;
   }
@@ -692,7 +878,7 @@ function applyDateArithmetic(
       path,
       token: tok.raw,
       reason: 'incompatible_operation',
-      message: `Арифметика дней применима только к датам; «${tok.raw}» указывает на ${source}.`,
+      message: `Арифметика дат применима только к датам; «${tok.raw}» указывает на ${source}.`,
     });
     return null;
   }
@@ -713,9 +899,16 @@ function applyDateArithmetic(
     }
     base = parsed;
   }
-  const shifted = new Date(base);
-  shifted.setUTCDate(shifted.getUTCDate() + tok.daysOffset);
-  // `$today±Nd` остаётся YYYY-MM-DD, `$now±Nd` и `created/updated` — ISO-8601.
+  let shifted = new Date(base);
+  // Дни и недели — линейный сдвиг; месяцы и годы — календарный (с прижатием дня).
+  const dayShift = (tok.daysOffset ?? 0) + (tok.weeksOffset ?? 0) * 7;
+  if (dayShift !== 0) shifted.setUTCDate(shifted.getUTCDate() + dayShift);
+  const monthShift = (tok.monthsOffset ?? 0) + (tok.yearsOffset ?? 0) * 12;
+  if (monthShift !== 0) {
+    shifted = addMonthsClamped(shifted, monthShift);
+  }
+  // `$today±Nd`/`$week.*`/`$month.*` остаются YYYY-MM-DD, `$now±Nd` и
+  // `created/updated` — ISO-8601.
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     return todayIso(shifted);
   }

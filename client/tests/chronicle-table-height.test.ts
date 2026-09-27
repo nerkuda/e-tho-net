@@ -1,20 +1,17 @@
 /**
- * Высота таблицы хроно-комментариев на «Хронике» (ошибка 78562781).
+ * Высота ленты «Дневника» — продолжение ошибки 78562781.
  *
- * Симптом: перетаскивание границы между таблицей записей и областью
- * комментария визуально работало только во время драга, а после отпускания
- * высота возвращалась к прежней (240 px). Диагноз: сохранённая высота писалась
- * и читалась исправно (`saveListClamp('chronicle.table')` →
- * `chronicle_list_heights`), но применялась как точный инлайновый `height`, а
- * на элементе оставался **стилевой** `max-height: 240px` (`.chron-table-wrap`):
- * инлайновый потолок превью очищался на drag-end, и CSS-потолок снова обрезал
- * высоту — «граница возвращается».
+ * Симптом прежней «Хроники»: перетаскивание границы между таблицей записей и
+ * областью комментария визуально работало только во время драга, а после
+ * отпускания высота возвращалась к прежней (240 px): сохранённая высота
+ * применялась инлайном, но стилевой `max-height` снова обрезал её. Задача T6
+ * заменила таблицу с нижним редактором на ленту, поэтому прежний сплиттер и
+ * ключ `chronicle.table` из экрана ушли. Сторож сохраняет общий инвариант
+ * (кламп-контейнеры снимают стилевой потолок) и фиксирует новую раскладку:
+ * лента — стабильный контейнер на всю высоту центра, список внутри
+ * перерисовывается `replaceChildren`, потолок 240px больше не возвращается.
  *
- * Тесты структурные (конвенция соседних клиентских тестов — без jsdom):
- * проверяют и сам механизм (фикс `max-height: none`), и что сплиттер «Хроники»
- * пишет в тот же ключ L4, применяет высоту при пересборке и не пересекается с
- * каркасом панели отбора (задача 2ebe4206). Заодно фиксируется вывод проверки
- * «Событий» и «Структур»: своего сплиттера высоты таблицы там нет.
+ * Тесты структурные (конвенция соседних клиентских тестов — без jsdom).
  */
 
 import assert from 'node:assert/strict';
@@ -27,7 +24,6 @@ const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const CHRONICLE_TS = resolve(RENDERER, 'screens', 'chronicle', 'chronicle.ts');
 const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
 const STRUCTURES_TS = resolve(RENDERER, 'screens', 'structures', 'structures.ts');
-const LIST_HEIGHTS_TS = resolve(RENDERER, 'editor', 'list-heights.ts');
 const FRAME_TS = resolve(RENDERER, 'lib', 'filter-panel-frame.ts');
 const STYLES_CSS = assembledStylesFile();
 
@@ -51,33 +47,9 @@ function bodiesOf(css: string, selectorPart: string): string[] {
     .map((b) => b.body);
 }
 
-describe('высота таблицы хроно-комментариев (ошибка 78562781)', () => {
-  it('стилевой max-height не перекрывает высоту, выбранную перетаскиванием', () => {
-    const heights = readText(LIST_HEIGHTS_TS);
-    const idx = heights.indexOf('export function applyGroupClamp');
-    assert.ok(idx >= 0, 'applyGroupClamp найден');
-    const body = heights.slice(idx, heights.indexOf('/**', idx + 10));
-    assert.match(
-      body,
-      /group\.style\.maxHeight\s*=\s*'none'/,
-      'applyGroupClamp ставит max-height: none — иначе стилевой потолок обрезает сохранённую высоту',
-    );
-
-    const css = readText(STYLES_CSS);
-    const chronWrap = bodiesOf(css, '.chron-table-wrap');
-    assert.ok(chronWrap.length > 0, 'правило .chron-table-wrap на месте');
-    assert.match(
-      chronWrap.join('\n'),
-      /max-height:\s*240px/,
-      'до первого драга у таблицы остаётся CSS-умолчание (пять строк, §17)',
-    );
-  });
-
+describe('лента «Дневника»: высота не теряется (продолжение ошибки 78562781)', () => {
   it('каждый кламп-контейнер с фиксированной высотой снимает потолок базового правила', () => {
     const css = readText(STYLES_CSS);
-    // Общий сторож: правило, задающее точный height через --clamp-*, обязано
-    // нести и `max-height: none` — иначе `.admin-table-wrap` (380px) молча
-    // обрезает высоту, вытянутую за его предел (та же ошибка 78562781).
     const clampBlocks = cssBlocks(css).filter((b) => /height:\s*var\(--clamp-/.test(b.body));
     assert.ok(clampBlocks.length > 0, 'кламп-контейнеры с height: var(--clamp-*) найдены');
     for (const block of clampBlocks) {
@@ -94,52 +66,48 @@ describe('высота таблицы хроно-комментариев (ош�
     }
   });
 
-  it('драг сплиттера сохраняет высоту в тот же ключ L4, что читается при старте', () => {
-    const src = readText(CHRONICLE_TS);
-    const idx = src.indexOf("persistKey: 'chronicle.table'");
-    assert.ok(idx >= 0, 'сплиттер таблицы сохраняет высоту под ключом chronicle.table');
-    const call = src.slice(idx - 400, idx);
-    assert.match(call, /rowSplitter\(\(\) => wrap,/, 'высоту меняет сам разделитель таблицы');
-    assert.match(call, /min:\s*48/, 'нижняя граница высоты сохранена');
-
-    const heights = readText(LIST_HEIGHTS_TS);
+  it('лента занимает высоту центра и не несёт стилевого потолка', () => {
+    const css = readText(STYLES_CSS);
+    const main = bodiesOf(css, '.chron-main').join('\n');
     assert.match(
-      heights,
-      /CHRONICLE_KEY_PREFIX\s*=\s*'chronicle\.'/,
-      'ключи chronicle.* пишутся в chronicle_list_heights',
+      main,
+      /flex-direction:\s*column/,
+      'центр «Дневника» — колонка: сверху панель добавления, ниже лента',
     );
-    assert.ok(
-      'chronicle.table'.startsWith('chronicle.'),
-      'ключ таблицы попадает в снимок экрана, а не редактора',
-    );
+
+    const feed = bodiesOf(css, '.chron-feed-wrap').join('\n');
+    assert.ok(feed.length > 0, 'правило .chron-feed-wrap на месте');
+    assert.match(feed, /flex:\s*1 1 auto/, 'лента растягивается на остаток высоты');
+    assert.match(feed, /max-height:\s*none/, 'лента снимает прежний потолок таблицы (240px)');
+    assert.match(feed, /overflow:\s*auto/, 'лента — прокручиваемый контейнер');
   });
 
-  it('высота переживает пересборку: применяется к стабильному элементу при монтировании', () => {
+  it('контейнер ленты стабилен, список перерисовывается replaceChildren', () => {
     const src = readText(CHRONICLE_TS);
     assert.match(
       src,
-      /applyGroupClamp\(wrap, 'chronicle\.table'\)/,
-      'высота применяется сразу при монтировании экрана',
+      /feedWrap = div\('admin-table-wrap chron-table-wrap chron-feed-wrap'\)/,
+      'контейнер ленты — стабильный элемент (в т.ч. цель drop для drag-cloud)',
     );
-    // Обёртка таблицы не пересоздаётся при обновлении данных: таблица —
-    // единый фасад (элемент создаётся один раз), обновление — `setRows`, поэтому
-    // инлайновая высота не теряется.
-    assert.match(src, /const wrap = div\('admin-table-wrap chron-table-wrap'\)/, 'обёртка таблицы — стабильный элемент');
-    assert.match(src, /createTable<ChronicleRow>\(\{/, 'таблица — единый фасад lib/ui/table.ts');
-    assert.match(src, /table\.setRows\(rows\)/, 'перерисовка меняет строки фасада, а не обёртку');
+    assert.match(src, /feedList = div\('chron-feed'\)/, 'список ленты — отдельный стабильный элемент');
     assert.ok(
       !/wrap\.replaceChildren\(/.test(src),
-      'обёртку таблицы никогда не пересобирают целиком',
+      'контейнер ленты не пересобирают целиком — перерисовывается только список',
     );
+    // Данные меняет СПИСОК ленты (итерация №11: вызов обёрнут сохранением
+    // прокрутки — `withPreservedScroll(…, () => list.replaceChildren(...))`).
+    assert.match(src, /replaceChildren\(\.\.\.nodes\)/, 'данные меняет список ленты');
+    // Лента дневника: прокруточная догрузка «+50».
+    assert.match(src, /shouldLoadMore\(counters, feedWrap\)/, 'дозагрузка «+50» привязана к контейнеру ленты');
   });
 
-  it('каркас панели отбора не трогает высоту таблицы', () => {
+  it('каркас панели отбора не трогает высоту ленты', () => {
     const frame = readText(FRAME_TS);
     assert.ok(
       !/applyGroupClamp|saveListClamp|list-heights/.test(frame),
       'каркас панели не пишет в хранилище высот списков',
     );
-    assert.ok(!/tableWrap|chron-table/.test(frame), 'каркас панели не знает про обёртку таблицы');
+    assert.ok(!/feedWrap|chron-feed/.test(frame), 'каркас панели не знает про ленту');
     assert.match(frame, /panel\.style\.flexBasis/, 'каркас меняет только размер самой панели');
   });
 

@@ -185,13 +185,36 @@ describe('buildEntityChipField — общий чип-лист сущностей
         values = next;
       },
       loadOptions: () => [],
-      picker: { label: 'список типов…', open: async () => ['t-2', 't-3'] },
+      picker: { label: 'Открыть список типов', open: async () => ['t-2', 't-3'] },
     }) as unknown as { root: ShimElement };
 
-    const pickBtn = field.root.children.find((c) => c.textContent === 'список типов…');
-    assert.ok(pickBtn !== undefined, 'кнопка пикера есть');
+    // Кнопка пикера — угловая «…» в общей обёртке чип-поля (приёмка №2).
+    const pickBtn = field.root
+      .querySelectorAll('.link-value-corner-btn')
+      .find((c) => c.textContent === '…');
+    assert.ok(pickBtn !== undefined, 'угловая кнопка «…» (пикер) есть');
     pickBtn!.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(values, ['$thought', 't-2', 't-3'], 'токен сохранён, набор заменён');
+  });
+
+  it('угловой «✕» очищает всё значение (приёмка №2)', async () => {
+    installShim();
+    const { buildEntityChipField } = await import('../src/renderer/lib/entity-picker.js');
+    let values = ['t-1', '$thought'];
+    const field = buildEntityChipField({
+      getValues: () => values,
+      onChange: (next) => {
+        values = next;
+      },
+      loadOptions: () => [],
+    }) as unknown as { root: ShimElement };
+
+    const clearBtn = field.root
+      .querySelectorAll('.link-value-corner-btn')
+      .find((c) => c.textContent === '✕');
+    assert.ok(clearBtn !== undefined, 'угловая кнопка «✕» есть');
+    clearBtn!.click();
+    assert.deepEqual(values, [], 'очищено всё значение');
   });
 });

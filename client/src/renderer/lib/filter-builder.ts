@@ -36,7 +36,6 @@ import {
   typeNameKey,
   type ActivityEntityType,
   type ChronicleFilterDefinition,
-  type ChronicleLinkScope,
   type LinkType,
   type NetworkProperty,
   type PropertyValueType,
@@ -816,38 +815,57 @@ export function matchesKeywords(text: string, parsed: ParsedKeywords): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Отбор «Хроники»: общая модель критериев + поля этого экрана. Собственной
- * модели панель не держит — тип, парсер и конвертер живут здесь, в единственном
- * модуле конструктора (задача 3742dd59).
+ * Отбор «Дневника»: общая модель критериев + поля записи этого экрана.
+ * Собственной модели панель не держит — тип, парсер и конвертер живут здесь,
+ * в единственном модуле конструктора (задача 3742dd59).
+ *
+ * Состав (0.10.1, требование 306f74cc): критерии ЗАПИСИ — `keywords` (текст
+ * тела/заголовка записи и мыслевый путь, T7), `keywordIn*`, `dateFrom`/`dateTo`,
+ * `order`; критерии ЦЕЛЕЙ — `targets` (набор «Структур», запись проходит, если
+ * хотя бы одна привязанная мысль ему удовлетворяет).
  */
 export interface ChronicleCriteriaState extends FilterCriteriaState {
-  /** Корневые мысли отбора («мысли»). */
-  thoughtIds: string[];
-  /** Включать подчинённые корневых мыслей. */
-  includeSubtree: boolean;
-  /** Сторона связи, на которой должна быть выбранная мысль. */
-  linkScope: ChronicleLinkScope;
-  /** Границы периода хроно-комментариев (`YYYY-MM-DD`). */
+  /** Границы периода хроно-комментариев (`YYYY-MM-DD` или токен дат). */
   dateFrom: string;
   dateTo: string;
+  /**
+   * Режим полей периода панели «Дневника» (0.10.1, приёмка №2): `presets` —
+   * границы заданы токенами (пресеты + арифметика), `dates` — точными датами.
+   * Хранится в сохранённом отборе (`date_mode`) и восстанавливается при
+   * применении; значения раскрываются в момент применения.
+   */
+  dateMode: 'presets' | 'dates';
+  /**
+   * Критерии целей записи (0.10.1, требование 306f74cc): тот же набор, что у
+   * панели «Структур» (типы, родительские мысли, свойства, дополнительно).
+   * Запись проходит отбор, если хотя бы одна её привязанная мысль удовлетворяет
+   * этим критериям; группа едет на сервер полем `targets`
+   * (`ChronicleFilter.targets`).
+   */
+  targets: FilterCriteriaState;
 }
 
-/** Пустой отбор «Хроники» — все мысли сети. */
+/** Пустой отбор «Дневника» — все записи сети. */
 export function defaultChronicleCriteriaState(): ChronicleCriteriaState {
   return {
     ...defaultFilterCriteriaState(),
-    thoughtIds: [],
-    includeSubtree: false,
-    linkScope: 'both',
+    // Область ключевых слов по умолчанию — все три: наименование, синонимы,
+    // комментарий (мыслевый путь сохраняет поведение до 0.10.1; путь по телу
+    // записи от области не зависит).
+    keywordInComment: true,
     dateFrom: '',
     dateTo: '',
+    dateMode: 'presets',
+    targets: defaultFilterCriteriaState(),
   };
 }
 
 /**
- * Читает сохранённое определение отбора «Хроники» (`ChronicleFilterDefinition`,
+ * Читает сохранённое определение отбора «Дневника» (`ChronicleFilterDefinition`,
  * в т.ч. записанное до 0.8.2) в общую модель. Незнакомые поля игнорируются;
- * старые определения читаются теми же ключами — формат хранения не меняется.
+ * старые определения читаются теми же ключами. Поля прежних версий
+ * (`thought_ids`, `include_subtree`, `link_scope`) не участвуют в новой панели
+ * и молча пропускаются.
  */
 export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
   const next = defaultChronicleCriteriaState();
@@ -855,15 +873,25 @@ export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
   const parsed = def as Record<string, unknown>;
   const common = parseFilterDefinition(parsed);
   Object.assign(next, common);
-  if (Array.isArray(parsed['thought_ids'])) {
-    next.thoughtIds = (parsed['thought_ids'] as string[]).slice();
-  }
-  if (parsed['include_subtree'] === true) next.includeSubtree = true;
-  const scope = parsed['link_scope'];
-  if (scope === 'sources' || scope === 'targets' || scope === 'both') next.linkScope = scope;
   if (typeof parsed['date_from'] === 'string') next.dateFrom = parsed['date_from'];
   if (typeof parsed['date_to'] === 'string') next.dateTo = parsed['date_to'];
-  // `parseFilterDefinition` читает только общие границы; у «Хроники» период —
+  // Режим периода (0.10.1, приёмка №2): старые определения без него читаются
+  // как «Пресеты» — границы-токены прежнего поведения.
+  if (parsed['date_mode'] === 'dates' || parsed['date_mode'] === 'presets') {
+    next.dateMode = parsed['date_mode'];
+  }
+  // Определение без `keyword_scope` читается как прежнее поведение — поиск по
+  // всем областям (тело записи к области не относится).
+  if (!Array.isArray(parsed['keyword_scope'])) {
+    next.keywordInTitle = true;
+    next.keywordInSynonyms = true;
+    next.keywordInComment = true;
+  }
+  // Критерии целей — вложенное определение «Структур» (0.10.1, 306f74cc).
+  if (parsed['targets'] !== undefined && parsed['targets'] !== null) {
+    next.targets = parseFilterDefinition(parsed['targets']);
+  }
+  // `parseFilterDefinition` читает только общие границы; у «Дневника» период —
   // свои поля, а `created_after`/`updated_*` в её определении не участвуют.
   next.createdAfter = '';
   next.createdBefore = '';
@@ -874,29 +902,57 @@ export function parseChronicleCriteria(def: unknown): ChronicleCriteriaState {
 }
 
 /**
- * Конвертер отбора «Хроники» в wire-определение `ChronicleFilterDefinition`.
+ * Конвертер отбора «Дневника» в wire-определение `ChronicleFilterDefinition`.
  * Ключи совпадают с форматом сохранённых отборов — ранее сохранённое
  * читается и перезаписывается без потерь.
+ *
+ * Критерии записи (`keywords` + область, период, авторство) едут на верхнем
+ * уровне; критерии целей — в `targets` (0.10.1, требование 306f74cc).
  */
-export function buildChronicleWire(state: ChronicleCriteriaState): ChronicleFilterDefinition {
+export function buildChronicleWire(
+  state: ChronicleCriteriaState,
+  registry: ReadonlyMap<string, NetworkProperty> = new Map(),
+): ChronicleFilterDefinition {
   const out: ChronicleFilterDefinition = { order: state.order };
-  if (state.keywords.trim() !== '') out.keywords = state.keywords.trim();
-  if (state.thoughtIds.length > 0) out.thought_ids = state.thoughtIds.slice();
-  if (state.includeSubtree) out.include_subtree = true;
-  if (state.typeIds.length > 0) out.type_ids = state.typeIds.slice();
-  if (state.linkTypeIds.length > 0) out.link_type_ids = state.linkTypeIds.slice();
-  // `link_scope` отдаём всегда (как прежний конвертер «Хроники»): сервер
-  // принимает и «both», а сохранённые определения читаются одинаково.
-  out.link_scope = state.linkScope;
+  if (state.keywords.trim() !== '') {
+    out.keywords = state.keywords.trim();
+    const scope = buildChronicleKeywordScope(state);
+    if (scope !== undefined) out.keyword_scope = scope;
+  }
   if (state.dateFrom.trim() !== '') out.date_from = state.dateFrom.trim();
   if (state.dateTo.trim() !== '') out.date_to = state.dateTo.trim();
+  // Режим периода хранится как есть (0.10.1, приёмка №2); сами значения-токены
+  // раскрываются в момент применения отбора (требование 91f8d8dd).
+  out.date_mode = state.dateMode;
+  // Критерии целей — тот же конвертер «Структур» (0.10.1, 306f74cc):
+  // пустая группа не отдаётся, иначе сервер отберёт записи без целей.
+  if (hasAnyFilterCriteria(state.targets)) {
+    out.targets = buildWireFilter(state.targets, registry, { activeMode: 'structures' });
+  }
   Object.assign(out, buildAuthorPair('created_by', state.authorOp, state.authorId, state.authorIds));
   Object.assign(out, buildAuthorPair('updated_by', state.editorOp, state.editorId, state.editorIds));
   return out;
 }
 
-/** Пара `{ <field>, <field>_op }` одного условия авторства (§59119797). */
-function buildAuthorPair(
+/**
+ * Область поиска ключевых слов «Дневника»: серверное поведение по умолчанию —
+ * все области (наименование, синонимы, комментарий), поэтому `keyword_scope`
+ * не отдаётся, когда выбраны все три. Иначе — явный список выбранных областей
+ * (в т.ч. пара «наименование+синонимы» сужает поиск — в отличие от панели
+ * «Структур», где эта пара сама является серверным значением по умолчанию).
+ */
+function buildChronicleKeywordScope(
+  state: FilterCriteriaState,
+): StructureKeywordScope[] | undefined {
+  const scope: StructureKeywordScope[] = [];
+  if (state.keywordInTitle) scope.push('title');
+  if (state.keywordInSynonyms) scope.push('synonyms');
+  if (state.keywordInComment) scope.push('comment');
+  if (scope.length === 3) return undefined;
+  return scope;
+}
+
+/** Пара `{ <field>, <field>_op }` одного условия авторства (§59119797). */function buildAuthorPair(
   field: 'created_by' | 'updated_by',
   op: StructureAuthorOp,
   single: string,

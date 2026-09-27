@@ -9,15 +9,27 @@
  * requested date range.
  */
 
-import type { ChronicleLinkScope, SavedFilterView, SortOrder } from '../enums.js';
-import type { StructureAuthorOp } from './structure.js';
+import type { ChronicleLinkScope, SavedFilterView, SortOrder, StructureKeywordScope } from '../enums.js';
+import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */
 export interface ChronicleFilter {
-  /** Keywords mini-syntax (`*`/`-`, AND) — searched in thought titles,
-   *  synonyms, permanent+chronological comment texts of thoughts and links. */
+  /** Keywords mini-syntax (`*`/`-`, AND). Отбирает записи двумя путями:
+   *  (А) по мыслям — слова ищутся в названии, синонимах, постоянном комментарии
+   *  мысли и комментариях её связей, затем возвращаются записи этих мыслей;
+   *  (Б) по тексту самой записи — её тело и заголовок (0.10.1, T7; так сужается
+   *  лента записей дня, привязанных только к HOME). Исключающие слова вычитают
+   *  запись по её собственному тексту. */
   keywords?: string;
+  /**
+   * Где ищутся `keywords` в МЫСЛЕВОМ пути (путь А): любое подмножество
+   * `title`/`synonyms`/`comment` (постоянный комментарий мысли и комментарии её
+   * связей). Отсутствие или пустой массив — поиск по всем трём областям
+   * (поведение до 0.10.1). Тело/заголовок САМОЙ записи (путь Б, T7) от области
+   * не зависит.
+   */
+  keyword_scope?: StructureKeywordScope[];
   /** Root thoughts of the «мысли» field; empty = all thoughts of the network. */
   thought_ids?: string[];
   /** Include the roots' subordinates up to depth 20 (undirected, deduped). */
@@ -28,10 +40,32 @@ export interface ChronicleFilter {
   link_type_ids?: string[];
   /** Which endpoint of a link must be a selected thought (03-server-api.md §20). */
   link_scope?: ChronicleLinkScope;
-  /** Period start (YYYY-MM-DD or ISO-8601); empty = unbounded. */
+  /**
+   * Критерии целей записи — тот же набор, что у панели «Структур»
+   * (`StructureFilter`: типы, ключевые слова с `keyword_scope`, свойства,
+   * даты, автор и т. д.). Запись проходит отбор, если хотя бы одна её
+   * привязанная мысль (`comment_targets`, включая вторичные) удовлетворяет
+   * этим критериям; комбинируются с критериями записи по AND (0.10.1,
+   * требование 306f74cc).
+   */
+  targets?: StructureFilter;
+  /**
+   * Period start — полный UTC-инстанс, «голая дата» (`YYYY-MM-DD` = сутки
+   * UTC) или динамический токен дат (`$today`, `$now`, арифметика `±Nd`);
+   * empty = unbounded. Токен раскрывается в момент применения отбора
+   * (0.10.1, требование 91f8d8dd).
+   */
   date_from?: string | null;
-  /** Period end; empty = unbounded. */
+  /** Period end; форма значения — как у {@link date_from}; empty = unbounded. */
   date_to?: string | null;
+  /**
+   * Режим полей периода панели «Дневника» (0.10.1, приёмка №2): `presets` —
+   * границы периода заданы токенами (пресеты и арифметика), `dates` — точными
+   * датами. Хранится в определении сохранённого отбора как есть; на выборку
+   * не влияет (значения `date_from`/`date_to` раскрываются в момент
+   * применения). Отсутствие — прежнее поведение («Пресеты»).
+   */
+  date_mode?: 'presets' | 'dates';
   /**
    * Автор хроно-комментария — id пользователя (`created_by`); absent —
    * фильтр не применяется. Паритет с REST `created_by` в
@@ -53,7 +87,10 @@ export interface ChronicleFilter {
 
 /** Filter + paging of `POST /chronicle/query`. */
 export interface ChronicleQueryRequest extends ChronicleFilter {
-  /** Sort direction of (`valid_from`, `valid_to`, `title`). */
+  /**
+   * Sort direction of the whole sort key (0.10.1): класс записи → `valid_from`
+   * → `valid_to` → `created_at` → `id`.
+   */
   order: SortOrder;
   limit: number;
   offset: number;
@@ -83,6 +120,12 @@ export interface ChronicleRow {
   title: string | null;
   valid_from: string;
   valid_to: string | null;
+  /**
+   * Флаг «учитывать время» записи (0.10.1, требование 91ba5b3f). Клиент
+   * показывает/правит время суток только при `true`; на хранение дат не
+   * влияет.
+   */
+  use_time: boolean;
   version: number;
   created_at: string;
   updated_at: string;
@@ -90,6 +133,12 @@ export interface ChronicleRow {
   updated_by: string;
   /** Plain-text preview of `body_md` (~160 chars, `<mark>` highlights). */
   snippet: string;
+  /**
+   * Полный HTML тела записи (0.10.1, приёмка №3, задача 9bef6a27; колонка
+   * `comments.body_html`). Лента показывает запись ЦЕЛИКОМ в этом виде;
+   * `snippet` остаётся в ответе ради совместимости MCP-инструмента.
+   */
+  body_html: string;
   /** All attachments of the comment (m2m), resolved. */
   targets: ChronicleTarget[];
 }

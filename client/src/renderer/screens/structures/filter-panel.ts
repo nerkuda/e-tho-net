@@ -456,8 +456,9 @@ function buildTraversalSection(ctx: FilterFormContext): FilterSection {
     loadOptions: (query) => filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
     optionsHeader: 'Типы связей',
     placeholder: 'Тип связи…',
+    addPlaceholder: '+ ещё один тип',
     picker: {
-      label: 'список типов…',
+      label: 'Открыть список типов',
       open: () =>
         pickEntitiesModal({
           networkId: requireNetworkId(),
@@ -541,8 +542,9 @@ function renderPanel(): void {
         filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
       optionsHeader: 'Типы мыслей',
       placeholder: 'Название типа…',
+      addPlaceholder: '+ ещё один тип',
       picker: {
-        label: 'список типов…',
+        label: 'Открыть список типов',
         open: () =>
           pickEntitiesModal({
             networkId: requireNetworkId(),
@@ -562,8 +564,9 @@ function renderPanel(): void {
         filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
       optionsHeader: 'Типы связей',
       placeholder: 'Название типа…',
+      addPlaceholder: '+ ещё один тип',
       picker: {
-        label: 'список типов…',
+        label: 'Открыть список типов',
         open: () =>
           pickEntitiesModal({
             networkId: requireNetworkId(),
@@ -583,9 +586,10 @@ function renderPanel(): void {
       optionsHeader: 'Мысли',
       cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
       placeholder: 'Название мысли…',
+      addPlaceholder: '+ ещё одну мысль',
       tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
       picker: {
-        label: 'выбрать…',
+        label: 'Выбрать из списка',
         open: async () => {
           const result = await pickThoughtsDialog({
             networkId: requireNetworkId(),
@@ -602,7 +606,7 @@ function renderPanel(): void {
     buildTraversalSection(ctx),
     buildConditionsSection(ctx, { get: () => propertiesCollapsed, set: (v) => (propertiesCollapsed = v) }),
     buildAuthorshipSection(ctx, { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) }),
-    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }, { mode: 'datetime' }),
+    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }, { mode: 'period' }),
     buildExtrasSection(
       ctx,
       { get: () => extraCollapsed, set: (v) => (extraCollapsed = v) },

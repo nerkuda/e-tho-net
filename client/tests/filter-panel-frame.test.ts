@@ -198,11 +198,11 @@ describe('размер панели перетаскиванием границ�
 });
 
 describe('свёртываемость групп как в эталоне «Структур» (задача 2ebe4206)', () => {
-  it('«Хроника»: группа «Период» сворачивается', () => {
+  it('«Дневник»: группа «Период» сворачивается', () => {
     const src = readText(resolve(RENDERER, 'screens', 'chronicle', 'filter-panel.ts'));
     assert.match(
       src,
-      /\{ get: \(\) => periodCollapsed, set: \(v\) => \(periodCollapsed = v\) \}/,
+      /getCollapsed:\s*\(\)\s*=>\s*periodCollapsed,\s*setCollapsed:\s*\(v\)\s*=>\s*\(periodCollapsed\s*=\s*v\)/,
       'период получает своё состояние сворачивания',
     );
     assert.match(src, /let periodCollapsed = true;/, 'по умолчанию свёрнута');

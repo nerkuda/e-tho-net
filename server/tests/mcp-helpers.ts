@@ -286,9 +286,12 @@ export interface WriteThoughtFixture {
   comment?: { title?: string | null; body_md: string; valid_from?: string; valid_to?: string | null };
   chronicle?: Array<{
     title?: string | null;
-    body_md: string;
+    /** Необязателен (требование 26f0aa52): запись создаётся и по заголовку. */
+    body_md?: string;
     valid_from?: string;
     valid_to?: string | null;
+    /** Флаг «учитывать время» (0.10.1). */
+    use_time?: boolean;
   }>;
   properties?: Record<string, unknown>;
   links?: Array<{

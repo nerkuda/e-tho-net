@@ -22,8 +22,19 @@ export type ChronicleFilterState = ChronicleCriteriaState;
 /** Parsed persisted L4 `chronicle_state` (unknown input, safe defaults). */
 export interface PersistedChronicleState {
   filter: ChronicleFilterDefinition;
-  offset: number;
   savedFilterId: string | null;
+  /** Показанный месяц календаря (`chronicle_state.month`), если сохранён. */
+  month: { year: number; month: number } | null;
+}
+
+/** Разобрать сохранённый месяц календаря (номер месяца 1..12). */
+function parseMonth(value: unknown): { year: number; month: number } | null {
+  if (value === null || typeof value !== 'object') return null;
+  const raw = value as { year?: unknown; month?: unknown };
+  const year = typeof raw.year === 'number' ? Math.floor(raw.year) : NaN;
+  const month = typeof raw.month === 'number' ? Math.floor(raw.month) : NaN;
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return null;
+  return { year, month };
 }
 
 /** Parses the L4 `chronicle_state` JSON — never throws, falls back to empty. */
@@ -31,22 +42,19 @@ export function parseChronicleState(raw: string): PersistedChronicleState {
   try {
     const parsed = JSON.parse(raw) as Partial<{
       filter: Record<string, unknown>;
-      offset: number;
       savedFilterId: string | null;
+      month: unknown;
     }>;
     return {
       filter: buildChronicleWire(parseChronicleCriteria(parsed.filter ?? {})),
-      offset:
-        typeof parsed.offset === 'number' && Number.isFinite(parsed.offset) && parsed.offset >= 0
-          ? Math.floor(parsed.offset)
-          : 0,
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
+      month: parseMonth(parsed.month),
     };
   } catch {
     return {
       filter: buildChronicleWire(defaultChronicleCriteriaState()),
-      offset: 0,
       savedFilterId: null,
+      month: null,
     };
   }
 }

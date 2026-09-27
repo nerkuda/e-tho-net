@@ -998,7 +998,7 @@ function buildSettingsZone(zone: HTMLElement): void {
     cloudOf: (id) => subrootClouds.get(id) ?? null,
     placeholder: 'Мысль…',
     picker: {
-      label: 'выбрать…',
+      label: 'Выбрать из списка',
       open: async () => {
         const result = await pickThoughtsDialog({
           networkId: requireNetworkId(),

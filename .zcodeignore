@@ -1,0 +1,85 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+build/
+out/
+release/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# SQLite runtime data (never commit databases)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-journal
+etn_data/
+data/
+var/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Agent workspace (ZCode). В .zcode лежат личные данные (API-ключи в
+# config.json, планы сессий) — коммитится только .zcode/skills/ (скиллы).
+.zcode/*
+!.zcode/skills/
+!.zcode/skills/**
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Local scratch / migration test beds
+.tmp/
+
+# ===== ↑ Этот раздел синхронизируется с .gitignore (функция «Sync from .gitignore» перезаписывает только этот раздел) =====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ Это правила исключения ZCode по умолчанию (пожалуйста, добавляйте собственные правила ниже этой строки; синхронизация или сброс настроек на них не повлияют) -----
+# Добавляйте собственные правила ниже (эту строку-подсказку можно удалить)

@@ -14,7 +14,11 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createComment, createCommentWithTargets } from '../src/domain/comment-service.js';
-import { parseChronicleQueryBody, queryChronicle } from '../src/domain/chronicle-service.js';
+import {
+  parseChronicleFilterDefinition,
+  parseChronicleQueryBody,
+  queryChronicle,
+} from '../src/domain/chronicle-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -64,6 +68,33 @@ function seedLink(ndb: NetworkDb, source: string, target: string, typeId: string
   return id;
 }
 
+/** Insert a property definition into the registry; return its id. */
+function seedPropertyDefinition(ndb: NetworkDb, key: string, valueType: string): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), ?, NULL, NULL, '2024', '2024')`,
+    )
+    .run(id, key, key, valueType);
+  return id;
+}
+
+/** Insert a text property value on a thought. */
+function seedPropertyValue(
+  ndb: NetworkDb,
+  thoughtId: string,
+  propertyId: string,
+  value: string,
+): void {
+  ndb
+    .prepare(
+      `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_text, updated_at)
+       VALUES (?, 'thought', ?, ?, ?, '2024')`,
+    )
+    .run(randomUUID(), thoughtId, propertyId, value);
+}
+
 /** Query wrapper with default paging. */
 function query(
   ndb: NetworkDb,
@@ -94,7 +125,11 @@ describe(
         createComment(ndb, 'thought', a, { kind: 'permanent', body_md: 'perm' }, USER);
         const result = query(ndb, {});
         assert.equal(result.total, 2, 'only chronological comments');
-        assert.deepEqual(result.rows.map((r) => r.valid_from), ['2024-01-01', '2024-02-01']);
+        // 0.10.1: «голая дата» на записи нормализуется в полный UTC-инстанс.
+        assert.deepEqual(result.rows.map((r) => r.valid_from), [
+          '2024-01-01T00:00:00.000Z',
+          '2024-02-01T00:00:00.000Z',
+        ]);
       } finally {
         ndb.close();
       }
@@ -179,6 +214,57 @@ describe(
         // Текст комментария — через unicode_lower, оба регистра.
         assert.equal(query(ndb, { keywords: 'хроно' }).total, 2, 'comment body, lower case');
         assert.equal(query(ndb, { keywords: 'ХРОНО' }).total, 2, 'comment body, upper case');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('filters records by their own body/title, not only by their target thought (T7)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const home = seedThought(ndb, 'HOME', { home: true });
+        const a = seedThought(ndb, 'A');
+        const hit = createComment(
+          ndb,
+          'thought',
+          home,
+          { kind: 'chronological', body_md: 'привет мир', valid_from: '2024-01-01' },
+          USER,
+        );
+        createComment(
+          ndb,
+          'thought',
+          home,
+          { kind: 'chronological', body_md: 'пока мир', valid_from: '2024-01-02' },
+          USER,
+        );
+        createComment(
+          ndb,
+          'thought',
+          a,
+          { kind: 'chronological', title: 'Отпуск', body_md: 'без слов', valid_from: '2024-01-03' },
+          USER,
+        );
+
+        // Слово в теле записи дня (единственная цель — HOME) сужает ленту:
+        // раньше выбирался HOME и возвращались ВСЕ его записи.
+        const byHit = query(ndb, { keywords: 'привет' });
+        assert.equal(byHit.total, 1, 'совпадение в теле записи дня');
+        assert.equal(byHit.rows[0]!.id, hit.id);
+
+        // Заголовок записи тоже ищется.
+        assert.equal(query(ndb, { keywords: 'отпуск' }).total, 1, 'совпадение в заголовке записи');
+
+        // Исключающее слово вычитает запись по её собственному тексту.
+        assert.equal(query(ndb, { keywords: '-пока' }).total, 2, 'исключение по телу записи');
+        assert.equal(query(ndb, { keywords: 'мир -пока' }).total, 1, 'include + exclude по телу записи');
+
+        // Структурный отбор (thought_ids/type_ids) сужает и путь «по тексту записи».
+        assert.equal(
+          query(ndb, { thought_ids: [home], keywords: 'отпуск' }).total,
+          0,
+          'запись вне области отбора не просачивается',
+        );
       } finally {
         ndb.close();
       }
@@ -285,10 +371,10 @@ describe(
         const page = query(ndb, {}, { limit: 2, offset: 1 });
         assert.equal(page.total, 5);
         assert.equal(page.rows.length, 2);
-        assert.equal(page.rows[0]!.valid_from, '2024-01-02');
+        assert.equal(page.rows[0]!.valid_from, '2024-01-02T00:00:00.000Z');
 
         const desc = query(ndb, {}, { order: 'desc', limit: 50 });
-        assert.equal(desc.rows[0]!.valid_from, '2024-01-05');
+        assert.equal(desc.rows[0]!.valid_from, '2024-01-05T00:00:00.000Z');
       } finally {
         ndb.close();
       }
@@ -326,7 +412,237 @@ describe(
       }
     });
 
-    it('rejects invalid input (bad link_scope, bad order)', () => {
+    it('carries the full body_html of the record, not only the snippet (0.10.1, приёмка №3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        createComment(
+          ndb,
+          'thought',
+          a,
+          {
+            kind: 'chronological',
+            body_md: '## Итоги дня\n\n- первое\n- второе\n\n**важно**',
+            valid_from: '2024-01-01',
+          },
+          USER,
+        );
+        const row = query(ndb, {}).rows[0];
+        assert.ok(row, 'запись найдена');
+        assert.match(row!.body_html, /<h2/, 'заголовок markdown — как <h2>');
+        assert.match(row!.body_html, /<ul/, 'список markdown — как <ul>');
+        assert.match(row!.body_html, /<strong/, 'жирный markdown — как <strong>');
+        assert.ok(!row!.body_html.includes('##'), 'markdown-разметка не остаётся текстом');
+        // Выжимка остаётся в ответе ради совместимости MCP.
+        assert.ok(row!.snippet.length > 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('sorts by record class (HOME-only first), then valid_from/valid_to, in both orders', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const home = seedThought(ndb, 'HOME', { home: true });
+        const a = seedThought(ndb, 'A');
+        // Класс 0 — привязка только к HOME.
+        const h2 = createComment(ndb, 'thought', home, { kind: 'chronological', body_md: 'h2', valid_from: '2024-01-01' }, USER);
+        const h1 = createComment(ndb, 'thought', home, { kind: 'chronological', body_md: 'h1', valid_from: '2024-01-02' }, USER);
+        // Класс 1 — чужая мысль или смешанные привязки.
+        const p1 = createComment(ndb, 'thought', a, { kind: 'chronological', body_md: 'p1', valid_from: '2024-01-03' }, USER);
+        const p2 = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: home }, { owner_type: 'thought', owner_id: a }],
+          { kind: 'chronological', body_md: 'p2', valid_from: '2024-01-04' },
+          USER,
+        );
+
+        const asc = query(ndb, {});
+        assert.deepEqual(
+          asc.rows.map((r) => r.id),
+          [h2.id, h1.id, p1.id, p2.id],
+          'класс 0 блоком вверху, внутри — по valid_from',
+        );
+        // Класс — ВСЕГДА по возрастанию (требование c6ddc1ea): «убывание»
+        // переворачивает только даты, но не класс. Записи дня (класс 0)
+        // по-прежнему первыми, внутри класса — обратная хронология.
+        const desc = query(ndb, {}, { order: 'desc' });
+        assert.deepEqual(
+          desc.rows.map((r) => r.id),
+          [h1.id, h2.id, p2.id, p1.id],
+          'убывание переворачивает даты, но класс 0 остаётся первым',
+        );
+        // Снятие последнего чипса (HOME остаётся единственной целью) поднимает
+        // запись в класс 0 — «p2» становится классом 0 при возврате к HOME.
+        const homeOnly = createComment(ndb, 'thought', home, { kind: 'chronological', body_md: 'p2', valid_from: '2024-01-04' }, USER);
+        const after = query(ndb, {});
+        assert.equal(after.rows[0]!.id, h2.id);
+        assert.ok(
+          after.rows.findIndex((r) => r.id === homeOnly.id) <
+            after.rows.findIndex((r) => r.id === p2.id),
+          'запись с единственной целью HOME идёт в блоке класса 0',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('target criteria: at least one attached thought (incl. secondary) must match', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const home = seedThought(ndb, 'HOME', { home: true });
+        const alpha = seedThought(ndb, 'Alpha');
+        const beta = seedThought(ndb, 'Beta');
+        const cAlpha = createComment(ndb, 'thought', alpha, { kind: 'chronological', body_md: 'к альфе', valid_from: '2024-01-01' }, USER);
+        const cBeta = createComment(ndb, 'thought', beta, { kind: 'chronological', body_md: 'к бетe', valid_from: '2024-01-02' }, USER);
+        // Вторичная привязка: первичный владелец — HOME, чипс — Alpha.
+        const cBoth = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: home }, { owner_type: 'thought', owner_id: alpha }],
+          { kind: 'chronological', body_md: 'день+альфа', valid_from: '2024-01-03' },
+          USER,
+        );
+
+        const byKeyword = query(ndb, { targets: { keywords: 'Alpha' } });
+        assert.deepEqual(
+          byKeyword.rows.map((r) => r.id).sort(),
+          [cAlpha.id, cBoth.id].sort(),
+          'запись проходит, если привязанная мысль (в т.ч. вторичная) подходит',
+        );
+        assert.ok(!byKeyword.rows.some((r) => r.id === cBeta.id));
+
+        // Критерий по значению свойства цели («набор Структур»).
+        const prop = seedPropertyDefinition(ndb, 'Тема', 'text');
+        seedPropertyValue(ndb, alpha, prop, 'дедлайн');
+        const byProperty = query(ndb, {
+          targets: { properties: [{ property_id: prop, op: 'contains', value: 'дедлайн' }] },
+        });
+        assert.deepEqual(byProperty.rows.map((r) => r.id).sort(), [cAlpha.id, cBoth.id].sort());
+
+        // Группы критериев — по AND: запись подходит по цели, но не проходит
+        // критерий записи (даты).
+        const both = query(ndb, {
+          targets: { keywords: 'Alpha' },
+          date_from: '2024-01-04',
+          date_to: '2024-01-05',
+        });
+        assert.equal(both.total, 0, 'критерии цели и записи комбинируются по AND');
+
+        // Пустой набор критериев целей не сужает выборку.
+        assert.equal(query(ndb, { targets: {} }).total, 3);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('period tokens ($today/$now, arithmetic) expand at query time', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: '15-е', valid_from: '2024-06-15T12:00:00.000Z' }, USER);
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: '16-е', valid_from: '2024-06-16T12:00:00.000Z' }, USER);
+        const now = (): Date => new Date('2024-06-15T10:00:00.000Z');
+
+        const today = queryChronicle(
+          ndb,
+          parseChronicleQueryBody({ date_from: '$today', date_to: '$today' }, ''),
+          { now },
+        );
+        assert.equal(today.total, 1, '$today = сутки UTC текущего дня');
+        assert.equal(today.rows[0]!.valid_from, '2024-06-15T12:00:00.000Z');
+
+        const tomorrow = queryChronicle(
+          ndb,
+          parseChronicleQueryBody({ date_from: '$today+1d', date_to: '$today+1d' }, ''),
+          { now },
+        );
+        assert.equal(tomorrow.total, 1);
+        assert.equal(tomorrow.rows[0]!.valid_from, '2024-06-16T12:00:00.000Z');
+
+        // $now берёт момент времени (полный ISO-инстанс).
+        const fromNow = queryChronicle(
+          ndb,
+          parseChronicleQueryBody({ date_from: '$now+1d' }, ''),
+          { now },
+        );
+        assert.equal(fromNow.total, 1, 'записи после $now+1d: только 16-е');
+
+        // Токен требует контекста мысли в периоде недопустим.
+        assert.throws(
+          () => parseChronicleQueryBody({ date_from: '$thought.[Плановый срок]' }, 'r'),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        assert.throws(
+          () => parseChronicleQueryBody({ date_from: '$bogus' }, 'r'),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+
+        // Сохранённый отбор хранит токен без изменений.
+        const saved = parseChronicleFilterDefinition({ date_from: '$today', order: 'asc' }, 'r');
+        assert.equal(saved.date_from, '$today');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('режим периода (date_mode) сохраняется и валидируется (приёмка №2)', () => {
+      // Режим полей периода — часть определения сохранённого отбора.
+      const presets = parseChronicleFilterDefinition(
+        { date_from: '$week.start', date_to: '$week.end', date_mode: 'presets', order: 'asc' },
+        'r',
+      );
+      assert.equal(presets.date_mode, 'presets');
+      const dates = parseChronicleFilterDefinition(
+        { date_from: '2026-09-01', date_to: '2026-09-30', date_mode: 'dates', order: 'asc' },
+        'r',
+      );
+      assert.equal(dates.date_mode, 'dates');
+      // Неизвестный режим — VALIDATION_ERROR.
+      assert.throws(
+        () => parseChronicleFilterDefinition({ date_mode: 'years', order: 'asc' }, 'r'),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+      // Отсутствие режима — прежнее поведение (поле не появляется).
+      const legacy = parseChronicleFilterDefinition({ order: 'asc' }, 'r');
+      assert.equal(legacy.date_mode, undefined);
+    });
+
+    it('period intersection boundaries are inclusive', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'a', valid_from: '2024-01-10', valid_to: '2024-01-10' }, USER);
+        // valid_from ровно на нижней границе периода.
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'b', valid_from: '2024-01-10', valid_to: '2024-01-20' }, USER);
+        // valid_to ровно на верхней границе периода (конец суток включается).
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'c', valid_from: '2024-01-01', valid_to: '2024-01-10' }, USER);
+        const result = query(ndb, { date_from: '2024-01-10', date_to: '2024-01-10' });
+        assert.equal(result.total, 3, 'границы периода включительные для всех трёх');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('returns use_time flag of each record', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'без времени', valid_from: '2024-01-01' }, USER);
+        createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'со временем', valid_from: '2024-01-02T09:30:00.000Z', use_time: true }, USER);
+        const result = query(ndb, {});
+        assert.deepEqual(
+          result.rows.map((r) => r.use_time).sort(),
+          [false, true],
+          'флаг «учитывать время» присутствует в строках ответа',
+        );
+        const withTime = result.rows.find((r) => r.use_time === true)!;
+        assert.equal(withTime.valid_from, '2024-01-02T09:30:00.000Z');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('rejects invalid input (bad link_scope, bad order, bad targets)', () => {
       assert.throws(
         () => parseChronicleQueryBody({ link_scope: 'sideways' }, 'r'),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
@@ -334,6 +650,135 @@ describe(
       // order is lenient: an invalid value falls back to 'asc' instead.
       const parsed = parseChronicleQueryBody({ order: 'sideways' }, 'r');
       assert.equal(parsed.order, 'asc');
+      // targets обязан быть объектом критериев.
+      assert.throws(
+        () => parseChronicleQueryBody({ targets: [] }, 'r'),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+      // keyword_scope — закрытый словарь областей.
+      assert.throws(
+        () => parseChronicleQueryBody({ keywords: 'x', keyword_scope: ['body'] }, 'r'),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    });
+
+    it('keyword_scope сужает МЫСЛЕВОЙ путь ключевых слов (0.10.1, 91f8d8dd)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME', { home: true });
+        const target = seedThought(ndb, 'Alpha');
+        // Слово есть только в постоянном комментарии мысли-цели.
+        createComment(ndb, 'thought', target, { kind: 'permanent', body_md: 'секрет' }, USER);
+        const rec = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', body_md: 'обычное тело', valid_from: '2024-01-01' },
+          USER,
+        );
+        // По умолчанию область — все: запись находится мыслевым путём.
+        assert.deepEqual(query(ndb, { keywords: 'секрет' }).rows.map((r) => r.id), [rec.id]);
+        // Область «наименование» отсекает комментарий — путь А пуст, тело записи
+        // слова не содержит.
+        assert.deepEqual(
+          query(ndb, { keywords: 'секрет', keyword_scope: ['title'] }).rows.map((r) => r.id),
+          [],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+    it('область comment управляет путём Б — текстом самой записи (0.10.1, 46057359)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME', { home: true });
+        const target = seedThought(ndb, 'Alpha');
+        // Слова нет ни в наименовании, ни в синонимах цели — только в теле записи.
+        const byBody = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', body_md: 'заметка про берёзу', valid_from: '2024-01-01' },
+          USER,
+        );
+        // Заголовок записи — тоже путь Б.
+        const byTitle = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', title: 'Отпуск', body_md: 'без слова', valid_from: '2024-01-02' },
+          USER,
+        );
+
+        // (а) Область без comment: запись НЕ находится по своему тексту/заголовку...
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу', keyword_scope: ['title', 'synonyms'] }).rows.map((r) => r.id),
+          [],
+          'комментарии выключены — по телу записи не ищется',
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'отпуск', keyword_scope: ['title', 'synonyms'] }).rows.map((r) => r.id),
+          [],
+          'комментарии выключены — по заголовку записи не ищется',
+        );
+        // ...но мыслевой путь (наименование цели) работает.
+        assert.deepEqual(
+          query(ndb, { keywords: 'Alpha', keyword_scope: ['title', 'synonyms'] }).rows.map((r) => r.id).sort(),
+          [byBody.id, byTitle.id].sort(),
+          'наименование цели по-прежнему находит записи',
+        );
+
+        // (б) С областью comment запись находится по своему тексту и заголовку.
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу', keyword_scope: ['title', 'synonyms', 'comment'] }).rows.map((r) => r.id),
+          [byBody.id],
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'отпуск', keyword_scope: ['title', 'synonyms', 'comment'] }).rows.map((r) => r.id),
+          [byTitle.id],
+        );
+
+        // Пустая/отсутствующая область — прежнее поведение «все области».
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу' }).rows.map((r) => r.id),
+          [byBody.id],
+          'отсутствие keyword_scope = все области, включая comment',
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу', keyword_scope: [] }).rows.map((r) => r.id),
+          [byBody.id],
+          'пустая область = все области',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('комментарий цели остаётся мыслевым путём при выключенной области comment', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME', { home: true });
+        const target = seedThought(ndb, 'Beta');
+        // Слово — только в ПОСТОЯННОМ комментарии мысли-цели.
+        createComment(ndb, 'thought', target, { kind: 'permanent', body_md: 'секрет' }, USER);
+        const rec = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', body_md: 'обычное тело', valid_from: '2024-01-01' },
+          USER,
+        );
+        // Комментарий — это мыслевой путь (постоянные комментарии целей), он НЕ
+        // зависит от пути Б самой записи, но ищется только при области comment.
+        assert.deepEqual(
+          query(ndb, { keywords: 'секрет', keyword_scope: ['title'] }).rows.map((r) => r.id),
+          [],
+          'без comment комментарий цели не ищется',
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'секрет', keyword_scope: ['comment'] }).rows.map((r) => r.id),
+          [rec.id],
+          'с comment комментарий цели находится',
+        );
+      } finally {
+        ndb.close();
+      }
     });
   },
 );

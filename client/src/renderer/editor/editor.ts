@@ -10,7 +10,7 @@
  *
  * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3).
  * The set depends on the edited entity (0.8.1, задача 95775cfd): у мысли —
- * «Комментарий», «Свойства», «Вложения (N)», «Упоминания», «Хроника (N)»,
+ * «Комментарий», «Свойства», «Вложения (N)», «Упоминания», «Дневник (N)»,
  * «Граф», «Метаданные»; у связи — «Комментарий», «Мысли», «Метаданные». A tab's
  * content is built lazily on first activation and
  * cached for the lifetime of one editor render (a signature change rebuilds
@@ -173,7 +173,7 @@ const TABS_THOUGHT: EditorTabDef[] = [
   { id: 'properties', title: 'Свойства', counted: false },
   { id: 'attachments', title: 'Вложения', counted: true },
   { id: 'links', title: 'Упоминания', counted: false },
-  { id: 'chrono', title: 'Хроника', counted: true },
+  { id: 'chrono', title: 'Дневник', counted: true },
   { id: 'graph', title: 'Граф', counted: false },
   { id: 'metadata', title: 'Метаданные', counted: false },
 ];

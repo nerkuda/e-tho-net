@@ -10,8 +10,9 @@
  *     index `idx_comments_permanent_one`) and always exactly one target;
  *     `valid_from = created_at`, `valid_to = NULL`.
  *   * `chronological` — unrestricted count; carries `valid_from`/`valid_to`
- *     and 1..N targets. Detaching the last target re-attaches the comment to
- *     the network HOME thought.
+ *     (always full UTC instants; `valid_to` is never empty — unset equals
+ *     `valid_from`, 0.10.1) and 1..N targets. Detaching the last target
+ *     re-attaches the comment to the network HOME thought.
  *
  * The server renders and caches `body_html` from `body_md` via the safe
  * {@link renderMarkdown} renderer. Mutating calls accept an optional
@@ -41,6 +42,7 @@ import {
 import { renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
+import { normaliseInstant } from './dates.js';
 import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
@@ -60,6 +62,7 @@ interface CommentRow {
   body_html: string;
   valid_from: string;
   valid_to: string | null;
+  use_time: number;
   version: number;
   created_at: string;
   updated_at: string;
@@ -82,6 +85,7 @@ function rowToComment(row: CommentRow, targets: CommentTarget[] = []): Comment {
     body_html: row.body_html,
     valid_from: row.valid_from,
     valid_to: row.valid_to,
+    use_time: row.use_time === 1,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -153,6 +157,34 @@ function validateOwnerType(ownerType: unknown): CommentOwnerType {
     });
   }
   return ownerType as CommentOwnerType;
+}
+
+/**
+ * Id защищённой HOME-мысли сети (`is_root = 1`), или `null`, когда её нет.
+ * Локальная копия запроса из `thought-service.getHomeThoughtId`: импорт оттуда
+ * замкнул бы цикл — `thought-service` уже импортирует этот модуль.
+ */
+function homeThoughtId(ndb: NetworkDb): string | null {
+  const row = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
+    | { id: string }
+    | undefined;
+  return row?.id ?? null;
+}
+
+/** Непустой текст: строка, у которой после `trim()` остались символы. */
+function isNonEmptyText(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * Есть ли у записи содержательная привязка — цель, отличная от HOME-мысли
+ * (требование 26f0aa52): владелец HOME — первичная привязка, а не чипс.
+ * Связь или любая чужая мысль считается содержанием записи.
+ */
+function hasBindingOutsideHome(ndb: NetworkDb, targets: readonly CommentTarget[]): boolean {
+  const home = homeThoughtId(ndb);
+  if (home === null) return targets.length > 0;
+  return targets.some((t) => !(t.owner_type === 'thought' && t.owner_id === home));
 }
 
 /**
@@ -445,14 +477,19 @@ export function createComment(
  * must have exactly one target.
  *
  * Throws:
- *   * `VALIDATION_ERROR` (422) for an invalid kind/targets or empty body;
+ *   * `VALIDATION_ERROR` (422) for an invalid kind/targets or missing content —
+ *     a `permanent` comment needs a non-empty `body_md`, a `chronological` one
+ *     at least one of: non-empty `body_md`, non-empty `title`, or a target
+ *     other than HOME (требование 26f0aa52);
  *   * `NOT_FOUND` (404) if any target owner does not exist;
  *   * `DUPLICATE` (409) on a second `permanent` comment for the same owner.
  *
  * For `kind = 'permanent'` the `valid_from`/`valid_to` inputs are ignored
  * (`valid_from` becomes `created_at`, `valid_to` is `NULL`). For chronological
- * comments `valid_from` defaults to now and `valid_to` defaults to `null`
- * (open-ended); an explicit empty string is normalised to `null`.
+ * comments `valid_from` defaults to now, `valid_to` defaults to `valid_from`
+ * (0.10.1: `valid_to` у хронологической обязателен). Входные даты принимаются
+ * как полный UTC-инстанс или «голая дата» (= сутки UTC) и нормализуются
+ * {@link normaliseInstant}; date-only в хранилище не попадает.
  */
 export function createCommentWithTargets(
   ndb: NetworkDb,
@@ -461,11 +498,6 @@ export function createCommentWithTargets(
   actorUserId: string,
 ): Comment {
   const kind = validateKind(input.kind);
-  if (typeof input.body_md !== 'string' || input.body_md === '') {
-    throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
-      field: 'body_md',
-    });
-  }
   // Dedup targets preserving order; validate owner types and ids.
   const seen = new Set<string>();
   const targets: CommentTarget[] = [];
@@ -497,7 +529,32 @@ export function createCommentWithTargets(
       field: 'targets',
     });
   }
-  const bodyHtml = renderMarkdown(input.body_md);
+  // Содержание записи (требование 26f0aa52). Постоянный комментарий — это
+  // содержимое мысли, поэтому `body_md` обязателен. Хронологическая запись
+  // может создаваться по заголовку или привязке (владелец HOME — первичная
+  // привязка, не чипс): пустой `body_md` допустим, пока есть непустой заголовок
+  // либо цель вне HOME. Содержание проверяется ПОСЛЕ сборки целей, т.к. зависит
+  // от набора привязок.
+  if (kind === 'permanent') {
+    if (!isNonEmptyText(input.body_md)) {
+      throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
+        field: 'body_md',
+      });
+    }
+  } else if (
+    !isNonEmptyText(input.body_md) &&
+    !isNonEmptyText(input.title) &&
+    !hasBindingOutsideHome(ndb, targets)
+  ) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'a chronological comment must carry content: a non-empty body_md or title, ' +
+        'or a target other than HOME',
+      { field: 'content' },
+    );
+  }
+  const bodyMd = input.body_md ?? '';
+  const bodyHtml = renderMarkdown(bodyMd);
 
   return ndb.transaction(() => {
     for (const t of targets) {
@@ -532,16 +589,24 @@ export function createCommentWithTargets(
     const now = new Date(nowMs).toISOString();
     const title = input.title === undefined ? null : input.title;
     // Permanent comments ignore the validity window (docs/02-data-model.md §3.8).
-    const validFrom = kind === 'permanent' ? now : (normaliseDate(input.valid_from) ?? now);
-    const validTo = kind === 'permanent' ? null : (normaliseDate(input.valid_to) ?? null);
+    const validFrom =
+      kind === 'permanent' ? now : (normaliseInstant(input.valid_from, 'valid_from', 'start') ?? now);
+    // У хронологической записи `valid_to` обязателен: не задан (или пуст) —
+    // равен `valid_from` (0.10.1, ADR 994d076a); у постоянной всегда NULL.
+    const validTo =
+      kind === 'permanent'
+        ? null
+        : (normaliseInstant(input.valid_to, 'valid_to', 'end') ?? validFrom);
+    // Флаг «учитывать время» — на формат дат не влияет; по умолчанию выключен.
+    const useTime = input.use_time === true ? 1 : 0;
 
     ndb
       .prepare(
         `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html,
-                               valid_from, valid_to, version,
+                               valid_from, valid_to, use_time, version,
                                created_at, updated_at, created_by, updated_by,
                                created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -550,10 +615,11 @@ export function createCommentWithTargets(
         primary.owner_id,
         kind,
         title,
-        input.body_md,
+        bodyMd,
         bodyHtml,
         validFrom,
         validTo,
+        useTime,
         now,
         now,
         actorUserId,
@@ -585,10 +651,16 @@ export function createCommentWithTargets(
  * {@link editComment}: удаление единственной секции текста без `#` оставляет
  * пустое тело, но запись в БД сохраняется (граница 154df95d). По умолчанию
  * `false` — REST `PATCH /comments/{id}` и `etn.comments.update` продолжают
- * отвергать пустое тело.
+ * отвергать опустошение записи.
+ *
+ * Содержание (требование 26f0aa52): постоянный комментарий всегда требует
+ * непустой `body_md`; хронологическая запись вне `allowEmptyBody` не может
+ * стать полностью пустой — правка отвергается, если после неё нет ни
+ * непустого `body_md`, ни заголовка, ни привязки вне HOME.
  *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), or `VALIDATION_ERROR`
- * (422) when setting an empty `body_md` and `allowEmptyBody` is not set.
+ * (422) when the edit would leave the comment without content and
+ * `allowEmptyBody` is not set.
  */
 export function updateComment(
   ndb: NetworkDb,
@@ -616,7 +688,11 @@ export function updateComment(
       args.push(changes.title);
     }
     if (changes.body_md !== undefined) {
-      if (changes.body_md === '' && options.allowEmptyBody !== true) {
+      // У постоянного комментария пустое тело — потеря содержимого мысли, вне
+      // явного `allowEmptyBody` (граница 154df95d) запрещено. Хронологическая
+      // запись проверяется целиком ниже: её содержание может держаться на
+      // заголовке или привязке (требование 26f0aa52).
+      if (changes.body_md === '' && current.kind === 'permanent' && options.allowEmptyBody !== true) {
         throw new EtnError('VALIDATION_ERROR', 'body_md must not be empty', {
           field: 'body_md',
         });
@@ -624,15 +700,51 @@ export function updateComment(
       sets.push('body_md = ?', 'body_html = ?');
       args.push(changes.body_md, renderMarkdown(changes.body_md));
     }
+    // Хронологическая запись не может стать полностью пустой (требование
+    // 26f0aa52): правка отвергается, если после неё у записи нет ни непустого
+    // текста, ни заголовка, ни привязки вне HOME. `allowEmptyBody` (editComment,
+    // граница 154df95d) осознанно снимает и эту защиту — там пустое тело
+    // разрешено самим контрактом секционной правки.
+    if (current.kind === 'chronological' && options.allowEmptyBody !== true) {
+      const nextBody = changes.body_md ?? current.body_md;
+      const nextTitle = changes.title !== undefined ? changes.title : current.title;
+      if (
+        !isNonEmptyText(nextBody) &&
+        !isNonEmptyText(nextTitle) &&
+        !hasBindingOutsideHome(ndb, current.targets)
+      ) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'a chronological comment cannot become empty: keep a non-empty body_md or title, ' +
+            'or a target other than HOME',
+          { field: 'content' },
+        );
+      }
+    }
     if (current.kind === 'chronological') {
+      // Эффективное начало: правка `valid_from` либо текущее значение.
+      const nextFrom =
+        changes.valid_from === undefined
+          ? current.valid_from
+          : (normaliseInstant(changes.valid_from, 'valid_from', 'start') ?? new Date().toISOString());
       if (changes.valid_from !== undefined) {
         sets.push('valid_from = ?');
-        args.push(normaliseDate(changes.valid_from) ?? new Date().toISOString());
+        args.push(nextFrom);
       }
       if (changes.valid_to !== undefined) {
         sets.push('valid_to = ?');
-        args.push(normaliseDate(changes.valid_to) ?? null);
+        // Пустое окончание у хронологической = её началу (0.10.1, ADR 994d076a).
+        args.push(normaliseInstant(changes.valid_to, 'valid_to', 'end') ?? nextFrom);
+      } else if (changes.valid_from !== undefined && current.valid_to === null) {
+        // Наследная открытая запись: правка начала обязана закрыть интервал.
+        sets.push('valid_to = ?');
+        args.push(nextFrom);
       }
+    }
+    // Флаг «учитывать время» хранится на записи любого рода; на даты не влияет.
+    if (changes.use_time !== undefined) {
+      sets.push('use_time = ?');
+      args.push(changes.use_time ? 1 : 0);
     }
 
     const nowMs = Date.now();
@@ -955,20 +1067,3 @@ function bumpVersion(ndb: NetworkDb, commentId: string, currentVersion: number, 
     .run(currentVersion + 1, now, actorUserId, nowMs, commentId, ndb.layerId);
 }
 
-/**
- * Normalise a date input to an ISO-8601 string. Accepts `Date`, an ISO string,
- * or a `YYYY-MM-DD` calendar date (stored verbatim to preserve the calendar
- * semantics of chronological comments). Empty/whitespace strings and `null`
- * yield `null`.
- */
-function normaliseDate(value: string | null | undefined | Date): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed === '') return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-    const parsed = new Date(trimmed);
-    return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString();
-  }
-  return value.toISOString();
-}

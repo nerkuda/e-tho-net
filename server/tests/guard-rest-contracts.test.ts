@@ -13,6 +13,13 @@
  * следующего присвоения (в т.ч. локальным парсерам тел — их поля не нашего
  * класса) или до конца окна в 200 строк. Объявленность поля сверяется по
  * тексту блока контракта в `server/src/contracts.ts`.
+ *
+ * Дополнено (0.10.1, итерация приёмки №11, ошибка f45fac74): проверка «поле
+ * в zod-схеме ⇒ поле в REST-карте». `parseRest` обходит ТОЛЬКО ключи
+ * REST-карты и возвращает `out`, поэтому схемное поле без записи в карте
+ * всегда доходит до хендлера как `undefined` — именно так терялся `use_time`
+ * при правке комментария (схема его объявляла, карта — нет; старый сторож
+ * считал поле объявленным по тексту блока и пропускал дыру).
  */
 
 import assert from 'node:assert/strict';
@@ -20,6 +27,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { contractsByName } from '../src/contracts.js';
 
 const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const CONTRACTS_TS = path.join(SERVER_SRC, 'contracts.ts');
@@ -102,6 +111,75 @@ describe('guard: REST-контракты объявляют всё, что чи�
       [],
       'хендлер читает поле, которого нет в контракте (упадёт в undefined ' +
         `на рантайме):\n  ${holes.join('\n  ')}`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Схема ⊄ REST-карта: parseRest читает только карту (ошибка f45fac74)
+// ---------------------------------------------------------------------------
+
+/**
+ * Контракты, у которых поле zod-схемы намеренно НЕ читается из REST-карты.
+ * Каждое исключение обязано быть обосновано и проверяется на актуальность
+ * (пока асимметрия есть — исключение живо; исчезла — его надо убрать).
+ */
+const REST_MAP_EXCEPTIONS: Record<string, string> = {
+  'rest:structures.query-body':
+    'Поля фильтра (keywords, keyword_scope, parent_ids, type_ids, link_type_ids, ' +
+    'link_filter, show_inactive/trashed/…, properties, created_*/updated_*) разбирает ' +
+    'не parseRest, а общий shared-парсер parseStructureFilter в роуте (делегат). ' +
+    'REST-карта держит только sort/order/paging и REST-only поля (show_trash). ' +
+    'Схема объявляет фильтры как z.unknown ради strict-отклонения неизвестных ключей.',
+};
+
+/** Схемные поля контракта, отсутствующие в REST-карте (parseRest вернёт undefined). */
+function schemaFieldsOutsideRestMap(contract: {
+  schema: { shape?: Record<string, unknown> };
+  rest: Record<string, unknown>;
+}): string[] {
+  const shape = contract.schema.shape ?? {};
+  const restKeys = new Set(Object.keys(contract.rest));
+  return Object.keys(shape).filter((key) => !restKeys.has(key));
+}
+
+describe('guard: REST-карта объявляет поля zod-схемы (0.10.1, f45fac74)', () => {
+  it('нет схемных полей, которые parseRest молча не читает (кроме исключений)', () => {
+    const holes: string[] = [];
+    for (const [name, contract] of contractsByName) {
+      if (!name.startsWith('rest:')) continue;
+      const missing = schemaFieldsOutsideRestMap(contract as never);
+      if (missing.length === 0) continue;
+      if (name in REST_MAP_EXCEPTIONS) continue;
+      holes.push(`${name} → ${missing.join(', ')}`);
+    }
+    assert.deepEqual(
+      holes,
+      [],
+      'поле объявлено в схеме, но не в REST-карте — parseRest не вернёт его ' +
+        `хендлеру (undefined):\n  ${holes.join('\n  ')}`,
+    );
+  });
+
+  it('исключения актуальны: контракт существует и всё ещё асимметричен', () => {
+    for (const [name, reason] of Object.entries(REST_MAP_EXCEPTIONS)) {
+      const contract = contractsByName.get(name);
+      assert.ok(contract !== undefined, `исключение «${name}» ссылается на несуществующий контракт`);
+      assert.ok(reason.trim().length > 0, `у исключения «${name}» нет причины`);
+      const missing = schemaFieldsOutsideRestMap(contract as never);
+      assert.ok(
+        missing.length > 0,
+        `исключение «${name}» устарело: асимметрии больше нет — убери его из списка`,
+      );
+    }
+  });
+
+  it('rest:comments.update читает use_time (ошибка f45fac74)', () => {
+    const contract = contractsByName.get('rest:comments.update');
+    assert.ok(contract !== undefined, 'контракт rest:comments.update существует');
+    assert.ok(
+      'use_time' in (contract!.rest as Record<string, unknown>),
+      'use_time объявлен в REST-карте — PATCH доводит флаг до домена',
     );
   });
 });

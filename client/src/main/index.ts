@@ -20,6 +20,7 @@ import { CLIENT_META_KEY, type DeepLink } from '@etn/shared';
 import { LocalDb } from './db/local-db.js';
 import {
   defaultMigrationsDir,
+  isDefaultUserDataDir,
   localDbPath,
   packagedMigrationsDir,
   parseLoggingArg,
@@ -48,6 +49,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
 /**
+ * Test mode «invisible window» (task 5c5b30e2, UI-probe bench). Enabled by
+ * `ETN_HIDDEN_WINDOW=1`: the window is shown without focus, fully transparent
+ * and without a taskbar button, so CDP-driven UI checks don't disturb the user.
+ * A normal launch is not affected. The window is deliberately *shown* (not left
+ * hidden) — Chromium throttles rendering of a hidden/background window and
+ * `Page.captureScreenshot` could then return a blank frame; a transparent
+ * window keeps the compositor ticking.
+ */
+const HIDDEN_WINDOW = process.env['ETN_HIDDEN_WINDOW'] === '1';
+
+/**
  * CLI profile directory (docs/07-client-electron.md §3): `--user-data-dir=<path>`
  * points the entire local profile (local.db, server profiles, settings, window
  * bounds) at a separate directory, so one installation can run several
@@ -64,6 +76,27 @@ if (userDataDirArg !== null) {
   // Dev runs (electron-vite) get their own profile directory so they never
   // share the installed app's local.db / server profiles / settings.
   app.setPath('userData', path.join(app.getPath('appData'), '@etn-dev'));
+}
+
+// Hidden-window test mode must never touch the user's real profile (task
+// 5c5b30e2). Guard by construction, before the journal, the local DB or any
+// lock: the mode is allowed only on an explicitly isolated `--user-data-dir`
+// that differs from the default `<appData>/<app name>`. Without the switch the
+// profile IS the user's — the same `local.db` and the same single-instance
+// lock as their running client, which is exactly how a test run used to wake
+// the user's window. Refuse, log, exit non-zero.
+if (HIDDEN_WINDOW) {
+  const onDefaultProfile =
+    userDataDirArg === null ||
+    isDefaultUserDataDir(app.getPath('userData'), app.getPath('appData'), app.getName());
+  if (onDefaultProfile) {
+    console.error(
+      `[ETN] hidden window mode requires --user-data-dir (refusing profile ${app.getPath('userData')})`,
+    );
+    // Hard exit: nothing has been opened yet, and continuing would let the
+    // process request the single-instance lock and wake the user's client.
+    process.exit(1);
+  }
 }
 
 // File journal (task f051bf95, 07-client-electron.md §7): created as early as
@@ -237,7 +270,17 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
   });
 
   win.once('ready-to-show', () => {
-    win.show();
+    if (HIDDEN_WINDOW) {
+      // Test mode (task 5c5b30e2): render for CDP, invisible to the user.
+      // Opacity and taskbar opt-out are set BEFORE showing; `showInactive`
+      // brings the window up without taking focus from the user.
+      console.log('[ETN] hidden window mode: opacity=0, skipTaskbar, showInactive');
+      win.setOpacity(0);
+      win.setSkipTaskbar(true);
+      win.showInactive();
+    } else {
+      win.show();
+    }
     // Subscribe to resize/move only AFTER the window is fully laid out, so
     // Electron's auto-events (which can change the bounds to fit a display
     // work area, DPI changes, etc.) don't get treated as user input and
@@ -408,13 +451,20 @@ app
     // opening another window. macOS uses `app.on('open-url')` for the same
     // effect. Acquire the lock here, *after* `app.whenReady()` so the
     // setAsDefaultProtocolClient call above has taken effect.
-    const gotLock = app.requestSingleInstanceLock();
-    if (!gotLock) {
-      // Another instance is already running — it will receive our argv via
-      // `second-instance` (handled below) and bring its window forward. We
-      // exit cleanly so the user doesn't see a duplicate UI.
-      app.quit();
-      return;
+    //
+    // Hidden-window test mode (task 5c5b30e2) deliberately does NOT take the
+    // lock: a test instance must never become the "already running" owner nor
+    // hand its argv to the user's client (which would raise that window). The
+    // isolated profile (enforced above) keeps the two fully independent.
+    if (!HIDDEN_WINDOW) {
+      const gotLock = app.requestSingleInstanceLock();
+      if (!gotLock) {
+        // Another instance is already running — it will receive our argv via
+        // `second-instance` (handled below) and bring its window forward. We
+        // exit cleanly so the user doesn't see a duplicate UI.
+        app.quit();
+        return;
+      }
     }
 
     // Open the local store and ensure the installation has a stable client_id
@@ -532,8 +582,13 @@ app.on('second-instance', (_event, argv) => {
   const link = extractDeepLink(argv);
   const win = BrowserWindow.getAllWindows()[0];
   if (win !== undefined) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
+    // Hidden-window test mode (task 5c5b30e2): never raise or focus — the whole
+    // point of the mode is not to disturb the user. Defensive: a hidden
+    // instance never takes the lock, so this branch should not be reachable.
+    if (!HIDDEN_WINDOW) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
     if (link !== null) dispatchDeepLink(win, link);
   }
 });
