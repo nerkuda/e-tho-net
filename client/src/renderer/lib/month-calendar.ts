@@ -7,10 +7,18 @@
  * (`lib/date-period-dialog.ts` — выбор дня, перетаскивание диапазона). Двух
  * разных календарей в коде быть не должно.
  *
- * **Навигация.** Строка заголовка: месяц — отдельная кликабельная кнопка
- * (открывает список январь–декабрь без года), год — отдельная кнопка (клик
- * позволяет ввести год), справа в той же строке кнопки «<» (месяц назад),
- * «○» (сегодня), «>» (месяц вперёд). Дни соседних месяцев приглушены.
+ * **Навигация.** Строка заголовка: месяц — кликабельная кнопка (открывает
+ * ВЫПАДАЮЩИЙ ПОПОВЕР со списком январь–декабрь без года; высота календаря от
+ * этого не меняется), год — кнопка, превращающаяся НА СВОЁМ ЖЕ МЕСТЕ в
+ * маленькое поле ввода года (4 цифры; Enter/blur — применить, Esc — отмена),
+ * справа в той же строке «<» (месяц назад), «○» (сегодня), «>» (месяц вперёд).
+ * Дни соседних месяцев приглушены.
+ *
+ * **Одиночный клик и перетаскивание.** Клик по дню сообщает хозяину день
+ * (`onPickDay`). Перетаскивание (mousedown → движение → mouseup) сообщает
+ * упорядоченный диапазон (`onRangeChange`). Сетка при старте перетаскивания НЕ
+ * перестраивается (меняется только выделение классов) — иначе узел-цель
+ * теряется и одиночный `click` по дню не доходит (приёмка №6, п.3).
  *
  * **Что компонент НЕ делает.** Он не применяет период и не трогает данные: клик
  * по дню/неделе лишь сообщает хозяину выбранное (`onPickDay`/`onPickWeek`),
@@ -19,14 +27,17 @@
  *
  * Чистая сетка месяца ({@link buildMonthWeeks}) и примитивы дат — `lib/dates.ts`
  * (перенесены из `screens/chronicle/diary.ts`, чтобы библиотека не зависела от
- * экрана). DOM собирается на общем словаре кнопок (`lib/ui/button.ts`), свои
- * кнопки не пишутся (сторож `guard-ui-buttons`).
+ * экрана). DOM собирается на общем словаре кнопок (`lib/ui/button.ts`), поля —
+ * `lib/ui/field.ts`, список месяцев — общий поповер `lib/ui/popover.ts` (свои
+ * кнопки/поля/панели не пишутся; сторожи `guard-ui-buttons`, `guard-ui-fields`,
+ * `guard-ui-popover`).
  */
 
 import { div, el, span } from './dom.js';
 import { buildMonthWeeks, firstOfMonth, todayLocal, type CalendarWeek } from './dates.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
+import { openPopover, type PopoverHandle } from './ui/popover.js';
 
 export { buildMonthWeeks } from './dates.js';
 export type { CalendarCell, CalendarWeek } from './dates.js';
@@ -66,6 +77,13 @@ const MONTHS_SHORT = [
 /** Границы вводимого года. */
 const MIN_YEAR = 1900;
 const MAX_YEAR = 2200;
+
+/**
+ * Окно «глушения» повторного открытия списка месяцев: после закрытия поповера
+ * кликом по кнопке месяца тот же клик не должен открывать список заново
+ * (pointerdown закрывает панель раньше, чем приходит `click`).
+ */
+const MONTH_REOPEN_GUARD_MS = 400;
 
 /** Опции сборки календаря месяца. */
 export interface MonthCalendarOptions {
@@ -141,6 +159,9 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     class: 'cal-year',
     onClick: () => openYearInput(),
   });
+  // Год и поле его ввода стоят в одной ячейке: поле раскрывается НА МЕСТЕ
+  // подписи, а не отдельной строкой (приёмка №6, п.5).
+  const yearCell = div('cal-year-cell');
   const spacer = div('cal-head-spacer');
   const prevBtn = uiButton({
     label: '‹',
@@ -166,33 +187,20 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     class: 'cal-nav cal-next',
     onClick: () => shiftMonth(1),
   });
-  head.append(monthBtn, yearBtn, spacer, prevBtn, todayBtn, nextBtn);
-
-  const monthList = div('cal-months');
-  monthList.hidden = true;
-  const grid = div('cal-grid');
-
-  for (let i = 0; i < 12; i++) {
-    const index = i;
-    monthList.append(
-      uiButton({
-        label: MONTHS[i]!,
-        role: 'ghost',
-        size: 's',
-        class: 'cal-month-item',
-        onClick: () => pickMonth(index + 1),
-      }),
-    );
-  }
+  head.append(monthBtn, yearCell, spacer, prevBtn, todayBtn, nextBtn);
 
   const yearInput = fieldInput({
     type: 'number',
     extraClass: 'cal-year-input',
     ariaLabel: 'Год',
+    title: 'Год',
     min: MIN_YEAR,
     max: MAX_YEAR,
   });
   yearInput.style.display = 'none';
+  yearCell.append(yearBtn, yearInput);
+
+  const grid = div('cal-grid');
 
   let from = opts.from ?? '';
   let to = opts.to ?? '';
@@ -201,7 +209,11 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   let month: number; // 1..12
 
   const anchor =
-    (opts.from ?? '').trim() !== '' ? opts.from! : today !== '' ? today : firstOfMonth(new Date().getFullYear(), 1);
+    (opts.from ?? '').trim() !== ''
+      ? opts.from!
+      : today !== ''
+        ? today
+        : firstOfMonth(new Date().getFullYear(), 1);
   const anchorDate = new Date(`${anchor}T00:00:00Z`);
   year = opts.month?.year ?? anchorDate.getUTCFullYear();
   month = opts.month?.month ?? anchorDate.getUTCMonth() + 1;
@@ -212,6 +224,15 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   let dragStart = '';
   /** Drag ушёл на другой день (тогда click подавляется). */
   let dragMoved = false;
+  /** Кнопки дней текущей сетки (для обновления выделения без перестройки). */
+  let dayCells: Array<{ day: string; el: HTMLElement }> = [];
+
+  /** Открыт ли inline-ввод года прямо сейчас. */
+  let yearEditing = false;
+  /** Открытая панель списка месяцев. */
+  let monthPopover: PopoverHandle | null = null;
+  /** Момент закрытия списка месяцев (защита от повторного открытия). */
+  let monthPopoverClosedAt = 0;
 
   function notifyMonth(): void {
     opts.onMonthChange?.(year, month);
@@ -246,18 +267,51 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     render();
   }
 
+  /** Тело списка месяцев (январь–декабрь) — уходит в общий поповер. */
+  function buildMonthList(): HTMLElement {
+    const list = div('cal-months');
+    for (let i = 0; i < 12; i++) {
+      const index = i;
+      list.append(
+        uiButton({
+          label: MONTHS[i]!,
+          role: 'ghost',
+          size: 's',
+          class: 'cal-month-item',
+          onClick: () => pickMonth(index + 1),
+        }),
+      );
+    }
+    return list;
+  }
+
+  /** Открывает/закрывает выпадающий поповер списка месяцев. */
   function toggleMonthList(): void {
-    monthList.hidden = !monthList.hidden;
-    monthList.classList.toggle('is-open', !monthList.hidden);
+    if (monthPopover !== null) {
+      monthPopover.close();
+      return;
+    }
+    // Панель только что закрыта кликом вне (в т.ч. по самой кнопке) — этот
+    // же клик не должен открывать её снова.
+    if (Date.now() - monthPopoverClosedAt < MONTH_REOPEN_GUARD_MS) return;
+    monthPopover = openPopover({
+      anchor: { element: monthBtn },
+      content: { title: 'Месяц', body: buildMonthList() },
+      extraClass: 'cal-months-popover',
+      onClose: () => {
+        monthPopover = null;
+        monthPopoverClosedAt = Date.now();
+      },
+    });
   }
 
   function closeMonthList(): void {
-    monthList.hidden = true;
-    monthList.classList.remove('is-open');
+    monthPopover?.close();
   }
 
-  /** Открыть поле ввода года вместо кнопки. */
+  /** Открыть поле ввода года вместо кнопки (на том же месте). */
   function openYearInput(): void {
+    yearEditing = true;
     yearInput.value = String(year);
     yearInput.style.display = '';
     yearBtn.style.display = 'none';
@@ -265,23 +319,62 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     yearInput.select();
   }
 
-  /** Применить введённый год (при выходе из поля). */
+  /** Применить введённый год. */
   function commitYear(): void {
+    if (!yearEditing) return;
     const value = Number.parseInt(yearInput.value, 10);
     if (Number.isFinite(value)) {
       year = Math.min(MAX_YEAR, Math.max(MIN_YEAR, value));
     }
+    closeYearInput();
+    notifyMonth();
+    render();
+  }
+
+  /** Закрыть поле года без применения (Esc). */
+  function cancelYear(): void {
+    if (!yearEditing) return;
+    yearEditing = false;
     yearInput.style.display = 'none';
     yearBtn.style.display = '';
     notifyMonth();
     render();
   }
 
+  function closeYearInput(): void {
+    yearEditing = false;
+    yearInput.style.display = 'none';
+    yearBtn.style.display = '';
+  }
+
   yearInput.addEventListener('change', commitYear);
   yearInput.addEventListener('blur', commitYear);
   yearInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') commitYear();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      commitYear();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelYear();
+    }
   });
+
+  // Esc в поле года должен отменить правку года, а НЕ закрыть модальный диалог
+  // (`showDialog` слушает Escape на `window` в capture-фазе). Capture-слушатель
+  // регистрируется при сборке календаря — то есть раньше, чем диалог повесит
+  // свой, — и при открытом поле года гасит нажатие до диалога (приёмка №6, п.5).
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (!yearEditing || event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelYear();
+    },
+    true,
+  );
 
   function inPeriod(day: string): boolean {
     if (from !== '' && day < from) return false;
@@ -289,11 +382,20 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     return from !== '' || to !== '';
   }
 
+  /** Обновляет классы выделения на существующих кнопках дней. */
+  function paintSelection(): void {
+    for (const cell of dayCells) {
+      cell.el.classList.toggle('is-selected', inPeriod(cell.day));
+      cell.el.classList.toggle('is-selected-from', from !== '' && cell.day === from);
+      cell.el.classList.toggle('is-selected-to', to !== '' && cell.day === to);
+    }
+  }
+
   function renderHead(): void {
     monthBtn.textContent = MONTHS_SHORT[month - 1]!;
     yearBtn.textContent = String(year);
     // Год, показанный в поле ввода, синхронизируем с текущим.
-    if (yearInput.style.display !== 'none') yearInput.value = String(year);
+    if (yearEditing || yearInput.style.display !== 'none') yearInput.value = String(year);
   }
 
   function buildDay(cell: { day: string; inMonth: boolean }): HTMLElement {
@@ -328,7 +430,11 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     return button;
   }
 
-  /** Перетаскивание диапазона: mousedown → движение → mouseup. */
+  /**
+   * Перетаскивание диапазона: mousedown → движение → mouseup. Во время drag
+   * сетка НЕ пересобирается — обновляются только классы выделения, поэтому
+   * узел-цель остаётся на месте и одиночный `click` по дню срабатывает.
+   */
   function wireDrag(button: HTMLElement, day: string): void {
     button.addEventListener('mousedown', () => {
       dragging = true;
@@ -336,14 +442,14 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       dragStart = day;
       from = day;
       to = day;
-      render();
+      paintSelection();
     });
     button.addEventListener('mousemove', () => {
       if (!dragging) return;
       if (day !== dragStart) dragMoved = true;
       from = minDay(dragStart, day);
       to = maxDay(dragStart, day);
-      render();
+      paintSelection();
     });
     button.addEventListener('mouseup', () => {
       if (!dragging) return;
@@ -354,13 +460,14 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       if (start === end) return; // обычный клик — дальше сработает onClick
       from = minDay(start, end);
       to = maxDay(start, end);
-      render();
+      paintSelection();
       opts.onRangeChange?.(from, to);
     });
   }
 
   function renderGrid(): void {
     grid.replaceChildren();
+    dayCells = [];
     const headRow = div('cal-row cal-row-head');
     if (weekNumbers) headRow.append(span('', 'cal-week-num'));
     for (const name of WEEKDAYS) headRow.append(span(name, 'cal-wd'));
@@ -380,9 +487,14 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
           }),
         );
       }
-      for (const cell of week.days) row.append(buildDay(cell));
+      for (const cell of week.days) {
+        const button = buildDay(cell);
+        dayCells.push({ day: cell.day, el: button });
+        row.append(button);
+      }
       grid.append(row);
     }
+    paintSelection();
   }
 
   function render(): void {
@@ -391,7 +503,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   }
 
   render();
-  root.append(head, monthList, yearInput, grid);
+  root.append(head, grid);
 
   return {
     root,
@@ -405,6 +517,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       if (Number.isNaN(d.getTime())) return;
       year = d.getUTCFullYear();
       month = d.getUTCMonth() + 1;
+      closeMonthList();
       render();
     },
     getMonth: () => ({ year, month }),

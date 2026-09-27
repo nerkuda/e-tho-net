@@ -204,8 +204,31 @@ export const DPD_VALUE_CLASS = 'dpd-value';
 export const DPD_TIME_TOGGLE_CLASS = 'dpd-time-toggle';
 /** Класс поля времени. */
 export const DPD_TIME_CLASS = 'dpd-time';
-/** Класс контейнера полей времени. */
+/** Класс поля даты нижней строки значения. */
+export const DPD_DATE_CLASS = 'dpd-date';
+/** Класс разделителя-дефиса между границами периода. */
+export const DPD_SEP_CLASS = 'dpd-sep';
+/** Класс контейнера полей времени (прежняя раскладка; сохранён для CSS). */
 export const DPD_TIMES_CLASS = 'dpd-times';
+
+/**
+ * Время по умолчанию, когда у значения времени нет: включение «С указанием
+ * времени» подставляет осмысленное `10:00`, а не полночь (приёмка №6, п.1).
+ */
+export const DPD_DEFAULT_TIME = '10:00';
+
+/** Локальная дата `YYYY-MM-DD` корректна (существует в календаре). */
+export function isValidLocalDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.toISOString().slice(0, 10) === value;
+}
+
+/** Время `HH:MM` корректно (00:00–23:59). */
+export function isValidTime(value: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
 
 /**
  * Собирает содержимое диалога (календарь, переключатель режима, время, значение)
@@ -222,8 +245,10 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
   let from = initial.from ?? today;
   let to = allowPeriod ? (initial.to ?? from) : from;
   let hasTime = allowTime && initial.hasTime === true;
-  let fromTime = initial.fromTime ?? '00:00';
-  let toTime = initial.toTime ?? fromTime;
+  // Время берём из значения только когда оно осмысленно (`hasTime`): иначе
+  // включение «С указанием времени» подставляет DPD_DEFAULT_TIME, а не полночь.
+  let fromTime = hasTime ? (initial.fromTime ?? DPD_DEFAULT_TIME) : DPD_DEFAULT_TIME;
+  let toTime = hasTime ? (initial.toTime ?? fromTime) : fromTime;
 
   const root = div(DPD_CLASS);
 
@@ -292,6 +317,11 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     class: DPD_TIME_TOGGLE_CLASS,
     onClick: () => {
       hasTime = !hasTime;
+      if (hasTime) {
+        // Осмысленное значение по умолчанию вместо полуночи (приёмка №6, п.1).
+        if (fromTime === '00:00') fromTime = DPD_DEFAULT_TIME;
+        if (toTime === '00:00') toTime = DPD_DEFAULT_TIME;
+      }
       repaint();
     },
   });
@@ -306,40 +336,120 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     repaint();
   }
 
-  function buildTimeInput(which: 'from' | 'to'): HTMLElement {
+  /** Структурная подпись нижней строки: режим + наличие времени. */
+  let lineSignature = '';
+  /** Поля нижней строки значения (пересоздаются при смене структуры). */
+  let dateFromInput: HTMLInputElement | null = null;
+  let dateToInput: HTMLInputElement | null = null;
+  let timeFromInput: HTMLInputElement | null = null;
+  let timeToInput: HTMLInputElement | null = null;
+
+  function buildDateInput(which: 'from' | 'to', value: string): HTMLInputElement {
     const input = fieldInput({
+      type: 'text',
+      extraClass: DPD_DATE_CLASS,
+      value,
+      maxLength: 10,
+      ariaLabel: which === 'from' ? 'Дата начала' : 'Дата окончания',
+      title: 'Дата в формате ГГГГ-ММ-ДД',
+      placeholder: 'ГГГГ-ММ-ДД',
+      onChange: (raw) => applyDateInput(which, raw),
+    });
+    // Поле даты — редактируемый ввод `YYYY-MM-DD` (подсказка мобильной
+    // клавиатуре и шаблон формата), а не текстовая надпись (приёмка №6, п.2).
+    input.inputMode = 'numeric';
+    input.setAttribute('pattern', '\\d{4}-\\d{2}-\\d{2}');
+    return input;
+  }
+
+  function buildTimeInput(which: 'from' | 'to'): HTMLInputElement {
+    return fieldInput({
       type: 'time',
       extraClass: DPD_TIME_CLASS,
       value: which === 'from' ? fromTime : toTime,
       ariaLabel: which === 'from' ? 'Время начала' : 'Время окончания',
+      onChange: (raw) => {
+        const time = raw.trim();
+        if (!isValidTime(time)) {
+          syncValueLineValues();
+          return;
+        }
+        if (which === 'from') fromTime = time;
+        else toTime = time;
+        repaint();
+      },
     });
-    input.addEventListener('change', () => {
-      if (which === 'from') fromTime = input.value || fromTime;
-      else toTime = input.value || toTime;
-      repaint();
-    });
-    return input;
+  }
+
+  /** Ввод в поле даты: валидация формата, автоподгон «По» ≥ «С» (`setPeriod*`). */
+  function applyDateInput(which: 'from' | 'to', raw: string): void {
+    const day = raw.trim();
+    if (!isValidLocalDay(day)) {
+      syncValueLineValues();
+      return;
+    }
+    if (mode === 'date') {
+      from = day;
+      to = day;
+    } else if (which === 'from') {
+      const next = setPeriodFrom(from, to, day);
+      from = next.from;
+      to = next.to;
+    } else {
+      const next = setPeriodTo(from, to, day);
+      from = next.from;
+      to = next.to;
+    }
+    syncCalendar();
+  }
+
+  /** Пересобрать нижнюю строку под текущую структуру (режим + время). */
+  function rebuildValueLine(): void {
+    valueLine.replaceChildren();
+    dateFromInput = buildDateInput('from', from);
+    dateToInput = null;
+    timeFromInput = null;
+    timeToInput = null;
+    valueLine.append(dateFromInput);
+    if (hasTime) {
+      timeFromInput = buildTimeInput('from');
+      valueLine.append(timeFromInput);
+    }
+    if (mode === 'period') {
+      valueLine.append(span('-', DPD_SEP_CLASS));
+      dateToInput = buildDateInput('to', to);
+      valueLine.append(dateToInput);
+      if (hasTime) {
+        timeToInput = buildTimeInput('to');
+        valueLine.append(timeToInput);
+      }
+    }
+  }
+
+  /** Обновить значения полей без пересборки (сохраняет фокус при вводе). */
+  function syncValueLineValues(): void {
+    if (dateFromInput !== null) dateFromInput.value = from;
+    if (dateToInput !== null) dateToInput.value = to;
+    if (timeFromInput !== null) timeFromInput.value = fromTime;
+    if (timeToInput !== null) timeToInput.value = toTime;
   }
 
   /** Перерисовать всё, кроме сетки календаря (она держит своё состояние). */
   function repaint(): void {
     extras.replaceChildren();
+    extras.hidden = !allowTime;
     if (allowTime) {
       setButtonActive(timeToggle, hasTime);
       extras.append(timeToggle);
-      if (hasTime) {
-        const times = div(DPD_TIMES_CLASS);
-        times.append(
-          span('с', 'dpd-time-tag'),
-          buildTimeInput('from'),
-          ...(mode === 'period'
-            ? [span('по', 'dpd-time-tag'), buildTimeInput('to')]
-            : []),
-        );
-        extras.append(times);
-      }
     }
-    valueLine.textContent = formatDatePeriodDialogValue({
+    const signature = `${mode}|${hasTime ? 'time' : 'notime'}`;
+    if (signature !== lineSignature) {
+      lineSignature = signature;
+      rebuildValueLine();
+    } else {
+      syncValueLineValues();
+    }
+    valueLine.title = formatDatePeriodDialogValue({
       mode,
       from,
       to,

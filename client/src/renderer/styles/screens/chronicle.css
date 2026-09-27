@@ -105,11 +105,19 @@
   text-transform: capitalize;
 }
 
-.cal-year-input {
-  width: 5.5rem;
+/* Ячейка года: подпись и поле ввода стоят на одном месте. */
+.cal-year-cell {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
 }
 
-/* Список месяцев (январь–декабрь) под заголовком. */
+/* Поле года — под 4 цифры (инлайн-замена подписи, не строка во всю ширину). */
+.cal-year-input {
+  width: 4.5rem;
+}
+
+/* Список месяцев (январь–декабрь) — тело выпадающего поповера. */
 .cal-months {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -206,17 +214,38 @@
   gap: 6px;
 }
 
+/* Пустой блок (время не разрешено) не занимает места. */
+.dpd-extras[hidden] {
+  display: none;
+}
+
 .dpd-times {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
+/* Поле времени в нижней строке значения. */
 .dpd-time {
-  width: 6.5rem;
+  width: 5.5rem;
 }
 
+/* Поле даты в нижней строке значения — редактируемый `YYYY-MM-DD`. */
+.dpd-date {
+  width: 9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dpd-sep {
+  color: var(--muted);
+}
+
+/* Нижняя строка значения — поля ввода, а не текстовая надпись. */
 .dpd-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   padding-top: 4px;
   border-top: 1px solid var(--border);
   color: var(--muted);
