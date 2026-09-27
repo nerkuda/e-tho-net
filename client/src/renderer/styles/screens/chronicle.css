@@ -208,9 +208,11 @@
   min-width: 260px;
 }
 
+/* Кнопка «С указанием времени» — компактная, не во всю ширину диалога. */
 .dpd-extras {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
 }
 
@@ -219,37 +221,41 @@
   display: none;
 }
 
-.dpd-times {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Поле времени в нижней строке значения. */
-.dpd-time {
-  width: 5.5rem;
-}
-
-/* Поле даты в нижней строке значения — редактируемый `YYYY-MM-DD`. */
-.dpd-date {
-  width: 9rem;
-  font-variant-numeric: tabular-nums;
-}
-
 .dpd-sep {
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
-/* Нижняя строка значения — поля ввода, а не текстовая надпись. */
+/* Нижняя строка значения — ОДНА строка: поля ввода не переносятся на другую
+   строку и не растягиваются на ширину диалога (итерация приёмки №7, задача
+   c4a7e9e3). */
 .dpd-value {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding-top: 4px;
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* Поля строки значения — узкие фиксированные: дата ~116px, время ~70px.
+   Селектор из двух классов осознанно специфичнее `.ui-input { width: 100% }`,
+   поэтому вид не зависит от порядка CSS `lib/ui` и прикладных модулей
+   (грабли 36889dd6). */
+.dpd-value .dpd-date {
+  flex: 0 0 auto;
+  width: 116px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dpd-value .dpd-time {
+  flex: 0 0 auto;
+  width: 70px;
+  text-align: center;
 }
 
 /* ---------------------------------------------------------------------------

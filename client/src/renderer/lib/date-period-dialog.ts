@@ -208,8 +208,6 @@ export const DPD_TIME_CLASS = 'dpd-time';
 export const DPD_DATE_CLASS = 'dpd-date';
 /** Класс разделителя-дефиса между границами периода. */
 export const DPD_SEP_CLASS = 'dpd-sep';
-/** Класс контейнера полей времени (прежняя раскладка; сохранён для CSS). */
-export const DPD_TIMES_CLASS = 'dpd-times';
 
 /**
  * Время по умолчанию, когда у значения времени нет: включение «С указанием
@@ -310,10 +308,14 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
 
   const extras = div('dpd-extras');
 
+  // Настоящая кнопка словаря (не ghost-надпись): роль `secondary` даёт
+  // видимую рамку-кнопку, включённое состояние заливается акцентом
+  // (`.ui-btn--secondary.ui-btn--active`, итерация приёмки №7).
   const timeToggle = uiButton({
     label: 'С указанием времени',
-    role: 'ghost',
+    role: 'secondary',
     size: 's',
+    title: 'Показывать и учитывать время суток',
     class: DPD_TIME_TOGGLE_CLASS,
     onClick: () => {
       hasTime = !hasTime;
