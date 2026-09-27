@@ -11,16 +11,24 @@
  * (Node 22). Разбор сценария вынесен в `./ui-probe-scenario.mjs` и покрыт
  * юнит-тестами.
  *
- * Запуск клиента для проверок (electron-vite прокидывает аргументы Electron
- * через env-переменные, CLI-флаги в `npm run dev` он не принимает):
+ * Запуск клиента для проверок. Рекомендуется обёртка `./ui-probe-launch.mjs`:
+ * она сама генерирует изолированный профиль, ставит `ETN_HIDDEN_WINDOW=1` и
+ * ждёт готовности CDP.
  *
- *   # клиент без окна и без фокуса + порт отладки + изолированный профиль
+ *   # клиент без окна и фокуса + порт отладки + УНИКАЛЬНЫЙ профиль
+ *   node client/scripts/ui-probe-launch.mjs --port 9333
+ *
+ *   # прогон сценария (порт — тот же, что у клиента)
+ *   node client/scripts/ui-probe.mjs --scenario scenario.json --out .tmp/verify/out --port 9333
+ *
+ * Запускать клиент вручную тоже можно, но `--user-data-dir` ОБЯЗАТЕЛЕН: без
+ * него `ETN_HIDDEN_WINDOW=1` отказывается стартовать (защита от запуска на
+ * профиле пользователя). Дефолтный профиль общий с работающим клиентом
+ * пользователя — тестовый экземпляр поднял бы ЕГО окно и отобрал фокус.
+ *
  *   ETN_HIDDEN_WINDOW=1 REMOTE_DEBUGGING_PORT=9333 \
  *     ELECTRON_CLI_ARGS='["--user-data-dir=C:/R/ETN/.tmp/verify/profile"]' \
  *     npm -w @etn/client run dev
- *
- *   # прогон сценария
- *   node client/scripts/ui-probe.mjs --scenario scenario.json --out .tmp/verify/out --port 9333
  *
  * `REMOTE_DEBUGGING_PORT` по умолчанию включает `--remote-debugging-port`;
  * дополнительные аргументы Electron задаются JSON-массивом в
@@ -61,8 +69,12 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
 Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага; 2 — ошибка
 вызова, сценария или подключения к CDP.
 
-Как запустить клиент для проверок (electron-vite читает аргументы Electron
-из окружения, а не из CLI):
+Как запустить клиент для проверок (рекомендуется обёртка — один вызов):
+
+  node client/scripts/ui-probe-launch.mjs --port 9333
+
+  Обёртка генерирует уникальный изолированный профиль, ставит
+  ETN_HIDDEN_WINDOW=1, включает CDP и ждёт готовности. Вручную:
 
   ETN_HIDDEN_WINDOW=1 REMOTE_DEBUGGING_PORT=9333 \\
     ELECTRON_CLI_ARGS='["--user-data-dir=C:/R/ETN/.tmp/verify/profile"]' \\
@@ -70,6 +82,9 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
 
   ETN_HIDDEN_WINDOW=1 — окно невидимо (opacity 0), не в панели задач и не
   забирает фокус; рендер при этом живой, Page.captureScreenshot даёт кадр.
+  --user-data-dir ОБЯЗАТЕЛЕН: на дефолтном профиле (общем с клиентом
+  пользователя) тестовый режим отказывается стартовать — иначе тестовый
+  экземпляр поднял бы окно пользователя и отобрал фокус.
 
 Шаги сценария (ровно одно действие на шаг, плюс необязательные name/timeout):
   { "key": "ArrowDown", "modifiers": ["shift"] }   стрелки, Tab, Enter, Esc…
