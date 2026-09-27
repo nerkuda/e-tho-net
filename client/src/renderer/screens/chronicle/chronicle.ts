@@ -90,6 +90,7 @@ import {
   hasRecordContent,
   insertRowByDay,
   isLastChip,
+  localDay,
   localDayEnd,
   localDayStart,
   periodValuesForRange,
@@ -1379,6 +1380,22 @@ function syncCalendar(): void {
 }
 
 /**
+ * Показать ДЕНЬ ЗАПИСИ в календаре при переходе к записи (0.10.1, ошибка
+ * ecd91c1d): пункт «Открыть в дневнике» обязан «установить в календаре дату из
+ * записи» (чек-лист задачи 8012a9b0, п.2) — то есть сменить ОТОБРАЖАЕМЫЙ месяц,
+ * а не только выделение. Без этого календарь оставался на месяце, сохранённом
+ * в состоянии вкладки, и дня записи в его сетке нет: ни отметки, ни выделения,
+ * а отметки записей — по не относящемуся к записи месяцу. `showDate` уведомляет
+ * `onMonthChange`: месяц персистится, счётчики дней пересчитываются для нового
+ * месяца; следом `syncCalendar` проставляет выделение дня.
+ */
+function showRecordDayInCalendar(day: string): void {
+  if (calendar === null || day === '') return;
+  calendar.showDate(day);
+  syncCalendar();
+}
+
+/**
  * Счётчики записей по дням ОТОБРАЖАЕМОГО месяца (0.10.1, элемент 55b07702):
  * отдельный запрос по границам месяца с текущими критериями, БЕЗ периода —
  * поэтому счётчик виден и на выделенной, и на невыделенной дате. Числа дней
@@ -1461,7 +1478,9 @@ async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
   persistState();
   await getHome().catch(() => undefined);
   await reload();
-  syncCalendar();
+  // Календарь — на месяц записи (чек-лист 8012a9b0, п.2), иначе дня записи в
+  // его сетке нет и переход выглядит как «отметок нет» (ошибка ecd91c1d).
+  showRecordDayInCalendar(localDay(row.valid_from));
   if (await loadUntilRecord(row.id)) {
     focusRecord(row.id);
     return;
@@ -1505,7 +1524,8 @@ async function startTemporarySelection(
   renderTemporaryBanner();
   persistState();
   await reload();
-  syncCalendar();
+  // Тот же переход к записи — календарь тоже встаёт на её месяц.
+  showRecordDayInCalendar(localDay(period.from));
   await loadUntilRecord(recordId);
   focusRecord(recordId);
 }
