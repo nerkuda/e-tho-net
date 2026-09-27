@@ -2088,6 +2088,10 @@ export const RestCommentUpdate = defineContract(
     body_md: { from: { kind: 'body' } },
     valid_from: { from: { kind: 'body' } },
     valid_to: { from: { kind: 'body' } },
+    // Флаг «учитывать время» обязан читаться из тела: без записи в REST-карте
+    // `parseRest` его не вернёт, и PATCH молча терял бы флаг (ошибка f45fac74,
+    // итерация приёмки №11 0.10.1). Создание (`commentFieldsRest`) флаг уже чтит.
+    use_time: { from: { kind: 'body' } },
   },
 );
 
