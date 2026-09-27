@@ -54,6 +54,7 @@ function row(over: Partial<ChronicleRow>): ChronicleRow {
     created_by: 'u',
     updated_by: 'u',
     snippet: '',
+    body_html: '',
     targets: [],
     ...over,
   };

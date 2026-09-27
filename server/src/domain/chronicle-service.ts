@@ -810,6 +810,7 @@ function buildRows(
       created_by: row.created_by,
       updated_by: row.updated_by,
       snippet: row.snippet,
+      body_html: row.body_html,
       targets,
     };
   });
@@ -822,6 +823,11 @@ interface Row {
   owner_id: string;
   title: string | null;
   body_md: string;
+  /**
+   * Полный HTML тела записи (0.10.1, приёмка №3): лента показывает запись
+   * целиком, а не `snippet`.
+   */
+  body_html: string;
   valid_from: string;
   valid_to: string | null;
   /** 0/1 — флаг «учитывать время» (миграция 046). */
@@ -919,6 +925,7 @@ export function queryChronicle(
   const rows = ndb
     .prepare(
       `SELECT c.id, c.owner_type, c.owner_id, c.title, c.body_md, c.valid_from, c.valid_to,
+              c.body_html,
               c.use_time, c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
        FROM comments_v c
        WHERE ${cond}

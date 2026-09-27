@@ -133,6 +133,12 @@ export interface ChronicleRow {
   updated_by: string;
   /** Plain-text preview of `body_md` (~160 chars, `<mark>` highlights). */
   snippet: string;
+  /**
+   * Полный HTML тела записи (0.10.1, приёмка №3, задача 9bef6a27; колонка
+   * `comments.body_html`). Лента показывает запись ЦЕЛИКОМ в этом виде;
+   * `snippet` остаётся в ответе ради совместимости MCP-инструмента.
+   */
+  body_html: string;
   /** All attachments of the comment (m2m), resolved. */
   targets: ChronicleTarget[];
 }

@@ -412,6 +412,34 @@ describe(
       }
     });
 
+    it('carries the full body_html of the record, not only the snippet (0.10.1, приёмка №3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        createComment(
+          ndb,
+          'thought',
+          a,
+          {
+            kind: 'chronological',
+            body_md: '## Итоги дня\n\n- первое\n- второе\n\n**важно**',
+            valid_from: '2024-01-01',
+          },
+          USER,
+        );
+        const row = query(ndb, {}).rows[0];
+        assert.ok(row, 'запись найдена');
+        assert.match(row!.body_html, /<h2/, 'заголовок markdown — как <h2>');
+        assert.match(row!.body_html, /<ul/, 'список markdown — как <ul>');
+        assert.match(row!.body_html, /<strong/, 'жирный markdown — как <strong>');
+        assert.ok(!row!.body_html.includes('##'), 'markdown-разметка не остаётся текстом');
+        // Выжимка остаётся в ответе ради совместимости MCP.
+        assert.ok(row!.snippet.length > 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('sorts by record class (HOME-only first), then valid_from/valid_to, in both orders', () => {
       const ndb = createInMemoryNetworkDb();
       try {

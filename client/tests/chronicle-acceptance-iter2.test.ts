@@ -31,6 +31,7 @@ const ENTITY_PICKER = read('lib/entity-picker.ts');
 const PERIOD_EDITOR = read('lib/period-editor.ts');
 const BUILDER = read('lib/filter-builder.ts');
 const DIARY = read('screens/chronicle/diary.ts');
+const RECORD_BODY = read('screens/chronicle/record-body.ts');
 const CSS = read('styles/screens/chronicle.css');
 
 describe('приёмка №2, п.1: единые поля выбора (обе панели)', () => {
@@ -74,9 +75,11 @@ describe('приёмка №2, п.2–3: оболочка комментария
   });
 
   it('пустая запись даёт кликабельную область с приглашением', () => {
-    assert.match(CHRONICLE, /diary\.emptyRecordHint/, 'плейсхолдер пустой записи');
-    assert.match(CHRONICLE, /diary-snippet-empty/);
-    assert.match(CHRONICLE, /diary\.emptyRecordHint'\)\)/);
+    // Приёмка №3 (0.10.1): просмотр тела переехал в общий рендер записи
+    // (`record-body.ts`) — приглашение пустой записи живёт там.
+    assert.match(RECORD_BODY, /diary\.emptyRecordHint/, 'плейсхолдер пустой записи');
+    assert.match(RECORD_BODY, /diary-snippet-empty/);
+    assert.match(CHRONICLE, /renderRecordView\(shell, row\)/, 'лента использует общий рендер');
   });
 });
 

@@ -50,7 +50,7 @@ import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
 import { confirmDialog } from '../../lib/dialog.js';
-import { div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
+import { div, el, errText, fmtDate, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
@@ -103,6 +103,7 @@ import {
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
 import { parseChronicleState } from './state.js';
+import { renderRecordView } from './record-body.js';
 
 /**
  * Границы размера панели отбора (задача 2ebe4206): слева — ширина, вверху
@@ -661,29 +662,19 @@ function recordMenuItems(row: ChronicleRow): MenuItem[] {
 
 /**
  * Тело записи: единая оболочка комментария (`lib/ui/comment.ts`) в режиме
- * просмотра; двойной клик — правка тем же полем markdown, что в редакторе
- * мысли. Пустая запись тоже даёт кликабельную область и приглашение
- * (0.10.1, приёмка №2 — ошибка «пустую запись нельзя открыть»).
+ * ПРОСМОТРА показывает ПОЛНЫЙ `body_html` записи (0.10.1, приёмка №3) —
+ * заголовки, списки, выделения видны целиком, без выжимки `snippet`. Сборка
+ * тела вынесена в `./record-body.js` ради поведенческого теста. Двойной клик —
+ * правка тем же полем markdown, что в редакторе мысли. Пустая запись тоже даёт
+ * кликабельную область и приглашение (0.10.1, приёмка №2).
  */
 function buildBody(row: ChronicleRow): HTMLElement {
   const body = div('diary-record-body');
   const shell = commentShell({ variant: 'plain' });
-  renderSnippet(shell, row.snippet);
+  renderRecordView(shell, row);
   shell.root.addEventListener('dblclick', () => void openBodyEditor(body, row, shell));
   body.append(shell.root);
   return body;
-}
-
-/** Показать превью текста записи в теле оболочки; пусто — приглашение. */
-function renderSnippet(shell: ReturnType<typeof commentShell>, snippet: string): void {
-  const view = div('diary-snippet');
-  if (snippet.trim() !== '') {
-    renderHtml(view, snippet);
-  } else {
-    view.append(el('span', 'diary-snippet-empty muted', t('diary.emptyRecordHint')));
-  }
-  shell.setField(view);
-  shell.setState({ kind: 'ready' });
 }
 
 /** Встроенная правка текста записи (оболочка комментария + поле markdown). */

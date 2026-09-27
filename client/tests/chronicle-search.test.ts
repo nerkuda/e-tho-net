@@ -133,6 +133,6 @@ describe('дневник: стили подсветки и плашки (T7)', (
     const css = readFileSync(assembledStylesFile(), 'utf8');
     assert.match(css, /\.diary-record-target\s*\{/, 'стиль подсветки записи');
     assert.match(css, /\.diary-temp-banner\s*\{/, 'стиль плашки временной выборки');
-    assert.match(css, /\.diary-snippet mark\s*\{/, 'подсветка совпадений в тексте записи');
+    assert.match(css, /\.diary-body mark\s*\{/, 'подсветка совпадений в тексте записи');
   });
 });
