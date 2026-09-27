@@ -124,6 +124,30 @@ export function formatDatePeriodValue(value: DatePeriodValue): string {
 }
 
 /**
+ * Единое отображение периода ДНЕВНИКОВОЙ ЗАПИСИ по её полным UTC-инстансам —
+ * одна точка правды для трёх мест: лента экрана «Дневник», колонка «Период»
+ * вкладки-«Дневник» редактора и шапка записи (0.10.1, задача 8012a9b0). Время
+ * показывается только при `useTime` (запись «учитывает время»): выключено —
+ * видна лишь дата. Формат строки задаёт {@link formatDatePeriodValue}.
+ */
+export function formatRecordPeriod(
+  fromInstant: string,
+  toInstant: string | null,
+  useTime: boolean,
+): string {
+  const to = toInstant ?? fromInstant;
+  const withTime = useTime === true;
+  const value = datePeriodValueFromInstants(fromInstant, to, withTime, withTime);
+  // `datePeriodValueFromInstants` ставит режим «дата» по совпадению ДАТ, но
+  // запись одного дня с разным временем границ — это период: показываем
+  // «дата, ЧЧ:ММ - ЧЧ:ММ» (требование чек-листа 8012a9b0).
+  if (withTime && value.from === value.to && value.fromTime !== value.toTime) {
+    value.mode = 'period';
+  }
+  return formatDatePeriodValue(value);
+}
+
+/**
  * Строка значения ВНИЗУ диалога: у периода одна дата повторяется у обеих границ
  * (`2026-09-26 10:00 - 2026-09-26 10:00`), две даты — `2026-09-26 - 2026-09-27`.
  */

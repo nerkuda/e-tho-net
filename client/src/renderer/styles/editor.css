@@ -436,18 +436,8 @@
   max-height: none;
 }
 
-/* Pin the header row while the body scrolls — the editor's «Хроника» tab. The
-   chronicle workspace table gets its pinned header from the vendor grid
-   (lib/ui/table.ts) instead. */
-.chrono-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  /* Фон шапки — из токена темы (требование 11ddd910, правило 11): отличается
-     от строк данных и надписей и следует за сменой токена, а не за его
-     текущим значением (исправлено в ревизии 0.9.1). */
-  background: var(--table-header-bg);
-}
+/* Заголовок таблицы вкладки рисует фасад `lib/ui/table.ts` (вендорская шапка
+   с фоновым токеном `--table-header-bg`), своих правил для `thead` нет. */
 
 .chrono-editor {
   flex: 1 1 auto;
@@ -462,16 +452,19 @@
   display: flex;
   gap: 6px;
   margin-bottom: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
 }
 
-.chrono-meta-row .chrono-meta-input:first-child {
-  flex: 1 1 140px;
+/* Шапка записи — одна строка: период слева, поле заголовка тянется на всю
+   оставшуюся ширину панели. */
+.chrono-meta-row .chrono-date-value {
+  flex: 0 0 auto;
 }
 
-.chrono-meta-input {
-  max-width: 170px;
+.chrono-meta-row .chrono-meta-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* The markdown field fills the attachment view area (description editor). */

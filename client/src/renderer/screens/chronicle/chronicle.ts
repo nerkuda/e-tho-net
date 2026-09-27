@@ -62,7 +62,7 @@ import {
 } from '../../lib/period-editor.js';
 import {
   datePeriodValueFromInstants,
-  formatDatePeriodValue,
+  formatRecordPeriod,
   openDatePeriodDialog,
   resolveDatePeriodInstants,
   type DatePeriodValue,
@@ -803,16 +803,9 @@ function buildRecordCard(row: ChronicleRow): HTMLElement {
   return card;
 }
 
-/** Подпись даты/периода записи общим рендерером диалога даты/периода. */
+/** Подпись даты/периода записи — единый помощник периода дневниковой записи. */
 function recordDateLabel(row: ChronicleRow): string {
-  return formatDatePeriodValue(
-    datePeriodValueFromInstants(
-      row.valid_from,
-      row.valid_to ?? row.valid_from,
-      row.use_time === true,
-      row.use_time === true,
-    ),
-  );
+  return formatRecordPeriod(row.valid_from, row.valid_to, row.use_time === true);
 }
 
 /** Инпут заголовка записи: правка по месту с сохранением по blur. */
@@ -1460,7 +1453,7 @@ async function loadUntilRecord(id: string): Promise<boolean> {
  * скрыта активным отбором (кроме периода) — временная выборка с плашкой и
  * возвратом отбора.
  */
-async function jumpToRecord(row: ChronicleRow): Promise<void> {
+async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
   const period = recordPeriod(row);
   if (period.from === '') return;
   const previous = { filter: getFilterState(), savedFilterId: getSavedFilterId() };
@@ -1474,6 +1467,27 @@ async function jumpToRecord(row: ChronicleRow): Promise<void> {
     return;
   }
   await startTemporarySelection(previous, period, row.id);
+}
+
+/** Минимальная ссылка на дневниковую запись для перехода к ней. */
+export interface ChronicleRecordRef {
+  id: string;
+  valid_from: string;
+  valid_to: string | null;
+}
+
+/**
+ * Открыть экран «Дневник» на конкретной записи (0.10.1, задача 8012a9b0):
+ * переключить вид, установить в календаре дату записи и сделать запись текущей
+ * в ленте. Единый вход для пункта меню строки вкладки «Дневник» редактора —
+ * механика перехода уже есть у поиска (`jumpToRecord`, T7), второй копии нет.
+ */
+export async function openChronicleRecord(record: ChronicleRecordRef): Promise<void> {
+  // Ленивый импорт: статический замкнул бы цикл active-view → chronicle.
+  const { setActiveView } = await import('../active-view.js');
+  setActiveView('chronicle');
+  await ensureChronicleInitialised();
+  await jumpToRecord(record);
 }
 
 /** Временная выборка: критерии кроме периода сброшены, запись открывается. */

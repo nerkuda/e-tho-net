@@ -228,13 +228,15 @@ describe('«Дневник»: включение времени из диало�
     assert.match(src, /use_time: value\.hasTime === true/, 'hasTime диалога → use_time записи');
   });
 
-  it('вкладка редактора: включение времени в диалоге синхронизирует флажок', () => {
+  it('вкладка редактора: показ времени задаёт ответ диалога (флажка в шапке нет)', () => {
     const src = readFileSync(resolve(RENDERER, 'editor', 'chrono-tab.ts'), 'utf8');
     assert.match(
       src,
-      /useTimeInput\.input\.checked\s*=\s*result\.hasTime/,
-      'флажок «учитывать время» едет за hasTime диалога',
+      /useTime = result\.hasTime === true/,
+      'hasTime диалога → показ времени записи на вкладке',
     );
+    assert.match(src, /use_time: useTime/, 'показ времени уходит в create/update');
     assert.match(src, /allowTime: true/, 'вкладка тоже разрешает время в диалоге');
+    assert.ok(!/checkboxRow\(/.test(src), 'флажка «учитывать время» в шапке больше нет');
   });
 });

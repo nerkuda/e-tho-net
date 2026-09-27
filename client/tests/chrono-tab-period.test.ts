@@ -1,8 +1,10 @@
 /**
- * Вкладка «Дневник» редактора: поле периода и флаг «учитывать время»
+ * Вкладка «Дневник» редактора: период записи, таблица и шапка
  * (0.10.1, задача T8 a657bf3b; элемент 7310d077 «Вкладка «Дневник» редактора»,
  * элемент 2f14de06 «Поле периода»; ADR времени 994d076a; требования d58aa1a4
  * «формат дат/valid_to», 91ba5b3f «флаг use_time», 80b31f7a «переименование»).
+ * Доработка вкладки — задача 8012a9b0 (три колонки, единый помощник периода,
+ * шапка записи без флажка времени, переход в экран «Дневник»).
  *
  * Чистый помощник `resolvePeriodInstants` (значение контрола → полные
  * UTC-инстансы записи) проверяется напрямую; связка вкладки — структурно по
@@ -71,7 +73,7 @@ describe('resolvePeriodInstants: время по ADR и непустой valid_t
   });
 });
 
-describe('вкладка «Дневник»: диалог даты/периода и флаг «учитывать время»', () => {
+describe('вкладка «Дневник»: диалог даты/периода и шапка записи', () => {
   it('вкладка переименована в «Дневник» (требование 80b31f7a)', () => {
     const editorSrc = read(SRC.editor);
     assert.ok(editorSrc.includes("title: 'Дневник'"), 'вкладка подписана «Дневник»');
@@ -92,29 +94,21 @@ describe('вкладка «Дневник»: диалог даты/период�
     assert.ok(!/\.type\s*=\s*['"](?:date|datetime-local|time)['"]/.test(src), 'своих полей дат периода нет');
   });
 
-  it('флаг «учитывать время» — переключатель строки метаданных', () => {
+  it('в шапке нет флажка «учитывать время» — показ времени задаёт ответ диалога', () => {
     const src = read(SRC.tab);
-    assert.ok(src.includes("label: 'учитывать время'"), 'подпись переключателя');
-    assert.match(src, /checkboxRow\(\{/, 'переключатель — фасад lib/ui');
-    assert.match(src, /useTimeInput\.input\.checked/, 'флаг читается из переключателя');
-    assert.ok(src.includes('use_time: useTimeInput.input.checked'), 'флаг уходит в create/update');
+    assert.ok(!src.includes('учитывать время'), 'флажка «учитывать время» в шапке нет');
+    assert.ok(!/checkboxRow\(/.test(src), 'фасад переключателя больше не подключается');
+    assert.match(src, /useTime = result\.hasTime === true/, 'показ времени — из ответа диалога (hasTime)');
+    assert.match(src, /use_time: useTime/, 'флаг уходит в create/update');
   });
 
-  it('время показывается по флагу, подпись — общий рендерер значения', () => {
+  it('подпись периода — единый помощник `formatRecordPeriod` (лента, таблица, шапка)', () => {
     const src = read(SRC.tab);
-    // Подпись значения строится общим рендерером диалога; время — по флагу.
-    assert.match(src, /formatDatePeriodValue\(/, 'подпись — общий рендерер значения');
-    assert.match(
-      src,
-      /datePeriodValueFromInstants\(\s*fromInstant,\s*toInstant,\s*useTimeInput\.input\.checked/,
-      'hasTime диалога берётся из флага',
-    );
-    // Явная правка времени в диалоге включает флаг (требование 91ba5b3f).
-    assert.match(
-      src,
-      /useTimeInput\.input\.checked !== result\.hasTime/,
-      'правка времени синхронизирует флаг',
-    );
+    // И «ячейка таблицы», и подпись шапки строятся одним помощником — своим
+    // вызовом на каждый случай, без дублирования логики формата.
+    const matches = src.match(/formatRecordPeriod\(/g) ?? [];
+    assert.ok(matches.length >= 2, 'период строится помощником и в таблице, и в шапке');
+    assert.ok(!/formatDatePeriodValue\(/.test(src), 'локального рендерера значения на вкладке нет');
   });
 
   it('правка дат — полные UTC-инстансы, время суток сохраняет общий помощник', () => {
@@ -124,10 +118,5 @@ describe('вкладка «Дневник»: диалог даты/период�
     assert.ok(create.includes('valid_from: fromInstant'), 'create: полный инстанс начала');
     assert.ok(create.includes('valid_to: toInstant'), 'create: полный инстанс конца');
     assert.ok(!/valid_to:\s*(?:null|['"]['"])/.test(src), 'valid_to не бывает пустым');
-  });
-
-  it('таблица показывает время только при включённом флаге', () => {
-    const src = read(SRC.tab);
-    assert.match(src, /comment\.use_time === true \? formatDateTime\(/, 'время в колонках С/По — по флагу');
   });
 });
