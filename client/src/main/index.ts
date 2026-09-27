@@ -48,6 +48,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
 /**
+ * Test mode «invisible window» (task 5c5b30e2, UI-probe bench). Enabled by
+ * `ETN_HIDDEN_WINDOW=1`: the window is shown without focus, fully transparent
+ * and without a taskbar button, so CDP-driven UI checks don't disturb the user.
+ * A normal launch is not affected. The window is deliberately *shown* (not left
+ * hidden) — Chromium throttles rendering of a hidden/background window and
+ * `Page.captureScreenshot` could then return a blank frame; a transparent
+ * window keeps the compositor ticking.
+ */
+const HIDDEN_WINDOW = process.env['ETN_HIDDEN_WINDOW'] === '1';
+
+/**
  * CLI profile directory (docs/07-client-electron.md §3): `--user-data-dir=<path>`
  * points the entire local profile (local.db, server profiles, settings, window
  * bounds) at a separate directory, so one installation can run several
@@ -237,7 +248,17 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
   });
 
   win.once('ready-to-show', () => {
-    win.show();
+    if (HIDDEN_WINDOW) {
+      // Test mode (task 5c5b30e2): render for CDP, invisible to the user.
+      // Opacity and taskbar opt-out are set BEFORE showing; `showInactive`
+      // brings the window up without taking focus from the user.
+      console.log('[ETN] hidden window mode: opacity=0, skipTaskbar, showInactive');
+      win.setOpacity(0);
+      win.setSkipTaskbar(true);
+      win.showInactive();
+    } else {
+      win.show();
+    }
     // Subscribe to resize/move only AFTER the window is fully laid out, so
     // Electron's auto-events (which can change the bounds to fit a display
     // work area, DPI changes, etc.) don't get treated as user input and

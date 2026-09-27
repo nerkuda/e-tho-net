@@ -70,6 +70,10 @@ module.exports = tseslint.config(
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        // Web-API globals available in Node 22 (CDP scripts: fetch + WebSocket).
+        fetch: 'readonly',
+        WebSocket: 'readonly',
+        URL: 'readonly',
       },
     },
   },
