@@ -287,6 +287,41 @@
   flex: 0 0 auto;
 }
 
+/* Панельный вариант (0.10.1, приёмка №4, задача fd9eef49): по строке на границу
+   периода — «С» и «По» в отдельных контейнерах-строках, поля идут колонкой.
+   Метка границы — фиксированная колонка, контролы читаемого размера, ширины
+   заданы явно (ни микроскопических, ни гигантских). Вариант `editor` выше не
+   затронут и остаётся однострочным. */
+.pe-panel .pe-fields {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.pe-panel .pe-bound,
+.pe-panel .pe-preset-bound {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.pe-panel .pe-tag {
+  width: 22px;
+}
+
+.pe-panel .pe-date-input,
+.pe-panel .pe-preset-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pe-panel .pe-preset-num {
+  width: 64px;
+}
+
+.pe-panel .pe-preset-unit {
+  width: 64px;
+}
+
 .pe-error {
   flex: 1 1 100%;
   font-size: 11px;

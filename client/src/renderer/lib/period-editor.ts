@@ -418,6 +418,8 @@ function boundError(bound: BoundState, allowTokens: boolean): string | null {
 
 /** Класс корня контрола. */
 const ROOT_CLASS = 'pe-root';
+/** Модификатор панельного варианта: раскладка границ колонкой (две строки). */
+const PANEL_CLASS = 'pe-panel';
 /** Класс контейнера полей. */
 const FIELDS_CLASS = 'pe-fields';
 /** Класс одной границы. */
@@ -540,6 +542,10 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   let to = emptyBound();
 
   const root = div(ROOT_CLASS);
+  // Панельный вариант — по строке на границу периода (0.10.1, приёмка №4):
+  // модификатор корня, раскладка колонкой задана в CSS. Вариант `editor`
+  // (даты записи, вкладка редактора) сохраняет однострочную раскладку.
+  if (panel) root.classList.add(PANEL_CLASS);
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', opts.label ?? 'Период');
 
