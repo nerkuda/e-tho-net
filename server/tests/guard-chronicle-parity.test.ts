@@ -98,6 +98,78 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     assert.match(block, /targets\s*:/, 'контракт обязан объявлять targets');
     assert.match(block, /date_from\s*:/);
     assert.match(block, /date_to\s*:/);
+    // 0.10.1, задача 46057359: область ключевых слов едет и через MCP —
+    // без объявления в контракте (`.strict()`) MCP-вызов её отвергал бы.
+    assert.match(block, /keyword_scope\s*:/, 'контракт обязан объявлять keyword_scope');
+  });
+
+  it('MCP-фасад прокидывает keyword_scope в тело (задача 46057359)', () => {
+    assert.match(
+      MCP,
+      /body\.keyword_scope\s*=\s*args\.keyword_scope/,
+      'MCP-инструмент обязан прокинуть keyword_scope — иначе путь Б не гейтится',
+    );
+  });
+
+  it('REST и MCP: keyword_scope без comment отключает поиск по тексту записи', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Alpha');
+      const rec = createCommentWithTargets(
+        ndb,
+        [{ owner_type: 'thought', owner_id: target }],
+        { kind: 'chronological', body_md: 'заметка про берёзу', valid_from: '2024-01-01' },
+        USER,
+      );
+
+      const run = async (filter: Record<string, unknown>): Promise<string[]> => {
+        const restRes = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload: filter,
+        });
+        assert.equal(restRes.statusCode, 200);
+        const restRows = restRes.json().data as Array<{ id: string }>;
+        const mcpRes = await handle.client.callTool({
+          name: 'etn.chronicle.query',
+          arguments: { network_id: rest.networkId, ...filter },
+        });
+        const mcpRows = toolJson<{ rows: Array<{ id: string }> }>(mcpRes).rows;
+        assert.deepEqual(
+          mcpRows.map((r) => r.id),
+          restRows.map((r) => r.id),
+          'состав обязан совпасть у REST и MCP',
+        );
+        return restRows.map((r) => r.id);
+      };
+
+      assert.deepEqual(
+        await run({ keywords: 'берёзу', keyword_scope: ['title', 'synonyms'] }),
+        [],
+        'без comment текст записи не находит ни один фасад',
+      );
+      assert.deepEqual(
+        await run({ keywords: 'берёзу', keyword_scope: ['title', 'synonyms', 'comment'] }),
+        [rec.id],
+        'с comment находит по тексту записи',
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
   });
 
   it('REST и MCP дают одинаковый порядок и состав для одного отбора', async () => {

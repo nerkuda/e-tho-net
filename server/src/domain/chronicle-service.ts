@@ -668,6 +668,15 @@ function recordTextCond(
 }
 
 /**
+ * Включена ли область `comment` в `keyword_scope`. Отсутствие области (или
+ * пустой массив) — прежнее поведение «все области»; иначе область должна быть
+ * названа явно. Одна точка правды для пути Б (текст/заголовок записи).
+ */
+export function commentScopeEnabled(scope: StructureKeywordScope[] | undefined): boolean {
+  return scope === undefined || scope.length === 0 || scope.includes('comment');
+}
+
+/**
  * Phase 2 WHERE shared by the count and the page queries.
  *
  * `scopeIds` — мысли структурного отбора (без ключевых слов); `keywordIds` —
@@ -675,7 +684,14 @@ function recordTextCond(
  * прошла). Записи отбираются как объединение: (путь А, только при включающих
  * словах) привязанные к `keywordIds`, ИЛИ (путь Б) привязанные к области
  * отбора И совпавшие по собственному тексту (включающие есть / исключающих
- * нет). Чисто исключающие слова работают только путём Б — по тексту записи.
+ * нет).
+ *
+ * Путь Б — это область `comment` (0.10.1, задача 46057359): «Комментарии»
+ * относятся к постоянным комментариям мыслей И к дневниковым записям, а
+ * «наименование»/«синонимы» — только к мыслям. Поэтому совпадение по
+ * телу/заголовку САМОЙ записи ищется, только когда `keyword_scope` содержит
+ * `comment`; выключенный флаг «Комментарии» оставляет записи лишь мыслевому
+ * пути (наименование/синонимы целей).
  */
 function buildRowsWhere(
   ndb: NetworkDb,
@@ -697,7 +713,11 @@ function buildRowsWhere(
   if (includeWords.length > 0 && keywordIds.length > 0) {
     parts.push(attachmentCond(ndb, keywordIds, request, args));
   }
-  if (includeWords.length > 0 || excludeWords.length > 0) {
+  // Путь Б — только при включённой области `comment`.
+  if (
+    commentScopeEnabled(request.keyword_scope) &&
+    (includeWords.length > 0 || excludeWords.length > 0)
+  ) {
     const text = recordTextCond(includeWords, excludeWords, args);
     if (text !== null) {
       const attach = scopeRestricted
@@ -711,6 +731,11 @@ function buildRowsWhere(
     // как `(kind AND A) OR B`, и путь Б (текст записи) вернул бы в ленту
     // постоянные комментарии (дефект приёмки 0.10.1).
     conds.push(`(${parts.join(' OR ')})`);
+  } else if (includeWords.length > 0) {
+    // Включающие слова заданы, но ни один путь не дал условий: при выключенной
+    // области `comment` совпадение по тексту записи не ищется, а мыслевого
+    // совпадения нет — записей нет (иначе запрос отдал бы ВСЕ записи области).
+    conds.push('0');
   } else if (scopeIds.length > 0) {
     conds.push(
       scopeRestricted ? attachmentCond(ndb, scopeIds, request, args) : anyAttachmentCond(),

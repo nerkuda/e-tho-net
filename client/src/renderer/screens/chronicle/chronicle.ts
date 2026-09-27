@@ -33,6 +33,7 @@
 import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
+  STRUCTURE_KEYWORD_SCOPES,
   UI_STATE_KEY,
   type ChronicleRow,
   type ChronicleTarget,
@@ -1470,6 +1471,10 @@ async function searchRecords(query: string): Promise<ChronicleRow[]> {
   if (networkId === null) return [];
   const result = await etn.chronicle.query(networkId, {
     keywords: query,
+    // Область поиска — все три явно: строка ищет записи и по их собственному
+    // тексту/заголовку (область `comment`), независимо от флагов панели отбора
+    // (0.10.1, задача 46057359). Без `comment` сервер не ищет по тексту записи.
+    keyword_scope: [...STRUCTURE_KEYWORD_SCOPES],
     order: 'desc',
     limit: RECORD_SEARCH_MAX_RESULTS,
     offset: 0,

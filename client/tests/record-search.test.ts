@@ -32,6 +32,11 @@ import {
 } from '../src/renderer/lib/record-search.js';
 import type { ChronicleRow, ThoughtRef } from '@etn/shared';
 
+import {
+  buildChronicleWire,
+  defaultChronicleCriteriaState,
+} from '../src/renderer/lib/filter-builder.js';
+
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 
 function read(rel: string): string {
@@ -191,6 +196,25 @@ describe('строка поиска записей: встраивание в «
     assert.match(src, /UI_STATE_KEY\.RECORD_SEARCH/, 'ключ L4 `record_search`');
     assert.match(src, /parseRecordSearchSettings\(JSON\.parse\(raw\)\)/, 'настройки читаются общим парсером');
     assert.match(src, /serializeRecordSearchSettings\(settings\)/, 'настройки пишутся общим сериализатором');
+  });
+
+  it('строка поиска всегда ищет по тексту записи — scope с comment (задача 46057359)', () => {
+    assert.match(src, /keyword_scope: \[\.\.\.STRUCTURE_KEYWORD_SCOPES\]/, 'передаются все области, включая comment');
+    assert.match(src, /STRUCTURE_KEYWORD_SCOPES/, 'области — из shared-словаря, не литералы');
+  });
+});
+
+describe('панель отбора «Дневника»: область ключевых слов (задача 46057359)', () => {
+  it('все три области → scope не сужается (comment включён серверным значением)', () => {
+    const def = buildChronicleWire({ ...defaultChronicleCriteriaState(), keywords: 'x' });
+    assert.equal(def.keyword_scope, undefined, 'все области — серверное значение по умолчанию');
+  });
+
+  it('снятый «комментарий» → scope без comment (текст записи не ищется)', () => {
+    const state = defaultChronicleCriteriaState();
+    state.keywords = 'x';
+    state.keywordInComment = false;
+    assert.deepEqual(buildChronicleWire(state).keyword_scope, ['title', 'synonyms']);
   });
 });
 

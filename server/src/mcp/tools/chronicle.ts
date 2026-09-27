@@ -20,8 +20,8 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
     {
       title: 'Запрос хроники',
       description:
-        'Запрос хроники (паритет `POST /chronicle/query`): мысли по фильтру, их ' +
-        'хроно-комментарии и комментарии связей; `targets` — критерии целей («Структур»).',
+        'Запрос хроники (паритет `POST /chronicle/query`): хроно-комментарии по ' +
+        'фильтру мыслей; `targets` — критерии целей.',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },
@@ -43,6 +43,7 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         // повторяет ключи REST с минимальной правкой имён.
         const body: Record<string, unknown> = {};
         if (args.keywords !== undefined) body.keywords = args.keywords;
+        if (args.keyword_scope !== undefined) body.keyword_scope = args.keyword_scope;
         if (args.thought_ids !== undefined) body.thought_ids = args.thought_ids;
         if (args.include_subtree !== undefined) body.include_subtree = args.include_subtree;
         if (typeIds !== undefined) body.type_ids = typeIds;

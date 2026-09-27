@@ -41,6 +41,7 @@ import {
   EtnError,
   ETNX_SUBTREE_DEPTH_MAX,
   SORT_KINDS,
+  STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_SORTS,
   STRUCTURES_QUERY_MAX_LIMIT,
   SORT_ORDERS,
@@ -1583,6 +1584,11 @@ export const ChronicleQuery = defineContract(
   z.object({
     network_id: NetworkId,
     keywords: z.string().optional(),
+    // Область поиска ключевых слов (0.10.1, задача 46057359): `comment`
+    // покрывает постоянные комментарии мыслей И текст/заголовок самих записей;
+    // выключенная область `comment` (в т.ч. `['title','synonyms']`) отключает
+    // путь по тексту записи. Паритет с REST-телом (`parseChronicleQueryBody`).
+    keyword_scope: z.array(z.enum(STRUCTURE_KEYWORD_SCOPES)).optional(),
     thought_ids: z.array(ThoughtId).optional(),
     include_subtree: z.boolean().optional(),
     type: z.string().min(1).optional(),

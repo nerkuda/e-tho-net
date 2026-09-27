@@ -687,5 +687,98 @@ describe(
         ndb.close();
       }
     });
+    it('область comment управляет путём Б — текстом самой записи (0.10.1, 46057359)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME', { home: true });
+        const target = seedThought(ndb, 'Alpha');
+        // Слова нет ни в наименовании, ни в синонимах цели — только в теле записи.
+        const byBody = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', body_md: 'заметка про берёзу', valid_from: '2024-01-01' },
+          USER,
+        );
+        // Заголовок записи — тоже путь Б.
+        const byTitle = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', title: 'Отпуск', body_md: 'без слова', valid_from: '2024-01-02' },
+          USER,
+        );
+
+        // (а) Область без comment: запись НЕ находится по своему тексту/заголовку...
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу', keyword_scope: ['title', 'synonyms'] }).rows.map((r) => r.id),
+          [],
+          'комментарии выключены — по телу записи не ищется',
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'отпуск', keyword_scope: ['title', 'synonyms'] }).rows.map((r) => r.id),
+          [],
+          'комментарии выключены — по заголовку записи не ищется',
+        );
+        // ...но мыслевой путь (наименование цели) работает.
+        assert.deepEqual(
+          query(ndb, { keywords: 'Alpha', keyword_scope: ['title', 'synonyms'] }).rows.map((r) => r.id).sort(),
+          [byBody.id, byTitle.id].sort(),
+          'наименование цели по-прежнему находит записи',
+        );
+
+        // (б) С областью comment запись находится по своему тексту и заголовку.
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу', keyword_scope: ['title', 'synonyms', 'comment'] }).rows.map((r) => r.id),
+          [byBody.id],
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'отпуск', keyword_scope: ['title', 'synonyms', 'comment'] }).rows.map((r) => r.id),
+          [byTitle.id],
+        );
+
+        // Пустая/отсутствующая область — прежнее поведение «все области».
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу' }).rows.map((r) => r.id),
+          [byBody.id],
+          'отсутствие keyword_scope = все области, включая comment',
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'берёзу', keyword_scope: [] }).rows.map((r) => r.id),
+          [byBody.id],
+          'пустая область = все области',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('комментарий цели остаётся мыслевым путём при выключенной области comment', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'HOME', { home: true });
+        const target = seedThought(ndb, 'Beta');
+        // Слово — только в ПОСТОЯННОМ комментарии мысли-цели.
+        createComment(ndb, 'thought', target, { kind: 'permanent', body_md: 'секрет' }, USER);
+        const rec = createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'thought', owner_id: target }],
+          { kind: 'chronological', body_md: 'обычное тело', valid_from: '2024-01-01' },
+          USER,
+        );
+        // Комментарий — это мыслевой путь (постоянные комментарии целей), он НЕ
+        // зависит от пути Б самой записи, но ищется только при области comment.
+        assert.deepEqual(
+          query(ndb, { keywords: 'секрет', keyword_scope: ['title'] }).rows.map((r) => r.id),
+          [],
+          'без comment комментарий цели не ищется',
+        );
+        assert.deepEqual(
+          query(ndb, { keywords: 'секрет', keyword_scope: ['comment'] }).rows.map((r) => r.id),
+          [rec.id],
+          'с comment комментарий цели находится',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
