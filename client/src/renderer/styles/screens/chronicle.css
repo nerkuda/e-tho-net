@@ -16,8 +16,7 @@
 
 /* Область панели отбора: размер и скрытость ведёт общий каркас
  * (`.fp-host`, задача 2ebe4206); здесь только вид области. */
-.chron-filter-area {
-  display: flex;
+.chron-filter-area {  display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 10px 12px;
@@ -290,27 +289,6 @@
   padding: 8px 4px;
 }
 
-/* Плашка «Временная выборка — отбор сброшен»: над лентой, залипает при прокрутке. */
-.diary-temp-banner {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  margin-bottom: 10px;
-  border: 1px solid var(--warn);
-  border-radius: 6px;
-  background: var(--warn-soft);
-  color: var(--warn-strong);
-}
-
-.diary-temp-banner .diary-temp-text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 .diary-day {
   display: flex;
   flex-direction: column;
@@ -539,4 +517,55 @@
 
 .chron-chip.muted .chip-title {
   text-decoration: line-through;
+}
+
+/* ---------------------------------------------------------------------------
+ * Строка поиска дневниковых записей (lib/record-search.ts, 0.10.1, 46057359)
+ * ------------------------------------------------------------------------- */
+
+/* Полотно экрана — колонка: строка поиска над каркасом панели отбора и лентой.
+ * Строка занимает всю ширину области дневника (правый край — у сплиттера
+ * редактора), поэтому класс `.view-host` остаётся на внешнем контейнере. */
+.chron-frame {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+/* Строка поиска: поле на всю ширину, панель результатов позиционируется
+ * относительно неё (JS-анкеринг, как у поиска карты, не нужен). */
+.record-search {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.record-search .record-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Выпадающая панель результатов — под строкой, во всю её ширину. Перебивает
+ * `right: 10%` и `max-height: 50%` панели поиска карты: процент считался бы от
+ * высоты строки. */
+.record-search .search-panel.record-search-panel {
+  left: 10px;
+  right: 10px;
+  top: 100%;
+  max-height: min(420px, 60vh);
+}
+
+.record-search .search-hit-lead {
+  flex: 0 0 auto;
+  line-height: 1.4;
+}
+
+.chron-search-area {
+  flex: 0 0 auto;
 }

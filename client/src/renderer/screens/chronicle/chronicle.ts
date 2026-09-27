@@ -68,6 +68,14 @@ import {
   type DatePeriodValue,
 } from '../../lib/date-period-dialog.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
+import {
+  RECORD_SEARCH_MAX_RESULTS,
+  mountRecordSearch,
+  parseRecordSearchSettings,
+  serializeRecordSearchSettings,
+  type RecordSearchHandle,
+  type RecordSearchSettings,
+} from '../../lib/record-search.js';
 import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
 import { fieldInput } from '../../lib/ui/field.js';
@@ -94,7 +102,6 @@ import {
   localDayEnd,
   localDayStart,
   periodValuesForRange,
-  recordPeriod,
   resolvePeriodDay,
   rowDays,
   slotDeleteNeedsNetwork,
@@ -185,17 +192,8 @@ let month: { year: number; month: number } | null = null;
 const dayCounts = new Map<string, number>();
 /** Запись, к которой выполнен переход: карточка подсвечена до следующего применения. */
 let jumpHighlightId: string | null = null;
-/** Плашка «Временная выборка» над лентой (0.10.1, T7). */
-let tempBanner: HTMLElement | null = null;
-/**
- * Активная временная выборка (T7): запись не прошла отбор кроме периода —
- * критерии сброшены, период оставлен; здесь хранится прежний отбор для возврата.
- */
-let temporarySelection: {
-  filter: ReturnType<typeof getFilterState>;
-  savedFilterId: string | null;
-  period: { from: string; to: string };
-} | null = null;
+/** Строка поиска дневниковых записей (0.10.1, задача 46057359). */
+let recordSearch: RecordSearchHandle | null = null;
 
 // ---------------------------------------------------------------------------
 // Pseudo-record (slot) state
@@ -298,10 +296,9 @@ export async function ensureChronicleInitialised(): Promise<void> {
   month = null;
   collapsedDaysLoaded = false;
   collapsedDays.clear();
-  // Переход поиска и временная выборка — состояние текущего входа, не персистятся.
+  // Подсветка перехода — состояние текущего входа, не персистится.
   jumpHighlightId = null;
-  temporarySelection = null;
-  tempBanner = null;
+  recordSearch?.hide();
 
   try {
     let raw: string | null = null;
@@ -352,9 +349,15 @@ export function mountChronicle(hostEl: HTMLElement): void {
   const filterArea = div('chron-filter-area');
   const splitter = splitterElement('chron-splitter');
   const main = div('chron-main');
-  hostEl.append(filterArea, splitter, main);
+  // Строка поиска записей — над панелью отбора и лентой, во всю ширину области
+  // дневника (0.10.1, задача 46057359). Каркас панели отбора переезжает на
+  // внутренний контейнер: полотно вида остаётся колонкой (строка + каркас).
+  const searchArea = div('chron-search-area');
+  const frameHost = div('chron-frame');
+  hostEl.append(searchArea, frameHost);
+  frameHost.append(filterArea, splitter, main);
   mountFilterPanelFrame({
-    container: hostEl,
+    container: frameHost,
     panel: filterArea,
     splitter,
     stateKey: UI_STATE_KEY.CHRONICLE_FILTER_PANEL,
@@ -362,6 +365,16 @@ export function mountChronicle(hostEl: HTMLElement): void {
     maxSize: CHRONICLE_FILTER_MAX_W,
     minSizeTop: 80,
     maxSizeTop: 800,
+  });
+
+  // Строка поиска дневниковых записей — переиспользуемый компонент
+  // (`lib/record-search.ts`): мини-синтаксис keywords, выпадающий список
+  // записей, настройки «неактивные мысли»/«корзина», переход к записи.
+  recordSearch = mountRecordSearch(searchArea, {
+    search: (query) => searchRecords(query),
+    onPick: (row) => void jumpToRecord(row),
+    loadSettings: () => loadRecordSearchSettings(),
+    saveSettings: (settings) => persistRecordSearchSettings(settings),
   });
 
   // Календарь — первый элемент панели отбора (0.10.1, элемент 9b424548).
@@ -470,8 +483,7 @@ export function mountChronicle(hostEl: HTMLElement): void {
 
 /** Applies the current filter from scratch (the «Применить» path). */
 async function applyFilter(): Promise<void> {
-  // Ручное применение завершает временную выборку и снимает подсветку перехода.
-  clearTemporarySelection();
+  // Ручное применение снимает подсветку перехода.
   jumpHighlightId = null;
   persistState();
   await getHome().catch(() => undefined);
@@ -1443,12 +1455,58 @@ function pad2(n: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Search jump (0.10.1, T7; элемент «Поиск в дневниковой ленте»)
+// Поиск дневниковых записей и переход к записи (0.10.1, задача 46057359)
 // ---------------------------------------------------------------------------
 
-/** Прокручивает ленту к записи и подсвечивает её карточку. */
-function focusRecord(id: string): void {
+/**
+ * Живой поиск записей строкой (задача 46057359): только хроно-записи, критерий
+ * — мини-синтаксис keywords (как у строки поиска карты). Период и прочие
+ * критерии панели не применяются: строка ищет по всей сети, иначе запись вне
+ * текущего периода не нашлась бы. Настройки «неактивные мысли»/«корзина» —
+ * клиентский отбор результатов (компонент `lib/record-search.ts`).
+ */
+async function searchRecords(query: string): Promise<ChronicleRow[]> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return [];
+  const result = await etn.chronicle.query(networkId, {
+    keywords: query,
+    order: 'desc',
+    limit: RECORD_SEARCH_MAX_RESULTS,
+    offset: 0,
+  });
+  return result.rows;
+}
+
+/** Настройки строки поиска записей из L4 `ui_state` (0.10.1, задача 46057359). */
+async function loadRecordSearchSettings(): Promise<RecordSearchSettings | null> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return null;
+  const raw = await etn.ui.getState(networkId, UI_STATE_KEY.RECORD_SEARCH).catch(() => null);
+  if (raw === null) return null;
+  try {
+    return parseRecordSearchSettings(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/** Сохранить настройки строки поиска записей в L4 `ui_state`. */
+function persistRecordSearchSettings(settings: RecordSearchSettings): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void etn.ui
+    .setState(networkId, UI_STATE_KEY.RECORD_SEARCH, serializeRecordSearchSettings(settings))
+    .catch(() => undefined);
+}
+
+/**
+ * Прокручивает ленту к записи, делает её текущей и подсвечивает карточку.
+ * Текущей запись делает контроллер навигации (`selectRecord`): выделение
+ * переприменяется после перерисовки ленты (`feedNav.refresh`, требование 4).
+ */
+function focusRecord(id: string, day: string): void {
   jumpHighlightId = id;
+  feedNav?.selectRecord(id, day);
   renderFeed();
   const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
   card?.scrollIntoView({ block: 'center' });
@@ -1465,27 +1523,42 @@ async function loadUntilRecord(id: string): Promise<boolean> {
 }
 
 /**
- * Переход к найденной записи (T7): период панели ← диапазон записи,
- * программное «Применить», прокрутка ленты и подсветка записи. Если запись
- * скрыта активным отбором (кроме периода) — временная выборка с плашкой и
- * возвратом отбора.
+ * Переход к найденной записи (0.10.1, задача 46057359): период панели ← ДАТА
+ * НАЧАЛА записи (её локальные сутки), программное «Применить», прокрутка ленты
+ * и подсветка записи. Если запись не проходит текущий отбор (кроме периода) —
+ * отбор СБРАСЫВАЕТСЯ, период остаётся датой начала записи; временной выборки с
+ * плашкой больше нет (решение пользователя 2026-09-27).
  */
 async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
-  const period = recordPeriod(row);
-  if (period.from === '') return;
-  const previous = { filter: getFilterState(), savedFilterId: getSavedFilterId() };
+  const startDay = localDay(row.valid_from);
+  if (startDay === '') return;
+  // Дата начала записи — границы её ЛОКАЛЬНЫХ суток наблюдателя: запись у
+  // полуночи не выпадает из UTC-суток (ADR времени 994d076a).
+  const period = { from: localDayStart(startDay), to: localDayEnd(startDay) };
+  jumpHighlightId = null;
+  // 1) Период записи, прочие критерии отбора сохраняются.
   setFilterState(applyPeriodToFilter(getFilterState(), period));
   persistState();
   await getHome().catch(() => undefined);
   await reload();
   // Календарь — на месяц записи (чек-лист 8012a9b0, п.2), иначе дня записи в
   // его сетке нет и переход выглядит как «отметок нет» (ошибка ecd91c1d).
-  showRecordDayInCalendar(localDay(row.valid_from));
+  showRecordDayInCalendar(startDay);
   if (await loadUntilRecord(row.id)) {
-    focusRecord(row.id);
+    focusRecord(row.id, startDay);
     return;
   }
-  await startTemporarySelection(previous, period, row.id);
+  // 2) Запись не проходит отбор — сброс отбора, дата начала записи остаётся.
+  const fresh = defaultChronicleCriteriaState();
+  fresh.dateFrom = period.from;
+  fresh.dateTo = period.to;
+  setFilterState(fresh);
+  setSavedFilterId(null);
+  persistState();
+  await reload();
+  showRecordDayInCalendar(startDay);
+  await loadUntilRecord(row.id);
+  focusRecord(row.id, startDay);
 }
 
 /** Минимальная ссылка на дневниковую запись для перехода к ней. */
@@ -1499,7 +1572,7 @@ export interface ChronicleRecordRef {
  * Открыть экран «Дневник» на конкретной записи (0.10.1, задача 8012a9b0):
  * переключить вид, установить в календаре дату записи и сделать запись текущей
  * в ленте. Единый вход для пункта меню строки вкладки «Дневник» редактора —
- * механика перехода уже есть у поиска (`jumpToRecord`, T7), второй копии нет.
+ * механика перехода одна (`jumpToRecord`), второй копии нет.
  */
 export async function openChronicleRecord(record: ChronicleRecordRef): Promise<void> {
   // Ленивый импорт: статический замкнул бы цикл active-view → chronicle.
@@ -1507,67 +1580,6 @@ export async function openChronicleRecord(record: ChronicleRecordRef): Promise<v
   setActiveView('chronicle');
   await ensureChronicleInitialised();
   await jumpToRecord(record);
-}
-
-/** Временная выборка: критерии кроме периода сброшены, запись открывается. */
-async function startTemporarySelection(
-  previous: { filter: ReturnType<typeof getFilterState>; savedFilterId: string | null },
-  period: { from: string; to: string },
-  recordId: string,
-): Promise<void> {
-  const fresh = defaultChronicleCriteriaState();
-  fresh.dateFrom = period.from;
-  fresh.dateTo = period.to;
-  setFilterState(fresh);
-  setSavedFilterId(null);
-  temporarySelection = { ...previous, period };
-  renderTemporaryBanner();
-  persistState();
-  await reload();
-  // Тот же переход к записи — календарь тоже встаёт на её месяц.
-  showRecordDayInCalendar(localDay(period.from));
-  await loadUntilRecord(recordId);
-  focusRecord(recordId);
-}
-
-/** Плашка «Временная выборка — отбор сброшен» с кнопкой возврата. */
-function renderTemporaryBanner(): void {
-  if (feedWrap === null) return;
-  tempBanner?.remove();
-  tempBanner = null;
-  if (temporarySelection === null) return;
-  tempBanner = div('diary-temp-banner');
-  tempBanner.append(
-    span(t('diary.tempSelection'), 'diary-temp-text'),
-    uiButton({
-      label: t('diary.restoreFilter'),
-      role: 'secondary',
-      size: 's',
-      class: 'diary-temp-restore',
-      onClick: () => void restoreFilter(),
-    }),
-  );
-  feedWrap.insertBefore(tempBanner, feedWrap.firstChild);
-}
-
-/** Возврат прежнего отбора после временной выборки. */
-async function restoreFilter(): Promise<void> {
-  const saved = temporarySelection;
-  if (saved === null) return;
-  temporarySelection = null;
-  tempBanner?.remove();
-  tempBanner = null;
-  setFilterState(saved.filter);
-  setSavedFilterId(saved.savedFilterId);
-  await applyFilter();
-}
-
-/** Снимает плашку временной выборки (ручное применение/очистка отбора). */
-function clearTemporarySelection(): void {
-  if (temporarySelection === null && tempBanner === null) return;
-  temporarySelection = null;
-  tempBanner?.remove();
-  tempBanner = null;
 }
 
 // ---------------------------------------------------------------------------

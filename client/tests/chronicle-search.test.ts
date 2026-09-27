@@ -103,36 +103,43 @@ describe('дневник: строка поиска с debounce (T7)', () => {
   });
 });
 
-describe('дневник: переход к записи (T7)', () => {
+describe('дневник: переход к записи (0.10.1, задача 46057359)', () => {
   const src = read('screens/chronicle/chronicle.ts');
 
-  it('период панели берётся из записи и применяется программно', () => {
-    assert.match(src, /recordPeriod\(row\)/, 'период строится из диапазона записи');
-    assert.match(src, /applyPeriodToFilter\(getFilterState\(\), period\)/, 'период подставляется в отбор');
-    assert.match(src, /jumpToRecord: \(row\) => void jumpToRecord\(row\)/, 'панель вызывает переход');
+  it('период панели берётся из даты начала записи и применяется программно', () => {
+    assert.match(src, /const startDay = localDay\(row\.valid_from\)/, 'дата начала записи');
+    assert.match(
+      src,
+      /from: localDayStart\(startDay\), to: localDayEnd\(startDay\)/,
+      'границы — локальные сутки даты начала',
+    );
+    assert.match(src, /applyPeriodToFilter\(getFilterState\(\), period\)/, 'дата начала подставляется в отбор');
+    assert.match(src, /jumpToRecord: \(row\) => void jumpToRecord\(row\)/, 'строка поиска вызывает переход');
   });
 
-  it('лента прокручивается к записи и подсвечивает её', () => {
+  it('лента прокручивается к записи, делает её текущей и подсвечивает', () => {
     assert.match(src, /scrollIntoView\(\{ block: 'center' \}\)/, 'прокрутка к карточке записи');
     assert.match(src, /diary-record-target/, 'карточка перехода получает класс подсветки');
     assert.match(src, /jumpHighlightId = id/, 'подсвеченная запись запоминается');
+    assert.match(src, /feedNav\?\.selectRecord\(id, day\)/, 'запись становится текущей лентой');
   });
 
-  it('запись вне отбора открывается временной выборкой с плашкой и возвратом', () => {
-    assert.match(src, /startTemporarySelection\(/, 'включается временная выборка');
-    assert.match(src, /t\('diary\.tempSelection'\)/, 'плашка «Временная выборка — отбор сброшен»');
-    assert.match(src, /t\('diary\.restoreFilter'\)/, 'кнопка «Вернуть отбор»');
-    assert.match(src, /void restoreFilter\(\)/, 'возврат прежнего отбора');
-    assert.match(src, /setFilterState\(saved\.filter\)/, 'возвращается прежний набор критериев');
-    assert.match(src, /div\('diary-temp-banner'\)/, 'плашка — отдельный элемент ленты');
+  it('запись вне отбора: отбор сбрасывается, дата начала остаётся', () => {
+    assert.match(src, /if \(await loadUntilRecord\(row\.id\)\)/, 'сначала запись ищется в текущем отборе');
+    assert.match(src, /const fresh = defaultChronicleCriteriaState\(\)/, 'не прошла — отбор сбрасывается');
+    assert.match(src, /setSavedFilterId\(null\)/, 'сохранённый отбор снимается');
+    assert.match(src, /await loadUntilRecord\(row\.id\)/, 'лента догружается до записи');
+    assert.ok(
+      !src.includes('startTemporarySelection'),
+      'временной выборки с плашкой больше нет (решение пользователя 2026-09-27)',
+    );
   });
 });
 
-describe('дневник: стили подсветки и плашки (T7)', () => {
-  it('подсветка записи и плашка описаны в стилях экрана', () => {
+describe('дневник: стили подсветки (0.10.1)', () => {
+  it('подсветка записи описана в стилях экрана', () => {
     const css = readFileSync(assembledStylesFile(), 'utf8');
     assert.match(css, /\.diary-record-target\s*\{/, 'стиль подсветки записи');
-    assert.match(css, /\.diary-temp-banner\s*\{/, 'стиль плашки временной выборки');
     assert.match(css, /\.diary-body mark\s*\{/, 'подсветка совпадений в тексте записи');
   });
 });

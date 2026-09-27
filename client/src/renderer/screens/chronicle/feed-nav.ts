@@ -72,6 +72,12 @@ export interface FeedNavHandle {
   focusNavigation(): void;
   /** Текущая сущность или `null`, если выделения нет. */
   current(): FeedEntity | null;
+  /**
+   * Сделать запись текущей (выбранной) по её дню-вхождению и вернуть фокус в
+   * ленту. Используется переходом к записи (0.10.1, задача 46057359): запись,
+   * найденная строкой поиска, становится «текущей» лентой.
+   */
+  selectRecord(id: string, day: string): void;
   /** Снять слушатели (размонтирование вида). */
   destroy(): void;
 }
@@ -538,6 +544,13 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     },
     current(): FeedEntity | null {
       return current;
+    },
+    selectRecord(id: string, day: string): void {
+      setCurrent({ kind: 'record', key: id }, day);
+      navActive = true;
+      // Карточка может быть ещё не в DOM (переход догружает страницы) — тогда
+      // выделение переприменит `refresh` после ближайшей перерисовки.
+      if (findCardIn(day, id) !== null) focusNav();
     },
     destroy(): void {
       root.removeEventListener('keydown', onKeyDown as EventListener);

@@ -51,8 +51,8 @@ describe('переход к записи ставит календарь на е
     const jump = bodyOf(src, 'jumpToRecord');
     assert.match(
       jump,
-      /showRecordDayInCalendar\(localDay\(row\.valid_from\)\)/,
-      'день записи берётся из valid_from и показывается в календаре',
+      /showRecordDayInCalendar\(startDay\)/,
+      'день записи (дата начала) показывается в календаре',
     );
     assert.ok(
       !/\n\s*syncCalendar\(\);/.test(jump),
@@ -60,14 +60,13 @@ describe('переход к записи ставит календарь на е
     );
   });
 
-  it('временная выборка (скрытая отбором запись) тоже показывает её день', () => {
+  it('сброс отбора в переходе тоже показывает день записи', () => {
     const src = read('screens/chronicle/chronicle.ts');
-    const temp = bodyOf(src, 'startTemporarySelection');
-    assert.match(
-      temp,
-      /showRecordDayInCalendar\(localDay\(period\.from\)\)/,
-      'день записи берётся из периода перехода',
-    );
+    const jump = bodyOf(src, 'jumpToRecord');
+    // Оба пути (запись прошла отбор / отбор сброшен) ставят календарь на дату
+    // начала: иначе после сброса отбор переехал бы на месяц из состояния.
+    const calls = jump.match(/showRecordDayInCalendar\(startDay\)/g) ?? [];
+    assert.equal(calls.length, 2, 'календарь ставится на дату записи на обоих путях');
   });
 
   it('обычная синхронизация календаря месяц не двигает (навигация пользователя цела)', () => {

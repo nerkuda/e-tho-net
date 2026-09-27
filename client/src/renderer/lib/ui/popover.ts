@@ -256,6 +256,32 @@ function ensureListeners(): void {
 }
 
 /**
+ * Делегированный слушатель «нажатие вне» для поисковых выпадашек с ОСОБЫМИ
+ * исключениями (общая выпадашка подсказок, модальный диалог): закрывает слой,
+ * когда нажатие не удержано предикатом. Механика «клика вне» живёт только в
+ * `lib/ui` (сторож `guard-ui-popover.test.ts`): потребитель описывает лишь
+ * условие «этот узел панель удерживает», а сам `pointerdown`-слушатель ставит
+ * компонент. Возвращает функцию снятия слушателя.
+ */
+export function watchOutsideTap(
+  holds: (target: Node) => boolean,
+  onOutside: () => void,
+): () => void {
+  const handler = (event: Event): void => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (holds(target)) return;
+    onOutside();
+  };
+  document.addEventListener(
+    'pointerdown',
+    handler,
+    true,
+  );
+  return () => document.removeEventListener('pointerdown', handler, true);
+}
+
+/**
  * Показывает панель с контентом у якоря. Панель монтируется в `document.body`
  * (fixed-позиционирование — не режется `overflow` контейнеров) и сразу
  * ставится по месту.
