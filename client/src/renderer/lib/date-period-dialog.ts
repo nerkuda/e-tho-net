@@ -30,7 +30,14 @@ import {
 } from './period-editor.js';
 import { showDialog } from './dialog.js';
 import { buildMonthCalendar } from './month-calendar.js';
-import { isValidLocalDay, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
+import {
+  isValidLocalDay,
+  setPeriodFrom,
+  setPeriodTimeFrom,
+  setPeriodTimeTo,
+  setPeriodTo,
+  todayLocal,
+} from './dates.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
 import { setButtonActive, uiButton } from './ui/button.js';
@@ -368,6 +375,27 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     return input;
   }
 
+  /**
+   * Применить введённое время границы с валидацией порядка (ошибка d4fbeaf7).
+   * Валидация зеркалит даты ({@link setPeriodFrom}/{@link setPeriodTo}): при
+   * ОДИНАКОВЫХ датах «С» и «По» время «По» не раньше «С» — ввод «время с» >
+   * «время по» подтягивает «По» к «С» и наоборот. При разных датах период
+   * охватывает больше суток, время границ свободно.
+   */
+  function applyTime(which: 'from' | 'to', time: string): void {
+    if (mode === 'period' && from === to) {
+      const next =
+        which === 'from'
+          ? setPeriodTimeFrom(fromTime, toTime, time)
+          : setPeriodTimeTo(fromTime, toTime, time);
+      fromTime = next.fromTime;
+      toTime = next.toTime;
+      return;
+    }
+    if (which === 'from') fromTime = time;
+    else toTime = time;
+  }
+
   function buildTimeInput(which: 'from' | 'to'): HTMLInputElement {
     return fieldInput({
       type: 'time',
@@ -380,8 +408,7 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
           syncValueLineValues();
           return;
         }
-        if (which === 'from') fromTime = time;
-        else toTime = time;
+        applyTime(which, time);
         repaint();
       },
     });
@@ -485,13 +512,15 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
       const day = dateToInput.value.trim();
       if (isValidLocalDay(day)) to = day;
     }
+    // Даты уже сведены выше, поэтому порядок времени проверяется по итоговым
+    // датам (ошибка d4fbeaf7): при одинаковых датах «По» не раньше «С».
     if (timeFromInput !== null) {
       const time = timeFromInput.value.trim();
-      if (isValidTime(time)) fromTime = time;
+      if (isValidTime(time)) applyTime('from', time);
     }
     if (timeToInput !== null) {
       const time = timeToInput.value.trim();
-      if (isValidTime(time)) toTime = time;
+      if (isValidTime(time)) applyTime('to', time);
     }
   }
 

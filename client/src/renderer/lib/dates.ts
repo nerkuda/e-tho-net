@@ -65,6 +65,34 @@ export function setPeriodTo(
   return { from: day < from ? day : from, to: day };
 }
 
+/**
+ * Назначить «время с» периода при ОДИНАКОВЫХ датах границ: если «время с» >
+ * «время по», конец автоматически становится равен началу. Зеркало
+ * {@link setPeriodFrom} для времени суток (ошибка d4fbeaf7). Вызывающий сам
+ * решает, когда правило применимо: при разных датах период охватывает больше
+ * суток, и время границ может быть любым.
+ */
+export function setPeriodTimeFrom(
+  fromTime: string,
+  toTime: string,
+  time: string,
+): { fromTime: string; toTime: string } {
+  return { fromTime: time, toTime: toTime < time ? time : toTime };
+}
+
+/**
+ * Назначить «время по» периода при ОДИНАКОВЫХ датах границ: если «время по» <
+ * «время с», начало автоматически становится равно концу. Зеркало
+ * {@link setPeriodTo} для времени суток (ошибка d4fbeaf7).
+ */
+export function setPeriodTimeTo(
+  fromTime: string,
+  toTime: string,
+  time: string,
+): { fromTime: string; toTime: string } {
+  return { fromTime: time < fromTime ? time : fromTime, toTime: time };
+}
+
 /** Сдвиг календарного дня на `n` суток (арифметика в UTC — без переходов DST). */
 export function addDays(day: string, n: number): string {
   const m = BARE_DATE_RE.exec(day.trim());
