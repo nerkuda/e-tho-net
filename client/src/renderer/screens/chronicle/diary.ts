@@ -427,6 +427,22 @@ export function insertRowByDay(
 }
 
 /**
+ * Выполнить отрисовку, сохранив позицию вертикальной прокрутки контейнера
+ * (0.10.1, итерация приёмки №11, задача 45df70ed; ошибка 407b1827). Перерисовка
+ * ленты после правки записи/real-time не должна сбрасывать список в начало.
+ * `container === null` — прокрутку сохранять негде (смена отбора/первый показ),
+ * отрисовка просто выполняется.
+ */
+export function withPreservedScroll(
+  container: { scrollTop: number } | null,
+  render: () => void,
+): void {
+  const top = container !== null ? container.scrollTop : 0;
+  render();
+  if (container !== null) container.scrollTop = top;
+}
+
+/**
  * Группировка записей по локальным дням наблюдателя. Порядок записей внутри дня
  * — серверный (класс → `valid_from` → `valid_to` → `created_at` → `id`,
  * требование c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок

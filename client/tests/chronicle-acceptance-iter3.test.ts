@@ -139,8 +139,13 @@ describe('приёмка №3, п.2: свёрнутый день скрывае�
   });
 
   it('сборка блока дня и класс, и hidden ставит по состоянию', () => {
-    assert.match(CHRONICLE, /classList\.add\('is-collapsed'\)/);
-    assert.match(CHRONICLE, /const list = div\('diary-day-list'\);[\s\S]*list\.hidden = collapsed/);
+    // Итерация №11: состояние группы (класс секции, hidden списка, aria,
+    // подсказка) ставит общий помощник `applyDayCollapsed` — и при сборке, и
+    // при in-place переключении (требование 165323a7, «Устойчивость»).
+    assert.match(CHRONICLE, /applyDayCollapsed\(section, collapsed, dayGroupLabels\(\)\)/);
+    const DAY_GROUPS = read('screens/chronicle/day-groups.ts');
+    assert.match(DAY_GROUPS, /classList\?\.toggle\('is-collapsed', collapsed\)/);
+    assert.match(DAY_GROUPS, /list\.hidden = collapsed/);
   });
 });
 

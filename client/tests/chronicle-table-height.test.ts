@@ -94,7 +94,9 @@ describe('лента «Дневника»: высота не теряется (�
       !/wrap\.replaceChildren\(/.test(src),
       'контейнер ленты не пересобирают целиком — перерисовывается только список',
     );
-    assert.match(src, /feedList\.replaceChildren\(\.\.\.nodes\)/, 'данные меняет список ленты');
+    // Данные меняет СПИСОК ленты (итерация №11: вызов обёрнут сохранением
+    // прокрутки — `withPreservedScroll(…, () => list.replaceChildren(...))`).
+    assert.match(src, /replaceChildren\(\.\.\.nodes\)/, 'данные меняет список ленты');
     // Лента дневника: прокруточная догрузка «+50».
     assert.match(src, /shouldLoadMore\(counters, feedWrap\)/, 'дозагрузка «+50» привязана к контейнеру ленты');
   });

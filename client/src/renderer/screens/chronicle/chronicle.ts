@@ -100,6 +100,7 @@ import {
   todayLocal,
   visibleChips,
   weekPeriod,
+  withPreservedScroll,
 } from './diary.js';
 import {
   addThoughtToFilter,
@@ -113,6 +114,7 @@ import {
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
+import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 
@@ -154,6 +156,13 @@ let homeId: string | null = null;
 let homePromise: Promise<string> | null = null;
 /** Stable scroll container of the feed (`.chron-table-wrap`). */
 let feedWrap: HTMLElement | null = null;
+/**
+ * Сохранить позицию прокрутки ленты при следующей отрисовке (0.10.1, итерация
+ * приёмки №11, ошибка 407b1827): правка записи и real-time-обновления
+ * перерисовывают ленту, и без этого список прыгал в начало. Смена отбора
+ * (применение фильтра) позицию не сохраняет — лента показывается с начала.
+ */
+let keepFeedScroll = false;
 /** Stable list element re-rendered inside the container (never rebuilt). */
 let feedList: HTMLElement | null = null;
 /** Контроллер клавиатурной навигации ленты (0.10.1, приёмка №9). */
@@ -235,20 +244,37 @@ function persistCollapsedDays(): void {
     .catch(() => undefined);
 }
 
-/** Переключить свёрнутость группы даты и перерисовать ленту. */
+/** Переключить свёрнутость группы даты (0.10.1, приёмка №2). */
 function toggleDayCollapsed(day: string): void {
   setDayCollapsed(day, !collapsedDays.has(day));
+}
+
+/** Подписи заголовка группы дат из словаря (для in-place переключения). */
+function dayGroupLabels(): DayGroupLabels {
+  return { expand: t('listActions.expand'), collapse: t('listActions.collapse') };
 }
 
 /**
  * Привести свёрнутость группы дня к заданному состоянию (0.10.1, приёмка №9):
  * единая точка для клика по заголовку и для клавиатуры (Enter/«влево»/«вправо»).
+ *
+ * Группа переключается НА МЕСТЕ (`applyDayCollapsed`): узлы ленты не
+ * пересобираются, поэтому фокус клавиатурной навигации и позиция прокрутки
+ * сохраняются (требование 165323a7, «Устойчивость»; ошибки ab78e7b5,
+ * 407b1827). Полная перерисовка остаётся только запасным путём, когда секции
+ * дня в текущем DOM нет (её ещё не показывали).
  */
 function setDayCollapsed(day: string, collapsed: boolean): void {
   if (collapsedDays.has(day) === collapsed) return;
   if (collapsed) collapsedDays.add(day);
   else collapsedDays.delete(day);
   persistCollapsedDays();
+  const section = feedList !== null ? findDaySection(feedList, day) : null;
+  if (section !== null) {
+    applyDayCollapsed(section, collapsed, dayGroupLabels());
+    feedNav?.refresh();
+    return;
+  }
   renderFeed();
 }
 
@@ -449,6 +475,8 @@ async function applyFilter(): Promise<void> {
   persistState();
   await getHome().catch(() => undefined);
   await reload();
+  // Смена отбора показывает ленту с начала (позиция не сохраняется).
+  if (feedWrap !== null) feedWrap.scrollTop = 0;
   syncCalendar();
   void refreshCalendarCounts();
 }
@@ -484,6 +512,7 @@ async function loadMore(): Promise<void> {
   // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
   // страницу заново (данные важнее экономии запроса).
   if (pendingReconcile) {
+    keepFeedScroll = true;
     await reload();
     return;
   }
@@ -498,6 +527,8 @@ async function loadMore(): Promise<void> {
     if (seq !== querySeq) return;
     rows = [...rows, ...result.rows];
     total = result.total;
+    // Дозагрузка «+50» дописывает страницу — прокрутка не должна прыгать вверх.
+    keepFeedScroll = true;
     renderFeed();
   } catch {
     // A failed page keeps what is already shown; the next scroll retries.
@@ -518,6 +549,8 @@ export function scheduleChronicleRefresh(): void {
   if (refreshTimer !== null) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
+    // Правка записи / real-time: позиция прокрутки ленты сохраняется.
+    keepFeedScroll = true;
     void reload();
     syncCalendar();
     void refreshCalendarCounts();
@@ -588,7 +621,13 @@ function renderFeed(): void {
   } else if (rows.length < total) {
     nodes.push(el('div', 'chron-feed-more muted', t('diary.moreLeft', [rows.length, total])));
   }
-  feedList.replaceChildren(...nodes);
+  // Позиция прокрутки ленты сохраняется при перерисовке, вызванной правкой
+  // записи/real-time (0.10.1, итерация приёмки №11, ошибка 407b1827); при смене
+  // отбора флаг не поднят и лента показывается с начала.
+  const scrollTarget = keepFeedScroll ? feedWrap : null;
+  const list = feedList;
+  withPreservedScroll(scrollTarget, () => list.replaceChildren(...nodes));
+  keepFeedScroll = false;
   // Переприменить выделение «текущей» сущности после перерисовки (требование
   // 165323a7): оно сохраняется, если сущность ещё видима, и сбрасывается иначе.
   feedNav?.refresh();
@@ -658,7 +697,10 @@ function insertCreatedRecord(row: ChronicleRow): void {
   pendingReconcile = true;
   slot = null;
   if (inPlace) updateMoreLine();
-  else renderFeed();
+  else {
+    keepFeedScroll = true;
+    renderFeed();
+  }
   feedNav?.refresh();
 }
 
@@ -671,6 +713,22 @@ function setAllDaysCollapsed(collapsed: boolean): void {
     if (slot !== null) collapsedDays.add(slot.day);
   }
   persistCollapsedDays();
+  // Как и одиночная группа, «свернуть/развернуть все» переключает секции
+  // НА МЕСТЕ — фокус и прокрутка сохраняются (требование 165323a7).
+  if (feedList !== null) {
+    const labels = dayGroupLabels();
+    let touched = false;
+    for (const section of Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day'))) {
+      const day = section.dataset['day'] ?? '';
+      if (day === '') continue;
+      applyDayCollapsed(section, collapsed, labels);
+      touched = true;
+    }
+    if (touched) {
+      feedNav?.refresh();
+      return;
+    }
+  }
   renderFeed();
 }
 
@@ -678,24 +736,22 @@ function buildDayBlock(day: string, dayRows: ChronicleRow[]): HTMLElement {
   const section = div('diary-day');
   section.dataset['day'] = day;
   const collapsed = collapsedDays.has(day);
-  if (collapsed) section.classList.add('is-collapsed');
   // Заголовок — кнопка: клик сворачивает/разворачивает группу (0.10.1,
   // приёмка №2). Шрифт даты — вдвое крупнее (CSS-токен темы).
   const head = uiButton({
     label: formatDayLabel(day),
     role: 'ghost',
     class: 'diary-day-head',
-    title: collapsed ? t('listActions.expand') : t('listActions.collapse'),
     onClick: () => toggleDayCollapsed(day),
   });
   head.prepend(svgIcon('chevron-down', 18));
-  head.classList.toggle('is-collapsed', collapsed);
-  head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   const list = div('diary-day-list');
-  list.hidden = collapsed;
   if (slot !== null && slot.day === day) list.append(slot.root);
   for (const row of dayRows) list.append(buildRecordCard(row));
   section.append(head, list);
+  // Начальное состояние группы — тем же помощником, что и in-place переключение
+  // (одна точка правды о классах/атрибутах свёрнутой группы).
+  applyDayCollapsed(section, collapsed, dayGroupLabels());
   return section;
 }
 

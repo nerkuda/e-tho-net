@@ -31,7 +31,10 @@
  * Выделение хранится КЛЮЧОМ сущности (день группы либо вхождение «день+запись»),
  * а не ссылкой на узел: после перерисовки ленты (real-time, дозагрузка «+50»,
  * локальная вставка) {@link FeedNavHandle.refresh} переприменяет выделение, если
- * сущность ещё видима, и сбрасывает его, если она пропала/скрыта.
+ * сущность ещё видима, и сбрасывает его, если она пропала/скрыта. Там же
+ * возвращается фокус: пересборка узлов теряла фокус, и стрелки переставали
+ * двигать выделение (итерация приёмки №11, ошибка ab78e7b5). Фокус не трогается,
+ * пока активна правка текста или навигация погашена кликом вне ленты.
  */
 
 /** Класс выделения текущей сущности (группа или запись). */
@@ -163,6 +166,14 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   let currentDay: string | null = null;
   /** Индекс текущего поля внутри записи (-1 — режим полей не активен). */
   let elementCursor = -1;
+  /**
+   * Навигация ленты «активна»: пользователь уже ходил стрелками либо кликал по
+   * ленте и не уводил фокус наружу. Нужна, чтобы после перерисовки (refresh)
+   * вернуть фокус в ленту (требование 165323a7, «Устойчивость», ошибка ab78e7b5)
+   * и при этом не украсть его у правки текста или другой панели.
+   */
+  let navActive = false;
+  const ownerDocument = (globalThis as { document?: Document }).document;
 
   /** Секции дней ленты в DOM-порядке. */
   function daySections(): HTMLElement[] {
@@ -249,7 +260,12 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   /** Элементы записи в порядке обхода Tab'ом. */
   function recordElements(card: HTMLElement): Array<{ kind: RecordElementKind; el: HTMLElement }> {
     const date = card.querySelector<HTMLElement>('.diary-record-date');
-    const chips = card.querySelector<HTMLElement>('.diary-record-chips');
+    // Фокусируемый узел поля «мысли» — сама кнопка «+ мысль» (требование
+    // 165323a7; ошибка 02b4d513: Tab выделял пустую область-контейнер перед
+    // кнопкой). Контейнер `.diary-record-chips` оставлен запасным путём.
+    const chips =
+      card.querySelector<HTMLElement>('.diary-chip-add') ??
+      card.querySelector<HTMLElement>('.diary-record-chips');
     const title = card.querySelector<HTMLElement>('.diary-record-title');
     const body = card.querySelector<HTMLElement>('.diary-record-body');
     const out: Array<{ kind: RecordElementKind; el: HTMLElement }> = [];
@@ -293,6 +309,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
 
   /** Фокус на элементе навигации (иначе — на контейнере ленты). */
   function focusNav(): void {
+    navActive = true;
     const el = findEntityEl(current, currentDay);
     const candidate = el !== null && canReceiveFocus(el) ? el : root;
     candidate.focus?.();
@@ -406,6 +423,9 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
       if (key === 'Escape' && target !== null) exitEditing(target);
       return;
     }
+    // Нажатие клавиши навигации в ленте «оживляет» её: после перерисовки фокус
+    // вернётся к текущей сущности (требование 165323a7, «Устойчивость»).
+    navActive = true;
     switch (key) {
       case 'ArrowDown':
         event.preventDefault?.();
@@ -453,6 +473,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   function onClick(event: { target?: unknown | null }): void {
     const target = (event.target ?? null) as HTMLElement | null;
     if (target === null) return;
+    navActive = true;
     const card = closestWithClass(target, 'diary-record');
     const section = closestWithClass(target, 'diary-day');
     const day =
@@ -486,10 +507,11 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   function onDocumentClick(event: { target?: unknown | null }): void {
     const target = (event.target ?? null) as HTMLElement | null;
     if (target !== null && root.contains?.(target) === true) return;
+    // Клик вне ленты гасит навигацию: перерисовка не должна тянуть фокус назад.
+    navActive = false;
     exitFieldMode();
   }
 
-  const ownerDocument = (globalThis as { document?: Document }).document;
   root.addEventListener('keydown', onKeyDown as EventListener);
   root.addEventListener('click', onClick as EventListener);
   ownerDocument?.addEventListener('click', onDocumentClick as EventListener, true);
@@ -502,6 +524,14 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         elementCursor = -1;
       }
       applyHighlight();
+      // После перерисовки узлы ленты заменены — прежний фокус потерян, и
+      // клавиатура «отваливается» (требование 165323a7, «Устойчивость», ошибка
+      // ab78e7b5). Возвращаем фокус в ленту, если навигация была активна и
+      // пользователь не правит текст (иначе украли бы фокус у редактора).
+      const active = (ownerDocument?.activeElement ?? null) as HTMLElement | null;
+      if (current !== null && navActive && !isEditingTarget(active)) {
+        focusNav();
+      }
     },
     focusNavigation(): void {
       focusNav();

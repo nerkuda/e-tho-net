@@ -212,7 +212,11 @@ describe('приёмка №8, п.2: создание записи не дёрг
     assert.match(src, /slotRoot!\.replaceWith\(card\)/, 'слот превращается в карточку на месте');
     assert.match(src, /async function localRowFromComment\(/, 'строка собирается из ответа создания');
     assert.match(src, /pendingReconcile = true/, 'следующая дозагрузка идёт согласованием');
-    assert.match(src, /if \(pendingReconcile\) \{\s*await reload\(\);/, 'дозагрузка учитывает допущение');
+    assert.match(
+      src,
+      /if \(pendingReconcile\) \{\s*keepFeedScroll = true;\s*await reload\(\);/,
+      'дозагрузка учитывает допущение (и не сбрасывает прокрутку)',
+    );
     // Немедленная полная перезагрузка сразу после создания устранена.
     assert.ok(
       !/slot = null;\s*state\.root\.remove\(\);\s*await reload\(\);\s*syncCalendar\(\);\s*return created;/.test(
