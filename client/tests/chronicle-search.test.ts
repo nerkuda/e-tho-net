@@ -17,6 +17,7 @@ import { assembledStylesFile } from './renderer-css.js';
 import {
   SEARCH_DEBOUNCE_MS,
   localDay,
+  periodValuesForRange,
   recordPeriod,
 } from '../src/renderer/screens/chronicle/diary.js';
 
@@ -108,13 +109,36 @@ describe('дневник: переход к записи (0.10.1, задача 4
 
   it('период панели берётся из даты начала записи и применяется программно', () => {
     assert.match(src, /const startDay = localDay\(row\.valid_from\)/, 'дата начала записи');
+    // Доработка приёмки (DoD 4): период пишется mode-конвертером как в
+    // `pickPeriod` — поля панели показывают дату записи, а не «сегодня».
+    assert.match(src, /const mode = getFilterState\(\)\.dateMode/, 'режим полей периода — из отбора');
     assert.match(
       src,
-      /from: localDayStart\(startDay\), to: localDayEnd\(startDay\)/,
-      'границы — локальные сутки даты начала',
+      /periodValuesForRange\(startDay, startDay, todayLocal\(\), mode\)/,
+      'период — через mode-конвертер, а не сырые инстансы',
     );
-    assert.match(src, /applyPeriodToFilter\(getFilterState\(\), period\)/, 'дата начала подставляется в отбор');
+    assert.match(src, /applyPeriodToFilter\(getFilterState\(\), values\)/, 'дата начала подставляется в отбор');
     assert.match(src, /jumpToRecord: \(row\) => void jumpToRecord\(row\)/, 'строка поиска вызывает переход');
+  });
+
+  it('поля «С»/«ПО» показывают дату записи, а не «сегодня» (красный без фикса)', () => {
+    // Запись от 22.08.2026, «сегодня» = 27.09.2026 → в «Пресетах» это не
+    // `$today`, а день-арифметика; в «Датах» — точная дата. Именно это значение
+    // попадает в поля периода панели при переходе.
+    const presets = periodValuesForRange('2026-08-22', '2026-08-22', '2026-09-27', 'presets');
+    assert.equal(presets.from, '$today-36d', 'пресеты: дата записи, а не сегодня');
+    assert.equal(presets.to, '$today-36d');
+    assert.notEqual(presets.from, '$today', '«сегодня» в полях — именно дефект');
+    assert.deepEqual(
+      periodValuesForRange('2026-08-22', '2026-08-22', '2026-09-27', 'dates'),
+      { from: '2026-08-22', to: '2026-08-22' },
+      'даты: точная дата записи',
+    );
+    // Оба пути перехода (запись прошла отбор / отбор сброшен) используют одно
+    // значение `values`; на пути сброса режим сохраняется.
+    assert.match(src, /fresh\.dateMode = mode/, 'режим периода сохраняется при сбросе');
+    assert.match(src, /fresh\.dateFrom = values\.from/, 'сброс: дата начала записи');
+    assert.match(src, /fresh\.dateTo = values\.to/, 'сброс: дата начала записи');
   });
 
   it('лента прокручивается к записи, делает её текущей и подсвечивает', () => {

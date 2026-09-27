@@ -1537,12 +1537,18 @@ async function loadUntilRecord(id: string): Promise<boolean> {
 async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
   const startDay = localDay(row.valid_from);
   if (startDay === '') return;
-  // Дата начала записи — границы её ЛОКАЛЬНЫХ суток наблюдателя: запись у
-  // полуночи не выпадает из UTC-суток (ADR времени 994d076a).
-  const period = { from: localDayStart(startDay), to: localDayEnd(startDay) };
+  // Поля периода панели обязаны ПОКАЗЫВАТЬ дату начала записи (DoD 4, доработка
+  // приёмки): значение пишется через mode-конвертер `periodValuesForRange` — как
+  // в клике по календарю (`pickPeriod`). Сырые инстансы `localDayStart/End`
+  // period-editor в режиме «Пресеты» не отображает (показывал «сегодня»).
+  // «Пресеты» → токен `$today±Nd`, «Даты» → точная дата; раскрытие в ЛОКАЛЬНЫЕ
+  // сутки наблюдателя делает запрос (`chronicleQueryDefinition` →
+  // `resolvePeriodForQuery`), поэтому запись у полуночи не выпадает (ADR 994d076a).
+  const mode = getFilterState().dateMode;
+  const values = periodValuesForRange(startDay, startDay, todayLocal(), mode);
   jumpHighlightId = null;
-  // 1) Период записи, прочие критерии отбора сохраняются.
-  setFilterState(applyPeriodToFilter(getFilterState(), period));
+  // 1) Дата начала записи, прочие критерии отбора сохраняются.
+  setFilterState(applyPeriodToFilter(getFilterState(), values));
   persistState();
   await getHome().catch(() => undefined);
   await reload();
@@ -1555,8 +1561,9 @@ async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
   }
   // 2) Запись не проходит отбор — сброс отбора, дата начала записи остаётся.
   const fresh = defaultChronicleCriteriaState();
-  fresh.dateFrom = period.from;
-  fresh.dateTo = period.to;
+  fresh.dateMode = mode;
+  fresh.dateFrom = values.from;
+  fresh.dateTo = values.to;
   setFilterState(fresh);
   setSavedFilterId(null);
   persistState();
