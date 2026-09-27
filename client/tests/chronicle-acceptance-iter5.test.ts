@@ -39,6 +39,10 @@ function installShim(): ShimElement {
     createTextNode: (text: string) => new ShimElement('#text', undefined, text),
     body,
     activeElement: body,
+    // Поповер списка месяцев (`lib/ui/popover.ts`) ставит делегированные
+    // слушатели на `document` — шим отдаёт заглушки.
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
   };
   const win = ((globalThis as any).window ?? ((globalThis as any).window = {})) as Record<
     string,
@@ -283,8 +287,8 @@ describe('приёмка №5, п.3: диалог «Дата/период»', ()
     assert.equal(dialog.getValue().fromTime, '10:00', 'время начала сохранено');
   });
 
-  it('список месяцев, смена года и кнопки < ○ >', async () => {
-    installShim();
+  it('список месяцев — поповер, смена года инлайн, кнопки < ○ >', async () => {
+    const body = installShim();
     const { buildDatePeriodDialog } = await import(
       '../src/renderer/lib/date-period-dialog.js'
     );
@@ -298,15 +302,30 @@ describe('приёмка №5, п.3: диалог «Дата/период»', ()
 
     assert.equal(monthLabel(), 'янв', 'заголовок показывает месяц');
 
-    // Список месяцев: открывается кликом по месяцу, выбор меняет месяц (год тот же).
-    assert.equal(byClass(root, 'cal-months')!.hidden, true, 'список месяцев закрыт');
+    // Список месяцев — ВЫПАДАЮЩИЙ поповер (не инлайн-раскрытие диалога).
+    assert.equal(
+      root.querySelectorAll('.cal-months').length,
+      0,
+      'внутри диалога списка месяцев нет (высота не меняется)',
+    );
     byClass(root, 'cal-month')!.click();
-    assert.equal(byClass(root, 'cal-months')!.hidden, false, 'список месяцев открыт');
-    const october = root
+    const popover = body.querySelector('.ui-popover');
+    assert.ok(popover !== null, 'список месяцев открыт поповером');
+    assert.equal(
+      popover!.querySelectorAll('.cal-month-item').length,
+      12,
+      'в поповере 12 месяцев',
+    );
+    const october = popover!
       .querySelectorAll('.cal-month-item')
       .find((item) => item.textContent === 'Октябрь')!;
     october.click();
     assert.equal(monthLabel(), 'окт', 'выбор месяца из списка переключил месяц');
+    assert.equal(
+      body.querySelectorAll('.ui-popover').length,
+      0,
+      'после выбора поповер закрыт',
+    );
     assert.equal(byClass(root, 'cal-year')!.textContent, '2020', 'год не менялся');
 
     // Кнопка «>» — месяц вперёд.
@@ -316,10 +335,17 @@ describe('приёмка №5, п.3: диалог «Дата/период»', ()
     byClass(root, 'cal-prev')!.click();
     assert.equal(monthLabel(), 'окт', 'кнопка «<» переключает месяц назад');
 
-    // Смена года: клик по году открывает поле ввода.
-    byClass(root, 'cal-year')!.click();
+    // Смена года: инлайн-поле НА МЕСТЕ подписи (в той же ячейке).
+    const yearBtn = byClass(root, 'cal-year')!;
+    yearBtn.click();
     const yearInput = byClass(root, 'cal-year-input')!;
     assert.notEqual(yearInput.style.display, 'none', 'поле года раскрыто');
+    assert.equal(
+      yearInput.parent,
+      byClass(root, 'cal-year-cell'),
+      'поле года стоит в ячейке года',
+    );
+    assert.equal(yearBtn.style.display, 'none', 'подпись года скрыта на время ввода');
     yearInput.value = '2027';
     yearInput.emit('change');
     assert.equal(byClass(root, 'cal-year')!.textContent, '2027', 'год применён');
