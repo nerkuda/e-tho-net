@@ -315,6 +315,11 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
+      // The table is NOT bound to this owner: drop the shown-owner mark so a
+      // retarget back to the previous owner is not mistaken for "already shown"
+      // and gets re-read instead of leaving the error text on screen
+      // (задача 90b2256e, круг 3).
+      shownOwnerId = null;
       wrap.replaceChildren(operationError(err));
       return;
     }
@@ -845,6 +850,9 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
+      // Same as the outside-type body: forgotten owner mark so returning to the
+      // previous entity re-reads instead of keeping the error (90b2256e, круг 3).
+      shownOwnerId = null;
       tableWrap.replaceChildren(operationError(err));
       tableAttached = false;
       return;

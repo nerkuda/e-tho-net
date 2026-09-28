@@ -604,4 +604,76 @@ describe('инкрементальная смена сущности в реда
     assert.equal(setCalls.at(-1)!.ownerId, 't2', 'правка ушла в текущую мысль');
     assert.equal(setCalls.at(-1)!.value, 'NEW_VALUE');
   });
+
+  it('сбой перечитывания свойств не оставляет ложную привязку к прежнему владельцу', async () => {
+    shimDom();
+    installEtn();
+    const win = (globalThis as any).window as Record<string, any>;
+    // Definitions fetch fails while `failEnabled` is raised (the t2 window);
+    // otherwise it succeeds and the count of successful reads is tracked.
+    let failEnabled = false;
+    let successCalls = 0;
+    win.etn.types = {
+      listTypeProperties: async () => {
+        if (failEnabled) throw new Error('boom');
+        successCalls += 1;
+        return [TEXT_PROPERTY];
+      },
+    };
+    win.etn.properties = {
+      get: async (_networkId: string, _ownerType: string, ownerId: string) => [
+        propertyValueRow(ownerId === 't1' ? 'VALUE_A' : 'VALUE_B'),
+      ],
+      set: async () => undefined,
+      remove: async () => undefined,
+    };
+
+    const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    // Build «Свойства» for t1, then hide the tab behind «Комментарий».
+    editorInternals.activateTab('properties');
+    await flush();
+    const scrollBox = host.children[1]!;
+    const propPane = scrollBox.querySelector('.tab-pane-root')!.children[0]!;
+    assert.equal(scrollBox.querySelector('.prop-editor')!.value, 'VALUE_A', 'свойства t1 прочитаны');
+    editorInternals.activateTab('main');
+    await flush();
+    // Simulate the detached (hidden) pane: the shim's default root is connected,
+    // so mark it disconnected the way a real hidden tab is.
+    propPane.isConnected = false;
+
+    // Switch to t2 while hidden with the fetch failing: the error is rendered.
+    // The pane must NOT keep claiming t1 as its shown owner.
+    failEnabled = true;
+    store.update({ focus: makeFocus(makeThought({ id: 't2', title: 'B', type_id: 'ta' })) } as any);
+    await flush();
+    failEnabled = false;
+
+    // Return to the previous owner: the hidden pane must re-read t1 instead of
+    // matching the stale shown-owner mark and keeping the error text.
+    const before = successCalls;
+    store.update({ focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })) } as any);
+    await flush();
+    assert.ok(successCalls > before, 'возврат к прежнему владельцу запустил перечитывание');
+
+    editorInternals.activateTab('properties');
+    await flush();
+    assert.equal(
+      scrollBox.querySelector('.prop-editor')!.value,
+      'VALUE_A',
+      'таблица прежнего владельца показана, а не текст ошибки',
+    );
+  });
 });
