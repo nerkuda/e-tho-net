@@ -173,3 +173,121 @@ describe('buildValueEditor — строковое свойство со спис
     assert.deepEqual(rowLabels(body), ['СПб', 'Казань']);
   });
 });
+
+/** Сырое содержимое истории свойства `p1` в localStorage (или null). */
+function recentRaw(): string | null {
+  const ls = (globalThis as any).localStorage as {
+    getItem: (key: string) => string | null;
+  };
+  return ls.getItem(RECENT_KEY);
+}
+
+describe('buildValueEditor — сохранение НЕ пишет историю для свойства со списком (замечание проверки 4a96d07a)', () => {
+  it('одиночное поле со списком: успешное сохранение не оставляет записи в localStorage', async () => {
+    installShim(null);
+    const { buildValueEditor } = await import('../src/renderer/editor/value-editor.js');
+    const root = buildValueEditor({
+      networkId: 'n1',
+      definition: {
+        value_type: 'text',
+        config: { options: [...OPTIONS] },
+        required: false,
+        default_value: null,
+      },
+      value: null,
+      commitOn: 'blur',
+      historyPropertyId: 'p1',
+      save: () => true,
+    }) as unknown as ShimElement;
+
+    const input = findTag(root, 'input');
+    assert.ok(input !== null, 'поле ввода есть');
+    input!.value = 'Москва';
+    input!.emit('blur');
+    await flush();
+
+    assert.equal(recentRaw(), null, 'история не записана для свойства со списком');
+  });
+
+  it('одиночное поле без списка: успешное сохранение пишет историю (контроль)', async () => {
+    installShim(null);
+    const { buildValueEditor } = await import('../src/renderer/editor/value-editor.js');
+    const root = buildValueEditor({
+      networkId: 'n1',
+      definition: { value_type: 'text', config: null, required: false, default_value: null },
+      value: null,
+      commitOn: 'blur',
+      historyPropertyId: 'p1',
+      save: () => true,
+    }) as unknown as ShimElement;
+
+    const input = findTag(root, 'input');
+    assert.ok(input !== null, 'поле ввода есть');
+    input!.value = 'СПб';
+    input!.emit('blur');
+    await flush();
+
+    assert.deepEqual(JSON.parse(recentRaw() ?? '[]'), ['СПб'], 'история записана без списка');
+  });
+
+  it('чип-поле со списком: успешное добавление чипа не оставляет записи в localStorage', async () => {
+    installShim(null);
+    const { buildValueEditor } = await import('../src/renderer/editor/value-editor.js');
+    const root = buildValueEditor({
+      networkId: 'n1',
+      definition: {
+        value_type: 'text',
+        config: { options: [...OPTIONS], multiple: true },
+        required: false,
+        default_value: null,
+      },
+      value: null,
+      commitOn: 'blur',
+      historyPropertyId: 'p1',
+      save: () => true,
+    }) as unknown as ShimElement;
+
+    const input = findTag(root, 'input');
+    assert.ok(input !== null, 'поле ввода есть');
+    input!.value = 'Москва';
+    input!.emit('keydown', {
+      key: 'Enter',
+      defaultPrevented: false,
+      preventDefault: () => undefined,
+    });
+    await flush();
+
+    assert.equal(recentRaw(), null, 'история не записана для чип-поля со списком');
+  });
+
+  it('чип-поле без списка: успешное добавление чипа пишет историю (контроль)', async () => {
+    installShim(null);
+    const { buildValueEditor } = await import('../src/renderer/editor/value-editor.js');
+    const root = buildValueEditor({
+      networkId: 'n1',
+      definition: {
+        value_type: 'text',
+        config: { multiple: true },
+        required: false,
+        default_value: null,
+      },
+      value: null,
+      commitOn: 'blur',
+      historyPropertyId: 'p1',
+      save: () => true,
+    }) as unknown as ShimElement;
+
+    const input = findTag(root, 'input');
+    assert.ok(input !== null, 'поле ввода есть');
+    input!.value = 'СПб';
+    input!.emit('keydown', {
+      key: 'Enter',
+      defaultPrevented: false,
+      preventDefault: () => undefined,
+    });
+    await flush();
+
+    assert.deepEqual(JSON.parse(recentRaw() ?? '[]'), ['СПб'], 'история записана без списка');
+  });
+});
+

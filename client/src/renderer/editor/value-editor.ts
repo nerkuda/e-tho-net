@@ -867,6 +867,12 @@ function buildMultiTextChipsEditor(opts: {
   let items = [...opts.items];
   const root = div('st-f-chipfield value-chips-field');
 
+  // Свойство со списком вариантов: история не ведётся — выпадашку занимает
+  // сам список, который открывается сразу при входе в поле добавления и до
+  // первой правки показывается целиком (карточка ошибки 4a96d07a). Значение
+  // в `store` тоже не пишем: история без выпадашки-истории бессмысленна.
+  const options = kind === 'text' ? (definition.config?.options ?? []).filter((o) => o !== '') : [];
+
   const commit = (next: string[]): void => {
     items = next;
     render();
@@ -874,7 +880,7 @@ function buildMultiTextChipsEditor(opts: {
     void Promise.resolve()
       .then(() => opts.save(next.length > 0 ? payload : null))
       .then((ok) => {
-        if (ok === true && opts.historyPropertyId !== undefined) {
+        if (ok === true && opts.historyPropertyId !== undefined && options.length === 0) {
           recordTextItemsHistory(opts.networkId, opts.historyPropertyId, next);
         }
       });
@@ -906,7 +912,6 @@ function buildMultiTextChipsEditor(opts: {
     // Свойство со списком вариантов: история не ведётся — выпадашку занимает
     // сам список, который открывается сразу при входе в поле добавления и до
     // первой правки показывается целиком (карточка ошибки 4a96d07a).
-    const options = kind === 'text' ? (definition.config?.options ?? []).filter((o) => o !== '') : [];
     let edited = false;
     input.addEventListener('focus', () => {
       edited = false;
@@ -1000,6 +1005,12 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
 
   const commitOn = opts.commitOn ?? 'blur';
   const clearNow = makeClearNow(input, commitOn, opts.save);
+  // Свойство со списком вариантов (`config.options`): история последних
+  // значений не ведётся — выпадашку занимает сам список вариантов, который
+  // открывается сразу при входе в поле и до первой правки показывается
+  // целиком (карточка ошибки 4a96d07a). В `localStorage` запись тоже не идёт.
+  const options: string[] =
+    kind === 'text' ? (definition.config?.options ?? []).filter((o) => o !== '') : [];
   if (commitOn === 'change') {
     input.addEventListener('input', () => {
       const next = input.value.trim() === '' ? null : input.value;
@@ -1029,7 +1040,7 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
             baseline = prev;
             return;
           }
-          if (opts.historyPropertyId !== undefined && typeof next === 'string') {
+          if (opts.historyPropertyId !== undefined && typeof next === 'string' && options.length === 0) {
             recordTextHistory(opts.networkId, opts.historyPropertyId, next);
           }
         });
@@ -1038,14 +1049,6 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   }
 
   const sources: SuggestSource[] = [];
-  // Свойство со списком вариантов (`config.options`): история последних
-  // значений не ведётся — выпадашку занимает сам список вариантов, который
-  // открывается сразу при входе в поле и до первой правки показывается
-  // целиком (карточка ошибки 4a96d07a).
-  let options: string[] = [];
-  if (kind === 'text') {
-    options = (definition.config?.options ?? []).filter((o) => o !== '');
-  }
   // Правка поля пользователем: до неё содержимое (текущее значение) не
   // считается введённым запросом — см. `showAllUntilEdited` ниже.
   let edited = false;
