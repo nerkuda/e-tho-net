@@ -58,6 +58,7 @@ import { badge } from './badge.js';
 import { choiceControl } from './choice-row.js';
 import { emptyState, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
+import { reconcileKeyed } from './keyed-list.js';
 
 /** Корневой класс дерева (роль `tree`). */
 export const TREE_CLASS = 'ui-tree';
@@ -411,6 +412,53 @@ function rowExtraClass(name: string | undefined): string | undefined {
 }
 
 /**
+ * Модель строки для keyed-сверки: ВСЁ, от чего зависит вид строки для
+ * вызывающего ({@link TreeOptions.renderContent}, колонки, флажок, отступ).
+ * Собирается из данных и состояния дерева. Равенство — по ССЫЛКЕ на узел
+ * данных и по полям состояния ({@link rowModelEqual}): смена данных всегда даёт
+ * новый объект элемента (поставщик пересобирает массив), а раскрытие, фильтр и
+ * смена текущей строки ссылку не меняют — поэтому неизменная строка не
+ * перерисовывается, а перезагрузка данных обновляет все строки.
+ */
+interface TreeRowModel<T extends TreeItem> {
+  item: T;
+  depth: number;
+  expanded: boolean;
+  current: boolean;
+  hasChildren: boolean;
+  childCount: number;
+  checked: boolean;
+}
+
+/** Изменяемое состояние строки: актуальная модель и её флажок. */
+interface TreeRowState<T extends TreeItem> {
+  model: TreeRowModel<T>;
+  input: HTMLInputElement | null;
+}
+
+/**
+ * Элемент keyed-сверки корня дерева: шапка, пустое состояние или строка.
+ * `deepEqual` по этой структуре — критерий «строка изменилась».
+ */
+type TreeRenderEntry<T extends TreeItem> =
+  | { kind: 'head'; key: '__tree_head'; spec: string }
+  | { kind: 'empty'; key: '__tree_empty'; spec: string }
+  | { kind: 'row'; key: string; model: TreeRowModel<T> };
+
+/** Равенство моделей строки: та же ССЫЛКА на данные и то же состояние вида. */
+function rowModelEqual<T extends TreeItem>(a: TreeRowModel<T>, b: TreeRowModel<T>): boolean {
+  return (
+    Object.is(a.item, b.item) &&
+    a.depth === b.depth &&
+    a.expanded === b.expanded &&
+    a.current === b.current &&
+    a.hasChildren === b.hasChildren &&
+    a.childCount === b.childCount &&
+    a.checked === b.checked
+  );
+}
+
+/**
  * Строит дерево списков. Возвращает {@link TreeHandle}: рендер, фильтр,
  * раскрытие, текущая строка. Все строки — из словаря/параметров, размеры —
  * по токенам (`./tree.css`).
@@ -557,47 +605,73 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     return caret;
   }
 
-  function buildRow(item: T, counts: Map<string, number>, items: readonly T[]): HTMLElement {
-    const depth = treeDepthOf(items, item.id);
-    const childCount = counts.get(item.id) ?? 0;
-    const hasChildren = (item.hasChildren ?? false) || childCount > 0;
-    const isOpen = expanded.has(item.id);
-    const isCurrent = item.id === currentId;
+  /** Изменяемое состояние строки по её элементу (см. {@link TreeRowState}). */
+  const rowStates = new WeakMap<HTMLElement, TreeRowState<T>>();
 
-    const row = div(TREE_ROW_CLASS);
+  /** Модель строки из данных и текущего состояния дерева. */
+  function rowModelOf(item: T, counts: Map<string, number>, items: readonly T[]): TreeRowModel<T> {
+    const childCount = counts.get(item.id) ?? 0;
+    return {
+      item,
+      depth: treeDepthOf(items, item.id),
+      expanded: expanded.has(item.id),
+      current: item.id === currentId,
+      hasChildren: (item.hasChildren ?? false) || childCount > 0,
+      childCount,
+      checked: options.isChecked?.(item) ?? false,
+    };
+  }
+
+  /**
+   * Наполнить/обновить строку дерева — общая сборка и keyed-обновление.
+   * Пересобирается содержимое ОДНОЙ строки; коллекция строк сверяется по
+   * ключу в {@link render}, поэтому неизменные строки не трогаются.
+   */
+  function fillRow(row: HTMLElement, state: TreeRowState<T>, model: TreeRowModel<T>): void {
+    const item = model.item;
+    state.model = model;
+
+    row.className = TREE_ROW_CLASS;
     const extra = rowExtraClass(options.rowClass?.(item));
     if (extra !== undefined) row.classList.add(...extra.split(/\s+/));
-    if (isCurrent) row.classList.add(TREE_ROW_CURRENT_CLASS);
+    if (model.current) row.classList.add(TREE_ROW_CURRENT_CLASS);
     row.setAttribute('role', 'treeitem');
-    row.setAttribute('aria-level', String(depth));
+    row.setAttribute('aria-level', String(model.depth));
     row.id = cssId(item.id);
     row.dataset['treeId'] = item.id;
-    if (hasChildren) row.setAttribute('aria-expanded', String(isOpen));
-    row.setAttribute('aria-selected', String(isCurrent));
-    row.style.setProperty('--tree-level', String(Math.max(0, depth - 1)));
+    if (model.hasChildren) row.setAttribute('aria-expanded', String(model.expanded));
+    else row.removeAttribute('aria-expanded');
+    row.setAttribute('aria-selected', String(model.current));
+    row.style.setProperty('--tree-level', String(Math.max(0, model.depth - 1)));
 
-    row.append(buildCaret(item, hasChildren, isOpen));
+    row.replaceChildren(buildCaret(item, model.hasChildren, model.expanded));
 
-    let input: HTMLInputElement | null = null;
+    state.input = null;
     if (options.checkbox === true) {
-      const checked = options.isChecked?.(item) ?? false;
-      input = choiceControl('checkbox', { checked });
+      const input = choiceControl('checkbox', { checked: model.checked });
       input.classList.add(TREE_CHECK_CLASS);
       input.tabIndex = -1;
-      input.addEventListener('change', () => options.onCheck?.(item, input!.checked));
-      row.setAttribute('aria-checked', String(checked));
+      input.addEventListener('change', () => options.onCheck?.(state.model.item, input.checked));
+      row.setAttribute('aria-checked', String(model.checked));
       row.append(input);
+      state.input = input;
     }
 
     const content = div(TREE_CONTENT_CLASS);
-    const ctx: TreeRowContext = { depth, expanded: isOpen, current: isCurrent, hasChildren, childCount };
+    const ctx: TreeRowContext = {
+      depth: model.depth,
+      expanded: model.expanded,
+      current: model.current,
+      hasChildren: model.hasChildren,
+      childCount: model.childCount,
+    };
     const rendered = options.renderContent(item, ctx);
     if (Array.isArray(rendered)) content.append(...(rendered as Node[]));
     else content.append(rendered as Node);
     row.append(content);
 
-    if (options.showChildCount === true && childCount > 0) {
-      row.append(badge(String(childCount), { kind: 'quiet', extraClass: TREE_COUNT_CLASS }));
+    if (options.showChildCount === true && model.childCount > 0) {
+      row.append(badge(String(model.childCount), { kind: 'quiet', extraClass: TREE_COUNT_CLASS }));
     }
 
     for (const column of options.columns ?? []) {
@@ -617,15 +691,27 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       }
       row.append(cell);
     }
+  }
 
-    const checkboxInput = input;
+  /**
+   * Собирает строку: элемент, его состояние и обработчики. Обработчики читают
+   * АКТУАЛЬНУЮ модель из {@link TreeRowState}, поэтому keyed-обновление
+   * (`fillRow` на том же узле) не требует пере-навешивания слушателей.
+   */
+  function createRow(model: TreeRowModel<T>): HTMLElement {
+    const row = div(TREE_ROW_CLASS);
+    const state: TreeRowState<T> = { model, input: null };
+    rowStates.set(row, state);
+    fillRow(row, state, model);
+
     row.addEventListener('click', (event) => {
       const target = event.target as HTMLElement | null;
       if (target !== null && typeof target.closest === 'function' && target.closest('button') !== null) return;
+      const item = state.model.item;
       const wasCurrent = currentId === item.id;
       currentId = item.id;
-      if (checkboxInput !== null) {
-        if (target === checkboxInput) {
+      if (state.input !== null) {
+        if (target === state.input) {
           if (!wasCurrent) {
             paintCurrent();
             notifyCurrent();
@@ -635,7 +721,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
         // Флажок и `aria-checked` синхронизирует toggleCheck; строка НЕ
         // пересобирается — иначе второй клик двойного клика придёт в новый
         // узел и `dblclick` (редактор, правило 6) не сработает.
-        toggleCheck(item, checkboxInput, !checkboxInput.checked, row);
+        toggleCheck(item, state.input, !state.input.checked, row);
         if (!wasCurrent) {
           paintCurrent();
           notifyCurrent();
@@ -651,13 +737,13 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
         paintCurrent();
         notifyCurrent();
       }
-      return;
     });
     // Двойной клик — активация строки: редактор (задан `onDblActivate`) либо
     // подтверждение выбора в пикере (`onActivate`), правило 6 требования
     // 11ddd910. Флажковый режим переключается обычными кликами; двойной клик
     // поверх — дополнительным событием.
     row.addEventListener('dblclick', () => {
+      const item = state.model.item;
       // Двойной клик подтверждает/активирует ту строку, по которой он сделан,
       // и делает её текущей (правило 5) — как и одиночный клик.
       if (currentId !== item.id) {
@@ -671,6 +757,7 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     // становится текущей, затем показывается её меню — команды действуют на ту
     // строку, из которой меню вызвано.
     row.addEventListener('contextmenu', (event) => {
+      const item = state.model.item;
       const items = options.rowMenu?.(item) ?? [];
       if (items.length === 0) return;
       event.preventDefault();
@@ -686,25 +773,92 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     return row;
   }
 
-  function buildHead(): HTMLElement | null {
+  /** Обновляет сохранённую строку под изменившуюся модель (keyed-сверка). */
+  function updateRow(row: HTMLElement, model: TreeRowModel<T>): void {
+    const state = rowStates.get(row);
+    if (state === undefined) return;
+    fillRow(row, state, model);
+  }
+
+  /** Состав шапки колонок строкой — по ней keyed-сверка видит изменение. */
+  function headSpec(): string | null {
     const columns = options.columns ?? [];
-    const hasHeaders = options.treeColumnHeader !== undefined || columns.some((c) => c.header !== undefined);
+    const hasHeaders =
+      options.treeColumnHeader !== undefined || columns.some((c) => c.header !== undefined);
     if (!hasHeaders) return null;
-    const head = div(TREE_HEAD_CLASS);
-    head.setAttribute('role', 'presentation');
+    return [
+      options.treeColumnHeader ?? '',
+      ...columns.map(
+        (c) => `${c.key}\u0000${c.header ?? ''}\u0000${c.width ?? ''}\u0000${c.align ?? ''}`,
+      ),
+    ].join('\u0001');
+  }
+
+  /** Наполняет шапку колонок (общая сборка и keyed-обновление). */
+  function fillHead(head: HTMLElement): void {
+    const columns = options.columns ?? [];
+    const cells: Node[] = [];
     const treeCell = div(`${TREE_CELL_CLASS} ${TREE_CELL_CLASS}--tree`);
     treeCell.textContent = options.treeColumnHeader ?? '';
-    head.append(treeCell);
+    cells.push(treeCell);
     for (const column of columns) {
       const cell = div(`${TREE_CELL_CLASS} ${TREE_CELL_CLASS}--${column.key}`);
       if (column.header !== undefined) cell.textContent = column.header;
       if (column.width !== undefined) cell.style.flexBasis = column.width;
       if (column.align === 'end') cell.classList.add(`${TREE_CELL_CLASS}--end`);
-      head.append(cell);
+      cells.push(cell);
     }
+    head.replaceChildren(...cells);
+  }
+
+  function buildHead(): HTMLElement | null {
+    const columns = options.columns ?? [];
+    const hasHeaders =
+      options.treeColumnHeader !== undefined || columns.some((c) => c.header !== undefined);
+    if (!hasHeaders) return null;
+    const head = div(TREE_HEAD_CLASS);
+    head.setAttribute('role', 'presentation');
+    fillHead(head);
     return head;
   }
 
+  /** Опции пустого состояния (заголовок/подсказка локализованы владельцем). */
+  function emptyOptions(): { title: string; hint: string; action?: StateAction } {
+    return {
+      title: options.emptyText ?? t('tree.empty'),
+      hint: options.emptyHint ?? t('tree.emptyHint'),
+      ...(options.emptyAction !== undefined ? { action: options.emptyAction } : {}),
+    };
+  }
+
+  /** Подпись пустого состояния строкой — по ней keyed-сверка видит изменение. */
+  function emptySpec(): string {
+    return [
+      options.emptyText ?? t('tree.empty'),
+      options.emptyHint ?? t('tree.emptyHint'),
+      options.emptyAction !== undefined ? 'action' : '',
+    ].join('\u0000');
+  }
+
+  function buildEmpty(): HTMLElement {
+    const empty = emptyState(emptyOptions());
+    empty.classList.add(TREE_EMPTY_CLASS);
+    return empty;
+  }
+
+  /** Обновляет содержимое пустого состояния на сохранённом узле. */
+  function updateEmpty(el: HTMLElement): void {
+    const fresh = buildEmpty();
+    el.replaceChildren(...Array.from(fresh.children));
+  }
+
+  /**
+   * Перерисовывает дерево. Коллекция строк обновляется keyed-сверкой
+   * (`reconcileKeyed`, уровень 2 тех.проекта `1d48df6d`): неизменные строки
+   * сохраняют identity — живы прокрутка, hover и клавиатурный фокус. Шапка и
+   * пустое состояние — тоже элементы сверки (с постоянными ключами); полной
+   * пересборки коллекции нет.
+   */
   function render(): void {
     const items = itemsOf();
     const counts = treeChildCounts(items);
@@ -712,24 +866,39 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     const ids = visible();
     const byId = new Map(items.map((item) => [item.id, item]));
 
-    const nodes: Node[] = [];
-    const head = buildHead();
-    if (head !== null) nodes.push(head);
+    const entries: TreeRenderEntry<T>[] = [];
+    const head = headSpec();
+    if (head !== null) entries.push({ kind: 'head', key: '__tree_head', spec: head });
     if (ids.length === 0) {
-      const empty = emptyState({
-        title: options.emptyText ?? t('tree.empty'),
-        hint: options.emptyHint ?? t('tree.emptyHint'),
-        ...(options.emptyAction !== undefined ? { action: options.emptyAction } : {}),
-      });
-      empty.classList.add(TREE_EMPTY_CLASS);
-      nodes.push(empty);
+      entries.push({ kind: 'empty', key: '__tree_empty', spec: emptySpec() });
     } else {
       for (const id of ids) {
         const item = byId.get(id);
-        if (item !== undefined) nodes.push(buildRow(item, counts, items));
+        if (item !== undefined) {
+          entries.push({ kind: 'row', key: id, model: rowModelOf(item, counts, items) });
+        }
       }
     }
-    root.replaceChildren(...nodes);
+
+    reconcileKeyed(root, entries, {
+      key: (entry) => entry.key,
+      build: (entry) => {
+        if (entry.kind === 'row') return createRow(entry.model);
+        if (entry.kind === 'head') return buildHead() as HTMLElement;
+        return buildEmpty();
+      },
+      update: (el, entry) => {
+        if (entry.kind === 'row') updateRow(el, entry.model);
+        else if (entry.kind === 'head') fillHead(el);
+        else updateEmpty(el);
+      },
+      equals: (a, b) => {
+        if (a.kind === 'row' && b.kind === 'row') return rowModelEqual(a.model, b.model);
+        if (a.kind !== 'row' && b.kind !== 'row') return a.spec === b.spec;
+        return false;
+      },
+    });
+
     if (currentId !== null) root.setAttribute('aria-activedescendant', cssId(currentId));
     else root.removeAttribute('aria-activedescendant');
   }

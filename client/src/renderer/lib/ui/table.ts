@@ -15,6 +15,15 @@
  * меню, копирование, подписка на селектор store. Общение с элементом Grid
  * изолировано тонким адаптером {@link GridTableAdapter} (`./table-grid.ts`).
  *
+ * **Keyed-сверка (`reconcileKeyed`) к строкам не применима.** Строки живут в
+ * вендорском Grid (shadow DOM, виртуализация): свой набор он получает через
+ * `items` и сверяет сам, `reconcileKeyed` работает по element-детям
+ * контейнера. Поэтому инкрементальность здесь в другом: данные пере-назначаются
+ * только при реальном изменении набора/порядка строк, а смена выделения
+ * синхронизируется точечно ({@link syncSelection}) и НЕ сбрасывает
+ * виртуализацию/прокрутку сетки. Полную пересборку строк вручную не делаем —
+ * это ломало бы ADR 03eb2c61 и требование 93115633.
+ *
  * **Тестируемость (ключевое решение).** `vaadin-grid` — custom element: на
  * используемом в тестах DOM-шиме он не исполняется. Поэтому фасад разделён на
  *  • чистые функции — {@link cycleSort}, {@link sortRows},
@@ -641,15 +650,25 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     );
   };
 
+  /**
+   * Точечная синхронизация выделения — БЕЗ пере-назначения набора строк.
+   * Смена выделения не меняет данные, поэтому не должна сбрасывать
+   * виртуализацию/прокрутку вендорской сетки (keyed-принцип: обновляется
+   * только то, что изменилось; ср. `setActive` на смене текущей строки).
+   */
+  const syncSelection = (): void => {
+    if (!multi) return;
+    const data = ordered();
+    adapter.setSelected(data.filter((row, index) => selected.has(spec.rowKey(row, index))));
+  };
+
   const renderItems = (): void => {
     const data = ordered();
     adapter.setItems(data);
     emptyEl.hidden = data.length > 0;
     const current = currentIndexOf(data);
     adapter.setActive(current >= 0 ? data[current] : null);
-    if (multi) {
-      adapter.setSelected(data.filter((row, index) => selected.has(spec.rowKey(row, index))));
-    }
+    syncSelection();
     if (nav === 'cell') {
       if (cellCursor.row >= data.length) {
         cellCursor = { row: Math.max(0, data.length - 1), col: cellCursor.col, item: 0 };
@@ -795,7 +814,7 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       const id = spec.rowKey(row, index);
       if (selected.has(id)) selected.delete(id);
       else selected.add(id);
-      renderItems();
+      syncSelection();
     }
   });
 
@@ -910,7 +929,7 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     setSelection(keys: readonly string[]): void {
       selected.clear();
       for (const key of keys) selected.add(key);
-      renderItems();
+      syncSelection();
     },
     getSelection(): string[] {
       return [...selected];

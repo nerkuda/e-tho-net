@@ -41,6 +41,10 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
     (`keyed-list.ts`) вместо `replaceChildren`/`clear` всей коллекции: полная
     пересборка — только при однократном монтировании экрана и смене сущности
     (стандарт «Списки рендерятся инкрементально», сторож `guard-keyed-lists`).
+    На keyed-сверке: «Дневник», «Структуры», таблица «Свойства» редактора и
+    дерево `tree.ts`. Строки `table.ts` живут в вендорском Vaadin Grid
+    (набор — через `items`, свой keyed-механизм); фасад лишь не пере-назначает
+    набор при смене выделения (`syncSelection`).
 
 ## Каталог компонентов
 
@@ -63,9 +67,9 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `state.ts` | `select`, `selectMany`, `deepEqual` | Реактивные селекторы поверх store (основа списков) | задача `60fcc702`, требование `628d33ee` |
 | `keyed-list.ts` | `reconcileKeyed`, `DEFAULT_KEY_ATTR` | Инкрементальная сверка списка по ключу (identity неизменных узлов) | задача `6952c619`, ADR keyed-обновления |
 | `scroll-anchor.ts` | `preserveScroll` | Возврат позиции прокрутки при легитимной полной пересборке | задача `3bfef1f7` |
-| `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы) | задача `dad2b029`, требование `93115633` |
+| `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы); строки — вендорский Grid, выделение синхронизируется точечно | задача `dad2b029`, требование `93115633`, задача `d59fdfb9` |
 | `table-grid.ts` | `vaadinGridAdapter` | Адаптер модели таблицы к Vaadin Grid | задача `dad2b029` |
-| `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории) | задача `d1c15a2d`, требование `0086037c` |
+| `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории); коллекция строк — на keyed-сверке | задача `d1c15a2d`, требование `0086037c`, задача `d59fdfb9` |
 | `chip-list.ts` / `chip-list.css` | `chipList`, классы `CHIP_*` | Чипы выбранных значений с крестиком и полем добавления | требование `d1cd2095` |
 | `empty-state.ts` / `empty-state.css` | `emptyState`, `loadingState`, `errorState`, классы `EMPTY_STATE_*`/`LOADING_STATE_CLASS`/`ERROR_STATE_CLASS` | «Пусто/грузлю/ошибка» с подсказкой и точкой входа к действию | задача `d7b7c367`, требование `e514768f` |
 | `register.ts` | (side-effect импорт) | Регистрация вендора и подключение CSS в правильном порядке | задача `95dd50b9` |

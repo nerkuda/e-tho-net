@@ -47,6 +47,9 @@ const EDITOR_PROPERTIES = fs.readFileSync(
   path.join(RENDERER_ROOT, 'editor', 'properties.ts'),
   'utf8',
 );
+// Дерево `lib/ui/tree.ts` переведено на keyed-сверку задачей d59fdfb9:
+// коллекция строк — `reconcileKeyed`, полной пересборки контейнера нет.
+const TREE = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'tree.ts'), 'utf8');
 
 /** Комментарий — упоминание конструкции в пояснении не является нарушением. */
 function isCommentLine(line: string): boolean {
@@ -68,9 +71,17 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
   // lib/ui — фасады.
   ['lib/ui/comment.ts', 'внутренние слоты оболочки комментария (tools/foot)'],
   ['lib/ui/table-grid.ts', 'разовая сборка колонок Grid при монтировании'],
-  ['lib/ui/tree.ts', 'полная пересборка дерева типов; перевод на reconcileKeyed — подзадача в ETN'],
+  [
+    'lib/ui/tree.ts',
+    'коллекция строк — reconcileKeyed; replaceChildren — шапка/пустое состояние ' +
+      'и содержимое ОДНОЙ изменившейся строки (общая сборка и keyed-обновление)',
+  ],
   ['lib/ui/chip-list.ts', 'точечная пересборка чипов/селекта при смене набора'],
-  ['lib/ui/table.ts', 'слот пустого состояния и смена набора строк — вне задачи уровня 2'],
+  [
+    'lib/ui/table.ts',
+    'слот пустого состояния (не список); строки — вендорский Vaadin Grid ' +
+      '(items), выделение синхронизируется точечно (syncSelection)',
+  ],
   ['lib/ui/collapsible.ts', 'одиночный слот тела секции'],
   // screens — монтирование экранов, слоты форм/панелей.
   ['screens/screens.ts', 'монтирование экрана целиком (смена сущности)'],
@@ -210,6 +221,19 @@ describe('guard: инкрементальный рендер списков (695
       EDITOR_PROPERTIES,
       /reconcileKeyed\(tbody,\s*rows,\s*rowSpec\)/,
       'строки таблицы «Свойства» сверяются по ключу, а не пересобираются коллекцией',
+    );
+  });
+
+  it('(д) дерево lib/ui сверяет коллекцию строк через reconcileKeyed (d59fdfb9)', () => {
+    assert.match(
+      TREE,
+      /reconcileKeyed\(root,\s*entries,\s*\{/,
+      'корень дерева наполняется keyed-сверкой по ключу строки',
+    );
+    assert.doesNotMatch(
+      TREE,
+      /root\.replaceChildren\(/,
+      'полной пересборки коллекции строк дерева быть не должно',
     );
   });
 });
