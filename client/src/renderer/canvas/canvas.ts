@@ -123,6 +123,17 @@ export interface ZoneEntry {
   id: string;
   links: FocusNeighbor[];
   ref: ThoughtRef | null;
+  /**
+   * Related titles the cloud shortens its compound name against, when the
+   * entry comes from a view run result rather than a real focus neighbour
+   * (08-ui-spec.md §2.2.3). The lower zone under a view shows the focus's
+   * view result "with the same clouds as children" (spec 9984aa98), but its
+   * thoughts may have no link to the focus at all — so they cannot be found
+   * in {@link relatedTitles} (built from focus edges) and must carry the
+   * focus title explicitly. Undefined for real neighbours, which keep the
+   * edge-based map (regression cbb91b62).
+   */
+  viewResultRelated?: readonly string[];
 }
 
 /** Comment/attachment counts shown in the cloud indicators row. */
@@ -746,6 +757,11 @@ function viewResultToZoneEntries(
         id: ref.id,
         links: [neighbor],
         ref,
+        // A view result is shown with the same clouds as a child, but its
+        // thought may have no link to the focus — shorten compound parts
+        // against the focused thought explicitly (08-ui-spec.md §2.2.3,
+        // ошибка ace5e73b). Real neighbours keep the edge-based map.
+        viewResultRelated: [focus.focused.title],
       };
     });
 }
@@ -1897,8 +1913,14 @@ function buildCloud(
   // cached ref, which can lag behind after a rename until re-resolved.
   const cloudTitleFull = entry.links[0]?.title ?? ref?.title ?? '—';
   // Outside the focus, compound names hide the parts matching visible related
-  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name.
-  const cloudTitle = shortenCompoundName(cloudTitleFull, relatedTitles.get(entry.id) ?? []);
+  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name. A view
+  // result in the lower zone carries the focus title explicitly (its thoughts
+  // need no link to the focus, ошибка ace5e73b); real neighbours use the
+  // edge-based map built from the focus response.
+  const cloudTitle = shortenCompoundName(
+    cloudTitleFull,
+    entry.viewResultRelated ?? relatedTitles.get(entry.id) ?? [],
+  );
 
   // The base cloud (icon, colours, font, dim/trash states, deferred click,
   // Ctrl+click, context menu) comes from the shared factory; the canvas adds
@@ -2213,6 +2235,7 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
 /** Test seam for unit tests. */
 export const canvasInternals = {
   groupByThought,
+  viewResultToZoneEntries,
   refCache,
   indicatorCache,
   canvasRenderKey,
