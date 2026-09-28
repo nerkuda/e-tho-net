@@ -61,21 +61,47 @@ function isThenable(value: unknown): value is Promise<unknown> {
 }
 
 /**
- * Обернуть неймспейс моста так, чтобы его методы возвращали результат,
- * очищенный от конвертов ошибок: main отдаёт отказ плоским объектом
- * ({@link IpcErrorEnvelope}), а renderer бросает восстановленный `EtnError`.
+ * Обернуть метод неймспейса моста так, чтобы результат был очищен от конверта
+ * ошибок: main отдаёт отказ плоским объектом ({@link IpcErrorEnvelope}), а
+ * renderer бросает восстановленный `EtnError`.
+ */
+function reviveNamespaceResult(
+  target: object,
+  method: (...args: unknown[]) => unknown,
+): (...args: unknown[]) => unknown {
+  return (...args: unknown[]): unknown => {
+    const result = method.apply(target, args);
+    return isThenable(result) ? result.then(unwrapIpcResult) : result;
+  };
+}
+
+/**
+ * Построить фасад неймспейса моста — ОТДЕЛЬНЫЙ plain-объект, а НЕ Proxy
+ * поверх contextBridge-объекта (ошибка f14962ca).
+ *
+ * `contextBridge` отдаёт неймспейсы как объекты с read-only non-configurable
+ * data-свойствами. Proxy поверх такого объекта, чей `get` возвращает новую
+ * обёртку функции, нарушает инвариант Proxy (для read-only non-configurable
+ * data-свойства trap обязан вернуть ИСХОДНОЕ значение) — renderer падает с
+ * `TypeError: 'get' on proxy: property 'onDeepLink' is a read-only and
+ * non-configurable data property…` ещё до монтирования UI. Юнит-шимы на
+ * plain-объектах этот инвариант не воспроизводят и дефект не ловят.
+ *
+ * Поэтому фасад собирается явно: собственные ключи моста копируются в новый
+ * объект, функции оборачиваются восстановлением `EtnError`, остальные значения
+ * прокидываются как есть. Новый объект не несёт чужих инвариантов, поэтому
+ * подмена функций безопасна.
  */
 function withIpcErrorRevival<T extends object>(target: T): T {
-  return new Proxy(target, {
-    get(obj, prop, receiver) {
-      const value = Reflect.get(obj, prop, receiver) as unknown;
-      if (typeof value !== 'function') return value;
-      return (...args: unknown[]): unknown => {
-        const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
-        return isThenable(result) ? result.then(unwrapIpcResult) : result;
-      };
-    },
-  }) as T;
+  const facade: Record<PropertyKey, unknown> = {};
+  for (const key of Reflect.ownKeys(target)) {
+    const value = (target as Record<PropertyKey, unknown>)[key];
+    facade[key] =
+      typeof value === 'function'
+        ? reviveNamespaceResult(target, value as (...args: unknown[]) => unknown)
+        : value;
+  }
+  return facade as T;
 }
 
 /**

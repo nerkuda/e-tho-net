@@ -37,6 +37,30 @@ function installFakeBridge(bridge: Record<string, unknown>): void {
   (globalThis as any).window = { etn: bridgeClone(bridge) as Record<string, unknown> };
 }
 
+/**
+ * Неймспейс, воспроизводящий инвариант `contextBridge`: собственные свойства —
+ * read-only non-configurable data-свойства. Proxy поверх такого объекта,
+ * возвращающий из `get` новую обёртку функции, нарушает инвариант Proxy и
+ * роняет renderer (`TypeError: 'get' on proxy …`) — ровно дефект f14962ca,
+ * который plain-объектный шим выше не ловил.
+ */
+function frozenNamespace(methods: Record<string, unknown>): Record<string, unknown> {
+  const ns: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(methods)) {
+    Object.defineProperty(ns, key, {
+      value,
+      writable: false,
+      configurable: false,
+      enumerable: true,
+    });
+  }
+  return ns;
+}
+
+function installFrozenBridge(bridge: Record<string, unknown>): void {
+  (globalThis as any).window = { etn: bridge };
+}
+
 describe('Восстановление EtnError из конверта IPC (ошибка f14962ca)', () => {
   it('toIpcErrorEnvelope сохраняет code/details/request_id у EtnError', () => {
     const envelope = toIpcErrorEnvelope(
@@ -112,6 +136,39 @@ describe('Восстановление EtnError из конверта IPC (ош�
         assert.ok(!(err instanceof EtnError));
         assert.equal(err.name, 'TypeError');
         assert.equal(err.message, 'bad arg');
+        return true;
+      },
+    );
+  });
+
+  it('read-only non-configurable свойства моста (инвариант contextBridge) не роняют фасад', () => {
+    // Регресс f14962ca: доступ к `deepLink.onDeepLink` — read-only
+    // non-configurable data-свойство — не должен бросать TypeError Proxy.
+    installFrozenBridge({
+      deepLink: frozenNamespace({ onDeepLink: () => () => {} }),
+      types: frozenNamespace({
+        updateThoughtType: () =>
+          Promise.resolve({
+            __etnError: true,
+            error: {
+              name: 'EtnError',
+              message: 'locked',
+              code: 'LOCKED',
+              details: { holder: { user_id: 'u1' } },
+            },
+          }),
+      }),
+    });
+
+    const unsubscribe = (etn as any).deepLink.onDeepLink(() => {});
+    assert.equal(typeof unsubscribe, 'function');
+
+    return assert.rejects(
+      () => (etn as any).types.updateThoughtType('net', 'id', {}, 1),
+      (err: any) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal(err.code, 'LOCKED');
+        assert.deepEqual((err.details as { holder?: unknown }).holder, { user_id: 'u1' });
         return true;
       },
     );
