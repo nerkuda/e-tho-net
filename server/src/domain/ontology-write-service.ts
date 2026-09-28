@@ -88,7 +88,7 @@ import {
   updateNetworkProperty,
   updateTypeProperty,
 } from './property-service.js';
-import { assertParentValid } from './type-hierarchy.js';
+import { assertParentValid, getRootTypeId } from './type-hierarchy.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
@@ -384,6 +384,11 @@ function resolveThoughtTypes(
       parent = { kind: 'existing', id: pe.id };
     } else if (item.parent_ref !== undefined && item.parent_ref !== null) {
       parent = { kind: 'ref', ref: item.parent_ref };
+    } else if (item.parent === null) {
+      // Явный `parent: null` — прикрепить тип под корневой тип. Отличаем от
+      // отсутствующего ключа (`undefined`), который у существующего типа
+      // оставляет родителя без изменений (ошибка f14962ca).
+      parent = { kind: 'root' };
     } else if (id === null) {
       parent = { kind: 'root' };
     } else {
@@ -463,6 +468,9 @@ function resolveLinkTypes(
       parent = { kind: 'existing', id: pe.id };
     } else if (item.parent_ref !== undefined && item.parent_ref !== null) {
       parent = { kind: 'ref', ref: item.parent_ref };
+    } else if (item.parent === null) {
+      // Явный `parent: null` — под корневой тип связи (см. выше, ошибка f14962ca).
+      parent = { kind: 'root' };
     } else if (id === null) {
       parent = { kind: 'root' };
     } else {
@@ -1088,6 +1096,27 @@ export function writeOntology(
         ) {
           updateInput.comment_template_md = item.comment_template_md;
         }
+        // Явно заданный `parent` (id существующего типа или null — «под
+        // корень») у СУЩЕСТВУЮЩЕГО типа раньше молча терялся: `parent` брался
+        // только на создании, а фаза 1.5 обрабатывала лишь `parent_ref`, поэтому
+        // патч с изменённым родителем отвечал `action: "unchanged"`, а родитель
+        // не менялся (ошибка f14962ca). Корневому типу родителя не назначают —
+        // для него явный parent остаётся без изменений.
+        if (!existing.is_root) {
+          const desiredParentId =
+            item.parent.kind === 'existing'
+              ? item.parent.id
+              : item.parent.kind === 'root'
+                ? getRootTypeId(ndb, 'thought_types')
+                : undefined;
+          if (
+            desiredParentId !== undefined &&
+            desiredParentId !== null &&
+            desiredParentId !== existing.parent_id
+          ) {
+            updateInput.parent_id = desiredParentId;
+          }
+        }
         if (Object.keys(updateInput).length > 0) {
           // 0.8.2, задача 8ea1ab6a: MCP не имеет интерактивного подтверждения;
           // смена parent_id у используемого типа мысли сразу применяется,
@@ -1183,6 +1212,24 @@ export function writeOntology(
         if (item.width !== undefined && item.width !== existing.width) updateInput.width = item.width;
         if (item.description !== undefined && item.description !== existing.description) {
           updateInput.description = item.description;
+        }
+        // Явный `parent`/`parent: null` у существующего типа связи применяется
+        // так же, как у типа мысли (ошибка f14962ca): без этого патч отвечал
+        // `unchanged`, а родитель не менялся.
+        if (!existing.is_root) {
+          const desiredParentId =
+            item.parent.kind === 'existing'
+              ? item.parent.id
+              : item.parent.kind === 'root'
+                ? getRootTypeId(ndb, 'link_types')
+                : undefined;
+          if (
+            desiredParentId !== undefined &&
+            desiredParentId !== null &&
+            desiredParentId !== existing.parent_id
+          ) {
+            updateInput.parent_id = desiredParentId;
+          }
         }
         if (Object.keys(updateInput).length > 0) {
           updateLinkType(ndb, id, updateInput, undefined, actorUserId);

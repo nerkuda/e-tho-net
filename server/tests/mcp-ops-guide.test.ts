@@ -85,10 +85,14 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.match(toolText(ontologyTopic), /value_type/);
         assert.match(toolText(ontologyTopic), /reparent_blocked_by_layer/);
         // 8c64fdd4: тема обязана однозначно говорить, что принимают `parent`
-        // и `id`, — `parent` только id, `id` только существующий элемент.
+        // и `id`, — `parent` только id (имя не резолвится), `id` только
+        // существующий элемент.
+        // f14962ca: явный `parent` работает и на патче существующего типа,
+        // `parent: null` — прикрепление под корневой тип.
         const ontologyText = toolText(ontologyTopic);
         assert.match(ontologyText, /Адресация и создание элементов/);
-        assert.match(ontologyText, /`parent` — ТОЛЬКО id/);
+        assert.match(ontologyText, /`parent` — id существующего/);
+        assert.match(ontologyText, /`null` — прикрепить тип под\s*\n?корневой/);
         assert.match(ontologyText, /id ему\s*\n?генерирует сервер|генерирует сервер/);
 
         const queryTopic = await handle.client.callTool({

@@ -22,7 +22,61 @@
  * The `typeof window` guard keeps the module importable from Node unit tests.
  */
 
+import { EtnError } from '@etn/shared';
+
+import {
+  isIpcErrorEnvelope,
+  type IpcErrorEnvelope,
+} from '../../main/ipc/contract.js';
 import type { EtnApi, EtnBridgeApi } from '../../main/ipc/contract.js';
+
+/**
+ * Восстановить ошибку из {@link IpcErrorEnvelope} в КОНТЕКСТЕ RENDERER
+ * (ошибка f14962ca). `contextBridge` теряет кастомные свойства ошибок, поэтому
+ * `EtnError` c `code`/`details` собирается здесь: только в этом контексте
+ * `instanceof EtnError` и `err.details` снова работают для UI-веток (диалог
+ * подтверждения смены родителя, `LOCKED`, `VERSION_CONFLICT`).
+ */
+function reviveIpcError(error: IpcErrorEnvelope['error']): Error {
+  if (error.code !== undefined) {
+    return new EtnError(error.code, error.message, error.details, error.request_id);
+  }
+  const revived = new Error(error.message);
+  if (error.name !== '') revived.name = error.name;
+  return revived;
+}
+
+/** Конверт ошибки превратить в брошенную ошибку; обычный результат — как есть. */
+function unwrapIpcResult<T>(value: T): T {
+  if (isIpcErrorEnvelope(value)) throw reviveIpcError(value.error);
+  return value;
+}
+
+function isThenable(value: unknown): value is Promise<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Обернуть неймспейс моста так, чтобы его методы возвращали результат,
+ * очищенный от конвертов ошибок: main отдаёт отказ плоским объектом
+ * ({@link IpcErrorEnvelope}), а renderer бросает восстановленный `EtnError`.
+ */
+function withIpcErrorRevival<T extends object>(target: T): T {
+  return new Proxy(target, {
+    get(obj, prop, receiver) {
+      const value = Reflect.get(obj, prop, receiver) as unknown;
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]): unknown => {
+        const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
+        return isThenable(result) ? result.then(unwrapIpcResult) : result;
+      };
+    },
+  }) as T;
+}
 
 /**
  * Resolves the current `window.etn` lazily. `lib/etn.ts` is imported by the
@@ -103,8 +157,13 @@ export const etn: EtnApi = new Proxy(
             'Ensure the preload script has loaded.',
         );
       }
-      if (prop === 'structures') return structuresFacade(api);
-      return (api as unknown as Record<string, unknown>)[prop];
+      if (prop === 'structures') return withIpcErrorRevival(structuresFacade(api));
+      const value = (api as unknown as Record<string, unknown>)[prop];
+      // Неймспейсы оборачиваем, чтобы их методы восстанавливали `EtnError`
+      // из конверта ошибки (f14962ca); скаляры/промисы без обёртки отдаём как есть.
+      return typeof value === 'object' && value !== null
+        ? withIpcErrorRevival(value as object)
+        : value;
     },
   },
 ) as EtnApi;
