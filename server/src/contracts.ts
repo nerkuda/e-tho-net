@@ -1235,7 +1235,10 @@ const OntologyWriteThoughtTypeFields = z
     ref: z.string().min(1).optional(),
     id: z.string().min(1).nullable().optional(),
     name: z.string().min(1).optional(),
-    parent: z.string().min(1).nullable().optional(),
+    // Пустая строка трактуется как `null` — прикрепить под корневой тип
+    // (паритет с REST `PATCH /thought-types`, где `parse: '' → null`),
+    // ошибка 1eb2a430.
+    parent: z.string().nullable().optional(),
     parent_ref: z.string().min(1).nullable().optional(),
     description: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
@@ -1255,7 +1258,9 @@ const OntologyWriteLinkTypeFields = z
     id: z.string().min(1).nullable().optional(),
     name_forward: z.string().min(1).optional(),
     name_reverse: z.string().min(1).optional(),
-    parent: z.string().min(1).nullable().optional(),
+    // Пустая строка трактуется как `null` — под корневой тип связи
+    // (паритет с REST `PATCH /link-types`, ошибка 1eb2a430).
+    parent: z.string().nullable().optional(),
     parent_ref: z.string().min(1).nullable().optional(),
     color: z.string().nullable().optional(),
     style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),

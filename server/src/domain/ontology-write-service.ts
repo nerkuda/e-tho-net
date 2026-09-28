@@ -305,7 +305,10 @@ function validateParentXor<T extends { parent?: string | null; parent_ref?: stri
   sectionLabel: string,
   index: number,
 ): void {
-  const hasParent = item.parent !== undefined && item.parent !== null && item.parent !== '';
+  // Явно заданный `parent` — любое значение, кроме отсутствующего ключа:
+  // `null` и `''` оба означают «под корень» (ошибка 1eb2a430), поэтому тоже
+  // конфликтуют с `parent_ref`.
+  const hasParent = item.parent !== undefined;
   const hasParentRef = item.parent_ref !== undefined && item.parent_ref !== null;
   if (hasParent && hasParentRef) {
     throw new EtnError(
@@ -384,10 +387,12 @@ function resolveThoughtTypes(
       parent = { kind: 'existing', id: pe.id };
     } else if (item.parent_ref !== undefined && item.parent_ref !== null) {
       parent = { kind: 'ref', ref: item.parent_ref };
-    } else if (item.parent === null) {
-      // Явный `parent: null` — прикрепить тип под корневой тип. Отличаем от
-      // отсутствующего ключа (`undefined`), который у существующего типа
-      // оставляет родителя без изменений (ошибка f14962ca).
+    } else if (item.parent === null || item.parent === '') {
+      // Явный `parent: null` ИЛИ пустая строка (`parent: ""`) — прикрепить тип
+      // под корневой тип. Пустая строка приравнена к null для паритета с REST
+      // `PATCH /thought-types` (там `parent_id: ""` → null), ошибка 1eb2a430.
+      // Отличаем от отсутствующего ключа (`undefined`), который у
+      // существующего типа оставляет родителя без изменений (ошибка f14962ca).
       parent = { kind: 'root' };
     } else if (id === null) {
       parent = { kind: 'root' };
@@ -468,8 +473,9 @@ function resolveLinkTypes(
       parent = { kind: 'existing', id: pe.id };
     } else if (item.parent_ref !== undefined && item.parent_ref !== null) {
       parent = { kind: 'ref', ref: item.parent_ref };
-    } else if (item.parent === null) {
-      // Явный `parent: null` — под корневой тип связи (см. выше, ошибка f14962ca).
+    } else if (item.parent === null || item.parent === '') {
+      // Явный `parent: null` / `parent: ""` — под корневой тип связи
+      // (см. выше, ошибки f14962ca и 1eb2a430).
       parent = { kind: 'root' };
     } else if (id === null) {
       parent = { kind: 'root' };
@@ -1096,13 +1102,23 @@ export function writeOntology(
         ) {
           updateInput.comment_template_md = item.comment_template_md;
         }
-        // Явно заданный `parent` (id существующего типа или null — «под
-        // корень») у СУЩЕСТВУЮЩЕГО типа раньше молча терялся: `parent` брался
-        // только на создании, а фаза 1.5 обрабатывала лишь `parent_ref`, поэтому
-        // патч с изменённым родителем отвечал `action: "unchanged"`, а родитель
-        // не менялся (ошибка f14962ca). Корневому типу родителя не назначают —
-        // для него явный parent остаётся без изменений.
-        if (!existing.is_root) {
+        // Явно заданный `parent` (id существующего типа, `null`/`""` — «под
+        // корень» или `parent_ref`) у СУЩЕСТВУЮЩЕГО типа раньше молча терялся:
+        // `parent` брался только на создании, а фаза 1.5 обрабатывала лишь
+        // `parent_ref`, поэтому патч с изменённым родителем отвечал
+        // `action: "unchanged"`, а родитель не менялся (ошибка f14962ca).
+        // Корневому типу родителя не назначают: REST `PATCH /thought-types`
+        // отдаёт `VALIDATION_ERROR` «у корневого типа нет родителя» — MCP
+        // приведён к тому же контракту (ошибка 1eb2a430).
+        if (existing.is_root) {
+          if (item.parent.kind !== 'unchanged') {
+            throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+              entity: 'thought_type',
+              id,
+              field: `thought_types[${item.index}].parent`,
+            });
+          }
+        } else {
           const desiredParentId =
             item.parent.kind === 'existing'
               ? item.parent.id
@@ -1214,9 +1230,18 @@ export function writeOntology(
           updateInput.description = item.description;
         }
         // Явный `parent`/`parent: null` у существующего типа связи применяется
-        // так же, как у типа мысли (ошибка f14962ca): без этого патч отвечал
-        // `unchanged`, а родитель не менялся.
-        if (!existing.is_root) {
+        // так же, как у типа мысли (ошибки f14962ca и 1eb2a430): без этого
+        // патч отвечал `unchanged`, а родитель не менялся. Корневому типу
+        // связи родителя не назначают — `VALIDATION_ERROR` (как REST PATCH).
+        if (existing.is_root) {
+          if (item.parent.kind !== 'unchanged') {
+            throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+              entity: 'link_type',
+              id,
+              field: `link_types[${item.index}].parent`,
+            });
+          }
+        } else {
           const desiredParentId =
             item.parent.kind === 'existing'
               ? item.parent.id

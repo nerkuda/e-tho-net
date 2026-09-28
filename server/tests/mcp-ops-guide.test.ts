@@ -92,7 +92,10 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         const ontologyText = toolText(ontologyTopic);
         assert.match(ontologyText, /Адресация и создание элементов/);
         assert.match(ontologyText, /`parent` — id существующего/);
-        assert.match(ontologyText, /`null` — прикрепить тип под\s*\n?корневой/);
+        // 1eb2a430: `null` и `""` равнозначны («под корень»), у корневого
+        // типа родителя нет — явный parent → VALIDATION_ERROR (паритет с REST).
+        assert.match(ontologyText, /`null`\/`""` — прикрепить тип/);
+        assert.match(ontologyText, /у КОРНЕВОГО типа родителя нет/);
         assert.match(ontologyText, /id ему\s*\n?генерирует сервер|генерирует сервер/);
         // 16766f82: тема обязана говорить, что явный `parent_link_type_id`
         // работает и на патче существующего свойства-связи (`null` — под
