@@ -277,7 +277,13 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
     focus: () => view.focus(),
     focusToEnd: () => {
       view.focus();
-      view.dispatch({ selection: { anchor: view.state.doc.length } });
+      // `scrollIntoView` (замечание проверки f4f99e3f): без него при входе в
+      // правку длинного комментария каретка ставится в конец документа вне
+      // видимой части поля, и панель не прокручивается к курсору.
+      view.dispatch({
+        selection: { anchor: view.state.doc.length },
+        scrollIntoView: true,
+      });
     },
     blur: () => view.contentDOM.blur(),
     destroy: () => view.destroy(),
