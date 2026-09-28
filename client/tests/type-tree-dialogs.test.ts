@@ -27,26 +27,21 @@ const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 const read = (rel: string): string => readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
 
 describe('диалоги типов: широкая роль и подпись-подсказка (d866bc65)', () => {
-  it('дерево типов мыслей: роль l и подпись с title', () => {
-    const src = read('screens/type-manager.ts');
+  it('объединённый каталог типов и свойств: роль l и дерево с полной подписью', () => {
+    // С 0.10.2 (задача 979761cd) три списка — вкладки одного диалога; широкую
+    // роль l несёт он (панели роли не задают).
+    const src = read('screens/type-catalogue.ts');
     assert.match(
       src,
-      /title:\s*t\('thoughtTypes\.title'\)[\s\S]{0,400}?size:\s*'l'/,
-      'диалог «Типы мыслей» обязан использовать широкую роль l',
+      /title:\s*t\('catalogue\.title'\)[\s\S]{0,400}?size:\s*'l'/,
+      'объединённый диалог каталога обязан использовать широкую роль l',
     );
-    assert.match(src, /TREE_LABEL_CLASS/, 'подпись строки обязана нести класс .ui-tree-label');
-    assert.match(src, /name\.title = item\.type\.name/, 'подпись строки обязана давать title');
-  });
-
-  it('дерево типов связей: роль l и подпись с title', () => {
-    const src = read('screens/property-manager.ts');
-    assert.match(
-      src,
-      /title:\s*t\('linkTypes\.title'\)[\s\S]{0,400}?size:\s*'l'/,
-      'диалог «Типы связей» обязан использовать широкую роль l',
-    );
-    assert.match(src, /TREE_LABEL_CLASS/, 'подпись строки обязана нести класс .ui-tree-label');
-    assert.match(src, /label\.title =/, 'подпись строки обязана давать title');
+    const tt = read('screens/type-manager.ts');
+    assert.match(tt, /TREE_LABEL_CLASS/, 'подпись строки типа мысли обязана нести .ui-tree-label');
+    assert.match(tt, /name\.title = item\.type\.name/, 'подпись строки обязана давать title');
+    const pm = read('screens/property-manager.ts');
+    assert.match(pm, /TREE_LABEL_CLASS/, 'подпись строки типа связи обязана нести .ui-tree-label');
+    assert.match(pm, /label\.title =/, 'подпись строки обязана давать title');
   });
 });
 

@@ -40,8 +40,9 @@ import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
 import { showNetworkStatisticsDialog } from './network-stats.js';
 import { showSettingsDialog } from './settings.js';
-import { showThoughtTypesDialog } from './type-manager.js';
-import { showLinkTypesTreeDialog, showPropertyManagerDialog } from './property-manager.js';
+// Каталог типов и свойств — один вкладочный диалог (задача 979761cd):
+// команды меню открывают его на своей вкладке.
+import { showTypeCatalogueDialog } from './type-catalogue.js';
 import { showAboutDialog } from './about-dialog.js';
 import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
@@ -101,12 +102,14 @@ export function buildNetMenuItems(counts: NetMenuCounts): MenuItem[] {
   const editorHidden = store.state.editorPosition === 'hidden';
   return [
     menuAction(t('netMenu.thoughtTypes', store.state.thoughtTypes.length), () =>
-      showThoughtTypesDialog(),
+      showTypeCatalogueDialog('thought-types'),
     ),
     menuAction(t('netMenu.linkTypes', store.state.linkTypes.length), () =>
-      showLinkTypesTreeDialog(),
+      showTypeCatalogueDialog('link-types'),
     ),
-    menuAction(t('netMenu.properties', counts.properties), () => showPropertyManagerDialog()),
+    menuAction(t('netMenu.properties', counts.properties), () =>
+      showTypeCatalogueDialog('properties'),
+    ),
     menuAction(t('netMenu.trash', counts.trash), () => {
       const networkId = store.state.networkId;
       if (networkId !== null) void openTrashDialog(networkId);

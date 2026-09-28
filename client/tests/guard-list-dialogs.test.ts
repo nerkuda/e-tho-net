@@ -50,21 +50,26 @@ function section(src: string, startMarker: string, endMarker: string): string {
   return end < 0 ? src.slice(start) : src.slice(start, end);
 }
 
-/** Секция диалога «Типы мыслей» (type-manager.ts). */
+/**
+ * Секция панели «Типы мыслей» (type-manager.ts). До 0.10.2 список был
+ * отдельным диалогом `showThoughtTypesDialog`; задача 979761cd вынесла тело в
+ * панель объединённого диалога каталога — правила 1–7 требования 11ddd910
+ * предъявляются к самой панели, а не к оболочке диалога.
+ */
 function thoughtTypesDialog(): string {
   return section(
     source('screens/type-manager.ts'),
-    'export function showThoughtTypesDialog(): void {',
+    'export function buildThoughtTypesPanel(): CataloguePanel {',
     '// Parent picker',
   );
 }
 
-/** Секция диалога «Типы связей» (property-manager.ts). */
+/** Секция панели «Типы связей» (property-manager.ts) — правило то же. */
 function linkTypesDialog(): string {
   return section(
     source('screens/property-manager.ts'),
-    'export function showLinkTypesTreeDialog(): void {',
-    '\0', // диалог замыкает файл
+    'export function buildLinkTypesPanel(): CataloguePanel {',
+    '\0', // панель замыкает файл
   );
 }
 
@@ -77,11 +82,12 @@ function propertyList(): string {
   );
 }
 
-/** Диалог «Свойства» — потребитель списка (property-manager.ts). */
+/** Панель «Свойства» — потребитель списка (property-manager.ts), до 0.10.2
+ *  отдельный диалог `showPropertyManagerDialog`. */
 function propertyManagerDialog(): string {
   return section(
     source('screens/property-manager.ts'),
-    'export function showPropertyManagerDialog(): void {',
+    'export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): CataloguePanel {',
     '\n  // Realtime:',
   );
 }
@@ -197,25 +203,22 @@ describe('guard: единые правила диалогов-списков (11
     );
   });
 
-  it('R3: футер диалога — только кнопки решения', () => {
-    for (const [name, src] of [
-      ['Типы мыслей', thoughtTypesDialog()],
-      ['Типы связей', linkTypesDialog()],
-    ] as const) {
-      const labels = footerLabels(src);
-      assert.ok(labels.length > 0, `${name}: в футере нет кнопок`);
-      for (const label of labels) {
-        assert.ok(
-          DECISION_LABELS.includes(label),
-          `${name}: в футере недопустимая кнопка «${label}» — правило 3 требования 11ddd910`,
-        );
-      }
+  it('R3: футер объединённого диалога-списка — только кнопки решения', () => {
+    // С 0.10.2 (задача 979761cd) у трёх списков один общий футер — он живёт в
+    // оболочке объединённого диалога (`screens/type-catalogue.ts`), панели
+    // футер не несут.
+    const labels = footerLabels(source('screens/type-catalogue.ts'));
+    assert.ok(labels.length > 0, 'объединённый диалог: в футере нет кнопок');
+    for (const label of labels) {
+      assert.ok(
+        DECISION_LABELS.includes(label),
+        `объединённый диалог: в футере недопустимая кнопка «${label}» — правило 3 требования 11ddd910`,
+      );
     }
-    // Список «Свойства» собирает каркас потребитель — проверяем его футер.
     assert.match(
-      propertyManagerDialog(),
+      source('screens/type-catalogue.ts'),
       /buttons:\s*\[\{\s*label:\s*t\('actions\.close'\),\s*primary:\s*true\s*\}\]/,
-      'Свойства: футер — только «Закрыть»',
+      'объединённый диалог: футер — только «Закрыть»',
     );
   });
 
@@ -656,6 +659,10 @@ const DIALOG_FILES = new Set([
   'screens/settings.ts',
   'screens/tabs/picker.ts',
   'screens/thought-type/filter-dialog.ts',
+  // Объединённый диалог каталога типов и свойств (задача 979761cd): оболочка
+  // вкладочного диалога; списки-панели живут в type-manager/property-manager,
+  // поэтому в LIST_DIALOG_FILES не входит — `.list-dialog-body` несут панели.
+  'screens/type-catalogue.ts',
   'screens/type-manager.ts',
   'screens/workspace-menus.ts',
   'selection/dialogs.ts',
