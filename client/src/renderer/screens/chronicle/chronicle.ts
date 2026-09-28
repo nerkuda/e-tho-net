@@ -778,12 +778,20 @@ async function applyChronicleOps(ops: readonly ChronicleRealtimeOp[]): Promise<v
       continue;
     }
     // Переставить на место по тому же порядку, что серверный: правка даты
-    // сдвигает запись в ленте, а не только её содержимое.
+    // сдвигает запись в ленте, а не только её содержимое. Класс записи считается
+    // по РАЗРЕШЁННОМУ HOME: при `homeId === null` `recordClass` даёт 1 всем
+    // строкам и позиция разойдётся с серверной — недоступный HOME уводит в
+    // полный путь (ошибка 89409d57).
+    const homeForOrder = homeId ?? (await getHome().catch(() => null));
+    if (homeForOrder === null) {
+      await reloadAndSync();
+      return;
+    }
     rows = insertRowByDay(
       rows.filter((r) => r.id !== op.id),
       row,
       order,
-      homeId,
+      homeForOrder,
     );
     changed = true;
   }
