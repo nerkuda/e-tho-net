@@ -81,6 +81,7 @@ import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { operationError } from '../../lib/ui/messages.js';
+import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
@@ -109,7 +110,6 @@ import {
   todayLocal,
   visibleChips,
   weekPeriod,
-  withPreservedScroll,
 } from './diary.js';
 import {
   addThoughtToFilter,
@@ -165,13 +165,6 @@ let homeId: string | null = null;
 let homePromise: Promise<string> | null = null;
 /** Stable scroll container of the feed (`.chron-table-wrap`). */
 let feedWrap: HTMLElement | null = null;
-/**
- * Сохранить позицию прокрутки ленты при следующей отрисовке (0.10.1, итерация
- * приёмки №11, ошибка 407b1827): правка записи и real-time-обновления
- * перерисовывают ленту, и без этого список прыгал в начало. Смена отбора
- * (применение фильтра) позицию не сохраняет — лента показывается с начала.
- */
-let keepFeedScroll = false;
 /** Stable list element re-rendered inside the container (never rebuilt). */
 let feedList: HTMLElement | null = null;
 /** Контроллер клавиатурной навигации ленты (0.10.1, приёмка №9). */
@@ -489,7 +482,8 @@ async function applyFilter(): Promise<void> {
   persistState();
   await getHome().catch(() => undefined);
   await reload();
-  // Смена отбора показывает ленту с начала (позиция не сохраняется).
+  // Смена отбора показывает ленту с начала: reload пересобирает её с якорем,
+  // поэтому позицию сбрасываем явно поверх.
   if (feedWrap !== null) feedWrap.scrollTop = 0;
   syncCalendar();
   void refreshCalendarCounts();
@@ -524,9 +518,8 @@ async function loadMore(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || loadingMore || rows.length >= total) return;
   // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
-  // страницу заново (данные важнее экономии запроса).
+  // страницу заново (данные важнее экономии запроса); прокрутку держит renderFeed.
   if (pendingReconcile) {
-    keepFeedScroll = true;
     await reload();
     return;
   }
@@ -542,7 +535,6 @@ async function loadMore(): Promise<void> {
     rows = [...rows, ...result.rows];
     total = result.total;
     // Дозагрузка «+50» дописывает страницу — прокрутка не должна прыгать вверх.
-    keepFeedScroll = true;
     renderFeed();
   } catch {
     // A failed page keeps what is already shown; the next scroll retries.
@@ -564,7 +556,6 @@ export function scheduleChronicleRefresh(): void {
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
     // Правка записи / real-time: позиция прокрутки ленты сохраняется.
-    keepFeedScroll = true;
     void reload();
     syncCalendar();
     void refreshCalendarCounts();
@@ -635,13 +626,14 @@ function renderFeed(): void {
   } else if (rows.length < total) {
     nodes.push(el('div', 'chron-feed-more muted', t('diary.moreLeft', [rows.length, total])));
   }
-  // Позиция прокрутки ленты сохраняется при перерисовке, вызванной правкой
-  // записи/real-time (0.10.1, итерация приёмки №11, ошибка 407b1827); при смене
-  // отбора флаг не поднят и лента показывается с начала.
-  const scrollTarget = keepFeedScroll ? feedWrap : null;
+  // Позиция прокрутки ленты переживает любую пересборку текущей ленты (правка
+  // записи, real-time, дозагрузка «+50», сворачивание групп): якорь —
+  // ближайшая к кромке карточка (`data-row-key`, lib/ui/scroll-anchor.ts).
+  // Смена отбора показывает ленту с начала (applyFilter сбрасывает scrollTop
+  // после пересборки), переход к записи позиционируется на её карточке.
   const list = feedList;
-  withPreservedScroll(scrollTarget, () => list.replaceChildren(...nodes));
-  keepFeedScroll = false;
+  if (feedWrap !== null) preserveScroll(feedWrap, () => list.replaceChildren(...nodes));
+  else list.replaceChildren(...nodes);
   // Переприменить выделение «текущей» сущности после перерисовки (требование
   // 165323a7): оно сохраняется, если сущность ещё видима, и сбрасывается иначе.
   feedNav?.refresh();
@@ -711,10 +703,7 @@ function insertCreatedRecord(row: ChronicleRow): void {
   pendingReconcile = true;
   slot = null;
   if (inPlace) updateMoreLine();
-  else {
-    keepFeedScroll = true;
-    renderFeed();
-  }
+  else renderFeed();
   feedNav?.refresh();
 }
 

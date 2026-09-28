@@ -169,7 +169,13 @@ export class ShimElement {
   colSpan = 0;
   options: ShimElement[] = [];
   scrollTop = 0;
+  /** Высота содержимого прокручиваемого контейнера (для клампинга `scrollTop`). */
+  scrollHeight = 0;
+  /** Видимая высота прокручиваемого контейнера. */
+  clientHeight = 0;
   offsetWidth = 0;
+  /** Смещение относительно `offsetParent` (якорь сохранения прокрутки). */
+  offsetTop = 0;
   tabIndex = 0;
   focused = false;
   /** Корень, подключённый к документу: читается геттером `isConnected`. */

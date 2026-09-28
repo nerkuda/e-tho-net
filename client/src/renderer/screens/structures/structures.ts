@@ -51,6 +51,7 @@ import {
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
+import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { deepEqual } from '../../lib/ui/state.js';
 import { errText } from '../../lib/dom.js';
@@ -314,8 +315,10 @@ function buildFilter(): StructureFilter {
   return filter;
 }
 
-/** Runs the filter query; `reset` starts a fresh page, otherwise appends. */
-async function applyQuery(reset: boolean): Promise<void> {
+/** Runs the filter query; `reset` starts a fresh page, otherwise appends.
+ *  `keepScroll` сохраняет позицию прокрутки при пересборке (realtime-перезапрос,
+ *  дозагрузка); новый отбор и первый вход показывают список с начала. */
+async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const state = getFilterState();
@@ -365,7 +368,7 @@ async function applyQuery(reset: boolean): Promise<void> {
     // The page carries its own direction flags — the root ellipses are filled
     // right after the query, without waiting for the first expansion (§15.4).
     for (const [id, flags] of Object.entries(result.directions)) directions.set(id, flags);
-    renderTree();
+    renderTree(keepScroll);
   } catch (err) {
     // Отменённый запрос — не ошибка: его сменил более новый (требование
     // ebed4980). Ничего не показываем.
@@ -444,7 +447,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
       hierarchy.delete(`${key}|parents`);
       hierarchy.delete(`${key}|children`);
     }
-    renderTree();
+    renderTree(true);
     return;
   }
   // Expand: fetch one level with the per-branch dedup ids (§15.5).
@@ -458,7 +461,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
     expansion.set(row.key, { ...flags, [dir]: true });
-    renderTree();
+    renderTree(true);
   } catch (err) {
     notice(`Не удалось раскрыть: ${errText(err)}`, 'error');
   }
@@ -483,7 +486,7 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
     });
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
-    renderTree();
+    renderTree(true);
   } catch (err) {
     notice(`Не удалось загрузить ещё: ${errText(err)}`, 'error');
   }
@@ -697,7 +700,9 @@ function reactToStore(): void {
   const visual = visualSlice();
   if (lastDataSlice === null || !deepEqual(lastDataSlice, data)) {
     syncRenderSlices(data, visual);
-    renderTree();
+    // Обновление слоя данных без явного сброса (подгрузка типов/связей, приход
+    // имён) не должно уводить список вверх — позиция прокрутки сохраняется.
+    renderTree(true);
     return;
   }
   if (lastVisualSlice === null || !deepEqual(lastVisualSlice, visual)) {
@@ -731,9 +736,19 @@ function cloudVisualState(thoughtId: string, selection: ReadonlySet<string>): Cl
 /** Rebuilds the results tree from the current state (full rebuild, small lists).
  *  An expanding/collapsing layout change plays a FLIP animation (§15.5): the
  *  rows keep moving smoothly from their old places, freshly revealed rows
- *  fade in, and removed rows dissolve in place. */
-function renderTree(): void {
+ *  fade in, and removed rows dissolve in place.
+ *
+ *  `keepScroll` сохраняет позицию прокрутки через {@link preserveScroll}: так
+ *  пересобираются realtime-перезапрос, раскрытие/свёртывание узла и дозагрузка
+ *  соседей. Новый отбор и первый вход показывают список с начала. */
+function renderTree(keepScroll = false): void {
   if (host === null || resultsHost === null) return;
+  if (keepScroll) {
+    // Якорь снимается до сборки, позиция восстанавливается после (тот же путь
+    // сборки без сохранения — иначе позиция сбросилась бы внутри самого rebuild).
+    preserveScroll(resultsHost, () => renderTree(false));
+    return;
+  }
   applyCanvasScaleVars(host);
   finalizeTreeAnimation();
   const before = captureTreeLayout();
@@ -779,7 +794,7 @@ function renderTree(): void {
   if (resultPager.hasMore) {
     const more = el('button', 'st-more', 'Показать ещё');
     more.type = 'button';
-    more.addEventListener('click', () => void applyQuery(false));
+    more.addEventListener('click', () => void applyQuery(false, true));
     resultsHost.append(more);
   }
   const counter = badge(`Показано ${resultIds.length} из ${total}`, {
@@ -1436,7 +1451,7 @@ async function reloadAll(): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
   if (networkId === null || networkIdSeen !== `${networkId}:${tabId ?? ''}`) return;
-  await applyQuery(true);
+  await applyQuery(true, true);
   // The visible set may be unchanged while the links themselves changed
   // (realtime) — force the edges refresh even for the same id signature.
   edgesSignature = '';
@@ -1463,7 +1478,7 @@ async function reloadAll(): Promise<void> {
       }
     }
   }
-  renderTree();
+  renderTree(true);
 }
 
 /** Drops caches after a thought was deleted locally (also see history prune). */

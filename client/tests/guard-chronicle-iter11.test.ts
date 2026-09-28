@@ -7,8 +7,9 @@
  *    (`findDaySection` + `applyDayCollapsed`), а не полной пересборкой —
  *    иначе теряются фокус клавиатуры и позиция прокрутки (ошибки ab78e7b5,
  *    407b1827);
- *  - перерисовка ленты при правке записи/real-time сохраняет `scrollTop`
- *    (`withPreservedScroll`);
+ *  - перерисовка ленты при правке записи/real-time сохраняет позицию прокрутки
+ *    (`preserveScroll`, lib/ui/scroll-anchor.ts — уровень 1 тех.проекта
+ *    1d48df6d: якорь по ключу строки вместо простого `scrollTop`);
  *  - фокусируемый узел поля «мысли» — кнопка «+ мысль» (`.diary-chip-add`),
  *    а не пустой контейнер привязок (ошибка 02b4d513).
  *
@@ -38,11 +39,11 @@ describe('сторож: группы дат переключаются на ме
     );
   });
 
-  it('перерисовка ленты сохраняет позицию прокрутки через withPreservedScroll', () => {
+  it('перерисовка ленты сохраняет позицию прокрутки через preserveScroll', () => {
     assert.match(
       CHRONICLE,
-      /withPreservedScroll\(scrollTarget,\s*\(\)\s*=>/,
-      'renderFeed сохраняет scrollTop при перерисовке (правка/real-time)',
+      /preserveScroll\(feedWrap,\s*\(\)\s*=>/,
+      'renderFeed сохраняет позицию прокрутки при пересборке (правка/real-time)',
     );
   });
 
