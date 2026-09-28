@@ -75,6 +75,26 @@ function installEtn(): void {
   };
 }
 
+/** Adds one in-type text property so the «Свойства» table actually attaches. */
+function installTypeProperty(): void {
+  const win = (globalThis as any).window as Record<string, any>;
+  win.etn.types = {
+    listTypeProperties: async () => [
+      {
+        id: 'p1',
+        property_id: 'p1',
+        owner_type: 'thought_type',
+        owner_id: 'ta',
+        key: 'Заметка',
+        value_type: 'text',
+        config: null,
+        required: false,
+        position: 0,
+      },
+    ],
+  };
+}
+
 function makeThought(overrides: Partial<Thought> = {}): Thought {
   return {
     id: 't1',
@@ -246,7 +266,7 @@ describe('инкрементальная смена сущности в реда
     assert.equal(scrollBox.querySelector('.editor-title-input')!.value, 'T9');
   });
 
-  it('фокус поля заголовка возвращается после смены мысли', async () => {
+  it('фокус поля заголовка сохраняется на переиспользованном поле', async () => {
     shimDom();
     installEtn();
     const { mountEditor } = await import('../src/renderer/editor/editor.js');
@@ -273,7 +293,105 @@ describe('инкрементальная смена сущности в реда
     await flush();
 
     const titleB = scrollBox.querySelector('.editor-title-input')!;
-    assert.notEqual(titleB, titleA, 'шапка пересобрана на новое поле');
-    assert.equal(titleB.focused, true, 'фокус перенесён на поле заголовка новой мысли');
+    assert.equal(titleB, titleA, 'поле заголовка переиспользовано — тот же узел');
+    assert.equal(titleB.value, 'B', 'значение обновлено на новую мысль');
+    assert.equal(titleB.focused, true, 'фокус остался на поле заголовка');
+  });
+
+  it('смена мысли того же типа переиспользует поля шапки и построенные панели', async () => {
+    shimDom();
+    installEtn();
+    installTypeProperty();
+    const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    // Build the «Свойства» pane so its keyed table is observable.
+    editorInternals.activateTab('properties');
+    await flush();
+
+    const scrollBox = host.children[1]!;
+    const paneHost = scrollBox.querySelector('.tab-pane-root')!;
+    const titleA = scrollBox.querySelector('.editor-title-input')!;
+    const synA = scrollBox.querySelector('.synonyms-input')!;
+    const paneA = paneHost.children[0]!;
+    const tableA = scrollBox.querySelector('.prop-table');
+    assert.ok(tableA !== null, 'таблица «Свойства» построена');
+
+    store.update({
+      focus: makeFocus(
+        makeThought({ id: 't2', title: 'B', type_id: 'ta', synonyms: ['синоним'] }),
+      ),
+    } as any);
+    await flush();
+
+    assert.equal(scrollBox.querySelector('.editor-title-input'), titleA, 'поле заголовка — тот же узел');
+    assert.equal(scrollBox.querySelector('.synonyms-input'), synA, 'поле синонимов — тот же узел');
+    assert.equal(titleA.value, 'B', 'заголовок обновлён на новую мысль');
+    assert.equal(synA.value, 'синоним', 'синонимы обновлены на новой мысли');
+    assert.equal(paneHost.children[0], paneA, 'панель вкладки переиспользована — тот же узел');
+    assert.equal(
+      scrollBox.querySelector('.prop-table'),
+      tableA,
+      'таблица «Свойства» не пересобрана — живы строки по ключам',
+    );
+  });
+
+  it('устаревший загрузчик счётчика не перезаписывает счётчик новой мысли', async () => {
+    shimDom();
+    installEtn();
+    const { mountEditor, registerTabCount } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    // Controllable loader for the counted «Дневник» tab: each entity's count is
+    // resolved manually so we can let the PREVIOUS entity's promise settle last.
+    const resolvers = new Map<string, (n: number) => void>();
+    registerTabCount(
+      'chrono',
+      (ctx) =>
+        new Promise<number | undefined>((resolve) => {
+          resolvers.set(ctx.ownerId, (n) => resolve(n));
+        }),
+    );
+
+    const scrollBox = host.children[1]!;
+    const tabBar = scrollBox.querySelector('.editor-tabs')!;
+    const badge = tabBar.querySelectorAll('.editor-tab')[4]!.querySelector('.editor-tab-count')!;
+
+    // t1 → t2 → t3 (same type): t2's and t3's loaders are both in flight.
+    store.update({ focus: makeFocus(makeThought({ id: 't2', title: 'B', type_id: 'ta' })) } as any);
+    await flush();
+    store.update({ focus: makeFocus(makeThought({ id: 't3', title: 'C', type_id: 'ta' })) } as any);
+    await flush();
+    assert.ok(resolvers.has('t2') && resolvers.has('t3'), 'загрузчики обеих мыслей запущены');
+
+    // The CURRENT entity (t3) settles first, then the stale t2 loader.
+    resolvers.get('t3')!(3);
+    await flush();
+    assert.equal(badge.textContent, '(3)', 'счётчик актуальной мысли записан');
+    resolvers.get('t2')!(2);
+    await flush();
+    assert.equal(badge.textContent, '(3)', 'устаревший загрузчик не перезаписал счётчик');
   });
 });

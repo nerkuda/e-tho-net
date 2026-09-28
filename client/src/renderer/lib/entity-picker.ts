@@ -1204,6 +1204,13 @@ export interface EntityCombo {
   root: HTMLElement;
   /** Текущее значение (`null` — пусто). */
   value(): string | null;
+  /**
+   * Программно устанавливает значение БЕЗ вызова `onChange` (внешняя
+   * перепривязка поля к другой сущности того же вида, задача 90b2256e: шапка
+   * редактора при смене мысли обновляет значения на месте, а не пересобирает
+   * поле). Перерисовывает облачко/режим поля, значение владельцу не сохраняет.
+   */
+  setValue(id: string | null): void;
   /** Закрывает выпадашку и снимает слушатели. */
   dispose(): void;
 }
@@ -1356,14 +1363,14 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
             ? undefined
             : {
                 onRemove: () => {
-                  setValue(null);
+                  commitValue(null);
                 },
               },
       }),
     );
   };
 
-  const setValue = (id: string | null): void => {
+  const commitValue = (id: string | null): void => {
     if (opts.disabled === true) return;
     // Узел с фокусом сейчас исчезнет (крестик облачка) или скроется (строка
     // ввода заполненного поля) — запоминаем фокус, чтобы вернуть его живому
@@ -1417,9 +1424,23 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       ...(catalogue !== undefined ? { catalogue } : {}),
     }).then((ids) => {
       if (ids === null) return;
-      setValue(ids[0] ?? null);
+      commitValue(ids[0] ?? null);
     });
   }
+
+  /**
+   * Внешняя установка значения (см. {@link EntityCombo.setValue}): меняет
+   * показанное значение, НЕ уведомляя владельца (`onChange` не зовётся) и не
+   * трогая фокус — поле переиспользуется при смене сущности того же вида.
+   */
+  const setValue = (id: string | null): void => {
+    current = id;
+    const opt = id !== null ? byId.get(id) : undefined;
+    currentCloud = opt?.cloud ?? null;
+    input.value = '';
+    renderValue();
+    renderMode();
+  };
 
   /** Строка выпадашки по варианту каталога: облачко типа (значок, цвета,
    *  начертание) либо, у свойства-связи, значок конца связи с парной подписью;
@@ -1539,7 +1560,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       id = null; // неудачное создание ведёт себя как отказ
     }
     if (id !== null) {
-      setValue(id);
+      commitValue(id);
       return;
     }
     // Отказ: вернуть каретку в поле и снова открыть список с той же строкой.
@@ -1558,10 +1579,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         return;
       }
       if (entry.value === '') {
-        setValue(null);
+        commitValue(null);
         return;
       }
-      setValue(entry.value);
+      commitValue(entry.value);
     },
   });
 
@@ -1580,6 +1601,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   return {
     root,
     value: () => current,
+    setValue,
     dispose: () => handle?.dispose(),
   };
 }
