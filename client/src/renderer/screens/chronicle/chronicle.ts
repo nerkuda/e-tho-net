@@ -972,13 +972,26 @@ function updateMoreLine(): void {
  * месте (0.10.1, итерация приёмки №8, п.2) — DOM-позиция и скролл сохраняются,
  * соседние карточки не пересобираются. `feedList` при этом не перерисовывается
  * целиком; счётчики календаря обновляются отдельным запросом (фоном).
+ *
+ * Место строки в ленте считается по РАЗРЕШЁННОМУ HOME (`homeId ?? getHome()`), а
+ * не по модульному `homeId`: при `homeId === null` `recordClass` даёт 1 всем
+ * строкам и позиция расходится с серверной (та же природа, что 89409d57).
+ * Недоступный HOME уводит в полный путь — слот убираем, лента перезагружается
+ * (ошибка 810520c5).
  */
-function insertCreatedRecord(row: ChronicleRow): void {
+async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
+  const home = homeId ?? (await getHome().catch(() => null));
   const slotRoot = slot?.root ?? null;
+  if (home === null) {
+    slot = null;
+    slotRoot?.remove();
+    await reload();
+    return;
+  }
   const card = buildRecordCard(row);
   const inPlace = slotRoot !== null && slotRoot.parentElement !== null;
   if (inPlace) slotRoot!.replaceWith(card);
-  rows = insertRowByDay(rows, row, getFilterState().order, homeId);
+  rows = insertRowByDay(rows, row, getFilterState().order, home);
   total += 1;
   pendingReconcile = true;
   slot = null;
@@ -986,7 +999,6 @@ function insertCreatedRecord(row: ChronicleRow): void {
   else renderFeed();
   feedNav?.refresh();
 }
-
 /** Свернуть/развернуть все показанные группы дат (кнопки верхней панели). */
 function setAllDaysCollapsed(collapsed: boolean): void {
   collapsedDays.clear();
@@ -1468,6 +1480,13 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
   if (thoughtIds.length === 0) return;
   try {
     const fresh = await etn.comments.get(networkId, rowId);
+    // Первая содержательная привязка выводит запись из HOME-блока вниз (класс
+    // записи становится > 0). Сверяемся с РАЗРЕШЁННЫМ HOME: при `homeId === null`
+    // HOME-цель не отличить от обычной (ошибка 810520c5, корень 89409d57).
+    const home = homeId ?? (await getHome().catch(() => null));
+    const firstBinding =
+      home !== null &&
+      !fresh.targets.some((tg) => tg.owner_type === 'thought' && tg.owner_id !== home);
     let version = fresh.version;
     let attached = 0;
     for (const id of thoughtIds) {
@@ -1478,6 +1497,10 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
     }
     if (attached === 0) notice(t('diary.alreadyAttached'), 'info');
     await reload();
+    // Перемещённая вниз запись должна быть видна: прокручиваем к её карточке, а
+    // если день записи ниже загруженной страницы — показываем ленту с начала
+    // (ошибка 810520c5, симметрично 368747a6).
+    if (firstBinding) revealRecord(rowId);
   } catch (err) {
     notice(t('diary.attachFailed', [errText(err)]), 'error');
   }
@@ -1650,7 +1673,7 @@ async function ensureSlot(opts: {
     // откат на полную перезагрузку ради точности данных.
     const localRow = await localRowFromComment(created, home);
     if (localRow !== null) {
-      insertCreatedRecord(localRow);
+      await insertCreatedRecord(localRow);
       syncCalendar();
       void refreshCalendarCounts();
     } else {
@@ -1826,6 +1849,22 @@ function focusRecord(id: string, day: string): void {
   card?.scrollIntoView({ block: 'center' });
 }
 
+/**
+ * Показывает запись после её перемещения между блоками ленты: прокручивает к
+ * карточке записи, а если карточки в загруженной странице нет (день записи ниже
+ * текущей позиции) — показывает ленту с начала. Keyed-сверка сохраняет позицию
+ * прокрутки, поэтому перемещённая запись иначе остаётся вне вида (ошибка
+ * 810520c5, симметрично 368747a6).
+ */
+function revealRecord(id: string): void {
+  const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
+  if (card !== null && card !== undefined) {
+    card.scrollIntoView({ block: 'center' });
+    return;
+  }
+  if (feedWrap !== null) feedWrap.scrollTop = 0;
+}
+
 /** Догружает страницы ленты, пока запись не появится (она внутри периода). */
 async function loadUntilRecord(id: string): Promise<boolean> {
   while (!rows.some((r) => r.id === id) && rows.length < total) {
@@ -1963,10 +2002,18 @@ export async function openChronicleLinkById(id: string): Promise<void> {
 async function getHome(): Promise<string> {
   if (homeId !== null) return homeId;
   if (homePromise === null) {
-    homePromise = findRootThought(requireNetworkId()).then((root) => {
-      homeId = root.id;
-      return root.id;
-    });
+    homePromise = findRootThought(requireNetworkId())
+      .then((root) => {
+        homeId = root.id;
+        return root.id;
+      })
+      .catch((err: unknown) => {
+        // Сбой разрешения HOME не кэшируем навсегда: сбрасываем промис, чтобы
+        // следующее обращение сделало новую попытку, а не осталось в fallback до
+        // перезагрузки экрана (ошибка 810520c5).
+        homePromise = null;
+        throw err;
+      });
   }
   return homePromise;
 }

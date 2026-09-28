@@ -267,7 +267,7 @@ describe('приёмка №9, п.2: клавиатурная навигация
     assert.equal(handle.current(), null, 'исчезнувшая сущность сбрасывает выделение');
   });
 
-  it('экран подключает контроллер к ленте и передаёт homeId в локальную вставку', async () => {
+  it('экран подключает контроллер к ленте и считает класс вставки по разрешённому HOME', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const src = readFileSync(
@@ -277,10 +277,17 @@ describe('приёмка №9, п.2: клавиатурная навигация
     assert.match(src, /attachFeedNav\(feedWrap, \{/, 'лента подключает контроллер навигации');
     assert.match(src, /feedWrap\.tabIndex = 0/, 'лента фокусируема для клавиатуры');
     assert.match(src, /feedNav\?\.refresh\(\)/, 'после перерисовки выделение переприменяется');
+    // Класс строки при локальной вставке считается по РАЗРЕШЁННОМУ HOME (ошибка
+    // 810520c5): при `homeId === null` место записи расходилось с серверным.
     assert.match(
       src,
-      /insertRowByDay\(rows, row, getFilterState\(\)\.order, homeId\)/,
-      'экран передаёт homeId — класс записи считается как на сервере',
+      /const home = homeId \?\? \(await getHome\(\)\.catch\(\(\) => null\)\);/,
+      'локальная вставка разрешает HOME',
+    );
+    assert.match(
+      src,
+      /insertRowByDay\(rows, row, getFilterState\(\)\.order, home\)/,
+      'экран передаёт разрешённый home — класс записи считается как на сервере',
     );
   });
 });
