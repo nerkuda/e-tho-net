@@ -60,7 +60,6 @@ import { createRealtimeBatch } from '../../lib/realtime-batch.js';
 import {
   applyLinkUpdateToState,
   applyThoughtUpdateToState,
-  linkChangeAffectsDirections,
   linkChangeNeedsReload,
   removeLinkFromState,
   removeThoughtFromState,
@@ -1548,7 +1547,7 @@ function connectorLabel(links: FocusEdge[]): string {
  * |---|---|---|
  * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `updated` — ЛЮБАЯ правка (ключ `updated_at`); сортировка `alpha` или активный текст. отбор + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
  * | `thought.deleted` | убрать из `resultIds`/`refs`/`directions`/`hierarchy`/`edges` → строка уходит removed-путём сверки | нет среди видимых — игнор |
- * | `link.updated` | ребро нарисовано и меняется оформление (`type_id`/`color`/`style`/`width`/`marked_for_deletion`) → `edges` + перерисовка линий; `type_id` под фильтром обхода или `marked_for_deletion` при скрытой корзине — ещё и точечный додар `directions` концов | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active` — структура/наличие линии |
+ * | `link.updated` | ребро нарисовано и меняется только оформление (`color`/`style`/`width`) → `edges` + перерисовка линий | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active`; смена `type_id` под активным фильтром обхода (сосед может выпасть из раскрытых уровней); `marked_for_deletion` при скрытой корзине (линия обязана исчезнуть) — состав/структура графа |
  * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии + точечный додар `directions` концов | ребро не нарисовано — игнор |
  * | `thought.created` | — | всегда: вхождение в отбор не проверяется (нет построения проверки членства) |
  * | `link.created`, `property-value.*`, `thought-type*`, `link-type*`, `property-definition.*`, `*-view.*`, `layer.merged` | — | всегда (состав/структура/каталог) |
@@ -1559,11 +1558,14 @@ function connectorLabel(links: FocusEdge[]): string {
  * {@link scheduleStructuresRefresh} (полный путь) сами — своё realtime-эхо до
  * рендерера не доходит.
  *
- * **Эллипсы при правке/удалении ребра.** Линии применяются точечно, но
- * `directions` (наполненность эллипсов) считается сервером по ВСЕМ активным
- * связям мысли, а не только по видимым, — из кэша `edges` её не вывести.
- * Поэтому для концов изменённого/удалённого ребра направления перечитываются
- * точечно ({@link refreshDirections}), а не полной перезагрузкой страницы.
+ * **Эллипсы при удалении ребра.** Линия снимается точечно, но `directions`
+ * (наполненность эллипсов) считается сервером по ВСЕМ активным связям мысли, а
+ * не только по видимым, — из кэша `edges` её не вывести. Поэтому для концов
+ * УДАЛЁННОГО ребра направления перечитываются точечно
+ * ({@link refreshDirections}), а не полной перезагрузкой страницы. Правки,
+ * меняющие состав графа (в том числе смена типа под фильтром обхода и пометка
+ * корзины при скрытой корзине), идут полным путём — эллипсы берутся из
+ * перезапроса.
  */
 type StructuresRealtimeOp =
   | { kind: 'thought-updated'; id: string; changes: ThoughtUpdateInput }
@@ -1636,11 +1638,10 @@ function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
         break;
       }
       case 'link-updated': {
-        const edge = edges.get(op.id);
-        if (edge !== undefined && linkChangeAffectsDirections(op.changes, linkCriteriaSnapshot())) {
-          refreshDirectionsFor.add(edge.source_id);
-          refreshDirectionsFor.add(edge.target_id);
-        }
+        // Всё, что меняет состав графа (концы, active, тип под фильтром
+        // обхода, пометка корзины при скрытой корзине), уходит полным путём
+        // ещё в `applyStructuresRealtime`; сюда доходит только точечное
+        // оформление нарисованного ребра (цвет/стиль/ширина/тип/пометка).
         if (applyLinkUpdateToState(state, op.id, op.changes)) changed = true;
         break;
       }
@@ -1661,9 +1662,9 @@ function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
 
 /**
  * Точечный додар свежих `directions` (наполненности эллипсов) для концов
- * изменённого/удалённого ребра. Эллипс сервер считает по ВСЕМ активным связям
- * мысли с учётом фильтра обхода и видимости корзины, поэтому из локального
- * кэша `edges` (связи только среди видимых) его не вывести.
+ * удалённого ребра. Эллипс сервер считает по ВСЕМ активным связям мысли с
+ * учётом фильтра обхода и видимости корзины, поэтому из локального кэша
+ * `edges` (связи только среди видимых) его не вывести.
  *
  * Источник — та же точка {@link fetchHierarchy}, что и раскрытие: тот же
  * `link_filter` отбора и `showInactive`/корзина, значит и та же семантика
@@ -1739,7 +1740,7 @@ export function applyStructuresRealtime(evt: AnyRealtimeEvent): void {
     case 'link.updated': {
       const { id, changes } = evt.data;
       if (!edges.has(id)) return;
-      if (linkChangeNeedsReload(changes)) {
+      if (linkChangeNeedsReload(changes, linkCriteriaSnapshot())) {
         realtimeBatch.markFull();
         return;
       }

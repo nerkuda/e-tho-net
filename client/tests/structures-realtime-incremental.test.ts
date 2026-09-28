@@ -21,7 +21,6 @@ import {
   applyLinkUpdateToState,
   applyThoughtChanges,
   applyThoughtUpdateToState,
-  linkChangeAffectsDirections,
   linkChangeNeedsReload,
   removeLinkFromState,
   removeThoughtFromState,
@@ -93,6 +92,9 @@ const CRITERIA: StructuresCriteriaSnapshot = {
   showTrash: true,
 };
 
+/** Критерии правки РЕБРА: фильтр обхода выключен, корзина показана. */
+const LINK_CRITERIA: StructuresLinkCriteria = { linkFilterActive: false, showTrash: true };
+
 describe('structures realtime: классификация fallback', () => {
   it('правка, влияющая на порядок или состав отбора, уходит в полный путь', () => {
     assert.equal(thoughtChangeNeedsReload({ title: 'X' }, { ...CRITERIA, sort: 'alpha' }), true);
@@ -117,40 +119,41 @@ describe('structures realtime: классификация fallback', () => {
   it('чистое оформление применяется точечно', () => {
     assert.equal(thoughtChangeNeedsReload({ title: 'X' }, CRITERIA), false);
     assert.equal(thoughtChangeNeedsReload({ active: false }, { ...CRITERIA, showInactive: true }), false);
-    assert.equal(linkChangeNeedsReload({ color: '#f00' }), false);
-    assert.equal(linkChangeNeedsReload({ marked_for_deletion: true }), false);
+    assert.equal(linkChangeNeedsReload({ color: '#f00' }, LINK_CRITERIA), false);
+    assert.equal(linkChangeNeedsReload({ style: 'dashed', width: 3 }, LINK_CRITERIA), false);
+    assert.equal(linkChangeNeedsReload({ marked_for_deletion: true }, LINK_CRITERIA), false);
   });
 
   it('смена концов или активности ребра — полный путь', () => {
-    assert.equal(linkChangeNeedsReload({ source_id: 'a', target_id: 'b' }), true);
-    assert.equal(linkChangeNeedsReload({ active: false }), true);
-  });
-});
-
-describe('structures realtime: направления (эллипсы) концов ребра', () => {
-  const LINK_CRITERIA: StructuresLinkCriteria = { linkFilterActive: false, showTrash: true };
-
-  it('оформление ребра направлений не меняет', () => {
-    assert.equal(linkChangeAffectsDirections({ color: '#f00' }, LINK_CRITERIA), false);
-    assert.equal(linkChangeAffectsDirections({ style: 'dashed', width: 3 }, LINK_CRITERIA), false);
-    assert.equal(linkChangeAffectsDirections({}, LINK_CRITERIA), false);
+    assert.equal(linkChangeNeedsReload({ source_id: 'a', target_id: 'b' }, LINK_CRITERIA), true);
+    assert.equal(linkChangeNeedsReload({ active: false }, LINK_CRITERIA), true);
   });
 
-  it('смена типа под фильтром обхода меняет раскрываемость концов', () => {
+  it('пометка ребра корзиной при скрытой корзине — полный путь (ошибка 8da8e6b4)', () => {
+    // При выключенной настройке «Показывать содержимое корзины» помеченное
+    // ребро больше не приходит в выборку edges: линия обязана исчезнуть, а не
+    // только пометиться инкрементально.
     assert.equal(
-      linkChangeAffectsDirections({ type_id: 'ty' }, { ...LINK_CRITERIA, linkFilterActive: true }),
+      linkChangeNeedsReload({ marked_for_deletion: true }, { ...LINK_CRITERIA, showTrash: false }),
       true,
     );
-    // Без фильтра обхода тип ребра на закраску эллипса не влияет.
-    assert.equal(linkChangeAffectsDirections({ type_id: 'ty' }, LINK_CRITERIA), false);
-  });
-
-  it('корзина ребра меняет раскрываемость только при скрытой корзине', () => {
     assert.equal(
-      linkChangeAffectsDirections({ marked_for_deletion: true }, { ...LINK_CRITERIA, showTrash: false }),
+      linkChangeNeedsReload({ marked_for_deletion: false }, { ...LINK_CRITERIA, showTrash: false }),
       true,
     );
-    assert.equal(linkChangeAffectsDirections({ marked_for_deletion: true }, LINK_CRITERIA), false);
+    // При показанной корзине пометка — оформление нарисованной линии.
+    assert.equal(linkChangeNeedsReload({ marked_for_deletion: true }, LINK_CRITERIA), false);
+  });
+
+  it('смена типа ребра под фильтром обхода — полный путь (ошибка 0af1d810)', () => {
+    // Ребро может выпасть из типов, по которым раскрываются ветви дерева:
+    // сосед исчезает из раскрытых уровней, линия — вместе с ним.
+    assert.equal(
+      linkChangeNeedsReload({ type_id: 'ty' }, { ...LINK_CRITERIA, linkFilterActive: true }),
+      true,
+    );
+    // Без фильтра обхода тип ребра состав видимого графа не меняет.
+    assert.equal(linkChangeNeedsReload({ type_id: 'ty' }, LINK_CRITERIA), false);
   });
 });
 
@@ -242,17 +245,26 @@ describe('structures realtime: проводка экрана и шины', () =>
   );
   const realtimeUi = fs.readFileSync(path.join(RENDERER_ROOT, 'realtime-ui.ts'), 'utf8');
 
-  it('эллипсы концов правленого/удалённого ребра перечитываются точечно', () => {
+  it('эллипсы концов удалённого ребра перечитываются точечно', () => {
     // Снимок `directions` нельзя вывести из кэша `edges` (только видимые связи),
     // поэтому батч запускает точечный додар направлений, а не полный путь.
     const body = structures.slice(structures.indexOf('function applyStructuresOps('));
     const end = body.indexOf('\n}\n\n/**');
     const fnBody = body.slice(0, end);
-    assert.match(fnBody, /refreshDirectionsFor\.add\(edge\.source_id\)/);
+    assert.match(fnBody, /case 'link-deleted':[\s\S]*?refreshDirectionsFor\.add\(edge\.source_id\)/);
     assert.match(fnBody, /refreshDirectionsFor\.add\(edge\.target_id\)/);
     assert.match(fnBody, /void refreshDirections\(refreshDirectionsFor\)/);
     assert.match(structures, /async function refreshDirections\(ids: ReadonlySet<string>\)/);
     assert.match(structures, /fetchHierarchy\(networkId, id, 'children', \{\}\)\)\.directions\[id\]/);
+    // Смена типа под фильтром обхода и пометка корзины уходят полным путём,
+    // точечного додара направлений по `link.updated` больше нет (ошибки 8da8e6b4/0af1d810).
+    assert.ok(!fnBody.includes('linkChangeAffectsDirections'), 'link.updated не должен идти через точечный додар directions');
+  });
+
+  it('link.updated классифицируется с критериями отбора/корзины', () => {
+    const body = structures.slice(structures.indexOf("case 'link.updated':"));
+    const end = body.indexOf("case 'link.deleted':");
+    assert.match(body.slice(0, end), /linkChangeNeedsReload\(changes, linkCriteriaSnapshot\(\)\)/);
   });
 
   it('экран коалессирует события и держит один reconcile на окно', () => {
