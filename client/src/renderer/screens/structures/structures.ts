@@ -52,6 +52,7 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
+import { deepEqual } from '../../lib/ui/state.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
 import {
@@ -64,6 +65,7 @@ import {
   type TreeRow,
 } from './layout.js';
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
+import { patchCloudVisualStates, type CloudVisualState } from './visual-states.js';
 import { openFilterCommandsMenu } from './commands.js';
 import { StructuresPager } from './pagination.js';
 import {
@@ -618,33 +620,112 @@ export function mountStructures(hostEl: HTMLElement): void {
       return;
     }
     if (store.state.activeView !== 'structures') return;
-    // Full rebuilds are cheap at tree sizes, but the store fans out on every
-    // realtime event (lastEvent etc.) — guard on the visually relevant inputs.
-    const signature = renderSignature();
-    if (signature === lastRenderSignature) return;
-    lastRenderSignature = signature;
-    renderTree();
+    reactToStore();
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
 }
 
-/** Signature of the inputs the tree rendering depends on (redundant rebuilds). */
-let lastRenderSignature = '';
-function renderSignature(): string {
+// ---------------------------------------------------------------------------
+// Store reaction: data layer vs visual layer (task 1a0a607d)
+// ---------------------------------------------------------------------------
+
+/**
+ * Слой ДАННЫХ отрисовки: входные данные, смена которых требует пересборки
+ * строк. Слой ВИЗУАЛЬНЫХ состояний (выборка, текущая мысль, цель редактора,
+ * фокус холста) меняется дёшево и обрабатывается {@link patchVisualStates} без
+ * пересоздания DOM.
+ *
+ * Почему сигнатуры со структурным сравнением (`deepEqual`), а не селекторы
+ * `lib/ui/state.ts`: данные дерева (`resultIds`, `total`, `expansion`) живут в
+ * модуле и меняются запросами БЕЗ обновления store, а дерево тогда
+ * перерисовывается прямыми вызовами `renderTree`. Селектор запоминает срез
+ * только на обновлениях store и после прямого `renderTree` остаётся устаревшим,
+ * «вооружая» лишнюю пересборку на следующем постороннем апдейте. Поэтому срез
+ * переанкерится самими путями отрисовки — {@link syncRenderSlices}.
+ */
+type DataSlice = readonly [string | null, number, number, number, number, string[]];
+type VisualSlice = readonly [
+  readonly string[],
+  string | null,
+  string | null,
+  string,
+  string,
+];
+
+/** Данные, от которых зависит состав строк дерева. */
+function dataSlice(): DataSlice {
   const st = store.state;
-  return JSON.stringify([
+  return [
     st.networkId,
     resultIds.length,
     total,
+    st.linkTypes.length,
+    st.thoughtTypes.length,
+    [...expansion.keys()],
+  ];
+}
+
+/** Визуальные состояния облачков: выборка, выделенная связь, цель редактора,
+ *  фокус холста. «Кто текущий» включает `structuresActiveThoughtId` (его
+ *  выставляет `setThoughtEditorTarget`) и `focus.focused.id`. */
+function visualSlice(): VisualSlice {
+  const st = store.state;
+  return [
     st.selection,
     st.selectedLinkId,
     st.structuresActiveThoughtId,
     st.editorTarget?.kind ?? '',
     st.focus?.focused.id ?? '',
-    st.linkTypes.length,
-    [...expansion.keys()],
-  ]);
+  ];
+}
+
+let lastDataSlice: DataSlice | null = null;
+let lastVisualSlice: VisualSlice | null = null;
+
+/** Зафиксировать срезы как отработанные — зовут пути отрисовки (полная сборка
+ *  и точечный патч), чтобы прямой `renderTree` не «вооружил» лишний rebuild. */
+function syncRenderSlices(data: DataSlice, visual: VisualSlice): void {
+  lastDataSlice = data;
+  lastVisualSlice = visual;
+}
+
+/** Реакция на обновление store: данные изменились — пересборка; изменился
+ *  только визуальный слой — точечный патч классов. */
+function reactToStore(): void {
+  const data = dataSlice();
+  const visual = visualSlice();
+  if (lastDataSlice === null || !deepEqual(lastDataSlice, data)) {
+    syncRenderSlices(data, visual);
+    renderTree();
+    return;
+  }
+  if (lastVisualSlice === null || !deepEqual(lastVisualSlice, visual)) {
+    syncRenderSlices(data, visual);
+    patchVisualStates();
+  }
+}
+
+/**
+ * Точечно переставить классы облачков после изменения ТОЛЬКО визуального слоя
+ * (задача 1a0a607d): DOM строк переиспользуется как есть — прокрутка, hover и
+ * клавиатурный курсор (`syncStructuresCursor`) не затрагиваются. Выделенная
+ * связь — надстройка верхнего слоя: обновляется `drawTopOverlay()` без строк.
+ */
+function patchVisualStates(): void {
+  if (resultsHost === null) return;
+  const selection = new Set(store.state.selection);
+  patchCloudVisualStates(resultsHost, (id) => cloudVisualState(id, selection));
+  // Клавиатурный курсор не синхронизируем: строки и его DOM-якоря не менялись.
+  drawTopOverlay();
+  syncRenderSlices(dataSlice(), visualSlice());
+}
+
+/** Визуальные классы одного облачка — ЕДИНОЕ определение для первичной сборки
+ *  (`buildCloud`) и точечного патча. Текущая мысль — `currentThoughtId()`: то
+ *  же определение, что у холста и панели истории (0.5.5), иначе гало разъедется. */
+function cloudVisualState(thoughtId: string, selection: ReadonlySet<string>): CloudVisualState {
+  return { selected: selection.has(thoughtId), halo: currentThoughtId() === thoughtId };
 }
 
 /** Rebuilds the results tree from the current state (full rebuild, small lists).
@@ -721,6 +802,9 @@ function renderTree(): void {
     drawLinks();
   }
   void refreshEdges();
+  // Сборка применила и данные, и визуальные классы — фиксируем оба среза,
+  // чтобы следующее постороннее обновление store не вызвало пересборку.
+  syncRenderSlices(dataSlice(), visualSlice());
 }
 
 // ---------------------------------------------------------------------------
@@ -940,7 +1024,10 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     },
   );
   cloud.classList.add('st-cloud');
-  if (selection.has(row.thoughtId)) cloud.classList.add('selected');
+  // Выборка и гало — из единого определения (то же, что в точечном патче
+  // `patchVisualStates`), иначе начальная сборка и патч разъедутся.
+  const visual = cloudVisualState(row.thoughtId, selection);
+  if (visual.selected) cloud.classList.add('selected');
   // Halo of the active thought (§15.7): the same accent ring around the cloud
   // as the canvas (§2.2.4) instead of the old full-width band. The "current
   // thought" is the thought open in the editor, else the canvas focus — the
@@ -948,9 +1035,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   // frame follows the thought across screen switches. While a link is open in
   // the editor there is no current thought and the halo fades (the link takes
   // the spotlight).
-  if (currentThoughtId() === row.thoughtId) {
-    cloud.classList.add('halo');
-  }
+  if (visual.halo) cloud.classList.add('halo');
 
   // Ellipses (§15.5): filled when the thought has parents/children at all —
   // known from the hierarchy directions accumulated so far.
