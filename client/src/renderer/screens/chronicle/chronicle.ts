@@ -81,7 +81,7 @@ import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { operationError } from '../../lib/ui/messages.js';
-import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
+import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
@@ -600,9 +600,10 @@ function dayCount(day: string): number {
 }
 
 function renderFeed(): void {
-  if (feedList === null) return;
+  const list = feedList;
+  if (list === null) return;
   if (statusEl !== null) statusEl.hidden = true;
-  feedList.hidden = false;
+  list.hidden = false;
 
   const { from, to } = currentFromTo();
   // Направление сортировки ленты (0.10.1, итерация приёмки №8, п.3): сервер
@@ -614,26 +615,49 @@ function renderFeed(): void {
   // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
   // Слот псевдо-записи всегда виден: его день появляется в ленте, даже если в
   // нём ещё нет записей (элемент «Sticky-панель новой записи»).
-  if (slot !== null && !days.some((d) => d.day === slot!.day)) {
-    days.push({ day: slot.day, rows: [] });
+  const slotNow = slot;
+  if (slotNow !== null && !days.some((d) => d.day === slotNow.day)) {
+    days.push({ day: slotNow.day, rows: [] });
     days.sort((a, b) => compareDays(a.day, b.day, order));
   }
 
-  const nodes: HTMLElement[] = [];
-  for (const day of days) nodes.push(buildDayBlock(day.day, day.rows));
-  if (nodes.length === 0) {
-    nodes.push(el('div', 'chron-feed-empty muted', t('diary.feedEmpty')));
-  } else if (rows.length < total) {
-    nodes.push(el('div', 'chron-feed-more muted', t('diary.moreLeft', [rows.length, total])));
+  // Инкрементальное обновление ленты (уровень 2 тех.проекта `1d48df6d`):
+  // ВНЕШНИЙ уровень — группы дней по ключу дня (`data-day`), ВНУТРЕННИЙ —
+  // карточки записей по `data-row-key`. Неизменные узлы не пересоздаются,
+  // поэтому прокрутка, hover, фокус и открытые редакторы переживают правку
+  // записи, realtime-перезапрос и дозагрузку «+50».
+  reconcileKeyed(list, days, {
+    keyAttr: 'data-day',
+    key: (day) => day.day,
+    build: (day) => buildDaySection(day.day),
+    update: (section, day) => updateDaySection(section, day.day),
+  });
+
+  for (const day of days) {
+    const section = findDaySection(list, day.day);
+    if (section === null) continue;
+    const dayList = section.querySelector<HTMLElement>('.diary-day-list');
+    if (dayList === null) continue;
+    reconcileKeyed(dayList, day.rows, {
+      keyAttr: TABLE_ROW_KEY_ATTR,
+      key: (row) => row.id,
+      build: (row) => buildRecordCard(row),
+      update: (card, row) => updateRecordCard(card, row),
+    });
+    // Слот псевдо-записи — ВНЕ reconcile: сверка снимает его как безключевой
+    // узел, поэтому возвращаем ТОТ ЖЕ элемент наверх списка дня. Identity узла
+    // и текст живого редактора сохраняются (элемент «Sticky-панель новой
+    // записи»).
+    if (slotNow !== null && slotNow.day === day.day) dayList.prepend(slotNow.root);
   }
-  // Позиция прокрутки ленты переживает любую пересборку текущей ленты (правка
-  // записи, real-time, дозагрузка «+50», сворачивание групп): якорь —
-  // ближайшая к кромке карточка (`data-row-key`, lib/ui/scroll-anchor.ts).
-  // Смена отбора показывает ленту с начала (applyFilter сбрасывает scrollTop
-  // после пересборки), переход к записи позиционируется на её карточке.
-  const list = feedList;
-  if (feedWrap !== null) preserveScroll(feedWrap, () => list.replaceChildren(...nodes));
-  else list.replaceChildren(...nodes);
+
+  // Хвост ленты («пусто»/«осталось N») — вне reconcile, монтируется после:
+  // пересобирается целиком на каждой отрисовке.
+  if (days.length === 0) {
+    list.append(el('div', 'chron-feed-empty muted', t('diary.feedEmpty')));
+  } else if (rows.length < total) {
+    list.append(el('div', 'chron-feed-more muted', t('diary.moreLeft', [rows.length, total])));
+  }
   // Переприменить выделение «текущей» сущности после перерисовки (требование
   // 165323a7): оно сохраняется, если сущность ещё видима, и сбрасывается иначе.
   feedNav?.refresh();
@@ -735,10 +759,13 @@ function setAllDaysCollapsed(collapsed: boolean): void {
   renderFeed();
 }
 
-function buildDayBlock(day: string, dayRows: ChronicleRow[]): HTMLElement {
+/**
+ * Секция дня ленты: заголовок-кнопка сворачивания + пустой список записей.
+ * Список наполняется отдельным (внутренним) keyed-проходом `renderFeed`.
+ */
+function buildDaySection(day: string): HTMLElement {
   const section = div('diary-day');
   section.dataset['day'] = day;
-  const collapsed = collapsedDays.has(day);
   // Заголовок — кнопка: клик сворачивает/разворачивает группу (0.10.1,
   // приёмка №2). Шрифт даты — вдвое крупнее (CSS-токен темы).
   const head = uiButton({
@@ -749,27 +776,47 @@ function buildDayBlock(day: string, dayRows: ChronicleRow[]): HTMLElement {
   });
   head.prepend(svgIcon('chevron-down', 18));
   const list = div('diary-day-list');
-  if (slot !== null && slot.day === day) list.append(slot.root);
-  for (const row of dayRows) list.append(buildRecordCard(row));
   section.append(head, list);
   // Начальное состояние группы — тем же помощником, что и in-place переключение
   // (одна точка правды о классах/атрибутах свёрнутой группы).
-  applyDayCollapsed(section, collapsed, dayGroupLabels());
+  applyDayCollapsed(section, collapsedDays.has(day), dayGroupLabels());
   return section;
+}
+
+/** Обновление существующей секции дня при keyed-сверке: свёрнутость на месте. */
+function updateDaySection(section: HTMLElement, day: string): void {
+  applyDayCollapsed(section, collapsedDays.has(day), dayGroupLabels());
 }
 
 // ---------------------------------------------------------------------------
 // Record card
 // ---------------------------------------------------------------------------
 
+/** Карточка записи ленты. Ключ строки (`data-row-key`) вешает keyed-сверка. */
 function buildRecordCard(row: ChronicleRow): HTMLElement {
   const card = div('diary-record');
   // `data-row-key` ставится атрибутом: `dataset['data-row-key']` бросает
   // исключение (имя свойства dataset не может содержать дефис) — ошибка
   // 6 сентября (0.10.1, дефект приёмки).
   card.setAttribute(TABLE_ROW_KEY_ATTR, row.id);
-  // Запись, к которой выполнен переход поиска, подсвечена (T7).
-  if (row.id === jumpHighlightId) card.classList.add('diary-record-target');
+  fillRecordCard(card, row);
+  return card;
+}
+
+/**
+ * Обновление существующей карточки при keyed-сверке: перерисовывается ТОЛЬКО
+ * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
+ * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
+ */
+function updateRecordCard(card: HTMLElement, row: ChronicleRow): void {
+  fillRecordCard(card, row);
+}
+
+/** Наполнить карточку содержимым записи (общая сборка и обновление). */
+function fillRecordCard(card: HTMLElement, row: ChronicleRow): void {
+  // Запись, к которой выполнен переход поиска, подсвечена (T7); при правке
+  // класс пересчитывается (запись могла перестать быть целью перехода).
+  card.classList.toggle('diary-record-target', row.id === jumpHighlightId);
 
   // Строка 1: значение даты/периода (клик — диалог «Дата/период»), облачка
   // привязок, кнопка «+ мысль», у правого края «бутерброд» меню записи.
@@ -801,9 +848,9 @@ function buildRecordCard(row: ChronicleRow): HTMLElement {
       onClick: (event) => showMenuAt(event.clientX, event.clientY, recordMenuItems(row)),
     }),
   );
-  // Строка 2 — заголовок, далее оболочка комментария.
-  card.append(head, buildTitleInput(row), buildRecordBody(row, card));
-  return card;
+  // Строка 2 — заголовок, далее оболочка комментария. `buildRecordBody` кладёт
+  // дескриптор оболочки в `recordShells` под этот самый узел карточки.
+  card.replaceChildren(head, buildTitleInput(row), buildRecordBody(row, card));
 }
 
 /** Подпись даты/периода записи — единый помощник периода дневниковой записи. */

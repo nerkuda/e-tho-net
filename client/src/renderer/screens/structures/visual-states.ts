@@ -14,8 +14,11 @@
  * механика патча вынесена сюда и покрыта юнит-тестом на DOM-шиме.
  */
 
-/** CSS-класс одного дерева-облачка (совпадает с классом из `structures.ts`). */
-export const CLOUD_SELECTOR = '.st-cloud';
+/** CSS-класс одного дерева-облачка — единое определение для сборки и патча. */
+export const ST_CLOUD_CLASS = 'st-cloud';
+
+/** Селектор облачка, производный от {@link ST_CLOUD_CLASS}. */
+export const CLOUD_SELECTOR = `.${ST_CLOUD_CLASS}`;
 
 /** Визуальные классы облачка: общая выборка и гало текущей мысли. */
 export interface CloudVisualState {

@@ -41,7 +41,7 @@ import { ELLIPSE_INSIDE } from '../../lib/pure.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { setActiveView } from '../active-view.js';
-import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
+import { div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   markAttachmentsPreview,
@@ -51,6 +51,7 @@ import {
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
+import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { deepEqual } from '../../lib/ui/state.js';
@@ -66,7 +67,7 @@ import {
   type TreeRow,
 } from './layout.js';
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
-import { patchCloudVisualStates, type CloudVisualState } from './visual-states.js';
+import { patchCloudVisualStates, ST_CLOUD_CLASS, type CloudVisualState } from './visual-states.js';
 import { openFilterCommandsMenu } from './commands.js';
 import { StructuresPager } from './pagination.js';
 import {
@@ -733,14 +734,23 @@ function cloudVisualState(thoughtId: string, selection: ReadonlySet<string>): Cl
   return { selected: selection.has(thoughtId), halo: currentThoughtId() === thoughtId };
 }
 
-/** Rebuilds the results tree from the current state (full rebuild, small lists).
- *  An expanding/collapsing layout change plays a FLIP animation (§15.5): the
- *  rows keep moving smoothly from their old places, freshly revealed rows
- *  fade in, and removed rows dissolve in place.
+/**
+ * Rebuilds the results tree from the current state. Инкрементально
+ * (уровень 2 тех.проекта `1d48df6d`): внешний ключ — ветвь корня
+ * (`.st-branch`, `data-root`), внутренний — строки ветви (`.st-row`, `data-key`)
+ * и кнопки «Показать ещё». Неизменные строки НЕ пересоздаются — сохраняются
+ * прокрутка, hover и клавиатурный курсор. Пустое состояние и футер листания
+ * монтируются после сверки (вне keyed-слоя).
  *
- *  `keepScroll` сохраняет позицию прокрутки через {@link preserveScroll}: так
- *  пересобираются realtime-перезапрос, раскрытие/свёртывание узла и дозагрузка
- *  соседей. Новый отбор и первый вход показывают список с начала. */
+ * An expanding/collapsing layout change plays a FLIP animation (§15.5): the
+ * rows keep moving smoothly from their old places, freshly revealed rows
+ * fade in, and removed rows dissolve in place — по статистике сверки
+ * (`added`/`removed`/`moved`); без изменений кадр анимации не запускается.
+ *
+ *  `keepScroll` сохраняет позицию прокрутки через {@link preserveScroll}: сверка
+ *  держит identity строк, но не сдвигает `scrollTop`, когда узлы выше кромки
+ *  меняют высоту (раскрытие/свёртывание, дозагрузка). Новый отбор и первый вход
+ *  показывают список с начала. */
 function renderTree(keepScroll = false): void {
   if (host === null || resultsHost === null) return;
   if (keepScroll) {
@@ -749,11 +759,11 @@ function renderTree(keepScroll = false): void {
     preserveScroll(resultsHost, () => renderTree(false));
     return;
   }
+  const results = resultsHost;
   applyCanvasScaleVars(host);
   finalizeTreeAnimation();
   const before = captureTreeLayout();
   const { rows, moreMarkers } = currentTree();
-  clear(resultsHost);
 
   // Markers with a fresh «has_more» flag, keyed by the row they trail.
   const markersByAfterKey = new Map<string, MoreMarker>();
@@ -763,48 +773,80 @@ function renderTree(keepScroll = false): void {
     }
   }
   const rowByKey = new Map(rows.map((r) => [r.key, r]));
-
   const selection = new Set(store.state.selection);
+
   // Every filter-result root opens its own framed branch (§15.5): the root row,
   // its parents and its descendants stay visually together, so deep expansions
-  // remain attributable to its root.
-  let branch: HTMLElement | null = null;
-  let branchRootId: string | null = null;
+  // remain attributable to its root. Ветвь — внешний элемент keyed-сверки,
+  // её строки и «Показать ещё» — элементы вложенной сверки.
+  const branches: TreeBranch[] = [];
+  let currentBranch: TreeBranch | null = null;
   for (const row of rows) {
-    if (branch === null || row.rootId !== branchRootId) {
-      branch = div('st-branch');
-      branch.dataset['root'] = row.rootId;
-      branchRootId = row.rootId;
-      resultsHost.append(branch);
+    if (currentBranch === null || row.rootId !== currentBranch.rootId) {
+      currentBranch = { rootId: row.rootId, items: [] };
+      branches.push(currentBranch);
     }
-    branch.append(buildRow(row, selection));
+    currentBranch.items.push({ key: row.key, row, marker: null, node: null });
     const marker = markersByAfterKey.get(row.key);
     const node = marker !== undefined ? rowByKey.get(marker.nodeKey) : undefined;
-    if (marker !== undefined && node !== undefined) branch.append(buildMoreButton(marker, node));
+    if (marker !== undefined && node !== undefined) {
+      currentBranch.items.push({ key: moreMarkerKey(marker), row: null, marker, node });
+    }
   }
 
+  let changed = false;
+  const branchStats = reconcileKeyed(results, branches, {
+    keyAttr: 'data-root',
+    key: (branch) => branch.rootId,
+    // Ветвь меняется только составом строк — их сверяет вложенный вызов ниже.
+    equals: (a, b) => a.rootId === b.rootId,
+    build: (branch) => buildBranch(branch.rootId),
+    update: () => undefined,
+  });
+  changed = branchStats.added.length > 0 || branchStats.removed.length > 0 || branchStats.moved;
+
+  for (const branch of branches) {
+    const branchEl = results.querySelector<HTMLElement>(`[data-root="${branch.rootId}"]`);
+    if (branchEl === null) continue;
+    const stats = reconcileKeyed(branchEl, branch.items, {
+      keyAttr: 'data-key',
+      key: (item) => item.key,
+      build: (item) =>
+        item.row !== null
+          ? buildRow(item.row, selection)
+          : buildMoreButton(item.marker as MoreMarker, item.node as TreeRow),
+      update: (el, item) => {
+        if (item.row !== null) fillRow(el, item.row, selection);
+        else applyMoreButton(el as HTMLButtonElement, item.marker as MoreMarker, item.node as TreeRow);
+      },
+    });
+    if (stats.added.length > 0 || stats.removed.length > 0 || stats.moved || stats.updated.length > 0) {
+      changed = true;
+    }
+  }
+
+  // Empty state and pagination footer (§15.4) — вне keyed-слоя: монтируются
+  // после сверки и пересобираются целиком. Continuation is signalled by the
+  // keyset cursor of the last page (`total` feeds only the counter, 3f2fdc41).
   if (total === 0) {
     const empty = div('st-empty');
     empty.textContent = 'Ничего не найдено — измените критерии отбора';
-    resultsHost.append(empty);
+    results.append(empty);
   }
-
-  // Pagination footer (§15.4). Continuation is signalled by the keyset cursor
-  // of the last page (`total` feeds only the counter, requirement 3f2fdc41).
   if (resultPager.hasMore) {
     const more = el('button', 'st-more', 'Показать ещё');
     more.type = 'button';
     more.addEventListener('click', () => void applyQuery(false, true));
-    resultsHost.append(more);
+    results.append(more);
   }
   const counter = badge(`Показано ${resultIds.length} из ${total}`, {
     kind: 'quiet',
     extraClass: 'ui-badge--block',
   });
-  resultsHost.append(counter);
+  results.append(counter);
 
   syncStructuresCursor();
-  const animated = applyTreeFlip(before);
+  const animated = changed && applyTreeFlip(before);
   if (animated) {
     // Lines are drawn at final geometry — wait out the FLIP, then draw.
     flipUntil = performance.now() + FLIP_MS + 40;
@@ -957,9 +999,42 @@ function toggleExpandFor(key: string, thoughtId: string, rootId: string, dir: Hi
   void toggleExpand({ key, thoughtId, rootId, root: false, ownIndent: 0, indent: 0, via: null }, dir);
 }
 
+/** Одна ветвь дерева (обрамление корня отбора) — внешний элемент keyed-сверки. */
+interface TreeBranch {
+  rootId: string;
+  items: TreeBranchItem[];
+}
+
+/** Элемент ветви: строка дерева ИЛИ кнопка «Показать ещё» (одно из двух). */
+interface TreeBranchItem {
+  key: string;
+  row: TreeRow | null;
+  marker: MoreMarker | null;
+  /** Строка, которую завершает маркер (для `loadMoreNeighbors`); у строки — сам себя. */
+  node: TreeRow | null;
+}
+
+/** Устойчивый ключ кнопки «Показать ещё» в keyed-сверке ветви. */
+function moreMarkerKey(marker: MoreMarker): string {
+  return `more:${marker.nodeKey}:${marker.dir}`;
+}
+
+/** Ветвь-обрамление корня отбора: сверка наполнит её строками. */
+function buildBranch(rootId: string): HTMLElement {
+  const branch = div('st-branch');
+  branch.dataset['root'] = rootId;
+  return branch;
+}
+
 /** Builds one tree row: the root triangle (for filter results) + a cloud. */
 function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   const rowEl = div('st-row');
+  fillRow(rowEl, row, selection);
+  return rowEl;
+}
+
+/** Наполнить/обновить строку дерева (общая сборка и keyed-обновление). */
+function fillRow(rowEl: HTMLElement, row: TreeRow, selection: Set<string>): void {
   rowEl.dataset['key'] = row.key;
   rowEl.dataset['id'] = row.thoughtId;
   rowEl.dataset['root'] = row.rootId;
@@ -968,23 +1043,32 @@ function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
     // The link lines are drawn over the tree from these attributes (drawLinks).
     rowEl.dataset['via'] = row.via.otherId;
     rowEl.dataset['role'] = row.via.role;
+  } else {
+    delete rowEl.dataset['via'];
+    delete rowEl.dataset['role'];
   }
+  // Содержимое строки пересобирается только при её изменении (keyed-сверка):
+  // сам узел строки сохраняется, поэтому прокрутка и позиция не теряются.
+  rowEl.replaceChildren();
   if (row.root) rowEl.append(div('st-root-marker'));
-  const cloud = buildCloud(row, selection);
-  rowEl.append(cloud);
+  rowEl.append(buildCloud(row, selection));
   // Patch the indicator row from the shared canvas indicator cache/queue
   // (the cache hit applies synchronously to the fresh DOM, §15.4).
   queueIndicatorLoad(row.thoughtId);
-  return rowEl;
 }
 
 /** Builds one per-node «Показать ещё» button (§15.5 pagination). */
 function buildMoreButton(marker: MoreMarker, node: TreeRow): HTMLElement {
   const btn = el('button', 'st-more', 'Показать ещё');
   btn.type = 'button';
-  btn.style.setProperty('--st-indent', String(marker.indent));
-  btn.addEventListener('click', () => void loadMoreNeighbors(marker.nodeKey, node.thoughtId, node.rootId, marker.dir));
+  applyMoreButton(btn, marker, node);
   return btn;
+}
+
+/** Настроить кнопку «Показать ещё»: отступ и обработчик (без наслоения). */
+function applyMoreButton(btn: HTMLButtonElement, marker: MoreMarker, node: TreeRow): void {
+  btn.style.setProperty('--st-indent', String(marker.indent));
+  btn.onclick = () => void loadMoreNeighbors(marker.nodeKey, node.thoughtId, node.rootId, marker.dir);
 }
 
 /** Builds one thought cloud: same visual language as the canvas (§15.4). */
@@ -1038,7 +1122,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
       },
     },
   );
-  cloud.classList.add('st-cloud');
+  cloud.classList.add(ST_CLOUD_CLASS);
   // Выборка и гало — из единого определения (то же, что в точечном патче
   // `patchVisualStates`), иначе начальная сборка и патч разъедутся.
   const visual = cloudVisualState(row.thoughtId, selection);

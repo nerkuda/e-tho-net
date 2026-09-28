@@ -376,7 +376,7 @@ describe('приёмка №5, п.1: компоновка карточки за�
     // Порядок строки 1: дата → чипсы → «+ мысль» → «бутерброд».
     const head = CHRONICLE.slice(
       CHRONICLE.indexOf('const head = div('),
-      CHRONICLE.indexOf('card.append('),
+      CHRONICLE.indexOf('card.replaceChildren('),
     );
     const order = ["class: 'diary-record-date'", 'buildChipsRow(row)', "label: '+ мысль'", 'diary-record-actions'];
     let last = -1;
@@ -395,7 +395,7 @@ describe('приёмка №5, п.1: компоновка карточки за�
   it('строка 2 — заголовок, далее оболочка комментария', () => {
     assert.match(
       CHRONICLE,
-      /card\.append\(head, buildTitleInput\(row\), buildRecordBody\(row, card\)\)/,
+      /card\.replaceChildren\(head, buildTitleInput\(row\), buildRecordBody\(row, card\)\)/,
       'порядок: строка 1, заголовок (строка 2), тело',
     );
     assert.match(

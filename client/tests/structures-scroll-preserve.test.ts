@@ -56,13 +56,24 @@ describe('Структуры: сохранение прокрутки при п�
   });
 });
 
-describe('Дневник: сохранение прокрутки ленты при пересборке', () => {
-  it('renderFeed пересобирает список через preserveScroll', () => {
-    assert.match(CHRONICLE, /import \{ preserveScroll \} from '\.\.\/\.\.\/lib\/ui\/scroll-anchor\.js'/);
+describe('Дневник: прокрутка ленты при обновлении (уровень 2)', () => {
+  it('renderFeed обновляет ленту инкрементально (keyed), без полной пересборки', () => {
+    // Уровень 2 тех.проекта `1d48df6d`: полная пересборка ленты упразднена —
+    // identity неизменных карточек и групп дней держит прокрутку сам, поэтому
+    // `preserveScroll` в «Дневнике» больше не участвует.
     assert.match(
       CHRONICLE,
-      /preserveScroll\(feedWrap,\s*\(\)\s*=>\s*list\.replaceChildren\(\.\.\.nodes\)\)/,
-      'позиция прокрутки ленты держится якорем',
+      /reconcileKeyed\(list,\s*days,\s*\{/,
+      'внешний keyed-уровень — группы дней',
+    );
+    assert.match(
+      CHRONICLE,
+      /reconcileKeyed\(dayList,\s*day\.rows,\s*\{/,
+      'внутренний keyed-уровень — карточки записей',
+    );
+    assert.ok(
+      !/preserveScroll\(feedWrap/.test(CHRONICLE),
+      'полная пересборка ленты через preserveScroll упразднена',
     );
     assert.ok(!/keepFeedScroll/.test(CHRONICLE), 'ручной флаг сохранения прокрутки упразднён');
   });

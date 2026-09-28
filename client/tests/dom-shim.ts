@@ -269,6 +269,13 @@ export class ShimElement {
   }
 
   insertBefore(node: ShimElement, before: ShimElement | null): void {
+    // Реальная семантика DOM: insertBefore ПЕРЕМЕЩАЕТ уже подключённый узел
+    // (сначала снимает его с прежнего места), а не клонирует. Без этого
+    // keyed-reconcile давал бы дубли узлов на шиме.
+    if (node.parent !== null) {
+      const oldIndex = node.parent.children.indexOf(node);
+      if (oldIndex >= 0) node.parent.children.splice(oldIndex, 1);
+    }
     node.parent = this;
     if (before === null) {
       this.children.push(node);
