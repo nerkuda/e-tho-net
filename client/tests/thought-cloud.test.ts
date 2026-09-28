@@ -312,7 +312,7 @@ describe('цвет, начертание и значок', () => {
     assert.equal(root.style.color, '#ffffff');
   });
 
-  it('личный цвет фона вешает класс cloud-has-bg; без него класса нет', () => {
+  it('резолвнутый цвет фона вешает класс cloud-has-bg; без фона класса нет', () => {
     // Класс — признак для стилей: фон облачка распространяется на иконочную
     // колонку (задача 1dc56942).
     const withBg = cloud(thought({ bg_color: '#222222' }), { profile: 'canvas' });
@@ -322,7 +322,8 @@ describe('цвет, начертание и значок', () => {
     assert.ok(!withoutBg.classList.contains(CLOUD_BG_CLASS));
   });
 
-  it('начертание — классы font-bold/font-italic', () => {    const root = cloud(
+  it('начертание — классы font-bold/font-italic', () => {
+    const root = cloud(
       thought({ font_bold: true, font_italic: true, font_underline: false }),
       { profile: 'canvas' },
     );
