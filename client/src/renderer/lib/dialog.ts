@@ -316,20 +316,102 @@ function raiseDialog(backdrop: HTMLDivElement): void {
   backdrop.classList.remove('dialog-raised');
   void backdrop.offsetWidth;
   backdrop.classList.add('dialog-raised');
-  focusFirstField(backdrop);
+  const box = backdrop.querySelector<HTMLElement>('.dialog-box');
+  if (box !== null) focusOpenedDialog(backdrop, box);
 }
 
-/** Best-effort focus into the raised dialog's first text field (the box itself as a fallback). */
-function focusFirstField(backdrop: HTMLDivElement): void {
-  const body = backdrop.querySelector<HTMLElement>('.dialog-body');
-  if (body === null) return;
-  for (const tag of ['input', 'textarea', 'select'] as const) {
-    const control = body.querySelector<HTMLElement>(tag);
-    if (control !== null) {
-      control.focus();
-      return;
+/** Теги, которые браузер табилит по умолчанию (шаг «Tab»). */
+const FOCUSABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON']);
+
+/** Клавиши-стрелки: ими можно ходить по кнопкам панели кнопок. */
+const ARROW_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
+
+/**
+ * Виден ли элемент для фокуса. В реальном DOM `display:none` даёт
+ * `offsetParent === null`; в тестовом DOM-шиме свойство не определено, поэтому
+ * проверку пропускаем — иначе фокус не находил бы управляющие элементы в тестах.
+ */
+function isVisibleForFocus(node: Element): boolean {
+  const carrier = node as Element & { hidden?: boolean; offsetParent?: unknown };
+  if (carrier.hidden === true) return false;
+  if (carrier.offsetParent === null) return false;
+  return true;
+}
+
+/** Фокусируемый элемент диалога: поле, кнопка, ссылка или contenteditable; не заблокирован и виден. */
+function isFocusableNode(node: Element): boolean {
+  const carrier = node as Element & {
+    tagName?: string;
+    disabled?: boolean;
+    type?: string;
+    isContentEditable?: boolean;
+  };
+  const tag = (carrier.tagName ?? '').toUpperCase();
+  if (tag === 'A') return node.hasAttribute('href') && isVisibleForFocus(node);
+  if (tag === 'INPUT' && carrier.type === 'hidden') return false;
+  if (!FOCUSABLE_TAGS.has(tag) && carrier.isContentEditable !== true) return false;
+  if (carrier.disabled === true) return false;
+  return isVisibleForFocus(node);
+}
+
+/** Все фокусируемые потомки диалога в порядке DOM — для ловушки Tab. */
+function collectFocusables(root: Element): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  const walk = (node: Element): void => {
+    for (const child of Array.from(node.children) as Element[]) {
+      if (isFocusableNode(child)) out.push(child as HTMLElement);
+      walk(child);
     }
+  };
+  walk(root);
+  return out;
+}
+
+/** Первое текстовое поле диалога — курсор при открытии ставится в него (08-ui-spec.md §4.2). */
+function firstTextField(root: Element): HTMLElement | null {
+  for (const node of collectFocusables(root)) {
+    const tag = (node.tagName ?? '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return node;
   }
+  return null;
+}
+
+/** Кнопки панели кнопок (футера): по ним ходят стрелки в диалогах подтверждения. */
+function footerButtons(box: Element): HTMLButtonElement[] {
+  const footer = box.querySelector('.dialog-footer');
+  if (footer === null) return [];
+  return (Array.from(footer.querySelectorAll('button')) as HTMLButtonElement[]).filter((button) =>
+    isFocusableNode(button),
+  );
+}
+
+/**
+ * Ставит фокус в только что открытый (верхний) диалог. Без этого фокус
+ * остаётся в нижележащем диалоге, и Tab/стрелки продолжают ходить по нему —
+ * именно так диалог подтверждения закрытия «не получал» фокус (ошибка
+ * 0c45bce8). Приоритет: первое текстовое поле → первая кнопка панели кнопок →
+ * любой фокусируемый элемент → сам бокс (`tabindex="-1"`). Диалог-редактор
+ * может переопределить выбор своим `onMount` — он вызывается после.
+ */
+function focusOpenedDialog(backdrop: HTMLElement, box: HTMLElement): void {
+  const text = firstTextField(backdrop);
+  if (text !== null) {
+    text.focus();
+    return;
+  }
+  const buttons = footerButtons(box);
+  const firstButton = buttons[0];
+  if (firstButton !== undefined) {
+    firstButton.focus();
+    return;
+  }
+  const focusables = collectFocusables(box);
+  const firstFocusable = focusables[0];
+  if (firstFocusable !== undefined) {
+    firstFocusable.focus();
+    return;
+  }
+  box.focus();
 }
 
 /**
@@ -432,6 +514,10 @@ export function showDialog(opts: DialogOptions): () => void {
   const focusAnchor = resolveFocusAnchor(previouslyFocused);
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
+  // Бокс принимает программный фокус (fallback, когда в диалоге нет ни поля, ни
+  // кнопки): `tabindex="-1"` не встаёт в порядок табуляции, но позволяет
+  // `focus()` — так верхний диалог удерживает фокус (ошибка 0c45bce8).
+  box.setAttribute('tabindex', '-1');
   // Роль размера (требование 13464c39): класс несёт ширину и ФИКСИРОВАННУЮ
   // высоту, поэтому переключение вкладок и смена содержимого высоту не меняют.
   box.dataset['dialogSize'] = opts.size ?? 'm';
@@ -625,6 +711,70 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onCtrlShiftEnter);
 
+  /**
+   * Ловушка фокуса верхнего диалога (ошибка 0c45bce8). Tab не покидает
+   * верхний диалог: на краях порядок заворачивается внутрь. Виджет, который сам
+   * обработал Tab (таблица — переход по ячейкам), помечает событие
+   * `preventDefault`, и каркас его не трогает.
+   */
+  const onTab = (event: KeyboardEvent): void => {
+    if (event.key !== 'Tab' || event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.defaultPrevented) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    const focusables = collectFocusables(box);
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (first === undefined || last === undefined) {
+      event.preventDefault();
+      box.focus();
+      return;
+    }
+    const active = (document.activeElement ?? null) as FocusableElement | null;
+    if (active === null || active === box || !box.contains(active)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+      return;
+    }
+    const index = focusables.indexOf(active as HTMLElement);
+    if (index < 0) return;
+    if (!event.shiftKey && index === focusables.length - 1) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && index === 0) {
+      event.preventDefault();
+      last.focus();
+    }
+  };
+  window.addEventListener('keydown', onTab);
+
+  /**
+   * Стрелки по кнопкам панели кнопок (ошибка 0c45bce8): в диалогах
+   * подтверждения Tab и ←/→/↑/↓ одинаково ходят по кнопкам. Перехватываем
+   * только когда фокус уже на кнопке футера или на самом боксе диалога —
+   * в поле стрелки двигают курсор, и там их трогать нельзя.
+   */
+  const onArrows = (event: KeyboardEvent): void => {
+    if (!ARROW_KEYS.has(event.key) || event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.defaultPrevented) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    const buttons = footerButtons(box);
+    if (buttons.length === 0) return;
+    const active = (document.activeElement ?? null) as FocusableElement | null;
+    const forward = event.key === 'ArrowRight' || event.key === 'ArrowDown';
+    const index = active === null ? -1 : buttons.indexOf(active as HTMLButtonElement);
+    if (index < 0) {
+      if (active !== box) return;
+      event.preventDefault();
+      (forward ? buttons[0] : buttons[buttons.length - 1])?.focus();
+      return;
+    }
+    event.preventDefault();
+    buttons[(index + (forward ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+  };
+  window.addEventListener('keydown', onArrows);
+
   // Клик по подложке мимо тела диалога НЕ ЗАКРЫВАЕТ диалог (правило задачи
   // c9353ce1, отменяющее cc28ee10): модальный диалог закрывают только кнопки,
   // выбор из списка и Esc. Правило «клик мимо закрывает» отменено — при
@@ -653,6 +803,8 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onConfirm);
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
+    window.removeEventListener('keydown', onTab);
+    window.removeEventListener('keydown', onArrows);
     backdrop.removeEventListener('click', onBackdropClick);
     // Возврат фокуса владельцу списка (ошибка 28d69bc6): стрелочная навигация
     // продолжается без повторного клика. Фокус ставим до `onClose` — обработчик
@@ -660,6 +812,13 @@ export function showDialog(opts: DialogOptions): () => void {
     restoreFocus(previouslyFocused, focusAnchor);
     opts.onClose?.();
   });
+  // Фокус — в ТОЛЬКО ЧТО открытый (верхний) диалог. Диалог, объявивший
+  // `onMount`, управляет фокусом сам (редакторы, списки с полем поиска) — не
+  // вмешиваемся, чтобы не перевести фокус дважды. Каркас ставит фокус диалогам
+  // БЕЗ `onMount` (подтверждения, сообщения): иначе при открытии подтверждения
+  // над редактором фокус остаётся в редакторе, и Tab ходит по нему — ошибка
+  // 0c45bce8.
+  if (opts.onMount === undefined) focusOpenedDialog(backdrop, box);
   opts.onMount?.(close, box);
   return close;
 }
