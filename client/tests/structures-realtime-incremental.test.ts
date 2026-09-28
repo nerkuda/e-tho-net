@@ -21,12 +21,14 @@ import {
   applyLinkUpdateToState,
   applyThoughtChanges,
   applyThoughtUpdateToState,
+  linkChangeAffectsDirections,
   linkChangeNeedsReload,
   removeLinkFromState,
   removeThoughtFromState,
   rowRenderSignature,
   thoughtChangeNeedsReload,
   type StructuresCriteriaSnapshot,
+  type StructuresLinkCriteria,
   type StructuresState,
 } from '../src/renderer/screens/structures/realtime-apply.js';
 
@@ -125,6 +127,33 @@ describe('structures realtime: классификация fallback', () => {
   });
 });
 
+describe('structures realtime: направления (эллипсы) концов ребра', () => {
+  const LINK_CRITERIA: StructuresLinkCriteria = { linkFilterActive: false, showTrash: true };
+
+  it('оформление ребра направлений не меняет', () => {
+    assert.equal(linkChangeAffectsDirections({ color: '#f00' }, LINK_CRITERIA), false);
+    assert.equal(linkChangeAffectsDirections({ style: 'dashed', width: 3 }, LINK_CRITERIA), false);
+    assert.equal(linkChangeAffectsDirections({}, LINK_CRITERIA), false);
+  });
+
+  it('смена типа под фильтром обхода меняет раскрываемость концов', () => {
+    assert.equal(
+      linkChangeAffectsDirections({ type_id: 'ty' }, { ...LINK_CRITERIA, linkFilterActive: true }),
+      true,
+    );
+    // Без фильтра обхода тип ребра на закраску эллипса не влияет.
+    assert.equal(linkChangeAffectsDirections({ type_id: 'ty' }, LINK_CRITERIA), false);
+  });
+
+  it('корзина ребра меняет раскрываемость только при скрытой корзине', () => {
+    assert.equal(
+      linkChangeAffectsDirections({ marked_for_deletion: true }, { ...LINK_CRITERIA, showTrash: false }),
+      true,
+    );
+    assert.equal(linkChangeAffectsDirections({ marked_for_deletion: true }, LINK_CRITERIA), false);
+  });
+});
+
 describe('structures realtime: слияние изменений', () => {
   it('thought.updated обновляет title в refs и одну строку', () => {
     const state = makeState();
@@ -212,6 +241,19 @@ describe('structures realtime: проводка экрана и шины', () =>
     'utf8',
   );
   const realtimeUi = fs.readFileSync(path.join(RENDERER_ROOT, 'realtime-ui.ts'), 'utf8');
+
+  it('эллипсы концов правленого/удалённого ребра перечитываются точечно', () => {
+    // Снимок `directions` нельзя вывести из кэша `edges` (только видимые связи),
+    // поэтому батч запускает точечный додар направлений, а не полный путь.
+    const body = structures.slice(structures.indexOf('function applyStructuresOps('));
+    const end = body.indexOf('\n}\n\n/**');
+    const fnBody = body.slice(0, end);
+    assert.match(fnBody, /refreshDirectionsFor\.add\(edge\.source_id\)/);
+    assert.match(fnBody, /refreshDirectionsFor\.add\(edge\.target_id\)/);
+    assert.match(fnBody, /void refreshDirections\(refreshDirectionsFor\)/);
+    assert.match(structures, /async function refreshDirections\(ids: ReadonlySet<string>\)/);
+    assert.match(structures, /fetchHierarchy\(networkId, id, 'children', \{\}\)\)\.directions\[id\]/);
+  });
 
   it('экран коалессирует события и держит один reconcile на окно', () => {
     assert.match(structures, /export function applyStructuresRealtime\(evt: AnyRealtimeEvent\)/);

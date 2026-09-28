@@ -60,11 +60,13 @@ import { createRealtimeBatch } from '../../lib/realtime-batch.js';
 import {
   applyLinkUpdateToState,
   applyThoughtUpdateToState,
+  linkChangeAffectsDirections,
   linkChangeNeedsReload,
   removeLinkFromState,
   removeThoughtFromState,
   rowRenderSignature,
   thoughtChangeNeedsReload,
+  type StructuresLinkCriteria,
   type StructuresState,
 } from './realtime-apply.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
@@ -1546,8 +1548,8 @@ function connectorLabel(links: FocusEdge[]): string {
  * |---|---|---|
  * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `updated` — ЛЮБАЯ правка (ключ `updated_at`); сортировка `alpha` или активный текст. отбор + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
  * | `thought.deleted` | убрать из `resultIds`/`refs`/`directions`/`hierarchy`/`edges` → строка уходит removed-путём сверки | нет среди видимых — игнор |
- * | `link.updated` | ребро нарисовано и меняется оформление (`type_id`/`color`/`style`/`width`/`marked_for_deletion`) → `edges` + перерисовка линий | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active` — структура/наличие линии |
- * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии | ребро не нарисовано — игнор |
+ * | `link.updated` | ребро нарисовано и меняется оформление (`type_id`/`color`/`style`/`width`/`marked_for_deletion`) → `edges` + перерисовка линий; `type_id` под фильтром обхода или `marked_for_deletion` при скрытой корзине — ещё и точечный додар `directions` концов | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active` — структура/наличие линии |
+ * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии + точечный додар `directions` концов | ребро не нарисовано — игнор |
  * | `thought.created` | — | всегда: вхождение в отбор не проверяется (нет построения проверки членства) |
  * | `link.created`, `property-value.*`, `thought-type*`, `link-type*`, `property-definition.*`, `*-view.*`, `layer.merged` | — | всегда (состав/структура/каталог) |
  *
@@ -1556,6 +1558,12 @@ function connectorLabel(links: FocusEdge[]): string {
  * батч и запускает {@link reloadAll}. Локальные производители по-прежнему зовут
  * {@link scheduleStructuresRefresh} (полный путь) сами — своё realtime-эхо до
  * рендерера не доходит.
+ *
+ * **Эллипсы при правке/удалении ребра.** Линии применяются точечно, но
+ * `directions` (наполненность эллипсов) считается сервером по ВСЕМ активным
+ * связям мысли, а не только по видимым, — из кэша `edges` её не вывести.
+ * Поэтому для концов изменённого/удалённого ребра направления перечитываются
+ * точечно ({@link refreshDirections}), а не полной перезагрузкой страницы.
  */
 type StructuresRealtimeOp =
   | { kind: 'thought-updated'; id: string; changes: ThoughtUpdateInput }
@@ -1594,12 +1602,25 @@ function criteriaSnapshot(): {
   };
 }
 
+/** Критерии, влияющие на применимость правки РЕБРА (эллипсы концов). */
+function linkCriteriaSnapshot(): StructuresLinkCriteria {
+  return {
+    // Фильтр обхода по типам связей активен ровно тогда, когда задан у
+    // применённого отбора (тот же, что у раскрытия — `fetchHierarchy`).
+    linkFilterActive: appliedQuery?.filter.link_filter !== undefined,
+    showTrash: store.state.showTrash,
+  };
+}
+
 /**
  * Применить накопленный батч к снимку и ОДИН раз свернуть дерево. Пустой батч
- * (событие не изменило видимого) кадр сверки не запускает.
+ * (событие не изменило видимого) кадр сверки не запускает. Для концов
+ * изменённого/удалённого ребра дополнительно запускается точечный додар
+ * направлений ({@link refreshDirections}).
  */
 function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
   const state = structuresState();
+  const refreshDirectionsFor = new Set<string>();
   let changed = false;
   for (const op of ops) {
     switch (op.kind) {
@@ -1614,12 +1635,72 @@ function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
         }
         break;
       }
-      case 'link-updated':
+      case 'link-updated': {
+        const edge = edges.get(op.id);
+        if (edge !== undefined && linkChangeAffectsDirections(op.changes, linkCriteriaSnapshot())) {
+          refreshDirectionsFor.add(edge.source_id);
+          refreshDirectionsFor.add(edge.target_id);
+        }
         if (applyLinkUpdateToState(state, op.id, op.changes)) changed = true;
         break;
-      case 'link-deleted':
+      }
+      case 'link-deleted': {
+        const edge = edges.get(op.id);
+        if (edge !== undefined) {
+          refreshDirectionsFor.add(edge.source_id);
+          refreshDirectionsFor.add(edge.target_id);
+        }
         if (removeLinkFromState(state, op.id)) changed = true;
         break;
+      }
+    }
+  }
+  if (changed) renderTree(true);
+  if (refreshDirectionsFor.size > 0) void refreshDirections(refreshDirectionsFor);
+}
+
+/**
+ * Точечный додар свежих `directions` (наполненности эллипсов) для концов
+ * изменённого/удалённого ребра. Эллипс сервер считает по ВСЕМ активным связям
+ * мысли с учётом фильтра обхода и видимости корзины, поэтому из локального
+ * кэша `edges` (связи только среди видимых) его не вывести.
+ *
+ * Источник — та же точка {@link fetchHierarchy}, что и раскрытие: тот же
+ * `link_filter` отбора и `showInactive`/корзина, значит и та же семантика
+ * закраски. Соседей и рёбра ответа НЕ сливаем в снимок — берём лишь флаги
+ * нужных мыслей. Додар не удался — полный путь ({@link reloadAll}): эллипс
+ * нельзя оставить неверным.
+ */
+async function refreshDirections(ids: ReadonlySet<string>): Promise<void> {
+  const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
+  const seen = `${networkId}:${tabId ?? ''}`;
+  if (networkId === null) return;
+  let fresh: ReadonlyArray<readonly [string, { has_incoming: boolean; has_outgoing: boolean } | undefined]>;
+  try {
+    fresh = await Promise.all(
+      [...ids].map(
+        async (id) =>
+          [id, (await fetchHierarchy(networkId, id, 'children', {})).directions[id]] as const,
+      ),
+    );
+  } catch {
+    realtimeBatch.markFull();
+    return;
+  }
+  // Сменили сеть/вкладку, пока шёл додар, — ответ устарел.
+  if (networkIdSeen !== seen) return;
+  let changed = false;
+  for (const [id, flags] of fresh) {
+    if (flags === undefined) continue;
+    const prev = directions.get(id);
+    if (
+      prev === undefined ||
+      prev.has_incoming !== flags.has_incoming ||
+      prev.has_outgoing !== flags.has_outgoing
+    ) {
+      directions.set(id, flags);
+      changed = true;
     }
   }
   if (changed) renderTree(true);

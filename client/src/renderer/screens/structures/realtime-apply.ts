@@ -103,6 +103,42 @@ export function linkChangeNeedsReload(changes: LinkUpdateInput): boolean {
   );
 }
 
+/**
+ * Критерии, влияющие на то, меняет ли правка РЕБРА наполненность эллипсов
+ * раскрываемости его концов.
+ */
+export interface StructuresLinkCriteria {
+  /** Активен фильтр обхода по типам связей (`link_filter` текущего отбора). */
+  linkFilterActive: boolean;
+  /** Настройка сети «Показывать содержимое корзины». */
+  showTrash: boolean;
+}
+
+/**
+ * Может ли правка НАРИСОВАННОГО ребра изменить наполненность эллипсов
+ * (`directions`) его концов? Само ребро/линия применяются точечно, но флаги
+ * направлений концов надо перечитать у сервера: эллипс считается по ВСЕМ
+ * активным связям мысли (в том числе НЕвидимым), а не по кэшу `edges` (там
+ * только связи среди видимых) — из локального снимка его не вывести
+ * (см. `refreshDirections` в `structures.ts`).
+ *
+ *  - `type_id` под активным фильтром обхода: ребро входит в типы/выходит из
+ *    типов, по которым считается раскрываемость концов;
+ *  - `marked_for_deletion` при скрытой корзине: помеченное ребро перестаёт
+ *    закрашивать эллипс.
+ *
+ * Смена концов (`source_id`/`target_id`) и `active` сюда не доходят — они
+ * уходят в полный путь ({@link linkChangeNeedsReload}).
+ */
+export function linkChangeAffectsDirections(
+  changes: LinkUpdateInput,
+  criteria: StructuresLinkCriteria,
+): boolean {
+  if (changes.type_id !== undefined && criteria.linkFilterActive) return true;
+  if (changes.marked_for_deletion !== undefined && !criteria.showTrash) return true;
+  return false;
+}
+
 /** Обновлённая `ThoughtRef` из частичных изменений (`updated`-событие). */
 export function applyThoughtChanges(ref: ThoughtRef, changes: ThoughtUpdateInput): ThoughtRef {
   const next: ThoughtRef = { ...ref };
