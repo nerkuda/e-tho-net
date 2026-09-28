@@ -1419,7 +1419,10 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
     const meaningful = fresh.targets.filter(
       (tg) => !(tg.owner_type === 'thought' && tg.owner_id === homeId),
     );
-    if (isLastChip(meaningful)) {
+    // Снятие последнего содержательного чипса меняет класс записи на 0 — сервер
+    // возвращает её в HOME и поднимает в верхний блок (c81964c7).
+    const movesToHome = isLastChip(meaningful);
+    if (movesToHome) {
       const ok = await confirmDialog(t('diary.detachTitle'), t('diary.detachQuestion'), true);
       if (!ok) return;
     }
@@ -1429,6 +1432,10 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
     // Снятие последнего чипса оставляет запись (сервер сам возвращает её в HOME
     // и поднимает в верхний блок) — лента перезагружается целиком.
     await reload();
+    // Перемещение записи в другой блок меняет состав верхней части ленты:
+    // keyed-сверка держит позицию прокрутки, поэтому перемещённая запись может
+    // остаться вне вида. Показываем ленту с начала (ошибка 368747a6).
+    if (movesToHome && feedWrap !== null) feedWrap.scrollTop = 0;
   } catch (err) {
     notice(t('diary.detachFailed', [errText(err)]), 'error');
   }
