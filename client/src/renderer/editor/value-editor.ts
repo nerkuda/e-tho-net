@@ -37,9 +37,11 @@
  *
  * История последних значений подключается опцией `historyPropertyId`
  * (networkId + property id — ключ `recent-values.ts`): источник `empty` у
- * text/url/link, включая множественные значения и свойства-связи (ошибка
+ * text/url, включая множественные значения и свойства-связи (ошибка
  * 880c3add — история пропала из полей свойств-связей). Пишется при успешном
- * сохранении в `blur`-режиме.
+ * сохранении в `blur`-режиме. У свойства со списком вариантов
+ * (`config.options`) история не подключается — выпадашку занимает сам список,
+ * который открывается сразу при входе в поле (карточка ошибки 4a96d07a).
  */
 
 import type {
@@ -845,7 +847,9 @@ function buildTextChip(value: string, opts: {
 /**
  * Чип-редактор нескольких значений (задача вехи 4: `config.multiple` — чипы,
  * а не списки строк). Один чип на значение; поле добавления с общей
- * выпадашкой (история + закрытый список `config.options` для text);
+ * выпадашкой (история + закрытый список `config.options` для text; у свойства
+ * со списком история не подключается, а список открывается сразу — карточка
+ * ошибки 4a96d07a);
  * Enter на свободном тексте добавляет чип, клик/Enter по строке выпадашки —
  * её выбор; «✕» у чипа убирает значение. Сохранение — набором на каждое
  * изменение (`save([])` при пустом наборе).
@@ -899,15 +903,28 @@ function buildMultiTextChipsEditor(opts: {
     input.placeholder = kind === 'url' ? 'https://… или путь к файлу' : '+ ещё одно значение';
     if (kind === 'url') input.title = 'URL или путь к файлу';
 
+    // Свойство со списком вариантов: история не ведётся — выпадашку занимает
+    // сам список, который открывается сразу при входе в поле добавления и до
+    // первой правки показывается целиком (карточка ошибки 4a96d07a).
+    const options = kind === 'text' ? (definition.config?.options ?? []).filter((o) => o !== '') : [];
+    let edited = false;
+    input.addEventListener('focus', () => {
+      edited = false;
+    });
+    input.addEventListener('input', () => {
+      edited = true;
+    });
     const sources: SuggestSource[] = [];
-    if (opts.historyPropertyId !== undefined) {
+    if (opts.historyPropertyId !== undefined && options.length === 0) {
       sources.push(textHistorySource(opts.networkId, opts.historyPropertyId));
     }
-    if (kind === 'text') {
-      const options = (definition.config?.options ?? []).filter((o) => o !== '');
-      if (options.length > 0) {
-        sources.push(optionsSuggestSource(options, { header: 'Варианты' }));
-      }
+    if (options.length > 0) {
+      sources.push(
+        optionsSuggestSource(options, {
+          header: 'Варианты',
+          showAllUntilEdited: () => !edited,
+        }),
+      );
     }
     // Источники вызывающего (токены отбора) — общий список подсказок.
     if (opts.extraSuggest !== undefined) sources.push(...opts.extraSuggest);
@@ -963,7 +980,9 @@ async function openUrlExternally(value: string): Promise<void> {
  * Одиночное строковое поле (text / url): blur-коммит с baseline и rollback,
  * «✕» очистки, для url — «Открыть»; подсказки — общая выпадашка (история на
  * пустом поле + закрытый список `config.options` для text; каретка ▾
- * открывает полный список вариантов).
+ * открывает полный список вариантов). У свойства со списком вариантов история
+ * не подключается, а список открывается сразу при входе в поле и до первой
+ * правки показывается целиком (карточка ошибки 4a96d07a).
  */
 function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): HTMLElement {
   const { definition } = opts;
@@ -1019,15 +1038,33 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   }
 
   const sources: SuggestSource[] = [];
-  if (opts.historyPropertyId !== undefined) {
-    sources.push(textHistorySource(opts.networkId, opts.historyPropertyId));
-  }
+  // Свойство со списком вариантов (`config.options`): история последних
+  // значений не ведётся — выпадашку занимает сам список вариантов, который
+  // открывается сразу при входе в поле и до первой правки показывается
+  // целиком (карточка ошибки 4a96d07a).
   let options: string[] = [];
   if (kind === 'text') {
     options = (definition.config?.options ?? []).filter((o) => o !== '');
-    if (options.length > 0) {
-      sources.push(optionsSuggestSource(options, { header: 'Варианты' }));
-    }
+  }
+  // Правка поля пользователем: до неё содержимое (текущее значение) не
+  // считается введённым запросом — см. `showAllUntilEdited` ниже.
+  let edited = false;
+  input.addEventListener('focus', () => {
+    edited = false;
+  });
+  input.addEventListener('input', () => {
+    edited = true;
+  });
+  if (opts.historyPropertyId !== undefined && options.length === 0) {
+    sources.push(textHistorySource(opts.networkId, opts.historyPropertyId));
+  }
+  if (options.length > 0) {
+    sources.push(
+      optionsSuggestSource(options, {
+        header: 'Варианты',
+        showAllUntilEdited: () => !edited,
+      }),
+    );
   }
   // Источники вызывающего (токены отбора) — в том же списке подсказок
   // (инструкция «Пикер … источник вариантов — её параметр»).
