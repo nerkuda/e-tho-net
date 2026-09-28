@@ -132,20 +132,54 @@ let ellipseHover: { thoughtId: string; direction: 'parent' | 'child' } | null = 
  * Дополнительный набор рёбер (задача c8fa74ba): когда сектор карты подгружает
  * порции соседей сверх первых 50, окрестность из ответа фокуса перестаёт
  * покрывать все видимые связи. Канва запрашивает рёбра среди ВСЕХ видимых
- * мыслей (`POST /thoughts/edges`) и передаёт их сюда; пока набор задан, он
- * ЗАМЕНЯЕТ `focus.edges` при отрисовке. `null` — снова рисуем по фокусу
- * (устанавливается при смене фокуса и при отсутствии подгрузки).
+ * мыслей (`POST /thoughts/edges`) и передаёт их сюда; рёбра, уже пришедшие в
+ * `focus.edges`, из набора вычитаются (для них источник истины — сам ответ
+ * фокуса), поэтому здесь остаются только связи, которых фокус НЕ покрывает.
+ * `null` — дополнительного набора нет (нет подгрузки или сменился фокус).
+ *
+ * Почему набор НЕ заменяет `focus.edges` целиком: `focus.edges` — живой
+ * источник истины по общим рёбрам (обновляется realtime-перезапросом и
+ * локальными правками, в т.ч. `patchFocusEdge`), а подгруженный набор —
+ * снимок, обновляемый только при догрузке порции или перечитывании. Если брать
+ * общие рёбра из снимка, локальное удаление связи «Удалить совсем» убирает её
+ * из `focus.edges`, но не из снимка, и линия висит на карте до смены фокуса
+ * (ошибка c02ff7dc).
  */
 let supplementalEdges: FocusEdge[] | null = null;
 
-/** Задать/сбросить дополнительный набор рёбер (см. {@link supplementalEdges}). */
-export function setSupplementalEdges(edges: FocusEdge[] | null): void {
-  supplementalEdges = edges;
+/**
+ * Задать/сбросить дополнительный набор рёбер (см. {@link supplementalEdges}).
+ * `focusEdges` — рёбра ответа фокуса на момент запроса: они вычитаются из
+ * набора, чтобы общие рёбра рисовались по живому `focus.edges`, а не по снимку.
+ */
+export function setSupplementalEdges(
+  edges: FocusEdge[] | null,
+  focusEdges: readonly FocusEdge[] = [],
+): void {
+  if (edges === null) {
+    supplementalEdges = null;
+    return;
+  }
+  const covered = new Set(focusEdges.map((e) => e.id));
+  supplementalEdges = edges.filter((e) => !covered.has(e.id));
 }
 
-/** Источник рёбер для отрисовки: подгруженный набор, иначе — ответ фокуса. */
+/** Есть ли подгруженные рёбра вне `focus.edges` (см. {@link supplementalEdges}). */
+export function hasSupplementalEdges(): boolean {
+  return supplementalEdges !== null && supplementalEdges.length > 0;
+}
+
+/**
+ * Источник рёбер для отрисовки: живые рёбра текущего ответа фокуса плюс
+ * подгруженные рёбра вне него (см. {@link supplementalEdges}). Порядок и
+ * дедупликация по id сохраняют одну линию на ребро.
+ */
 function edgeSource(focus: FocusResponse): FocusEdge[] {
-  return supplementalEdges ?? focus.edges ?? edgesFromNeighbours(focus);
+  const focusEdges = focus.edges ?? edgesFromNeighbours(focus);
+  if (supplementalEdges === null || supplementalEdges.length === 0) return focusEdges;
+  const seen = new Set(focusEdges.map((e) => e.id));
+  const appended = supplementalEdges.filter((e) => !seen.has(e.id));
+  return appended.length === 0 ? focusEdges : [...focusEdges, ...appended];
 }
 
 /**
@@ -1237,4 +1271,5 @@ export const linksInternals = {
   rectsOverlap,
   edgeGeometry,
   edgePointAt,
+  edgeSource,
 };

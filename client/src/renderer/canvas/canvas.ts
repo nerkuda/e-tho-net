@@ -84,6 +84,7 @@ import {
   setEllipseHover,
   setDragLinkLine,
   setSupplementalEdges,
+  hasSupplementalEdges,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
 import {
@@ -1197,7 +1198,17 @@ function syncZoneTotalsWithFreshFocus(): void {
   if (focus === null || focus === lastFocusResponse) return;
   if (focus.focused.id !== lastFocusId) return;
   lastFocusResponse = focus;
-  void reconcileZoneTotals(focus);
+  // Подгруженные рёбра — снимок `POST /thoughts/edges` по видимым мыслям,
+  // обновляется только при догрузке порции или здесь. Удаление связи между
+  // ДВУМЯ подгруженными соседями (её нет и не будет в `focus.edges`) снимок не
+  // трогает — линия висела бы до смены фокуса. Перечитываем снимок на свежем
+  // ответе ТОГО ЖЕ фокуса после сверки секторов (её догрузка успевает
+  // пополнить видимый набор, и запрос идёт по устоявшемуся составу мыслей;
+  // ошибка c02ff7dc). Общие рёбра фокуса чинятся самим `edgeSource` — снимок их
+  // не хранит.
+  void reconcileZoneTotals(focus).then(() => {
+    if (hasSupplementalEdges()) void refreshZoneEdges(focus);
+  });
 }
 
 /**
@@ -1372,9 +1383,11 @@ async function appendNextZonePage(
  * Re-fetches every active link among the currently VISIBLE thoughts (focus +
  * all appended pages) and hands them to the link overlay. Beyond the first
  * page the focus response's `edges` no longer covers the neighbourhood, so the
- * overlay is fed the authoritative set from `POST /thoughts/edges`.
+ * overlay is fed the authoritative set from `POST /thoughts/edges`; the edges
+ * already in `focus.edges` are dropped from the snapshot so the overlay renders
+ * shared edges from the live focus response (ошибка c02ff7dc).
  */
-async function refreshZoneEdges(_focus: FocusResponse): Promise<void> {
+async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const token = zonePagingToken;
@@ -1382,7 +1395,7 @@ async function refreshZoneEdges(_focus: FocusResponse): Promise<void> {
   try {
     const edges = await etn.structures.edges(networkId, ids, store.state.showInactive);
     if (token !== zonePagingToken) return;
-    setSupplementalEdges(edges);
+    setSupplementalEdges(edges, focus.edges ?? []);
     redrawLinks?.();
   } catch {
     // Best effort: the overlay keeps drawing the focus response's edges.
