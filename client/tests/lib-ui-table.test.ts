@@ -539,6 +539,35 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     t.refresh();
     assert.equal(stub.columnSets.length, before + 1, 'refresh пересобирает колонки');
   });
+
+  it('смена выделения не пере-назначает набор строк (Space/setSelection, d59fdfb9)', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      selection: 'multi',
+    });
+    const wrapper = t.element as unknown as ShimElement;
+    wrapper.emit('keydown', keyEvent('ArrowDown')); // текущая 'a'
+
+    // Фикс d59fdfb9: выделение идёт через `setSelected` и НЕ пере-назначает
+    // набор строк (`setItems`/`setRows`) — иначе список пересобирался бы и
+    // сбрасывал прокрутку на каждое нажатие Space.
+    const itemsBefore = stub.itemSets.length;
+    const selectedBefore = stub.selectedSets.length;
+
+    wrapper.emit('keydown', keyEvent(' ')); // Space выделяет текущую 'a'
+    assert.deepEqual(t.getSelection(), ['a']);
+    assert.equal(stub.itemSets.length, itemsBefore, 'Space не пере-назначает строки');
+    assert.ok(stub.selectedSets.length > selectedBefore, 'выделение ушло через setSelected');
+
+    t.setSelection(['a', 'b']);
+    assert.equal(stub.itemSets.length, itemsBefore, 'setSelection не пере-назначает строки');
+    assert.deepEqual(t.getSelection().sort(), ['a', 'b']);
+  });
 });
 
 // --- Расширение фасада: управляемая сортировка и режим ячеек (задача 20ac6917)

@@ -462,10 +462,18 @@ describe('edgeSource: живые рёбра фокуса + подгруженн�
   });
 
   it('canvas перечитывает снимок на свежем ответе того же фокуса (canvas.ts)', () => {
+    // Поведенческая проверка недостижима: `syncZoneTotalsWithFreshFocus` и
+    // `refreshZoneEdges` не экспортированы, а их прогон требует полностью
+    // смонтированного холста, реестра ссылок и мок-API ETN — это не
+    // пропорционально предмету. Контракт стережём структурно, но без привязки к
+    // форматированию: ищем цепочку «сверка секторов → (при наличии снимка)
+    // перечитать рёбра» регулярным выражением по вызовам, а не по подстрокам
+    // с точным отступом и порядком пробелов.
     const src = readFileSync(CANVAS_SRC, 'utf8');
-    const start = src.indexOf('function syncZoneTotalsWithFreshFocus');
-    const body = src.slice(start, src.indexOf('\n}', start));
-    assert.ok(body.includes('hasSupplementalEdges()'), 'снимок перечитывается только когда он есть');
-    assert.ok(body.includes('refreshZoneEdges(focus)'), 'снимок держат свежим на том же фокусе');
+    assert.match(
+      src,
+      /reconcileZoneTotals\(focus\)\.then\(\(\) => \{[\s\S]*?if \(hasSupplementalEdges\(\)\) void refreshZoneEdges\(focus\)/,
+      'снимок перечитывается ПОСЛЕ сверки секторов и только когда он есть',
+    );
   });
 });
