@@ -455,11 +455,18 @@ function outsideRows(
  * Ключ строки «Свойства вне типа»: внетиповое значение привязано к свойству
  * реестра — его `property_id` и служит ключом (аналог id привязки основной
  * таблицы). У рёбер типа связи без свойства в реестре `property_id` пуст —
- * ключом становится display-имя стороны: оно же ключ записи (748b80fd) и не
- * повторяется в наборе.
+ * ключом становится уникальная серверная пара «тип связи + направление»
+ * (`link_type_id`/`direction`): display-имя стороны для этого не годится —
+ * уникальность имён типа связи только по паре forward/reverse, и два типа с
+ * одинаковым `name_forward` дали бы один и тот же ключ (регрессия круга 1).
  */
 function outsideRowKey(value: PropertyValue | LinkPropertyValues): string {
-  return value.property_id !== '' ? value.property_id : `link:${value.property_name}`;
+  if (isLinkPropertyValues(value)) {
+    return value.property_id !== ''
+      ? value.property_id
+      : `link:${value.link_type_id ?? ''}|${value.direction}`;
+  }
+  return value.property_id;
 }
 
 /**

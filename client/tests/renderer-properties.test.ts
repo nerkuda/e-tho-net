@@ -799,6 +799,64 @@ describe('editor properties — внетиповые свойства-связи
     assert.equal(row1T2, row1, 'строка того же ключа сохранена как узел при перепривязке');
     assert.ok(JSON.stringify(row1T2).includes('C'), 'значение нового владельца отрисовано');
   });
+
+  /**
+   * Круг 1 проверки задачи 3df6b477: у рёбер типа связи без свойства в реестре
+   * display-имя НЕ уникально (уникальна только пара forward/reverse), поэтому
+   * ключ строки берётся из серверной пары «тип связи + направление». Иначе два
+   * типа с одинаковым `name_forward` дали бы дубль ключа, и `reconcileKeyed`
+   * упал бы в async `reload()` — группа «Свойства вне типа» опустела бы.
+   */
+  it('дубликаты display-имени типа связи не ломают reconcile (3df6b477)', async () => {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    etnApi['system'] = { openExternal: async () => '' };
+    etnApi['thoughts'] = { resolve: async () => [] };
+
+    const linkRow = (linkTypeId: string, targetId: string) => ({
+      id: '',
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: '',
+      outside_type: true,
+      property_name: 'связано с',
+      value_type: 'link',
+      direction: 'out',
+      link_type_id: linkTypeId,
+      structural: false,
+      count: 1,
+      values: [
+        {
+          link_id: `l-${linkTypeId}`,
+          target_id: targetId,
+          target_title: targetId,
+          target_type_id: null,
+          comment: null,
+        },
+      ],
+    });
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const table = propertiesInternals.buildOutsideTypeTable(
+      [linkRow('lt1', 'p1'), linkRow('lt2', 'p2')] as any,
+      'n1',
+      'thought',
+      't1',
+      () => {},
+    ) as unknown as ShimElement;
+
+    const tbody = table.children[0]!.children[0] as ShimElement;
+    assert.equal(tbody.children.length, 2, 'обе строки с одинаковым display-именем отрисованы');
+    const keys = tbody.children.map((r) => r.getAttribute('data-key'));
+    assert.equal(new Set(keys).size, 2, 'ключи строк уникальны');
+    const json = JSON.stringify(table);
+    assert.ok(json.includes('связано с'), 'display-имя отрисовано');
+    assert.ok(json.includes('p1') && json.includes('p2'), 'обе строки несут своё ребро');
+  });
 });
 
 describe('property value helpers (pure)', () => {
