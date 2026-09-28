@@ -192,6 +192,9 @@ export async function ensureStructuresInitialised(): Promise<void> {
   if (networkIdSeen === key) return;
   networkIdSeen = key;
 
+  // Новый снимок грузится целиком — отложенный полный путь больше не нужен.
+  fullRefreshPending = false;
+
   // Reset per-network state (a previous network may still be loaded).
   resultIds = [];
   total = 0;
@@ -654,6 +657,13 @@ export function mountStructures(hostEl: HTMLElement): void {
       store.state.activeView === 'structures'
     ) {
       void ensureStructuresInitialised();
+      return;
+    }
+    if (store.state.activeView === 'structures' && fullRefreshPending) {
+      // Вид снова показан, а на скрытом виде накопился отложенный полный путь:
+      // перезагружаем снимок сейчас (ошибка 8e702d8c).
+      fullRefreshPending = false;
+      void reloadAll();
       return;
     }
     if (store.state.activeView !== 'structures') return;
@@ -1592,10 +1602,24 @@ type StructuresRealtimeOp =
   | { kind: 'link-updated'; id: string; changes: LinkUpdateInput }
   | { kind: 'link-deleted'; id: string };
 
+/**
+ * Отложенный полный путь: fallback-событие пришло, когда вид «Структур» не
+ * показан. Сетевые перезагрузки вхолостую не гоняем — снимок помечается
+ * «грязным» и перезагружается при следующем показе вида (ошибка 8e702d8c).
+ */
+let fullRefreshPending = false;
+
 const realtimeBatch = createRealtimeBatch<StructuresRealtimeOp>({
   windowMs: 400,
   applyBatch: (ops) => applyStructuresOps(ops),
   applyFull: () => {
+    // Инкрементальные события поддерживают снимок и вне экрана, но полный путь
+    // при скрытом виде — вхолостую: помечаем снимок «грязным» и перезагружаем
+    // при показе вида (ошибка 8e702d8c).
+    if (store.state.activeView !== 'structures') {
+      fullRefreshPending = true;
+      return;
+    }
     void reloadAll();
   },
 });

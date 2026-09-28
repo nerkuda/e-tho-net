@@ -290,11 +290,33 @@ describe('structures realtime: проводка экрана и шины', () =>
     assert.match(structures, /export function applyStructuresRealtime\(evt: AnyRealtimeEvent\)/);
     assert.match(structures, /createRealtimeBatch<StructuresRealtimeOp>\(/);
     assert.match(structures, /applyBatch: \(ops\) => applyStructuresOps\(ops\)/);
-    assert.match(structures, /applyFull: \(\) => \{\s*void reloadAll\(\);/);
+    assert.match(
+      structures,
+      /applyFull: \(\) => \{[\s\S]*?void reloadAll\(\);/,
+      'полный путь по-прежнему зовёт reloadAll (при показанном виде)',
+    );
     const body = structures.slice(structures.indexOf('function applyStructuresOps('));
     const end = body.indexOf('\n}\n');
     const callCount = (body.slice(0, end).match(/renderTree\(/g) ?? []).length;
     assert.equal(callCount, 1, 'один renderTree на батч окна');
+  });
+
+  it('полный путь при скрытом виде откладывается до показа (ошибка 8e702d8c)', () => {
+    // Скрытый вид не гоняет сетевые перезагрузки вхолостую: fallback-событие
+    // помечает снимок «грязным», а перезагрузка идёт при следующем показе вида.
+    assert.match(
+      structures,
+      /applyFull: \(\) => \{[\s\S]*?if \(store\.state\.activeView !== 'structures'\) \{[\s\S]*?fullRefreshPending = true;[\s\S]*?return;[\s\S]*?void reloadAll\(\);/,
+      'applyFull откладывает полный путь, пока вид скрыт',
+    );
+    // Показ вида с отложенной пометкой перезагружает снимок сейчас.
+    assert.match(
+      structures,
+      /store\.subscribe\(\(\) => \{[\s\S]*?fullRefreshPending[\s\S]*?void reloadAll\(\);/,
+      'показ вида снимает отложенную пометку полной перезагрузкой',
+    );
+    // Инкрементальный батч гейта по активному виду НЕ получил: снимок живёт и вне экрана.
+    assert.match(structures, /applyBatch: \(ops\) => applyStructuresOps\(ops\)/);
   });
 
   it('снимок поддерживается и вне активного вида «Структур» (замечание проверки уровня 3)', () => {
