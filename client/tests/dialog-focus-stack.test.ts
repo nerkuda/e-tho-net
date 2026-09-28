@@ -62,11 +62,12 @@ function installShim(): void {
 
 installShim();
 
-const { closeDialog, showDialog, promptDialog, confirmDialog } = await import(
+const { closeDialog, showDialog, promptDialog, confirmDialog, collectFocusables } = await import(
   '../src/renderer/lib/dialog.js'
 );
 const { t } = await import('../src/renderer/lib/i18n.js');
 const { div } = await import('../src/renderer/lib/dom.js');
+const { uiTabs } = await import('../src/renderer/lib/ui/tabs.js');
 
 /** Число `keydown`-слушателей окна — каркас вешает/снимает их на каждый диалог. */
 function keydownListenerCount(): number {
@@ -330,5 +331,60 @@ describe('фокус верхнего диалога и ловушка Tab (0c45
       true,
       'фокус вернулся в нижележащий (оставшийся) диалог, а не на body',
     );
+  });
+});
+
+describe('порядок ловушки Tab учитывает tabindex (ошибка ed26b7a3)', () => {
+  /** Элемент с заданными атрибутами (как их ставит продукт). */
+  function make(tag: string, attrs: Record<string, string> = {}): ActiveTrackingElement {
+    const element = doc().createElement(tag) as ActiveTrackingElement;
+    for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, value);
+    return element;
+  }
+
+  it('положительный tabindex — впереди, нулевой — по DOM, -1 исключён', () => {
+    installShim();
+    const root = doc().createElement('div') as ActiveTrackingElement;
+    const first = make('button'); // нативный, без атрибута — ранг 0
+    const positive2 = make('button', { tabindex: '2' });
+    const excluded = make('button', { tabindex: '-1' });
+    const positive1 = make('button', { tabindex: '1' });
+    const wrapper = make('div', { tabindex: '0' }); // обёртка: не нативный тег, но tabindex=0
+    root.append(first, positive2, excluded, positive1, wrapper);
+
+    const order = collectFocusables(root as unknown as Element);
+    assert.deepEqual(
+      order,
+      [positive1, positive2, first, wrapper],
+      'порядок: tabindex 1 → 2 → нулевые в порядке DOM; tabindex=-1 пропущен',
+    );
+  });
+
+  it('обёртка с tabindex=0 попадает в порядок, кнопка с tabindex=-1 — нет', () => {
+    installShim();
+    const root = doc().createElement('div') as ActiveTrackingElement;
+    const wrapper = make('div', { tabindex: '0' });
+    const skipped = make('button', { tabindex: '-1' });
+    const visible = make('button');
+    root.append(wrapper, skipped, visible);
+
+    const order = collectFocusables(root as unknown as Element);
+    assert.deepEqual(order, [wrapper, visible], 'обёртка включена, кнопка с -1 исключена');
+  });
+
+  it('кнопки неактивных вкладок (tabIndex=-1) не встают в порядок табуляции', () => {
+    installShim();
+    const root = doc().createElement('div') as ActiveTrackingElement;
+    const tabs = uiTabs({
+      tabs: [
+        { id: 'a', label: 'A', content: () => doc().createElement('div') as unknown as HTMLElement },
+        { id: 'b', label: 'B', content: () => doc().createElement('div') as unknown as HTMLElement },
+      ],
+    });
+    root.append(tabs.root as unknown as ActiveTrackingElement);
+
+    const tabButtons = collectFocusables(root as unknown as Element).filter((element) => element.tagName === 'button');
+    assert.equal(tabButtons.length, 1, 'в порядке только активная вкладка');
+    assert.equal(tabButtons[0]!.textContent, 'A', 'активная вкладка — первая');
   });
 });

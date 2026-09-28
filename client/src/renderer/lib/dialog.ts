@@ -358,17 +358,63 @@ function isFocusableNode(node: Element): boolean {
   return isVisibleForFocus(node);
 }
 
-/** Все фокусируемые потомки диалога в порядке DOM — для ловушки Tab. */
-function collectFocusables(root: Element): HTMLElement[] {
-  const out: HTMLElement[] = [];
+/** Число из атрибута `tabindex`; `null` — атрибута нет (нативная фокусируемость). */
+function tabIndexAttr(node: Element): number | null {
+  const raw = node.getAttribute('tabindex');
+  if (raw === null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Ранг элемента в последовательной навигации Tab, либо `null` — не в порядке.
+ *
+ * `tabindex="-1"` исключает элемент из порядка даже когда он кликабелен — так
+ * браузер пропускает кнопки неактивных вкладок (`lib/ui/tabs.ts`); раньше они
+ * попадали в ловушку Tab, и порядок расходился с нативным. Явный неотрицательный
+ * `tabindex` делает элемент шагом табуляции и тогда, когда его тег не входит в
+ * нативный набор, — обёртка таблицы/дерева (`tabIndex = 0`) браузером табилится.
+ * Без атрибута элемент участвует, только если фокусируем нативно; ранг `0` —
+ * браузерный шаг по порядку DOM (ошибка ed26b7a3).
+ */
+function tabStopRank(node: Element): number | null {
+  const attr = tabIndexAttr(node);
+  // Свойство `tabIndex` — тот же источник, что атрибут: в реальном DOM оно его
+  // отражает, а в тестовом DOM-шиме продукт ставит его напрямую (`tabs.ts` —
+  // недоступные вкладки `tabIndex = -1`). Явный отрицательный признак берём из
+  // любого источника — он исключает элемент из порядка табуляции.
+  const prop = (node as { tabIndex?: number }).tabIndex;
+  const explicit = attr ?? (typeof prop === 'number' && prop < 0 ? prop : null);
+  if (explicit !== null) {
+    if (explicit < 0) return null;
+    const carrier = node as Element & { disabled?: boolean };
+    if (carrier.disabled === true || !isVisibleForFocus(node)) return null;
+    return explicit;
+  }
+  return isFocusableNode(node) ? 0 : null;
+}
+
+/**
+ * Все фокусируемые потомки диалога в НАТИВНОМ порядке табуляции — для ловушки
+ * Tab. Положительный `tabindex` идёт впереди нулевого и сортируется по
+ * возрастанию; элементы с нулевым рангом — в порядке DOM (`Array.sort` в Node
+ * стабильна). Порядок совпадает с браузерной последовательностью фокуса, иначе
+ * Tab «перепрыгивал» бы элементы (ошибка ed26b7a3).
+ */
+export function collectFocusables(root: Element): HTMLElement[] {
+  const out: Array<{ el: HTMLElement; rank: number }> = [];
   const walk = (node: Element): void => {
     for (const child of Array.from(node.children) as Element[]) {
-      if (isFocusableNode(child)) out.push(child as HTMLElement);
+      const rank = tabStopRank(child);
+      if (rank !== null) out.push({ el: child as HTMLElement, rank });
       walk(child);
     }
   };
   walk(root);
-  return out;
+  // Нулевой ранг — «после всех положительных», поэтому его ключ — +∞: так
+  // стабильная сортировка сохраняет порядок DOM среди нулевых.
+  const key = (rank: number): number => (rank > 0 ? rank : Number.POSITIVE_INFINITY);
+  return out.sort((a, b) => key(a.rank) - key(b.rank)).map((entry) => entry.el);
 }
 
 /** Первое текстовое поле диалога — курсор при открытии ставится в него (08-ui-spec.md §4.2). */
