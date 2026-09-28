@@ -157,6 +157,25 @@ describe('structures realtime: классификация fallback', () => {
   });
 });
 
+describe('structures realtime: направления (эллипсы) концов ребра', () => {
+  it('додар направлений отбрасывает устаревший ответ (смена отбора/додара) — ошибка 0eebf8eb', () => {
+    const src = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'structures', 'structures.ts'),
+      'utf8',
+    );
+    const body = src.slice(src.indexOf('async function refreshDirections('));
+    const end = body.indexOf('\n}\n');
+    const fnBody = body.slice(0, end);
+    // Поколение ОТБОРА: ответ, переживший смену применённого отбора, отбрасывается.
+    assert.match(fnBody, /const seq = querySeq;/);
+    assert.match(fnBody, /seq !== querySeq/);
+    // Поколение ДОДАРА по id: поздний ответ старого додара не перезаписывает свежие флаги.
+    assert.match(fnBody, /const call = \+\+directionsCallSeq;/);
+    assert.match(fnBody, /directionsStartedAt\.set\(id, call\)/);
+    assert.match(fnBody, /directionsStartedAt\.get\(id\) !== call/);
+  });
+});
+
 describe('structures realtime: слияние изменений', () => {
   it('thought.updated обновляет title в refs и одну строку', () => {
     const state = makeState();

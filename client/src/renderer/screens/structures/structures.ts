@@ -165,6 +165,16 @@ let appliedQuery: {
   order: FilterState['order'];
 } | null = null;
 
+/**
+ * Поколение точечного додара направлений (ошибка 0eebf8eb): монотонный номер
+ * старта додара и номер последнего старта по каждому id. Поздний ответ
+ * устаревшего додара (в т.ч. два додара по одному id разрешились не в порядке
+ * старта) не должен перезаписывать свежие флаги. Поколение ОТБОРА стережёт
+ * отдельно `querySeq` — сменившийся отбор обесценивает любой ответ.
+ */
+let directionsCallSeq = 0;
+const directionsStartedAt = new Map<string, number>();
+
 // ---------------------------------------------------------------------------
 // View switching (L4 active_view)
 // ---------------------------------------------------------------------------
@@ -1671,12 +1681,25 @@ function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
  * закраски. Соседей и рёбра ответа НЕ сливаем в снимок — берём лишь флаги
  * нужных мыслей. Додар не удался — полный путь ({@link reloadAll}): эллипс
  * нельзя оставить неверным.
+ *
+ * Ответ отбрасывается, если за время полёта сменился отбор (`querySeq`),
+ * сеть/вкладка или этот id уже перезапрошен более новым додаром (ошибка
+ * 0eebf8eb): иначе поздний устаревший ответ перезаписал бы свежие флаги.
  */
 async function refreshDirections(ids: ReadonlySet<string>): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
   const seen = `${networkId}:${tabId ?? ''}`;
   if (networkId === null) return;
+  const seq = querySeq;
+  const call = ++directionsCallSeq;
+  for (const id of ids) directionsStartedAt.set(id, call);
+  /** Снять свои маркеры поколения (чужие — более новых додаров — не трогаем). */
+  const clearMarkers = (): void => {
+    for (const id of ids) {
+      if (directionsStartedAt.get(id) === call) directionsStartedAt.delete(id);
+    }
+  };
   let fresh: ReadonlyArray<readonly [string, { has_incoming: boolean; has_outgoing: boolean } | undefined]>;
   try {
     fresh = await Promise.all(
@@ -1686,13 +1709,20 @@ async function refreshDirections(ids: ReadonlySet<string>): Promise<void> {
       ),
     );
   } catch {
+    clearMarkers();
     realtimeBatch.markFull();
     return;
   }
-  // Сменили сеть/вкладку, пока шёл додар, — ответ устарел.
-  if (networkIdSeen !== seen) return;
+  // Сменили сеть/вкладку или отбор, пока шёл додар, — ответ устарел.
+  if (networkIdSeen !== seen || seq !== querySeq) {
+    clearMarkers();
+    return;
+  }
   let changed = false;
   for (const [id, flags] of fresh) {
+    // Этот id уже перезапрошен более новым додаром — не перезаписываем свежее.
+    if (directionsStartedAt.get(id) !== call) continue;
+    directionsStartedAt.delete(id);
     if (flags === undefined) continue;
     const prev = directions.get(id);
     if (
