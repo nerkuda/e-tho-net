@@ -22,11 +22,15 @@ import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
 import {
-  invalidateStructuresThought,
+  applyStructuresRealtime,
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
-import { invalidateChronicleThought, scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
+import {
+  applyChronicleRealtime,
+  invalidateChronicleThought,
+  scheduleChronicleRefresh,
+} from './screens/chronicle/chronicle.js';
 import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chronicle/filter-panel.js';
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
@@ -152,7 +156,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       invalidateIndicators(evt.data.id);
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
-      invalidateStructuresThought(evt.data.id);
+      // «Структуры» убирают строку точечно (removed-путь keyed-сверки), «Дневник»
+      // перезапрашивает ленту, если мысль была чипсом загруженной записи.
+      applyStructuresRealtime(evt);
       invalidateChronicleThought(evt.data.id);
       // R7: drop cached wiki-link titles for the deleted thought so any
       // visible ID-based link switches to the «deleted» muted style.
@@ -182,7 +188,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // existing ID-based links in view-mode re-render with the new title.
       invalidateWikiLinkCacheById(evt.data.id);
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
-      scheduleStructuresRefresh();
+      // «Структуры» обновляют `ThoughtRef` и одну строку (или уходят в полный
+      // путь, если правка влияет на отбор/порядок); «Дневник» перезапрашивает
+      // ленту — чипсы показывают заголовки мыслей.
+      applyStructuresRealtime(evt);
       scheduleChronicleRefresh();
       break;
 
@@ -192,11 +201,20 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     // (прецедент 270b8454: тот же набор, что у правок типов связи).
     case 'thought.reordered':
     case 'link.created':
-    case 'link.updated':
-    case 'link.deleted':
     case 'property-value.set':
     case 'property-value.deleted':
       scheduleNeighbourhoodRepaint();
+      break;
+
+    // Ребро уже нарисовано на «Структурах» — правка оформления применяется
+    // точечно к `edges` и линиям; смена концов/активности ребра уходит в полный
+    // путь (см. таблицу в structures.ts). Холст перечитывает окрестность;
+    // «Дневник» перезапрашивает ленту (чипсы связей показывают их подписи).
+    case 'link.updated':
+    case 'link.deleted':
+      scheduleRefresh();
+      applyStructuresRealtime(evt);
+      scheduleChronicleRefresh();
       break;
 
     case 'comment.created':
@@ -211,7 +229,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // comment view in place; the canvas indicator below the cloud was
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
-      scheduleChronicleRefresh();
+      applyChronicleRealtime(evt);
       break;
 
     case 'comment.deleted':
@@ -219,7 +237,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // comment events. The canvas indicator cache is invalidated above; the
       // editor's comment view is patched by its own listener.
       invalidateIndicators(evt.data.owner_id);
-      scheduleChronicleRefresh();
+      applyChronicleRealtime(evt);
       break;
 
     case 'comment.updated':
@@ -228,7 +246,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // neighbourhood. The editor owns the comment view for its open entity
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
-      scheduleChronicleRefresh();
+      applyChronicleRealtime(evt);
       break;
 
     case 'attachment.created':

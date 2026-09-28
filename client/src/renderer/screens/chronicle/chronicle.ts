@@ -35,6 +35,7 @@ import {
   CHRONICLE_QUERY_MAX_LIMIT,
   STRUCTURE_KEYWORD_SCOPES,
   UI_STATE_KEY,
+  type AnyRealtimeEvent,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -87,7 +88,16 @@ import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
-import { parseChronicleCriteria, defaultChronicleCriteriaState } from '../../lib/filter-builder.js';
+import { parseChronicleCriteria, defaultChronicleCriteriaState, hasAnyFilterCriteria } from '../../lib/filter-builder.js';
+import { createRealtimeBatch } from '../../lib/realtime-batch.js';
+import {
+  chronicleAllowsIncremental,
+  commentUpdateNeedsReload,
+  hasDiaryAttachment,
+  mergeCommentChanges,
+  rowVisibleInPeriod,
+  type ChronicleCriteriaSnapshot,
+} from './realtime-apply.js';
 import { buildMonthCalendar, type MonthCalendarHandle } from '../../lib/month-calendar.js';
 import {
   applyPeriodToFilter,
@@ -159,7 +169,6 @@ let loadingMore = false;
  * перезагрузкой, а не offset-пагинацией, чтобы не потерять/не удвоить строку.
  */
 let pendingReconcile = false;
-let refreshTimer: number | null = null;
 /** Id of the HOME (root) thought — primary owner of a day record. */
 let homeId: string | null = null;
 let homePromise: Promise<string> | null = null;
@@ -549,17 +558,190 @@ function maybeLoadMore(): void {
   if (shouldLoadMore(counters, feedWrap)) void loadMore();
 }
 
-/** Debounced refresh (real-time comment/target events). */
+/**
+ * Realtime-путь «Дневника» (задача afcfb144, уровень 3 тех.проекта `1d48df6d`).
+ *
+ * **Таблица «событие → действие».**
+ *
+ * | Событие | Инкрементально | Fallback (полный перезапрос) |
+ * |---|---|---|
+ * | `comment.created` | хроно-запись хотя бы с одной привязкой, отбор — только период/порядок: точечный доар не-HOME целей + вставка одной строки в свой день | прочие критерии в отборе (текст/цели/автор); сборка строки/доар не удалась; привязок нет или вне периода — игнор |
+ * | `comment.updated` | строка уже в ленте: слияние полей, доар `body_html` при неполном payload, переразрешение `targets`; выход из периода — удаление строки | нет строки в ленте — игнор; при доп. критериях изменение текста/заголовка/привязок |
+ * | `comment.deleted` | строка в ленте → удаление одной строки | нет строки или владелец не мысль — игнор |
+ * | прочее (в т.ч. `thought.deleted` по чипсам) | — | `scheduleChronicleRefresh` (полный перезапрос) |
+ *
+ * Очередь событий за окно дебаунса применяется ОДНИМ батчем → один `renderFeed`
+ * на окно; fallback-событие в окне отменяет батч и зовёт {@link reloadAndSync}.
+ */
+type ChronicleRealtimeOp =
+  | { kind: 'created'; comment: Comment }
+  | { kind: 'updated'; id: string; changes: Partial<Comment> }
+  | { kind: 'deleted'; id: string };
+
+const realtimeBatch = createRealtimeBatch<ChronicleRealtimeOp>({
+  windowMs: 250,
+  applyBatch: (ops) => {
+    void applyChronicleOps(ops);
+  },
+  applyFull: () => {
+    void reloadAndSync();
+  },
+});
+
+/** Полный путь realtime: перезапрос первой страницы + пересчёт календаря. */
+async function reloadAndSync(): Promise<void> {
+  await reload();
+  syncCalendar();
+  void refreshCalendarCounts();
+}
+
+/** Критерии, при которых новую/изменённую запись нельзя признать входящей в отбор. */
+function chronicleCriteriaSnapshot(): ChronicleCriteriaSnapshot {
+  const f = getFilterState();
+  const hasAuthor =
+    f.authorOp !== 'eq' ||
+    f.authorId !== '' ||
+    f.authorIds.length > 0 ||
+    f.editorOp !== 'eq' ||
+    f.editorId !== '' ||
+    f.editorIds.length > 0;
+  return {
+    keywords: f.keywords,
+    hasTargetCriteria: hasAnyFilterCriteria(f.targets),
+    hasAuthorCriteria: hasAuthor,
+  };
+}
+
+/**
+ * Дебounced refresh (real-time comment/target events) — полный путь. Локальные
+ * производители зовут его сами; чужое realtime-эхо до рендерера не доходит.
+ * Внутри окна дебаунса батч инкрементальных событий отменяется: полный путь
+ * важнее экономии.
+ */
 export function scheduleChronicleRefresh(): void {
   if (host === null) return;
-  if (refreshTimer !== null) return;
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = null;
-    // Правка записи / real-time: позиция прокрутки ленты сохраняется.
-    void reload();
+  realtimeBatch.markFull();
+}
+
+/**
+ * Принять чужое хроно-событие: классифицировать и положить в очередь окна или
+ * пометить окно как fallback. Событие по записи, которой нет в ленте,
+ * игнорируется.
+ */
+export function applyChronicleRealtime(evt: AnyRealtimeEvent): void {
+  if (host === null) return;
+  switch (evt.type) {
+    case 'comment.created': {
+      const comment = evt.data.comment;
+      if (comment.kind !== 'chronological') return;
+      if (!chronicleAllowsIncremental(chronicleCriteriaSnapshot())) {
+        realtimeBatch.markFull();
+        return;
+      }
+      realtimeBatch.push({ kind: 'created', comment });
+      return;
+    }
+    case 'comment.updated': {
+      const { id, changes } = evt.data;
+      if (!rows.some((r) => r.id === id)) return;
+      if (commentUpdateNeedsReload(changes, chronicleCriteriaSnapshot())) {
+        realtimeBatch.markFull();
+        return;
+      }
+      realtimeBatch.push({ kind: 'updated', id, changes });
+      return;
+    }
+    case 'comment.deleted': {
+      const { id, owner_type } = evt.data;
+      if (owner_type !== 'thought') return;
+      if (!rows.some((r) => r.id === id)) return;
+      realtimeBatch.push({ kind: 'deleted', id });
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+/**
+ * Применить накопленный батч к снимку ленты и ОДИН раз пересобрать её. Любая
+ * неуверенность (не собралась локальная строка, не удался доар) откатывает
+ * окно на полный перезапрос — данные важнее экономии запроса.
+ */
+async function applyChronicleOps(ops: readonly ChronicleRealtimeOp[]): Promise<void> {
+  const { from, to } = currentFromTo();
+  const order = getFilterState().order;
+  let changed = false;
+  for (const op of ops) {
+    if (op.kind === 'deleted') {
+      if (rows.some((r) => r.id === op.id)) {
+        rows = rows.filter((r) => r.id !== op.id);
+        total = Math.max(0, total - 1);
+        changed = true;
+      }
+      continue;
+    }
+    if (op.kind === 'created') {
+      if (!hasDiaryAttachment(op.comment.targets)) continue;
+      const home = homeId ?? (await getHome().catch(() => null));
+      if (home === null) {
+        await reloadAndSync();
+        return;
+      }
+      const built = await localRowFromComment(op.comment, home);
+      if (built === null) {
+        await reloadAndSync();
+        return;
+      }
+      if (!rowVisibleInPeriod(built, from, to)) continue;
+      if (rows.some((r) => r.id === built.id)) continue;
+      rows = insertRowByDay(rows, built, order, home);
+      total += 1;
+      changed = true;
+      continue;
+    }
+    // updated
+    const idx = rows.findIndex((r) => r.id === op.id);
+    if (idx < 0) continue;
+    let row = rows[idx]!;
+    let changes = op.changes;
+    if (changes.body_md !== undefined && changes.body_html === undefined) {
+      try {
+        const fresh = await etn.comments.get(requireNetworkId(), op.id);
+        changes = { ...changes, body_html: fresh.body_html };
+      } catch {
+        continue; // доар не удался — строку не трогаем, следующий перезапрос поправит
+      }
+    }
+    row = mergeCommentChanges(row, changes);
+    if (changes.targets !== undefined) {
+      const home = homeId ?? (await getHome().catch(() => null));
+      if (home === null) {
+        await reloadAndSync();
+        return;
+      }
+      const targets = await resolveRowTargets(changes.targets, home);
+      if (targets === null) {
+        await reloadAndSync();
+        return;
+      }
+      row = { ...row, targets };
+    }
+    if (!rowVisibleInPeriod(row, from, to)) {
+      rows = rows.filter((r) => r.id !== op.id);
+      total = Math.max(0, total - 1);
+      changed = true;
+      continue;
+    }
+    rows = rows.slice();
+    rows[idx] = row;
+    changed = true;
+  }
+  if (changed) {
+    renderFeed();
     syncCalendar();
     void refreshCalendarCounts();
-  }, 250);
+  }
 }
 
 /**
@@ -675,18 +857,8 @@ async function localRowFromComment(
   comment: Comment,
   home: string,
 ): Promise<ChronicleRow | null> {
-  const networkId = requireNetworkId();
-  const targets: ChronicleTarget[] = [];
-  for (const target of comment.targets) {
-    if (target.owner_type !== 'thought') return null;
-    if (target.owner_id === home) continue;
-    try {
-      const thought = await etn.thoughts.get(networkId, target.owner_id);
-      targets.push({ kind: 'thought', thought });
-    } catch {
-      return null;
-    }
-  }
+  const targets = await resolveRowTargets(comment.targets, home);
+  if (targets === null) return null;
   return {
     id: comment.id,
     title: comment.title,
@@ -702,6 +874,32 @@ async function localRowFromComment(
     body_html: comment.body_html,
     targets,
   };
+}
+
+/**
+ * Привязки записи для ленты: HOME — служебная и в чипсах не показывается,
+ * остальные мысли доразрешаются точечным чтением (`etn.thoughts.get`).
+ * `null` — встретилась не-support'имая привязка (связь) или доар не удался;
+ * вызывающий откатывается на полную перезагрузку (realtime) либо на серверную
+ * строку.
+ */
+async function resolveRowTargets(
+  targets: readonly CommentTarget[],
+  home: string,
+): Promise<ChronicleTarget[] | null> {
+  const networkId = requireNetworkId();
+  const out: ChronicleTarget[] = [];
+  for (const target of targets) {
+    if (target.owner_type !== 'thought') return null;
+    if (target.owner_id === home) continue;
+    try {
+      const thought = await etn.thoughts.get(networkId, target.owner_id);
+      out.push({ kind: 'thought', thought });
+    } catch {
+      return null;
+    }
+  }
+  return out;
 }
 
 /** Обновить строку «осталось N» без перерисовки ленты (её счётчик сдвинулся). */

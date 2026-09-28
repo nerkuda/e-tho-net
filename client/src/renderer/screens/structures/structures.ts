@@ -17,11 +17,15 @@
 import {
   STRUCTURES_PAGE_SIZE,
   UI_STATE_KEY,
+  type AnyRealtimeEvent,
   type FocusEdge,
   type HierarchyResponse,
+  type LinkUpdateInput,
   type StructureFilter,
   type StructurePropertyCondition,
+  type StructureSort,
   type ThoughtRef,
+  type ThoughtUpdateInput,
 } from '@etn/shared';
 
 import {
@@ -52,6 +56,17 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
+import { createRealtimeBatch } from '../../lib/realtime-batch.js';
+import {
+  applyLinkUpdateToState,
+  applyThoughtUpdateToState,
+  linkChangeNeedsReload,
+  removeLinkFromState,
+  removeThoughtFromState,
+  rowRenderSignature,
+  thoughtChangeNeedsReload,
+  type StructuresState,
+} from './realtime-apply.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { deepEqual } from '../../lib/ui/state.js';
@@ -386,7 +401,14 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
 
 /** Current flattened rows + per-node «Показать ещё» markers (§15.5). */
 function currentTree(): { rows: TreeRow[]; moreMarkers: MoreMarker[] } {
-  return flattenStructuresTree(resultIds, expansion, neighborsOf);
+  const tree = flattenStructuresTree(resultIds, expansion, neighborsOf);
+  // Подпись видимого содержимого строки: keyed-сверка зовёт `update` только
+  // тогда, когда метаданные мысли/эллипсы/раскрытость реально изменились —
+  // так чужая правка (realtime) обновляет ОДНУ строку, не трогая соседние.
+  for (const row of tree.rows) {
+    row.rev = rowRenderSignature(refs.get(row.thoughtId), directions.get(row.thoughtId), expansion.get(row.key));
+  }
+  return tree;
 }
 
 /** Current flattened rows (render + exclude computation share this). */
@@ -1515,19 +1537,148 @@ function connectorLabel(links: FocusEdge[]): string {
 // Realtime refresh (§15.4)
 // ---------------------------------------------------------------------------
 
-let refreshTimer: number | null = null;
+/**
+ * Realtime-путь «Структур» (задача afcfb144, уровень 3 тех.проекта `1d48df6d`).
+ *
+ * **Таблица «событие → действие».**
+ *
+ * | Событие | Инкрементально | Fallback (полный перезапрос) |
+ * |---|---|---|
+ * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `alpha` + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
+ * | `thought.deleted` | убрать из `resultIds`/`refs`/`directions`/`hierarchy`/`edges` → строка уходит removed-путём сверки | нет среди видимых — игнор |
+ * | `link.updated` | ребро нарисовано и меняется оформление (`type_id`/`color`/`style`/`width`/`marked_for_deletion`) → `edges` + перерисовка линий | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active` — структура/наличие линии |
+ * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии | ребро не нарисовано — игнор |
+ * | `thought.created` | — | всегда: вхождение в отбор не проверяется (нет построения проверки членства) |
+ * | `link.created`, `property-value.*`, `thought-type*`, `link-type*`, `property-definition.*`, `*-view.*`, `layer.merged` | — | всегда (состав/структура/каталог) |
+ *
+ * Очередь событий за окно дебаунса применяется ОДНИМ батчем → один reconcile
+ * (`renderTree`) на окно. Наличие хоть одного fallback-события в окне отменяет
+ * батч и запускает {@link reloadAll}. Локальные производители по-прежнему зовут
+ * {@link scheduleStructuresRefresh} (полный путь) сами — своё realtime-эхо до
+ * рендерера не доходит.
+ */
+type StructuresRealtimeOp =
+  | { kind: 'thought-updated'; id: string; changes: ThoughtUpdateInput }
+  | { kind: 'thought-deleted'; id: string }
+  | { kind: 'link-updated'; id: string; changes: LinkUpdateInput }
+  | { kind: 'link-deleted'; id: string };
+
+const realtimeBatch = createRealtimeBatch<StructuresRealtimeOp>({
+  windowMs: 400,
+  applyBatch: (ops) => applyStructuresOps(ops),
+  applyFull: () => {
+    void reloadAll();
+  },
+});
+
+/** Коллекции снимка экрана для чистого применощего модуля. */
+function structuresState(): StructuresState {
+  return { refs, edges, resultIds, directions, hierarchy };
+}
+
+/** Критерии отбора, влияющие на применимость события к строке. */
+function criteriaSnapshot(): {
+  sort: StructureSort;
+  keywords: string;
+  typeIds: readonly string[];
+  showInactive: boolean;
+  showTrash: boolean;
+} {
+  const state = getFilterState();
+  return {
+    sort: state.sort,
+    keywords: state.keywords,
+    typeIds: state.typeIds,
+    showInactive: store.state.showInactive,
+    showTrash: store.state.showTrash,
+  };
+}
 
 /**
- * Coalesces realtime updates into one reload: the visible page is re-queried
- * and every expanded node refetches its hierarchy level (expansion survives).
+ * Применить накопленный батч к снимку и ОДИН раз свернуть дерево. Пустой батч
+ * (событие не изменило видимого) кадр сверки не запускает.
+ */
+function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
+  const state = structuresState();
+  let changed = false;
+  for (const op of ops) {
+    switch (op.kind) {
+      case 'thought-updated':
+        if (applyThoughtUpdateToState(state, op.id, op.changes)) changed = true;
+        break;
+      case 'thought-deleted': {
+        const wasRoot = resultIds.includes(op.id);
+        if (removeThoughtFromState(state, op.id)) {
+          changed = true;
+          if (wasRoot) total = Math.max(0, total - 1);
+        }
+        break;
+      }
+      case 'link-updated':
+        if (applyLinkUpdateToState(state, op.id, op.changes)) changed = true;
+        break;
+      case 'link-deleted':
+        if (removeLinkFromState(state, op.id)) changed = true;
+        break;
+    }
+  }
+  if (changed) renderTree(true);
+}
+
+/**
+ * Принять чужое realtime-событие: классифицировать и положить в очередь окна
+ * (батч) или пометить окно как fallback. Событие по невидимой сущности
+ * игнорируется — состав отбора по нему не перестраиваем.
+ */
+export function applyStructuresRealtime(evt: AnyRealtimeEvent): void {
+  if (store.state.activeView !== 'structures') return;
+  switch (evt.type) {
+    case 'thought.updated': {
+      const { id, changes } = evt.data;
+      if (!refs.has(id)) return;
+      if (thoughtChangeNeedsReload(changes, criteriaSnapshot())) {
+        realtimeBatch.markFull();
+        return;
+      }
+      realtimeBatch.push({ kind: 'thought-updated', id, changes });
+      return;
+    }
+    case 'thought.deleted': {
+      const { id } = evt.data;
+      clearActiveThought(id);
+      if (!refs.has(id) && !resultIds.includes(id)) return;
+      realtimeBatch.push({ kind: 'thought-deleted', id });
+      return;
+    }
+    case 'link.updated': {
+      const { id, changes } = evt.data;
+      if (!edges.has(id)) return;
+      if (linkChangeNeedsReload(changes)) {
+        realtimeBatch.markFull();
+        return;
+      }
+      realtimeBatch.push({ kind: 'link-updated', id, changes });
+      return;
+    }
+    case 'link.deleted': {
+      const { id } = evt.data;
+      if (!edges.has(id)) return;
+      realtimeBatch.push({ kind: 'link-deleted', id });
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+/**
+ * Полный путь: пометить окно дебаунса как требующее перезапроса страницы и
+ * всех раскрытых уровней ({@link reloadAll}). Зовётся локальными
+ * производителями и realtime-ветками, которые нельзя применить точечно.
  */
 export function scheduleStructuresRefresh(): void {
   if (store.state.activeView !== 'structures') return;
-  if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = null;
-    void reloadAll();
-  }, 400);
+  realtimeBatch.markFull();
 }
 
 /** Reloads the page and all expanded hierarchy levels. */
@@ -1565,16 +1716,20 @@ async function reloadAll(): Promise<void> {
   renderTree(true);
 }
 
+/** Сбросить «текущую мысль» (и цель редактора), если удалена именно она. */
+function clearActiveThought(id: string): void {
+  if (store.state.structuresActiveThoughtId !== id) return;
+  store.update({
+    structuresActiveThoughtId: null,
+    structuresActiveThought: null,
+    ...(store.state.editorTarget?.kind === 'thought' ? { editorTarget: null } : {}),
+  });
+}
+
 /** Drops caches after a thought was deleted locally (also see history prune). */
 export function invalidateStructuresThought(id: string): void {
   refs.delete(id);
-  if (store.state.structuresActiveThoughtId === id) {
-    store.update({
-      structuresActiveThoughtId: null,
-      structuresActiveThought: null,
-      ...(store.state.editorTarget?.kind === 'thought' ? { editorTarget: null } : {}),
-    });
-  }
+  clearActiveThought(id);
   scheduleStructuresRefresh();
 }
 
