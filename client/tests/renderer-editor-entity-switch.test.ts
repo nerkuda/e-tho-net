@@ -75,24 +75,23 @@ function installEtn(): void {
   };
 }
 
+/** One in-type text property definition, shared by the «Свойства» fixtures. */
+const TEXT_PROPERTY = {
+  id: 'p1',
+  property_id: 'p1',
+  owner_type: 'thought_type',
+  owner_id: 'ta',
+  key: 'Заметка',
+  value_type: 'text',
+  config: null,
+  required: false,
+  position: 0,
+};
+
 /** Adds one in-type text property so the «Свойства» table actually attaches. */
 function installTypeProperty(): void {
   const win = (globalThis as any).window as Record<string, any>;
-  win.etn.types = {
-    listTypeProperties: async () => [
-      {
-        id: 'p1',
-        property_id: 'p1',
-        owner_type: 'thought_type',
-        owner_id: 'ta',
-        key: 'Заметка',
-        value_type: 'text',
-        config: null,
-        required: false,
-        position: 0,
-      },
-    ],
-  };
+  win.etn.types = { listTypeProperties: async () => [TEXT_PROPERTY] };
 }
 
 function makeThought(overrides: Partial<Thought> = {}): Thought {
@@ -347,6 +346,51 @@ describe('инкрементальная смена сущности в реда
     );
   });
 
+  it('скрытая вкладка сохраняет узел при смене мысли и перечитывается лениво', async () => {
+    shimDom();
+    installEtn();
+    const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    const scrollBox = host.children[1]!;
+    const paneHost = scrollBox.querySelector('.tab-pane-root')!;
+
+    // Make sure «Комментарий» is built and shown first (the active tab is
+    // module-level and may leak from a previous test in this file).
+    editorInternals.activateTab('main');
+    await flush();
+    const mainPane = paneHost.children[0]!;
+
+    // Hide «Комментарий» behind «Свойства» so it becomes a cached hidden pane.
+    editorInternals.activateTab('properties');
+    await flush();
+
+    // Another thought of the same type: «Свойства» is retargeted (hook), the
+    // hidden «Комментарий» is only marked stale — its node stays cached.
+    store.update({ focus: makeFocus(makeThought({ id: 't2', title: 'B', type_id: 'ta' })) } as any);
+    await flush();
+
+    editorInternals.activateTab('main');
+    await flush();
+    assert.equal(
+      paneHost.children[0],
+      mainPane,
+      'скрытая вкладка перечитана в своём узле — identity сохранена',
+    );
+    assert.equal(scrollBox.querySelector('.editor-title-input')!.value, 'B');
+  });
+
   it('устаревший загрузчик счётчика не перезаписывает счётчик новой мысли', async () => {
     shimDom();
     installEtn();
@@ -393,5 +437,68 @@ describe('инкрементальная смена сущности в реда
     resolvers.get('t2')!(2);
     await flush();
     assert.equal(badge.textContent, '(3)', 'устаревший загрузчик не перезаписал счётчик');
+  });
+
+  it('устаревший ответ «Свойства» не перезаписывает значения новой мысли', async () => {
+    shimDom();
+    installEtn();
+    // Controllable `properties.get`: each owner's response is settled manually,
+    // so the PREVIOUS owner's response can arrive AFTER the new one.
+    const pending = new Map<string, (values: unknown[]) => void>();
+    const win = (globalThis as any).window as Record<string, any>;
+    win.etn.types = { listTypeProperties: async () => [TEXT_PROPERTY] };
+    win.etn.properties = {
+      get: (_networkId: string, _ownerType: string, ownerId: string) =>
+        new Promise((resolve) => pending.set(ownerId, resolve)),
+    };
+
+    const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+    editorInternals.activateTab('properties');
+    await flush();
+
+    const valueRow = (v: string): unknown => ({
+      property_id: 'p1',
+      property_name: 'Заметка',
+      value_type: 'text',
+      value: v,
+      outside_type: false,
+    });
+    assert.ok(pending.has('t1'), 'загрузка свойств t1 стартовала');
+
+    // Switch to another thought of the same type while t1 is still in flight.
+    store.update({ focus: makeFocus(makeThought({ id: 't2', title: 'B', type_id: 'ta' })) } as any);
+    await flush();
+    assert.ok(pending.has('t2'), 'загрузка свойств t2 стартовала');
+
+    // The CURRENT owner (t2) settles first…
+    pending.get('t2')!([valueRow('VALUE_B')]);
+    await flush();
+    const scrollBox = host.children[1]!;
+    assert.equal(
+      scrollBox.querySelector('.prop-editor')!.value,
+      'VALUE_B',
+      'значение текущей мысли показано',
+    );
+
+    // …then the stale t1 response arrives and must be dropped.
+    pending.get('t1')!([valueRow('VALUE_A')]);
+    await flush();
+    assert.equal(
+      scrollBox.querySelector('.prop-editor')!.value,
+      'VALUE_B',
+      'устаревший ответ t1 отброшен — значение новой мысли не перезаписано',
+    );
   });
 });

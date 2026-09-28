@@ -293,14 +293,20 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   let everMounted = false;
   const reload = async (): Promise<void> => {
     if (everMounted && !box.isConnected) return;
+    // Owner token of this reload (same guard as the in-type table): a slow
+    // response of the previous owner must not be rendered after a retarget
+    // (task 90b2256e, круг 2).
+    const requestOwnerId = target.ownerId;
     wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: Array<PropertyValue | LinkPropertyValues>;
     try {
-      values = await etn.properties.get(networkId, target.ownerType, target.ownerId);
+      values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
     } catch (err) {
+      if (requestOwnerId !== target.ownerId) return;
       wrap.replaceChildren(operationError(err));
       return;
     }
+    if (requestOwnerId !== target.ownerId) return;
     if (box.isConnected) everMounted = true;
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
     // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
@@ -312,7 +318,7 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       return;
     }
     wrap.replaceChildren(
-      buildOutsideTypeTable(outside, networkId, target.ownerType, target.ownerId, () => void reload()),
+      buildOutsideTypeTable(outside, networkId, target.ownerType, requestOwnerId, () => void reload()),
     );
   };
   outsideReload = () => void reload();
@@ -801,6 +807,12 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
 
   async function reload(): Promise<void> {
     if (everMounted && !box.isConnected) return;
+    // Token of THIS reload: the owner it reads for. The pane survives an entity
+    // switch (registerTabRetarget → retargetCurrent), so a slow response of the
+    // PREVIOUS owner must not be applied to the NEW one — otherwise its values
+    // would be written with the new ownerId and could save onto the wrong
+    // entity (task 90b2256e, круг 2).
+    const requestOwnerId = target.ownerId;
     const startedAt = Date.now();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
@@ -809,10 +821,14 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
     try {
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
     } catch (err) {
+      if (requestOwnerId !== target.ownerId) return;
       tableWrap.replaceChildren(operationError(err));
       tableAttached = false;
       return;
     }
+    // The owner changed while the definitions were in flight — the retarget's
+    // own reload (fired by `retargetCurrent`) is authoritative; drop this one.
+    if (requestOwnerId !== target.ownerId) return;
     if (box.isConnected) everMounted = true;
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
@@ -825,23 +841,25 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
     }
     let values: Array<PropertyValue | LinkPropertyValues> = [];
     try {
-      values = await etn.properties.get(networkId, target.ownerType, target.ownerId);
+      values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
     } catch {
       // The main table still renders even if the values fetch fails.
     }
+    // Same guard after the values fetch — the slowest leg of the pair.
+    if (requestOwnerId !== target.ownerId) return;
     const valueByProp = new Map(values.map((v) => [v.property_id, v]));
     if (!tableAttached) {
       tableWrap.replaceChildren(table);
       tableAttached = true;
     }
     const rows: PropertyRow[] = definitions.map((definition) => ({
-      ownerId: target.ownerId,
+      ownerId: requestOwnerId,
       definition,
       value: valueByProp.get(definition.property_id),
     }));
     reconcileKeyed(tbody, rows, rowSpec);
     logUiEvent('ui.editor.props.loaded', {
-      id: target.ownerId,
+      id: requestOwnerId,
       ms: Date.now() - startedAt,
       definitions: definitions.length,
     });

@@ -482,6 +482,16 @@ const paneBuildCounts = new Map<EditorTabId, number>();
 let reflowOverflow: (() => void) | null = null;
 
 /**
+ * Построенные вкладки, содержимое которых принадлежит ПРЕДЫДУЩЕЙ сущности
+ * (задача 90b2256e). При смене сущности того же типа скрытые вкладки не
+ * пересобираются эагерно — только помечаются здесь и пересобираются в СВОЁМ
+ * узле (`displayTab`) при следующей активации, так что identity узла вкладки
+ * сохраняется, а лишних чтений на переключение мысли нет. Показанная вкладка и
+ * вкладки с хуком `registerTabRetarget` обновляются сразу.
+ */
+let stalePanes = new Set<EditorTabId>();
+
+/**
  * Хук перепривязки ЖИВОЙ шапки к другой сущности того же вида: обновляет
  * значения полей НА МЕСТЕ, не пересоздавая узлы (задача 90b2256e, круг 1 —
  * замечание проверки «поля шапки при том же типе — patchHeader»). Регистрирует
@@ -622,6 +632,7 @@ export function mountEditor(editorHost: HTMLElement): void {
   reflowOverflow = null;
   headerRetarget = null;
   headerShapeKey = null;
+  stalePanes = new Set();
   lastSignature = '';
   lastIdentitySignature = '';
 
@@ -868,6 +879,11 @@ function displayTab(id: EditorTabId): void {
   if (pane === undefined) {
     pane = buildTabPane(id);
     builtPanes.set(id, pane);
+  } else if (stalePanes.has(id)) {
+    // Content belongs to the previous entity — rebuild it inside the SAME pane
+    // node (identity survives the entity switch, task 90b2256e).
+    stalePanes.delete(id);
+    pane.replaceChildren(...buildTabPane(id).children);
   }
   paneHostEl.replaceChildren(pane);
 }
@@ -894,7 +910,10 @@ function activateEditorTab(id: EditorTabId): void {
  */
 function invalidatePanes(ids: readonly EditorTabId[]): void {
   const shownWasDropped = ids.includes(shownTab) ? builtPanes.delete(shownTab) : false;
-  for (const id of ids) builtPanes.delete(id);
+  for (const id of ids) {
+    builtPanes.delete(id);
+    stalePanes.delete(id);
+  }
   if (shownWasDropped) displayTab(shownTab);
 }
 
@@ -1476,13 +1495,15 @@ function renderRetarget(ctx: EditorContext): void {
 }
 
 /**
- * Re-reads the content of every BUILT tab pane under the new owner WITHOUT
- * dropping the pane cache (task 90b2256e, круг 1): resetting `builtPanes` on an
- * entity switch destroyed the «Свойства» table and the keyed reconciliation
- * never ran in the target scenario. A tab that registered a
- * {@link registerTabRetarget} hook updates its content in place (живут строки по
- * ключам, открытые редакторы значений и фокус); the rest rebuild their content
- * inside the SAME pane node, so the pane identity survives the switch.
+ * Binds the content of the built tab panes to the new owner WITHOUT dropping
+ * the pane cache (task 90b2256e, круг 1): resetting `builtPanes` on an entity
+ * switch destroyed the «Свойства» table and the keyed reconciliation never ran
+ * in the target scenario. A tab that registered a {@link registerTabRetarget}
+ * hook updates its content in place (живут строки по ключам, открытые редакторы
+ * значений и фокус); the SHOWN tab without a hook rebuilds its content inside
+ * the SAME pane node now; a hidden one is only marked {@link stalePanes} and
+ * rebuilds in its own node on next activation — no eager fetch/build, and the
+ * pane identity survives either way.
  */
 function retargetBuiltPanes(ctx: EditorContext): void {
   for (const [id, pane] of [...builtPanes]) {
@@ -1491,8 +1512,14 @@ function retargetBuiltPanes(ctx: EditorContext): void {
       hook(pane, ctx);
       continue;
     }
-    const fresh = buildTabPane(id);
-    pane.replaceChildren(...fresh.children);
+    // The shown tab must update now; a hidden one is only marked stale and
+    // rebuilds in its own node on next activation (no eager fetch/build).
+    if (id === shownTab) {
+      pane.replaceChildren(...buildTabPane(id).children);
+      stalePanes.delete(id);
+    } else {
+      stalePanes.add(id);
+    }
   }
 }
 
@@ -1572,6 +1599,7 @@ function renderFull(ctx: EditorContext | null): void {
   // (the builder re-registers it). Placeholders leave it null.
   headerRetarget = null;
   headerShapeKey = null;
+  stalePanes = new Set();
   renderCtx = ctx;
 
   if (ctx === null) {
