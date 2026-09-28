@@ -2464,16 +2464,27 @@ export class RestClient {
    * `POST /networks/{nid}/thoughts/edges` — every active link between the
    * given visible thoughts (03-server-api.md §6.12), for drawing the
    * structures tree links from ellipse to ellipse.
+   *
+   * `linkFilter` (ошибка a617b4c6) — тот же фильтр типов связей, что уходят
+   * фокусу и страницам секторов: снимок рёбер обязан уважать активный фильтр,
+   * иначе на карту попадают рёбра отфильтрованных типов.
    */
   public async postStructureEdges(
     networkId: string,
     ids: string[],
     showInactive: boolean,
+    linkFilter?: import('@etn/shared').LinkTypeFilterInput,
   ): Promise<import('@etn/shared').FocusEdge[]> {
     const data = await this.request<{ edges: import('@etn/shared').FocusEdge[] }>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/edges`,
-      { body: { ids, show_inactive: showInactive } },
+      {
+        body: {
+          ids,
+          show_inactive: showInactive,
+          ...(linkFilter !== undefined ? { link_filter: linkFilter } : {}),
+        },
+      },
     );
     return data.edges;
   }

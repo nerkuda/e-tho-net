@@ -535,8 +535,16 @@ export interface EtnApi {
     /**
      * `POST /thoughts/edges` — every active link between the given visible
      * thoughts (03-server-api.md §6.12), for drawing the tree links.
+     *
+     * `linkFilter` (ошибка a617b4c6) — активный фильтр типов связей: снимок
+     * рёбер обязан уважать его так же, как фокус и страницы секторов.
      */
-    edges(networkId: string, ids: string[], showInactive: boolean): Promise<FocusEdge[]>;
+    edges(
+      networkId: string,
+      ids: string[],
+      showInactive: boolean,
+      linkFilter?: LinkTypeFilterInput,
+    ): Promise<FocusEdge[]>;
   };
   savedFilters: {
     list(networkId: string): Promise<SavedFilter[]>;

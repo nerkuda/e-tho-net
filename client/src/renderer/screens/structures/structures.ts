@@ -1307,7 +1307,11 @@ async function refreshEdges(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || resultsHost === null) return;
   const ids = [...new Set(currentRows().map((r) => r.thoughtId))];
-  const signature = `${store.state.showInactive ? 1 : 0}|${ids.slice().sort().join(',')}`;
+  // Фильтр типов связей входит в подпись снимка: его смена тоже требует
+  // перечитывания линий (ошибка a617b4c6 — снимок обязан уважать фильтр,
+  // как раскрытие ветвей в fetchHierarchy).
+  const linkFilter = appliedQuery?.filter.link_filter;
+  const signature = `${store.state.showInactive ? 1 : 0}|${JSON.stringify(linkFilter ?? null)}|${ids.slice().sort().join(',')}`;
   if (signature === edgesSignature) return;
   edgesSignature = signature;
   if (ids.length === 0) {
@@ -1317,7 +1321,12 @@ async function refreshEdges(): Promise<void> {
     return;
   }
   try {
-    const list = await etn.structures.edges(networkId, ids, store.state.showInactive);
+    const list = await etn.structures.edges(
+      networkId,
+      ids,
+      store.state.showInactive,
+      linkFilter,
+    );
     edges.clear();
     for (const edge of list) edges.set(edge.id, edge);
     drawLinks();

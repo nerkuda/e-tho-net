@@ -279,6 +279,35 @@ describe('RestClient — раскрытие дерева «Структур» (L
   });
 });
 
+describe('RestClient — снимок рёбер «Структур» (ошибка a617b4c6)', () => {
+  /** Пустой снимок рёбер — важен только состав тела запроса. */
+  const EMPTY_EDGES = { status: 200, body: { data: { edges: [] } } };
+
+  it('postStructureEdges кладёт фильтр типов связей в тело link_filter', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_EDGES]);
+    const client = makeClient(fetch);
+    await client.postStructureEdges('net1', ['t1', 't2'], true, {
+      type_ids: ['lt1'],
+      include_structural: true,
+    });
+    assert.equal(calls[0]!.init.method, 'POST');
+    const body = JSON.parse((calls[0]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.deepEqual(body, {
+      ids: ['t1', 't2'],
+      show_inactive: true,
+      link_filter: { type_ids: ['lt1'], include_structural: true },
+    });
+  });
+
+  it('без фильтра тело запроса link_filter не содержит (прежнее поведение)', async () => {
+    const { fetch, calls } = makeFetch([EMPTY_EDGES]);
+    const client = makeClient(fetch);
+    await client.postStructureEdges('net1', ['t1'], false);
+    const body = JSON.parse((calls[0]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.deepEqual(body, { ids: ['t1'], show_inactive: false });
+  });
+});
+
 describe('RestClient — превью соседей на холсте (ошибка e5cee08e)', () => {
   /** Пустой список соседей — важен только собранный URL. */
   const EMPTY_NEIGHBORS = { status: 200, body: { data: [] } };

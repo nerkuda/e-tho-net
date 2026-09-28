@@ -3364,7 +3364,7 @@ export const RestHierarchyQuery = defineContract(
   },
 );
 
-/** Тело POST /thoughts/edges — { ids, show_inactive, show_trash } (+ network_id из params). */
+/** Тело POST /thoughts/edges — { ids, show_inactive, show_trash, link_filter } (+ network_id из params). */
 export const RestEdgesBody = defineContract(
   'rest:structures.edges-body',
   z.object({
@@ -3372,12 +3372,14 @@ export const RestEdgesBody = defineContract(
     ids: z.array(z.string()).min(1),
     show_inactive: z.boolean().optional(),
     show_trash: z.boolean().optional(),
+    link_filter: LinkFilter,
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     ids: { from: { kind: 'body' }, msg: 'ids должен быть массивом строк.' },
     show_inactive: { from: { kind: 'body' } },
     show_trash: { from: { kind: 'body' } },
+    link_filter: { from: { kind: 'body' } },
   },
 );
 

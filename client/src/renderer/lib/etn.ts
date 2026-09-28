@@ -139,8 +139,8 @@ function structuresFacade(bridge: EtnBridgeApi): EtnApi['structures'] {
       ),
     hierarchy: (networkId, thoughtId, query) =>
       bridge.structures.hierarchy(networkId, thoughtId, query),
-    edges: (networkId, ids, showInactive) =>
-      bridge.structures.edges(networkId, ids, showInactive),
+    edges: (networkId, ids, showInactive, linkFilter) =>
+      bridge.structures.edges(networkId, ids, showInactive, linkFilter),
   };
 }
 

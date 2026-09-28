@@ -1393,7 +1393,16 @@ async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
   const token = zonePagingToken;
   const ids = [...zoneVisibleIds];
   try {
-    const edges = await etn.structures.edges(networkId, ids, store.state.showInactive);
+    // Снимок обязан уважать активный фильтр типов связей — тот же, что уходит
+    // фокусу и порциям секторов (ошибка a617b4c6); иначе на холст вернутся
+    // рёбра отфильтрованных типов.
+    const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
+    const edges = await etn.structures.edges(
+      networkId,
+      ids,
+      store.state.showInactive,
+      linkFilter,
+    );
     if (token !== zonePagingToken) return;
     setSupplementalEdges(edges, focus.edges ?? []);
     redrawLinks?.();

@@ -60,4 +60,62 @@ describe('POST /networks/:networkId/thoughts/edges', () => {
     assert.equal(res.statusCode, 422);
     assert.equal(res.json().error.code, 'VALIDATION_ERROR');
   });
+
+  // Ошибка a617b4c6: снимок рёбер для догрузки порций карты игнорировал
+  // фильтр типов связей — контракт не принимал `link_filter`, маршрут звал
+  // `getEdgesAmong(..., undefined, ...)`, и на холст возвращались рёбра
+  // отфильтрованных типов. Родительская связь создаётся структурной
+  // (`type_id = NULL`), поэтому фильтр без `include_structural` её отсекает.
+  it('link_filter ограничивает снимок рёбер (a617b4c6)', async (t) => {
+    const ctx: RestTestContext = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const a = await apiCreateThought(ctx, { title: 'A' });
+    const b = await apiCreateThought(ctx, {
+      title: 'B',
+      create_link: { direction: 'parent', target_thought_id: a.data['id'] as string },
+    });
+    const idA = a.data['id'] as string;
+    const idB = b.data['id'] as string;
+    const edgesOf = (res: { json: () => unknown }): Array<{ id: string }> =>
+      (res.json() as { data: { edges: Array<{ id: string }> } }).data.edges;
+
+    const plain = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/networks/${ctx.networkId}/thoughts/edges`,
+      headers: authHeaders(ctx),
+      payload: { ids: [idA, idB], show_inactive: false },
+    });
+    assert.equal(plain.statusCode, 200, `body: ${plain.body}`);
+    assert.ok(edgesOf(plain).length > 0, 'без фильтра ребро есть');
+
+    // Фильтр по несуществующему типу связи (без `include_structural`) отсекает
+    // структурное ребро — снимок обязан вернуть пусто.
+    const filtered = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/networks/${ctx.networkId}/thoughts/edges`,
+      headers: authHeaders(ctx),
+      payload: {
+        ids: [idA, idB],
+        show_inactive: false,
+        link_filter: { type_ids: ['11111111-1111-1111-1111-111111111111'] },
+      },
+    });
+    assert.equal(filtered.statusCode, 200, `body: ${filtered.body}`);
+    assert.deepEqual(edgesOf(filtered), [], 'фильтр типов отсекает рёбра (a617b4c6)');
+
+    // `include_structural` возвращает структурное ребро обратно.
+    const structural = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/networks/${ctx.networkId}/thoughts/edges`,
+      headers: authHeaders(ctx),
+      payload: {
+        ids: [idA, idB],
+        show_inactive: false,
+        link_filter: { include_structural: true },
+      },
+    });
+    assert.equal(structural.statusCode, 200, `body: ${structural.body}`);
+    assert.ok(edgesOf(structural).length > 0, 'include_structural сохраняет структурное ребро');
+  });
 });
