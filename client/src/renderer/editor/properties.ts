@@ -141,13 +141,6 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
   // A fresh pane resets the stale reload callbacks of the previous one.
   currentReload = null;
   outsideReload = null;
-  retargetCurrent = (next) => {
-    target.ownerType = next.ownerType;
-    target.ownerId = next.ownerId;
-    target.typeId = resolveEditorTypeId(next);
-    currentReload?.();
-    outsideReload?.();
-  };
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
   const typeGroup = groupSection({
@@ -165,13 +158,17 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
     defaultCollapsed: true,
     lazyCount: true,
     loadCount: async () => {
+      // Owner token: a slow badge count of the previous owner must not land on
+      // the new one (task 90b2256e, круг 3).
+      const requestOwnerId = target.ownerId;
       try {
         const networkId = requireNetworkId();
         const values = await etn.properties.get(
           networkId,
           target.ownerType,
-          target.ownerId,
+          requestOwnerId,
         );
+        if (requestOwnerId !== target.ownerId) return undefined;
         // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
         // вне типа (dfaacb05), сервер отдаёт его формой LinkPropertyValues.
         const outside = values.filter((v) => v.outside_type === true);
@@ -182,6 +179,18 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
     },
     buildBody: () => buildOutsidePropertiesBody(target),
   });
+  // Retarget of the SHOWN pane to another owner of the same type: the pane is
+  // reused (editor's `registerTabRetarget`), its bodies reload under the new
+  // owner and the outside-type badge is re-resolved (its owner lives on the
+  // group, not in the body, so it needs an explicit refresh).
+  retargetCurrent = (next) => {
+    target.ownerType = next.ownerType;
+    target.ownerId = next.ownerId;
+    target.typeId = resolveEditorTypeId(next);
+    currentReload?.();
+    outsideReload?.();
+    outsideGroup.dispatchEvent(new CustomEvent('etn:refresh-count'));
+  };
   // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
   // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
   // заголовка, единственная развёрнутая растягивается на всю вкладку,
@@ -291,12 +300,15 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   box.append(wrap);
 
   let everMounted = false;
+  /** Owner currently rendered in this body (see the in-type table's guard). */
+  let shownOwnerId: string | null = null;
   const reload = async (): Promise<void> => {
-    if (everMounted && !box.isConnected) return;
     // Owner token of this reload (same guard as the in-type table): a slow
     // response of the previous owner must not be rendered after a retarget
-    // (task 90b2256e, круг 2).
+    // (task 90b2256e, круг 2); an owner CHANGE proceeds even while detached
+    // (круг 3).
     const requestOwnerId = target.ownerId;
+    if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
     wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: Array<PropertyValue | LinkPropertyValues>;
     try {
@@ -308,6 +320,7 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
     }
     if (requestOwnerId !== target.ownerId) return;
     if (box.isConnected) everMounted = true;
+    shownOwnerId = requestOwnerId;
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
     // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
     const outside: Array<PropertyValue | LinkPropertyValues> = values.filter(
@@ -707,6 +720,14 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
    * коллекцию (задача 90b2256e, стандарт «Списки рендерятся инкрементально»).
    */
   let tableAttached = false;
+  /**
+   * Владелец, чьи значения сейчас нарисованы в таблице. Гард ниже пропускает
+   * перечитывание ОТСОЕДИНЁННОЙ панели, только если владелец не сменился: смена
+   * сущности того же типа обязана обновить скрытую панель (задача 90b2256e,
+   * круг 3), иначе при возврате на вкладку видны значения прежней сущности, а
+   * ячейки держат замыкание со старым ownerId.
+   */
+  let shownOwnerId: string | null = null;
   // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
   // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
   const table = el('table', 'table-list prop-table prop-grid');
@@ -806,13 +827,15 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
   void reload();
 
   async function reload(): Promise<void> {
-    if (everMounted && !box.isConnected) return;
     // Token of THIS reload: the owner it reads for. The pane survives an entity
     // switch (registerTabRetarget → retargetCurrent), so a slow response of the
     // PREVIOUS owner must not be applied to the NEW one — otherwise its values
     // would be written with the new ownerId and could save onto the wrong
     // entity (task 90b2256e, круг 2).
     const requestOwnerId = target.ownerId;
+    // A detached pane skips only a REDUNDANT reload of the owner it already
+    // shows; an owner change must proceed even while hidden (круг 3).
+    if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
     const startedAt = Date.now();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
@@ -830,6 +853,9 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
     // own reload (fired by `retargetCurrent`) is authoritative; drop this one.
     if (requestOwnerId !== target.ownerId) return;
     if (box.isConnected) everMounted = true;
+    // From here the table is considered bound to this owner (even the empty-set
+    // branch below) — the detached-pane guard keys off it.
+    shownOwnerId = requestOwnerId;
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
     // владельца для гейта берут из того, что реально отрисовано сейчас.

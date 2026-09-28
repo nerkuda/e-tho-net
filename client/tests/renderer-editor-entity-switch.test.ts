@@ -22,8 +22,10 @@ function shimDom(): void {
   // HTMLElement so a focused field is actually recognised (product code).
   (globalThis as any).HTMLElement = ShimElement;
   (globalThis as any).CustomEvent = class {
+    type: string;
     detail: unknown;
-    constructor(_type: string, init?: { detail?: unknown }) {
+    constructor(type: string, init?: { detail?: unknown }) {
+      this.type = type;
       this.detail = init?.detail;
     }
   };
@@ -92,6 +94,17 @@ const TEXT_PROPERTY = {
 function installTypeProperty(): void {
   const win = (globalThis as any).window as Record<string, any>;
   win.etn.types = { listTypeProperties: async () => [TEXT_PROPERTY] };
+}
+
+/** One stored text value row for the `TEXT_PROPERTY` definition. */
+function propertyValueRow(value: string): unknown {
+  return {
+    property_id: 'p1',
+    property_name: 'Заметка',
+    value_type: 'text',
+    value,
+    outside_type: false,
+  };
 }
 
 function makeThought(overrides: Partial<Thought> = {}): Thought {
@@ -468,13 +481,7 @@ describe('инкрементальная смена сущности в реда
     editorInternals.activateTab('properties');
     await flush();
 
-    const valueRow = (v: string): unknown => ({
-      property_id: 'p1',
-      property_name: 'Заметка',
-      value_type: 'text',
-      value: v,
-      outside_type: false,
-    });
+    const valueRow = (v: string): unknown => propertyValueRow(v);
     assert.ok(pending.has('t1'), 'загрузка свойств t1 стартовала');
 
     // Switch to another thought of the same type while t1 is still in flight.
@@ -500,5 +507,101 @@ describe('инкрементальная смена сущности в реда
       'VALUE_B',
       'устаревший ответ t1 отброшен — значение новой мысли не перезаписано',
     );
+  });
+
+  it('скрытая вкладка «Свойства» перечитывается при смене мысли и пишет в новую', async () => {
+    shimDom();
+    installEtn();
+    const getCalls: string[] = [];
+    const setCalls: Array<{ ownerId: string; value: unknown }> = [];
+    const win = (globalThis as any).window as Record<string, any>;
+    win.etn.types = { listTypeProperties: async () => [TEXT_PROPERTY] };
+    win.etn.properties = {
+      get: async (_networkId: string, _ownerType: string, ownerId: string) => {
+        getCalls.push(ownerId);
+        const rows: unknown[] = [propertyValueRow(ownerId === 't1' ? 'VALUE_A' : 'VALUE_B')];
+        // Only t2 has an outside-type value — the group's «Свойства вне типа»
+        // badge must follow the owner on retarget (круг 3).
+        if (ownerId === 't2') {
+          rows.push({
+            property_id: 'po1',
+            property_name: 'Вне типа',
+            value_type: 'text',
+            value: 'X',
+            outside_type: true,
+          });
+        }
+        return rows;
+      },
+      set: async (
+        _networkId: string,
+        _ownerType: string,
+        ownerId: string,
+        _key: string,
+        value: unknown,
+      ) => {
+        setCalls.push({ ownerId, value });
+      },
+      remove: async () => undefined,
+    };
+
+    const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    // Build «Свойства» for t1, then hide it behind «Комментарий».
+    editorInternals.activateTab('properties');
+    await flush();
+    const scrollBox = host.children[1]!;
+    assert.equal(scrollBox.querySelector('.prop-editor')!.value, 'VALUE_A');
+    editorInternals.activateTab('main');
+    await flush();
+
+    // Switch to another thought of the same type while «Свойства» is hidden.
+    const before = getCalls.length;
+    store.update({ focus: makeFocus(makeThought({ id: 't2', title: 'B', type_id: 'ta' })) } as any);
+    await flush();
+    assert.ok(
+      getCalls.slice(before).includes('t2'),
+      'скрытая вкладка «Свойства» перечитала значения новой мысли',
+    );
+
+    // Returning to the tab shows the CURRENT owner's value…
+    editorInternals.activateTab('properties');
+    await flush();
+    assert.equal(
+      scrollBox.querySelector('.prop-editor')!.value,
+      'VALUE_B',
+      'показано значение текущей мысли, а не прежней',
+    );
+    // The «Свойства вне типа» badge belongs to the reused group header and must
+    // follow the new owner too (t2 has one outside-type value).
+    const outsideTitle = scrollBox.findAll(
+      (n) => n.className.includes('group-title') && n.textContent === 'Свойства вне типа',
+    )[0]!;
+    assert.equal(
+      outsideTitle.parent!.querySelector('.ui-badge')!.textContent,
+      '(1)',
+      'счётчик «Свойства вне типа» соответствует текущей мысли',
+    );
+
+    // …and an edit writes to the CURRENT owner, not the previous one.
+    const input = scrollBox.querySelector('.prop-editor')!;
+    input.value = 'NEW_VALUE';
+    input.blur();
+    await flush();
+    assert.equal(setCalls.length > 0, true, 'правка сохранена');
+    assert.equal(setCalls.at(-1)!.ownerId, 't2', 'правка ушла в текущую мысль');
+    assert.equal(setCalls.at(-1)!.value, 'NEW_VALUE');
   });
 });

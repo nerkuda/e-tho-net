@@ -390,6 +390,18 @@ export class ShimElement {
     this.emit(type, event);
   }
 
+  /**
+   * `dispatchEvent` реального DOM на элементе: тип берётся из `event.type`.
+   * Продукт шлёт на элементах `CustomEvent` (`editor/properties.ts` →
+   * `etn:refresh-count` для бейджа группы); шим-`CustomEvent` тестов обязан
+   * нести `type`. Без типа — no-op (совместимость с урезанными заглушками).
+   */
+  dispatchEvent(event: any): boolean {
+    const type = event?.type;
+    if (typeof type === 'string' && type !== '') this.emit(type, event);
+    return true;
+  }
+
   fire(type: string, event?: any): void {
     this.emit(type, event);
   }
