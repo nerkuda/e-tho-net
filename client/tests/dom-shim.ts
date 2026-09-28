@@ -19,8 +19,9 @@
  * - `isConnected` считается по цепочке `parent` до корня с флагом
  *   `connectedRoot` (по умолчанию `true` — как у «плоских» копий); запись
  *   `el.isConnected = false` меняет флаг корня;
- * - `remove()` вынимает узел из родителя и шлёт событие `remove` (контракт
- *   каркаса диалога `showDialog`); узел без родителя события не даёт;
+ * - `remove()` вынимает узел из родителя и НЕ шлёт событие `remove` (в
+ *   Chromium/Electron `Element.remove()` события не даёт — ошибка 0c45bce8);
+ *   очистку потребители зовут напрямую;
  * - `emit`/`dispatch`/`fire` — один и тот же тестовый драйвер событий.
  */
 
@@ -336,15 +337,17 @@ export class ShimElement {
   }
 
   /**
-   * Снятие узла из DOM. Событие `remove` шлётся только когда узел был подключён
-   * (контракт каркаса диалога: повторный `remove()` не переигрывает `onClose`).
+   * Снятие узла из DOM. Событий НЕ шлёт: в Chromium/Electron
+   * `Element.remove()`/`removeChild()` события `remove` не дают, и шим,
+   * который бы его слал, вводил бы тесты в заблуждение (каркас диалога именно
+   * на этом событии ошибочно держал очистку — ошибка 0c45bce8, давнее
+   * происхождение f0e2fba4). Очистку потребители обязаны звать напрямую.
    */
   remove(): void {
     if (this.parent === null) return;
     const index = this.parent.children.indexOf(this);
     if (index >= 0) this.parent.children.splice(index, 1);
     this.parent = null;
-    this.emit('remove');
   }
 
   contains(node: ShimElement | null): boolean {

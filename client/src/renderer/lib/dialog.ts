@@ -188,9 +188,9 @@ export interface DialogOptions {
   onMount?: (close: () => void, box: HTMLElement) => void;
   /**
    * Called once when the dialog closes by ANY path — Esc, the × button, a
-   * footer button, or `closeDialog()` popping the stack: it fires from the
-   * backdrop's `remove` event, so removing the backdrop from the DOM by any
-   * means triggers it exactly once.
+   * footer button, or `closeDialog()`: all of them funnel into the dialog's
+   * single teardown, so it fires exactly once (not via a DOM `remove` event —
+   * Chromium/Electron never fires one on `Element.remove()`).
    */
   onClose?: () => void;
   /**
@@ -254,10 +254,14 @@ export function isCtrlShiftEnterShortcut(event: ShortcutEventLike): boolean {
   return true;
 }
 
+/** Per-dialog teardown: focus restore, `onClose`, listener cleanup, DOM removal. */
+const teardowns = new WeakMap<HTMLDivElement, () => void>();
+
 /** Closes the topmost open dialog (no-op when none). */
 export function closeDialog(): void {
-  const top = stack.pop();
-  top?.remove();
+  const top = stack[stack.length - 1];
+  if (top === undefined) return;
+  teardowns.get(top)?.();
 }
 
 /**
@@ -615,11 +619,38 @@ export function showDialog(opts: DialogOptions): () => void {
     box.append(footer);
   }
 
+  /**
+   * Единственная точка закрытия диалога: снимает его со стопки, отписывает
+   * слушатели, возвращает фокус и зовёт `onClose`, затем убирает подложку из
+   * DOM. Вызывается НАПРЯМУЮ из всех путей закрытия (Esc, ×, кнопки футера,
+   * `closeDialog`) — на DOM-событие `remove` полагаться нельзя: в
+   * Chromium/Electron `Element.remove()`/`removeChild()` его НЕ шлют, поэтому
+   * блок очистки по событию в живом клиенте не выполнялся вовсе (фокус не
+   * возвращался, промисы `promptDialog`/`confirmDialog` на Esc/× не
+   * резолвились, листенеры и `dialogKeys` не снимались; давнее происхождение —
+   * `f0e2fba4`). Идемпотентна: повторный вызов ничего не переигрывает.
+   */
   const close = (): void => {
+    if (teardowns.get(backdrop) === undefined) return;
+    teardowns.delete(backdrop);
     const index = stack.indexOf(backdrop);
     if (index >= 0) stack.splice(index, 1);
+    dialogKeys.delete(backdrop);
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keydown', onConfirm);
+    window.removeEventListener('keydown', onShiftEnter);
+    window.removeEventListener('keydown', onCtrlShiftEnter);
+    window.removeEventListener('keydown', onTab);
+    window.removeEventListener('keydown', onArrows);
+    backdrop.removeEventListener('click', onBackdropClick);
+    // Возврат фокуса владельцу списка (ошибка 28d69bc6): стрелочная навигация
+    // продолжается без повторного клика. Фокус ставим до `onClose` — обработчик
+    // может открыть следующий диалог, который снимет фокус себе сам.
+    restoreFocus(previouslyFocused, focusAnchor);
+    opts.onClose?.();
     backdrop.remove();
   };
+  teardowns.set(backdrop, close);
   /**
    * Показать подтверждение закрытия «грязного» редактора (требование
    * b58f6aad): три решения — «Сохранить» (записать и закрыть), «Не сохранять»
@@ -797,21 +828,6 @@ export function showDialog(opts: DialogOptions): () => void {
   document.body.append(backdrop);
   stack.push(backdrop);
   if (opts.dedupeKey !== undefined) dialogKeys.set(backdrop, opts.dedupeKey);
-  backdrop.addEventListener('remove', () => {
-    dialogKeys.delete(backdrop);
-    window.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('keydown', onConfirm);
-    window.removeEventListener('keydown', onShiftEnter);
-    window.removeEventListener('keydown', onCtrlShiftEnter);
-    window.removeEventListener('keydown', onTab);
-    window.removeEventListener('keydown', onArrows);
-    backdrop.removeEventListener('click', onBackdropClick);
-    // Возврат фокуса владельцу списка (ошибка 28d69bc6): стрелочная навигация
-    // продолжается без повторного клика. Фокус ставим до `onClose` — обработчик
-    // может открыть следующий диалог, который снимет фокус себе сам.
-    restoreFocus(previouslyFocused, focusAnchor);
-    opts.onClose?.();
-  });
   // Фокус — в ТОЛЬКО ЧТО открытый (верхний) диалог. Диалог, объявивший
   // `onMount`, управляет фокусом сам (редакторы, списки с полем поиска) — не
   // вмешиваемся, чтобы не перевести фокус дважды. Каркас ставит фокус диалогам
@@ -840,8 +856,8 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
     /**
      * Единственная точка завершения промиса. Промис обязан резолвиться на
      * ЛЮБОМ пути закрытия диалога (ошибка e0360076): кнопки завершают его
-     * явно, а Esc и × — через `onClose`. Флаг `settled` не даёт позднему
-     * событию `remove` переиграть уже принятое решение.
+     * явно, а Esc и × — через `onClose`. Флаг `settled` не даёт повторному
+     * пути (кнопка плюс `onClose`) переиграть уже принятое решение.
      */
     const finish = (value: string | null): void => {
       if (settled) return;

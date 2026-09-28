@@ -62,9 +62,16 @@ function installShim(): void {
 
 installShim();
 
-const { closeDialog, showDialog } = await import('../src/renderer/lib/dialog.js');
+const { closeDialog, showDialog, promptDialog, confirmDialog } = await import(
+  '../src/renderer/lib/dialog.js'
+);
 const { t } = await import('../src/renderer/lib/i18n.js');
 const { div } = await import('../src/renderer/lib/dom.js');
+
+/** Число `keydown`-слушателей окна — каркас вешает/снимает их на каждый диалог. */
+function keydownListenerCount(): number {
+  return windowListeners.filter((l) => l.type === 'keydown').length;
+}
 
 function body(): ShimElement {
   return doc().body as ShimElement;
@@ -152,6 +159,65 @@ function buttonByLabel(backdrop: ShimElement, label: string): ShimElement {
 function active(): ShimElement | null {
   return doc().activeElement as ShimElement | null;
 }
+
+/** Клик по × в шапке диалога. */
+function clickClose(backdrop: ShimElement): void {
+  const closeBtn = backdrop.querySelector('.ui-btn--ghost');
+  assert.ok(closeBtn !== null, 'в шапке есть ×');
+  closeBtn!.click();
+}
+
+describe('прямая очистка при закрытии диалога (0c45bce8, круг 2)', () => {
+  it('Esc резолвит промис promptDialog и снимает слушатели', async () => {
+    installShim();
+    drainDialogs();
+    const baseline = keydownListenerCount();
+    const promise = promptDialog('Имя', 'Подпись');
+    assert.equal(backdrops().length, 1, 'диалог открыт');
+    assert.ok(keydownListenerCount() > baseline, 'каркас повесил слушатели');
+
+    pressKey('Escape');
+    await assert.doesNotReject(promise);
+    assert.equal(await promise, null, 'Esc — отмена, промис резолвится null');
+    assert.equal(backdrops().length, 0, 'подложка убрана из DOM');
+    assert.equal(keydownListenerCount(), baseline, 'слушатели сняты (не через DOM-событие)');
+  });
+
+  it('× резолвит промис confirmDialog и снимает слушатели', async () => {
+    installShim();
+    drainDialogs();
+    const baseline = keydownListenerCount();
+    const promise = confirmDialog('Подтверждение', 'Точно?');
+    clickClose(topDialog());
+    assert.equal(await promise, false, '× — отказ, промис резолвится false');
+    assert.equal(backdrops().length, 0, 'подложка убрана из DOM');
+    assert.equal(keydownListenerCount(), baseline, 'слушатели сняты');
+  });
+
+  it('closeDialog тоже гонит очистку: onClose зовётся один раз, слушатели сняты', async () => {
+    installShim();
+    drainDialogs();
+    const baseline = keydownListenerCount();
+    const promise = confirmDialog('Подтверждение', 'Точно?');
+    closeDialog();
+    assert.equal(await promise, false, 'closeDialog завершает диалог как отказ');
+    assert.equal(backdrops().length, 0);
+    assert.equal(keydownListenerCount(), baseline, 'слушатели сняты');
+  });
+
+  it('фокус возвращается в поле редактора после «Отменить закрытие» (живой сценарий)', () => {
+    installShim();
+    drainDialogs();
+    const editor = openEditor();
+    editor.input.value = 'правка';
+    pressKey('Escape');
+    const confirm = topDialog();
+    buttonByLabel(confirm, t('dialog.unsaved.stay')).click();
+
+    assert.equal(backdrops().length, 1, 'редактор остался открыт');
+    assert.equal(active(), editor.input, 'фокус вернулся в поле редактора, а не на body');
+  });
+});
 
 describe('фокус верхнего диалога и ловушка Tab (0c45bce8)', () => {
   it('подтверждение над редактором забирает фокус у нижележащего диалога', () => {
