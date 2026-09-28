@@ -215,6 +215,17 @@ function touchType(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string, ac
  * Открывает теневую копию владельца в текущем слое; записи `value_*` и
  * `property_values.updated_at` остаются независимыми (миллисекундные даты
  * значения и владельца могут различаться на пару мс).
+ *
+ * `version` владельца НЕ инкрементируется (ошибка af104f16). Версия мысли/
+ * связи — оптимистическая блокировка её СОБСТВЕННЫХ полей (PATCH `If-Match`,
+ * 03-server-api.md §6.4); запись значения свойства идёт отдельным маршрутом
+ * без `If-Match` (§9) и версию владельца как контракт не несёт. Инкремент
+ * делал бы любой открытый редактор протухшим: после правки свойства (в том
+ * числе чужим клиентом — событие `property-value.set` версию не доносит)
+ * следующее сохранение реквизита мысли падало бы `409 VERSION_CONFLICT`,
+ * хотя поля разные и мысль не захвачена. Авторство владельца при этом
+ * обновляется — приравнивание требование e6d4165e задаёт по `updated_*`,
+ * не по `version`.
  */
 function touchOwner(
   ndb: NetworkDb,
@@ -228,7 +239,7 @@ function touchOwner(
   materializeShadow(ndb, table, ownerId);
   ndb
     .prepare(
-      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
+      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ?
        WHERE id = ? AND layer_id = ?`,
     )
     .run(now, actorUserId, nowMs, ownerId, ndb.layerId);

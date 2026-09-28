@@ -340,6 +340,51 @@ describe(
       }
     });
 
+    it('правка значения свойства не поднимает version владельца — реквизиты сохраняются со старой версией (af104f16)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Карточка' }, ALICE);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'статус', value_type: 'text' }, ALICE);
+        const t = createThought(ndb, { title: 'Объект', type_id: tt.id }, ALICE);
+        const versionBefore = t.version;
+
+        // Запись значения свойства обновляет авторство владельца, но не его
+        // оптимистическую версию: маршрут значений (§9) не несёт If-Match, и
+        // инкремент делал бы протухшим любой открытый редактор.
+        setPropertyValue(ndb, 'thought', t.id, 'статус', 'готово', BOB);
+        const versionAfter = (
+          ndb.prepare(`SELECT version FROM thoughts WHERE id = ?`).get(t.id) as { version: number }
+        ).version;
+        assert.equal(
+          versionAfter,
+          versionBefore,
+          'правка значения свойства не должна поднимать version мысли',
+        );
+
+        // Реквизит мысли (реквизиты шапки) сохраняется со старой версией —
+        // именно этот сценарий падал 409 VERSION_CONFLICT.
+        const updated = updateThought(ndb, t.id, { active: false }, versionBefore, BOB);
+        assert.equal(updated.active, false);
+        assert.equal(updated.version, versionBefore + 1);
+
+        // Симметрично для связи.
+        const lt = createLinkType(ndb, { name_forward: 'f', name_reverse: 'r' }, ALICE);
+        createTypeProperty(ndb, 'link_type', lt.id, { key: 'вес', value_type: 'number' }, ALICE);
+        const a = createThought(ndb, { title: 'A' }, ALICE);
+        const b = createThought(ndb, { title: 'B' }, ALICE);
+        const link = createLink(ndb, { source_id: a.id, target_id: b.id, type_id: lt.id }, ALICE);
+        setPropertyValue(ndb, 'link', link.id, 'вес', 7, BOB);
+        const linkVersion = (
+          ndb.prepare(`SELECT version FROM links WHERE id = ?`).get(link.id) as { version: number }
+        ).version;
+        assert.equal(linkVersion, link.version, 'правка значения свойства не должна поднимать version связи');
+        const updatedLink = updateLink(ndb, link.id, { active: false }, link.version, BOB);
+        assert.equal(updatedLink.active, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('приравнивание: правка значения свойства на связи трогает updated_by/updated_at_ms связи', () => {
       const ndb = createInMemoryNetworkDb();
       try {
