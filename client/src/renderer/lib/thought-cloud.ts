@@ -96,6 +96,11 @@ export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
     cloud.style.color = '';
   }
   if (style.bg !== null) cloud.style.background = style.bg;
+  // Личный цвет фона (не резолв типа) — признак для стилей: иконочная колонка
+  // закрашивается тем же фоном, иначе между ней и остальным облачком видна
+  // «ступенька» (задача 1dc56942). Без своего цвета признак снят — фон ведёт
+  // себя как раньше.
+  cloud.classList.toggle(CLOUD_BG_CLASS, style.bg !== null);
   cloud.classList.toggle('font-bold', style.bold);
   cloud.classList.toggle('font-italic', style.italic);
   cloud.classList.toggle('font-underline', style.underline);
@@ -297,6 +302,17 @@ export const CLOUD_WIDTHS: readonly CloudWidth[] = ['fixed', 'container'];
  * (`.link-endpoint .cloud`, `.search-hit .cloud`) закрыты.
  */
 export const CLOUD_WIDTH_CONTAINER_CLASS = 'cloud-width-container';
+
+/**
+ * Класс-признак «у облачка задан личный цвет фона» (задача 1dc56942): вешает
+ * {@link applyCloudStyle}, когда `style.bg !== null`. В `styles.css` он даёт
+ * одно правило, распространяющее этот фон на иконочную колонку
+ * (`.cloud-icon`), — так зона иконки и основная часть облачка закрашены одним
+ * цветом без видимой «ступеньки». Без цвета класс снят, фон иконки остаётся
+ * прежним (`--surface-2`, L12). Ставить вручную — запрещено (сторож
+ * `guard-thought-cloud`).
+ */
+export const CLOUD_BG_CLASS = 'cloud-has-bg';
 
 /**
  * Данные мысли, из которых облачко строится. Визуальные поля опциональны:

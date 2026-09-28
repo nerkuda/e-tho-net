@@ -281,6 +281,42 @@ describe('guard: представление мысли строится толь
     ]);
   });
 
+  it('личный фон облачка распространяется на иконку — класс cloud-has-bg и одно правило', () => {
+    // Признак «у облачка свой фон» (задача 1dc56942) вешает только
+    // applyCloudStyle фабрики; стиль по нему закрашивает иконочную колонку
+    // тем же цветом, что и остальное облачко.
+    const css = stripCssComments(readText(STYLES_CSS));
+    const rule = /\.cloud-has-bg\s+\.cloud-icon\s*\{([^}]*)\}/.exec(css);
+    assert.ok(
+      rule !== null,
+      'правило `.cloud-has-bg .cloud-icon` должно существовать (фон иконки — как у облачка)',
+    );
+    const body = rule?.[1] ?? '';
+    assert.match(body, /background:\s*inherit;/, 'иконочная колонка берёт фон родителя');
+    assert.match(
+      body,
+      /border-right-color:\s*transparent;/,
+      'разделительная линия колонки не рисуется поверх личного фона',
+    );
+
+    // Имя класса в TS и в CSS — одно и то же.
+    const ts = readText(THOUGHT_CLOUD_TS);
+    const exported = /CLOUD_BG_CLASS\s*=\s*'([^']+)'/.exec(ts)?.[1];
+    assert.equal(exported, 'cloud-has-bg', 'CLOUD_BG_CLASS must match the CSS class');
+
+    // Никакое другое место не вешает класс вручную — только фабрика.
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'no-manual-bg-class',
+        description:
+          'Класс cloud-has-bg вешает фабрика lib/thought-cloud.ts (applyCloudStyle) ' +
+          'при личном цвете фона; вручную — запрещено.',
+        pattern: /cloud-has-bg|CLOUD_BG_CLASS/,
+        allow: (rel) => rel === 'lib/thought-cloud.ts',
+      },
+    ]);
+  });
+
   it('в каждом месте ширина облачка объявлена явно или задана раскладкой места', () => {
     const missing: string[] = [];
     for (const file of listTs(RENDERER_ROOT)) {

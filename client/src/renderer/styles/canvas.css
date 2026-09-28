@@ -757,6 +757,18 @@ body.cloud-dragging * {
   object-fit: contain;
 }
 
+/* Личный цвет фона облачка распространяется и на иконочную колонку (задача
+   1dc56942): класс `cloud-has-bg` вешает фабрика (`applyCloudStyle`,
+   `lib/thought-cloud.ts`), когда у мысли задан свой фон. Колонка берёт фон
+   родителя (`inherit`) вместо `--surface-2`, а разделительная линия исчезает
+   — «ступеньки» между зоной иконки и остальной частью облачка нет (в т.ч. для
+   фокуса, холста, чипа нижней зоны отбора и строки «Структур»). Без личного
+   цвета класс снят, фон иконки остаётся прежним (L12). */
+.cloud-has-bg .cloud-icon {
+  background: inherit;
+  border-right-color: transparent;
+}
+
 /* Compact thought icon for lists (history bar, link rows, search hits,
    selection panel): image icons fill the fixed box exactly like the cloud
    icons do — never their natural size. */

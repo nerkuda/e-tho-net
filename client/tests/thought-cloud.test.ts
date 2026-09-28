@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, mock } from 'node:test';
 
 import {
+  CLOUD_BG_CLASS,
   CLOUD_PROFILES,
   CLOUD_WIDTHS,
   CLOUD_WIDTH_CONTAINER_CLASS,
@@ -311,8 +312,17 @@ describe('цвет, начертание и значок', () => {
     assert.equal(root.style.color, '#ffffff');
   });
 
-  it('начертание — классы font-bold/font-italic', () => {
-    const root = cloud(
+  it('личный цвет фона вешает класс cloud-has-bg; без него класса нет', () => {
+    // Класс — признак для стилей: фон облачка распространяется на иконочную
+    // колонку (задача 1dc56942).
+    const withBg = cloud(thought({ bg_color: '#222222' }), { profile: 'canvas' });
+    assert.ok(withBg.classList.contains(CLOUD_BG_CLASS));
+
+    const withoutBg = cloud(thought({ bg_color: null }), { profile: 'canvas' });
+    assert.ok(!withoutBg.classList.contains(CLOUD_BG_CLASS));
+  });
+
+  it('начертание — классы font-bold/font-italic', () => {    const root = cloud(
       thought({ font_bold: true, font_italic: true, font_underline: false }),
       { profile: 'canvas' },
     );
