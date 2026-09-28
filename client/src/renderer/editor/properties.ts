@@ -299,17 +299,30 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   wrap.append(el('span', 'muted', 'Загрузка…'));
   box.append(wrap);
 
+  // Инкрементальная таблица (стандарт «Списки рендерятся инкрементально»):
+  // узел таблицы держим, а строки сверяем по ключу через `reconcileKeyed`
+  // вместо пересборки коллекции на каждом перечитывании (realtime
+  // `property-value.*`, перепривязка). Так живы фокус, прокрутка и открытые
+  // редакторы неизменившихся строк.
+  const { table, tbody } = makeOutsideTypeTable();
+  /** Прикреплена ли таблица к обёртке; пока нет — в ней плейсхолдер/ошибка. */
+  let tableAttached = false;
   let everMounted = false;
   /** Owner currently rendered in this body (see the in-type table's guard). */
   let shownOwnerId: string | null = null;
-  const reload = async (): Promise<void> => {
+
+  const rowSpec = outsideRowSpec(networkId, target, () => void reload());
+
+  async function reload(): Promise<void> {
     // Owner token of this reload (same guard as the in-type table): a slow
     // response of the previous owner must not be rendered after a retarget
     // (task 90b2256e, круг 2); an owner CHANGE proceeds even while detached
     // (круг 3).
     const requestOwnerId = target.ownerId;
     if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
-    wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
+    // обновление не мигает «Загрузкой…» на каждой правке значения.
+    if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: Array<PropertyValue | LinkPropertyValues>;
     try {
       values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
@@ -320,6 +333,7 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       // and gets re-read instead of leaving the error text on screen
       // (задача 90b2256e, круг 3).
       shownOwnerId = null;
+      tableAttached = false;
       wrap.replaceChildren(operationError(err));
       return;
     }
@@ -332,13 +346,16 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       (v) => v.outside_type === true,
     );
     if (outside.length === 0) {
+      tableAttached = false;
       wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
     }
-    wrap.replaceChildren(
-      buildOutsideTypeTable(outside, networkId, target.ownerType, requestOwnerId, () => void reload()),
-    );
-  };
+    if (!tableAttached) {
+      wrap.replaceChildren(table);
+      tableAttached = true;
+    }
+    reconcileKeyed(tbody, outsideRows(outside, requestOwnerId), rowSpec);
+  }
   outsideReload = () => void reload();
   void reload();
   // Keep the outside-type body in sync with the main properties reload (a
@@ -395,44 +412,105 @@ function buildOutsideTypeTable(
   ownerId: string,
   onRemove: () => void,
 ): HTMLElement {
-    const root = div('prop-outside');
-    // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
-    // дублировал её и читался как «заголовок колонок таблицы». Таблица
-    // без `<thead>` — только строки значений; первая колонка содержит имя
-    // свойства, вторая — редактор/чип/крестик. `prop-grid` — фиксированная
-    // раскладка двух колонок (ошибка 2012f46b): чип не раздувает таблицу.
-    const table = el('table', 'table-list prop-outside-table prop-grid');
-    const tbody = el('tbody');
-    for (const value of values) {
-      const row = el('tr');
-      if (isLinkPropertyValues(value)) {
-        const nameCell = el('td', undefined, `${value.property_name} (связь)`);
-        setTooltip(
-          nameCell,
-          value.property_id !== ''
-            ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
-            : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
-        );
-        row.append(nameCell);
-        row.append(
-          buildOutsideLinkCell(value, networkId, ownerType, ownerId, onRemove),
-        );
-        tbody.append(row);
-        continue;
-      }
-      const nameCell = el('td', undefined, `${value.property_name} (${valueTypeName(value.value_type)})`);
+  const root = div('prop-outside');
+  // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
+  // дублировал её и читался как «заголовок колонок таблицы». Таблица
+  // без `<thead>` — только строки значений; первая колонка содержит имя
+  // свойства, вторая — редактор/чип/крестик.
+  const { table, tbody } = makeOutsideTypeTable();
+  root.append(table);
+  const target: PropertiesTarget = { ownerType, ownerId, typeId: null };
+  reconcileKeyed(tbody, outsideRows(values, ownerId), outsideRowSpec(networkId, target, onRemove));
+  return root;
+}
+
+/**
+ * Оболочка таблицы «Свойства вне типа»: `prop-grid` — фиксированная раскладка
+ * двух колонок (ошибка 2012f46b): чип не раздувает таблицу своим nowrap-именем.
+ * Единая точка для постоянной таблицы группы и одноразового тест-сима.
+ */
+function makeOutsideTypeTable(): { table: HTMLElement; tbody: HTMLElement } {
+  const table = el('table', 'table-list prop-outside-table prop-grid');
+  const tbody = el('tbody');
+  table.append(tbody);
+  return { table, tbody };
+}
+
+/** Строка таблицы «Свойства вне типа»: владелец + само внетиповое значение. */
+interface OutsideRow {
+  /** Владелец, под которого прочитано значение (меняется при перепривязке). */
+  ownerId: string;
+  value: PropertyValue | LinkPropertyValues;
+}
+
+/** Оборачивает внетиповые значения в строки keyed-сверки. */
+function outsideRows(
+  values: Array<PropertyValue | LinkPropertyValues>,
+  ownerId: string,
+): OutsideRow[] {
+  return values.map((value) => ({ ownerId, value }));
+}
+
+/**
+ * Ключ строки «Свойства вне типа»: внетиповое значение привязано к свойству
+ * реестра — его `property_id` и служит ключом (аналог id привязки основной
+ * таблицы). У рёбер типа связи без свойства в реестре `property_id` пуст —
+ * ключом становится display-имя стороны: оно же ключ записи (748b80fd) и не
+ * повторяется в наборе.
+ */
+function outsideRowKey(value: PropertyValue | LinkPropertyValues): string {
+  return value.property_id !== '' ? value.property_id : `link:${value.property_name}`;
+}
+
+/**
+ * Спецификация keyed-сверки строк «Свойства вне типа» — по образцу основной
+ * таблицы: неизменившиеся строки не трогаются (живы фокус, прокрутка,
+ * открытые редакторы), изменившуюся пересобирает `update`. `equals` включает
+ * владельца: ячейки держат его замыканием, поэтому при перепривязке значение
+ * перерисовывается даже внешне равным (задача 90b2256e, круг 1).
+ */
+function outsideRowSpec(
+  networkId: string,
+  target: PropertiesTarget,
+  onRemove: () => void,
+): KeyedRenderSpec<OutsideRow> {
+  const fill = (row: HTMLElement, value: PropertyValue | LinkPropertyValues): void => {
+    row.replaceChildren();
+    if (isLinkPropertyValues(value)) {
+      const nameCell = el('td', undefined, `${value.property_name} (связь)`);
       setTooltip(
         nameCell,
-        'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+        value.property_id !== ''
+          ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
+          : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
       );
       row.append(nameCell);
-      row.append(buildOutsideValueCell(value, networkId, ownerType, ownerId, onRemove));
-      tbody.append(row);
+      row.append(buildOutsideLinkCell(value, networkId, target.ownerType, target.ownerId, onRemove));
+      return;
     }
-    table.append(tbody);
-    root.append(table);
-    return root;
-  }
+    const nameCell = el(
+      'td',
+      undefined,
+      `${value.property_name} (${valueTypeName(value.value_type)})`,
+    );
+    setTooltip(
+      nameCell,
+      'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+    );
+    row.append(nameCell);
+    row.append(buildOutsideValueCell(value, networkId, target.ownerType, target.ownerId, onRemove));
+  };
+  return {
+    key: (row) => outsideRowKey(row.value),
+    build: (row) => {
+      const tr = el('tr');
+      fill(tr, row.value);
+      return tr;
+    },
+    update: (tr, row) => fill(tr, row.value),
+    equals: (a, b) => a.ownerId === b.ownerId && deepEqual(a.value, b.value),
+  };
+}
 
 /**
  * Ячейка внетипового свойства-связи. Свойство есть в реестре (не подключено
@@ -1067,7 +1145,11 @@ function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): 
 }
 
 /** Test seam for unit tests. */
-export const propertiesInternals = { buildPropertiesBody, buildOutsideTypeTable };
+export const propertiesInternals = {
+  buildPropertiesBody,
+  buildOutsideTypeTable,
+  buildOutsidePropertiesBody,
+};
 
 /**
  * Type guard: скалярное значение (`PropertyValue`) против формы

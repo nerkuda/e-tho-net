@@ -719,6 +719,86 @@ describe('editor properties — внетиповые свойства-связи
     const clearButtons = json.split('prop-outside-remove').length - 1;
     assert.equal(clearButtons, 2, '748b80fd: outside-type link set gained a clear button');
   });
+
+  /**
+   * Задача 3df6b477: строки «Свойства вне типа» обновляются инкрементально
+   * (`reconcileKeyed`), а не пересобираются коллекцией на каждом перечитывании.
+   * Проверяем identity неизменившихся строк при realtime-правке значения и при
+   * перепривязке к другому владельцу.
+   */
+  it('строки «Свойства вне типа» обновляются инкрементально (3df6b477)', async () => {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    etnApi['system'] = { openExternal: async () => '' };
+
+    const scalar = (id: string, propertyId: string, name: string, value: string) => ({
+      id,
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: propertyId,
+      property_name: name,
+      value_type: 'text',
+      value,
+      outside_type: true,
+      updated_at: '2026',
+    });
+    let values: Array<Record<string, unknown>> = [
+      scalar('v1', 'po1', 'Отвалившееся', 'A'),
+      scalar('v2', 'po2', 'Ещё одно', 'B'),
+    ];
+    etnApi['properties'] = {
+      get: async () => values,
+      remove: async () => undefined,
+    };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const target = { ownerType: 'thought' as const, ownerId: 't1', typeId: null };
+    const body = propertiesInternals.buildOutsidePropertiesBody(target) as unknown as ShimElement;
+    (globalThis as any).document.body.append(body);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const wrap = body.children[0] as ShimElement;
+    const table = wrap.children[0] as ShimElement;
+    const tbody = table.children[0] as ShimElement;
+    assert.equal(tbody.children.length, 2, 'обе строки вне типа построены');
+    const row1 = tbody.children.find((r) => r.getAttribute('data-key') === 'po1')!;
+    const row2 = tbody.children.find((r) => r.getAttribute('data-key') === 'po2')!;
+    const row2Name = row2.children[0];
+
+    // Realtime property-value.set: меняется значение po1, соседняя строка po2
+    // не должна быть пересоздана или пересобрана.
+    values = [scalar('v1', 'po1', 'Отвалившееся', 'A2'), scalar('v2', 'po2', 'Ещё одно', 'B')];
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(wrap.children[0], table, 'узел таблицы сохранён');
+    assert.equal(table.children[0], tbody, 'узел tbody сохранён');
+    const row1After = tbody.children.find((r) => r.getAttribute('data-key') === 'po1')!;
+    const row2After = tbody.children.find((r) => r.getAttribute('data-key') === 'po2')!;
+    assert.equal(row1After, row1, 'строка изменённого значения сохранена как узел');
+    assert.equal(row2After, row2, 'соседняя неизменившаяся строка — тот же узел');
+    assert.equal(row2After.children[0], row2Name, 'соседняя строка не пересобиралась');
+    assert.ok(JSON.stringify(row1After).includes('A2'), 'значение изменённой строки обновлено');
+
+    // Перепривязка к другому владельцу: строки с теми же ключами переиспользуются
+    // как узлы (update), а не пересоздаются вместе с таблицей.
+    values = [scalar('v3', 'po1', 'Отвалившееся', 'C'), scalar('v4', 'po2', 'Ещё одно', 'D')];
+    target.ownerId = 't2';
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(wrap.children[0], table, 'таблица не пересобрана при перепривязке');
+    const row1T2 = tbody.children.find((r) => r.getAttribute('data-key') === 'po1')!;
+    assert.equal(row1T2, row1, 'строка того же ключа сохранена как узел при перепривязке');
+    assert.ok(JSON.stringify(row1T2).includes('C'), 'значение нового владельца отрисовано');
+  });
 });
 
 describe('property value helpers (pure)', () => {
