@@ -430,8 +430,11 @@ describe('проводка реакции редактора на изменен
     );
 
     // Тип сущности — часть сигнатуры рендера и гейта store: серверное
-    // отвязывание типа версию мысли не меняет.
-    const fullSignature = /const fullSignature =\s*ctx === null\s*\? 'null'\s*: `\$\{identitySignature\}\|\$\{ctx\.thought\?\.version \?\? ''\}\|\$\{ctx\.link\?\.version \?\? ''\}\|\$\{ctxTypeId\(ctx\) \?\? ''\}`/;
+    // отвязывание типа версию мысли не меняет. Id сущности тоже входит в
+    // fullSignature (задача 90b2256e): skeleton identity его не содержит,
+    // поэтому смена сущности обязана менять полную сигнатуру, иначе ранний
+    // выход «ничего не изменилось» пропустил бы перерисовку.
+    const fullSignature = /const fullSignature =\s*ctx === null\s*\? 'null'\s*: `\$\{identitySignature\}\|\$\{ctx\.ownerId\}\|\$\{ctx\.thought\?\.version \?\? ''\}\|\$\{ctx\.link\?\.version \?\? ''\}\|\$\{ctxTypeId\(ctx\) \?\? ''\}`/;
     assert.ok(fullSignature.test(editor), 'тип сущности входит в сигнатуру рендера');
     assert.ok(
       /liveRenderedKey\.typeId === ctxTypeId\(ctx\)/.test(editor),

@@ -52,6 +52,7 @@ import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-re
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import { uiButton } from '../lib/ui/button.js';
+import { reconcileKeyed, type KeyedRenderSpec } from '../lib/ui/keyed-list.js';
 import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
@@ -638,6 +639,85 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
   box.append(tableWrap);
 
   let everMounted = false;
+  /**
+   * Прикреплена ли таблица к обёртке. Пока нет — в обёртке стоит плейсхолдер
+   * («Загрузка…» / ошибка / пустой набор); прикрепив таблицу один раз, держим
+   * её и обновляем СТРОКИ инкрементально (`reconcileKeyed`), не пересобирая
+   * коллекцию (задача 90b2256e, стандарт «Списки рендерятся инкрементально»).
+   */
+  let tableAttached = false;
+  // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
+  // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
+  const table = el('table', 'table-list prop-table prop-grid');
+  const tbody = el('tbody');
+  table.append(tbody);
+
+  /** Строка таблицы: определение свойства + его текущее значение. */
+  interface PropertyRow {
+    definition: EffectiveTypeProperty;
+    value: PropertyValue | LinkPropertyValues | undefined;
+  }
+
+  /** Собирает строку строки таблицы: имя (+ ⓘ) и ячейку значения. */
+  const fillRow = (
+    row: HTMLElement,
+    definition: EffectiveTypeProperty,
+    value: PropertyValue | LinkPropertyValues | undefined,
+  ): void => {
+    row.replaceChildren();
+    // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
+    // у множественных свойств; тип значения и место определения здесь не
+    // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
+    // ⓘ несёт tooltip с описанием свойства. Текст заголовка — отдельный узел:
+    // счётчик обновляется локально после своей записи значения-связи (ошибка
+    // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
+    const count = valueCountOf(definition, value);
+    const nameCell = el('td', 'prop-name-cell');
+    const nameText = span(propertyNameLabel(definition, count));
+    nameCell.append(nameText);
+    const hint = propertyHint(definition);
+    if (hint !== null) {
+      const info = span('ⓘ', 'muted prop-hint');
+      setTooltip(info, hint);
+      nameCell.append(info);
+    }
+    row.append(nameCell);
+    row.append(
+      buildEditorCell({
+        networkId,
+        ownerType,
+        ownerId,
+        definition,
+        current: value,
+        // Своя запись значения-связи не поднимает версию мысли (гейт полной
+        // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
+        // клиента до рендерера не доходит (G8) — счётчик строки, нарисованный
+        // при `reload()`, перерисовываем здесь же (ошибка 9ee8e608).
+        onLinkCountChange: (next) => {
+          nameText.textContent = propertyNameLabel(definition, next);
+        },
+      }),
+    );
+  };
+
+  /**
+   * Спецификация keyed-сверки строк: ключ — id привязки (уникален в
+   * эффективном наборе; `property_id` может повторяться при разных привязках).
+   * Неизменившиеся строки (ни определение, ни значение) не трогаются — живы их
+   * открытые редакторы значений, фокус и прокрутка. Изменившуюся строку
+   * пересобираем целиком: значение вводит общий `buildValueEditor`, точечного
+   * апдейта у него нет.
+   */
+  const rowSpec: KeyedRenderSpec<PropertyRow> = {
+    key: (row) => (row.definition.id !== '' ? row.definition.id : row.definition.property_id),
+    build: (row) => {
+      const tr = el('tr');
+      fillRow(tr, row.definition, row.value);
+      return tr;
+    },
+    update: (tr, row) => fillRow(tr, row.definition, row.value),
+  };
+
   currentReload = () => void reload();
   // Слушаем локальное уведомление о правке значений (общий канал
   // `PROPERTY_VALUES_REFRESHED_EVENT`, задача 7849008a / ошибка ec5ba58c):
@@ -657,12 +737,15 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
   async function reload(): Promise<void> {
     if (everMounted && !box.isConnected) return;
     const startedAt = Date.now();
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
+    // обновление не мигает «Загрузкой…» на каждой правке значения.
+    if (!tableAttached) tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let definitions: EffectiveTypeProperty[];
     try {
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
     } catch (err) {
       tableWrap.replaceChildren(operationError(err));
+      tableAttached = false;
       return;
     }
     if (box.isConnected) everMounted = true;
@@ -672,6 +755,7 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
     rememberShownDefinitions(definitions);
     if (definitions.length === 0) {
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+      tableAttached = false;
       return;
     }
     let values: Array<PropertyValue | LinkPropertyValues> = [];
@@ -681,50 +765,15 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
       // The main table still renders even if the values fetch fails.
     }
     const valueByProp = new Map(values.map((v) => [v.property_id, v]));
-    // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
-    // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
-    const table = el('table', 'table-list prop-table prop-grid');
-    const tbody = el('tbody');
-    for (const definition of definitions) {
-      const value = valueByProp.get(definition.property_id);
-      const row = el('tr');
-      // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
-      // у множественных свойств; тип значения и место определения здесь не
-      // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
-      // ⓘ несёт tooltip с описанием свойства. Текст заголовка — отдельный узел:
-      // счётчик обновляется локально после своей записи значения-связи (ошибка
-      // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
-      const count = valueCountOf(definition, value);
-      const nameCell = el('td', 'prop-name-cell');
-      const nameText = span(propertyNameLabel(definition, count));
-      nameCell.append(nameText);
-      const hint = propertyHint(definition);
-      if (hint !== null) {
-        const info = span('ⓘ', 'muted prop-hint');
-        setTooltip(info, hint);
-        nameCell.append(info);
-      }
-      row.append(nameCell);
-      row.append(
-        buildEditorCell({
-          networkId,
-          ownerType,
-          ownerId,
-          definition,
-          current: value,
-          // Своя запись значения-связи не поднимает версию мысли (гейт полной
-          // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
-          // клиента до рендерера не доходит (G8) — счётчик строки, нарисованный
-          // при `reload()`, перерисовываем здесь же (ошибка 9ee8e608).
-          onLinkCountChange: (next) => {
-            nameText.textContent = propertyNameLabel(definition, next);
-          },
-        }),
-      );
-      tbody.append(row);
+    if (!tableAttached) {
+      tableWrap.replaceChildren(table);
+      tableAttached = true;
     }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
+    const rows: PropertyRow[] = definitions.map((definition) => ({
+      definition,
+      value: valueByProp.get(definition.property_id),
+    }));
+    reconcileKeyed(tbody, rows, rowSpec);
     logUiEvent('ui.editor.props.loaded', {
       id: ownerId,
       ms: Date.now() - startedAt,

@@ -109,6 +109,16 @@ export class ShimClassList {
     return this.tokens().has(name);
   }
 
+  /**
+   * Итерация токенов, как у реального `DOMTokenList`: продукт обходит классы
+   * спредом (`[...el.classList]`, напр. поиск маркера фокуса в
+   * `editor.ts` → `restoreEditorFocus`). Без итератора такой код на шиме
+   * падал бы «not iterable».
+   */
+  [Symbol.iterator](): IterableIterator<string> {
+    return this.tokens().values();
+  }
+
   toggle(name: string, force?: boolean): void {
     const tokens = this.tokens();
     const next = force ?? !tokens.has(name);

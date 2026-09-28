@@ -40,6 +40,13 @@ const STRUCTURES = fs.readFileSync(
   path.join(RENDERER_ROOT, 'screens', 'structures', 'structures.ts'),
   'utf8',
 );
+// Таблица «Свойства» редактора — вне греп-области сторожа (`screens/**`,
+// `lib/ui/**`), но переведена на `reconcileKeyed` задачей 90b2256e; проверяем
+// факт положительной проверкой, а не расширением области сканирования.
+const EDITOR_PROPERTIES = fs.readFileSync(
+  path.join(RENDERER_ROOT, 'editor', 'properties.ts'),
+  'utf8',
+);
 
 /** Комментарий — упоминание конструкции в пояснении не является нарушением. */
 function isCommentLine(line: string): boolean {
@@ -195,6 +202,14 @@ describe('guard: инкрементальный рендер списков (695
       STRUCTURES,
       /keyAttr:\s*'data-root'/,
       'ветви «Структур» сверяются по ключу корня',
+    );
+  });
+
+  it('(г) таблица «Свойства» редактора обновляется через reconcileKeyed (90b2256e)', () => {
+    assert.match(
+      EDITOR_PROPERTIES,
+      /reconcileKeyed\(tbody,\s*rows,\s*rowSpec\)/,
+      'строки таблицы «Свойства» сверяются по ключу, а не пересобираются коллекцией',
     );
   });
 });
