@@ -13,7 +13,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
 import { tags } from '@lezer/highlight';
-import { EditorState } from '@codemirror/state';
+import { EditorState, type SelectionRange } from '@codemirror/state';
 import { drawSelection, EditorView, keymap } from '@codemirror/view';
 
 import { livePreview, mdWidgetClick } from './md-live.js';
@@ -126,6 +126,73 @@ const mdTheme = EditorView.theme({
   },
 });
 
+/**
+ * Прокрутка каретки к видимой части — для поля, которое растёт по содержимому.
+ *
+ * Поле markdown растёт по контенту (08-ui-spec.md §6.4), поэтому скроллит не
+ * сам редактор, а контейнер панели (`.ui-comment--scroll`, `.editor-scroll`,
+ * тело диалога). Штатный обход предков в CodeMirror считает скроллером ЛЮБОЙ
+ * предок с `scrollHeight > clientHeight` — в том числе flex-контейнеры с
+ * `overflow: visible` (`md-field`, `ui-comment__body`): они ужаты флексом и
+ * формально переполнены, но прокрутить их нельзя (`scrollTop` не меняется).
+ * Мало того, их боксом CodeMirror обрезает прямоугольник каретки — до
+ * настоящего скроллера доходит «почти видимая» каретка, и он сдвигается на
+ * считанные пиксели: стрелка вниз и Ctrl+End уводят каретку за пределы
+ * видимой части, текст за ней не следует (ошибка f4f99e3f). Здесь обход
+ * повторён, но скроллером считается только элемент с непрозрачным `overflow`.
+ * Реализована стратегия `nearest` — других редактор полей не запрашивает.
+ */
+function scrollCaretIntoView(
+  view: EditorView,
+  range: SelectionRange,
+  options: { yMargin: number; xMargin: number },
+): boolean {
+  // Вертикальную позицию каретки берём из карты высот, а не публичным
+  // `coordsAtPos`: обработчик вызывается внутри measure-прохода CodeMirror,
+  // где чтение раскладки через публичный API запрещено.
+  const block = view.lineBlockAt(range.head);
+  const scrollBox = view.scrollDOM.getBoundingClientRect();
+  const baseTop = scrollBox.top - view.scrollDOM.scrollTop;
+  let top = baseTop + block.top;
+  let bottom = baseTop + block.bottom;
+
+  let handled = false;
+  for (let node: HTMLElement | null = view.scrollDOM; node !== null; node = node.parentElement) {
+    const cs = getComputedStyle(node);
+    if (/^(fixed|sticky)$/.test(cs.position)) break;
+    // Скроллер — только элемент с непрозрачным `overflow`, у которого есть
+    // реальное переполнение. Растянутые по контенту flex-предки с
+    // `overflow: visible` (`md-field`, `ui-comment__body`) пропускаем: их
+    // прокрутить нельзя, а обрезка прямоугольника по их боксу и ломала
+    // следование каретки (см. описание выше).
+    if (cs.overflowY === 'visible' || node.scrollHeight <= node.clientHeight) continue;
+    const box = node.getBoundingClientRect();
+    const boxTop = box.top;
+    const boxBottom = box.top + node.clientHeight;
+    let move = 0;
+    if (top < boxTop + options.yMargin) move = top - (boxTop + options.yMargin);
+    else if (bottom > boxBottom - options.yMargin) move = bottom - (boxBottom - options.yMargin);
+    if (move !== 0) {
+      const before = node.scrollTop;
+      node.scrollTop = before + move;
+      const moved = node.scrollTop - before;
+      top -= moved;
+      bottom -= moved;
+    }
+    // Обрезаем по боксу реального скроллера, чтобы более высокий не сдвинулся
+    // из-за каретки, которая уже видна в этом.
+    top = Math.max(top, boxTop);
+    bottom = Math.min(bottom, boxBottom);
+    handled = true;
+  }
+  // Горизонталь не трогаем: поле переносит длинные строки
+  // (`EditorView.lineWrapping`), горизонтальной прокрутки у каретки нет.
+  return handled;
+}
+
+/** Test seam: the panel-scroll handler of the auto-height markdown editor. */
+export const mdEditorInternals = { scrollCaretIntoView };
+
 /** Creates a markdown editor for the given initial document. */
 export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdEditor {
   const view = new EditorView({
@@ -155,6 +222,9 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         ]),
         history(),
         drawSelection(),
+        // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
+        // (поле растёт по содержимому) — см. scrollCaretIntoView.
+        EditorView.scrollHandler.of(scrollCaretIntoView),
         EditorView.lineWrapping,
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
