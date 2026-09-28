@@ -94,6 +94,12 @@ const CRITERIA: StructuresCriteriaSnapshot = {
 describe('structures realtime: классификация fallback', () => {
   it('правка, влияющая на порядок или состав отбора, уходит в полный путь', () => {
     assert.equal(thoughtChangeNeedsReload({ title: 'X' }, { ...CRITERIA, sort: 'alpha' }), true);
+    // Блокер 1: keywords по умолчанию ищут и по заголовку — переименование
+    // может вывести мысль из отбора, даже без сортировки по алфавиту.
+    assert.equal(thoughtChangeNeedsReload({ title: 'X' }, { ...CRITERIA, keywords: 'abc' }), true);
+    // Блокер 2: при sort='updated' ключ сортировки — updated_at, двигает ЛЮБАЯ правка.
+    assert.equal(thoughtChangeNeedsReload({ fg_color: '#fff' }, { ...CRITERIA, sort: 'updated' }), true);
+    assert.equal(thoughtChangeNeedsReload({ title: 'X' }, { ...CRITERIA, sort: 'updated' }), true);
     assert.equal(thoughtChangeNeedsReload({ synonyms: ['s'] }, { ...CRITERIA, keywords: 'abc' }), true);
     assert.equal(thoughtChangeNeedsReload({ type_id: 'ty' }, { ...CRITERIA, typeIds: ['ty'] }), true);
     assert.equal(
@@ -216,6 +222,16 @@ describe('structures realtime: проводка экрана и шины', () =>
     const end = body.indexOf('\n}\n');
     const callCount = (body.slice(0, end).match(/renderTree\(/g) ?? []).length;
     assert.equal(callCount, 1, 'один renderTree на батч окна');
+  });
+
+  it('снимок поддерживается и вне активного вида «Структур» (замечание проверки уровня 3)', () => {
+    const body = structures.slice(structures.indexOf('export function applyStructuresRealtime('));
+    const callEnd = body.indexOf('\n}\n');
+    const fnBody = body.slice(0, callEnd);
+    assert.ok(
+      !fnBody.includes("activeView !== 'structures'"),
+      'applyStructuresRealtime не должен гейтиться по активному виду: иначе thought.deleted вне экрана не чистит refs/активную мысль',
+    );
   });
 
   it('realtime-ветки шины зовут инкрементальный путь экрана', () => {

@@ -122,6 +122,25 @@ describe('chronicle realtime: проводка экрана и шины', () => 
     assert.equal(callCount, 1, 'один renderFeed на батч окна');
   });
 
+  it('событие по записи вне ленты доустанавливается точечным додаром (замечание проверки)', () => {
+    const body = chronicle.slice(chronicle.indexOf('async function applyChronicleOps('));
+    const end = body.indexOf('\n}\n');
+    const ops = body.slice(0, end);
+    assert.match(ops, /if \(idx < 0\) \{[\s\S]*?await etn\.comments\.get\(requireNetworkId\(\), op\.id\)/);
+    assert.match(ops, /if \(!rowVisibleInPeriod\(built, from, to\)[\s\S]*?rows = insertRowByDay\(rows, built, order, home\)/);
+    assert.match(ops, /pendingReconcile = true;/g, 'локальная вставка помечает страницу к сверке');
+  });
+
+  it('правка даты переставляет строку по серверному порядку', () => {
+    const body = chronicle.slice(chronicle.indexOf('async function applyChronicleOps('));
+    const end = body.indexOf('\n}\n');
+    assert.match(
+      body.slice(0, end),
+      /rows = insertRowByDay\(\s*rows\.filter\(\(r\) => r\.id !== op\.id\),\s*row,/,
+      'обновлённая строка встаёт на своё место по датам',
+    );
+  });
+
   it('realtime-ветки comment.* идут через applyChronicleRealtime', () => {
     assert.match(realtimeUi, /case 'comment\.created':[\s\S]*?applyChronicleRealtime\(evt\)/);
     assert.match(realtimeUi, /case 'comment\.updated':[\s\S]*?applyChronicleRealtime\(evt\)/);

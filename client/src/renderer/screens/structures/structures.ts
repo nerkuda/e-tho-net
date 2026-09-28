@@ -1544,7 +1544,7 @@ function connectorLabel(links: FocusEdge[]): string {
  *
  * | Событие | Инкрементально | Fallback (полный перезапрос) |
  * |---|---|---|
- * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `alpha` + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
+ * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `updated` — ЛЮБАЯ правка (ключ `updated_at`); сортировка `alpha` или активный текст. отбор + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
  * | `thought.deleted` | убрать из `resultIds`/`refs`/`directions`/`hierarchy`/`edges` → строка уходит removed-путём сверки | нет среди видимых — игнор |
  * | `link.updated` | ребро нарисовано и меняется оформление (`type_id`/`color`/`style`/`width`/`marked_for_deletion`) → `edges` + перерисовка линий | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active` — структура/наличие линии |
  * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии | ребро не нарисовано — игнор |
@@ -1629,9 +1629,14 @@ function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
  * Принять чужое realtime-событие: классифицировать и положить в очередь окна
  * (батч) или пометить окно как fallback. Событие по невидимой сущности
  * игнорируется — состав отбора по нему не перестраиваем.
+ *
+ * Гейта по активному виду НЕТ (замечание проверки уровня 3): снимок экрана
+ * поддерживается и когда «Структуры» не показаны — иначе `thought.deleted` вне
+ * экрана не чистил бы `refs`/активную мысль, и при возврате оставалась бы
+ * устаревшая строка (ре-квери при возврате не запускается). Отрисовка (один
+ * reconcile на окно) идёт тем же путём.
  */
 export function applyStructuresRealtime(evt: AnyRealtimeEvent): void {
-  if (store.state.activeView !== 'structures') return;
   switch (evt.type) {
     case 'thought.updated': {
       const { id, changes } = evt.data;

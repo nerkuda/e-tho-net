@@ -566,7 +566,7 @@ function maybeLoadMore(): void {
  * | Событие | Инкрементально | Fallback (полный перезапрос) |
  * |---|---|---|
  * | `comment.created` | хроно-запись хотя бы с одной привязкой, отбор — только период/порядок: точечный доар не-HOME целей + вставка одной строки в свой день | прочие критерии в отборе (текст/цели/автор); сборка строки/доар не удалась; привязок нет или вне периода — игнор |
- * | `comment.updated` | строка уже в ленте: слияние полей, доар `body_html` при неполном payload, переразрешение `targets`; выход из периода — удаление строки | нет строки в ленте — игнор; при доп. критериях изменение текста/заголовка/привязок |
+ * | `comment.updated` | строка в ленте: слияние полей, доар `body_html` при неполном payload, переразрешение `targets`, перестановка по дате; строки нет — додар полного комментария и вставка, если запись попала в период; выход из периода — удаление строки | при доп. критериях изменение текста/заголовка/привязок, а также событие по записи вне ленты (вхождение в отбор без сервера не проверить) |
  * | `comment.deleted` | строка в ленте → удаление одной строки | нет строки или владелец не мысль — игнор |
  * | прочее (в т.ч. `thought.deleted` по чипсам) | — | `scheduleChronicleRefresh` (полный перезапрос) |
  *
@@ -643,7 +643,18 @@ export function applyChronicleRealtime(evt: AnyRealtimeEvent): void {
     }
     case 'comment.updated': {
       const { id, changes } = evt.data;
-      if (!rows.some((r) => r.id === id)) return;
+      // Запись не в загруженной странице: перенос даты в видимый период обязан
+      // показать её (замечание проверки уровня 3) — идём тем же инкрементальным
+      // путём с точечным додаром полного комментария. Но только при отборе без
+      // доп. критериев: иначе вхождение в отбор без сервера не проверить.
+      if (!rows.some((r) => r.id === id)) {
+        if (!chronicleAllowsIncremental(chronicleCriteriaSnapshot())) {
+          realtimeBatch.markFull();
+          return;
+        }
+        realtimeBatch.push({ kind: 'updated', id, changes });
+        return;
+      }
       if (commentUpdateNeedsReload(changes, chronicleCriteriaSnapshot())) {
         realtimeBatch.markFull();
         return;
@@ -697,12 +708,41 @@ async function applyChronicleOps(ops: readonly ChronicleRealtimeOp[]): Promise<v
       if (rows.some((r) => r.id === built.id)) continue;
       rows = insertRowByDay(rows, built, order, home);
       total += 1;
+      // Локальная вставка сдвигает страницу — следующий «+50» идёт полной
+      // перезагрузкой, а не offset-пагинацией (иначе дубль/пропуск).
+      pendingReconcile = true;
       changed = true;
       continue;
     }
     // updated
     const idx = rows.findIndex((r) => r.id === op.id);
-    if (idx < 0) continue;
+    if (idx < 0) {
+      // Записи нет в загруженной странице: додар полного комментария и вставка
+      // строки, если она попадает в применённый период (замечание проверки).
+      const home = homeId ?? (await getHome().catch(() => null));
+      if (home === null) {
+        await reloadAndSync();
+        return;
+      }
+      let comment: Comment;
+      try {
+        comment = await etn.comments.get(requireNetworkId(), op.id);
+      } catch {
+        continue; // доар не удался — оставляем как есть
+      }
+      if (comment.kind !== 'chronological' || !hasDiaryAttachment(comment.targets)) continue;
+      const built = await localRowFromComment(comment, home);
+      if (built === null) {
+        await reloadAndSync();
+        return;
+      }
+      if (!rowVisibleInPeriod(built, from, to) || rows.some((r) => r.id === built.id)) continue;
+      rows = insertRowByDay(rows, built, order, home);
+      total += 1;
+      pendingReconcile = true;
+      changed = true;
+      continue;
+    }
     let row = rows[idx]!;
     let changes = op.changes;
     if (changes.body_md !== undefined && changes.body_html === undefined) {
@@ -733,8 +773,14 @@ async function applyChronicleOps(ops: readonly ChronicleRealtimeOp[]): Promise<v
       changed = true;
       continue;
     }
-    rows = rows.slice();
-    rows[idx] = row;
+    // Переставить на место по тому же порядку, что серверный: правка даты
+    // сдвигает запись в ленте, а не только её содержимое.
+    rows = insertRowByDay(
+      rows.filter((r) => r.id !== op.id),
+      row,
+      order,
+      homeId,
+    );
     changed = true;
   }
   if (changed) {

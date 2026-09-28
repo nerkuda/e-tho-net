@@ -62,7 +62,11 @@ export interface StructuresCriteriaSnapshot {
 /**
  * Требует ли `thought.updated` полного перезапроса страницы. Полный путь нужен,
  * когда правка меняет СОСТАВ отбора или ПОРЯДОК строк, а не только оформление:
- *  - заголовок при сортировке по алфавиту;
+ *  - сортировка по дате изменения (`updated`) — изменён `updated_at`, ключ
+ *    сортировки, поэтому порядок мог сдвинуться у ЛЮБОЙ правки;
+ *  - заголовок при сортировке по алфавиту ИЛИ при активном текстовом отборе
+ *    (ключевые слова по умолчанию ищут и по заголовку — переименование может
+ *    вывести мысль из отбора);
  *  - синонимы при активном текстовом отборе (область «синонимы»);
  *  - тип мысли при отборе по типам;
  *  - актуальность/корзина, когда неактивные/помеченные скрыты настройкой.
@@ -71,7 +75,13 @@ export function thoughtChangeNeedsReload(
   changes: ThoughtUpdateInput,
   criteria: StructuresCriteriaSnapshot,
 ): boolean {
-  if (changes.title !== undefined && criteria.sort === 'alpha') return true;
+  if (criteria.sort === 'updated') return true;
+  if (
+    changes.title !== undefined &&
+    (criteria.sort === 'alpha' || criteria.keywords.trim() !== '')
+  ) {
+    return true;
+  }
   if (changes.synonyms !== undefined && criteria.keywords.trim() !== '') return true;
   if (changes.type_id !== undefined && criteria.typeIds.length > 0) return true;
   if (changes.active !== undefined && !criteria.showInactive) return true;
