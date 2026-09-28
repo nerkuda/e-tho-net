@@ -728,7 +728,11 @@ async function applyChronicleOps(ops: readonly ChronicleRealtimeOp[]): Promise<v
       try {
         comment = await etn.comments.get(requireNetworkId(), op.id);
       } catch {
-        continue; // доар не удался — оставляем как есть
+        // Вхождение записи в отбор/период без додара не проверить — полный
+        // путь, а не глушение: иначе перенос даты в видимый период не покажется
+        // до постороннего обновления (ошибка 820608e4).
+        await reloadAndSync();
+        return;
       }
       if (comment.kind !== 'chronological' || !hasDiaryAttachment(comment.targets)) continue;
       const built = await localRowFromComment(comment, home);
