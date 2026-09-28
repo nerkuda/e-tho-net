@@ -2,18 +2,23 @@
  * Сторож инкрементального рендера списков (задача 6952c619, уровень 2
  * тех.проекта `1d48df6d`, ADR «Keyed-обновление списков»).
  *
- * Правило: списки в `screens/**` и `lib/ui/**` обновляются инкрементально
- * (`reconcileKeyed`, `lib/ui/keyed-list.ts`), а не полной пересборкой коллекции.
- * Две части сторожа:
+ * Правило: списки в `screens/**`, `lib/ui/**` и `editor/**` обновляются
+ * инкрементально (`reconcileKeyed`, `lib/ui/keyed-list.ts`), а не полной
+ * пересборкой коллекции. Две части сторожа:
  *
  * (а) **юнит-гарант API** `reconcileKeyed` — identity неизменённых узлов и
  *     корректность вставки/удаления/перемещения/обновления (глубокие тесты —
  *     `keyed-list.test.ts`);
  * (б) **греп-сторож**: полная пересборка (`replaceChildren` по коллекции,
  *     пустой `replaceChildren()`, `clear(host)` из `lib/dom.ts`) в
- *     `screens/**` и `lib/ui/**` разрешена только файлам из белого списка ниже.
- *     Новый файл вне списка краснеет — автор обязан либо перевести список на
- *     `reconcileKeyed`, либо добавить файл в список с обоснованием.
+ *     `screens/**`, `lib/ui/**` и `editor/**` разрешена только файлам из
+ *     белого списка ниже. Новый файл вне списка краснеет — автор обязан либо
+ *     перевести список на `reconcileKeyed`, либо добавить файл в список с
+ *     обоснованием.
+ *
+ * Область `editor/**` добавлена ошибкой cf903c79: каркас редактора и таблица
+ * «Свойства» уже инкрементальны (задача 90b2256e), но без покрытия новая
+ * полная пересборка списка в новом файле редактора проходила незамеченной.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -40,9 +45,9 @@ const STRUCTURES = fs.readFileSync(
   path.join(RENDERER_ROOT, 'screens', 'structures', 'structures.ts'),
   'utf8',
 );
-// Таблица «Свойства» редактора — вне греп-области сторожа (`screens/**`,
-// `lib/ui/**`), но переведена на `reconcileKeyed` задачей 90b2256e; проверяем
-// факт положительной проверкой, а не расширением области сканирования.
+// Таблица «Свойства» редактора переведена на `reconcileKeyed` задачей
+// 90b2256e; файл входит в греп-область сторожа (cf903c79) как файл белого
+// списка, поэтому дополнительно проверяем факт положительной проверкой.
 const EDITOR_PROPERTIES = fs.readFileSync(
   path.join(RENDERER_ROOT, 'editor', 'properties.ts'),
   'utf8',
@@ -103,11 +108,48 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
   ['screens/chronicle/chronicle.ts', 'монтирование вида и точечные слоты; лента — на reconcileKeyed'],
   ['screens/structures/filter-panel.ts', 'панель отбора — пересборка формы'],
   ['screens/structures/structures.ts', 'монтирование вида и наполнение строки; дерево — на reconcileKeyed'],
+  // editor — каркас редактора инкрементален (задача 90b2256e), ниже — только
+  // легитимные одиночные слоты и пересборка содержимого вкладок.
+  [
+    'editor/editor.ts',
+    'монтирование каркаса (mountEditor), очистка title/scrollBox при полной ' +
+      'пересборке (смена позиции/сущности) и подмена содержимого ОДНОЙ панели ' +
+      'вкладки в её же узле (retarget/activate)',
+  ],
+  [
+    'editor/properties.ts',
+    'слоты группы «Свойства»: плейсхолдер, ошибка, пустое состояние и разовое ' +
+      'монтирование таблицы; строки таблицы — reconcileKeyed; чипы внетиповых ' +
+      'значений-связей — точечная пересборка набора одного поля',
+  ],
+  [
+    'editor/chrono-tab.ts',
+    'содержимое вкладки «Дневник»: слот таблицы (ошибка/монтирование) и область ' +
+      'редактора записи; строки таблицы — setRows, не пересборка контейнера',
+  ],
+  [
+    'editor/links-tab.ts',
+    'содержимое вкладок связи: слоты корня (загрузка/ошибка/пусто/концы связи) и ' +
+      'результатов упоминаний — пересборка при построении вкладки',
+  ],
+  [
+    'editor/attachments.ts',
+    'вкладка вложений: слоты списка/просмотрщика (загрузка/ошибка) и результаты ' +
+      'поиска вложений — пересборка по запросу (как список пикера в screens)',
+  ],
+  [
+    'editor/value-editor.ts',
+    'поля-наборы значений (текст/чипы ссылок): пересборка чипов поля при смене ' +
+      'набора — тот же приём, что у chip-list в lib/ui',
+  ],
+  ['editor/icon-dialog.ts', 'одиночные слоты превью иконки (файл/URL)'],
+  ['editor/graph-tab.ts', 'разовое монтирование тела вкладки графа'],
+  ['editor/markdown-field.ts', 'одиночные слоты: превью и контейнер markdown-редактора'],
 ]);
 
-/** Сканирование только экранов и каталога фасадов. */
+/** Сканирование экранов, каталога фасадов и редактора. */
 const inScope = (rel: string): boolean =>
-  rel.startsWith('screens/') || rel.startsWith('lib/ui/');
+  rel.startsWith('screens/') || rel.startsWith('lib/ui/') || rel.startsWith('editor/');
 
 describe('guard: инкрементальный рендер списков (6952c619)', () => {
   it('(а) reconcileKeyed держит identity неизменённых узлов и меняет только нужное', () => {
@@ -156,9 +198,9 @@ describe('guard: инкрементальный рендер списков (695
         {
           name: 'no-collection-rebuild',
           description:
-            'Полная пересборка списка в screens/** и lib/ui/** запрещена: ' +
-            'используйте reconcileKeyed (lib/ui/keyed-list.ts). Легитимные ' +
-            'исключения перечислены в REBUILD_WHITELIST с обоснованием.',
+            'Полная пересборка списка в screens/**, lib/ui/** и editor/** ' +
+            'запрещена: используйте reconcileKeyed (lib/ui/keyed-list.ts). ' +
+            'Легитимные исключения перечислены в REBUILD_WHITELIST с обоснованием.',
           pattern: /\.replaceChildren\(/,
           include: inScope,
           allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
@@ -166,8 +208,8 @@ describe('guard: инкрементальный рендер списков (695
         {
           name: 'no-dom-clear',
           description:
-            'Очистка контейнера `clear(host)` (lib/dom.ts) в screens/** и ' +
-            'lib/ui/** запрещена: используйте reconcileKeyed или preserveScroll.',
+            'Очистка контейнера `clear(host)` (lib/dom.ts) в screens/**, ' +
+            'lib/ui/** и editor/** запрещена: используйте reconcileKeyed или preserveScroll.',
           pattern: /(?<![.\w])clear\([^:)]/,
           include: inScope,
           allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
@@ -194,6 +236,32 @@ describe('guard: инкрементальный рендер списков (695
               allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
             },
           ]),
+        /Сторож нашёл запрещённые конструкции/,
+      );
+
+      // Область редактора (cf903c79): новый файл `editor/**` вне белого списка
+      // краснеет так же, как экран вне списка.
+      fs.mkdirSync(path.join(dir, 'editor'));
+      fs.writeFileSync(
+        path.join(dir, 'editor', 'fresh-list.ts'),
+        'tbody.replaceChildren(...rows);\n',
+        'utf8',
+      );
+      assert.throws(
+        () =>
+          assertGuardClean(
+            dir,
+            [
+              {
+                name: 'no-collection-rebuild',
+                description: 'запрет',
+                pattern: /\.replaceChildren\(/,
+                include: inScope,
+                allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
+              },
+            ],
+            { exclude: ['screen.ts'] },
+          ),
         /Сторож нашёл запрещённые конструкции/,
       );
     } finally {
