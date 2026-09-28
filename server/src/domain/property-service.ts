@@ -1751,14 +1751,15 @@ export function updateNetworkProperty(
   // внутри сам откроет свою, но в одной сессии SQLite это нормально
   // (вложенные SAVEPOINT), если же она конфликтует — вызывающий код
   // должен ожидать отказ с понятным сообщением.
-  let linkUpdate: { name_forward?: string; name_reverse?: string; color?: string | null; style?: LinkStyle | null; width?: number | null } | null = null;
+  let linkUpdate: { name_forward?: string; name_reverse?: string; color?: string | null; style?: LinkStyle | null; width?: number | null; parent_id?: string | null } | null = null;
   if (
     linkTypeIdForUpdate !== null &&
     (changes.name_forward !== undefined ||
       changes.name_reverse !== undefined ||
       changes.link_color !== undefined ||
       changes.link_style !== undefined ||
-      changes.link_width !== undefined)
+      changes.link_width !== undefined ||
+      changes.parent_link_type_id !== undefined)
   ) {
     linkUpdate = {};
     if (changes.name_forward !== undefined) linkUpdate.name_forward = validateKey(changes.name_forward);
@@ -1766,6 +1767,25 @@ export function updateNetworkProperty(
     if (changes.link_color !== undefined) linkUpdate.color = changes.link_color ?? null;
     if (changes.link_style !== undefined) linkUpdate.style = changes.link_style ?? null;
     if (changes.link_width !== undefined) linkUpdate.width = changes.link_width ?? null;
+    // Ошибка 16766f82: явный `parent_link_type_id` правит `parent_id`
+    // связанного link_type (защита `reparent_blocked_by_layer` и валидация
+    // цикла — внутри `updateLinkType`). Сравниваем с текущим родителем,
+    // чтобы `null` (под корневой тип) и повтор не поднимали version впустую.
+    if (changes.parent_link_type_id !== undefined) {
+      const currentLinkForParent = getLinkType(ndb, linkTypeIdForUpdate);
+      const desiredParentId =
+        changes.parent_link_type_id === null
+          ? getRootTypeId(ndb, 'link_types')
+          : changes.parent_link_type_id;
+      if (
+        currentLinkForParent !== null &&
+        desiredParentId !== null &&
+        desiredParentId !== currentLinkForParent.parent_id
+      ) {
+        linkUpdate.parent_id = changes.parent_link_type_id;
+      }
+    }
+    if (Object.keys(linkUpdate).length === 0) linkUpdate = null;
   }
 
   return ndb.transaction(() => {

@@ -1335,6 +1335,35 @@ export function writeOntology(
         if (item.link_color !== undefined) updateInput.link_color = item.link_color;
         if (item.link_style !== undefined) updateInput.link_style = item.link_style;
         if (item.link_width !== undefined) updateInput.link_width = item.link_width;
+        // Ошибка 16766f82: явный `parent_link_type_id` у СУЩЕСТВУЮЩЕГО
+        // свойства-связи раньше молча терялся — у `NetworkPropertyUpdateInput`
+        // не было поля, и `updateNetworkProperty` не менял родителя уже
+        // созданного `link_type` (тот же класс, что `parent` у типа до
+        // f14962ca). Семантика как у `parent`: явный id применяется, `null` —
+        // прикрепление под корневой тип связи, пропущенный ключ (undefined)
+        // родителя не трогает. Неструктурное свойство-связь адресует свой
+        // `link_type` через `config.link_type_id`; структурные игнорируются.
+        if (item.parent_link_type_id !== undefined) {
+          const cfg = existing.config ?? {};
+          const linkTypeId =
+            typeof cfg.link_type_id === 'string' && cfg.link_type_id !== ''
+              ? cfg.link_type_id
+              : null;
+          if (linkTypeId !== null && cfg.structural !== true) {
+            const currentLink = getLinkType(ndb, linkTypeId);
+            const desiredParentId =
+              item.parent_link_type_id === null
+                ? getRootTypeId(ndb, 'link_types')
+                : item.parent_link_type_id;
+            if (
+              currentLink !== null &&
+              desiredParentId !== null &&
+              desiredParentId !== currentLink.parent_id
+            ) {
+              updateInput.parent_link_type_id = item.parent_link_type_id;
+            }
+          }
+        }
         if (Object.keys(updateInput).length > 0) {
           updateNetworkProperty(ndb, id, updateInput, actorUserId);
           version = readVersion(ndb, 'properties', id);

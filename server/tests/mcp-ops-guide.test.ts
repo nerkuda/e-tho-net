@@ -94,6 +94,11 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.match(ontologyText, /`parent` — id существующего/);
         assert.match(ontologyText, /`null` — прикрепить тип под\s*\n?корневой/);
         assert.match(ontologyText, /id ему\s*\n?генерирует сервер|генерирует сервер/);
+        // 16766f82: тема обязана говорить, что явный `parent_link_type_id`
+        // работает и на патче существующего свойства-связи (`null` — под
+        // корневой тип связи, пропущенный ключ родителя не трогает).
+        assert.match(ontologyText, /`parent_link_type_id` работает и на патче/);
+        assert.match(ontologyText, /`null` — прикрепить под корневой тип связи/);
 
         const queryTopic = await handle.client.callTool({
           name: 'etn.guide',
