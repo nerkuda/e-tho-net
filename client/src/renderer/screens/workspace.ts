@@ -54,6 +54,7 @@ import { mountTabStrip } from './tabs/tabs.js';
 import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 import { splitterElement } from '../lib/ui/splitter.js';
 import { fieldInput } from '../lib/ui/field.js';
+import { logUiEvent } from '../lib/ui-log.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -125,8 +126,13 @@ export function teardownWorkspace(): void {
   for (const fn of teardowns.splice(0)) {
     try {
       fn();
-    } catch {
+    } catch (err) {
       // Teardown is best-effort: one failing handle must not block the rest.
+      // The failure itself is diagnostic — surface it in the client journal
+      // (fire-and-forget, `ui.workspace.teardown_failed`; 08-ui-spec.md §9.7).
+      logUiEvent('ui.workspace.teardown_failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   current = null;
