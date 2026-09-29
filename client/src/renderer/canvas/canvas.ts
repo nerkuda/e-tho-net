@@ -246,10 +246,26 @@ let indicatorRunning = 0;
 // ---------------------------------------------------------------------------
 
 /**
+ * Отписки глобальных подписок канваса (режим полосы отборов, store, lock-бейджи)
+ * и `ResizeObserver` хоста. Собираются на монтировании и снимаются возвращённым
+ * teardown-хендлом: без этого каждое перемонтирование рабочего пространства
+ * добавляло живого слушателя, и клик по кнопке отбора запускал `render()` по
+ * ВСЕМ прошлым монтированиям — N параллельных POST `views/run` (ошибка 37b713de).
+ */
+let stripModeUnsubscribe: (() => void) | null = null;
+let storeUnsubscribe: (() => void) | null = null;
+let lockBadgeUnsubscribe: (() => void) | null = null;
+
+/**
  * Mounts the canvas into the workspace canvas host. Called by the workspace
  * builder; the canvas re-renders on every store change (focus/width/gap).
+ *
+ * Returns a teardown handle that releases every global subscription/observer
+ * registered here. The workspace builder MUST call it before rebuilding the
+ * canvas (см. `teardownWorkspace`), otherwise listeners accumulate across
+ * mount cycles (ошибка 37b713de).
  */
-export function mountCanvas(canvasHost: HTMLElement): void {
+export function mountCanvas(canvasHost: HTMLElement): () => void {
   host = canvasHost;
   // A remount (layer/view switch) may find a transition still running against
   // the previous host — drop its layers/timers before the DOM is wiped.
@@ -288,7 +304,8 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   host.append(top, focusRow, zoneSplitterH, zoneChildren, empty, layerLabelEl);
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
-  redrawLinks = initLinksOverlay(host).redraw;
+  const linksOverlay = initLinksOverlay(host);
+  redrawLinks = linksOverlay.redraw;
   applyCanvasScaleVars(host);
 
   // Focus filter strip (task 02ba2ae7, spec 9984aa98) — sits between the
@@ -299,13 +316,15 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   // Wire the strip mode as a render trigger: every button click invalidates
   // the lower zone, so the canvas must repaint. The strip fires the
   // listener synchronously after persisting the new mode.
-  onStripModeChange(() => {
+  // Keep the unsubscribe handle — the listener must not survive a remount
+  // (ошибка 37b713de).
+  stripModeUnsubscribe = onStripModeChange(() => {
     void render();
   });
   // Load the persisted strip map once per tab mount (the strip module owns
   // it). Errors are swallowed — L4 is best-effort.
   void loadPersistedStrip();
-  mountZoneSplitters({
+  const disposeZoneSplitters = mountZoneSplitters({
     host,
     top,
     focusRow,
@@ -343,7 +362,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
     }
   });
 
-  store.subscribe(() => {
+  storeUnsubscribe = store.subscribe(() => {
     if (host?.isConnected !== true) return;
     // The label follows layer/theme changes even when the canvas data itself
     // is unchanged (the fast path below skips the full rebuild).
@@ -389,10 +408,35 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   });
   // The focus band follows the focus row, whose position depends on the zone
   // shares and the host size — re-anchor it on resizes too (L12).
-  new ResizeObserver(() => {
+  const resizeObserver = new ResizeObserver(() => {
     if (host?.isConnected === true) updateFocusBand();
-  }).observe(host);
+  });
+  resizeObserver.observe(host);
   void render();
+
+  // Teardown handle: releases every global subscription/observer wired above.
+  // Idempotent — a second call is a no-op (handles are cleared).
+  return () => {
+    stripModeUnsubscribe?.();
+    stripModeUnsubscribe = null;
+    storeUnsubscribe?.();
+    storeUnsubscribe = null;
+    lockBadgeUnsubscribe?.();
+    lockBadgeUnsubscribe = null;
+    lockBadgeRefreshWired = false;
+    resizeObserver.disconnect();
+    linksOverlay.dispose();
+    disposeZoneSplitters();
+    // Detach the DOM handles so no late async render paints into a dead host.
+    host = null;
+    zones = null;
+    focusRow = null;
+    emptyEl = null;
+    focusCloudEl = null;
+    layerLabelEl = null;
+    layerLabelText = null;
+    redrawLinks = null;
+  };
 }
 
 /** Returns the cached metadata for a thought id, or null. */
@@ -935,7 +979,7 @@ let lockBadgeRefreshWired = false;
 function wireLockBadgeRefresh(): void {
   if (lockBadgeRefreshWired) return;
   lockBadgeRefreshWired = true;
-  store.subscribe(() => {
+  lockBadgeUnsubscribe = store.subscribe(() => {
     // `lockCacheTick` is bumped on every cache transition; use it as the
     // signal so unrelated store updates do not re-paint badges.
     void store.state.lockCacheTick;

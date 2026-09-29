@@ -589,8 +589,9 @@ function onConnectorClick(event: MouseEvent, links: FocusEdge[]): void {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/** Mounts the view: filter panel (left) + results tree (right). */
-export function mountStructures(hostEl: HTMLElement): void {
+/** Mounts the view: filter panel (left) + results tree (right). Returns a
+ *  teardown handle that releases the store subscription (ошибка 37b713de). */
+export function mountStructures(hostEl: HTMLElement): () => void {
   host = hostEl;
   host.replaceChildren();
   host.classList.add('hidden');
@@ -647,7 +648,7 @@ export function mountStructures(hostEl: HTMLElement): void {
     },
   });
 
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
@@ -671,6 +672,11 @@ export function mountStructures(hostEl: HTMLElement): void {
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
+
+  return () => {
+    unsubscribe();
+    host = null;
+  };
 }
 
 // ---------------------------------------------------------------------------

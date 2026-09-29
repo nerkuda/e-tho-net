@@ -236,7 +236,7 @@ let highlightedEllipses: HTMLElement[] = [];
  * therefore the architectural invariant of this module — see
  * {@link syncOverlayViewport} for the matching viewport invariant.
  */
-export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
+export function initLinksOverlay(host: HTMLElement): { redraw(): void; dispose(): void } {
   hostEl = host;
   // `links-layer` is the common marker of all four overlays: the focus-change
   // transition (`canvas/transition.ts`) hides and fades them as one group while
@@ -260,10 +260,11 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   host.append(svgHit, svgTop, svgDrag);
   syncOverlayViewport();
 
-  new ResizeObserver(() => {
+  const resizeObserver = new ResizeObserver(() => {
     syncOverlayViewport();
     requestDraw();
-  }).observe(host);
+  });
+  resizeObserver.observe(host);
   host.addEventListener(
     'scroll',
     () => {
@@ -276,12 +277,27 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   // Lock-cache transitions (task 4f141756) carry `lock-locked-*` classes on
   // the path; re-draw so a freshly-acquired lock and a freshly-released one
   // show up on every line without a focus round-trip.
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     void store.state.lockCacheTick;
     requestDraw();
   });
 
-  return { redraw: requestDraw };
+  // Teardown handle: the store subscription lives in this module (not on the
+  // host element), so it must be released explicitly on unmount — otherwise
+  // every canvas remount leaks one more subscriber (ошибка 37b713de). The host
+  // scroll listener and the SVG children die with the host DOM.
+  return {
+    redraw: requestDraw,
+    dispose: () => {
+      unsubscribe();
+      resizeObserver.disconnect();
+      hostEl = null;
+      svg = null;
+      svgHit = null;
+      svgTop = null;
+      svgDrag = null;
+    },
+  };
 }
 
 /**

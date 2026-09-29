@@ -64,13 +64,14 @@ let resizePending = false;
 /** Cached `ResizeObserver` so we don't re-create it on every render. */
 let resizeObserver: ResizeObserver | null = null;
 
-/** Mounts the history bar into the status bar host. */
-export function mountHistoryBar(historyHost: HTMLElement): void {
+/** Mounts the history bar into the status bar host. Returns a teardown handle
+ *  that releases the store subscription and the ResizeObserver (ошибка 37b713de). */
+export function mountHistoryBar(historyHost: HTMLElement): () => void {
   host = historyHost;
   // Canvas drags dropped onto the bar (or the history dropdown) open the
   // dragged thought like a click on a history entry (08-ui-spec.md §11.1).
   registerDropActions({ openEntry });
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
   // History writes land outside the store snapshot (history.js is not part of
@@ -92,6 +93,14 @@ export function mountHistoryBar(historyHost: HTMLElement): void {
   });
   resizeObserver.observe(historyHost);
   void render();
+
+  return () => {
+    unsubscribe();
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    host = null;
+    lastSignature = '';
+  };
 }
 
 /**

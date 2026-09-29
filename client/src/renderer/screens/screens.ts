@@ -7,7 +7,7 @@ import { clear } from '../lib/dom.js';
 import { store, type Screen } from '../state.js';
 import { buildOnboarding } from './onboarding.js';
 import { buildNetworks } from './networks.js';
-import { buildWorkspace } from './workspace.js';
+import { buildWorkspace, teardownWorkspace } from './workspace.js';
 
 let root: HTMLElement | null = null;
 
@@ -19,6 +19,10 @@ export function initScreens(rootEl: HTMLElement): void {
 /** Switches the visible screen, tearing down the previous one. */
 export function showScreen(screen: Screen): void {
   if (root === null) throw new Error('initScreens was not called');
+  // The workspace modules (canvas, editor, bars, views) register global
+  // store subscriptions/observers; release them BEFORE wiping the DOM so they
+  // do not accumulate across network opens / tab switches (ошибка 37b713de).
+  teardownWorkspace();
   clear(root);
   switch (screen) {
     case 'onboarding':

@@ -154,7 +154,7 @@ const subrootCloudsRequested = new Set<string>();
  * the results zone plus the toggleable settings zone; the funnel toggle sits in
  * the panel's top corner (the old toolbar gear is gone, задача a3247f84).
  */
-export function mountSearch(next: SearchChrome): void {
+export function mountSearch(next: SearchChrome): () => void {
   chrome = next;
 
   const { host, input } = next;
@@ -244,11 +244,13 @@ export function mountSearch(next: SearchChrome): void {
   // Keep the dropdown anchored to the input while the search row/window
   // resizes; the same resize re-decides where the settings zone goes (right of
   // the results or above them, задача a3247f84) — no restart needed.
-  window.addEventListener('resize', () => {
+  const onWindowResize = (): void => {
     positionPanel();
     applySettingsPlacement();
-  });
-  new ResizeObserver(positionPanel).observe(input);
+  };
+  window.addEventListener('resize', onWindowResize);
+  const panelObserver = new ResizeObserver(positionPanel);
+  panelObserver.observe(input);
 
   // Close the panel on any click outside it (the input and the toggle inside
   // the panel keep it open) and on Escape while it is visible, even if the
@@ -258,7 +260,7 @@ export function mountSearch(next: SearchChrome): void {
   // Иначе нажатие на строку подсказки прячет панель, поле теряет фокус,
   // список подсказок закрывается до `click` — выбранный тип (фокус, тип
   // связи) не доезжает до отбора (ошибка 72a06e01).
-  document.addEventListener('pointerdown', (event) => {
+  const onDocumentPointerDown = (event: Event): void => {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
     if (!(target instanceof Node)) return;
@@ -271,13 +273,26 @@ export function mountSearch(next: SearchChrome): void {
       return;
     }
     hidePanel();
-  });
-  document.addEventListener('keydown', (event) => {
+  };
+  document.addEventListener('pointerdown', onDocumentPointerDown);
+  const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape' && !host.classList.contains('hidden')) {
       if (searchTimer !== null) window.clearTimeout(searchTimer);
       hidePanel();
     }
-  });
+  };
+  document.addEventListener('keydown', onDocumentKeyDown);
+
+  // Release the global listeners/observer on workspace teardown — they live on
+  // `window`/`document`, not on the host element, so wiping the DOM does not
+  // remove them and each remount would add another set (ошибка 37b713de).
+  return () => {
+    window.removeEventListener('resize', onWindowResize);
+    document.removeEventListener('pointerdown', onDocumentPointerDown);
+    document.removeEventListener('keydown', onDocumentKeyDown);
+    panelObserver.disconnect();
+    chrome = null;
+  };
 }
 
 /**

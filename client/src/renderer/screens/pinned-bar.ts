@@ -46,23 +46,33 @@ const refCache = new Map<string, ThoughtRef>();
 /** Drop-position indicator shown while a drag hovers the panel. */
 let insertMarker: HTMLElement | null = null;
 
-/** Mounts the panel into the toolbar host (called from the workspace builder). */
-export function mountPinnedBar(pinnedHost: HTMLElement): void {
+/** Mounts the panel into the toolbar host (called from the workspace builder).
+ *  Returns a teardown handle that releases the store subscription and the
+ *  ResizeObserver (ошибка 37b713de). */
+export function mountPinnedBar(pinnedHost: HTMLElement): () => void {
   host = pinnedHost;
   registerDropActions({
     pinThought: (id, dropIndex) => void pinAt(id, dropIndex),
     resolvePinTarget,
     onDragEnd: hideInsertMarker,
   });
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
   // The toolbar width changes with the window — re-fit the chip row.
-  new ResizeObserver(() => {
+  const resizeObserver = new ResizeObserver(() => {
     lastSignature = '';
     if (host?.isConnected === true) void render();
-  }).observe(pinnedHost);
+  });
+  resizeObserver.observe(pinnedHost);
   void render();
+
+  return () => {
+    unsubscribe();
+    resizeObserver.disconnect();
+    host = null;
+    lastSignature = '';
+  };
 }
 
 /**

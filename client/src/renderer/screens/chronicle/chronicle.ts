@@ -365,8 +365,10 @@ function persistState(): void {
     .catch(() => undefined);
 }
 
-/** Builds and mounts the whole diary view into its host. */
-export function mountChronicle(hostEl: HTMLElement): void {
+/** Builds and mounts the whole diary view into its host. Returns a teardown
+ *  handle that releases the store subscription and the feed navigator
+ *  (ошибка 37b713de). */
+export function mountChronicle(hostEl: HTMLElement): () => void {
   host = hostEl;
   hostEl.replaceChildren();
   feedNav?.destroy();
@@ -489,7 +491,7 @@ export function mountChronicle(hostEl: HTMLElement): void {
     chronicleFilterAdd: (thoughtId) => addThoughtToFilter(thoughtId),
   });
 
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
@@ -501,6 +503,13 @@ export function mountChronicle(hostEl: HTMLElement): void {
       void ensureChronicleInitialised();
     }
   });
+
+  return () => {
+    unsubscribe();
+    feedNav?.destroy();
+    feedNav = null;
+    host = null;
+  };
 }
 
 // ---------------------------------------------------------------------------
