@@ -331,7 +331,10 @@
   text-align: left;
   font-weight: 600;
   text-transform: capitalize;
-  color: var(--muted);
+  /* Будний день — серый `--text-dim` (0.10.2, задача 41ed99ab). Раньше стоял
+   * несуществующий токен `--muted` — подстановка невалидна, заголовок наследовал
+   * `--text` (блокер проверки). Выходной перекрывается `--cal-weekend` ниже. */
+  color: var(--text-dim);
   padding-bottom: 0;
   /* Дата-заголовок вдвое крупнее базового шрифта (0.10.1, приёмка №2). */
   font-size: calc(var(--font-size-s) * 2);
