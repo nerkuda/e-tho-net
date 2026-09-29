@@ -87,8 +87,12 @@ describe('приёмка «Дневника» 0.10.1: счётчики кале�
     );
   });
 
-  it('день со счётчиком получает подпись независимо от выделения', () => {
-    assert.match(CALENDAR, /if \(count > 0\)[\s\S]*cal-count/);
+  it('день с записями получает индикатор независимо от выделения', () => {
+    // 0.10.2 (задача 41ed99ab): число-счётчик заменено столбиком точек слева от
+    // номера дня; пороги 50/100 — `calendarDotCount`, класс `cal-dots`.
+    assert.match(CALENDAR, /const dots = calendarDotCount\(count\)/);
+    assert.match(CALENDAR, /if \(dots > 0\) button\.append\(buildDots\(dots\)\)/);
+    assert.match(CALENDAR, /'cal-dots'/);
   });
 });
 
