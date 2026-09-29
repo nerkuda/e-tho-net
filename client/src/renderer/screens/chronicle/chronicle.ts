@@ -69,7 +69,7 @@ import {
   resolveDatePeriodInstants,
   type DatePeriodValue,
 } from '../../lib/date-period-dialog.js';
-import { createThoughtCloud, deferSingleClick } from '../../lib/thought-cloud.js';
+import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import {
   RECORD_SEARCH_MAX_RESULTS,
   mountRecordSearch,
@@ -80,7 +80,6 @@ import {
 } from '../../lib/record-search.js';
 import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
-import { fieldInput } from '../../lib/ui/field.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
@@ -141,8 +140,6 @@ import {
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
 import {
-  RECORD_TITLE_CLASS,
-  RECORD_TITLE_INPUT_CLASS,
   applyRecordCollapsed,
   applyRecordCollapsedForDay,
   dayOfCard,
@@ -150,6 +147,7 @@ import {
   recordCollapseKey,
   type RecordGroupLabels,
 } from './record-groups.js';
+import { createRecordTitle, type RecordTitleHandle } from './record-title.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 
@@ -203,6 +201,13 @@ const recordShells = new WeakMap<
   HTMLElement,
   { row: ChronicleRow; shell: ReturnType<typeof commentShell>; body: HTMLElement }
 >();
+/**
+ * Дескрипторы заголовка-компонента по узлу карточки (0.10.2, ошибка 36c330a3):
+ * вход в правку по клавиатуре (Enter на поле «заголовок», требование 165323a7)
+ * идёт от DOM-узла карточки, переданного контроллером навигации, — строка и
+ * компонент берутся отсюда, а не из повторного поиска.
+ */
+const recordTitles = new WeakMap<HTMLElement, RecordTitleHandle>();
 let statusEl: HTMLElement | null = null;
 let calendar: MonthCalendarHandle | null = null;
 /** Persisted month of the calendar (`chronicle_state.month`). */
@@ -222,7 +227,13 @@ interface SlotState {
   day: string;
   commentId: string | null;
   root: HTMLElement;
-  titleInput: HTMLInputElement;
+  /**
+   * Компонент заголовка слота (0.10.2, ошибка 36c330a3): тот же
+   * `createRecordTitle`, что и в карточке. Заголовок открыт В ПРАВКЕ, `Enter`
+   * завершает правку и показывает группу-просмотр, `Escape` отменяет, `blur`
+   * по-прежнему сохраняет черновик.
+   */
+  title: RecordTitleHandle;
   /** Дата записи по умолчанию (`clamp(сегодня, начало, конец периода)`). */
   from: string;
 }
@@ -1392,111 +1403,47 @@ function recordTitleLabel(row: ChronicleRow): string {
 }
 
 /**
- * Заголовок записи — сворачиваемая группа (0.10.2, задача 41ed99ab). В
- * ПРОСМОТРЕ это крупный заметный текст-кнопка: одиночный клик сворачивает/
- * разворачивает ТОЛЬКО тело комментария, двойной клик входит в правку. Пока
- * заголовок правится, на его месте поле ввода, и сворачивание недоступно.
+ * Заголовок записи — компонент «просмотр ↔ правка» (0.10.2, ошибка 36c330a3):
+ * тот же `createRecordTitle`, что и в слоте создания. В ПРОСМОТРЕ это крупный
+ * текст-кнопка со стрелкой-индикатором (задача 472457bf): одиночный клик
+ * сворачивает/разворачивает ТОЛЬКО тело комментария, двойной клик входит в
+ * правку. Пока заголовок правится, сворачивание недоступно; `Enter`/уход из
+ * поля завершают правку, `Escape` — отменяет.
  *
- * Перед надписью — индикатор сворачивания (задача 472457bf): та же стрелка
- * `chevron-down`, что у групп дней; поворот (−90° при свёрнутой записи) задаёт
- * класс `is-collapsed` заголовка, который ставит `applyRecordCollapsed`.
+ * Дескриптор кладётся в `recordTitles` под узел карточки: вход в правку по
+ * клавиатуре (Enter на поле «заголовок») идёт от DOM-узла карточки.
  */
 function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
-  // Одиночный клик откладывается на время двойного (эталон `deferSingleClick`,
-  // как у жестов облачка): иначе первый клик двойного успевал бы свернуть тело,
-  // и вход в правку заголовка оставлял бы запись свёрнутой (0.10.2, задача
-  // 41ed99ab, DoD №3–4).
-  let pendingClick: { cancel: () => void } | null = null;
-  const view = uiButton({
+  let committed = row.title ?? '';
+  const handle = createRecordTitle({
+    value: committed,
     label: recordTitleLabel(row),
-    role: 'ghost',
-    class: RECORD_TITLE_CLASS,
-    title: t('diary.titleEditHint'),
-    onClick: () => {
-      pendingClick?.cancel();
-      pendingClick = deferSingleClick(() => {
-        pendingClick = null;
-        const day = dayOfCard(card);
-        if (day === null) return;
-        toggleRecordCollapsed(day, row.id);
-      });
+    editHint: t('diary.titleEditHint'),
+    placeholder: t('diary.titlePlaceholder'),
+    onToggle: () => {
+      const day = dayOfCard(card);
+      if (day === null) return;
+      toggleRecordCollapsed(day, row.id);
+    },
+    onCommit: (next) => {
+      const trimmed = next.trim();
+      if (trimmed !== committed) {
+        committed = trimmed;
+        void patchRecord(row.id, { title: trimmed || null });
+      }
+      return recordDisplayTitle(trimmed || null, row.snippet) || t('diary.emptyTitle');
     },
   });
-  // Индикатор-стрелка первой (как у заголовка группы дня): клик по ней — тот же
-  // клик по кнопке, сворачивание/разворачивание тела записи.
-  view.prepend(svgIcon('chevron-down', 18));
-  view.addEventListener('dblclick', (event) => {
-    event.preventDefault();
-    pendingClick?.cancel();
-    pendingClick = null;
-    beginTitleEdit(row, card);
-  });
-  return view;
-}
-
-/**
- * Обновить надпись кнопки-заголовка, сохранив индикатор-стрелку (первый узел):
- * `textContent` затирает дочерние узлы вместе с `svg`, поэтому содержимое
- * собирается заново — индикатор, затем новый текст (задача 472457bf).
- */
-function setRecordTitleLabel(view: HTMLElement, label: string): void {
-  const icon = view.firstChild;
-  if (icon === null) {
-    view.textContent = label;
-    return;
-  }
-  view.replaceChildren(icon, label);
+  recordTitles.set(card, handle);
+  return handle.node();
 }
 
 /**
  * Вход в правку заголовка по клавиатуре (Enter на поле «заголовок», 0.10.2,
- * задача 41ed99ab): карточка → её строка из дескриптора оболочки.
+ * требование 165323a7): карточка → дескриптор её заголовка-компонента.
  */
 function beginTitleEditByCard(card: HTMLElement): void {
-  const handle = recordShells.get(card);
-  if (handle === undefined) return;
-  beginTitleEdit(handle.row, card);
-}
-
-/**
- * Правка заголовка записи (0.10.2, задача 41ed99ab): на месте кнопки-заголовка
- * появляется поле ввода. `Enter`/ уход из поля завершают правку и возвращают
- * заголовок в просмотр; `Esc` — отмена. Пока поле в фокусе, сворачивание
- * недоступно (стрелки/Enter принадлежат вводу).
- */
-function beginTitleEdit(row: ChronicleRow, card: HTMLElement): void {
-  const view = card.querySelector<HTMLElement>(`.${RECORD_TITLE_CLASS}`);
-  if (view === null || card.querySelector(`.${RECORD_TITLE_INPUT_CLASS}`) !== null) return;
-  const input = fieldInput({ extraClass: `${RECORD_TITLE_CLASS} ${RECORD_TITLE_INPUT_CLASS}` });
-  input.type = 'text';
-  input.value = row.title ?? '';
-  input.placeholder = t('diary.titlePlaceholder');
-  input.maxLength = 200;
-  let done = false;
-  const exit = (commit: boolean, refocus: boolean): void => {
-    if (done) return;
-    done = true;
-    const next = input.value.trim();
-    const nextTitle = commit ? next || null : row.title;
-    setRecordTitleLabel(view, recordDisplayTitle(nextTitle, row.snippet) || t('diary.emptyTitle'));
-    input.replaceWith(view);
-    if (commit && next !== (row.title ?? '')) void patchRecord(row.id, { title: next || null });
-    if (refocus) view.focus();
-  };
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      exit(true, true);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      exit(false, true);
-    }
-  });
-  input.addEventListener('blur', () => exit(true, false));
-  view.replaceWith(input);
-  input.focus();
-  input.select();
+  recordTitles.get(card)?.beginEdit();
 }
 
 function recordMenuItems(row: ChronicleRow): MenuItem[] {
@@ -1877,7 +1824,7 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
 function startSlot(day?: string, presetThoughtIds: string[] = []): void {
   if (host === null) return;
   if (slot !== null && presetThoughtIds.length === 0) {
-    slot.titleInput.focus();
+    slot.title.beginEdit();
     return;
   }
   slotFocusInside = false;
@@ -1894,13 +1841,33 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
 
   const root = div('diary-record diary-slot');
   const head = div('diary-record-head');
-  const titleInput = fieldInput({ extraClass: 'diary-record-title' });
-  titleInput.type = 'text';
-  titleInput.placeholder = t('diary.titlePlaceholder');
-  titleInput.maxLength = 200;
+  // Заголовок слота — ТОТ ЖЕ компонент, что в карточке (0.10.2, ошибка
+  // 36c330a3): слот открывается в правке (текст надо набирать), `Enter`
+  // завершает правку и возвращает заголовок в просмотр — сворачиваемую группу
+  // со стрелкой; `Escape` отменяет, уход из поля сохраняет черновик.
+  let slotCollapsed = false;
+  const title = createRecordTitle({
+    value: '',
+    label: t('diary.emptyTitle'),
+    editHint: t('diary.titleEditHint'),
+    placeholder: t('diary.titlePlaceholder'),
+    onToggle: () => {
+      slotCollapsed = !slotCollapsed;
+      applyRecordCollapsed(root, slotCollapsed, {
+        expand: t('listActions.expand'),
+        collapse: t('listActions.collapse'),
+      });
+    },
+    onCommit: (next) => {
+      // Правку завершают и `Enter`, и уход из поля — оба пути сохраняют
+      // черновик одним `ensureSlot` (ошибка 0757cd08: стража гонки, без дубля).
+      void ensureSlot({ title: next });
+      return next.trim() || t('diary.emptyTitle');
+    },
+  });
   head.append(
     el('span', 'diary-record-date', fmtDate(targetDay)),
-    titleInput,
+    title.node(),
     uiButton({
       label: '✕',
       role: 'ghost',
@@ -1955,12 +1922,10 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
     day: targetDay,
     commentId: null,
     root,
-    titleInput,
+    title,
     from: targetDay,
   };
   slot = state;
-
-  titleInput.addEventListener('blur', () => void ensureSlot({}));
 
   // Уход фокуса за пределы слота — единственная точка превращения слота в
   // карточку. Пока фокус внутри (заголовок, редактор комментария), слот
@@ -2001,7 +1966,9 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
   // работать (ошибка 0757cd08, круг 1, независимая проверка).
   try {
     renderFeed();
-    titleInput.focus();
+    // Слот открывается с заголовком В ПРАВКЕ (текст надо набирать): фокус
+    // ставим после монтирования — на откреплённом узле он бессмыслен.
+    state.title.beginEdit();
   } catch (err) {
     if (slot === state) {
       slot = null;
@@ -2092,7 +2059,7 @@ async function runEnsureSlot(opts: {
   const state = slot;
   if (state === null) return null;
   const networkId = requireNetworkId();
-  const title = opts.title !== undefined ? (opts.title ?? '') : state.titleInput.value;
+  const title = opts.title !== undefined ? (opts.title ?? '') : state.title.value();
   const body = opts.body ?? '';
   const extra = opts.extraThoughtIds ?? [];
   const plan = planSlotCommit({

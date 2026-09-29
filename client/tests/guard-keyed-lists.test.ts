@@ -106,6 +106,11 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
   ['screens/workspace-menus.ts', 'выпадающие меню — слоты'],
   ['screens/chronicle/filter-panel.ts', 'панель отбора — пересборка формы'],
   ['screens/chronicle/chronicle.ts', 'монтирование вида и точечные слоты; лента — на reconcileKeyed'],
+  [
+    'screens/chronicle/record-title.ts',
+    'заголовок записи — ОДНА кнопка-группа: `replaceChildren` обновляет только ' +
+      'её надпись, сохраняя `svg`-индикатор (задача 472457bf), это не коллекция списка',
+  ],
   ['screens/structures/filter-panel.ts', 'панель отбора — пересборка формы'],
   ['screens/structures/structures.ts', 'монтирование вида и наполнение строки; дерево — на reconcileKeyed'],
   // editor — каркас редактора инкрементален (задача 90b2256e), ниже — только

@@ -67,7 +67,9 @@ describe('приёмка «Дневника» 0.10.1: кнопка «Сегод�
 
 describe('приёмка «Дневника» 0.10.1: псевдо-запись по заголовку (пункт 4)', () => {
   it('blur заголовка создаёт запись без обходной меры-пробела', () => {
-    assert.match(CHRONICLE, /titleInput\.addEventListener\('blur', \(\) => void ensureSlot\(\{\}\)\)/);
+    // Заголовок слота — общий компонент (ошибка 36c330a3): и `Enter`, и `blur`
+    // завершают правку и зовут `ensureSlot` с введённым заголовком.
+    assert.match(CHRONICLE, /void ensureSlot\(\{ title: next \}\)/);
     assert.match(CHRONICLE, /body_md: body\b/, 'пустой текст отправляется как есть');
     assert.ok(!/\?\s*'\s'\s*:\s*body/.test(CHRONICLE), 'обходная мера «пробел» снята');
   });

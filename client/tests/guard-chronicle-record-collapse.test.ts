@@ -31,6 +31,7 @@ function read(...parts: string[]): string {
 
 const CHRONICLE = read('screens', 'chronicle', 'chronicle.ts');
 const RECORD_GROUPS = read('screens', 'chronicle', 'record-groups.ts');
+const RECORD_TITLE = read('screens', 'chronicle', 'record-title.ts');
 const FEED_NAV = read('screens', 'chronicle', 'feed-nav.ts');
 const CALENDAR = read('lib', 'month-calendar.ts');
 const CHRONICLE_CSS = read('styles', 'screens', 'chronicle.css');
@@ -108,13 +109,15 @@ describe('сторож: сворачиваемая запись «Дневник
   });
 
   it('одиночный клик заголовка отложен — двойной клик не сворачивает тело', () => {
+    // Компонент заголовка вынесен в один модуль (ошибка 36c330a3): различение
+    // кликов живёт там, а не в сборке карточки.
     assert.match(
-      CHRONICLE,
+      RECORD_TITLE,
       /deferSingleClick\(/,
       'заголовок различает одиночный и двойной клик (эталон жестов облачка)',
     );
     assert.match(
-      CHRONICLE,
+      RECORD_TITLE,
       /view\.addEventListener\('dblclick'/,
       'двойной клик входит в правку заголовка',
     );
@@ -183,15 +186,25 @@ describe('сторож: сворачиваемая запись «Дневник
   it('у заголовка записи есть индикатор сворачивания (стрелка, как у группы дня)', () => {
     // Задача 472457bf: тот же приём, что у групп дня, — стрелка внутри
     // кнопки-заголовка, поворот единым путём через класс `is-collapsed` заголовка.
-    const build =
+    // Компонент заголовка — единый модуль `record-title.ts` (ошибка 36c330a3).
+    const buildView =
+      /function buildView\(\): HTMLButtonElement \{([\s\S]*?)\n {2}\}/.exec(RECORD_TITLE)?.[1] ?? '';
+    assert.ok(buildView !== '', 'тело buildView найдено');
+    assert.match(
+      buildView,
+      /view\.prepend\(svgIcon\('chevron-down',\s*\d+\)\)/,
+      'стрелка-индикатор внутри кнопки-заголовка (общий `svgIcon`)',
+    );
+    // Карточка собирает заголовок через общий компонент, а не своей разметкой.
+    const buildTitle =
       /function buildTitle\(row: ChronicleRow, card: HTMLElement\): HTMLElement \{([\s\S]*?)\n\}/.exec(
         CHRONICLE,
       )?.[1] ?? '';
-    assert.ok(build !== '', 'тело buildTitle найдено');
+    assert.ok(buildTitle !== '', 'тело buildTitle найдено');
     assert.match(
-      build,
-      /view\.prepend\(svgIcon\('chevron-down',\s*\d+\)\)/,
-      'стрелка-индикатор внутри кнопки-заголовка (общий `svgIcon`)',
+      buildTitle,
+      /createRecordTitle\(/,
+      'карточка берёт заголовок из общего компонента',
     );
     assert.match(
       RECORD_GROUPS,
@@ -209,7 +222,7 @@ describe('сторож: сворачиваемая запись «Дневник
       'поворот индикатора плавный',
     );
     assert.match(
-      CHRONICLE,
+      RECORD_TITLE,
       /setRecordTitleLabel\(view,/,
       'смена надписи сохраняет стрелку (иначе `textContent` её затирает)',
     );
@@ -221,7 +234,7 @@ describe('сторож: сворачиваемая запись «Дневник
     // (первый узел кнопки), оставаясь зелёным. Разбираем тело помощника.
     const body =
       /function setRecordTitleLabel\(view: HTMLElement, label: string\): void \{([\s\S]*?)\n\}/.exec(
-        CHRONICLE,
+        RECORD_TITLE,
       )?.[1] ?? '';
     assert.ok(body !== '', 'тело setRecordTitleLabel найдено');
     const code = body.replace(/\/\/[^\n]*/g, '');

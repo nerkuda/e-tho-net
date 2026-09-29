@@ -183,10 +183,12 @@ describe('псевдо-запись: проводка фикса в экране
   });
 
   it('blur заголовка сохраняет черновик, не теряя текст (стража гонки)', () => {
+    // Заголовок слота — общий компонент (ошибка 36c330a3). Уход из поля
+    // (`blur`) завершает правку и зовёт `onCommit` → `ensureSlot({ title })`.
     assert.match(
       CHRONICLE,
-      /titleInput\.addEventListener\('blur', \(\) => void ensureSlot\(\{\}\)\)/,
-      'blur заголовка по-прежнему сохраняет',
+      /void ensureSlot\(\{ title: next \}\)/,
+      'blur/Enter заголовка по-прежнему сохраняет черновик',
     );
     assert.match(
       CHRONICLE,
@@ -240,7 +242,7 @@ describe('псевдо-запись: Ctrl+Enter → повторный слот 
   it('ошибка отрисовки не оставляет слот-стейт неконсистентным (кнопка работает)', () => {
     assert.match(
       CHRONICLE,
-      /try \{\s*renderFeed\(\);\s*titleInput\.focus\(\);\s*\} catch \(err\) \{\s*if \(slot === state\) \{\s*slot = null;/,
+      /try \{\s*renderFeed\(\);\s*(?:\/\/[^\n]*\n\s*)*state\.title\.beginEdit\(\);\s*\} catch \(err\) \{\s*if \(slot === state\) \{\s*slot = null;/,
       'сбой renderFeed в startSlot сбрасывает slot',
     );
   });
