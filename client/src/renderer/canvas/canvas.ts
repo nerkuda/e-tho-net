@@ -319,7 +319,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
   // Keep the unsubscribe handle — the listener must not survive a remount
   // (ошибка 37b713de).
   stripModeUnsubscribe = onStripModeChange(() => {
-    void render();
+    scheduleRender();
   });
   // Load the persisted strip map once per tab mount (the strip module owns
   // it). Errors are swallowed — L4 is best-effort.
@@ -404,7 +404,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
       store.state.editorTarget?.kind === 'thought'
         ? store.state.editorTarget.id
         : null;
-    void render();
+    scheduleRender();
   });
   // The focus band follows the focus row, whose position depends on the zone
   // shares and the host size — re-anchor it on resizes too (L12).
@@ -412,7 +412,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     if (host?.isConnected === true) updateFocusBand();
   });
   resizeObserver.observe(host);
-  void render();
+  scheduleRender();
 
   // Teardown handle: releases every global subscription/observer wired above.
   // Idempotent — a second call is a no-op (handles are cleared).
@@ -632,9 +632,46 @@ function paintHalo(): void {
   }
 }
 
+/**
+ * Счётчик фактических входов в `render()` (после гварда хозяина). Тестовый шов
+ * сторожа коалессирования: N синхронных триггеров → один рендер (см.
+ * {@link canvasInternals}.renderCount).
+ */
+let renderCount = 0;
+
+/** Отметка «рендер уже запланирован на текущий тик» — схлопывает все
+ *  синхронные триггеры в один `render()` (см. {@link scheduleRender}). */
+let renderScheduled = false;
+
+/**
+ * Планирует рендер на конец текущего тика, схлопывая любое число синхронных
+ * триггеров — уведомления стора, смену режима полосы отборов, монтирование — в
+ * ОДИН `render()`, который читает финальное состояние стора: последний триггер
+ * выигрывает по построению. Защита в глубину после ошибки 37b713de — пачка
+ * уведомлений (или утёкший подписчик) больше не запускает серию полных
+ * отрисовок, каждая из которых тянет `renderStrip` + `thoughts.get` + `list` +
+ * `views/run`.
+ *
+ * Именно МИКРОТАСКА, а не `requestAnimationFrame`: она выполняется до отрисовки
+ * кадра, поэтому хореография смены фокуса по-прежнему укладывает свой первый
+ * нарисованный кадр со СТАРЫМ содержимым — задержка до rAF позволила бы браузеру
+ * нарисовать НОВЫЙ фокус в центре раньше, чем `playFocusTransition` успеет его
+ * спрятать (дефект 1 задачи e9f0af94, сторож `guard-focus-animation`). Та же
+ * идиома, что у коалессированной перерисовки строк в `selection.ts`.
+ */
+function scheduleRender(): void {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  queueMicrotask(() => {
+    renderScheduled = false;
+    void render();
+  });
+}
+
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
   if (host === null || zones === null || focusRow === null) return;
+  renderCount++;
   // A real data update arriving mid-flight wins: snap any running transition to
   // its final state (release the held focus, drop the clones/layers) BEFORE the
   // old layout is captured and rebuilt. The rebuild below then starts from the
@@ -2308,6 +2345,8 @@ export const canvasInternals = {
   selectionKey,
   deferSingleClick,
   SINGLE_CLICK_DELAY_MS,
+  /** Число фактических `render()` — тестовый шов сторожа коалессирования. */
+  renderCount: () => renderCount,
 };
 
 // ---------------------------------------------------------------------------
