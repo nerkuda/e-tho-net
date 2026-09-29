@@ -208,10 +208,12 @@ const BORDER_STYLES = new Set([
 const BORDER_WIDTHS = /^(?:\d+(?:\.\d+)?(?:px|em|rem)|thin|medium|thick)$/;
 
 /**
- * Итоговый `border-right` правила с учётом каскада: шорткат `border-right`
- * задаёт ширину/стиль/цвет, а лонгхенды (`border-right-color`/`-width`/`-style`)
- * идут позже и переопределяют соответствующие части. Возвращает итоговые
- * значения последнего выигравшего объявления по каждой части.
+ * Итоговый `border-right` правила с учётом каскада. Учитывает и общие
+ * свойства (`border`, `border-color`/`-width`/`-style`), которые задают все
+ * четыре стороны, и правые лонгхенды/шорткат, которые их переопределяют.
+ * Порядок объявлений = каскад внутри правила. Для box-шорткатов из нескольких
+ * значений берётся сторона «right» (индекс 1 при 2–4 значениях, иначе 0).
+ * Возвращает итоговые значения по каждой части.
  */
 function resolveBorderRight(decls: Declaration[]): {
   color: string | null;
@@ -221,19 +223,107 @@ function resolveBorderRight(decls: Declaration[]): {
   let color: string | null = null;
   let width: string | null = null;
   let style: string | null = null;
+  /** `border`/`border-right`: смешанные токены (ширина/стиль/цвет). */
+  const setMixed = (value: string): void => {
+    for (const token of topLevelTokens(value)) {
+      const t = token.toLowerCase();
+      if (BORDER_WIDTHS.test(t)) width = t;
+      else if (BORDER_STYLES.has(t)) style = t;
+      else color = token;
+    }
+  };
+  /** Box-шорткат: взять значение стороны «right» и присвоить части. */
+  const setSide = (value: string, assign: (v: string) => void): void => {
+    const tokens = topLevelTokens(value);
+    if (tokens.length === 0) return;
+    assign(tokens.length === 1 ? (tokens[0] ?? '') : (tokens[1] ?? ''));
+  };
   for (const d of decls) {
-    if (d.prop === 'border-right') {
-      for (const token of topLevelTokens(d.value)) {
-        const t = token.toLowerCase();
-        if (BORDER_WIDTHS.test(t)) width = t;
-        else if (BORDER_STYLES.has(t)) style = t;
-        else color = token;
-      }
-    } else if (d.prop === 'border-right-color') color = d.value;
-    else if (d.prop === 'border-right-width') width = d.value.trim().toLowerCase();
-    else if (d.prop === 'border-right-style') style = d.value.trim().toLowerCase();
+    switch (d.prop) {
+      case 'border':
+      case 'border-right':
+        setMixed(d.value);
+        break;
+      case 'border-color':
+        setSide(d.value, (v) => {
+          color = v;
+        });
+        break;
+      case 'border-right-color':
+        color = d.value;
+        break;
+      case 'border-width':
+        setSide(d.value, (v) => {
+          width = v.trim().toLowerCase();
+        });
+        break;
+      case 'border-right-width':
+        width = d.value.trim().toLowerCase();
+        break;
+      case 'border-style':
+        setSide(d.value, (v) => {
+          style = v.trim().toLowerCase();
+        });
+        break;
+      case 'border-right-style':
+        style = d.value.trim().toLowerCase();
+        break;
+      default:
+        break;
+    }
   }
   return { color, width, style };
+}
+
+/** Свойства, задающие рамку (в т.ч. правую сторону) — признак «правило красит разделитель». */
+const BORDER_PROPS = new Set([
+  'border',
+  'border-right',
+  'border-color',
+  'border-width',
+  'border-style',
+  'border-right-color',
+  'border-right-width',
+  'border-right-style',
+]);
+
+/** Классы последнего составного селектора части селектора. */
+function lastCompoundClasses(selectorPart: string): string[] {
+  const compounds = selectorPart.trim().split(/[\s>+~]+/);
+  const last = compounds[compounds.length - 1] ?? '';
+  return [...last.matchAll(/\.([A-Za-z_][\w-]*)/g)].map((m) => m[1] ?? '');
+}
+
+/** Фон правила не «свой»: `inherit` либо полностью прозрачный фон. */
+function isOwnBackgroundAllowed(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  return v === 'inherit' || isTransparentColor(v);
+}
+
+/** Правило, красящее иконочную полосу: селектор + тело. */
+interface BandRule {
+  selector: string;
+  body: string;
+}
+
+/**
+ * Все правила, чей последний составной селектор — `.cloud-icon` (фон/разделитель
+ * полосы). Ловит и базовое `.cloud-icon`, и контекстные (`.cloud .cloud-icon`,
+ * `.cloud.focus-cloud .cloud-icon`), и любые иные формы: обход «вторым правилом»
+ * ниже по файлу не спрятать. Перечисление селекторов через запятую учитывается
+ * поэлементно.
+ */
+function collectBandRules(css: string): BandRule[] {
+  const rules: BandRule[] = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const rawSelector = m[1] ?? '';
+    const body = m[2] ?? '';
+    for (const part of rawSelector.split(',')) {
+      if (!lastCompoundClasses(part).includes('cloud-icon')) continue;
+      rules.push({ selector: part.trim().replace(/\s+/g, ' '), body });
+    }
+  }
+  return rules;
 }
 
 /**
@@ -393,46 +483,56 @@ describe('guard: представление мысли строится толь
     // (собственного `--surface-2` у неё нет), а разделительная линия прозрачна
     // при сохранённой толщине 1 px — геометрия полосы не меняется.
     //
-    // Проверяем ЭФФЕКТ, а не точный текст: блок объявлений разбирается в
-    // «свойство → значение», шорткат `border-right` и лонгхенды
-    // (`border-right-color`/`-width`/`-style`) сводятся к итоговому разделителю.
-    // Семантически эквивалентная перезапись (`border-right: 1px solid
-    // var(--border); border-right-color: transparent;`) обязана остаться зелёной.
+    // Проверяем ЭФФЕКТ, а не точный текст, и ВСЕ правила полосы: обход «вторым
+    // правилом» ниже по файлу (`.cloud .cloud-icon { background: … }`) обязан
+    // краснеть. Блок объявлений разбирается в «свойство → значение», шорткаты
+    // `border`/`border-right` и box-лонгхенды сводятся к итоговому разделителю.
+    // Эквивалентные записи (`background: inherit` / `background: transparent`;
+    // `border-right: 1px solid var(--border); border-right-color: transparent;`)
+    // остаются зелёными.
     const css = stripCssComments(readText(STYLES_CSS));
-    const base = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(
-      (m) => (m[1] ?? '').trim() === '.cloud-icon',
-    );
-    assert.ok(base !== undefined, 'базовое правило `.cloud-icon` должно существовать');
-    const body = base?.[2] ?? '';
-    const decls = parseDeclarations(body);
-
-    // Фон полосы — не свой, а унаследованный от облачка (не `--surface-2`).
-    assert.doesNotMatch(body, /--surface-2/, 'собственный фон --surface-2 у полосы запрещён');
-    const bg = [...decls]
-      .reverse()
-      .find((d) => d.prop === 'background' || d.prop === 'background-color');
-    assert.ok(bg !== undefined, 'полоса должна объявлять background/background-color');
-    assert.equal(
-      (bg?.value ?? '').trim().toLowerCase(),
-      'inherit',
-      'фон полосы — inherit от облачка (проверяем эффект, а не точный текст)',
+    const bandRules = collectBandRules(css);
+    assert.ok(
+      bandRules.length > 0,
+      'правила иконочной полосы с последним составным селектором `.cloud-icon` должны существовать',
     );
 
-    // Разделитель не виден (итоговый цвет прозрачен), но толщина 1 px сохранена
-    // — геометрия полосы неизменна.
-    const border = resolveBorderRight(decls);
-    assert.ok(
-      isTransparentColor(border.color),
-      `итоговый border-right-color прозрачен (получено: ${border.color ?? 'не задан'})`,
-    );
-    assert.equal(
-      border.width,
-      '1px',
-      `толщина разделителя 1 px сохранена (получено: ${border.width ?? 'не задана'})`,
-    );
-    assert.ok(
-      border.style !== null && border.style !== 'none' && border.style !== 'hidden',
-      `разделитель имеет отрисовываемый стиль при толщине 1 px (получено: ${border.style ?? 'не задан'})`,
+    // Каждое правило полосы: фон не свой, разделитель не виден и толщина 1 px.
+    const problems: string[] = [];
+    for (const rule of bandRules) {
+      const decls = parseDeclarations(rule.body);
+      if (/--surface-2/.test(rule.body)) {
+        problems.push(`${rule.selector}: собственный фон --surface-2 запрещён`);
+      }
+      const bg = [...decls]
+        .reverse()
+        .find((d) => d.prop === 'background' || d.prop === 'background-color');
+      if (bg !== undefined && !isOwnBackgroundAllowed(bg.value)) {
+        problems.push(
+          `${rule.selector}: фон полосы должен быть inherit или прозрачным, а не «${bg.value}»`,
+        );
+      }
+      if (decls.some((d) => BORDER_PROPS.has(d.prop))) {
+        const border = resolveBorderRight(decls);
+        if (border.color !== null && !isTransparentColor(border.color)) {
+          problems.push(`${rule.selector}: разделитель виден (border-right-color: ${border.color})`);
+        }
+        if (border.width !== null && border.width !== '1px') {
+          problems.push(
+            `${rule.selector}: толщина разделителя ${border.width} вместо 1 px (геометрия полосы сломана)`,
+          );
+        }
+        if (border.style !== null && (border.style === 'none' || border.style === 'hidden')) {
+          problems.push(
+            `${rule.selector}: разделитель не отрисовывается (${border.style}) — геометрия полосы сломана`,
+          );
+        }
+      }
+    }
+    assert.deepEqual(
+      problems,
+      [],
+      `правила иконочной полосы должны давать унаследованный/прозрачный фон и невидимый разделитель 1 px:\n  ${problems.join('\n  ')}`,
     );
 
     // Условие исчезло: признак-класс `cloud-has-bg` мёртв и удалён — его нет
@@ -450,7 +550,7 @@ describe('guard: представление мысли строится толь
         name: 'no-retired-bg-class',
         description:
           'Класс-признак cloud-has-bg удалён как мёртвый (фон полосы — всегда ' +
-          'inherit от облачка): возвращать его в рендерер запрещено.',
+          'inherit/прозрачный от облачка): возвращать его в рендерер запрещено.',
         pattern: /cloud-has-bg|CLOUD_BG_CLASS/,
       },
     ]);
