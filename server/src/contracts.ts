@@ -712,8 +712,16 @@ export const LayersResetOverride = defineContract(
 
 const SearchFields = z
   .object({
-    network_id: NetworkId.optional(),
-    network_ids: z.array(NetworkId).optional(),
+    // Сеть обязательна, но в форме XOR: либо одна (`network_id`), либо веер
+    // (`network_ids`). JSON Schema не умеет «хотя бы одно из двух required» —
+    // обязательность выражена описанием каждого поля (ошибка 99f27451:
+    // раньше она была видна только в рантайме).
+    network_id: NetworkId.optional().describe(
+      'Single network. Provide either `network_id` or `network_ids` — one is required.',
+    ),
+    network_ids: z.array(NetworkId).optional().describe(
+      'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+    ),
     query: z.string().min(1),
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
@@ -770,8 +778,14 @@ const QueryPropertyFields = z
   });
 const QueryFields = z
   .object({
-    network_id: NetworkId.optional(),
-    network_ids: z.array(NetworkId).optional(),
+    // XOR сети — как в `SearchFields`: обязательность несёт описание полей
+    // (JSON Schema не выражает «хотя бы одно из двух required», ошибка 99f27451).
+    network_id: NetworkId.optional().describe(
+      'Single network. Provide either `network_id` or `network_ids` — one is required.',
+    ),
+    network_ids: z.array(NetworkId).optional().describe(
+      'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+    ),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
@@ -898,8 +912,14 @@ export const ThoughtsFindDuplicates = defineContract(
   'etn.thoughts.find_duplicates',
   z
     .object({
-      network_id: NetworkId.optional(),
-      network_ids: z.array(NetworkId).optional(),
+      // XOR сети — как в `SearchFields`/`QueryFields`: обязательность несёт
+      // описание полей (ошибка 99f27451).
+      network_id: NetworkId.optional().describe(
+        'Single network. Provide either `network_id` or `network_ids` — one is required.',
+      ),
+      network_ids: z.array(NetworkId).optional().describe(
+        'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+      ),
       title: z.string().min(1),
       synonyms: z.array(z.string().min(1)).optional(),
     })
