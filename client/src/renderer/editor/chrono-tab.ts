@@ -113,6 +113,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   let activeWidget: HTMLElement | null = null;
   /** Row id the active editor area belongs to; `null` for a brand-new record. */
   let activeRowId: string | null = null;
+  /**
+   * Авто-выбор верхней строки выполняется один раз при открытии вкладки
+   * (0.10.2, задача 41ed99ab): поздние перезагрузки (правка, добавление) выбор
+   * пользователя не перебивают.
+   */
+  let autoSelectDone = false;
 
   // Таблица — единый фасад списков `lib/ui/table.ts`: колонки, сортировка,
   // клавиатурная навигация (стрелки, Home/End, PgUp/PgDn, Enter), контекстное
@@ -182,6 +188,22 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     table.element.hidden = false;
     table.setRows(chrono);
     if (selectedId !== null) table.setCurrent(selectedId);
+    // При открытии вкладки текущей становится САМАЯ ВЕРХНЯЯ строка (порядок —
+    // обратный хронологический, `defaultSort: period desc`), чтобы сразу
+    // показался текст её комментария (0.10.2, задача 41ed99ab). Авто-выбор — при
+    // отсутствии выбора и только однократно: явно выбранную строку возврат на
+    // ту же мысль не сбрасывает.
+    if (!autoSelectDone) {
+      autoSelectDone = true;
+      if (selectedId === null && chrono.length > 0) {
+        const top = table.getRows()[0];
+        if (top !== undefined) {
+          selectedId = top.id;
+          table.setCurrent(top.id);
+          buildEditor(top);
+        }
+      }
+    }
   }
 
   /** Opens the diary screen on this record (calendar date + current record). */
