@@ -11,7 +11,9 @@
  *  • единица свёрнутости — вхождение «день + id» (`recordCollapseKey`);
  *  • поле «комментарий» доступно только у развёрнутой записи (`feed-nav`);
  *  • календарь использует точки (`calendarDotCount`), а не число `.cal-count`;
- *  • заголовок выходного дня красится токеном `--cal-weekend` (обе темы).
+ *  • заголовок выходного дня красится токеном `--cal-weekend` (обе темы);
+ *  • смена надписи заголовка (`setRecordTitleLabel`) сохраняет иконку-шеврон —
+ *    первый узел кнопки не затирается (задача d586f340).
  *
  * Сторож зелёный на исправленном коде и краснеет, если эти пути откатят.
  */
@@ -210,6 +212,34 @@ describe('сторож: сворачиваемая запись «Дневник
       CHRONICLE,
       /setRecordTitleLabel\(view,/,
       'смена надписи сохраняет стрелку (иначе `textContent` её затирает)',
+    );
+  });
+
+  it('смена надписи заголовка сохраняет иконку-шеврон (не стирает узлы)', () => {
+    // Задача d586f340: проверки одного вызова `setRecordTitleLabel(view, …)` мало —
+    // возврат тела помощника к `view.textContent = label` стирал бы svg-иконку
+    // (первый узел кнопки), оставаясь зелёным. Разбираем тело помощника.
+    const body =
+      /function setRecordTitleLabel\(view: HTMLElement, label: string\): void \{([\s\S]*?)\n\}/.exec(
+        CHRONICLE,
+      )?.[1] ?? '';
+    assert.ok(body !== '', 'тело setRecordTitleLabel найдено');
+    const code = body.replace(/\/\/[^\n]*/g, '');
+    // Иконка — первый узел: помощник берёт её и собирает содержимое заново.
+    assert.match(code, /view\.firstChild/, 'берёт иконку-шеврон первым узлом');
+    assert.match(
+      code,
+      /view\.replaceChildren\(\s*icon\s*,\s*label\s*\)/,
+      'надпись ставится без затирания узлов (replaceChildren, а не textContent)',
+    );
+    // `textContent = label` допустим ТОЛЬКО как запасной путь для кнопки без иконки.
+    const outsideFallback = code.replace(
+      /if\s*\(\s*icon\s*===\s*null\s*\)\s*\{[\s\S]*?\n\s*\}/,
+      '',
+    );
+    assert.ok(
+      !/view\.textContent\s*=\s*label/.test(outsideFallback),
+      'вне ветки без иконки надпись не ставится через textContent (потеря шеврона)',
     );
   });
 });
