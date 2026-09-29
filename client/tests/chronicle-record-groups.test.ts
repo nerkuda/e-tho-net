@@ -23,6 +23,7 @@ import {
 import { isWeekend } from '../src/renderer/screens/chronicle/diary.js';
 import {
   applyRecordCollapsed,
+  applyRecordCollapsedForDay,
   dayOfCard,
   findRecordCard,
   recordCollapseKey,
@@ -209,6 +210,69 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
     });
     assert.ok(card.classList.contains('is-collapsed'), 'свёрнутость восстановлена');
     assert.equal(body.hidden, true, 'тело скрыто');
+  });
+});
+
+describe('applyRecordCollapsedForDay: восстановление по явному дню (задача 8f9c9b12)', () => {
+  const labels = { collapse: 'Свернуть', expand: 'Развернуть' };
+
+  /** Откреплённая карточка записи: DOM-предка с `data-day` нет. */
+  function detachedCard(id = 'r1'): {
+    card: ShimElement;
+    title: ShimElement;
+    body: ShimElement;
+  } {
+    const card = new ShimElement('div', 'diary-record');
+    card.setAttribute('data-row-key', id);
+    const title = new ShimElement('button', 'diary-record-title');
+    const body = new ShimElement('div', 'diary-record-body');
+    card.append(title, body);
+    return { card, title, body };
+  }
+
+  it('сворачивает откреплённую карточку по дню-параметру, не заглядывая в DOM', () => {
+    // Путь `fillRecordCard`: карточка ещё не в ленте, `dayOfCard` вернул бы null.
+    // Функция обязана работать от явного дня.
+    const { card, title, body } = detachedCard();
+    const saved = new Set([recordCollapseKey('2026-09-11', 'r1')]);
+    assert.equal(dayOfCard(card as unknown as HTMLElement), null, 'предка дня нет');
+
+    applyRecordCollapsedForDay(
+      card as unknown as HTMLElement,
+      '2026-09-11',
+      'r1',
+      saved,
+      labels,
+    );
+    assert.ok(card.classList.contains('is-collapsed'), 'свёрнутость восстановлена');
+    assert.equal(body.hidden, true, 'тело скрыто');
+    assert.equal(title.getAttribute('aria-expanded'), 'false', 'заголовок помечен свёрнутым');
+  });
+
+  it('ключ вхождения решает: сохранённый день другого дня не сворачивает', () => {
+    const { card } = detachedCard();
+    const saved = new Set([recordCollapseKey('2026-09-10', 'r1')]);
+    applyRecordCollapsedForDay(
+      card as unknown as HTMLElement,
+      '2026-09-11',
+      'r1',
+      saved,
+      labels,
+    );
+    assert.ok(!card.classList.contains('is-collapsed'), 'запись развёрнута');
+  });
+
+  it('пустой набор состояний оставляет карточку развёрнутой', () => {
+    const { card, body } = detachedCard();
+    applyRecordCollapsedForDay(
+      card as unknown as HTMLElement,
+      '2026-09-11',
+      'r1',
+      new Set<string>(),
+      labels,
+    );
+    assert.ok(!card.classList.contains('is-collapsed'));
+    assert.equal(body.hidden, false);
   });
 });
 

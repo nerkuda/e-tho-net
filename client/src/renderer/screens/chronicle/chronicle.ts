@@ -143,6 +143,7 @@ import {
   RECORD_TITLE_CLASS,
   RECORD_TITLE_INPUT_CLASS,
   applyRecordCollapsed,
+  applyRecordCollapsedForDay,
   dayOfCard,
   findRecordCard,
   recordCollapseKey,
@@ -1345,13 +1346,11 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   card.replaceChildren(head, buildTitle(row, card), buildRecordBody(row, card));
   // Свёрнутость тела записи переприменяется при keyed-обновлении карточки и
   // realtime (0.10.2, задача 41ed99ab): fillRecordCard — общая точка сборки и
-  // обновления. День приходит ЯВНЫМ параметром: на момент `build` карточка ещё
-  // не вставлена в ленту, и `dayOfCard(card)` вернул бы null (блокер проверки).
-  applyRecordCollapsed(
-    card,
-    collapsedRecords.has(recordCollapseKey(day, row.id)),
-    recordGroupLabels(),
-  );
+  // обновления. День приходит ЯВНЫМ параметром через единый помощник
+  // `applyRecordCollapsedForDay` (задача 8f9c9b12): на момент `build` карточка
+  // ещё не вставлена в ленту, и `dayOfCard(card)` вернул бы null (блокер
+  // проверки).
+  applyRecordCollapsedForDay(card, day, row.id, collapsedRecords, recordGroupLabels());
 }
 
 /** Подпись даты/периода записи — единый помощник периода дневниковой записи. */

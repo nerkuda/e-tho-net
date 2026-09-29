@@ -6,7 +6,8 @@
  *    `applyRecordCollapsed`), а не пересборкой ленты — иначе теряются фокус
  *    навигации и позиция прокрутки (грабли ab78e7b5, 407b1827);
  *  • свёрнутость переприменяется при keyed-обновлении карточки
- *    (`fillRecordCard` → `dayOfCard` + `recordCollapseKey`);
+ *    (`fillRecordCard` → `applyRecordCollapsedForDay` с явным днём, без вывода
+ *    дня из DOM-предка `dayOfCard`);
  *  • единица свёрнутости — вхождение «день + id» (`recordCollapseKey`);
  *  • поле «комментарий» доступно только у развёрнутой записи (`feed-nav`);
  *  • календарь использует точки (`calendarDotCount`), а не число `.cal-count`;
@@ -27,6 +28,7 @@ function read(...parts: string[]): string {
 }
 
 const CHRONICLE = read('screens', 'chronicle', 'chronicle.ts');
+const RECORD_GROUPS = read('screens', 'chronicle', 'record-groups.ts');
 const FEED_NAV = read('screens', 'chronicle', 'feed-nav.ts');
 const CALENDAR = read('lib', 'month-calendar.ts');
 const CHRONICLE_CSS = read('styles', 'screens', 'chronicle.css');
@@ -52,15 +54,23 @@ describe('сторож: сворачиваемая запись «Дневник
   });
 
   it('свёрнутость переприменяется при keyed-обновлении карточки', () => {
+    // Задача 8f9c9b12: применение свёрнутости по явному дню — единая функция в
+    // `record-groups.ts`; `fillRecordCard` зовёт именно её, а не собирает ключ у
+    // себя. Сторож ловит возврат доменного вывода дня (`dayOfCard`) в сборку.
     assert.match(
-      CHRONICLE,
-      /applyRecordCollapsed\([\s\S]*?collapsedRecords\.has\(recordCollapseKey\(day, row\.id\)\)/,
-      'fillRecordCard переприменяет свёрнутость после пересборки содержимого',
+      RECORD_GROUPS,
+      /export function applyRecordCollapsedForDay\(\s*card: HTMLElement,\s*day: string,\s*id: string,/,
+      'единая функция «день + id → состояние» в record-groups.ts',
+    );
+    assert.match(
+      RECORD_GROUPS,
+      /applyRecordCollapsed\(card,\s*collapsedKeys\.has\(recordCollapseKey\(day, id\)\), labels\)/,
+      'функция замыкает in-place применение через ключ вхождения',
     );
     assert.match(
       CHRONICLE,
-      /recordCollapseKey\(day,\s*row\.id\)/,
-      'ключ свёрнутости записи — вхождение «день + id»',
+      /applyRecordCollapsedForDay\(card, day, row\.id, collapsedRecords, recordGroupLabels\(\)\)/,
+      'fillRecordCard переприменяет свёрнутость по дню-параметру',
     );
   });
 
@@ -117,10 +127,10 @@ describe('сторож: сворачиваемая запись «Дневник
   });
 
   it('свёрнутость восстанавливается без опоры на DOM-предка карточки', () => {
-    // Блокер проверки, круг 1: `reconcileKeyed` зовёт `build`/`update` ДО
-    // вставки узла, поэтому день нельзя выводить из DOM (`dayOfCard`). Проверяем,
-    // что день передаётся явным параметром в сборку и обновление, а `fillRecordCard`
-    // не ищет день по предку.
+    // Блокер проверки, круг 1 (усилено задачей 8f9c9b12): `reconcileKeyed` зовёт
+    // `build`/`update` ДО вставки узла, поэтому день нельзя выводить из DOM
+    // (`dayOfCard`). Проверяем, что день передаётся явным параметром в сборку и
+    // обновление, а `fillRecordCard` не ищет день по предку.
     assert.match(
       CHRONICLE,
       /buildRecordCard\(row,\s*day\.day\)/,
@@ -131,9 +141,22 @@ describe('сторож: сворачиваемая запись «Дневник
       /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\)/,
       'fillRecordCard принимает день параметром',
     );
+    const fill =
+      /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\): void \{([\s\S]*?)\n\}/.exec(
+        CHRONICLE,
+      )?.[1] ?? '';
+    assert.ok(fill !== '', 'тело fillRecordCard найдено');
+    // Комментарии не код: пояснение рядом может упоминать `dayOfCard` — ищем
+    // сам вызов в коде.
+    const fillCode = fill.replace(/\/\/[^\n]*/g, '');
+    assert.match(
+      fillCode,
+      /applyRecordCollapsedForDay\(card, day, row\.id, collapsedRecords, recordGroupLabels\(\)\)/,
+      'fillRecordCard применяет свёрнутость по дню-параметру',
+    );
     assert.ok(
-      !/collapsedRecords\.has\(recordCollapseKey\(dayOfCard\(/.test(CHRONICLE),
-      'fillRecordCard не выводит день из DOM-предка',
+      !/dayOfCard\(/.test(fillCode),
+      'fillRecordCard не выводит день из DOM-предка (регресс-блокер)',
     );
   });
 

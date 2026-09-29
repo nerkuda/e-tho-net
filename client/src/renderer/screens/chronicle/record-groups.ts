@@ -69,7 +69,7 @@ export function findRecordCard(root: HTMLElement, day: string, id: string): HTML
 }
 
 /**
- * Привести запись к состоянию `collapsed` НА МЕСТЕ: класс карточки, `hidden`
+ * Применить запись к состоянию `collapsed` НА МЕСТЕ: класс карточки, `hidden`
  * тела, `aria-expanded` и подсказка заголовка. Существующие узлы не
  * заменяются — фокус на заголовке и прокрутка не теряются.
  */
@@ -86,4 +86,23 @@ export function applyRecordCollapsed(
   }
   const body = card.querySelector<HTMLElement>('.diary-record-body');
   if (body !== null) body.hidden = collapsed;
+}
+
+/**
+ * Применить СОХРАНЁННУЮ свёрнутость записи по явному дню вхождения (0.10.2,
+ * задача 8f9c9b12): единая точка «день + id → ключ → набор состояний» для
+ * сборки и keyed-обновления карточки. День принимается ПАРАМЕТРОМ, а не
+ * выводится из DOM: на момент `build` узел ещё не вставлен в секцию дня, и
+ * `dayOfCard` вернул бы `null` (блокер проверки 41ed99ab, круг 1). Вызов
+ * замыкает {@link applyRecordCollapsed} и является единственным путём
+ * восстановления свёрнутости из `fillRecordCard`.
+ */
+export function applyRecordCollapsedForDay(
+  card: HTMLElement,
+  day: string,
+  id: string,
+  collapsedKeys: ReadonlySet<string>,
+  labels: RecordGroupLabels,
+): void {
+  applyRecordCollapsed(card, collapsedKeys.has(recordCollapseKey(day, id)), labels);
 }
