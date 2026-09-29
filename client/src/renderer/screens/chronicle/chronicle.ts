@@ -1368,6 +1368,10 @@ function recordTitleLabel(row: ChronicleRow): string {
  * ПРОСМОТРЕ это крупный заметный текст-кнопка: одиночный клик сворачивает/
  * разворачивает ТОЛЬКО тело комментария, двойной клик входит в правку. Пока
  * заголовок правится, на его месте поле ввода, и сворачивание недоступно.
+ *
+ * Перед надписью — индикатор сворачивания (задача 472457bf): та же стрелка
+ * `chevron-down`, что у групп дней; поворот (−90° при свёрнутой записи) задаёт
+ * класс `is-collapsed` заголовка, который ставит `applyRecordCollapsed`.
  */
 function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
   // Одиночный клик откладывается на время двойного (эталон `deferSingleClick`,
@@ -1390,6 +1394,9 @@ function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
       });
     },
   });
+  // Индикатор-стрелка первой (как у заголовка группы дня): клик по ней — тот же
+  // клик по кнопке, сворачивание/разворачивание тела записи.
+  view.prepend(svgIcon('chevron-down', 18));
   view.addEventListener('dblclick', (event) => {
     event.preventDefault();
     pendingClick?.cancel();
@@ -1397,6 +1404,20 @@ function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
     beginTitleEdit(row, card);
   });
   return view;
+}
+
+/**
+ * Обновить надпись кнопки-заголовка, сохранив индикатор-стрелку (первый узел):
+ * `textContent` затирает дочерние узлы вместе с `svg`, поэтому содержимое
+ * собирается заново — индикатор, затем новый текст (задача 472457bf).
+ */
+function setRecordTitleLabel(view: HTMLElement, label: string): void {
+  const icon = view.firstChild;
+  if (icon === null) {
+    view.textContent = label;
+    return;
+  }
+  view.replaceChildren(icon, label);
 }
 
 /**
@@ -1429,7 +1450,7 @@ function beginTitleEdit(row: ChronicleRow, card: HTMLElement): void {
     done = true;
     const next = input.value.trim();
     const nextTitle = commit ? next || null : row.title;
-    view.textContent = recordDisplayTitle(nextTitle, row.snippet) || t('diary.emptyTitle');
+    setRecordTitleLabel(view, recordDisplayTitle(nextTitle, row.snippet) || t('diary.emptyTitle'));
     input.replaceWith(view);
     if (commit && next !== (row.title ?? '')) void patchRecord(row.id, { title: next || null });
     if (refocus) view.focus();

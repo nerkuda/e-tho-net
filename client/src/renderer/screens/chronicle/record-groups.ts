@@ -69,9 +69,14 @@ export function findRecordCard(root: HTMLElement, day: string, id: string): HTML
 }
 
 /**
- * Применить запись к состоянию `collapsed` НА МЕСТЕ: класс карточки, `hidden`
- * тела, `aria-expanded` и подсказка заголовка. Существующие узлы не
- * заменяются — фокус на заголовке и прокрутка не теряются.
+ * Применить запись к состоянию `collapsed` НА МЕСТЕ: класс карточки, класс
+ * заголовка (поворот индикатора-стрелки, задача 472457bf), `hidden` тела,
+ * `aria-expanded` и подсказка заголовка. Существующие узлы не заменяются —
+ * фокус на заголовке и прокрутка не теряются.
+ *
+ * Класс `is-collapsed` ставится и на КАРТОЧКУ (скрытие тела), и на ЗАГОЛОВОК
+ * (поворот `svg`-индикатора) — симметрично {@link applyDayCollapsed} у группы
+ * дня: единый путь поворота, без второго механизма в CSS по карточке.
  */
 export function applyRecordCollapsed(
   card: HTMLElement,
@@ -81,6 +86,7 @@ export function applyRecordCollapsed(
   card.classList?.toggle('is-collapsed', collapsed);
   const title = card.querySelector<HTMLElement>(`.${RECORD_TITLE_CLASS}`);
   if (title !== null) {
+    title.classList?.toggle('is-collapsed', collapsed);
     title.setAttribute?.('aria-expanded', collapsed ? 'false' : 'true');
     title.title = collapsed ? labels.expand : labels.collapse;
   }

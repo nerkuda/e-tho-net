@@ -153,6 +153,7 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
 
     applyRecordCollapsed(card as unknown as HTMLElement, true, labels);
     assert.ok(card.classList.contains('is-collapsed'), 'карточка свёрнута');
+    assert.ok(titleRef.classList.contains('is-collapsed'), 'индикатор заголовка повёрнут (472457bf)');
     assert.equal(bodyRef.hidden, true, 'тело скрыто');
     assert.equal(titleRef.getAttribute('aria-expanded'), 'false');
     assert.equal(titleRef.title, 'Развернуть');
@@ -160,6 +161,7 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
 
     applyRecordCollapsed(card as unknown as HTMLElement, false, labels);
     assert.ok(!card.classList.contains('is-collapsed'), 'карточка развёрнута');
+    assert.ok(!titleRef.classList.contains('is-collapsed'), 'индикатор заголовка смотрит вниз');
     assert.equal(bodyRef.hidden, false, 'тело показано');
     assert.equal(titleRef.getAttribute('aria-expanded'), 'true');
     assert.equal(titleRef.title, 'Свернуть');
@@ -245,6 +247,7 @@ describe('applyRecordCollapsedForDay: восстановление по явно
       labels,
     );
     assert.ok(card.classList.contains('is-collapsed'), 'свёрнутость восстановлена');
+    assert.ok(title.classList.contains('is-collapsed'), 'индикатор заголовка восстановлен');
     assert.equal(body.hidden, true, 'тело скрыто');
     assert.equal(title.getAttribute('aria-expanded'), 'false', 'заголовок помечен свёрнутым');
   });

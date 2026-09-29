@@ -177,4 +177,39 @@ describe('сторож: сворачиваемая запись «Дневник
     assert.match(head, /color:\s*var\(--text-dim\)/, 'будни серые через `--text-dim`');
     assert.ok(!/var\(--muted\)/.test(head), 'несуществующий `--muted` в заголовке дня убран');
   });
+
+  it('у заголовка записи есть индикатор сворачивания (стрелка, как у группы дня)', () => {
+    // Задача 472457bf: тот же приём, что у групп дня, — стрелка внутри
+    // кнопки-заголовка, поворот единым путём через класс `is-collapsed` заголовка.
+    const build =
+      /function buildTitle\(row: ChronicleRow, card: HTMLElement\): HTMLElement \{([\s\S]*?)\n\}/.exec(
+        CHRONICLE,
+      )?.[1] ?? '';
+    assert.ok(build !== '', 'тело buildTitle найдено');
+    assert.match(
+      build,
+      /view\.prepend\(svgIcon\('chevron-down',\s*\d+\)\)/,
+      'стрелка-индикатор внутри кнопки-заголовка (общий `svgIcon`)',
+    );
+    assert.match(
+      RECORD_GROUPS,
+      /title\.classList\?\.toggle\('is-collapsed', collapsed\)/,
+      'класс заголовка — единый путь поворота индикатора',
+    );
+    assert.match(
+      CHRONICLE_CSS,
+      /\.diary-record-title\.is-collapsed svg\s*\{[^}]*transform:\s*rotate\(-90deg\)/,
+      'свёрнутая запись поворачивает стрелку вправо (−90°)',
+    );
+    assert.match(
+      CHRONICLE_CSS,
+      /\.diary-record-title svg\s*\{[^}]*transition:\s*transform/,
+      'поворот индикатора плавный',
+    );
+    assert.match(
+      CHRONICLE,
+      /setRecordTitleLabel\(view,/,
+      'смена надписи сохраняет стрелку (иначе `textContent` её затирает)',
+    );
+  });
 });
