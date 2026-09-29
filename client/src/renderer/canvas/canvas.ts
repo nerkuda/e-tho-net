@@ -639,6 +639,15 @@ function paintHalo(): void {
  */
 let renderCount = 0;
 
+/**
+ * Счётчик ФАКТИЧЕСКИХ входов в `render()` — до гварда хозяина. Отличает
+ * «микротаск отложенного рендера дошёл, но render() стал no-op по `host === null`»
+ * от «микротаск потерян»: {@link renderCount} растёт лишь после гварда, поэтому
+ * после teardown он не двигается в обоих случаях (тестовый шов сторожа
+ * коалессирования, {@link canvasInternals}.renderEnterCount).
+ */
+let renderEnterCount = 0;
+
 /** Отметка «рендер уже запланирован на текущий тик» — схлопывает все
  *  синхронные триггеры в один `render()` (см. {@link scheduleRender}). */
 let renderScheduled = false;
@@ -670,6 +679,7 @@ function scheduleRender(): void {
 
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
+  renderEnterCount++;
   if (host === null || zones === null || focusRow === null) return;
   renderCount++;
   // A real data update arriving mid-flight wins: snap any running transition to
@@ -2345,8 +2355,10 @@ export const canvasInternals = {
   selectionKey,
   deferSingleClick,
   SINGLE_CLICK_DELAY_MS,
-  /** Число фактических `render()` — тестовый шов сторожа коалессирования. */
+  /** Число фактических `render()` (после гварда хозяина) — тестовый шов сторожа коалессирования. */
   renderCount: () => renderCount,
+  /** Число ВХОДОВ в `render()` (до гварда хозяина) — отличает no-op по `host === null` от потерянного микротаска. */
+  renderEnterCount: () => renderEnterCount,
 };
 
 // ---------------------------------------------------------------------------

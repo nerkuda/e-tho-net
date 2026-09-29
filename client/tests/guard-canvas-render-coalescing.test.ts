@@ -14,7 +14,11 @@
  * уведомлений (или утёкший подписчик) не должна запускать их серию.
  *
  * Сторож монтирует РЕАЛЬНЫЙ `mountCanvas` в DOM-шим и считает фактические
- * входы в рендер через тестовый шов `canvasInternals.renderCount`.
+ * входы в рендер через тестовые швы `canvasInternals.renderCount` (после гварда
+ * хозяина) и `canvasInternals.renderEnterCount` (до гварда — отличает no-op по
+ * `host === null` от потерянного микротаска). Дискриминирующая сила сторожа
+ * доказана отдельным подтестом: при синхронном планировщике (имитация регрессии)
+ * ассерт «отложен на микротаск» краснеет.
  *
  * Входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -225,6 +229,12 @@ function renderCount(): number {
   return canvas.canvasInternals.renderCount();
 }
 
+/** Входы в `render()` до гварда хозяина — отличает no-op по `host === null`
+ *  от потерянного микротаска. */
+function renderEnterCount(): number {
+  return canvas.canvasInternals.renderEnterCount();
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -308,21 +318,93 @@ describe('guard: коалессирование render() холста (зада�
     dispose();
   });
 
-  it('отложенный рендер после teardown не рисует в мёртвый хост', async () => {
+  it('отложенный рендер после teardown: микротаск не потерян, render вошёл и стал no-op', async () => {
     const host = makeHost();
     const dispose = canvas.mountCanvas(host as unknown as HTMLElement);
     await settle();
 
-    const base = renderCount();
+    const baseRendered = renderCount();
+    const baseEntered = renderEnterCount();
     store.update({ cloudWidth: 220 });
     // Демонтаж до выполнения микротаска: render() обязан стать no-op.
     dispose();
     await settle();
 
+    // Счётчик ДО гварда доказывает, что отложенный микротаск дошёл и вызвал
+    // render(): «потеря микротаска» дала бы НЕприращённый вход.
+    assert.equal(
+      renderEnterCount(),
+      baseEntered + 1,
+      'микротаск не потерян: отложенный render() вошёл в функцию после teardown',
+    );
+    // Счётчик ПОСЛЕ гварда и отсутствие DOM-эффекта отделяют «вошёл, но no-op
+    // по host === null» от настоящей отрисовки в мёртвый хост.
     assert.equal(
       renderCount(),
-      base,
-      'отложенный рендер после teardown не должен выполняться',
+      baseRendered,
+      'вошедший render() обязан стать no-op по host === null — DOM не трогается',
     );
+  });
+
+  it('дискриминирующая сила: синхронный рендер (имитация регрессии) делает ассерт «отложен» красным', async () => {
+    const host = makeHost();
+    const dispose = canvas.mountCanvas(host as unknown as HTMLElement);
+    await settle();
+
+    const base = renderCount();
+    const realQueueMicrotask = globalThis.queueMicrotask;
+    try {
+      // Имитация регрессии коалессирования: планировщик выполняет микротаск
+      // СИНХРОННО, то есть render() зовётся прямо из триггера — так вела себя
+      // до фикса каждая пачка уведомлений стора.
+      globalThis.queueMicrotask = ((cb: () => void) => {
+        cb();
+      }) as typeof queueMicrotask;
+
+      store.update({ cloudWidth: 120 });
+      store.update({ cloudWidth: 140 });
+      store.update({ cloudWidth: 160 });
+
+      // Тот самый ассерт сторожа из первого теста («рендер обязан быть отложен
+      // на микротаск», renderCount() === base) — под синхронным рендером он
+      // обязан быть КРАСНЫМ: пачка из 3 триггеров дала 3 немедленных render().
+      assert.throws(
+        () => assert.equal(renderCount(), base),
+        'ассерт «отложен на микротаск» краснеет на синхронном рендере — значит, он ловит регрессию коалессирования по существу',
+      );
+      assert.ok(
+        renderCount() > base,
+        `имитация регрессии должна увеличить счётчик в том же тике; получено ${renderCount() - base}`,
+      );
+    } finally {
+      globalThis.queueMicrotask = realQueueMicrotask;
+    }
+    await settle();
+    dispose();
+  });
+
+  it('быстрый remount в том же тике: отложенный рендер рисует новый хост, рендер не теряется', async () => {
+    const host1 = makeHost();
+    const dispose1 = canvas.mountCanvas(host1 as unknown as HTMLElement);
+    await settle();
+
+    const base = renderCount();
+    // Триггер ставит рендер в очередь; teardown и mount идут ДО микротаска.
+    store.update({ cloudWidth: 230 });
+    dispose1();
+    const host2 = makeHost();
+    const dispose2 = canvas.mountCanvas(host2 as unknown as HTMLElement);
+    await settle();
+
+    assert.equal(
+      renderCount(),
+      base + 1,
+      'отложенный рендер не потерян: ровно один render после teardown + mount в одном тике',
+    );
+    assert.ok(
+      host2.querySelector('.canvas-top') !== null,
+      'отложенный рендер нарисовал НОВЫЙ хост, а не мёртвый старый',
+    );
+    dispose2();
   });
 });
