@@ -107,6 +107,24 @@ function isUnknownStructureFieldError(err: unknown): boolean {
   return Array.isArray(fields) && fields.some((f) => f === 'count' || f === 'cursor');
 }
 
+/**
+ * Стабильная сериализация тела запроса для ключа дедупа идемпотентного POST:
+ * ключи объекта сортируются, поэтому два одинаковых payload'а с разным порядком
+ * свойств делят один in-flight слот (`JSON.stringify` сохранил бы порядок
+ * вставки и промахнулся). Сортируется верхний уровень — тело дедуплицируемого
+ * маршрута (`views/.../run`) плоское (sort/order/limit/offset).
+ */
+function stableBodyKey(body: unknown): string {
+  if (body === undefined || body === null) return '';
+  if (typeof body !== 'object') return String(body);
+  const record = body as Record<string, unknown>;
+  const sorted = Object.keys(record)
+    .filter((k) => record[k] !== undefined)
+    .sort()
+    .map((k) => [k, record[k]] as const);
+  return JSON.stringify(sorted);
+}
+
 /** Constructor options for {@link RestClient}. */
 export interface RestClientOptions {
   /** Server base URL, e.g. `http://localhost:3000`. Trailing slash is stripped. */
@@ -180,6 +198,18 @@ export class RestClient {
   private readonly inflightGets = new Map<string, Promise<ResponseEnvelope<unknown>>>();
 
   /**
+   * In-flight idempotent POSTs by method+URL+body (see {@link requestEnvelope}):
+   * identical posts racing each other share one fetch. Only routes that opt in
+   * via `idempotentPost` land here — non-idempotent POSTs must never be
+   * collapsed, and this map is deliberately separate from {@link inflightGets}
+   * (a GET and a POST never share a slot). Cleared in a `finally` — responses
+   * are never cached, so sequential posts fetch again and a retry AFTER a
+   * failure is a fresh request (the attempt loop inside one call still runs
+   * normally for every joiner).
+   */
+  private readonly inflightIdempotentPosts = new Map<string, Promise<ResponseEnvelope<unknown>>>();
+
+  /**
    * Сервер не знает полей `count`/`cursor` запроса выборки (старше этапа 4,
    * ошибка da2c68a7) — устанавливается при первом `VALIDATION_ERROR` на эти
    * поля и дальше запросы уходят без них, с offset-листанием. Флаг — свойство
@@ -243,6 +273,13 @@ export class RestClient {
    * overwrite it (ошибка 90811979: the focus strip read `meta.effective` of a
    * foreign response and lost the focused type's views, leaving the lower zone
    * empty until a manual mode toggle).
+   *
+   * In-flight dedup has two opt-in lanes, both sharing the whole response
+   * envelope: plain GETs by final URL, and — for a single read-only,
+   * idempotent route — POSTs by method+URL+body when the caller sets
+   * `idempotentPost`. A POST carrying `requestOptions` bypasses its lane, same
+   * as a GET (per-caller state must not leak); non-idempotent POSTs never opt
+   * in, so they are never collapsed.
    */
   private async requestEnvelope<T>(
     method: string,
@@ -251,6 +288,12 @@ export class RestClient {
       query?: QueryRecord;
       body?: unknown;
       requestOptions?: RequestOptions;
+      /**
+       * Opt-in in-flight dedup for an idempotent POST: identical parallel
+       * calls (method+URL+body) share one fetch. Only read-only routes may set
+       * it — never a mutating POST.
+       */
+      idempotentPost?: boolean;
     } = {},
   ): Promise<ResponseEnvelope<T>> {
     if (method === 'GET' && opts.requestOptions === undefined) {
@@ -261,6 +304,17 @@ export class RestClient {
         this.inflightGets.delete(url);
       });
       this.inflightGets.set(url, promise);
+      return promise;
+    }
+    if (method === 'POST' && opts.idempotentPost === true && opts.requestOptions === undefined) {
+      const url = this.buildUrl(path, opts.query);
+      const key = `POST ${url}\n${stableBodyKey(opts.body)}`;
+      const inflight = this.inflightIdempotentPosts.get(key);
+      if (inflight !== undefined) return inflight as Promise<ResponseEnvelope<T>>;
+      const promise = this.performRequest<T>(method, path, opts).finally(() => {
+        this.inflightIdempotentPosts.delete(key);
+      });
+      this.inflightIdempotentPosts.set(key, promise);
       return promise;
     }
     return this.performRequest<T>(method, path, opts);
@@ -1316,7 +1370,15 @@ export class RestClient {
    *  view relative to the context thought. The server substitutes
    *  `$thought.*` tokens from the focused thought; on unresolved tokens
    *  the response carries `meta.unresolved` (spec `9984aa98`,
-   *  requirement `b7fdab20`). */
+   *  requirement `b7fdab20`).
+   *
+   *  Idempotent route → in-flight dedup (задача 07edaa4d): running a view is
+   *  read-only, so N identical parallel calls (same network/thought/view and
+   *  same sort/order/limit/offset body) share one HTTP request and its
+   *  envelope. Sequential calls are NOT served from cache and a retry after a
+   *  failed call is a fresh request — the dedup slot lives only while the
+   *  request is in flight (ошибка 37b713de: a leaked listener multiplied one
+   *  click into 62 such POSTs and queued the server). */
   public async runThoughtTypeView(
     networkId: string,
     thoughtId: string,
@@ -1339,7 +1401,7 @@ export class RestClient {
     const { data, meta: envelope } = await this.requestEnvelope<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewName)}/run`,
-      { body: opts ?? {} },
+      { body: opts ?? {}, idempotentPost: true },
     );
     const meta = envelope as {
       total?: number;

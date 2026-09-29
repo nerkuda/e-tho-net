@@ -771,6 +771,81 @@ describe('RestClient — in-flight дедуп одинаковых GET', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// In-flight дедуп idempotent POST views/run (задача 07edaa4d). Образец — дедуп
+// GET выше; отличие: ключ включает тело (sort/order/limit/offset), а слот живёт
+// только пока запрос в полёте. Это защита в глубину после ошибки 37b713de
+// (утечка слушателя умножала один клик по отбору в 62 POST).
+// ---------------------------------------------------------------------------
+describe('RestClient — in-flight дедуп POST views/run (07edaa4d)', () => {
+  /** Success envelope для запуска отбора: data — ThoughtRef[], meta — как у сервера. */
+  const runBody = { data: [{ id: 't1', title: 'Мысль' }], meta: { total: 1, view: { id: 'v1', name: 'Отбор', type_id: 'ty1' } } };
+  /** Тело 5xx-ошибки — иначе пустой ответ трактуется parseResponse как 204. */
+  const err500 = { status: 500, body: { error: { code: 'INTERNAL', message: 'boom' } } };
+
+  it('N параллельных одинаковых запусков отбора делят один HTTP-запрос и один ответ', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: runBody }], { delayMs: 10 });
+    const client = makeClient(fetch);
+    const args = ['net1', 'thought1', 'view1', { limit: 20, offset: 0 }] as const;
+    const results = await Promise.all([
+      client.runThoughtTypeView(...args),
+      client.runThoughtTypeView(...args),
+      client.runThoughtTypeView(...args),
+      client.runThoughtTypeView(...args),
+      client.runThoughtTypeView(...args),
+    ]);
+    assert.equal(calls.length, 1, 'пять параллельных вызовов — один fetch');
+    for (const r of results) assert.deepEqual(r, results[0]);
+  });
+
+  it('разные тела (sort/order/limit/offset) не дедупятся — ключ включает тело', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: runBody }], { delayMs: 10 });
+    const client = makeClient(fetch);
+    await Promise.all([
+      client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 20 }),
+      client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 50 }),
+    ]);
+    assert.equal(calls.length, 2);
+  });
+
+  it('последовательные запуски не кешируются — каждый летит заново', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: runBody }]);
+    const client = makeClient(fetch);
+    await client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 20 });
+    await client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 20 });
+    assert.equal(calls.length, 2);
+  });
+
+  it('retry (5xx/backoff) внутри общего запроса не дедупится: повторяет один вызов, результат общий', async () => {
+    const { fetch, calls } = makeFetch(
+      [err500, err500, { status: 200, body: runBody }],
+      { delayMs: 5 },
+    );
+    const client = makeClient(fetch);
+    const args = ['net1', 'thought1', 'view1', { limit: 20 }] as const;
+    const [a, b] = await Promise.all([
+      client.runThoughtTypeView(...args),
+      client.runThoughtTypeView(...args),
+    ]);
+    assert.equal(calls.length, 3, 'два 5xx-повтора — это один общий запрос, не шесть');
+    assert.deepEqual(a, b);
+  });
+
+  it('после неудачного запуска слот освобождён — повторный запуск идёт новым запросом', async () => {
+    const { fetch, calls } = makeFetch([
+      err500,
+      err500,
+      err500,
+      { status: 200, body: runBody },
+    ]);
+    const client = makeClient(fetch);
+    await assert.rejects(() => client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 20 }));
+    const ok = await client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 20 });
+    assert.equal(calls.length, 4, 'первый вызов исчерпал 3 попытки, повторный — новый запрос');
+    assert.deepEqual(ok.data, runBody.data);
+  });
+});
+
 describe('RestClient — §16 system endpoints', () => {
   it('getHealth targets /api/v1/health without an Authorization header', async () => {
     const { fetch, calls } = makeFetch([
