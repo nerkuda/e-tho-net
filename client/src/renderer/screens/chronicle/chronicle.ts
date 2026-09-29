@@ -688,14 +688,27 @@ async function reload(preserveDepth = false): Promise<void> {
   }
 }
 
+/**
+ * Refresh ТЕКУЩЕГО вида с сохранением уже загруженной глубины ленты — единая
+ * точка для всех локальных refresh-путей (0.10.2, ошибка f5809943 и её
+ * продолжение b72e199e): правка/удаление записи и локальная вставка не должны
+ * терять дозагруженные «+50» страницы. Смена отбора/периода идёт через
+ * {@link reload} без флага — лента показывается с первой страницы.
+ */
+async function reloadKeepingDepth(): Promise<void> {
+  await reload(true);
+}
+
 /** Fetches the next «+50» page and appends it (scroll pagination). */
 async function loadMore(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || loadingMore || rows.length >= total) return;
   // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
   // страницу заново (данные важнее экономии запроса); прокрутку держит renderFeed.
+  // Глубину сохраняем — иначе перезапрос усекает ленту до одной страницы и
+  // клампит прокрутку (тот же класс, что f5809943).
   if (pendingReconcile) {
-    await reload();
+    await reloadKeepingDepth();
     return;
   }
   loadingMore = true;
@@ -756,12 +769,12 @@ const realtimeBatch = createRealtimeBatch<ChronicleRealtimeOp>({
 
 /**
  * Полный путь realtime: перезапрос ленты + пересчёт календаря. Глубину ленты
- * сохраняем (`reload(true)`) — этот путь обслуживает и локальные правки
+ * сохраняем (`reloadKeepingDepth`) — этот путь обслуживает и локальные правки
  * (`scheduleChronicleRefresh`), которые не должны терять дозагруженные «+50»
  * (ошибка f5809943).
  */
 async function reloadAndSync(): Promise<void> {
-  await reload(true);
+  await reloadKeepingDepth();
   syncCalendar();
   void refreshCalendarCounts();
 }
@@ -1657,7 +1670,9 @@ async function removeRecord(id: string): Promise<void> {
   try {
     const fresh = await etn.comments.get(networkId, id);
     await etn.comments.remove(networkId, id, fresh.version);
-    await reload();
+    // Удаление записи — refresh текущего вида: дозагруженные «+50» не теряем,
+    // прокрутка не прыгает в начало (тот же класс, что f5809943).
+    await reloadKeepingDepth();
   } catch (err) {
     notice(t('diary.deleteFailed', [errText(err)]), 'error');
   }

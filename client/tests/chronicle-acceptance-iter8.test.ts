@@ -214,8 +214,8 @@ describe('приёмка №8, п.2: создание записи не дёрг
     assert.match(src, /pendingReconcile = true/, 'следующая дозагрузка идёт согласованием');
     assert.match(
       src,
-      /if \(pendingReconcile\) \{\s*await reload\(\);\s*return;/,
-      'дозагрузка учитывает допущение (reload сохраняет прокрутку)',
+      /if \(pendingReconcile\) \{\s*await reloadKeepingDepth\(\);\s*return;/,
+      'дозагрузка учитывает допущение (refresh сохраняет глубину и прокрутку)',
     );
     // Немедленная полная перезагрузка сразу после создания устранена.
     assert.ok(
