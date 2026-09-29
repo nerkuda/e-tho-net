@@ -143,6 +143,111 @@ function stripCode(src: string): string {
     .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
 }
 
+/** Одно CSS-объявление правила (порядок появления сохранён). */
+interface Declaration {
+  prop: string;
+  value: string;
+}
+
+/**
+ * Разбирает блок объявлений правила в список «свойство → значение».
+ * Порядок сохраняется: позднее объявление переопределяет раннее — это и есть
+ * каскад внутри правила (шорткат, затем лонгхенд).
+ */
+function parseDeclarations(body: string): Declaration[] {
+  const out: Declaration[] = [];
+  for (const chunk of body.split(';')) {
+    const trimmed = chunk.trim();
+    if (trimmed === '') continue;
+    const at = trimmed.indexOf(':');
+    if (at < 0) continue;
+    out.push({
+      prop: trimmed.slice(0, at).trim().toLowerCase(),
+      value: trimmed.slice(at + 1).trim(),
+    });
+  }
+  return out;
+}
+
+/** Токены значения CSS верхнего уровня (скобки `var(…)`/`rgb(…)` — один токен). */
+function topLevelTokens(value: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of value) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur !== '') {
+        out.push(cur);
+        cur = '';
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur !== '') out.push(cur);
+  return out;
+}
+
+/** Ключевые слова стиля рамки (border-style). */
+const BORDER_STYLES = new Set([
+  'none',
+  'hidden',
+  'solid',
+  'dashed',
+  'dotted',
+  'double',
+  'groove',
+  'ridge',
+  'inset',
+  'outset',
+]);
+
+/** Ширины рамки (длина или ключевое слово). */
+const BORDER_WIDTHS = /^(?:\d+(?:\.\d+)?(?:px|em|rem)|thin|medium|thick)$/;
+
+/**
+ * Итоговый `border-right` правила с учётом каскада: шорткат `border-right`
+ * задаёт ширину/стиль/цвет, а лонгхенды (`border-right-color`/`-width`/`-style`)
+ * идут позже и переопределяют соответствующие части. Возвращает итоговые
+ * значения последнего выигравшего объявления по каждой части.
+ */
+function resolveBorderRight(decls: Declaration[]): {
+  color: string | null;
+  width: string | null;
+  style: string | null;
+} {
+  let color: string | null = null;
+  let width: string | null = null;
+  let style: string | null = null;
+  for (const d of decls) {
+    if (d.prop === 'border-right') {
+      for (const token of topLevelTokens(d.value)) {
+        const t = token.toLowerCase();
+        if (BORDER_WIDTHS.test(t)) width = t;
+        else if (BORDER_STYLES.has(t)) style = t;
+        else color = token;
+      }
+    } else if (d.prop === 'border-right-color') color = d.value;
+    else if (d.prop === 'border-right-width') width = d.value.trim().toLowerCase();
+    else if (d.prop === 'border-right-style') style = d.value.trim().toLowerCase();
+  }
+  return { color, width, style };
+}
+
+/**
+ * Цвет прозрачен: ключевое слово `transparent` либо нулевая альфа в
+ * `rgb()`/`rgba()` (в любой записи — с запятыми или через слэш).
+ */
+function isTransparentColor(value: string | null): boolean {
+  if (value === null) return false;
+  const v = value.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (v === 'transparent') return true;
+  const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/.exec(v);
+  return m !== null && m[4] !== undefined && Number.parseFloat(m[4]) === 0;
+}
+
 /** Рекурсивно собирает исходники renderer'а (без node_modules). */
 function listTs(dir: string, out: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -284,25 +389,50 @@ describe('guard: представление мысли строится толь
   it('иконочная полоса всегда берёт фон облачка — inherit, без признака cloud-has-bg', () => {
     // Дефолтный фон, унаследованный от типа и заданный вручную — все три
     // случая дают ОДИН фон у облачка и у иконочной полосы (задача 1dc56942,
-    // ревизия критериев 2026-09-29): полоса объявляет `background: inherit`
-    // (собственного фона `--surface-2` у неё нет), а разделительная линия
-    // прозрачна при сохранённой толщине 1 px — геометрия полосы не меняется.
+    // ревизия критериев 2026-09-29): полоса объявляет унаследованный фон
+    // (собственного `--surface-2` у неё нет), а разделительная линия прозрачна
+    // при сохранённой толщине 1 px — геометрия полосы не меняется.
+    //
+    // Проверяем ЭФФЕКТ, а не точный текст: блок объявлений разбирается в
+    // «свойство → значение», шорткат `border-right` и лонгхенды
+    // (`border-right-color`/`-width`/`-style`) сводятся к итоговому разделителю.
+    // Семантически эквивалентная перезапись (`border-right: 1px solid
+    // var(--border); border-right-color: transparent;`) обязана остаться зелёной.
     const css = stripCssComments(readText(STYLES_CSS));
     const base = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(
       (m) => (m[1] ?? '').trim() === '.cloud-icon',
     );
     assert.ok(base !== undefined, 'базовое правило `.cloud-icon` должно существовать');
     const body = base?.[2] ?? '';
-    assert.match(body, /background:\s*inherit;/, 'полоса берёт фон облачка, а не свой');
-    assert.doesNotMatch(
-      body,
-      /--surface-2/,
-      'у полосы не должно быть собственного фона --surface-2',
+    const decls = parseDeclarations(body);
+
+    // Фон полосы — не свой, а унаследованный от облачка (не `--surface-2`).
+    assert.doesNotMatch(body, /--surface-2/, 'собственный фон --surface-2 у полосы запрещён');
+    const bg = [...decls]
+      .reverse()
+      .find((d) => d.prop === 'background' || d.prop === 'background-color');
+    assert.ok(bg !== undefined, 'полоса должна объявлять background/background-color');
+    assert.equal(
+      (bg?.value ?? '').trim().toLowerCase(),
+      'inherit',
+      'фон полосы — inherit от облачка (проверяем эффект, а не точный текст)',
     );
-    assert.match(
-      body,
-      /border-right:\s*1px solid transparent;/,
-      'разделительная линия полосы прозрачна при сохранённой толщине 1 px',
+
+    // Разделитель не виден (итоговый цвет прозрачен), но толщина 1 px сохранена
+    // — геометрия полосы неизменна.
+    const border = resolveBorderRight(decls);
+    assert.ok(
+      isTransparentColor(border.color),
+      `итоговый border-right-color прозрачен (получено: ${border.color ?? 'не задан'})`,
+    );
+    assert.equal(
+      border.width,
+      '1px',
+      `толщина разделителя 1 px сохранена (получено: ${border.width ?? 'не задана'})`,
+    );
+    assert.ok(
+      border.style !== null && border.style !== 'none' && border.style !== 'hidden',
+      `разделитель имеет отрисовываемый стиль при толщине 1 px (получено: ${border.style ?? 'не задан'})`,
     );
 
     // Условие исчезло: признак-класс `cloud-has-bg` мёртв и удалён — его нет
