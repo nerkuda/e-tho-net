@@ -10,6 +10,12 @@
  * заголовок → комментарий). Enter на поле выполняет действие поля, Esc/клик вне
  * записи — выход из режима полей.
  *
+ * ←/→ сворачивают ТЕЛО записи в двух случаях (0.10.2, задачи 41ed99ab и
+ * 9cdede6b): когда запись выделена ЦЕЛИКОМ (режим полей не активен) — рабочий
+ * приём «↑/↓ выделить запись, ←/→ свернуть/развернуть, не заходя внутрь»; и,
+ * как раньше, когда текущее поле — «заголовок» в просмотре. На прочих полях
+ * записи (дата/период, мысли, комментарий) стрелки свёрнутость не трогают.
+ *
  * ИДЕНТИЧНОСТЬ ТЕКУЩЕЙ ЗАПИСИ — ПО ВХОЖДЕНИЮ «день + запись» (приёмка №10,
  * задача 197b3b05): длительная запись видна в каждой группе дня, и каждая её
  * копия — отдельная сущность навигации и клика. Номер дня хранится рядом с
@@ -470,6 +476,18 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     activateField();
   }
 
+  /**
+   * Реагируют ли ←/→ на текущую ЗАПИСЬ (0.10.2, задача 9cdede6b)? Сворачивание
+   * тела доступно, когда режим полей НЕ активен — запись выделена целиком
+   * (`field === null`), — а также, по прежней редакции (задача 41ed99ab), когда
+   * текущее поле — «заголовок» в просмотре. На прочих полях записи
+   * (дата/период, мысли, комментарий) стрелки свёрнутость не трогают.
+   */
+  function arrowsToggleRecord(field: { kind: RecordElementKind } | null): boolean {
+    if (current?.kind !== 'record' || currentDay === null) return false;
+    return field === null || field.kind === 'title';
+  }
+
   /** Выход из правки по Esc: снять фокус и вернуть его в навигацию. */
   function exitEditing(target: HTMLElement): void {
     (target as unknown as { blur?: () => void }).blur?.();
@@ -497,14 +515,15 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         move(-1);
         break;
       case 'ArrowLeft': {
-        // Группа дня — свернуть; заголовок записи в просмотре — свернуть тело
-        // (0.10.2, задача 41ed99ab). В правке заголовка сюда не доходим:
-        // isEditingTarget выше отдаёт стрелки полю ввода.
+        // Группа дня — свернуть; запись целиком (режим полей не активен) либо
+        // поле «заголовок» в просмотре — свернуть тело (0.10.2, задачи 41ed99ab,
+        // 9cdede6b). В правке заголовка сюда не доходим: isEditingTarget выше
+        // отдаёт стрелки полю ввода.
         const field = currentField();
         if (current?.kind === 'day') {
           event.preventDefault?.();
           setDayCollapsed(current.key, true);
-        } else if (current?.kind === 'record' && field?.kind === 'title') {
+        } else if (arrowsToggleRecord(field)) {
           event.preventDefault?.();
           toggleRecordCollapsed(true);
         }
@@ -515,7 +534,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         if (current?.kind === 'day') {
           event.preventDefault?.();
           setDayCollapsed(current.key, false);
-        } else if (current?.kind === 'record' && field?.kind === 'title') {
+        } else if (arrowsToggleRecord(field)) {
           event.preventDefault?.();
           toggleRecordCollapsed(false);
         }

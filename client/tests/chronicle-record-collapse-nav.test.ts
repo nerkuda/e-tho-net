@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 
 import {
   attachFeedNav,
+  FEED_NAV_CURRENT_CLASS,
   FEED_NAV_ELEMENT_CLASS,
 } from '../src/renderer/screens/chronicle/feed-nav.js';
 import { applyRecordCollapsed } from '../src/renderer/screens/chronicle/record-groups.js';
@@ -147,5 +148,181 @@ describe('навигация по сворачиваемой записи (за�
     toTitle(feed.root);
     press(feed.root, 'Enter');
     assert.deepEqual(edited, ['r1'], 'экран получил команду правки заголовка');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Задача 9cdede6b: ←/→ сворачивают запись ЦЕЛИКОМ из навигации по ленте
+// ---------------------------------------------------------------------------
+
+const LABELS = { collapse: 'Свернуть', expand: 'Развернуть' };
+
+interface Feed2 {
+  root: ShimElement;
+  card: (id: string) => ShimElement;
+  title: (id: string) => ShimElement;
+  body: (id: string) => ShimElement;
+  date: (id: string) => ShimElement;
+  chips: (id: string) => ShimElement;
+}
+
+/** Лента дня с двумя записями — чтобы проверить и переход ↓ после ←/→. */
+function buildFeed2(): Feed2 {
+  const root = new ShimElement('div', 'chron-feed-wrap');
+  const section = new ShimElement('div', 'diary-day');
+  section.setAttribute('data-day', '2026-09-11');
+  const head = new ShimElement('button', 'diary-day-head');
+  const list = new ShimElement('div', 'diary-day-list');
+  for (const id of ['r1', 'r2']) {
+    const card = new ShimElement('div', 'diary-record');
+    card.setAttribute('data-row-key', id);
+    const cardHead = new ShimElement('div', 'diary-record-head');
+    cardHead.append(new ShimElement('button', 'diary-record-date'));
+    cardHead.append(new ShimElement('div', 'diary-record-chips'));
+    cardHead.append(new ShimElement('button', 'diary-chip-add'));
+    const title = new ShimElement('button', 'diary-record-title');
+    const body = new ShimElement('div', 'diary-record-body');
+    card.append(cardHead, title, body);
+    list.append(card);
+  }
+  section.append(head, list);
+  root.append(section);
+  const cardOf = (id: string): ShimElement =>
+    root.querySelectorAll('.diary-record').find((c) => c.getAttribute('data-row-key') === id)!;
+  return {
+    root,
+    card: cardOf,
+    title: (id) => cardOf(id).querySelector('.diary-record-title')!,
+    body: (id) => cardOf(id).querySelector('.diary-record-body')!,
+    date: (id) => cardOf(id).querySelector('.diary-record-date')!,
+    chips: (id) => cardOf(id).querySelector('.diary-chip-add')!,
+  };
+}
+
+/** Нажатие с произвольной целью (для проверки режима правки текста). */
+function pressKey(root: ShimElement, key: string, target?: ShimElement): void {
+  root.emit('keydown', {
+    key,
+    shiftKey: false,
+    target: target ?? root,
+    preventDefault: () => undefined,
+  });
+}
+
+describe('запись целиком: ←/→ сворачивают/разворачивают из навигации (9cdede6b)', () => {
+  it('↑/↓ выделяет запись; ← сворачивает тело, → разворачивает — без входа в поля', () => {
+    const feed = buildFeed2();
+    const calls: Array<[string, string, boolean]> = [];
+    attachFeedNav(feed.root as unknown as HTMLElement, {
+      onSetDayCollapsed: () => undefined,
+      onSetRecordCollapsed: (day, id, collapsed) => calls.push([day, id, collapsed]),
+      onEditBody: () => undefined,
+    });
+
+    press(feed.root, 'ArrowDown'); // группа дня
+    press(feed.root, 'ArrowDown'); // запись r1 — выделена целиком
+    assert.ok(
+      feed.card('r1').classList.contains(FEED_NAV_CURRENT_CLASS),
+      'запись выделена стрелками',
+    );
+    // Режим полей НЕ активен — ни одно поле не подсвечено.
+    assert.ok(
+      !feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS),
+      'входа в поля не было',
+    );
+
+    // Числа до: тело видимо, карточка не свёрнута.
+    assert.equal(feed.body('r1').hidden, false, 'до ← тело видимо');
+    assert.equal(feed.card('r1').classList.contains('is-collapsed'), false);
+
+    const bodyNode = feed.body('r1');
+    press(feed.root, 'ArrowLeft');
+    assert.deepEqual(calls, [['2026-09-11', 'r1', true]], 'запрос свернуть тело записи');
+    // Экран сворачивает на месте — имитируем и сверяем числа.
+    applyRecordCollapsed(feed.card('r1') as unknown as HTMLElement, true, LABELS);
+    assert.equal(feed.body('r1').hidden, true, 'после ← тело скрыто');
+    assert.equal(feed.card('r1').classList.contains('is-collapsed'), true, 'карточка свёрнута');
+    assert.equal(feed.body('r1'), bodyNode, 'тело — тот же узел (переключение на месте)');
+
+    press(feed.root, 'ArrowRight');
+    assert.deepEqual(calls[1], ['2026-09-11', 'r1', false], 'запрос развернуть тело записи');
+    applyRecordCollapsed(feed.card('r1') as unknown as HTMLElement, false, LABELS);
+    assert.equal(feed.body('r1').hidden, false, 'после → тело снова видимо');
+    assert.equal(feed.card('r1').classList.contains('is-collapsed'), false);
+  });
+
+  it('после ←/→ выделение остаётся на записи, ↓ двигает его дальше (фокус не потерян)', () => {
+    const feed = buildFeed2();
+    attachFeedNav(feed.root as unknown as HTMLElement, {
+      onSetDayCollapsed: () => undefined,
+      onSetRecordCollapsed: (_day, _id, collapsed) =>
+        applyRecordCollapsed(feed.card('r1') as unknown as HTMLElement, collapsed, LABELS),
+      onEditBody: () => undefined,
+    });
+
+    press(feed.root, 'ArrowDown');
+    press(feed.root, 'ArrowDown'); // r1
+    press(feed.root, 'ArrowLeft'); // свернуть r1 целиком
+    assert.ok(
+      feed.card('r1').classList.contains(FEED_NAV_CURRENT_CLASS),
+      'выделение осталось на r1',
+    );
+    assert.equal(feed.title('r1').focused, true, 'фокус остался в ленте (на заголовке r1)');
+
+    press(feed.root, 'ArrowDown'); // следующая запись
+    assert.ok(
+      feed.card('r2').classList.contains(FEED_NAV_CURRENT_CLASS),
+      '↓ после ←/→ двигает выделение дальше',
+    );
+    assert.ok(!feed.card('r1').classList.contains(FEED_NAV_CURRENT_CLASS));
+  });
+
+  it('на прочих полях записи (дата/период, мысли) ←/→ свёрнутость не трогают', () => {
+    const feed = buildFeed2();
+    const calls: Array<[string, string, boolean]> = [];
+    attachFeedNav(feed.root as unknown as HTMLElement, {
+      onSetDayCollapsed: () => undefined,
+      onSetRecordCollapsed: (day, id, collapsed) => calls.push([day, id, collapsed]),
+      onEditBody: () => undefined,
+    });
+
+    press(feed.root, 'ArrowDown');
+    press(feed.root, 'ArrowDown'); // r1
+    press(feed.root, 'Enter'); // режим полей → дата/период
+    assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS));
+
+    press(feed.root, 'ArrowLeft');
+    press(feed.root, 'ArrowRight');
+    assert.deepEqual(calls, [], 'на поле «дата/период» стрелки свёрнутость не трогают');
+
+    press(feed.root, 'Tab'); // мысли
+    assert.ok(feed.chips('r1').classList.contains(FEED_NAV_ELEMENT_CLASS));
+    press(feed.root, 'ArrowLeft');
+    assert.deepEqual(calls, [], 'на поле «мысли» стрелки свёрнутость не трогают');
+
+    press(feed.root, 'Tab'); // заголовок
+    press(feed.root, 'ArrowLeft');
+    assert.deepEqual(
+      calls,
+      [['2026-09-11', 'r1', true]],
+      'на поле «заголовок» прежнее поведение сохранено',
+    );
+  });
+
+  it('в правке текста ←/→ принадлежат редактору — лента молчит', () => {
+    const feed = buildFeed2();
+    const calls: Array<[string, string, boolean]> = [];
+    attachFeedNav(feed.root as unknown as HTMLElement, {
+      onSetDayCollapsed: () => undefined,
+      onSetRecordCollapsed: (day, id, collapsed) => calls.push([day, id, collapsed]),
+      onEditBody: () => undefined,
+    });
+
+    press(feed.root, 'ArrowDown');
+    press(feed.root, 'ArrowDown'); // r1
+    const input = new ShimElement('input', 'diary-record-title-input');
+    pressKey(feed.root, 'ArrowLeft', input);
+    pressKey(feed.root, 'ArrowRight', input);
+    assert.deepEqual(calls, [], 'в поле правки стрелки не сворачивают запись');
   });
 });
