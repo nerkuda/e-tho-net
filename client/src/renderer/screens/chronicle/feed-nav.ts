@@ -56,6 +56,16 @@ type RecordElementKind = 'date' | 'chips' | 'title' | 'body';
 export interface FeedNavOptions {
   /** Свернуть (`true`) или развернуть (`false`) группу дня. */
   onSetDayCollapsed: (day: string, collapsed: boolean) => void;
+  /**
+   * Свернуть/развернуть ТЕЛО записи (0.10.2, задача 41ed99ab). Единица — вхождение
+   * «день + id»; `day` — день текущей копии записи.
+   */
+  onSetRecordCollapsed?: (day: string, id: string, collapsed: boolean) => void;
+  /**
+   * Вход в правку ЗАГОЛОВКА записи (Enter на поле «заголовок», 0.10.2, задача
+   * 41ed99ab). Раньше Enter на заголовке просто фокусировал поле ввода.
+   */
+  onEditTitle?: (recordId: string, card: HTMLElement) => void;
   /** Вход в правку текста записи (Enter на поле «комментарий»). */
   onEditBody: (recordId: string, card: HTMLElement) => void;
   /** Открыть диалог «Дата/период» (Enter на поле «дата/период»). */
@@ -278,7 +288,12 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     if (date !== null) out.push({ kind: 'date', el: date });
     if (chips !== null) out.push({ kind: 'chips', el: chips });
     if (title !== null) out.push({ kind: 'title', el: title });
-    if (body !== null) out.push({ kind: 'body', el: body });
+    // Поле «комментарий» доступно ТОЛЬКО при развёрнутой группе заголовка
+    // (0.10.2, задача 41ed99ab): в свёрнутой записи тело скрыто и Tab с
+    // заголовка уходит на «дата/период».
+    if (body !== null && !card.classList.contains('is-collapsed')) {
+      out.push({ kind: 'body', el: body });
+    }
     return out;
   }
 
@@ -344,6 +359,23 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     opts.onSetDayCollapsed(day, collapsed);
   }
 
+  /**
+   * Свернуть/развернуть ТЕЛО текущей записи (0.10.2, задача 41ed99ab).
+   * Переключение — на месте: экран скрывает тело, не пересобирая ленту, поэтому
+   * фокус и выделение остаются на заголовке — после переключения возвращаем
+   * фокус туда (требование «свёрнутая запись снова разворачивается»).
+   */
+  function toggleRecordCollapsed(collapsed: boolean): void {
+    if (current?.kind !== 'record' || currentDay === null) return;
+    const id = current.key;
+    opts.onSetRecordCollapsed?.(currentDay, id, collapsed);
+    navActive = true;
+    applyHighlight();
+    const card = findCardIn(currentDay, id);
+    const title = card?.querySelector<HTMLElement>('.diary-record-title') ?? null;
+    (title ?? card)?.focus?.();
+  }
+
   /** Текущее поле записи (null — режим полей не активен или поле исчезло). */
   function currentField(): { card: HTMLElement; kind: RecordElementKind } | null {
     if (current === null || current.kind !== 'record' || elementCursor < 0) return null;
@@ -385,8 +417,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         opts.onAddThought?.(current.key, field.card);
         break;
       case 'title': {
-        const title = field.card.querySelector<HTMLElement>('.diary-record-title');
-        title?.focus?.();
+        opts.onEditTitle?.(current.key, field.card);
         break;
       }
       case 'body':
@@ -441,18 +472,31 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         event.preventDefault?.();
         move(-1);
         break;
-      case 'ArrowLeft':
+      case 'ArrowLeft': {
+        // Группа дня — свернуть; заголовок записи в просмотре — свернуть тело
+        // (0.10.2, задача 41ed99ab). В правке заголовка сюда не доходим:
+        // isEditingTarget выше отдаёт стрелки полю ввода.
+        const field = currentField();
         if (current?.kind === 'day') {
           event.preventDefault?.();
           setDayCollapsed(current.key, true);
+        } else if (current?.kind === 'record' && field?.kind === 'title') {
+          event.preventDefault?.();
+          toggleRecordCollapsed(true);
         }
         break;
-      case 'ArrowRight':
+      }
+      case 'ArrowRight': {
+        const field = currentField();
         if (current?.kind === 'day') {
           event.preventDefault?.();
           setDayCollapsed(current.key, false);
+        } else if (current?.kind === 'record' && field?.kind === 'title') {
+          event.preventDefault?.();
+          toggleRecordCollapsed(false);
         }
         break;
+      }
       case 'Tab':
         // Tab/Shift+Tab ходят по полям только в режиме полей: вне его — обычная
         // навигация фокуса браузера.

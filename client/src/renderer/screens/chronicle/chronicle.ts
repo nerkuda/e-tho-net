@@ -69,7 +69,7 @@ import {
   resolveDatePeriodInstants,
   type DatePeriodValue,
 } from '../../lib/date-period-dialog.js';
-import { createThoughtCloud } from '../../lib/thought-cloud.js';
+import { createThoughtCloud, deferSingleClick } from '../../lib/thought-cloud.js';
 import {
   RECORD_SEARCH_MAX_RESULTS,
   mountRecordSearch,
@@ -111,11 +111,14 @@ import {
   hasRowId,
   insertRowByDay,
   isLastChip,
+  isWeekend,
   localDay,
   localDayEnd,
   localDayStart,
   periodValuesForRange,
   planSlotCommit,
+  recordDisplayTitle,
+  recordTitleFromBody,
   resolvePeriodDay,
   rowDays,
   slotDeleteNeedsNetwork,
@@ -137,6 +140,15 @@ import {
 } from './filter-panel.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
+import {
+  RECORD_TITLE_CLASS,
+  RECORD_TITLE_INPUT_CLASS,
+  applyRecordCollapsed,
+  dayOfCard,
+  findRecordCard,
+  recordCollapseKey,
+  type RecordGroupLabels,
+} from './record-groups.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 
@@ -241,6 +253,15 @@ const collapsedDays = new Set<string>();
 
 let collapsedDaysLoaded = false;
 
+/**
+ * Свёрнутые ТЕЛА записей ленты (0.10.2, задача 41ed99ab): ключи вхождений
+ * {@link recordCollapseKey} «день + id». Единица свёрнутости — вхождение, а не
+ * запись; состояние — L4 `ui_state` рядом с `diary_collapsed_days`.
+ */
+const collapsedRecords = new Set<string>();
+
+let collapsedRecordsLoaded = false;
+
 /** Загрузить свёрнутые группы дат из клиентских настроек экрана (L4). */
 async function loadCollapsedDays(): Promise<void> {
   const networkId = store.state.networkId;
@@ -269,13 +290,55 @@ function persistCollapsedDays(): void {
     .catch(() => undefined);
 }
 
+/** Загрузить свёрнутые тела записей из клиентских настроек экрана (L4). */
+async function loadCollapsedRecords(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null || collapsedRecordsLoaded) return;
+  collapsedRecordsLoaded = true;
+  try {
+    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.DIARY_COLLAPSED_RECORDS);
+    collapsedRecords.clear();
+    if (raw !== null && raw !== '') {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const key of parsed) if (typeof key === 'string') collapsedRecords.add(key);
+      }
+    }
+  } catch {
+    // Настройка недоступна — считаем, что всё развёрнуто.
+  }
+}
+
+/** Сохранить свёрнутые тела записей в клиентские настройки экрана (L4). */
+function persistCollapsedRecords(): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void etn.ui
+    .setState(
+      networkId,
+      UI_STATE_KEY.DIARY_COLLAPSED_RECORDS,
+      JSON.stringify([...collapsedRecords]),
+    )
+    .catch(() => undefined);
+}
+
 /** Переключить свёрнутость группы даты (0.10.1, приёмка №2). */
 function toggleDayCollapsed(day: string): void {
   setDayCollapsed(day, !collapsedDays.has(day));
 }
 
+/** Переключить свёрнутость тела записи (0.10.2, задача 41ed99ab). */
+function toggleRecordCollapsed(day: string, id: string): void {
+  setRecordCollapsed(day, id, !collapsedRecords.has(recordCollapseKey(day, id)));
+}
+
 /** Подписи заголовка группы дат из словаря (для in-place переключения). */
 function dayGroupLabels(): DayGroupLabels {
+  return { expand: t('listActions.expand'), collapse: t('listActions.collapse') };
+}
+
+/** Подписи заголовка записи из словаря (для in-place переключения). */
+function recordGroupLabels(): RecordGroupLabels {
   return { expand: t('listActions.expand'), collapse: t('listActions.collapse') };
 }
 
@@ -303,6 +366,58 @@ function setDayCollapsed(day: string, collapsed: boolean): void {
   renderFeed();
 }
 
+/**
+ * Привести свёрнутость тела записи к состоянию (0.10.2, задача 41ed99ab):
+ * единая точка для клика по заголовку и для клавиатуры (←/→). Запись
+ * переключается НА МЕСТЕ (`applyRecordCollapsed`) — фокус на заголовке и
+ * позиция прокрутки сохраняются. Фокус после переключения возвращает
+ * контроллер навигации. Пока заголовок правится, сворачивание недоступно.
+ */
+function setRecordCollapsed(day: string, id: string, collapsed: boolean): void {
+  const key = recordCollapseKey(day, id);
+  if (collapsedRecords.has(key) === collapsed) return;
+  if (collapsed) collapsedRecords.add(key);
+  else collapsedRecords.delete(key);
+  persistCollapsedRecords();
+  if (feedList === null) return;
+  const card = findRecordCard(feedList, day, id);
+  if (card === null) {
+    renderFeed();
+    return;
+  }
+  applyRecordCollapsed(card, collapsed, recordGroupLabels());
+}
+
+/**
+ * Свернуть/развернуть записи ОДНОГО дня (контекстное меню группы дня, 0.10.2,
+ * задача 41ed99ab). Обе команды доступны всегда. «Развернуть записи дня»
+ * разворачивает и сам день — иначе эффект не виден. Переключение — на месте.
+ */
+function setDayRecordsCollapsed(day: string, collapsed: boolean): void {
+  const { from, to } = currentFromTo();
+  const group = groupByLocalDays(rows, { from, to }).find((d) => d.day === day);
+  if (group !== undefined) {
+    for (const row of group.rows) {
+      const key = recordCollapseKey(day, row.id);
+      if (collapsed) collapsedRecords.add(key);
+      else collapsedRecords.delete(key);
+    }
+  }
+  persistCollapsedRecords();
+  // «Развернуть записи дня» возвращает и сам день — иначе эффект не виден.
+  if (!collapsed && collapsedDays.has(day)) setDayCollapsed(day, false);
+  const section = feedList !== null ? findDaySection(feedList, day) : null;
+  if (section !== null) {
+    const labels = recordGroupLabels();
+    for (const card of Array.from(section.querySelectorAll<HTMLElement>('.diary-record'))) {
+      const id = card.getAttribute(TABLE_ROW_KEY_ATTR) ?? '';
+      if (id === '') continue;
+      applyRecordCollapsed(card, collapsedRecords.has(recordCollapseKey(day, id)), labels);
+    }
+  }
+  feedNav?.refresh();
+}
+
 // ---------------------------------------------------------------------------
 // Mount / init
 // ---------------------------------------------------------------------------
@@ -322,6 +437,8 @@ export async function ensureChronicleInitialised(): Promise<void> {
   month = null;
   collapsedDaysLoaded = false;
   collapsedDays.clear();
+  collapsedRecordsLoaded = false;
+  collapsedRecords.clear();
   // Подсветка перехода — состояние текущего входа, не персистится.
   jumpHighlightId = null;
   recordSearch?.hide();
@@ -346,6 +463,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
   }
   await getHome().catch(() => undefined);
   await loadCollapsedDays();
+  await loadCollapsedRecords();
   await reload();
   syncCalendar();
 }
@@ -476,6 +594,8 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   feedWrap.tabIndex = 0;
   feedNav = attachFeedNav(feedWrap, {
     onSetDayCollapsed: (day, collapsed) => setDayCollapsed(day, collapsed),
+    onSetRecordCollapsed: (day, id, collapsed) => setRecordCollapsed(day, id, collapsed),
+    onEditTitle: (_id, card) => beginTitleEditByCard(card),
     onEditBody: (_id, card) => openCardBodyEditor(card),
     onEditDates: (_id, card) => editCardDates(card),
     onAddThought: (id) => void pickAndAttach(id),
@@ -975,7 +1095,9 @@ async function localRowFromComment(
     updated_at: comment.updated_at,
     created_by: comment.created_by,
     updated_by: comment.updated_by,
-    snippet: '',
+    // Производный заголовок записи с пустым `title` берётся из тела (0.10.2,
+    // задача 41ed99ab): у локальной строки `snippet` считается из `body_md`.
+    snippet: recordTitleFromBody(comment.body_md),
     body_html: comment.body_html,
     targets,
   };
@@ -1063,24 +1185,36 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   else renderFeed();
   feedNav?.refresh();
 }
-/** Свернуть/развернуть все показанные группы дат (кнопки верхней панели). */
+/** Свернуть/развернуть все показанные группы дат И тела записей (кнопки панели). */
 function setAllDaysCollapsed(collapsed: boolean): void {
   collapsedDays.clear();
+  collapsedRecords.clear();
+  const { from, to } = currentFromTo();
   if (collapsed) {
-    const { from, to } = currentFromTo();
-    for (const day of groupByLocalDays(rows, { from, to })) collapsedDays.add(day.day);
+    for (const day of groupByLocalDays(rows, { from, to })) {
+      collapsedDays.add(day.day);
+      for (const row of day.rows) collapsedRecords.add(recordCollapseKey(day.day, row.id));
+    }
     if (slot !== null) collapsedDays.add(slot.day);
   }
   persistCollapsedDays();
+  persistCollapsedRecords();
   // Как и одиночная группа, «свернуть/развернуть все» переключает секции
   // НА МЕСТЕ — фокус и прокрутка сохраняются (требование 165323a7).
   if (feedList !== null) {
     const labels = dayGroupLabels();
+    const recLabels = recordGroupLabels();
     let touched = false;
     for (const section of Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day'))) {
       const day = section.dataset['day'] ?? '';
       if (day === '') continue;
       applyDayCollapsed(section, collapsed, labels);
+      // Кнопки верхней панели действуют и на записи (0.10.2, задача 41ed99ab).
+      for (const card of Array.from(section.querySelectorAll<HTMLElement>('.diary-record'))) {
+        const id = card.getAttribute(TABLE_ROW_KEY_ATTR) ?? '';
+        if (id === '') continue;
+        applyRecordCollapsed(card, collapsed, recLabels);
+      }
       touched = true;
     }
     if (touched) {
@@ -1105,6 +1239,16 @@ function buildDaySection(day: string): HTMLElement {
     role: 'ghost',
     class: 'diary-day-head',
     onClick: () => toggleDayCollapsed(day),
+  });
+  // Выходной день (сб/вс) красится отдельным токеном (0.10.2, задача 41ed99ab).
+  if (isWeekend(day)) head.classList.add('is-weekend');
+  // Контекстное меню группы дня: обе команды записей дня доступны всегда.
+  head.addEventListener('contextmenu', (event: MouseEvent) => {
+    event.preventDefault();
+    showMenuAt(event.clientX, event.clientY, [
+      menuAction(t('diary.collapseDayRecords'), () => setDayRecordsCollapsed(day, true)),
+      menuAction(t('diary.expandDayRecords'), () => setDayRecordsCollapsed(day, false)),
+    ]);
   });
   head.prepend(svgIcon('chevron-down', 18));
   const list = div('diary-day-list');
@@ -1180,9 +1324,20 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow): void {
       onClick: (event) => showMenuAt(event.clientX, event.clientY, recordMenuItems(row)),
     }),
   );
-  // Строка 2 — заголовок, далее оболочка комментария. `buildRecordBody` кладёт
-  // дескриптор оболочки в `recordShells` под этот самый узел карточки.
-  card.replaceChildren(head, buildTitleInput(row), buildRecordBody(row, card));
+  // Строка 2 — заголовок-группа, далее оболочка комментария. `buildRecordBody`
+  // кладёт дескриптор оболочки в `recordShells` под этот самый узел карточки.
+  card.replaceChildren(head, buildTitle(row, card), buildRecordBody(row, card));
+  // Свёрнутость тела записи переприменяется при keyed-обновлении карточки и
+  // realtime (0.10.2, задача 41ed99ab): fillRecordCard — общая точка сборки и
+  // обновления, ключ вхождения читается из дня-предка карточки.
+  const day = dayOfCard(card);
+  if (day !== null) {
+    applyRecordCollapsed(
+      card,
+      collapsedRecords.has(recordCollapseKey(day, row.id)),
+      recordGroupLabels(),
+    );
+  }
 }
 
 /** Подпись даты/периода записи — единый помощник периода дневниковой записи. */
@@ -1190,19 +1345,96 @@ function recordDateLabel(row: ChronicleRow): string {
   return formatRecordPeriod(row.valid_from, row.valid_to, row.use_time === true);
 }
 
-/** Инпут заголовка записи: правка по месту с сохранением по blur. */
-function buildTitleInput(row: ChronicleRow): HTMLElement {
-  const input = fieldInput({ extraClass: 'diary-record-title' });
+/** Отображаемый заголовок записи; пустой — «Пустая запись» из словаря. */
+function recordTitleLabel(row: ChronicleRow): string {
+  return recordDisplayTitle(row.title, row.snippet) || t('diary.emptyTitle');
+}
+
+/**
+ * Заголовок записи — сворачиваемая группа (0.10.2, задача 41ed99ab). В
+ * ПРОСМОТРЕ это крупный заметный текст-кнопка: одиночный клик сворачивает/
+ * разворачивает ТОЛЬКО тело комментария, двойной клик входит в правку. Пока
+ * заголовок правится, на его месте поле ввода, и сворачивание недоступно.
+ */
+function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
+  // Одиночный клик откладывается на время двойного (эталон `deferSingleClick`,
+  // как у жестов облачка): иначе первый клик двойного успевал бы свернуть тело,
+  // и вход в правку заголовка оставлял бы запись свёрнутой (0.10.2, задача
+  // 41ed99ab, DoD №3–4).
+  let pendingClick: { cancel: () => void } | null = null;
+  const view = uiButton({
+    label: recordTitleLabel(row),
+    role: 'ghost',
+    class: RECORD_TITLE_CLASS,
+    title: t('diary.titleEditHint'),
+    onClick: () => {
+      pendingClick?.cancel();
+      pendingClick = deferSingleClick(() => {
+        pendingClick = null;
+        const day = dayOfCard(card);
+        if (day === null) return;
+        toggleRecordCollapsed(day, row.id);
+      });
+    },
+  });
+  view.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    pendingClick?.cancel();
+    pendingClick = null;
+    beginTitleEdit(row, card);
+  });
+  return view;
+}
+
+/**
+ * Вход в правку заголовка по клавиатуре (Enter на поле «заголовок», 0.10.2,
+ * задача 41ed99ab): карточка → её строка из дескриптора оболочки.
+ */
+function beginTitleEditByCard(card: HTMLElement): void {
+  const handle = recordShells.get(card);
+  if (handle === undefined) return;
+  beginTitleEdit(handle.row, card);
+}
+
+/**
+ * Правка заголовка записи (0.10.2, задача 41ed99ab): на месте кнопки-заголовка
+ * появляется поле ввода. `Enter`/ уход из поля завершают правку и возвращают
+ * заголовок в просмотр; `Esc` — отмена. Пока поле в фокусе, сворачивание
+ * недоступно (стрелки/Enter принадлежат вводу).
+ */
+function beginTitleEdit(row: ChronicleRow, card: HTMLElement): void {
+  const view = card.querySelector<HTMLElement>(`.${RECORD_TITLE_CLASS}`);
+  if (view === null || card.querySelector(`.${RECORD_TITLE_INPUT_CLASS}`) !== null) return;
+  const input = fieldInput({ extraClass: `${RECORD_TITLE_CLASS} ${RECORD_TITLE_INPUT_CLASS}` });
   input.type = 'text';
   input.value = row.title ?? '';
   input.placeholder = t('diary.titlePlaceholder');
   input.maxLength = 200;
-  input.addEventListener('blur', () => {
+  let done = false;
+  const exit = (commit: boolean, refocus: boolean): void => {
+    if (done) return;
+    done = true;
     const next = input.value.trim();
-    if (next === (row.title ?? '')) return;
-    void patchRecord(row.id, { title: next || null });
+    const nextTitle = commit ? next || null : row.title;
+    view.textContent = recordDisplayTitle(nextTitle, row.snippet) || t('diary.emptyTitle');
+    input.replaceWith(view);
+    if (commit && next !== (row.title ?? '')) void patchRecord(row.id, { title: next || null });
+    if (refocus) view.focus();
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      exit(true, true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      exit(false, true);
+    }
   });
-  return input;
+  input.addEventListener('blur', () => exit(true, false));
+  view.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 function recordMenuItems(row: ChronicleRow): MenuItem[] {

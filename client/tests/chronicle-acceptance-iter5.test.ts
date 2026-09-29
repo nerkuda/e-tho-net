@@ -392,10 +392,12 @@ describe('приёмка №5, п.1: компоновка карточки за�
     );
   });
 
-  it('строка 2 — заголовок, далее оболочка комментария', () => {
+  it('строка 2 — заголовок-группа, далее оболочка комментария', () => {
+    // 0.10.2 (задача 41ed99ab): заголовок стал сворачиваемой группой записи —
+    // в просмотре это крупная текстовая кнопка, а не всегда-редактируемый ввод.
     assert.match(
       CHRONICLE,
-      /card\.replaceChildren\(head, buildTitleInput\(row\), buildRecordBody\(row, card\)\)/,
+      /card\.replaceChildren\(head, buildTitle\(row, card\), buildRecordBody\(row, card\)\)/,
       'порядок: строка 1, заголовок (строка 2), тело',
     );
     assert.match(

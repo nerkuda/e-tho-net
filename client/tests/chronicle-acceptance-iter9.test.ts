@@ -182,9 +182,11 @@ describe('приёмка №9, п.2: клавиатурная навигация
     const edits: string[] = [];
     const dates: string[] = [];
     const thoughts: string[] = [];
+    const titleEdits: string[] = [];
     const { attachFeedNav, FEED_NAV_ELEMENT_CLASS, FEED_NAV_CURRENT_CLASS } = await navModule();
     const handle = attachFeedNav(feed.root as unknown as HTMLElement, {
       onSetDayCollapsed: () => undefined,
+      onEditTitle: (id) => titleEdits.push(id),
       onEditBody: (id) => edits.push(id),
       onEditDates: (id) => dates.push(id),
       onAddThought: (id) => thoughts.push(id),
@@ -206,9 +208,14 @@ describe('приёмка №9, п.2: клавиатурная навигация
 
     press(feed.root, 'Tab');
     assert.ok(feed.title('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Tab → заголовок');
+    // 0.10.2 (задача 41ed99ab): Enter на заголовке входит в ПРАВКУ заголовка
+    // (раньше просто фокусировал поле ввода).
     press(feed.root, 'Enter');
-    assert.equal(feed.title('r1').focused, true, 'Enter на заголовке входит в правку');
-    press(feed.root, 'Escape', feed.title('r1')); // Esc из правки заголовка — назад к полям
+    assert.deepEqual(titleEdits, ['r1'], 'Enter на заголовке входит в правку заголовка');
+    // Пока заголовок правится, поле — editing target: Esc завершает правку и
+    // возвращает фокус в навигацию (общий контракт контроллера).
+    feed.title('r1').focused = true;
+    press(feed.root, 'Escape', feed.title('r1'));
     assert.equal(feed.title('r1').focused, false, 'правка заголовка завершена');
     assert.ok(feed.title('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'выделение поля сохранено');
 
