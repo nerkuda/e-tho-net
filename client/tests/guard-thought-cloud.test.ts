@@ -281,38 +281,47 @@ describe('guard: представление мысли строится толь
     ]);
   });
 
-  it('резолвнутый фон облачка распространяется на иконку — класс cloud-has-bg и одно правило', () => {
-    // Признак «у облачка есть резолвнутый фон» (задача 1dc56942) вешает только
-    // applyCloudStyle фабрики; стиль по нему закрашивает иконочную колонку
-    // тем же цветом, что и остальное облачко.
+  it('иконочная полоса всегда берёт фон облачка — inherit, без признака cloud-has-bg', () => {
+    // Дефолтный фон, унаследованный от типа и заданный вручную — все три
+    // случая дают ОДИН фон у облачка и у иконочной полосы (задача 1dc56942,
+    // ревизия критериев 2026-09-29): полоса объявляет `background: inherit`
+    // (собственного фона `--surface-2` у неё нет), а разделительная линия
+    // прозрачна при сохранённой толщине 1 px — геометрия полосы не меняется.
     const css = stripCssComments(readText(STYLES_CSS));
-    const rule = /\.cloud-has-bg\s+\.cloud-icon\s*\{([^}]*)\}/.exec(css);
-    assert.ok(
-      rule !== null,
-      'правило `.cloud-has-bg .cloud-icon` должно существовать (фон иконки — как у облачка)',
+    const base = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(
+      (m) => (m[1] ?? '').trim() === '.cloud-icon',
     );
-    const body = rule?.[1] ?? '';
-    assert.match(body, /background:\s*inherit;/, 'иконочная колонка берёт фон родителя');
+    assert.ok(base !== undefined, 'базовое правило `.cloud-icon` должно существовать');
+    const body = base?.[2] ?? '';
+    assert.match(body, /background:\s*inherit;/, 'полоса берёт фон облачка, а не свой');
+    assert.doesNotMatch(
+      body,
+      /--surface-2/,
+      'у полосы не должно быть собственного фона --surface-2',
+    );
     assert.match(
       body,
-      /border-right-color:\s*transparent;/,
-      'разделительная линия колонки не рисуется поверх фона',
+      /border-right:\s*1px solid transparent;/,
+      'разделительная линия полосы прозрачна при сохранённой толщине 1 px',
     );
 
-    // Имя класса в TS и в CSS — одно и то же.
-    const ts = readText(THOUGHT_CLOUD_TS);
-    const exported = /CLOUD_BG_CLASS\s*=\s*'([^']+)'/.exec(ts)?.[1];
-    assert.equal(exported, 'cloud-has-bg', 'CLOUD_BG_CLASS must match the CSS class');
-
-    // Никакое другое место не вешает класс вручную — только фабрика.
+    // Условие исчезло: признак-класс `cloud-has-bg` мёртв и удалён — его нет
+    // ни правилом в CSS, ни в коде фабрики, ни где-либо ещё в рендерере.
+    assert.ok(
+      !/\.cloud-has-bg\b/.test(css),
+      'условное правило `.cloud-has-bg .cloud-icon` должно быть удалено',
+    );
+    assert.ok(
+      !/cloud-has-bg|CLOUD_BG_CLASS/.test(readText(THOUGHT_CLOUD_TS)),
+      'класс-признак cloud-has-bg и CLOUD_BG_CLASS должны быть удалены из фабрики',
+    );
     assertGuardClean(RENDERER_ROOT, [
       {
-        name: 'no-manual-bg-class',
+        name: 'no-retired-bg-class',
         description:
-          'Класс cloud-has-bg вешает фабрика lib/thought-cloud.ts (applyCloudStyle) ' +
-          'при резолвнутом цвете фона; вручную — запрещено.',
+          'Класс-признак cloud-has-bg удалён как мёртвый (фон полосы — всегда ' +
+          'inherit от облачка): возвращать его в рендерер запрещено.',
         pattern: /cloud-has-bg|CLOUD_BG_CLASS/,
-        allow: (rel) => rel === 'lib/thought-cloud.ts',
       },
     ]);
   });

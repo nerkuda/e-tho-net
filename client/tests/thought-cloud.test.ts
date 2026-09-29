@@ -16,7 +16,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, mock } from 'node:test';
 
 import {
-  CLOUD_BG_CLASS,
   CLOUD_PROFILES,
   CLOUD_WIDTHS,
   CLOUD_WIDTH_CONTAINER_CLASS,
@@ -312,14 +311,16 @@ describe('цвет, начертание и значок', () => {
     assert.equal(root.style.color, '#ffffff');
   });
 
-  it('резолвнутый цвет фона вешает класс cloud-has-bg; без фона класса нет', () => {
-    // Класс — признак для стилей: фон облачка распространяется на иконочную
-    // колонку (задача 1dc56942).
+  it('фон облачка не помечается классом — полоса иконки берёт его через inherit', () => {
+    // Признак cloud-has-bg удалён как мёртвый (задача 1dc56942, ревизия
+    // критериев 2026-09-29): фон иконочной полосы равен фону облачка всегда —
+    // правилом `background: inherit`, а не условным классом. Фабрика фона
+    // классом не помечает ни с фоном, ни без него.
     const withBg = cloud(thought({ bg_color: '#222222' }), { profile: 'canvas' });
-    assert.ok(withBg.classList.contains(CLOUD_BG_CLASS));
+    assert.ok(!withBg.classList.contains('cloud-has-bg'));
 
     const withoutBg = cloud(thought({ bg_color: null }), { profile: 'canvas' });
-    assert.ok(!withoutBg.classList.contains(CLOUD_BG_CLASS));
+    assert.ok(!withoutBg.classList.contains('cloud-has-bg'));
   });
 
   it('начертание — классы font-bold/font-italic', () => {
