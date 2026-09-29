@@ -54,7 +54,7 @@ describe('сторож: сворачиваемая запись «Дневник
   it('свёрнутость переприменяется при keyed-обновлении карточки', () => {
     assert.match(
       CHRONICLE,
-      /const day = dayOfCard\(card\);[\s\S]*?applyRecordCollapsed\(/,
+      /applyRecordCollapsed\([\s\S]*?collapsedRecords\.has\(recordCollapseKey\(day, row\.id\)\)/,
       'fillRecordCard переприменяет свёрнутость после пересборки содержимого',
     );
     assert.match(
@@ -114,5 +114,44 @@ describe('сторож: сворачиваемая запись «Дневник
     assert.match(dark, /--cal-weekend:/, 'токен переопределён в тёмной теме');
     assert.match(CHRONICLE, /isWeekend\(day\)/, 'заголовок выходного дня помечается классом');
     assert.match(CHRONICLE_CSS, /\.diary-day-head\.is-weekend/, 'вид выходного дня');
+  });
+
+  it('свёрнутость восстанавливается без опоры на DOM-предка карточки', () => {
+    // Блокер проверки, круг 1: `reconcileKeyed` зовёт `build`/`update` ДО
+    // вставки узла, поэтому день нельзя выводить из DOM (`dayOfCard`). Проверяем,
+    // что день передаётся явным параметром в сборку и обновление, а `fillRecordCard`
+    // не ищет день по предку.
+    assert.match(
+      CHRONICLE,
+      /buildRecordCard\(row,\s*day\.day\)/,
+      'в keyed-сборке день передаётся явно',
+    );
+    assert.match(
+      CHRONICLE,
+      /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\)/,
+      'fillRecordCard принимает день параметром',
+    );
+    assert.ok(
+      !/collapsedRecords\.has\(recordCollapseKey\(dayOfCard\(/.test(CHRONICLE),
+      'fillRecordCard не выводит день из DOM-предка',
+    );
+  });
+
+  it('«Свернуть все» собирает ключи и с фактических карточек DOM', () => {
+    // Замечание проверки, круг 1: дозагруженные «+50» карточки могут не попасть
+    // в `rows` на момент нажатия — ключ берётся с самой карточки.
+    assert.match(
+      CHRONICLE,
+      /if \(collapsed\) collapsedRecords\.add\(recordCollapseKey\(day, id\)\)/,
+      'ключ дозагруженной карточки попадает в набор при сворачивании',
+    );
+  });
+
+  it('будний заголовок дня использует реальный серый токен', () => {
+    // Блокер проверки, круг 1: `--muted` в проекте не существует — заголовок
+    // наследовал `--text`. Реальный серый — `--text-dim`.
+    const head = /\.diary-day-head\s*\{[^}]*\}/.exec(CHRONICLE_CSS)?.[0] ?? '';
+    assert.match(head, /color:\s*var\(--text-dim\)/, 'будни серые через `--text-dim`');
+    assert.ok(!/var\(--muted\)/.test(head), 'несуществующий `--muted` в заголовке дня убран');
   });
 });

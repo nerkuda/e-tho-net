@@ -412,8 +412,12 @@ function setDayRecordsCollapsed(day: string, collapsed: boolean): void {
     for (const card of Array.from(section.querySelectorAll<HTMLElement>('.diary-record'))) {
       const id = card.getAttribute(TABLE_ROW_KEY_ATTR) ?? '';
       if (id === '') continue;
+      // Ключ собираем и с карточки DOM: дозагруженная строка могла ещё не
+      // попасть в `rows` (та же природа, что у «Свернуть все»).
+      if (collapsed) collapsedRecords.add(recordCollapseKey(day, id));
       applyRecordCollapsed(card, collapsedRecords.has(recordCollapseKey(day, id)), labels);
     }
+    persistCollapsedRecords();
   }
   feedNav?.refresh();
 }
@@ -1047,8 +1051,12 @@ function renderFeed(): void {
     reconcileKeyed(dayList, day.rows, {
       keyAttr: TABLE_ROW_KEY_ATTR,
       key: (row) => row.id,
-      build: (row) => buildRecordCard(row),
-      update: (card, row) => updateRecordCard(card, row),
+      // День передаём ЯВНО: `reconcileKeyed` зовёт `build`/`update` ДО вставки
+      // узла в DOM, поэтому `dayOfCard(card)` в этот момент ещё null, и
+      // восстановление сохранённой свёрнутости не сработало бы (блокер проверки
+      // 41ed99ab, круг 1).
+      build: (row) => buildRecordCard(row, day.day),
+      update: (card, row) => updateRecordCard(card, row, day.day),
     });
     // Слот псевдо-записи — ВНЕ reconcile: сверка снимает его как безключевой
     // узел, поэтому возвращаем ТОТ ЖЕ элемент наверх списка дня. Identity узла
@@ -1151,6 +1159,9 @@ function updateMoreLine(): void {
 async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   const home = homeId ?? (await getHome().catch(() => null));
   const slotRoot = slot?.root ?? null;
+  // День слота — для восстановления сохранённой свёрнутости вставляемой карточки
+  // (блокер проверки 41ed99ab: день нельзя вывести из DOM до вставки).
+  const createdDay = slot?.day ?? localDay(row.valid_from);
   if (home === null) {
     slot = null;
     slotFocusInside = false;
@@ -1175,7 +1186,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
     feedNav?.refresh();
     return;
   }
-  const card = buildRecordCard(row);
+  const card = buildRecordCard(row, createdDay);
   const inPlace = slotRoot !== null && slotRoot.parentElement !== null;
   if (inPlace) slotRoot!.replaceWith(card);
   rows = insertRowByDay(rows, row, getFilterState().order, home);
@@ -1197,10 +1208,11 @@ function setAllDaysCollapsed(collapsed: boolean): void {
     }
     if (slot !== null) collapsedDays.add(slot.day);
   }
-  persistCollapsedDays();
-  persistCollapsedRecords();
-  // Как и одиночная группа, «свернуть/развернуть все» переключает секции
-  // НА МЕСТЕ — фокус и прокрутка сохраняются (требование 165323a7).
+  // Переключение секций НА МЕСТЕ (требование 165323a7) — фокус и прокрутка
+  // сохраняются. Ключи свёрнутости собираем и с ФАКТИЧЕСКИХ карточек DOM, а не
+  // только с `rows`: дозагруженные «+50» карточки могли ещё не попасть в `rows`
+  // на момент нажатия, и «Свернуть все» оставляло их развёрнутыми (замечание
+  // проверки 41ed99ab, круг 1).
   if (feedList !== null) {
     const labels = dayGroupLabels();
     const recLabels = recordGroupLabels();
@@ -1213,15 +1225,20 @@ function setAllDaysCollapsed(collapsed: boolean): void {
       for (const card of Array.from(section.querySelectorAll<HTMLElement>('.diary-record'))) {
         const id = card.getAttribute(TABLE_ROW_KEY_ATTR) ?? '';
         if (id === '') continue;
+        if (collapsed) collapsedRecords.add(recordCollapseKey(day, id));
         applyRecordCollapsed(card, collapsed, recLabels);
       }
       touched = true;
     }
     if (touched) {
+      persistCollapsedDays();
+      persistCollapsedRecords();
       feedNav?.refresh();
       return;
     }
   }
+  persistCollapsedDays();
+  persistCollapsedRecords();
   renderFeed();
 }
 
@@ -1269,13 +1286,13 @@ function updateDaySection(section: HTMLElement, day: string): void {
 // ---------------------------------------------------------------------------
 
 /** Карточка записи ленты. Ключ строки (`data-row-key`) вешает keyed-сверка. */
-function buildRecordCard(row: ChronicleRow): HTMLElement {
+function buildRecordCard(row: ChronicleRow, day: string): HTMLElement {
   const card = div('diary-record');
   // `data-row-key` ставится атрибутом: `dataset['data-row-key']` бросает
   // исключение (имя свойства dataset не может содержать дефис) — ошибка
   // 6 сентября (0.10.1, дефект приёмки).
   card.setAttribute(TABLE_ROW_KEY_ATTR, row.id);
-  fillRecordCard(card, row);
+  fillRecordCard(card, row, day);
   return card;
 }
 
@@ -1284,12 +1301,12 @@ function buildRecordCard(row: ChronicleRow): HTMLElement {
  * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
  * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
  */
-function updateRecordCard(card: HTMLElement, row: ChronicleRow): void {
-  fillRecordCard(card, row);
+function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
+  fillRecordCard(card, row, day);
 }
 
 /** Наполнить карточку содержимым записи (общая сборка и обновление). */
-function fillRecordCard(card: HTMLElement, row: ChronicleRow): void {
+function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
   // Запись, к которой выполнен переход поиска, подсвечена (T7); при правке
   // класс пересчитывается (запись могла перестать быть целью перехода).
   card.classList.toggle('diary-record-target', row.id === jumpHighlightId);
@@ -1329,15 +1346,13 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow): void {
   card.replaceChildren(head, buildTitle(row, card), buildRecordBody(row, card));
   // Свёрнутость тела записи переприменяется при keyed-обновлении карточки и
   // realtime (0.10.2, задача 41ed99ab): fillRecordCard — общая точка сборки и
-  // обновления, ключ вхождения читается из дня-предка карточки.
-  const day = dayOfCard(card);
-  if (day !== null) {
-    applyRecordCollapsed(
-      card,
-      collapsedRecords.has(recordCollapseKey(day, row.id)),
-      recordGroupLabels(),
-    );
-  }
+  // обновления. День приходит ЯВНЫМ параметром: на момент `build` карточка ещё
+  // не вставлена в ленту, и `dayOfCard(card)` вернул бы null (блокер проверки).
+  applyRecordCollapsed(
+    card,
+    collapsedRecords.has(recordCollapseKey(day, row.id)),
+    recordGroupLabels(),
+  );
 }
 
 /** Подпись даты/периода записи — единый помощник периода дневниковой записи. */

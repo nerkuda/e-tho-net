@@ -176,4 +176,25 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
       null,
     );
   });
+
+  it('восстановление свёрнутости не зависит от DOM-предка карточки (регресс блокера 1)', () => {
+    // При keyed-сборке карточка ещё НЕ вставлена в секцию дня — предка с
+    // `data-day` нет, и `dayOfCard` вернул бы null. Свёрнутость обязана
+    // примениться: день приходит параметром, а не из DOM.
+    const card = new ShimElement('div', 'diary-record');
+    card.setAttribute('data-row-key', 'r1');
+    const title = new ShimElement('button', 'diary-record-title');
+    const body = new ShimElement('div', 'diary-record-body');
+    card.append(title, body);
+
+    // Сохранённый ключ вхождения «день + id» (как из `diary_collapsed_records`).
+    const saved = new Set([recordCollapseKey('2026-09-11', 'r1')]);
+    assert.equal(dayOfCard(card as unknown as HTMLElement), null, 'предка дня нет');
+    applyRecordCollapsed(card as unknown as HTMLElement, saved.has(recordCollapseKey('2026-09-11', 'r1')), {
+      collapse: 'Свернуть',
+      expand: 'Развернуть',
+    });
+    assert.ok(card.classList.contains('is-collapsed'), 'свёрнутость восстановлена');
+    assert.equal(body.hidden, true, 'тело скрыто');
+  });
 });
