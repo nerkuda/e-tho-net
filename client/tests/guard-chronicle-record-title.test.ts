@@ -4,23 +4,20 @@
  *
  * Заголовок существующей карточки и заголовок слота создания ОБЯЗАН собирать
  * один компонент `screens/chronicle/record-title.ts` (`createRecordTitle`).
- * Раньше реализаций было две, и в слоте `Enter` не завершал правку — расхождение
- * возникло именно из-за копии разметки.
+ * Раньше реализаций было две, и в слоте `Enter` не завершал правку.
  *
- * Почему не хватает запрета литералов. Первая редакция сторожа ловила лишь
- * БУКВАЛЬНУЮ форму второй реализации и обходилась «разорванным» литералом
- * класса (`fieldInput({ extraClass: 'diary'+'-record-title' })`, узел компонента
- * при этом в слот не монтировался). Здесь проверяется ФАКТ МОНТИРОВАНИЯ:
- *   • в слот попадает ИМЕННО узел компонента — `head.append(…, title.node(), …)`
- *     (идентичность выражения `title.node()`, а не совпадение текста класса);
- *   • заголовок-дескриптор слота берётся из компонента (`const title =
- *     createRecordTitle`, `state.title`), а не собирается локально;
- *   • в `chronicle.ts` вообще нет локального создания поля ввода (запрет на
- *     `fieldInput(`/`el('input'`/`createElement('input'`) — любой обход через
- *     «разорванный» литерал или самодельный узел краснеет.
- * Вторая половина (контракт правки) проверяется ИСПОЛНЕНИЕМ компонента на
- * DOM-шиме: `Enter` завершает правку кнопкой-группой, `Escape` отменяет, `blur`
- * сохраняет, — переписывание логики в исходнике сторож не обманет.
+ * Проверка — В ИСПОЛНЕНИИ, а не разбором текста. Шапка слота собирается
+ * вынесенным помощником `screens/chronicle/slot-head.ts` (`buildSlotHead`) —
+ * тот же код, что зовёт `startSlot`. Сторож монтирует шапку на DOM-шиме и
+ * сверяет ИДЕНТИЧНОСТЬ узла: в шапке должен лежать ИМЕННО `title.node()`
+ * (в просмотре — кнопка `.diary-record-title` со `svg`-стрелкой, в правке —
+ * поле того же компонента), а не результат локальной сборки. Так проверка
+ * невосприимчива к форматированию исходника и к подмене узла после
+ * монтирования, и не требует запрещать `fieldInput` по всему экрану.
+ *
+ * Структурные проверки оставлены лишь как «привязка» экрана к помощнику:
+ * `startSlot` обязан звать `buildSlotHead`, в его теле нет локальной сборки
+ * поля ввода.
  */
 
 import assert from 'node:assert/strict';
@@ -38,6 +35,7 @@ function read(...parts: string[]): string {
 
 const CHRONICLE = read('screens', 'chronicle', 'chronicle.ts');
 const RECORD_TITLE = read('screens', 'chronicle', 'record-title.ts');
+const SLOT_HEAD = read('screens', 'chronicle', 'slot-head.ts');
 
 /** Тело функции верхнего уровня по объявлению (стиль файла: `}` в колонке 0). */
 function functionBody(src: string, signature: string): string {
@@ -49,23 +47,7 @@ function functionBody(src: string, signature: string): string {
   return body.slice(0, end);
 }
 
-/** Аргументы вызова по подстроке-маркеру, оканчивающейся на `(`. */
-function callArgs(src: string, marker: string): string {
-  const at = src.indexOf(marker);
-  if (at < 0) return '';
-  let depth = 0;
-  for (let i = at + marker.length - 1; i < src.length; i++) {
-    const ch = src[i];
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) return src.slice(at + marker.length, i);
-    }
-  }
-  return '';
-}
-
-/** Минимальный DOM-шим для исполнения компонента в сторожевом тесте. */
+/** Минимальный DOM-шим для исполнения компонента и шапки слота. */
 function installShim(): void {
   const body = new ShimElement('body');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -91,11 +73,21 @@ function installShim(): void {
 }
 
 describe('сторож: один компонент заголовка записи (ошибка 36c330a3)', () => {
-  it('оба потребителя собирают заголовок одним `createRecordTitle`', () => {
-    const calls = CHRONICLE.match(/createRecordTitle\(/g) ?? [];
-    assert.equal(calls.length, 2, 'карточка и слот — две проводки общего компонента');
-    const buildTitle = functionBody(CHRONICLE, 'function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {');
+  it('карточка и слот собирают заголовок одним `createRecordTitle`, слот — через `buildSlotHead`', () => {
+    const calls =
+      (CHRONICLE.match(/createRecordTitle\(/g) ?? []).length +
+      (SLOT_HEAD.match(/createRecordTitle\(/g) ?? []).length;
+    assert.equal(calls, 2, 'карточка и шапка слота — две проводки общего компонента');
+    const buildTitle = functionBody(
+      CHRONICLE,
+      'function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {',
+    );
     assert.match(buildTitle, /return handle\.node\(\);/, 'карточка отдаёт узел компонента');
+    const slot = functionBody(
+      CHRONICLE,
+      'function startSlot(day?: string, presetThoughtIds: string[] = []): void {',
+    );
+    assert.match(slot, /buildSlotHead\(/, 'слот собирает шапку общим помощником');
     assert.match(CHRONICLE, /title: RecordTitleHandle;/, 'слот хранит дескриптор компонента');
     assert.match(CHRONICLE, /state\.title\.beginEdit\(\)/, 'слот открывает заголовок в правке');
     assert.match(
@@ -105,43 +97,81 @@ describe('сторож: один компонент заголовка запи�
     );
   });
 
-  it('в слот монтируется ИМЕННО узел компонента (`title.node()`), а не локальное поле', () => {
-    const slot = functionBody(CHRONICLE, 'function startSlot(day?: string, presetThoughtIds: string[] = []): void {');
-    assert.ok(slot !== '', 'тело startSlot найдено');
-    // Дескриптор — результат общего компонента и он же лежит в состоянии слота.
-    assert.match(slot, /const title = createRecordTitle\(\{/, 'заголовок слота — из компонента');
-    assert.match(
-      slot,
-      /root,\s*\n\s*title,\s*\n\s*from: targetDay,/,
-      'в состояние слота кладётся дескриптор компонента (идентичность, а не копия)',
+  it('в шапке слота — ИМЕННО узел компонента (проверка в исполнении)', async () => {
+    installShim();
+    const mod = (await import('../src/renderer/screens/chronicle/slot-head.js')) as unknown as {
+      buildSlotHead(hooks: {
+        dayLabel: string;
+        onTitleCommit: (value: string) => void;
+        onCancel: () => void;
+      }): { root: ShimElement; title: { node(): ShimElement; beginEdit(): void } };
+    };
+    const commits: string[] = [];
+    let cancelled = 0;
+    const { root, title } = mod.buildSlotHead({
+      dayLabel: '1 сентября 2026',
+      onTitleCommit: (value) => commits.push(value),
+      onCancel: () => {
+        cancelled++;
+      },
+    });
+
+    // Шапка: дата, узел компонента-заголовка, кнопка отмены.
+    assert.equal(root.children.length, 3, 'в шапке три узла: дата, заголовок, «✕»');
+    assert.ok(
+      root.children[0]!.classList.contains('diary-record-date'),
+      'первый узел — подпись даты',
     );
-    // ФАКТ МОНТИРОВАНИЯ: в шапку слота добавляется узел компонента.
-    const head = callArgs(slot, 'head.append(');
-    assert.ok(head !== '', 'найден вызов head.append');
-    assert.match(head, /title\.node\(\)/, 'в шапку слота монтируется узел компонента');
-    // И это именно заголовочная позиция: между датой и кнопкой отмены.
-    assert.match(
-      head,
-      /el\('span',\s*'diary-record-date',\s*fmtDate\(targetDay\)\),\s*title\.node\(\),\s*uiButton\(/,
-      'узел компонента стоит на месте заголовка (между датой и «✕»)',
+    const titleNode = root.children[1]!;
+    assert.ok(
+      titleNode === title.node(),
+      'узел заголовка в шапке — узел компонента (идентичность, а не локальная сборка)',
+    );
+    assert.ok(titleNode.classList.contains('diary-record-title'), 'класс заголовка компонента');
+    assert.equal(titleNode.tagName, 'button', 'в просмотре — кнопка-группа компонента');
+    assert.ok(
+      titleNode.firstChild !== null && titleNode.firstChild.tagName === 'svg',
+      'у группы есть индикатор-стрелка компонента',
     );
     assert.ok(
-      !/fieldInput|createElement|el\(\s*'input'|innerHTML/.test(head),
-      'шапка слота не создаёт поле ввода локально',
+      root.children[2]!.classList.contains('diary-slot-cancel'),
+      'третий узел — кнопка отмены',
     );
+
+    // Вход в правку: в шапке оказывается поле ТОГО ЖЕ компонента (идентичность).
+    title.beginEdit();
+    assert.ok(root.children[1] === title.node(), 'в правке в шапке — поле компонента');
+    assert.equal(title.node().tagName, 'input', 'правка — поле ввода');
+    assert.ok(
+      title.node().classList.contains('diary-record-title-input'),
+      'поле носит класс правки компонента',
+    );
+
+    // Enter завершает правку и возвращает кнопку компонента на то же место.
+    title.node().value = 'Заголовок';
+    title.node().emit('keydown', {
+      key: 'Enter',
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.ok(root.children[1] === title.node(), 'после Enter в шапке снова узел компонента');
+    assert.equal(root.children[1]!.tagName, 'button', 'вернулась кнопка-группа');
+    assert.deepEqual(commits, ['Заголовок'], 'значение ушло в `onTitleCommit`');
+
+    // Кнопка отмены дёргает доменное действие.
+    root.children[2]!.click();
+    assert.equal(cancelled, 1, '«✕» вызывает отмену слота');
   });
 
-  it('в `chronicle.ts` нет локального создания поля ввода (обход «разорванным» литералом)', () => {
-    // Разорванный литерал класса (`'diary'+'-record-title'`) не спасёт: запрещено
-    // само создание поля/узла ввода в экране, чем бы оно ни собиралось.
-    assert.ok(!/fieldInput\(/.test(CHRONICLE), 'поле фасада `fieldInput` в экране не вызывается');
-    assert.ok(!/el\(\s*['"]input['"]/.test(CHRONICLE), 'самодельного `el(\'input\')` нет');
-    assert.ok(
-      !/createElement\(\s*['"]input['"]/.test(CHRONICLE),
-      'самодельного `createElement(\'input\')` нет',
+  it('`startSlot` не собирает поле ввода локально (запрет сужен до его тела)', () => {
+    const slot = functionBody(
+      CHRONICLE,
+      'function startSlot(day?: string, presetThoughtIds: string[] = []): void {',
     );
-    // Класс заголовка — только у компонента: в экране не должно быть строки
-    // класса в СКЛЕЙКЕ или литерале (страховка от «случайной» общности).
+    assert.match(slot, /buildSlotHead\(/, 'шапка слота собирается помощником');
+    assert.ok(!/fieldInput\(/.test(slot), 'в теле startSlot нет `fieldInput(`');
+    assert.ok(!/el\(\s*['"]input['"]/.test(slot), 'в теле startSlot нет самодельного `el(\'input\')`');
+    assert.ok(!/createElement/.test(slot), 'в теле startSlot нет `createElement`');
     assert.ok(
       !/['"]diary['"]\s*\+\s*['"]-record-title['"]/.test(CHRONICLE),
       'класс заголовка не собирается склейкой строк в экране',
@@ -149,7 +179,7 @@ describe('сторож: один компонент заголовка запи�
     assert.ok(!/RECORD_TITLE_INPUT_CLASS/.test(CHRONICLE), 'класс поля правки — только в компоненте');
   });
 
-  it('контракт правки проверяется ИСПОЛНЕНИЕМ: Enter/Escape/blur (не текстом исходника)', async () => {
+  it('контракт правки компонента проверяется ИСПОЛНЕНИЕМ: Enter/Escape/blur', async () => {
     installShim();
     const { createRecordTitle } = await import(
       '../src/renderer/screens/chronicle/record-title.js'
@@ -170,7 +200,6 @@ describe('сторож: один компонент заголовка запи�
         ...(onCancel !== undefined ? { onCancel } : {}),
       }) as unknown as H;
 
-    // Enter — завершить и вернуть кнопку-группу.
     const entered: string[] = [];
     const byEnter = make((v) => {
       entered.push(v);
@@ -190,7 +219,6 @@ describe('сторож: один компонент заголовка запи�
     assert.equal(byEnter.node().tagName, 'button', 'вернулась кнопка-группа, а не «ничего»');
     assert.deepEqual(entered, ['B'], 'значение закоммичено');
 
-    // Escape — отмена без коммита.
     const cancelled = { n: 0 };
     const commits: string[] = [];
     const byEscape = make(
@@ -213,7 +241,6 @@ describe('сторож: один компонент заголовка запи�
     assert.deepEqual(commits, [], 'Escape не коммитит');
     assert.equal(cancelled.n, 1, 'отмена замечена');
 
-    // Blur — завершить (слот сохраняет черновик по уходу из поля).
     const blurred: string[] = [];
     const byBlur = make((v) => {
       blurred.push(v);
