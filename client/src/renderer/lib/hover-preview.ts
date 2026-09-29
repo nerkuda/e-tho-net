@@ -21,10 +21,14 @@
  *
  * Open/close model (kept as-is from the pre-component engine; the panel
  * mechanics now live in `lib/ui/popover.ts`):
- *  - opening requires Ctrl held over a trigger for a short debounce pause
- *    (not instant — Ctrl+hover is also used for other gestures, e.g. the
- *    selection panel's Ctrl+click/hover, and an instant trigger would
- *    conflict with them);
+ *  - opening requires Ctrl held over a trigger for the SHARED
+ *    {@link CTRL_PREVIEW_OPEN_DELAY_MS} pause (not instant — Ctrl+hover is
+ *    also used for other gestures, e.g. the selection panel's Ctrl+click/hover,
+ *    and an instant trigger would conflict with them). The pause is owned by
+ *    the neutral `lib/preview-open-delay.ts` so the engine and the magnifier
+ *    («лупа», `image-zoom.ts`) share ONE value (ошибка 34e61b47); a `mousedown`
+ *    (any button) cancels a not-yet-opened preview so Ctrl+click reaches the
+ *    element instead of being covered by the popup;
  *  - once open, a popup no longer depends on Ctrl. Each open popup in the
  *    chain closes INDEPENDENTLY: a popup at depth `d` counts as "still
  *    hovered" while the cursor sits over its own element OR over any deeper
@@ -69,14 +73,12 @@ import {
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { etn } from './etn.js';
+import { createDelayedOpen, CTRL_PREVIEW_OPEN_DELAY_MS } from './preview-open-delay.js';
 import { commentShell } from './ui/comment.js';
-import { openPopover, type PopoverHandle } from './ui/popover.js';
+import { openPopover, watchOutsideTap, type PopoverHandle } from './ui/popover.js';
 import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
 import { store } from '../state.js';
 
-/** Pause before an open Ctrl+hover actually opens a popup, ms. Kept short but
- *  non-zero so it never fires on a passing cursor / other Ctrl+hover gestures. */
-const OPEN_DEBOUNCE_MS = 200;
 /** Grace delay before closing the whole chain once the cursor leaves it, ms
  *  (task requirement: exactly 0.3 s — gives time to move the cursor into the
  *  freshly opened popup). */
@@ -387,8 +389,9 @@ registerHoverPreviewResolver('attachments', resolveAttachmentsContent);
 // content has no links so it needs no wiring). It must run on the SAME
 // element `resolveWikiLinksInDom` was called on, in either order — the wiki
 // resolvers below re-check the live `wiki-link-deleted` class at hover time
-// (after the ~200ms open debounce, well past the resolver's async paint),
-// not at marking time, so marking never needs to wait for that promise.
+// (after the shared Ctrl+hover open delay, well past the resolver's async
+// paint), not at marking time, so marking never needs to wait for that
+// promise.
 // ---------------------------------------------------------------------------
 
 /** Marks every hoverable link inside a rendered comment body with the right
@@ -747,18 +750,22 @@ interface ContainerLike {
 let rootTrigger: HTMLElement | null = null;
 /** Open popups, depth 1..N, in order. */
 let chain: ChainEntry[] = [];
-let pendingOpen: { candidate: HTMLElement; timer: number } | null = null;
+/** Планировщик отложенного открытия с ЕДИНОЙ для всех Ctrl+предпросмотров
+ *  задержкой (ошибка 34e61b47) — см. `lib/preview-open-delay.ts`. `depth`
+ *  вычисляется в момент срабатывания, а не постановки в очередь. */
+const openScheduler = createDelayedOpen<HTMLElement>((candidate) => {
+  void doOpen(candidate, depthFor(candidate));
+});
 /** Bumped on every settled `doOpen` — cancels a stale in-flight fetch whose
  *  result would otherwise apply after the user moved on. */
 let openGeneration = 0;
 let mouseX = 0;
 let mouseY = 0;
 
+/** Отменяет ещё не открывшийся предпросмотр (сработавший таймер общей задержки
+ *  или отменённый до его истечения). Уже открытая цепочка не трогается. */
 function cancelPendingOpen(): void {
-  if (pendingOpen !== null) {
-    window.clearTimeout(pendingOpen.timer);
-    pendingOpen = null;
-  }
+  openScheduler.cancel();
 }
 
 function cancelEntryCloseTimer(entry: ChainEntry): void {
@@ -921,13 +928,7 @@ function tryScheduleOpen(candidate: HTMLElement): void {
   if (candidate.dataset['hpKind'] === undefined) return;
   const depth = depthFor(candidate);
   if (depth > MAX_DEPTH || isAlreadyOpenAt(candidate, depth)) return;
-  if (pendingOpen !== null && pendingOpen.candidate === candidate) return;
-  cancelPendingOpen();
-  const timer = window.setTimeout(() => {
-    pendingOpen = null;
-    void doOpen(candidate, depth);
-  }, OPEN_DEBOUNCE_MS);
-  pendingOpen = { candidate, timer };
+  openScheduler.schedule(candidate);
 }
 
 let initialized = false;
@@ -987,6 +988,19 @@ export function initHoverPreview(): void {
     if (event.key === 'Control') cancelPendingOpen();
   });
 
+  // Нажатие ЛЮБОЙ кнопки мыши отменяет ещё не открывшийся предпросмотр
+  // (ошибка 34e61b47): Ctrl+click по триггеру (эллипс облачка, ссылка,
+  // индикатор) обязан достаться элементу, а не попапу, независимо от того,
+  // как быстро пользователь навёл курсор и нажал. Уже открытая цепочка не
+  // закрывается — её закрытие остаётся за уходом курсора, скроллом и Escape.
+  // Механику document-level «нажатия» держит только компонент `lib/ui`
+  // (сторож guard-ui-popover), поэтому берём его `watchOutsideTap` с
+  // предикатом «ничего не удерживается» — срабатываем на каждое нажатие.
+  watchOutsideTap(
+    () => false,
+    () => cancelPendingOpen(),
+  );
+
   // A scroll elsewhere (canvas pan, a zone/tree scrolling) leaves an anchored
   // popup visually detached from its trigger — the shared component closes the
   // panel then; scrolling INSIDE one of our own popups must not (also the
@@ -1003,7 +1017,7 @@ export const hoverPreviewInternals = {
   isAlreadyOpenAt,
   isChainEntryAlive,
   MAX_DEPTH,
-  OPEN_DEBOUNCE_MS,
+  CTRL_PREVIEW_OPEN_DELAY_MS,
   CLOSE_DELAY_MS,
   fileNameFromUrl,
   looksLikeText,
