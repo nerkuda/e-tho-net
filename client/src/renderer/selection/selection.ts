@@ -75,8 +75,11 @@ interface SelectionRowEntry {
   title: string;
 }
 
-/** Mounts the selection panel into the workspace selection host. */
-export function mountSelection(selectionHost: HTMLElement): void {
+/** Mounts the selection panel into the workspace selection host. Returns a
+ *  teardown handle that releases the narrow selection subscription — otherwise
+ *  every workspace remount adds another live subscriber on the `selection`
+ *  slice (ошибка 37b713de). */
+export function mountSelection(selectionHost: HTMLElement): () => void {
   host = selectionHost;
   host.replaceChildren();
 
@@ -142,7 +145,12 @@ export function mountSelection(selectionHost: HTMLElement): void {
   // realtime) полностью пересобирала список — он мигал, а на время
   // асинхронного resolve имена подменялись id. Подписка немедленная: текущий
   // состав отрисовывается сразу, до первого изменения.
-  subscribeSelectionChanges(() => render());
+  const unsubscribeSelection = subscribeSelectionChanges(() => render());
+
+  return () => {
+    unsubscribeSelection();
+    host = null;
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -414,7 +414,7 @@ export function buildWorkspace(): HTMLElement {
   mountSelectionResizer(selectionResizer, body);
   mountEventAreaResizer(eventAreaResizer, statusbar);
   onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));
-  mountSelection(selectionHost);
+  onWorkspaceTeardown(mountSelection(selectionHost));
   onWorkspaceTeardown(mountStructures(structuresHost));
   onWorkspaceTeardown(mountChronicle(chronicleHost));
   onWorkspaceTeardown(mountActivity(activityHost));
