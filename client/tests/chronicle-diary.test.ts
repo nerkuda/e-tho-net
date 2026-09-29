@@ -17,6 +17,7 @@ import {
   addDays,
   applyPeriodToFilter,
   clampPseudoDate,
+  dayInPeriod,
   dayPeriod,
   groupByLocalDays,
   hasRecordContent,
@@ -156,6 +157,48 @@ describe('diary: группировка ленты по дням (c6ddc1ea)', ()
     });
     const days = groupByLocalDays([long], { from: '2026-09-26', to: '2026-09-27' });
     assert.deepEqual(days.map((d) => d.day), ['2026-09-26', '2026-09-27']);
+  });
+});
+
+describe('diary: день псевдо-записи виден только в своём периоде (ошибка effefba3)', () => {
+  it('dayInPeriod: включительные границы, пустая граница не ограничивает', () => {
+    assert.equal(dayInPeriod('2026-09-29', '2026-09-01', '2026-09-30'), true);
+    assert.equal(dayInPeriod('2026-09-01', '2026-09-01', '2026-09-30'), true, 'нижняя включительна');
+    assert.equal(dayInPeriod('2026-09-30', '2026-09-01', '2026-09-30'), true, 'верхняя включительна');
+    assert.equal(dayInPeriod('2026-09-29', '2026-09-15', '2026-09-15'), false, 'другой день — вне периода');
+    assert.equal(dayInPeriod('2026-09-29', '', ''), true, 'период не задан — не ограничивает');
+    assert.equal(dayInPeriod('', '2026-09-01', '2026-09-30'), false, 'пустой день не виден');
+  });
+
+  it('сценарий карточки: псевдо-запись и запись вне своего периода не показываются', () => {
+    // Создание при периоде-месяце: псевдо-запись получила день 29.
+    assert.equal(dayInPeriod('2026-09-29', '2026-09-01', '2026-09-30'), true);
+    // Смена периода на другой день (как клик по дате 15) — псевдо-запись скрыта.
+    assert.equal(dayInPeriod('2026-09-29', '2026-09-15', '2026-09-15'), false);
+    // Запись, уже сохранённая на 29, в периоде 15 тоже отсутствует (группировка).
+    const saved = row({ id: 'saved', valid_from: '2026-09-29T12:00:00.000Z' });
+    assert.deepEqual(groupByLocalDays([saved], { from: '2026-09-15', to: '2026-09-15' }), []);
+    // Возврат периода, содержащего день псевдо-записи, — она снова видна.
+    assert.equal(dayInPeriod('2026-09-29', '2026-09-28', '2026-09-30'), true);
+  });
+
+  it('renderFeed показывает слот по dayInPeriod и монтирует только его день', () => {
+    const src = read('screens/chronicle/chronicle.ts');
+    assert.match(
+      src,
+      /const slotDay = slotNow !== null && dayInPeriod\(slotNow\.day, from, to\) \? slotNow\.day : null;/,
+      'день слота допускается в ленту только внутри применённого периода',
+    );
+    assert.match(
+      src,
+      /if \(slotNow !== null && slotDay === day\.day\) dayList\.prepend\(slotNow\.root\);/,
+      'слот монтируется только в свой (допущенный) день',
+    );
+    // Голого добавления дня слота без проверки периода быть не должно.
+    assert.ok(
+      !/days\.push\(\{ day: slotNow\.day, rows: \[\] \}\)/.test(src),
+      'день слота не добавляется в ленту безусловно',
+    );
   });
 });
 

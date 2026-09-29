@@ -104,6 +104,7 @@ import {
   attachmentOwnerForRow,
   clampPseudoDate,
   compareDays,
+  dayInPeriod,
   dayPeriod,
   formatDayLabel,
   groupByLocalDays,
@@ -853,11 +854,16 @@ function renderFeed(): void {
   // Счётчики календаря приходят из отдельного запроса по месяцу
   // (`refreshCalendarCounts`) — они не зависят от применённого периода, поэтому
   // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
-  // Слот псевдо-записи всегда виден: его день появляется в ленте, даже если в
-  // нём ещё нет записей (элемент «Sticky-панель новой записи»).
+  // Слот псевдо-записи виден, как и запись, ТОЛЬКО в своём периоде (ошибка
+  // effefba3): если применённый период не содержит её день, слот не
+  // показывается — иначе зависшая псевдо-запись (без `data-row-key`, с
+  // некликабельной датой) торчала бы при любом периоде. День слота при этом
+  // остаётся в его состоянии: при возврате периода псевдо-запись показывается
+  // снова (черновик в узле сохраняется).
   const slotNow = slot;
-  if (slotNow !== null && !days.some((d) => d.day === slotNow.day)) {
-    days.push({ day: slotNow.day, rows: [] });
+  const slotDay = slotNow !== null && dayInPeriod(slotNow.day, from, to) ? slotNow.day : null;
+  if (slotDay !== null && !days.some((d) => d.day === slotDay)) {
+    days.push({ day: slotDay, rows: [] });
     days.sort((a, b) => compareDays(a.day, b.day, order));
   }
 
@@ -887,8 +893,9 @@ function renderFeed(): void {
     // Слот псевдо-записи — ВНЕ reconcile: сверка снимает его как безключевой
     // узел, поэтому возвращаем ТОТ ЖЕ элемент наверх списка дня. Identity узла
     // и текст живого редактора сохраняются (элемент «Sticky-панель новой
-    // записи»).
-    if (slotNow !== null && slotNow.day === day.day) dayList.prepend(slotNow.root);
+    // записи»). Показываем только когда его день в применённом периоде
+    // (ошибка effefba3): вне периода узел остаётся отсоединённым.
+    if (slotNow !== null && slotDay === day.day) dayList.prepend(slotNow.root);
   }
 
   // Хвост ленты («пусто»/«осталось N») — вне reconcile, монтируется после:
