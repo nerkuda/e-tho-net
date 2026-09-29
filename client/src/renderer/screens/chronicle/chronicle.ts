@@ -108,19 +108,20 @@ import {
   dayPeriod,
   formatDayLabel,
   groupByLocalDays,
-  hasRecordContent,
   insertRowByDay,
   isLastChip,
   localDay,
   localDayEnd,
   localDayStart,
   periodValuesForRange,
+  planSlotCommit,
   resolvePeriodDay,
   rowDays,
   slotDeleteNeedsNetwork,
   todayLocal,
   visibleChips,
   weekPeriod,
+  type SlotCommitPlan,
 } from './diary.js';
 import {
   addThoughtToFilter,
@@ -213,6 +214,26 @@ interface SlotState {
 }
 
 let slot: SlotState | null = null;
+
+/**
+ * Идёт ли сохранение слота (создание/обновление). Защита от гонки: заголовок
+ * сохраняется по blur, а уход из слота — по focusout; оба пути зовут
+ * `ensureSlot`, и без стража создался бы дубль записи (ошибка 0757cd08).
+ */
+let slotBusy: Promise<Comment | null> | null = null;
+
+/**
+ * Находится ли фокус внутри слота псевдо-записи. Пока фокус внутри (поле
+ * заголовка или редактор комментария), слот НЕ подменяется карточкой: живой
+ * редактор отсоединился бы, и набранный текст потерялся бы (ошибка 0757cd08).
+ */
+let slotFocusInside = false;
+
+/**
+ * Приостановка конвертации слота на время модального диалога (выбор мысли):
+ * фокус уходит в диалог, но слот покинутым не считается.
+ */
+let slotSuspendConvert = false;
 
 /** Свёрнутые группы дат ленты (0.10.1, приёмка №2); состояние — L4 `ui_state`. */
 const collapsedDays = new Set<string>();
@@ -860,6 +881,15 @@ function renderFeed(): void {
   // некликабельной датой) торчала бы при любом периоде. День слота при этом
   // остаётся в его состоянии: при возврате периода псевдо-запись показывается
   // снова (черновик в узле сохраняется).
+  // Слот, чья запись уже вернулась из сети обычной карточкой (перезагрузка
+  // ленты/filter apply, пока слот ещё не сконвертирован — отложенная
+  // конвертация, ошибка 0757cd08), снимаем: иначе запись показалась бы дважды.
+  const stale = slot;
+  if (stale !== null && stale.commentId !== null && rows.some((r) => r.id === stale.commentId)) {
+    stale.root.remove();
+    slot = null;
+    slotFocusInside = false;
+  }
   const slotNow = slot;
   const slotDay = slotNow !== null && dayInPeriod(slotNow.day, from, to) ? slotNow.day : null;
   if (slotDay !== null && !days.some((d) => d.day === slotDay)) {
@@ -991,6 +1021,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   const slotRoot = slot?.root ?? null;
   if (home === null) {
     slot = null;
+    slotFocusInside = false;
     slotRoot?.remove();
     await reload();
     return;
@@ -1002,6 +1033,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   total += 1;
   pendingReconcile = true;
   slot = null;
+  slotFocusInside = false;
   if (inPlace) updateMoreLine();
   else renderFeed();
   feedNav?.refresh();
@@ -1527,6 +1559,9 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
     slot.titleInput.focus();
     return;
   }
+  slotFocusInside = false;
+  slotSuspendConvert = false;
+  slotBusy = null;
   const filter = getFilterState();
   const targetDay =
     day ??
@@ -1586,6 +1621,10 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
     },
     onEditChange: (editing) => slotShell.setMode(editing ? 'edit' : 'view'),
   });
+  // Вид поля делаем фокусируемым (tabindex): уход фокуса из заголовка в
+  // комментарий оставляет фокус ВНУТРИ слота, поэтому запись ещё не создаётся
+  // и живой редактор не отсоединяется (ошибка 0757cd08).
+  widget.querySelector<HTMLElement>('.md-field-view')?.setAttribute('tabindex', '-1');
   slotShell.setField(widget);
   slotShell.setState({ kind: 'ready' });
   body.append(slotShell.root);
@@ -1602,12 +1641,33 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
 
   titleInput.addEventListener('blur', () => void ensureSlot({}));
 
+  // Уход фокуса за пределы слота — единственная точка превращения слота в
+  // карточку. Пока фокус внутри (заголовок, редактор комментария), слот
+  // остаётся: запись уже может быть создана (`state.commentId`), а последующие
+  // правки её ОБНОВЛЯЮТ, не теряя введённый текст (ошибка 0757cd08).
+  root.addEventListener('focusin', () => {
+    slotFocusInside = true;
+  });
+  root.addEventListener('focusout', (event) => {
+    if (slotSuspendConvert) return;
+    const next = (event as FocusEvent).relatedTarget as Node | null;
+    slotFocusInside = next !== null && root.contains(next);
+    if (!slotFocusInside) void ensureSlot({});
+  });
+
   async function addSlotChip(): Promise<void> {
-    const result = await pickThoughtsDialog({
-      networkId: requireNetworkId(),
-      allowCreate: false,
-      allowLinkType: false,
-    });
+    // Диалог выбора мысли уводит фокус из слота, но слот покинутым не считается.
+    slotSuspendConvert = true;
+    let result: Awaited<ReturnType<typeof pickThoughtsDialog>>;
+    try {
+      result = await pickThoughtsDialog({
+        networkId: requireNetworkId(),
+        allowCreate: false,
+        allowLinkType: false,
+      });
+    } finally {
+      slotSuspendConvert = false;
+    }
     if (result === null) return;
     const ids = pickedThoughtIds(result);
     if (ids.length === 0) return;
@@ -1617,29 +1677,82 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
   renderFeed();
   titleInput.focus();
 
-  // Preset bindings (drop on the feed / empty space) create the record at once.
-  if (presetThoughtIds.length > 0) void ensureSlot({ extraThoughtIds: presetThoughtIds });
+  // Привязки, заданные сразу (drop на ленте/пустом месте), создают запись и
+  // превращают слот в карточку немедленно — фокус в слоте не удерживается.
+  if (presetThoughtIds.length > 0) {
+    void ensureSlot({ extraThoughtIds: presetThoughtIds, convert: true });
+  }
 }
 
-/** Отменяет пустой слот: без id — только в клиенте, без сети (требование 26f0aa52). */
+/** Отменяет слот: без id — только в клиенте, без сети (требование 26f0aa52). */
 function cancelSlot(): void {
-  if (slot === null) return;
-  if (slotDeleteNeedsNetwork(slot.commentId)) {
-    void removeRecord(slot.commentId!);
+  const state = slot;
+  if (state === null) return;
+  if (!slotDeleteNeedsNetwork(state.commentId)) {
+    slot = null;
+    slotFocusInside = false;
+    renderFeed();
     return;
   }
-  slot = null;
-  renderFeed();
+  // Запись уже создана первым содержательным сохранением — удаляем на сервере.
+  // Пока открыт диалог подтверждения, слот не конвертируем (фокус уходит в
+  // диалог, но слот покинутым не считается).
+  slotSuspendConvert = true;
+  void (async () => {
+    try {
+      const ok = await confirmDialog(t('diary.deleteTitle'), t('diary.deleteQuestion'), true);
+      if (!ok) return;
+      const networkId = requireNetworkId();
+      const fresh = await etn.comments.get(networkId, state.commentId!);
+      await etn.comments.remove(networkId, state.commentId!, fresh.version);
+      if (slot === state) {
+        slot = null;
+        slotFocusInside = false;
+      }
+      await reload();
+    } catch (err) {
+      notice(t('diary.deleteFailed', [errText(err)]), 'error');
+    } finally {
+      slotSuspendConvert = false;
+    }
+  })();
 }
 
 /**
- * First content creates the record (owner HOME, date = pseudo date). Until then
- * nothing is written. Returns the created/updated comment (or null when empty).
+ * Сохраняет черновик слота: создаёт запись при первом содержании (владелец
+ * HOME, дата — псевдо-день) либо ОБНОВЛЯЕТ уже созданную. Возвращает запись или
+ * `null`, если содержания нет.
+ *
+ * Заголовок и текст сохраняются в ЛЮБОМ порядке ввода: запись, созданная первым
+ * содержательным blur (например, заголовком), дальше обновляется, а не теряет
+ * последующий текст (ошибка 0757cd08). Слот превращается в карточку на месте
+ * (`insertCreatedRecord`), только когда фокус покинул слот (или явно —
+ * `convert: true`): пока пользователь в поле, живой редактор остаётся.
  */
 async function ensureSlot(opts: {
   title?: string | null;
   body?: string;
   extraThoughtIds?: string[];
+  convert?: boolean;
+}): Promise<Comment | null> {
+  // Гонка путей сохранения (blur заголовка, commit редактора, focusout ухода из
+  // слота): сохраняет только первый вызов, остальные ждут его результата —
+  // иначе создался бы дубль записи.
+  if (slotBusy !== null) return slotBusy;
+  const run = runEnsureSlot(opts);
+  slotBusy = run;
+  try {
+    return await run;
+  } finally {
+    if (slotBusy === run) slotBusy = null;
+  }
+}
+
+async function runEnsureSlot(opts: {
+  title?: string | null;
+  body?: string;
+  extraThoughtIds?: string[];
+  convert?: boolean;
 }): Promise<Comment | null> {
   const state = slot;
   if (state === null) return null;
@@ -1647,13 +1760,15 @@ async function ensureSlot(opts: {
   const title = opts.title !== undefined ? (opts.title ?? '') : state.titleInput.value;
   const body = opts.body ?? '';
   const extra = opts.extraThoughtIds ?? [];
-  if (!hasRecordContent({ title, body, bindings: extra.length })) return null;
+  const plan = planSlotCommit({
+    commentId: state.commentId,
+    title,
+    body: opts.body,
+    bindings: extra.length,
+  });
+  if (plan.action === 'none') return null;
   try {
     const home = await getHome();
-    const targets: CommentTarget[] = [{ owner_type: 'thought', owner_id: home }];
-    for (const id of extra) {
-      if (id !== home) targets.push({ owner_type: 'thought', owner_id: id });
-    }
     // Содержание записи держится на любом из: текст, заголовок, чипс
     // (требование 26f0aa52). Сервер допускает пустой `body_md`, пока есть
     // непустой заголовок или привязка вне HOME, поэтому текст шлём как есть.
@@ -1661,39 +1776,81 @@ async function ensureSlot(opts: {
     // Дата записи — псевдо-день + текущее время суток (ADR 994d076a: «при
     // создании — указанная дата + текущее время»). Голую дату не шлём: она
     // теряет время суток, а `valid_to` обязан быть непустым (d58aa1a4).
-    const now = new Date().toISOString();
-    const { from: validFrom, to: validTo } = resolvePeriodInstants(
-      { from: state.from, to: state.from },
-      { from: now, to: now },
-    );
-    const created = await etn.comments.createMulti(networkId, targets, {
-      kind: 'chronological',
-      title: title.trim() || null,
-      body_md: body,
-      valid_from: validFrom,
-      valid_to: validTo,
-      use_time: false,
-    });
+    let comment: Comment;
+    if (plan.action === 'create') {
+      const targets: CommentTarget[] = [{ owner_type: 'thought', owner_id: home }];
+      for (const id of extra) {
+        if (id !== home) targets.push({ owner_type: 'thought', owner_id: id });
+      }
+      const now = new Date().toISOString();
+      const { from: validFrom, to: validTo } = resolvePeriodInstants(
+        { from: state.from, to: state.from },
+        { from: now, to: now },
+      );
+      comment = await etn.comments.createMulti(networkId, targets, {
+        kind: 'chronological',
+        title: plan.title,
+        body_md: body,
+        valid_from: validFrom,
+        valid_to: validTo,
+        use_time: false,
+      });
+      state.commentId = comment.id;
+    } else {
+      comment = await updateSlotComment(networkId, state.commentId!, plan, extra, home);
+    }
     // Спокойная лента (0.10.1, итерация приёмки №8, п.2): слот превращается в
     // карточку записи НА МЕСТЕ, без полной перерисовки ленты и перескока
     // скролла. Если локальную строку собрать не удалось (нестандартные цели) —
     // откат на полную перезагрузку ради точности данных.
-    const localRow = await localRowFromComment(created, home);
-    if (localRow !== null) {
-      await insertCreatedRecord(localRow);
-      syncCalendar();
-      void refreshCalendarCounts();
-    } else {
+    const localRow = await localRowFromComment(comment, home);
+    if (localRow === null) {
       slot = null;
+      slotFocusInside = false;
       state.root.remove();
       await reload();
       syncCalendar();
+      return comment;
     }
-    return created;
+    if (opts.convert === true || !slotFocusInside) {
+      await insertCreatedRecord(localRow);
+    }
+    syncCalendar();
+    void refreshCalendarCounts();
+    return comment;
   } catch (err) {
     notice(t('diary.createFailed', [errText(err)]), 'error');
     return null;
   }
+}
+
+/**
+ * Обновление уже созданной из слота записи (ошибка 0757cd08): заголовок —
+ * всегда, тело — только если было передано вызывающим (правка одного поля не
+ * затирает другое). Новые привязки добавляются точечно (`comments.addTarget`).
+ */
+async function updateSlotComment(
+  networkId: string,
+  id: string,
+  plan: SlotCommitPlan,
+  extra: readonly string[],
+  home: string,
+): Promise<Comment> {
+  const fresh = await etn.comments.get(networkId, id);
+  let version = fresh.version;
+  const patch: Record<string, unknown> = { title: plan.title };
+  if (plan.bodyProvided) patch['body_md'] = plan.body;
+  let comment = await etn.comments.update(networkId, id, patch, version);
+  version = comment.version;
+  for (const tid of extra) {
+    if (tid === home) continue;
+    if (comment.targets.some((tg) => tg.owner_type === 'thought' && tg.owner_id === tid)) {
+      continue;
+    }
+    comment = await etn.comments.addTarget(networkId, id, 'thought', tid, version);
+    version = comment.version;
+  }
+  return comment;
 }
 
 // ---------------------------------------------------------------------------

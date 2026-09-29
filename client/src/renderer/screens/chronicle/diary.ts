@@ -564,6 +564,46 @@ export function hasRecordContent(draft: RecordDraft): boolean {
   return (draft.bindings ?? 0) > 0;
 }
 
+/** Решение о сохранении черновика псевдо-записи (ошибка 0757cd08). */
+export interface SlotCommitPlan {
+  action: 'create' | 'update' | 'none';
+  /** Заголовок записи (пробелы обрезаны; пустой — `null`). */
+  title: string | null;
+  /** Тело записи (для создания — как есть; для обновления — см. `bodyProvided`). */
+  body: string;
+  /** Передано ли тело вызывающим: правка только заголовка тело не трогает. */
+  bodyProvided: boolean;
+}
+
+/**
+ * Выбор операции для первого/очередного сохранения псевдо-записи (ошибка
+ * 0757cd08). Заголовок входит в ЛЮБОЕ сохранение; тело — только когда реально
+ * передано (`body !== undefined`), иначе правка заголовка затирала бы уже
+ * сохранённый текст, а правка текста — заголовок. Пока записи нет (`commentId
+ * === null`) и нет содержания — ничего не пишем (требование 26f0aa52). Если
+ * запись уже создана (например, первым содержательным blur заголовка),
+ * последующее сохранение ОБНОВЛЯЕТ её, а не создаёт дубль.
+ */
+export function planSlotCommit(input: {
+  commentId: string | null;
+  title: string;
+  body?: string;
+  bindings?: number;
+}): SlotCommitPlan {
+  const title = input.title.trim() || null;
+  const body = input.body ?? '';
+  const bodyProvided = input.body !== undefined;
+  if (input.commentId === null) {
+    const has = hasRecordContent({
+      title: input.title,
+      body,
+      bindings: input.bindings ?? 0,
+    });
+    return { action: has ? 'create' : 'none', title, body, bodyProvided };
+  }
+  return { action: 'update', title, body, bodyProvided };
+}
+
 /**
  * Нужны ли сетевые вызовы при удалении слота: пустой слот (без id) удаляется
  * только в клиенте, без записи в сеть и real-time событий (требование
