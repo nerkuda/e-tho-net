@@ -1391,6 +1391,15 @@ export class RestClient {
       order?: import('@etn/shared').SortOrder;
       limit?: number;
       offset?: number;
+      /**
+       * Per-call options (Client-Request-Id / signal / If-Match). A POST
+       * carrying them bypasses the idempotent in-flight lane — the per-caller
+       * state must not leak between callers — exactly like a GET. They are
+       * transport options, NOT part of the run body: they are stripped before
+       * the request goes out. Added so callers can cancel a run and so the
+       * dedup bypass is reachable (задача 73fd3a65).
+       */
+      requestOptions?: RequestOptions;
     },
   ): Promise<RunThoughtTypeViewResult> {
     // Same envelope pitfall as `listThoughtTypeViews` above (баг 3, 5467fb19):
@@ -1398,10 +1407,13 @@ export class RestClient {
     // `unresolved`/`view`/`directions` — everything `runActiveViewIfNeeded`
     // in `focus-filter-strip.ts` reads) must come from the SAME response's
     // envelope, not from a field shared with the other in-flight requests.
+    // `requestOptions` is split off the run body — the server rejects unknown
+    // body fields (`VALIDATION_ERROR`), and it changes the dedup decision.
+    const { requestOptions, ...body } = opts ?? {};
     const { data, meta: envelope } = await this.requestEnvelope<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewName)}/run`,
-      { body: opts ?? {}, idempotentPost: true },
+      { body, idempotentPost: true, requestOptions },
     );
     const meta = envelope as {
       total?: number;

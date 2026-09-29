@@ -798,6 +798,32 @@ describe('RestClient — in-flight дедуп POST views/run (07edaa4d)', () => 
     for (const r of results) assert.deepEqual(r, results[0]);
   });
 
+  it('requestOptions отключают дедуп: параллельные запуски с Client-Request-Id → два HTTP', async () => {
+    // Защитный путь дедупа: POST, несущий per-caller состояние (Client-Request-Id
+    // /signal), обязан выйти из in-flight полосы — иначе состояние одного
+    // вызывающего утекло бы другому через общий слот. Те же requestOptions, что
+    // используют тесты заголовков, только через публичный метод runThoughtTypeView.
+    const { fetch, calls } = makeFetch([{ status: 200, body: runBody }], { delayMs: 10 });
+    const client = makeClient(fetch);
+    await Promise.all([
+      client.runThoughtTypeView('net1', 'thought1', 'view1', {
+        limit: 20,
+        requestOptions: { clientRequestId: 'req-1' },
+      }),
+      client.runThoughtTypeView('net1', 'thought1', 'view1', {
+        limit: 20,
+        requestOptions: { clientRequestId: 'req-2' },
+      }),
+    ]);
+    assert.equal(calls.length, 2, 'requestOptions несут состояние вызывающего — дедуп обязан быть отключён');
+
+    // Служебные опции НЕ утекают в тело запроса: сервер роняет лишние поля
+    // (VALIDATION_ERROR), а тело остаётся ровно run-опциями.
+    const ids = calls.map((c) => (c.init.headers as Record<string, string>)['Client-Request-Id']);
+    assert.deepEqual([...ids].sort(), ['req-1', 'req-2'], 'каждый вызов несёт свой Client-Request-Id');
+    for (const c of calls) assert.deepEqual(JSON.parse(String(c.init.body)), { limit: 20 });
+  });
+
   it('разные тела (sort/order/limit/offset) не дедупятся — ключ включает тело', async () => {
     const { fetch, calls } = makeFetch([{ status: 200, body: runBody }], { delayMs: 10 });
     const client = makeClient(fetch);
@@ -843,6 +869,21 @@ describe('RestClient — in-flight дедуп POST views/run (07edaa4d)', () => 
     const ok = await client.runThoughtTypeView('net1', 'thought1', 'view1', { limit: 20 });
     assert.equal(calls.length, 4, 'первый вызов исчерпал 3 попытки, повторный — новый запрос');
     assert.deepEqual(ok.data, runBody.data);
+  });
+
+  it('публичный POST без опт-ин флага не схлопывается: два параллельных createThought → два HTTP', async () => {
+    // Защитный путь дедупа: неидемпотентные POST не дедупятся вовсе — опт-ин
+    // `idempotentPost` стоит только у read-only `views/.../run`. Проверяем на
+    // реальном публичном методе (без моков внутренностей), что расширение флага
+    // на прочие POST не проскочит.
+    const created = { data: { id: 't1', title: 'Мысль' } };
+    const { fetch, calls } = makeFetch([{ status: 200, body: created }], { delayMs: 10 });
+    const client = makeClient(fetch);
+    await Promise.all([
+      client.createThought('net1', { title: 'Мысль' }),
+      client.createThought('net1', { title: 'Мысль' }),
+    ]);
+    assert.equal(calls.length, 2, 'два одинаковых POST без опт-ин флага обязаны лететь отдельно');
   });
 });
 
