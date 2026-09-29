@@ -13,8 +13,13 @@
  * штатным путём (кнопка «Добавить хроно-запись» → заголовок → Enter) и проверяет
  * `networkId` и `targets[0].owner_id` у исходящего `comments.createMulti` — это и
  * есть тело `POST /comments`. Совпадение текста исходника не проверяется: при
- * откате фикса проба краснеет по значению `owner_id` (проба воспроизведения
- * зафиксировала `owner_id = home-A` до фикса и `home-B` после).
+ * откате фикса проба краснеет по значению `owner_id`.
+ *
+ * Два кейса:
+ *  1. обычный путь — HOME сети A уже разрешён, затем смена сети на B;
+ *  2. ГОНКА — промис `findRootThought` сети A завершается ПОСЛЕ смены на сеть B
+ *     (управляемая отложенность): поздний `.then` прежней сети не должен
+ *     затирать кэш HOME текущей сети (`chronicle.ts` `getHome`, защита `.then`).
  */
 
 import assert from 'node:assert/strict';
@@ -77,8 +82,7 @@ function shimDom(): void {
   };
   (globalThis as any).document = doc;
   // Мутируем ТОТ ЖЕ объект `window` (конвенция `renderer-editor-mount`):
-  // `lib/etn.js` читает `window` на каждом обращении, поэтому подмена самого
-  // объекта допустима, но общий объект проще и безопаснее.
+  // `lib/etn.js` читает `window` на каждом обращении.
   const win = ((globalThis as any).window ??= {}) as Record<string, any>;
   win.document = doc;
   win.setTimeout = setTimeout;
@@ -104,6 +108,20 @@ interface Call {
   args: any[];
 }
 
+/** Отложенный промис с ручным `resolve` (для управляемой гонки). */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Дать провернуться микро-/макрозадачам текущего пути. */
+function tick(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
 /** Заглушка `Comment` с заданной первичной привязкой. */
 function comment(id: string, owner: string): Record<string, unknown> {
   return {
@@ -124,6 +142,48 @@ function comment(id: string, owner: string): Record<string, unknown> {
   };
 }
 
+/** Общие заглушки `window.etn`; `structures.query` и захват create — у теста. */
+function baseEtn(win: Record<string, any>, onCreate: (networkId: string, targets: any[]) => void): void {
+  win.etn = {
+    ui: { getState: async () => null, setState: async () => undefined },
+    tabs: { updateState: async () => undefined },
+    thoughts: {
+      get: async (_networkId: string, id: string) => ({
+        id,
+        title: id,
+        icon: null,
+        fg_color: null,
+        bg_color: null,
+      }),
+    },
+    chronicle: { query: async () => ({ rows: [], total: 0 }) },
+    comments: {
+      createMulti: async (networkId: string, targets: any[]) => {
+        onCreate(networkId, targets);
+        return comment('c1', targets[0]?.owner_id ?? '');
+      },
+      update: async (_n: string, id: string) => comment(id, ''),
+      get: async (_n: string, id: string) => comment(id, ''),
+      addTarget: async (_n: string, id: string) => comment(id, ''),
+      remove: async () => undefined,
+      removeTarget: async () => undefined,
+    },
+    links: { get: async () => undefined },
+    attachments: { list: async () => ({ items: [] }) },
+  };
+}
+
+/** Создать запись штатным путём: кнопка «Добавить» → заголовок → Enter. */
+function createRecord(host: ShimElement): void {
+  const add = host.querySelector('.diary-add-btn');
+  assert.ok(add, 'кнопка «Добавить хроно-запись» смонтирована');
+  add!.click();
+  const input = host.querySelector('.diary-record-title-input');
+  assert.ok(input, 'поле заголовка слота смонтировано');
+  input!.value = 'Тест';
+  input!.fire('keydown', { key: 'Enter', preventDefault() {} });
+}
+
 describe('guard: HOME «Дневника» привязан к сети (ошибка ab4e499f)', () => {
   it('запись в сети B создаётся с HOME сети B, а не прежней A', async () => {
     shimDom();
@@ -135,44 +195,18 @@ describe('guard: HOME «Дневника» привязан к сети (оши�
     const created = new Promise<void>((resolve) => {
       resolveCreate = resolve;
     });
-    /** HOME, отданный последним разрешением `structures.query`. */
-    const resolveHome = (networkId: string): string => HOME[networkId] ?? '';
 
     const win = (globalThis as any).window as Record<string, any>;
-    win.etn = {
-      ui: { getState: async () => null, setState: async () => undefined },
-      tabs: { updateState: async () => undefined },
-      structures: {
-        query: async (networkId: string) => {
-          calls.push({ ns: 'structures', method: 'query', args: [networkId] });
-          return { items: [{ id: resolveHome(networkId) }], total: 1 };
-        },
+    baseEtn(win, (networkId, targets) => {
+      createNetwork = networkId;
+      createTargets = targets;
+      resolveCreate();
+    });
+    win.etn.structures = {
+      query: async (networkId: string) => {
+        calls.push({ ns: 'structures', method: 'query', args: [networkId] });
+        return { items: [{ id: HOME[networkId] ?? '' }], total: 1 };
       },
-      thoughts: {
-        get: async (_networkId: string, id: string) => ({
-          id,
-          title: id,
-          icon: null,
-          fg_color: null,
-          bg_color: null,
-        }),
-      },
-      chronicle: { query: async () => ({ rows: [], total: 0 }) },
-      comments: {
-        createMulti: async (networkId: string, targets: any[]) => {
-          createNetwork = networkId;
-          createTargets = targets;
-          resolveCreate();
-          return comment('c1', targets[0]?.owner_id ?? '');
-        },
-        update: async (_n: string, id: string) => comment(id, ''),
-        get: async (_n: string, id: string) => comment(id, ''),
-        addTarget: async (_n: string, id: string) => comment(id, ''),
-        remove: async () => undefined,
-        removeTarget: async () => undefined,
-      },
-      links: { get: async () => undefined },
-      attachments: { list: async () => ({ items: [] }) },
     };
 
     const { store } = await import('../src/renderer/state.js');
@@ -195,14 +229,7 @@ describe('guard: HOME «Дневника» привязан к сети (оши�
     store.update({ networkId: 'netB', activeTabId: 'tabB' });
     await new Promise((r) => setTimeout(r, 0));
 
-    // Создаём запись штатным путём: кнопка → заголовок → Enter.
-    const add = (host as unknown as ShimElement).querySelector('.diary-add-btn');
-    assert.ok(add, 'кнопка «Добавить хроно-запись» смонтирована');
-    add!.click();
-    const input = (host as unknown as ShimElement).querySelector('.diary-record-title-input');
-    assert.ok(input, 'поле заголовка слота смонтировано');
-    input!.value = 'Тест';
-    input!.fire('keydown', { key: 'Enter', preventDefault() {} });
+    createRecord(host as unknown as ShimElement);
     await created;
 
     // Тело `POST /comments`: сеть текущая, первичная привязка — её HOME.
@@ -220,6 +247,90 @@ describe('guard: HOME «Дневника» привязан к сети (оши�
       target0?.owner_id,
       HOME.netA,
       'HOME прежней сети в тело запроса не попадает',
+    );
+  });
+
+  it('поздний промис HOME сети A после смены на B не затирает кэш (гонка)', async () => {
+    shimDom();
+
+    let createNetwork: string | null = null;
+    let createTargets: any[] | null = null;
+    let resolveCreate: () => void = () => undefined;
+    const created = new Promise<void>((resolve) => {
+      resolveCreate = resolve;
+    });
+
+    // Управляемые разрешения HOME: сеть A отдаём позже сети B.
+    const homeA = deferred<{ items: Array<{ id: string }>; total: number }>();
+    const homeB = deferred<{ items: Array<{ id: string }>; total: number }>();
+    let askedA = false;
+    let askedB = false;
+
+    const win = (globalThis as any).window as Record<string, any>;
+    baseEtn(win, (networkId, targets) => {
+      createNetwork = networkId;
+      createTargets = targets;
+      resolveCreate();
+    });
+    win.etn.structures = {
+      query: async (networkId: string) => {
+        if (networkId === 'netA') {
+          askedA = true;
+          return homeA.promise;
+        }
+        if (networkId === 'netB') {
+          askedB = true;
+          return homeB.promise;
+        }
+        return { items: [], total: 0 };
+      },
+    };
+
+    const { store } = await import('../src/renderer/state.js');
+    const chronicle = await import('../src/renderer/screens/chronicle/chronicle.js');
+
+    const host = new ShimElement('div') as unknown as HTMLElement & { isConnected: boolean };
+    host.isConnected = true;
+    store.update({ activeView: 'chronicle', networkId: 'netA', activeTabId: 'tabA' });
+    chronicle.mountChronicle(host);
+
+    // Старт «Дневника» в сети A НЕ ждём: разрешение HOME(A) намеренно зависает.
+    const initA = chronicle.ensureChronicleInitialised().catch(() => undefined);
+    await tick();
+    assert.ok(askedA, 'разрешение HOME сети A начато и ещё не завершено');
+
+    // Смена сети на B, пока промис HOME(A) висит.
+    store.update({ networkId: 'netB', activeTabId: 'tabB' });
+    await tick();
+    assert.ok(askedB, 'смена сети начала разрешение HOME сети B');
+
+    // Сначала завершается HOME(B) — кэш заполняется корректным значением...
+    homeB.resolve({ items: [{ id: HOME.netB ?? '' }], total: 1 });
+    await tick();
+    await tick();
+
+    // ...затем «поздно» завершается HOME(A): его `.then` не должен затереть кэш.
+    homeA.resolve({ items: [{ id: HOME.netA ?? '' }], total: 1 });
+    await tick();
+    await tick();
+    await initA;
+
+    createRecord(host as unknown as ShimElement);
+    await created;
+
+    const target0 = ((createTargets as any[] | null) ?? [])[0] as
+      | { owner_type?: string; owner_id?: string }
+      | undefined;
+    assert.equal(createNetwork, 'netB', 'запись создаётся в текущей сети B');
+    assert.equal(
+      target0?.owner_id,
+      HOME.netB,
+      'поздний промис HOME(A) не затёр кэш: владелец — HOME текущей сети B',
+    );
+    assert.notEqual(
+      target0?.owner_id,
+      HOME.netA,
+      'HOME прежней сети A в тело запроса не попадает',
     );
   });
 });
