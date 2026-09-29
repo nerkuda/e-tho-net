@@ -145,6 +145,30 @@ function isEditingTarget(target: HTMLElement | null): boolean {
   return closestWith(target, isContentEditable) !== null;
 }
 
+/** Класс корня прокрутки ленты «Дневника» (`chronicle.ts` → `feedWrap`). */
+const FEED_WRAP_CLASS = 'chron-feed-wrap';
+/** Классы редактора записи: обёртка поля комментария и её CM6-редактор. */
+const FEED_EDITOR_CLASSES = ['md-field', 'cm-editor'] as const;
+
+/**
+ * Клавиша адресована редактору ЗАПИСИ внутри ленты? Глобальный шорткат
+ * применения отбора (Ctrl+Enter, `filter-panel.ts`) в этом случае обязан
+ * молчать: комбинацию уже обработал внутренний редактор записи (коммит правки,
+ * M10) — ошибка f5809943. Панель отбора (`.chron-filter-area`) под этот гард НЕ
+ * подпадает: Ctrl+Enter в её полях по-прежнему применяет отбор (спека «Горячие
+ * клавиши», 50bb672a).
+ */
+export function isFeedRecordEditorTarget(target: HTMLElement | null): boolean {
+  if (target === null) return false;
+  // Редактор комментария записи (`.md-field` и вложенный CM6 `.cm-editor`).
+  for (const cls of FEED_EDITOR_CLASSES) {
+    if (closestWithClass(target, cls) !== null) return true;
+  }
+  // Любое поле правки ВНУТРИ ленты (поле заголовка записи).
+  if (closestWithClass(target, FEED_WRAP_CLASS) === null) return false;
+  return isEditingTarget(target);
+}
+
 /**
  * Может ли узел принять программный фокус. Реальный `div` без `tabindex` — нет
  * (тогда фокус ставится на контейнер ленты), а кнопка/поле — да.

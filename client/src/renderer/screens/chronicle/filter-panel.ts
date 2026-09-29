@@ -79,6 +79,7 @@ import {
   resolveDateToken,
   resolvePeriodForQuery,
 } from './diary.js';
+import { isFeedRecordEditorTarget } from './feed-nav.js';
 
 export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
 
@@ -649,12 +650,27 @@ function renderPanel(): void {
   });
 }
 
-/** Global Ctrl+Enter shortcut for the diary view (hosted by the feed). */
-export function wireChronicleApplyShortcut(container: HTMLElement): void {
+/**
+ * Global Ctrl+Enter shortcut for the diary view (hosted by the feed).
+ *
+ * `onApply` — точка применения отбора; вынесена параметром с дефолтом на
+ * `actions.apply()` только ради наблюдаемости в тестах (боевой вызов —
+ * `wireChronicleApplyShortcut(hostEl)` без второго аргумента).
+ */
+export function wireChronicleApplyShortcut(
+  container: HTMLElement,
+  onApply: () => void = () => actions.apply(),
+): void {
   container.addEventListener('keydown', (event) => {
-    if (event.ctrlKey && event.key === 'Enter') {
-      event.preventDefault();
-      actions.apply();
-    }
+    if (!event.ctrlKey || event.key !== 'Enter') return;
+    // Клавишу уже поглотил внутренний редактор записи (CM6 keymap Mod-Enter →
+    // коммит правки, M10) — не применяем отбор второй раз (ошибка f5809943).
+    if (event.defaultPrevented) return;
+    // Источник — редактор ЗАПИСИ ленты (комментарий/заголовок): молчим.
+    // Панель отбора сюда не попадает — Ctrl+Enter в её полях применяет отбор
+    // (спека «Горячие клавиши», 50bb672a).
+    if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return;
+    event.preventDefault();
+    onApply();
   });
 }
