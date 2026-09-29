@@ -486,6 +486,40 @@ export function groupByLocalDays(
     .map(([day, list]) => ({ day, rows: list }));
 }
 
+/**
+ * Забрать страницы ленты до глубины `depth` (0.10.2, ошибка f5809943).
+ *
+ * Refresh ТЕКУЩЕГО вида (правка записи, fallback realtime) обязан сохранять уже
+ * загруженную глубину: полный перезапрос только первой страницы терял
+ * дозагруженные «+50», состав ленты укорачивался, и позицию прокрутки держать
+ * становилось нечем (keyed-сверка снимает лишние узлы → клампинг `scrollTop`).
+ * Запросы идут до `max(pageSize, depth)` и не дальше `total`; страницы
+ * собираются ДО единственной перерисовки ленты — промежуточный рендер усечённого
+ * состава успел бы сбросить прокрутку.
+ *
+ * `fetchPage(offset, limit)` отдаёт очередную страницу в текущем отборе и
+ * порядке. Остановка — на пустой странице (сервер отдал меньше `total`) либо
+ * при достижении `total`. Смена критериев не терпит этой глубины: сброс на
+ * первую страницу — вызывающий передаёт `depth = pageSize`.
+ */
+export async function collectRowsToDepth<T>(
+  depth: number,
+  pageSize: number,
+  fetchPage: (offset: number, limit: number) => Promise<{ rows: T[]; total: number }>,
+): Promise<{ rows: T[]; total: number }> {
+  const target = Math.max(pageSize, depth);
+  const first = await fetchPage(0, pageSize);
+  let rows = first.rows;
+  let total = first.total;
+  while (rows.length < target && rows.length < total) {
+    const page = await fetchPage(rows.length, pageSize);
+    if (page.rows.length === 0) break;
+    rows = [...rows, ...page.rows];
+    total = page.total;
+  }
+  return { rows, total };
+}
+
 /** Период клика по дню календаря. */
 export interface PeriodRange {
   from: string;

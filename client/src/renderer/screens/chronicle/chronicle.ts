@@ -103,6 +103,7 @@ import {
   applyPeriodToFilter,
   attachmentOwnerForRow,
   clampPseudoDate,
+  collectRowsToDepth,
   compareDays,
   dayInPeriod,
   dayPeriod,
@@ -654,19 +655,28 @@ async function applyFilter(): Promise<void> {
   void refreshCalendarCounts();
 }
 
-/** Re-fetches the first page (used after edits and real-time events). */
-async function reload(): Promise<void> {
+/**
+ * Re-fetches the feed (used after edits and real-time events).
+ *
+ * `preserveDepth` — перезапрос до УЖЕ загруженной глубины (`rows.length`):
+ * refresh текущего вида не должен терять дозагруженные «+50» страницы (ошибка
+ * f5809943 — завершение правки записи сбрасывало прокрутку в начало). Страницы
+ * собираются {@link collectRowsToDepth} ДО единственной перерисовки. Смена
+ * отбора/периода идёт без флага: лента показывается с первой страницы (это
+ * ожидаемое поведение, `applyFilter`/`jumpToRecord`).
+ */
+async function reload(preserveDepth = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || feedList === null) return;
   const seq = ++querySeq;
   renderStatus('loading');
   try {
     const def = chronicleQueryDefinition();
-    const result = await etn.chronicle.query(networkId, {
-      ...def,
-      limit: CHRONICLE_PAGE_SIZE,
-      offset: 0,
-    });
+    const result = await collectRowsToDepth(
+      preserveDepth ? rows.length : CHRONICLE_PAGE_SIZE,
+      CHRONICLE_PAGE_SIZE,
+      (offset, limit) => etn.chronicle.query(networkId, { ...def, limit, offset }),
+    );
     if (seq !== querySeq) return;
     rows = result.rows;
     total = result.total;
@@ -744,9 +754,14 @@ const realtimeBatch = createRealtimeBatch<ChronicleRealtimeOp>({
   },
 });
 
-/** Полный путь realtime: перезапрос первой страницы + пересчёт календаря. */
+/**
+ * Полный путь realtime: перезапрос ленты + пересчёт календаря. Глубину ленты
+ * сохраняем (`reload(true)`) — этот путь обслуживает и локальные правки
+ * (`scheduleChronicleRefresh`), которые не должны терять дозагруженные «+50»
+ * (ошибка f5809943).
+ */
 async function reloadAndSync(): Promise<void> {
-  await reload();
+  await reload(true);
   syncCalendar();
   void refreshCalendarCounts();
 }
