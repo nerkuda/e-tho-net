@@ -1268,13 +1268,34 @@ export function writeOntology(
       ltResults.push({ ref: item.ref, id, version, action });
       if (item.ref !== null) ltIdByRef.set(item.ref, id);
     }
-    for (const item of resolvedLinkTypes) {
+    for (const [i, item] of resolvedLinkTypes.entries()) {
       if (item.parent.kind !== 'ref') continue;
+      // `parent_ref` резолвится здесь, ПОСЛЕ того как все типы записаны: у
+      // только что СОЗДАННОГО типа связи `item.id` ещё `null` (id появляется
+      // лишь в `ltResults`/`ltIdByRef`), поэтому адресовать тип через
+      // `item.id` нельзя — итерация молча пропускалась (ошибка 98ab2c3e).
+      // Актуальный id берём из `ltResults` (порядок 1:1 с resolvedLinkTypes),
+      // как в фазе 1.5 thought_types.
       const targetId = ltIdByRef.get(item.parent.ref);
-      if (targetId === undefined) continue;
-      const id = item.id!;
+      if (targetId === undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `parent_ref "${item.parent.ref}" is not declared in this batch`,
+          {
+            field: `link_types[${item.index}].parent_ref`,
+            parent_ref: item.parent.ref,
+          },
+        );
+      }
+      const r = ltResults[i]!;
+      const id = r.id;
       const existing = getLinkType(ndb, id);
-      if (existing === null) continue;
+      if (existing === null) {
+        throw new EtnError('NOT_FOUND', `link type ${id} not found`, {
+          entity: 'link_type',
+          id,
+        });
+      }
       if (existing.parent_id === targetId) continue;
       assertParentValid(ndb, 'link_types', id, targetId);
       const updated = updateLinkType(
@@ -1284,11 +1305,8 @@ export function writeOntology(
         undefined,
         actorUserId,
       );
-      const r = ltResults.find((x) => x.id === id);
-      if (r !== undefined) {
-        r.version = updated.version;
-        if (r.action === 'unchanged') r.action = 'updated';
-      }
+      r.version = updated.version;
+      if (r.action === 'unchanged') r.action = 'updated';
     }
 
     // ---- properties ----------------------------------------------------

@@ -185,6 +185,172 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
     }
   });
 
+  // Ошибка 98ab2c3e: фаза 1.5 для link_types адресовала тип через `item.id`,
+  // а у только что СОЗДАННОГО типа он ещё null — `parent_ref` молча терялся,
+  // тип оставался под корнем. Теперь id берётся из результата записи, как в
+  // фазе thought_types.
+  it('builds a hierarchy of 3 link types via parent_ref in one call (98ab2c3e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              { ref: 'lwork', name_forward: 'иерарх-работа', name_reverse: 'иерарх-работа-обр' },
+              {
+                ref: 'ltask',
+                name_forward: 'иерарх-задача',
+                name_reverse: 'иерарх-задача-обр',
+                parent_ref: 'lwork',
+              },
+              {
+                ref: 'lsub',
+                name_forward: 'иерарх-подзадача',
+                name_reverse: 'иерарх-подзадача-обр',
+                parent_ref: 'ltask',
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<OntologyWriteResult>(result);
+        assert.equal(data.link_types.length, 3);
+        for (const t of data.link_types) assert.equal(t.action, 'created');
+        const lwork = data.link_types.find((t) => t.ref === 'lwork')!;
+        const ltask = data.link_types.find((t) => t.ref === 'ltask')!;
+        const lsub = data.link_types.find((t) => t.ref === 'lsub')!;
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const parentOf = (id: string): string | null =>
+          (
+            ndb.prepare('SELECT parent_id FROM link_types_v WHERE id = ?').get(id) as {
+              parent_id: string | null;
+            }
+          ).parent_id;
+        // lwork — прямой потомок корня.
+        assert.notEqual(parentOf(lwork.id), null);
+        assert.equal(parentOf(ltask.id), lwork.id, 'ltask подвешен под lwork');
+        assert.equal(parentOf(lsub.id), ltask.id, 'lsub подвешен под ltask');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('resolves parent_ref of a new link type to an existing one by name and by id (98ab2c3e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const seed = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                {
+                  ref: 'root',
+                  name_forward: 'существующий-родитель',
+                  name_reverse: 'существующий-родитель-обр',
+                },
+              ],
+            },
+          }),
+        );
+        const existingId = seed.link_types[0]!.id;
+
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              // Батч-псевдоним, совпадающий по паре имён с существующим типом:
+              // его id резолвится из БД ещё в resolve-фазе.
+              {
+                ref: 'byName',
+                name_forward: 'существующий-родитель',
+                name_reverse: 'существующий-родитель-обр',
+              },
+              {
+                ref: 'childByName',
+                name_forward: 'новичок-по-имени',
+                name_reverse: 'новичок-по-имени-обр',
+                parent_ref: 'byName',
+              },
+              // Батч-псевдоним с явным id существующего типа.
+              { ref: 'byId', id: existingId },
+              {
+                ref: 'childById',
+                name_forward: 'новичок-по-id',
+                name_reverse: 'новичок-по-id-обр',
+                parent_ref: 'byId',
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<OntologyWriteResult>(result);
+        const childByName = data.link_types.find((t) => t.ref === 'childByName')!;
+        const childById = data.link_types.find((t) => t.ref === 'childById')!;
+        assert.equal(childByName.action, 'created');
+        assert.equal(childById.action, 'created');
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const parentOf = (id: string): string | null =>
+          (
+            ndb.prepare('SELECT parent_id FROM link_types_v WHERE id = ?').get(id) as {
+              parent_id: string | null;
+            }
+          ).parent_id;
+        assert.equal(parentOf(childByName.id), existingId, 'родитель по имени существующего типа');
+        assert.equal(parentOf(childById.id), existingId, 'родитель по id существующего типа');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('rejects a link type parent_ref not declared in the batch (98ab2c3e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              {
+                ref: 'orphan',
+                name_forward: 'нерезолв-ребёнок',
+                name_reverse: 'нерезолв-ребёнок-обр',
+                parent_ref: 'nope',
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, true, 'ожидается VALIDATION_ERROR, а не молчаливый игнор');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('nope'), `ожидалось упоминание ref: ${text}`);
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const rows = ndb
+          .prepare("SELECT id FROM link_types_v WHERE name_forward = 'нерезолв-ребёнок'")
+          .all();
+        assert.equal(rows.length, 0, 'батч с нерезолвленным parent_ref откатывается');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('rejects a cycle in parent_ref with VALIDATION_ERROR before any write', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -1270,8 +1436,9 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
           'перед патчем ребёнок подвешен под p',
         );
         // Тип связи подвесим под `lp` явным parent-id, чтобы затем снять его
-        // пустой строкой (у `parent_ref` при СОЗДАНИИ link_type есть отдельный
-        // латентный дефект — не предмет этой ошибки).
+        // пустой строкой. (`parent_ref` при СОЗДАНИИ link_type тоже работает —
+        // см. регресс 98ab2c3e ниже; здесь выбран явный id, чтобы отдельно
+        // проверить именно снятие родителя пустой строкой.)
         toolJson<OntologyWriteResult>(
           await handle.client.callTool({
             name: 'etn.ontology.write',
