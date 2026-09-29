@@ -605,12 +605,21 @@ export function planSlotCommit(input: {
 }
 
 /**
+ * Есть ли в ленте строка с таким id. Дедуп локальной вставки созданной записи
+ * (ошибка 0757cd08, круг 1): строку могла вставить другая ветка (realtime-
+ * событие, перезагрузка/сверка), пока слот ждал ухода фокуса. Повторная
+ * вставка даёт ленте два узла с одним ключом и роняет `reconcileKeyed`.
+ */
+export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
+  return rows.some((row) => row.id === id);
+}
+
+/**
  * Нужны ли сетевые вызовы при удалении слота: пустой слот (без id) удаляется
  * только в клиенте, без записи в сеть и real-time событий (требование
  * 26f0aa52).
  */
-export function slotDeleteNeedsNetwork(commentId: string | null): boolean {
-  return commentId !== null;
+export function slotDeleteNeedsNetwork(commentId: string | null): boolean {  return commentId !== null;
 }
 
 /**

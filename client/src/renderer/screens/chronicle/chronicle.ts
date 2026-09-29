@@ -108,6 +108,7 @@ import {
   dayPeriod,
   formatDayLabel,
   groupByLocalDays,
+  hasRowId,
   insertRowByDay,
   isLastChip,
   localDay,
@@ -885,7 +886,7 @@ function renderFeed(): void {
   // ленты/filter apply, пока слот ещё не сконвертирован — отложенная
   // конвертация, ошибка 0757cd08), снимаем: иначе запись показалась бы дважды.
   const stale = slot;
-  if (stale !== null && stale.commentId !== null && rows.some((r) => r.id === stale.commentId)) {
+  if (stale !== null && stale.commentId !== null && hasRowId(rows, stale.commentId)) {
     stale.root.remove();
     slot = null;
     slotFocusInside = false;
@@ -1026,14 +1027,29 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
     await reload();
     return;
   }
+  slot = null;
+  slotFocusInside = false;
+  // Дедупликация по id: пока слот ждал ухода фокуса, строку уже могла вставить
+  // другая ветка (realtime-событие, перезагрузка/сверка). Повторная вставка даёт
+  // ленте два узла с одним ключом и роняет `reconcileKeyed` (ошибка 0757cd08,
+  // круг 1: Ctrl+Enter + повторное «Добавить хроно-запись»). Строка уже в ленте —
+  // вторую не вставляем, но СЛИВАЕМ свежие поля (тело/заголовок/даты): ветка,
+  // вставившая строку, могла знать запись ещё до сохранения текста, и карточка
+  // иначе показывала бы устаревшее содержимое. Позицию сохраняет сверка.
+  if (hasRowId(rows, row.id)) {
+    rows = rows.map((existing) => (existing.id === row.id ? row : existing));
+    slotRoot?.remove();
+    pendingReconcile = true;
+    renderFeed();
+    feedNav?.refresh();
+    return;
+  }
   const card = buildRecordCard(row);
   const inPlace = slotRoot !== null && slotRoot.parentElement !== null;
   if (inPlace) slotRoot!.replaceWith(card);
   rows = insertRowByDay(rows, row, getFilterState().order, home);
   total += 1;
   pendingReconcile = true;
-  slot = null;
-  slotFocusInside = false;
   if (inPlace) updateMoreLine();
   else renderFeed();
   feedNav?.refresh();
@@ -1674,8 +1690,22 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
     await ensureSlot({ extraThoughtIds: ids });
   }
 
-  renderFeed();
-  titleInput.focus();
+  // Открытие слота не должно оставлять модульный `slot` в неконсистентном
+  // состоянии при любой ошибке отрисовки: иначе все последующие клики уходят в
+  // раннюю ветку «слот уже есть» и кнопка «Добавить хроно-запись» перестаёт
+  // работать (ошибка 0757cd08, круг 1, независимая проверка).
+  try {
+    renderFeed();
+    titleInput.focus();
+  } catch (err) {
+    if (slot === state) {
+      slot = null;
+      slotFocusInside = false;
+    }
+    state.root.remove();
+    notice(t('diary.createFailed', [errText(err)]), 'error');
+    return;
+  }
 
   // Привязки, заданные сразу (drop на ленте/пустом месте), создают запись и
   // превращают слот в карточку немедленно — фокус в слоте не удерживается.

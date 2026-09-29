@@ -26,6 +26,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+  hasRowId,
   planSlotCommit,
   type SlotCommitPlan,
 } from '../src/renderer/screens/chronicle/diary.js';
@@ -35,6 +36,16 @@ const CHRONICLE = fs.readFileSync(
   path.join(RENDERER_ROOT, 'screens', 'chronicle', 'chronicle.ts'),
   'utf8',
 );
+
+/** Тело функции верхнего уровня по её объявлению (стиль файла: `}` в первой колонке). */
+function functionBody(src: string, signature: string): string {
+  const start = src.indexOf(signature);
+  assert.ok(start >= 0, `исходник содержит «${signature}»`);
+  const body = src.slice(start);
+  const end = body.indexOf('\n}\n');
+  assert.ok(end >= 0, `у «${signature}» найдено тело`);
+  return body.slice(0, end);
+}
 
 /** Мини-хранилище записей: id → запись (заголовок, тело). */
 interface FakeComment {
@@ -181,6 +192,56 @@ describe('псевдо-запись: проводка фикса в экране
       CHRONICLE,
       /if \(slotBusy !== null\) return slotBusy;/,
       'параллельные сохранения не создают дубль',
+    );
+  });
+});
+
+describe('псевдо-запись: Ctrl+Enter → повторный слот не роняет ленту (ошибка 0757cd08, круг 1)', () => {
+  it('дедуп по id: локальная вставка не добавляет вторую строку с тем же ключом', () => {
+    // Модель ленты: строку могла вставить другая ветка (realtime-событие,
+    // перезагрузка/сверка), пока слот ждал ухода фокуса.
+    const rows: { id: string }[] = [];
+    const insertLocal = (row: { id: string }): void => {
+      if (hasRowId(rows, row.id)) return; // правило insertCreatedRecord
+      rows.push(row);
+    };
+    rows.push({ id: 'rec-1' }); // вставка realtime-путём
+    insertLocal({ id: 'rec-1' }); // локальная конвертация слота того же id
+    assert.equal(rows.length, 1, 'второй узел с тем же ключом не появился');
+    // После Ctrl+Enter повторный слот создаётся: ключей-дублей нет.
+    assert.equal(hasRowId(rows, 'rec-2'), false);
+    insertLocal({ id: 'rec-2' });
+    assert.deepEqual(
+      rows.map((r) => r.id),
+      ['rec-1', 'rec-2'],
+    );
+  });
+
+  it('insertCreatedRecord дедуплицирует по id до insertRowByDay', () => {
+    const fn = functionBody(CHRONICLE, 'async function insertCreatedRecord(');
+    assert.match(
+      fn,
+      /if \(hasRowId\(rows, row\.id\)\) \{[\s\S]*?slotRoot\?\.remove\(\);[\s\S]*?pendingReconcile = true;[\s\S]*?return;/,
+      'существующая строка — слот снимается, дубль не вставляется',
+    );
+    const guard = fn.indexOf('hasRowId(rows, row.id)');
+    const insert = fn.indexOf('insertRowByDay(rows, row');
+    assert.ok(guard >= 0 && insert >= 0 && guard < insert, 'дедуп стоит ДО вставки строки');
+  });
+
+  it('renderFeed снимает слот, чья запись уже пришла из сети', () => {
+    assert.match(
+      CHRONICLE,
+      /stale\.commentId !== null && hasRowId\(rows, stale\.commentId\)/,
+      'слот-двойник не показывается',
+    );
+  });
+
+  it('ошибка отрисовки не оставляет слот-стейт неконсистентным (кнопка работает)', () => {
+    assert.match(
+      CHRONICLE,
+      /try \{\s*renderFeed\(\);\s*titleInput\.focus\(\);\s*\} catch \(err\) \{\s*if \(slot === state\) \{\s*slot = null;/,
+      'сбой renderFeed в startSlot сбрасывает slot',
     );
   });
 });
