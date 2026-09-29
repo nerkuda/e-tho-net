@@ -14,7 +14,9 @@
  *
  * The history is recorded by the properties editor on every successful save
  * of a single text value. Multiple-value properties (`config.multiple`) keep
- * no history at all.
+ * no history at all. A text property declared with a closed list of options
+ * (`config.options`) keeps no history either — its dropdown shows that list
+ * itself, opened right on field focus (карточка ошибки 4a96d07a).
  */
 
 /** History length per property (the agreed product decision: 10 entries). */

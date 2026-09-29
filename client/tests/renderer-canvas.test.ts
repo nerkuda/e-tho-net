@@ -9,12 +9,13 @@ import { describe, it } from 'node:test';
 import type { FocusEdge, FocusNeighbor, FocusResponse, Thought, ThoughtRef, ThoughtType } from '@etn/shared';
 
 import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/canvas.js';
+import type { ViewResult } from '../src/renderer/canvas/focus-filter-strip.js';
 import { shortenCompoundName } from '../src/renderer/lib/pure.js';
 import { store } from '../src/renderer/state.js';
 // Канон стиля и значка мысли живёт в общей фабрике облачка (веха 2).
 import { resolveCloudStyle, resolveThoughtIcon } from '../src/renderer/lib/thought-cloud.js';
 
-const { groupByThought, canvasRenderKey, selectionKey } = canvasInternals;
+const { groupByThought, viewResultToZoneEntries, canvasRenderKey, selectionKey } = canvasInternals;
 
 function thought(id: string, title = id): Thought {
   return {
@@ -417,6 +418,76 @@ describe('zone cloud compound name integration (08-ui-spec §2.2.3, cbb91b62)', 
     });
     assert.equal(result.get('child'), undefined);
     assert.equal(shortenCompoundName('Проект А.Ошибки', result.get('child') ?? []), 'Проект А.Ошибки');
+  });
+});
+
+describe('view result compound name (08-ui-spec §2.2.3, ace5e73b)', () => {
+  // Нижняя зона под отбором показывает результат «теми же облачками, что и
+  // потомков» (элемент интерфейса 9984aa98). Мысли результата могут не иметь
+  // связи с фокусом вовсе, поэтому `relatedTitles` (из рёбер фокуса) для них
+  // пуст — имя должно сокращаться по фокусу явно.
+  const sorts = {
+    parents: { sort: 'created' as const, order: 'asc' as const },
+    children: { sort: 'created' as const, order: 'asc' as const },
+    siblings: { sort: 'created' as const, order: 'asc' as const },
+  };
+
+  function viewResult(items: ThoughtRef[]): ViewResult {
+    return {
+      viewId: 'v',
+      viewName: 'Работы версии',
+      viewTypeId: 'vt',
+      focusId: 'focus',
+      items,
+      directions: Object.fromEntries(
+        items.map((i) => [i.id, { has_incoming: false, has_outgoing: false }]),
+      ),
+      unresolved: null,
+      empty: false,
+    };
+  }
+
+  function focus(title: string): FocusResponse {
+    return {
+      focused: thought('focus', title),
+      parents: [],
+      siblings: [],
+      children: [],
+      edges: [],
+      sorts,
+    };
+  }
+
+  it('сокращает составное имя из результата отбора по фокусу без прямой связи', () => {
+    const entries = viewResultToZoneEntries(
+      viewResult([ref({ id: 'r1', title: 'Ошибки.0.10.1' })]),
+      focus('0.10.1'),
+    );
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0]?.viewResultRelated, ['0.10.1'], 'результат несёт имя фокуса');
+    assert.equal(
+      shortenCompoundName(entries[0]?.links[0]?.title ?? '', entries[0]?.viewResultRelated ?? []),
+      'Ошибки',
+    );
+  });
+
+  it('пример из карточки: фокус «Аптеки», результат «Аптеки.Новосибирск» → «Новосибирск»', () => {
+    const entries = viewResultToZoneEntries(
+      viewResult([ref({ id: 'r1', title: 'Аптеки.Новосибирск' })]),
+      focus('Аптеки'),
+    );
+    assert.equal(
+      shortenCompoundName(entries[0]?.links[0]?.title ?? '', entries[0]?.viewResultRelated ?? []),
+      'Новосибирск',
+    );
+  });
+
+  it('исключает саму фокусную мысль из результата', () => {
+    const entries = viewResultToZoneEntries(
+      viewResult([ref({ id: 'focus', title: '0.10.1' }), ref({ id: 'r1', title: 'Ошибки.0.10.1' })]),
+      focus('0.10.1'),
+    );
+    assert.deepEqual(entries.map((e) => e.id), ['r1']);
   });
 });
 

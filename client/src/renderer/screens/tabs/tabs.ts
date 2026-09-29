@@ -37,7 +37,7 @@ const TAB_LAYOUT = { kind: 'fixed', defaultWidth: 180, minWidth: 120 } as const;
  * Mounts the tab strip into `host`. Returns the root element so the caller
  * (workspace.ts) can wire global listeners.
  */
-export function mountTabStrip(host: HTMLElement): HTMLDivElement {
+export function mountTabStrip(host: HTMLElement): () => void {
   const root = div('tab-strip');
   host.append(root);
 
@@ -75,7 +75,7 @@ export function mountTabStrip(host: HTMLElement): HTMLDivElement {
   });
   observer.observe(root);
 
-  store.subscribe(() => render(elements));
+  const unsubscribe = store.subscribe(() => render(elements));
 
   render(elements);
   wireTabDrag(root, (orderedIds) => {
@@ -83,7 +83,13 @@ export function mountTabStrip(host: HTMLElement): HTMLDivElement {
   });
   void refreshTabs();
 
-  return root;
+  // Release the store subscription and the ResizeObserver on workspace
+  // teardown — otherwise each network open adds another live subscriber
+  // (ошибка 37b713de).
+  return () => {
+    unsubscribe();
+    observer.disconnect();
+  };
 }
 
 /** Pulls the latest tab list from main and merges into the store. */

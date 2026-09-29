@@ -121,6 +121,37 @@ describe(
       }
     });
 
+    it('правка значения свойства не протухает If-Match владельца: реквизиты сохраняются (af104f16)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const child = await createThought(ctx, 'Цель для версии');
+        // Запись значения свойства-связи поднимает авторство HOME, но не version.
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [child]), 200);
+
+        const before = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(before.statusCode, 200);
+        const version = (before.json().data as { version: number }).version;
+        assert.equal(version, 1, 'правка значения свойства не должна поднимать version мысли');
+
+        // Именно этот PATCH падал 409 VERSION_CONFLICT сразу после правки
+        // свойства: клиент держал версию, снятую до записи значения.
+        const patch = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}`,
+          headers: { ...authHeaders(ctx), 'if-match': String(version) },
+          payload: { title: 'HOME после правки свойства' },
+        });
+        assert.equal(patch.statusCode, 200);
+        assert.equal((patch.json().data as { version: number }).version, version + 1);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('удаление из набора помечает ребро в корзину (значение не читается)', async () => {
       const ctx = await buildRestContext();
       try {

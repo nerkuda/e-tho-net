@@ -311,9 +311,16 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Same projection as the focus response (`toFocusEdge`) — including
         // the trash flag from 355319d4, so the tree lines mark trashed edges
         // exactly like the map does.
-        const edges: FocusEdge[] = getEdgesAmong(ndb, ids, showInactive, undefined, showTrash).map(
-          toFocusEdge,
-        );
+        // Фильтр типов связей (ошибка a617b4c6): снимок рёбер для догрузки
+        // порций обязан уважать тот же `link_filter`, что и фокус/страницы
+        // секторов, — иначе на холст возвращались рёбра отфильтрованных типов.
+        const edges: FocusEdge[] = getEdgesAmong(
+          ndb,
+          ids,
+          showInactive,
+          input.link_filter,
+          showTrash,
+        ).map(toFocusEdge);
         sendSuccess(reply, { edges });
       },
     );

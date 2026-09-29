@@ -303,5 +303,17 @@ export type { StateAction, EmptyStateOptions } from './empty-state.js';
 // (дерева и таблицы) для правила 10 требования 11ddd910 (ошибка 28d69bc6).
 export { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './focus-anchor.js';
 
+// Сохранение позиции прокрутки при пересборке списка — общий модуль дизайн-
+// системы (задача 3bfef1f7, уровень 1 тех.проекта 1d48df6d): якорь по ключу
+// строки вместо простого `scrollTop`. Остаётся для списков, пересборка которых
+// легитимна; для keyed-списков прокрутку удерживает сама identity узлов.
+export { preserveScroll } from './scroll-anchor.js';
+
+// Keyed-обновление списков — примитив инкрементального рендера (задача
+// 6952c619, уровень 2 тех.проекта 1d48df6d): сверка набора узлов с массивом
+// по ключу без пересоздания неизменных элементов; статистика — вход для FLIP.
+export { DEFAULT_KEY_ATTR, reconcileKeyed } from './keyed-list.js';
+export type { KeyedRenderSpec, KeyedReconcileStats } from './keyed-list.js';
+
 
 

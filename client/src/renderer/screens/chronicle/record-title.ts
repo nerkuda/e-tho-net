@@ -1,0 +1,193 @@
+/**
+ * Заголовок дневниковой записи — ЕДИНЫЙ компонент «просмотр ↔ правка» (0.10.2,
+ * ошибка 36c330a3; элемент «Лента дневных записей» e01f383a, требование 165323a7).
+ *
+ * Заголовок одинаков в карточке существующей записи и в слоте создания
+ * («Добавить хроно-запись»). Раньше их собирали двумя независимыми
+ * реализациями, и поведение расходилось: в карточке `Enter` завершал правку, а
+ * в слоте заголовок был голым полем без обработчика `Enter` — нажатие не делало
+ * ничего, запись создавалась только по `blur`. Здесь пара «просмотр/правка»
+ * живёт в одном месте, и оба потребителя обязаны брать её отсюда (сторож
+ * `guard-chronicle-record-title`).
+ *
+ * Контракт:
+ *  • ПРОСМОТР — кнопка-заголовок (класс {@link RECORD_TITLE_CLASS}). У
+ *    сворачиваемой записи перед надписью индикатор-стрелка `chevron-down`:
+ *    одиночный клик откладывается на время двойного (`deferSingleClick`) и
+ *    сворачивает ТЕЛО, двойной клик входит в правку. Узел кнопки создаётся ОДИН
+ *    раз и не пересоздаётся при смене надписи — иначе терялись бы класс
+ *    `is-collapsed` (поворот стрелки, задача 472457bf) и фокус.
+ *  • ПРАВКА — поле ввода (классы {@link RECORD_TITLE_CLASS} +
+ *    {@link RECORD_TITLE_INPUT_CLASS}): `Enter` завершает правку и возвращает
+ *    заголовок в просмотр, `Escape` отменяет, уход фокуса (`blur`) завершает.
+ *    Пока поле в фокусе, сворачивание записи недоступно (клавиши — вводу).
+ *
+ * Модуль оперирует только DOM (без Electron/сети) и проверяется DOM-тестом на
+ * шиме. Классы заголовка объявлены в `./record-groups.ts` — там же живёт
+ * in-place сворачивание и поиск карточки/дня.
+ */
+
+import { fieldInput } from '../../lib/ui/field.js';
+import { uiButton } from '../../lib/ui/button.js';
+import { svgIcon } from '../../lib/icons.js';
+import { deferSingleClick } from '../../lib/thought-cloud.js';
+import { RECORD_TITLE_CLASS, RECORD_TITLE_INPUT_CLASS } from './record-groups.js';
+
+/** Опции компонента заголовка записи. */
+export interface RecordTitleOptions {
+  /** Начальное значение (поле `title` записи; у слота — пусто). */
+  value?: string;
+  /** Надпись в режиме ПРОСМОТРА (производный заголовок либо «Пустая запись»). */
+  label: string;
+  /** Подсказка кнопки-заголовка (как войти в правку). */
+  editHint: string;
+  /** Приглашение пустого поля правки. */
+  placeholder: string;
+  /** Предел длины поля (по умолчанию 200). */
+  maxLength?: number;
+  /**
+   * Сворачиваемая ли группа: рисует индикатор-стрелку и реагирует на одиночный
+   * клик (по умолчанию `true`). `false` оставляет только правку по двойному
+   * клику.
+   */
+  collapsible?: boolean;
+  /** Одиночный клик в просмотре (сворачивание/разворачивание тела записи). */
+  onToggle?: () => void;
+  /**
+   * Завершение правки с сохранением: получает введённое значение, возвращает
+   * новую надпись просмотра. Вызывается и по `Enter`, и по `blur`.
+   */
+  onCommit?: (value: string) => string;
+  /** Отмена правки (`Escape`): значение не сохраняется. */
+  onCancel?: () => void;
+}
+
+/** Публичный дескриптор компонента заголовка. */
+export interface RecordTitleHandle {
+  /** Текущий корневой узел (кнопка просмотра или поле правки). */
+  node(): HTMLElement;
+  /** Текущее значение заголовка (последнее показанное). */
+  value(): string;
+  /** Открыта ли правка сейчас. */
+  isEditing(): boolean;
+  /** Войти в правку (уже в правке — сфокусировать поле). */
+  beginEdit(): void;
+  /** Завершить правку: `commit` — сохранить, иначе отменить. */
+  endEdit(commit: boolean, refocus: boolean): void;
+}
+
+/**
+ * Обновить надпись кнопки-заголовка, сохранив индикатор-стрелку (первый узел):
+ * `textContent` затирает дочерние узлы вместе с `svg`, поэтому содержимое
+ * собирается заново — индикатор, затем новый текст (задача 472457bf,
+ * d586f340).
+ */
+export function setRecordTitleLabel(view: HTMLElement, label: string): void {
+  const icon = view.firstChild;
+  if (icon === null) {
+    view.textContent = label;
+    return;
+  }
+  view.replaceChildren(icon, label);
+}
+
+/** Создать компонент заголовка записи. */
+export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
+  const collapsible = opts.collapsible !== false;
+  const maxLength = opts.maxLength ?? 200;
+  let value = opts.value ?? '';
+  let label = opts.label;
+  let field: HTMLInputElement | null = null;
+  let pendingClick: { cancel: () => void } | null = null;
+
+  function buildView(): HTMLButtonElement {
+    const view = uiButton({
+      label,
+      role: 'ghost',
+      class: RECORD_TITLE_CLASS,
+      title: opts.editHint,
+      onClick: () => {
+        pendingClick?.cancel();
+        pendingClick = deferSingleClick(() => {
+          pendingClick = null;
+          opts.onToggle?.();
+        });
+      },
+    });
+    if (collapsible) view.prepend(svgIcon('chevron-down', 18));
+    view.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      pendingClick?.cancel();
+      pendingClick = null;
+      beginEdit();
+    });
+    return view;
+  }
+
+  // Кнопка-заголовок создаётся ОДИН раз: её идентичность держит класс
+  // `is-collapsed` (поворот стрелки) и фокус — пересоздание узла потеряло бы
+  // состояние свёрнутой записи (задача 472457bf).
+  const view = buildView();
+  let node: HTMLElement = view;
+
+  function showView(refocus: boolean): void {
+    setRecordTitleLabel(view, label);
+    if (node !== view) {
+      node.replaceWith(view);
+      node = view;
+    }
+    if (refocus) view.focus();
+  }
+
+  function beginEdit(): void {
+    if (field !== null) {
+      field.focus();
+      field.select();
+      return;
+    }
+    const next = fieldInput({
+      extraClass: `${RECORD_TITLE_CLASS} ${RECORD_TITLE_INPUT_CLASS}`,
+    });
+    next.type = 'text';
+    next.value = value;
+    next.placeholder = opts.placeholder;
+    next.maxLength = maxLength;
+    next.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        endEdit(true, true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        endEdit(false, true);
+      }
+    });
+    next.addEventListener('blur', () => endEdit(true, false));
+    node.replaceWith(next);
+    field = next;
+    node = next;
+    next.focus();
+    next.select();
+  }
+
+  function endEdit(commit: boolean, refocus: boolean): void {
+    const current = field;
+    if (current === null) return;
+    field = null;
+    if (commit) {
+      value = current.value;
+      label = opts.onCommit !== undefined ? opts.onCommit(value) : value;
+    } else {
+      opts.onCancel?.();
+    }
+    showView(refocus);
+  }
+
+  return {
+    node: () => node,
+    value: () => value,
+    isEditing: () => field !== null,
+    beginEdit,
+    endEdit,
+  };
+}

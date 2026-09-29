@@ -17,11 +17,15 @@
 import {
   STRUCTURES_PAGE_SIZE,
   UI_STATE_KEY,
+  type AnyRealtimeEvent,
   type FocusEdge,
   type HierarchyResponse,
+  type LinkUpdateInput,
   type StructureFilter,
   type StructurePropertyCondition,
+  type StructureSort,
   type ThoughtRef,
+  type ThoughtUpdateInput,
 } from '@etn/shared';
 
 import {
@@ -41,7 +45,7 @@ import { ELLIPSE_INSIDE } from '../../lib/pure.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { setActiveView } from '../active-view.js';
-import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
+import { div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
   markAttachmentsPreview,
@@ -51,7 +55,22 @@ import {
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
+import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
+import { createRealtimeBatch } from '../../lib/realtime-batch.js';
+import {
+  applyLinkUpdateToState,
+  applyThoughtUpdateToState,
+  linkChangeNeedsReload,
+  removeLinkFromState,
+  removeThoughtFromState,
+  rowRenderSignature,
+  thoughtChangeNeedsReload,
+  type StructuresLinkCriteria,
+  type StructuresState,
+} from './realtime-apply.js';
+import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
+import { deepEqual } from '../../lib/ui/state.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
 import {
@@ -64,6 +83,7 @@ import {
   type TreeRow,
 } from './layout.js';
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
+import { patchCloudVisualStates, ST_CLOUD_CLASS, type CloudVisualState } from './visual-states.js';
 import { openFilterCommandsMenu } from './commands.js';
 import { StructuresPager } from './pagination.js';
 import {
@@ -145,6 +165,16 @@ let appliedQuery: {
   order: FilterState['order'];
 } | null = null;
 
+/**
+ * Поколение точечного додара направлений (ошибка 0eebf8eb): монотонный номер
+ * старта додара и номер последнего старта по каждому id. Поздний ответ
+ * устаревшего додара (в т.ч. два додара по одному id разрешились не в порядке
+ * старта) не должен перезаписывать свежие флаги. Поколение ОТБОРА стережёт
+ * отдельно `querySeq` — сменившийся отбор обесценивает любой ответ.
+ */
+let directionsCallSeq = 0;
+const directionsStartedAt = new Map<string, number>();
+
 // ---------------------------------------------------------------------------
 // View switching (L4 active_view)
 // ---------------------------------------------------------------------------
@@ -161,6 +191,9 @@ export async function ensureStructuresInitialised(): Promise<void> {
   const key = `${networkId}:${tabId ?? ''}`;
   if (networkIdSeen === key) return;
   networkIdSeen = key;
+
+  // Новый снимок грузится целиком — отложенный полный путь больше не нужен.
+  fullRefreshPending = false;
 
   // Reset per-network state (a previous network may still be loaded).
   resultIds = [];
@@ -312,8 +345,10 @@ function buildFilter(): StructureFilter {
   return filter;
 }
 
-/** Runs the filter query; `reset` starts a fresh page, otherwise appends. */
-async function applyQuery(reset: boolean): Promise<void> {
+/** Runs the filter query; `reset` starts a fresh page, otherwise appends.
+ *  `keepScroll` сохраняет позицию прокрутки при пересборке (realtime-перезапрос,
+ *  дозагрузка); новый отбор и первый вход показывают список с начала. */
+async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const state = getFilterState();
@@ -363,7 +398,7 @@ async function applyQuery(reset: boolean): Promise<void> {
     // The page carries its own direction flags — the root ellipses are filled
     // right after the query, without waiting for the first expansion (§15.4).
     for (const [id, flags] of Object.entries(result.directions)) directions.set(id, flags);
-    renderTree();
+    renderTree(keepScroll);
   } catch (err) {
     // Отменённый запрос — не ошибка: его сменил более новый (требование
     // ebed4980). Ничего не показываем.
@@ -380,7 +415,14 @@ async function applyQuery(reset: boolean): Promise<void> {
 
 /** Current flattened rows + per-node «Показать ещё» markers (§15.5). */
 function currentTree(): { rows: TreeRow[]; moreMarkers: MoreMarker[] } {
-  return flattenStructuresTree(resultIds, expansion, neighborsOf);
+  const tree = flattenStructuresTree(resultIds, expansion, neighborsOf);
+  // Подпись видимого содержимого строки: keyed-сверка зовёт `update` только
+  // тогда, когда метаданные мысли/эллипсы/раскрытость реально изменились —
+  // так чужая правка (realtime) обновляет ОДНУ строку, не трогая соседние.
+  for (const row of tree.rows) {
+    row.rev = rowRenderSignature(refs.get(row.thoughtId), directions.get(row.thoughtId), expansion.get(row.key));
+  }
+  return tree;
 }
 
 /** Current flattened rows (render + exclude computation share this). */
@@ -442,7 +484,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
       hierarchy.delete(`${key}|parents`);
       hierarchy.delete(`${key}|children`);
     }
-    renderTree();
+    renderTree(true);
     return;
   }
   // Expand: fetch one level with the per-branch dedup ids (§15.5).
@@ -456,7 +498,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
     expansion.set(row.key, { ...flags, [dir]: true });
-    renderTree();
+    renderTree(true);
   } catch (err) {
     notice(`Не удалось раскрыть: ${errText(err)}`, 'error');
   }
@@ -481,7 +523,7 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
     });
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
-    renderTree();
+    renderTree(true);
   } catch (err) {
     notice(`Не удалось загрузить ещё: ${errText(err)}`, 'error');
   }
@@ -547,8 +589,9 @@ function onConnectorClick(event: MouseEvent, links: FocusEdge[]): void {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/** Mounts the view: filter panel (left) + results tree (right). */
-export function mountStructures(hostEl: HTMLElement): void {
+/** Mounts the view: filter panel (left) + results tree (right). Returns a
+ *  teardown handle that releases the store subscription (ошибка 37b713de). */
+export function mountStructures(hostEl: HTMLElement): () => void {
   host = hostEl;
   host.replaceChildren();
   host.classList.add('hidden');
@@ -605,7 +648,7 @@ export function mountStructures(hostEl: HTMLElement): void {
     },
   });
 
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
@@ -617,47 +660,159 @@ export function mountStructures(hostEl: HTMLElement): void {
       void ensureStructuresInitialised();
       return;
     }
+    if (store.state.activeView === 'structures' && fullRefreshPending) {
+      // Вид снова показан, а на скрытом виде накопился отложенный полный путь:
+      // перезагружаем снимок сейчас (ошибка 8e702d8c).
+      fullRefreshPending = false;
+      void reloadAll();
+      return;
+    }
     if (store.state.activeView !== 'structures') return;
-    // Full rebuilds are cheap at tree sizes, but the store fans out on every
-    // realtime event (lastEvent etc.) — guard on the visually relevant inputs.
-    const signature = renderSignature();
-    if (signature === lastRenderSignature) return;
-    lastRenderSignature = signature;
-    renderTree();
+    reactToStore();
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
+
+  return () => {
+    unsubscribe();
+    host = null;
+  };
 }
 
-/** Signature of the inputs the tree rendering depends on (redundant rebuilds). */
-let lastRenderSignature = '';
-function renderSignature(): string {
+// ---------------------------------------------------------------------------
+// Store reaction: data layer vs visual layer (task 1a0a607d)
+// ---------------------------------------------------------------------------
+
+/**
+ * Слой ДАННЫХ отрисовки: входные данные, смена которых требует пересборки
+ * строк. Слой ВИЗУАЛЬНЫХ состояний (выборка, текущая мысль, цель редактора,
+ * фокус холста) меняется дёшево и обрабатывается {@link patchVisualStates} без
+ * пересоздания DOM.
+ *
+ * Почему сигнатуры со структурным сравнением (`deepEqual`), а не селекторы
+ * `lib/ui/state.ts`: данные дерева (`resultIds`, `total`, `expansion`) живут в
+ * модуле и меняются запросами БЕЗ обновления store, а дерево тогда
+ * перерисовывается прямыми вызовами `renderTree`. Селектор запоминает срез
+ * только на обновлениях store и после прямого `renderTree` остаётся устаревшим,
+ * «вооружая» лишнюю пересборку на следующем постороннем апдейте. Поэтому срез
+ * переанкерится самими путями отрисовки — {@link syncRenderSlices}.
+ */
+type DataSlice = readonly [string | null, number, number, number, number, string[]];
+type VisualSlice = readonly [
+  readonly string[],
+  string | null,
+  string | null,
+  string,
+  string,
+];
+
+/** Данные, от которых зависит состав строк дерева. */
+function dataSlice(): DataSlice {
   const st = store.state;
-  return JSON.stringify([
+  return [
     st.networkId,
     resultIds.length,
     total,
+    st.linkTypes.length,
+    st.thoughtTypes.length,
+    [...expansion.keys()],
+  ];
+}
+
+/** Визуальные состояния облачков: выборка, выделенная связь, цель редактора,
+ *  фокус холста. «Кто текущий» включает `structuresActiveThoughtId` (его
+ *  выставляет `setThoughtEditorTarget`) и `focus.focused.id`. */
+function visualSlice(): VisualSlice {
+  const st = store.state;
+  return [
     st.selection,
     st.selectedLinkId,
     st.structuresActiveThoughtId,
     st.editorTarget?.kind ?? '',
     st.focus?.focused.id ?? '',
-    st.linkTypes.length,
-    [...expansion.keys()],
-  ]);
+  ];
 }
 
-/** Rebuilds the results tree from the current state (full rebuild, small lists).
- *  An expanding/collapsing layout change plays a FLIP animation (§15.5): the
- *  rows keep moving smoothly from their old places, freshly revealed rows
- *  fade in, and removed rows dissolve in place. */
-function renderTree(): void {
+let lastDataSlice: DataSlice | null = null;
+let lastVisualSlice: VisualSlice | null = null;
+
+/** Зафиксировать срезы как отработанные — зовут пути отрисовки (полная сборка
+ *  и точечный патч), чтобы прямой `renderTree` не «вооружил» лишний rebuild. */
+function syncRenderSlices(data: DataSlice, visual: VisualSlice): void {
+  lastDataSlice = data;
+  lastVisualSlice = visual;
+}
+
+/** Реакция на обновление store: данные изменились — пересборка; изменился
+ *  только визуальный слой — точечный патч классов. */
+function reactToStore(): void {
+  const data = dataSlice();
+  const visual = visualSlice();
+  if (lastDataSlice === null || !deepEqual(lastDataSlice, data)) {
+    syncRenderSlices(data, visual);
+    // Обновление слоя данных без явного сброса (подгрузка типов/связей, приход
+    // имён) не должно уводить список вверх — позиция прокрутки сохраняется.
+    renderTree(true);
+    return;
+  }
+  if (lastVisualSlice === null || !deepEqual(lastVisualSlice, visual)) {
+    syncRenderSlices(data, visual);
+    patchVisualStates();
+  }
+}
+
+/**
+ * Точечно переставить классы облачков после изменения ТОЛЬКО визуального слоя
+ * (задача 1a0a607d): DOM строк переиспользуется как есть — прокрутка, hover и
+ * клавиатурный курсор (`syncStructuresCursor`) не затрагиваются. Выделенная
+ * связь — надстройка верхнего слоя: обновляется `drawTopOverlay()` без строк.
+ */
+function patchVisualStates(): void {
+  if (resultsHost === null) return;
+  const selection = new Set(store.state.selection);
+  patchCloudVisualStates(resultsHost, (id) => cloudVisualState(id, selection));
+  // Клавиатурный курсор не синхронизируем: строки и его DOM-якоря не менялись.
+  drawTopOverlay();
+  syncRenderSlices(dataSlice(), visualSlice());
+}
+
+/** Визуальные классы одного облачка — ЕДИНОЕ определение для первичной сборки
+ *  (`buildCloud`) и точечного патча. Текущая мысль — `currentThoughtId()`: то
+ *  же определение, что у холста и панели истории (0.5.5), иначе гало разъедется. */
+function cloudVisualState(thoughtId: string, selection: ReadonlySet<string>): CloudVisualState {
+  return { selected: selection.has(thoughtId), halo: currentThoughtId() === thoughtId };
+}
+
+/**
+ * Rebuilds the results tree from the current state. Инкрементально
+ * (уровень 2 тех.проекта `1d48df6d`): внешний ключ — ветвь корня
+ * (`.st-branch`, `data-root`), внутренний — строки ветви (`.st-row`, `data-key`)
+ * и кнопки «Показать ещё». Неизменные строки НЕ пересоздаются — сохраняются
+ * прокрутка, hover и клавиатурный курсор. Пустое состояние и футер листания
+ * монтируются после сверки (вне keyed-слоя).
+ *
+ * An expanding/collapsing layout change plays a FLIP animation (§15.5): the
+ * rows keep moving smoothly from their old places, freshly revealed rows
+ * fade in, and removed rows dissolve in place — по статистике сверки
+ * (`added`/`removed`/`moved`); без изменений кадр анимации не запускается.
+ *
+ *  `keepScroll` сохраняет позицию прокрутки через {@link preserveScroll}: сверка
+ *  держит identity строк, но не сдвигает `scrollTop`, когда узлы выше кромки
+ *  меняют высоту (раскрытие/свёртывание, дозагрузка). Новый отбор и первый вход
+ *  показывают список с начала. */
+function renderTree(keepScroll = false): void {
   if (host === null || resultsHost === null) return;
+  if (keepScroll) {
+    // Якорь снимается до сборки, позиция восстанавливается после (тот же путь
+    // сборки без сохранения — иначе позиция сбросилась бы внутри самого rebuild).
+    preserveScroll(resultsHost, () => renderTree(false));
+    return;
+  }
+  const results = resultsHost;
   applyCanvasScaleVars(host);
   finalizeTreeAnimation();
   const before = captureTreeLayout();
   const { rows, moreMarkers } = currentTree();
-  clear(resultsHost);
 
   // Markers with a fresh «has_more» flag, keyed by the row they trail.
   const markersByAfterKey = new Map<string, MoreMarker>();
@@ -667,48 +822,80 @@ function renderTree(): void {
     }
   }
   const rowByKey = new Map(rows.map((r) => [r.key, r]));
-
   const selection = new Set(store.state.selection);
+
   // Every filter-result root opens its own framed branch (§15.5): the root row,
   // its parents and its descendants stay visually together, so deep expansions
-  // remain attributable to its root.
-  let branch: HTMLElement | null = null;
-  let branchRootId: string | null = null;
+  // remain attributable to its root. Ветвь — внешний элемент keyed-сверки,
+  // её строки и «Показать ещё» — элементы вложенной сверки.
+  const branches: TreeBranch[] = [];
+  let currentBranch: TreeBranch | null = null;
   for (const row of rows) {
-    if (branch === null || row.rootId !== branchRootId) {
-      branch = div('st-branch');
-      branch.dataset['root'] = row.rootId;
-      branchRootId = row.rootId;
-      resultsHost.append(branch);
+    if (currentBranch === null || row.rootId !== currentBranch.rootId) {
+      currentBranch = { rootId: row.rootId, items: [] };
+      branches.push(currentBranch);
     }
-    branch.append(buildRow(row, selection));
+    currentBranch.items.push({ key: row.key, row, marker: null, node: null });
     const marker = markersByAfterKey.get(row.key);
     const node = marker !== undefined ? rowByKey.get(marker.nodeKey) : undefined;
-    if (marker !== undefined && node !== undefined) branch.append(buildMoreButton(marker, node));
+    if (marker !== undefined && node !== undefined) {
+      currentBranch.items.push({ key: moreMarkerKey(marker), row: null, marker, node });
+    }
   }
 
+  let changed = false;
+  const branchStats = reconcileKeyed(results, branches, {
+    keyAttr: 'data-root',
+    key: (branch) => branch.rootId,
+    // Ветвь меняется только составом строк — их сверяет вложенный вызов ниже.
+    equals: (a, b) => a.rootId === b.rootId,
+    build: (branch) => buildBranch(branch.rootId),
+    update: () => undefined,
+  });
+  changed = branchStats.added.length > 0 || branchStats.removed.length > 0 || branchStats.moved;
+
+  for (const branch of branches) {
+    const branchEl = results.querySelector<HTMLElement>(`[data-root="${branch.rootId}"]`);
+    if (branchEl === null) continue;
+    const stats = reconcileKeyed(branchEl, branch.items, {
+      keyAttr: 'data-key',
+      key: (item) => item.key,
+      build: (item) =>
+        item.row !== null
+          ? buildRow(item.row, selection)
+          : buildMoreButton(item.marker as MoreMarker, item.node as TreeRow),
+      update: (el, item) => {
+        if (item.row !== null) fillRow(el, item.row, selection);
+        else applyMoreButton(el as HTMLButtonElement, item.marker as MoreMarker, item.node as TreeRow);
+      },
+    });
+    if (stats.added.length > 0 || stats.removed.length > 0 || stats.moved || stats.updated.length > 0) {
+      changed = true;
+    }
+  }
+
+  // Empty state and pagination footer (§15.4) — вне keyed-слоя: монтируются
+  // после сверки и пересобираются целиком. Continuation is signalled by the
+  // keyset cursor of the last page (`total` feeds only the counter, 3f2fdc41).
   if (total === 0) {
     const empty = div('st-empty');
     empty.textContent = 'Ничего не найдено — измените критерии отбора';
-    resultsHost.append(empty);
+    results.append(empty);
   }
-
-  // Pagination footer (§15.4). Continuation is signalled by the keyset cursor
-  // of the last page (`total` feeds only the counter, requirement 3f2fdc41).
   if (resultPager.hasMore) {
     const more = el('button', 'st-more', 'Показать ещё');
     more.type = 'button';
-    more.addEventListener('click', () => void applyQuery(false));
-    resultsHost.append(more);
+    more.addEventListener('click', () => void applyQuery(false, true));
+    results.append(more);
   }
   const counter = badge(`Показано ${resultIds.length} из ${total}`, {
     kind: 'quiet',
     extraClass: 'ui-badge--block',
   });
-  resultsHost.append(counter);
+  results.append(counter);
 
   syncStructuresCursor();
-  const animated = applyTreeFlip(before);
+  const animated = changed && applyTreeFlip(before);
   if (animated) {
     // Lines are drawn at final geometry — wait out the FLIP, then draw.
     flipUntil = performance.now() + FLIP_MS + 40;
@@ -721,6 +908,9 @@ function renderTree(): void {
     drawLinks();
   }
   void refreshEdges();
+  // Сборка применила и данные, и визуальные классы — фиксируем оба среза,
+  // чтобы следующее постороннее обновление store не вызвало пересборку.
+  syncRenderSlices(dataSlice(), visualSlice());
 }
 
 // ---------------------------------------------------------------------------
@@ -858,9 +1048,42 @@ function toggleExpandFor(key: string, thoughtId: string, rootId: string, dir: Hi
   void toggleExpand({ key, thoughtId, rootId, root: false, ownIndent: 0, indent: 0, via: null }, dir);
 }
 
+/** Одна ветвь дерева (обрамление корня отбора) — внешний элемент keyed-сверки. */
+interface TreeBranch {
+  rootId: string;
+  items: TreeBranchItem[];
+}
+
+/** Элемент ветви: строка дерева ИЛИ кнопка «Показать ещё» (одно из двух). */
+interface TreeBranchItem {
+  key: string;
+  row: TreeRow | null;
+  marker: MoreMarker | null;
+  /** Строка, которую завершает маркер (для `loadMoreNeighbors`); у строки — сам себя. */
+  node: TreeRow | null;
+}
+
+/** Устойчивый ключ кнопки «Показать ещё» в keyed-сверке ветви. */
+function moreMarkerKey(marker: MoreMarker): string {
+  return `more:${marker.nodeKey}:${marker.dir}`;
+}
+
+/** Ветвь-обрамление корня отбора: сверка наполнит её строками. */
+function buildBranch(rootId: string): HTMLElement {
+  const branch = div('st-branch');
+  branch.dataset['root'] = rootId;
+  return branch;
+}
+
 /** Builds one tree row: the root triangle (for filter results) + a cloud. */
 function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   const rowEl = div('st-row');
+  fillRow(rowEl, row, selection);
+  return rowEl;
+}
+
+/** Наполнить/обновить строку дерева (общая сборка и keyed-обновление). */
+function fillRow(rowEl: HTMLElement, row: TreeRow, selection: Set<string>): void {
   rowEl.dataset['key'] = row.key;
   rowEl.dataset['id'] = row.thoughtId;
   rowEl.dataset['root'] = row.rootId;
@@ -869,23 +1092,32 @@ function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
     // The link lines are drawn over the tree from these attributes (drawLinks).
     rowEl.dataset['via'] = row.via.otherId;
     rowEl.dataset['role'] = row.via.role;
+  } else {
+    delete rowEl.dataset['via'];
+    delete rowEl.dataset['role'];
   }
+  // Содержимое строки пересобирается только при её изменении (keyed-сверка):
+  // сам узел строки сохраняется, поэтому прокрутка и позиция не теряются.
+  rowEl.replaceChildren();
   if (row.root) rowEl.append(div('st-root-marker'));
-  const cloud = buildCloud(row, selection);
-  rowEl.append(cloud);
+  rowEl.append(buildCloud(row, selection));
   // Patch the indicator row from the shared canvas indicator cache/queue
   // (the cache hit applies synchronously to the fresh DOM, §15.4).
   queueIndicatorLoad(row.thoughtId);
-  return rowEl;
 }
 
 /** Builds one per-node «Показать ещё» button (§15.5 pagination). */
 function buildMoreButton(marker: MoreMarker, node: TreeRow): HTMLElement {
   const btn = el('button', 'st-more', 'Показать ещё');
   btn.type = 'button';
-  btn.style.setProperty('--st-indent', String(marker.indent));
-  btn.addEventListener('click', () => void loadMoreNeighbors(marker.nodeKey, node.thoughtId, node.rootId, marker.dir));
+  applyMoreButton(btn, marker, node);
   return btn;
+}
+
+/** Настроить кнопку «Показать ещё»: отступ и обработчик (без наслоения). */
+function applyMoreButton(btn: HTMLButtonElement, marker: MoreMarker, node: TreeRow): void {
+  btn.style.setProperty('--st-indent', String(marker.indent));
+  btn.onclick = () => void loadMoreNeighbors(marker.nodeKey, node.thoughtId, node.rootId, marker.dir);
 }
 
 /** Builds one thought cloud: same visual language as the canvas (§15.4). */
@@ -939,8 +1171,11 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
       },
     },
   );
-  cloud.classList.add('st-cloud');
-  if (selection.has(row.thoughtId)) cloud.classList.add('selected');
+  cloud.classList.add(ST_CLOUD_CLASS);
+  // Выборка и гало — из единого определения (то же, что в точечном патче
+  // `patchVisualStates`), иначе начальная сборка и патч разъедутся.
+  const visual = cloudVisualState(row.thoughtId, selection);
+  if (visual.selected) cloud.classList.add('selected');
   // Halo of the active thought (§15.7): the same accent ring around the cloud
   // as the canvas (§2.2.4) instead of the old full-width band. The "current
   // thought" is the thought open in the editor, else the canvas focus — the
@@ -948,9 +1183,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   // frame follows the thought across screen switches. While a link is open in
   // the editor there is no current thought and the halo fades (the link takes
   // the spotlight).
-  if (currentThoughtId() === row.thoughtId) {
-    cloud.classList.add('halo');
-  }
+  if (visual.halo) cloud.classList.add('halo');
 
   // Ellipses (§15.5): filled when the thought has parents/children at all —
   // known from the hierarchy directions accumulated so far.
@@ -966,9 +1199,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   // canvas 1-to-1) — connectivity state, not the expand/collapse action.
   setTooltip(topEllipse, dir?.has_incoming === true ? 'Есть входящие связи' : 'Входящих связей нет');
   setTooltip(bottomEllipse, dir?.has_outgoing === true ? 'Есть исходящие связи' : 'Исходящих связей нет');
-  // The ellipse click must not reach the cloud handler: opening the thought
-  // (store update) fans out an immediate second renderTree() whose finalize
-  // kills the FLIP transition in its first frame — and the click means
+  // The ellipse click must not reach the cloud handler: the click means
   // "toggle this direction", not "activate the thought" (§15.5).
   topEllipse.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -1092,7 +1323,11 @@ async function refreshEdges(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || resultsHost === null) return;
   const ids = [...new Set(currentRows().map((r) => r.thoughtId))];
-  const signature = `${store.state.showInactive ? 1 : 0}|${ids.slice().sort().join(',')}`;
+  // Фильтр типов связей входит в подпись снимка: его смена тоже требует
+  // перечитывания линий (ошибка a617b4c6 — снимок обязан уважать фильтр,
+  // как раскрытие ветвей в fetchHierarchy).
+  const linkFilter = appliedQuery?.filter.link_filter;
+  const signature = `${store.state.showInactive ? 1 : 0}|${JSON.stringify(linkFilter ?? null)}|${ids.slice().sort().join(',')}`;
   if (signature === edgesSignature) return;
   edgesSignature = signature;
   if (ids.length === 0) {
@@ -1102,7 +1337,12 @@ async function refreshEdges(): Promise<void> {
     return;
   }
   try {
-    const list = await etn.structures.edges(networkId, ids, store.state.showInactive);
+    const list = await etn.structures.edges(
+      networkId,
+      ids,
+      store.state.showInactive,
+      linkFilter,
+    );
     edges.clear();
     for (const edge of list) edges.set(edge.id, edge);
     drawLinks();
@@ -1333,19 +1573,268 @@ function connectorLabel(links: FocusEdge[]): string {
 // Realtime refresh (§15.4)
 // ---------------------------------------------------------------------------
 
-let refreshTimer: number | null = null;
+/**
+ * Realtime-путь «Структур» (задача afcfb144, уровень 3 тех.проекта `1d48df6d`).
+ *
+ * **Таблица «событие → действие».**
+ *
+ * | Событие | Инкрементально | Fallback (полный перезапрос) |
+ * |---|---|---|
+ * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `updated` — ЛЮБАЯ правка (ключ `updated_at`); сортировка `alpha` или активный текст. отбор + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
+ * | `thought.deleted` | убрать из `resultIds`/`refs`/`directions`/`hierarchy`/`edges` → строка уходит removed-путём сверки | нет среди видимых — игнор |
+ * | `link.updated` | ребро нарисовано и меняется только оформление (`color`/`style`/`width`) → `edges` + перерисовка линий | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active`; смена `type_id` под активным фильтром обхода (сосед может выпасть из раскрытых уровней); `marked_for_deletion` при скрытой корзине (линия обязана исчезнуть) — состав/структура графа |
+ * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии + точечный додар `directions` концов | ребро не нарисовано — игнор |
+ * | `thought.created` | — | всегда: вхождение в отбор не проверяется (нет построения проверки членства) |
+ * | `link.created`, `property-value.*`, `thought-type*`, `link-type*`, `property-definition.*`, `*-view.*`, `layer.merged` | — | всегда (состав/структура/каталог) |
+ *
+ * Очередь событий за окно дебаунса применяется ОДНИМ батчем → один reconcile
+ * (`renderTree`) на окно. Наличие хоть одного fallback-события в окне отменяет
+ * батч и запускает {@link reloadAll}. Локальные производители по-прежнему зовут
+ * {@link scheduleStructuresRefresh} (полный путь) сами — своё realtime-эхо до
+ * рендерера не доходит.
+ *
+ * **Эллипсы при удалении ребра.** Линия снимается точечно, но `directions`
+ * (наполненность эллипсов) считается сервером по ВСЕМ активным связям мысли, а
+ * не только по видимым, — из кэша `edges` её не вывести. Поэтому для концов
+ * УДАЛЁННОГО ребра направления перечитываются точечно
+ * ({@link refreshDirections}), а не полной перезагрузкой страницы. Правки,
+ * меняющие состав графа (в том числе смена типа под фильтром обхода и пометка
+ * корзины при скрытой корзине), идут полным путём — эллипсы берутся из
+ * перезапроса.
+ */
+type StructuresRealtimeOp =
+  | { kind: 'thought-updated'; id: string; changes: ThoughtUpdateInput }
+  | { kind: 'thought-deleted'; id: string }
+  | { kind: 'link-updated'; id: string; changes: LinkUpdateInput }
+  | { kind: 'link-deleted'; id: string };
 
 /**
- * Coalesces realtime updates into one reload: the visible page is re-queried
- * and every expanded node refetches its hierarchy level (expansion survives).
+ * Отложенный полный путь: fallback-событие пришло, когда вид «Структур» не
+ * показан. Сетевые перезагрузки вхолостую не гоняем — снимок помечается
+ * «грязным» и перезагружается при следующем показе вида (ошибка 8e702d8c).
+ */
+let fullRefreshPending = false;
+
+const realtimeBatch = createRealtimeBatch<StructuresRealtimeOp>({
+  windowMs: 400,
+  applyBatch: (ops) => applyStructuresOps(ops),
+  applyFull: () => {
+    // Инкрементальные события поддерживают снимок и вне экрана, но полный путь
+    // при скрытом виде — вхолостую: помечаем снимок «грязным» и перезагружаем
+    // при показе вида (ошибка 8e702d8c).
+    if (store.state.activeView !== 'structures') {
+      fullRefreshPending = true;
+      return;
+    }
+    void reloadAll();
+  },
+});
+
+/** Коллекции снимка экрана для чистого применощего модуля. */
+function structuresState(): StructuresState {
+  return { refs, edges, resultIds, directions, hierarchy };
+}
+
+/** Критерии отбора, влияющие на применимость события к строке. */
+function criteriaSnapshot(): {
+  sort: StructureSort;
+  keywords: string;
+  typeIds: readonly string[];
+  showInactive: boolean;
+  showTrash: boolean;
+} {
+  const state = getFilterState();
+  return {
+    sort: state.sort,
+    keywords: state.keywords,
+    typeIds: state.typeIds,
+    showInactive: store.state.showInactive,
+    showTrash: store.state.showTrash,
+  };
+}
+
+/** Критерии, влияющие на применимость правки РЕБРА (эллипсы концов). */
+function linkCriteriaSnapshot(): StructuresLinkCriteria {
+  return {
+    // Фильтр обхода по типам связей активен ровно тогда, когда задан у
+    // применённого отбора (тот же, что у раскрытия — `fetchHierarchy`).
+    linkFilterActive: appliedQuery?.filter.link_filter !== undefined,
+    showTrash: store.state.showTrash,
+  };
+}
+
+/**
+ * Применить накопленный батч к снимку и ОДИН раз свернуть дерево. Пустой батч
+ * (событие не изменило видимого) кадр сверки не запускает. Для концов
+ * изменённого/удалённого ребра дополнительно запускается точечный додар
+ * направлений ({@link refreshDirections}).
+ */
+function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
+  const state = structuresState();
+  const refreshDirectionsFor = new Set<string>();
+  let changed = false;
+  for (const op of ops) {
+    switch (op.kind) {
+      case 'thought-updated':
+        if (applyThoughtUpdateToState(state, op.id, op.changes)) changed = true;
+        break;
+      case 'thought-deleted': {
+        const wasRoot = resultIds.includes(op.id);
+        if (removeThoughtFromState(state, op.id)) {
+          changed = true;
+          if (wasRoot) total = Math.max(0, total - 1);
+        }
+        break;
+      }
+      case 'link-updated': {
+        // Всё, что меняет состав графа (концы, active, тип под фильтром
+        // обхода, пометка корзины при скрытой корзине), уходит полным путём
+        // ещё в `applyStructuresRealtime`; сюда доходит только точечное
+        // оформление нарисованного ребра (цвет/стиль/ширина/тип/пометка).
+        if (applyLinkUpdateToState(state, op.id, op.changes)) changed = true;
+        break;
+      }
+      case 'link-deleted': {
+        const edge = edges.get(op.id);
+        if (edge !== undefined) {
+          refreshDirectionsFor.add(edge.source_id);
+          refreshDirectionsFor.add(edge.target_id);
+        }
+        if (removeLinkFromState(state, op.id)) changed = true;
+        break;
+      }
+    }
+  }
+  if (changed) renderTree(true);
+  if (refreshDirectionsFor.size > 0) void refreshDirections(refreshDirectionsFor);
+}
+
+/**
+ * Точечный додар свежих `directions` (наполненности эллипсов) для концов
+ * удалённого ребра. Эллипс сервер считает по ВСЕМ активным связям мысли с
+ * учётом фильтра обхода и видимости корзины, поэтому из локального кэша
+ * `edges` (связи только среди видимых) его не вывести.
+ *
+ * Источник — та же точка {@link fetchHierarchy}, что и раскрытие: тот же
+ * `link_filter` отбора и `showInactive`/корзина, значит и та же семантика
+ * закраски. Соседей и рёбра ответа НЕ сливаем в снимок — берём лишь флаги
+ * нужных мыслей. Додар не удался — полный путь ({@link reloadAll}): эллипс
+ * нельзя оставить неверным.
+ *
+ * Ответ отбрасывается, если за время полёта сменился отбор (`querySeq`),
+ * сеть/вкладка или этот id уже перезапрошен более новым додаром (ошибка
+ * 0eebf8eb): иначе поздний устаревший ответ перезаписал бы свежие флаги.
+ */
+async function refreshDirections(ids: ReadonlySet<string>): Promise<void> {
+  const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
+  const seen = `${networkId}:${tabId ?? ''}`;
+  if (networkId === null) return;
+  const seq = querySeq;
+  const call = ++directionsCallSeq;
+  for (const id of ids) directionsStartedAt.set(id, call);
+  /** Снять свои маркеры поколения (чужие — более новых додаров — не трогаем). */
+  const clearMarkers = (): void => {
+    for (const id of ids) {
+      if (directionsStartedAt.get(id) === call) directionsStartedAt.delete(id);
+    }
+  };
+  let fresh: ReadonlyArray<readonly [string, { has_incoming: boolean; has_outgoing: boolean } | undefined]>;
+  try {
+    fresh = await Promise.all(
+      [...ids].map(
+        async (id) =>
+          [id, (await fetchHierarchy(networkId, id, 'children', {})).directions[id]] as const,
+      ),
+    );
+  } catch {
+    clearMarkers();
+    realtimeBatch.markFull();
+    return;
+  }
+  // Сменили сеть/вкладку или отбор, пока шёл додар, — ответ устарел.
+  if (networkIdSeen !== seen || seq !== querySeq) {
+    clearMarkers();
+    return;
+  }
+  let changed = false;
+  for (const [id, flags] of fresh) {
+    // Этот id уже перезапрошен более новым додаром — не перезаписываем свежее.
+    if (directionsStartedAt.get(id) !== call) continue;
+    directionsStartedAt.delete(id);
+    if (flags === undefined) continue;
+    const prev = directions.get(id);
+    if (
+      prev === undefined ||
+      prev.has_incoming !== flags.has_incoming ||
+      prev.has_outgoing !== flags.has_outgoing
+    ) {
+      directions.set(id, flags);
+      changed = true;
+    }
+  }
+  if (changed) renderTree(true);
+}
+
+/**
+ * Принять чужое realtime-событие: классифицировать и положить в очередь окна
+ * (батч) или пометить окно как fallback. Событие по невидимой сущности
+ * игнорируется — состав отбора по нему не перестраиваем.
+ *
+ * Гейта по активному виду НЕТ (замечание проверки уровня 3): снимок экрана
+ * поддерживается и когда «Структуры» не показаны — иначе `thought.deleted` вне
+ * экрана не чистил бы `refs`/активную мысль, и при возврате оставалась бы
+ * устаревшая строка (ре-квери при возврате не запускается). Отрисовка (один
+ * reconcile на окно) идёт тем же путём.
+ */
+export function applyStructuresRealtime(evt: AnyRealtimeEvent): void {
+  switch (evt.type) {
+    case 'thought.updated': {
+      const { id, changes } = evt.data;
+      if (!refs.has(id)) return;
+      if (thoughtChangeNeedsReload(changes, criteriaSnapshot())) {
+        realtimeBatch.markFull();
+        return;
+      }
+      realtimeBatch.push({ kind: 'thought-updated', id, changes });
+      return;
+    }
+    case 'thought.deleted': {
+      const { id } = evt.data;
+      clearActiveThought(id);
+      if (!refs.has(id) && !resultIds.includes(id)) return;
+      realtimeBatch.push({ kind: 'thought-deleted', id });
+      return;
+    }
+    case 'link.updated': {
+      const { id, changes } = evt.data;
+      if (!edges.has(id)) return;
+      if (linkChangeNeedsReload(changes, linkCriteriaSnapshot())) {
+        realtimeBatch.markFull();
+        return;
+      }
+      realtimeBatch.push({ kind: 'link-updated', id, changes });
+      return;
+    }
+    case 'link.deleted': {
+      const { id } = evt.data;
+      if (!edges.has(id)) return;
+      realtimeBatch.push({ kind: 'link-deleted', id });
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+/**
+ * Полный путь: пометить окно дебаунса как требующее перезапроса страницы и
+ * всех раскрытых уровней ({@link reloadAll}). Зовётся локальными
+ * производителями и realtime-ветками, которые нельзя применить точечно.
  */
 export function scheduleStructuresRefresh(): void {
   if (store.state.activeView !== 'structures') return;
-  if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = null;
-    void reloadAll();
-  }, 400);
+  realtimeBatch.markFull();
 }
 
 /** Reloads the page and all expanded hierarchy levels. */
@@ -1353,7 +1842,7 @@ async function reloadAll(): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
   if (networkId === null || networkIdSeen !== `${networkId}:${tabId ?? ''}`) return;
-  await applyQuery(true);
+  await applyQuery(true, true);
   // The visible set may be unchanged while the links themselves changed
   // (realtime) — force the edges refresh even for the same id signature.
   edgesSignature = '';
@@ -1380,19 +1869,23 @@ async function reloadAll(): Promise<void> {
       }
     }
   }
-  renderTree();
+  renderTree(true);
+}
+
+/** Сбросить «текущую мысль» (и цель редактора), если удалена именно она. */
+function clearActiveThought(id: string): void {
+  if (store.state.structuresActiveThoughtId !== id) return;
+  store.update({
+    structuresActiveThoughtId: null,
+    structuresActiveThought: null,
+    ...(store.state.editorTarget?.kind === 'thought' ? { editorTarget: null } : {}),
+  });
 }
 
 /** Drops caches after a thought was deleted locally (also see history prune). */
 export function invalidateStructuresThought(id: string): void {
   refs.delete(id);
-  if (store.state.structuresActiveThoughtId === id) {
-    store.update({
-      structuresActiveThoughtId: null,
-      structuresActiveThought: null,
-      ...(store.state.editorTarget?.kind === 'thought' ? { editorTarget: null } : {}),
-    });
-  }
+  clearActiveThought(id);
   scheduleStructuresRefresh();
 }
 

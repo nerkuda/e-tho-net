@@ -11,7 +11,7 @@
  *    (требование 165323a7, «Устойчивость»).
  * 3. Прокрутка (ошибка 407b1827): сворачивание/разворачивание группы меняет
  *    ленту НА МЕСТЕ (узлы не пересобираются), а перерисовка с сохранением
- *    прокрутки не сбрасывает `scrollTop` (`withPreservedScroll`).
+ *    прокрутки не сбрасывает позицию (`preserveScroll`, lib/ui/scroll-anchor.ts).
  *
  * Требование 165323a7 актуализировано ДО кода (итерация №11).
  */
@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { applyDayCollapsed, findDaySection } from '../src/renderer/screens/chronicle/day-groups.js';
-import { withPreservedScroll } from '../src/renderer/screens/chronicle/diary.js';
+import { preserveScroll } from '../src/renderer/lib/ui/scroll-anchor.js';
 import { ShimElement } from './dom-shim.js';
 
 // ---------------------------------------------------------------------------
@@ -342,19 +342,14 @@ describe('приёмка №11, п.3: группа переключается н
     assert.equal(findDaySection(feed.root as unknown as HTMLElement, '2026-09-01'), null);
   });
 
-  it('withPreservedScroll: перерисовка не сбрасывает scrollTop', () => {
+  it('preserveScroll: перерисовка не сбрасывает позицию прокрутки', () => {
     const container = new ShimElement('div', 'chron-feed-wrap');
     container.scrollTop = 120;
-    withPreservedScroll(container, () => {
+    container.scrollHeight = 1000;
+    container.clientHeight = 200;
+    preserveScroll(container as unknown as HTMLElement, () => {
       container.scrollTop = 0; // имитация пересборки содержимого
     });
     assert.equal(container.scrollTop, 120, 'позиция прокрутки восстановлена');
-
-    // Контейнера нет (смена отбора/первый показ) — отрисовка всё равно выполняется.
-    let ran = false;
-    withPreservedScroll(null, () => {
-      ran = true;
-    });
-    assert.ok(ran, 'отрисовка выполнена');
   });
 });

@@ -22,7 +22,87 @@
  * The `typeof window` guard keeps the module importable from Node unit tests.
  */
 
+import { EtnError } from '@etn/shared';
+
+import {
+  isIpcErrorEnvelope,
+  type IpcErrorEnvelope,
+} from '../../main/ipc/contract.js';
 import type { EtnApi, EtnBridgeApi } from '../../main/ipc/contract.js';
+
+/**
+ * Восстановить ошибку из {@link IpcErrorEnvelope} в КОНТЕКСТЕ RENDERER
+ * (ошибка f14962ca). `contextBridge` теряет кастомные свойства ошибок, поэтому
+ * `EtnError` c `code`/`details` собирается здесь: только в этом контексте
+ * `instanceof EtnError` и `err.details` снова работают для UI-веток (диалог
+ * подтверждения смены родителя, `LOCKED`, `VERSION_CONFLICT`).
+ */
+function reviveIpcError(error: IpcErrorEnvelope['error']): Error {
+  if (error.code !== undefined) {
+    return new EtnError(error.code, error.message, error.details, error.request_id);
+  }
+  const revived = new Error(error.message);
+  if (error.name !== '') revived.name = error.name;
+  return revived;
+}
+
+/** Конверт ошибки превратить в брошенную ошибку; обычный результат — как есть. */
+function unwrapIpcResult<T>(value: T): T {
+  if (isIpcErrorEnvelope(value)) throw reviveIpcError(value.error);
+  return value;
+}
+
+function isThenable(value: unknown): value is Promise<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Обернуть метод неймспейса моста так, чтобы результат был очищен от конверта
+ * ошибок: main отдаёт отказ плоским объектом ({@link IpcErrorEnvelope}), а
+ * renderer бросает восстановленный `EtnError`.
+ */
+function reviveNamespaceResult(
+  target: object,
+  method: (...args: unknown[]) => unknown,
+): (...args: unknown[]) => unknown {
+  return (...args: unknown[]): unknown => {
+    const result = method.apply(target, args);
+    return isThenable(result) ? result.then(unwrapIpcResult) : result;
+  };
+}
+
+/**
+ * Построить фасад неймспейса моста — ОТДЕЛЬНЫЙ plain-объект, а НЕ Proxy
+ * поверх contextBridge-объекта (ошибка f14962ca).
+ *
+ * `contextBridge` отдаёт неймспейсы как объекты с read-only non-configurable
+ * data-свойствами. Proxy поверх такого объекта, чей `get` возвращает новую
+ * обёртку функции, нарушает инвариант Proxy (для read-only non-configurable
+ * data-свойства trap обязан вернуть ИСХОДНОЕ значение) — renderer падает с
+ * `TypeError: 'get' on proxy: property 'onDeepLink' is a read-only and
+ * non-configurable data property…` ещё до монтирования UI. Юнит-шимы на
+ * plain-объектах этот инвариант не воспроизводят и дефект не ловят.
+ *
+ * Поэтому фасад собирается явно: собственные ключи моста копируются в новый
+ * объект, функции оборачиваются восстановлением `EtnError`, остальные значения
+ * прокидываются как есть. Новый объект не несёт чужих инвариантов, поэтому
+ * подмена функций безопасна.
+ */
+function withIpcErrorRevival<T extends object>(target: T): T {
+  const facade: Record<PropertyKey, unknown> = {};
+  for (const key of Reflect.ownKeys(target)) {
+    const value = (target as Record<PropertyKey, unknown>)[key];
+    facade[key] =
+      typeof value === 'function'
+        ? reviveNamespaceResult(target, value as (...args: unknown[]) => unknown)
+        : value;
+  }
+  return facade as T;
+}
 
 /**
  * Resolves the current `window.etn` lazily. `lib/etn.ts` is imported by the
@@ -85,8 +165,8 @@ function structuresFacade(bridge: EtnBridgeApi): EtnApi['structures'] {
       ),
     hierarchy: (networkId, thoughtId, query) =>
       bridge.structures.hierarchy(networkId, thoughtId, query),
-    edges: (networkId, ids, showInactive) =>
-      bridge.structures.edges(networkId, ids, showInactive),
+    edges: (networkId, ids, showInactive, linkFilter) =>
+      bridge.structures.edges(networkId, ids, showInactive, linkFilter),
   };
 }
 
@@ -103,8 +183,13 @@ export const etn: EtnApi = new Proxy(
             'Ensure the preload script has loaded.',
         );
       }
-      if (prop === 'structures') return structuresFacade(api);
-      return (api as unknown as Record<string, unknown>)[prop];
+      if (prop === 'structures') return withIpcErrorRevival(structuresFacade(api));
+      const value = (api as unknown as Record<string, unknown>)[prop];
+      // Неймспейсы оборачиваем, чтобы их методы восстанавливали `EtnError`
+      // из конверта ошибки (f14962ca); скаляры/промисы без обёртки отдаём как есть.
+      return typeof value === 'object' && value !== null
+        ? withIpcErrorRevival(value as object)
+        : value;
     },
   },
 ) as EtnApi;

@@ -41,6 +41,7 @@ const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const COMPONENT_TS = resolve(RENDERER, 'lib', 'property-list.ts');
 const MANAGER_TS = resolve(RENDERER, 'screens', 'property-manager.ts');
 const PICKER_TS = resolve(RENDERER, 'screens', 'type-manager.ts');
+const CATALOGUE_TS = resolve(RENDERER, 'screens', 'type-catalogue.ts');
 const ICONS_TS = resolve(RENDERER, 'lib', 'icons.ts');
 
 function read(path: string): string {
@@ -265,18 +266,25 @@ describe('якоря рендера и режимов (требования 3–
 });
 
 describe('якоря потребителей (требование 1, 10)', () => {
-  it('менеджер свойств — режим manager, кнопка «Добавить», диалог «Свойства» шире', () => {
+  it('менеджер свойств — режим manager, кнопка «Добавить», объединённый диалог шире', () => {
     const src = read(MANAGER_TS);
     assert.ok(src.includes('buildPropertyList({'), 'менеджер использует общий список');
     assert.match(src, /mode: 'manager'/);
-    assert.match(src, /title: 'Свойства'/, 'команда/диалог «Свойства»');
-    assert.match(src, /size: 'l'/, 'диалог «Свойства» — роль l (900px, шире прежних 720px)');
     assert.match(
       src,
       /onAdd:\s*\(\) =>\s*openPropertyManagerEditor\(null,\s*onChanged,\s*\(created\) =>\s*\{\s*pendingSelectId = created\.id;/,
       '«Добавить» открывает редактор на создании; созданное свойство становится текущей строкой (правило 7, 11ddd910)',
     );
     assert.match(src, /onDelete: \(row\) => void removeRow\(row\.registry\)/, 'удаление — подтверждение менеджера');
+    // С 0.10.2 (задача 979761cd) список свойств — вкладка объединённого
+    // диалога каталога: заголовок и роль l задаёт его оболочка.
+    const catalogue = read(CATALOGUE_TS);
+    assert.match(catalogue, /id: 'properties'/, 'вкладка «Свойства мыслей» объединённого диалога');
+    assert.match(
+      catalogue,
+      /title:\s*t\('catalogue\.title'\)[\s\S]{0,400}?size:\s*'l'/,
+      'объединённый диалог — роль l (900px, шире прежних 720px)',
+    );
   });
 
   it('пикер типа — режим picker с блокировкой подключённых имён', () => {

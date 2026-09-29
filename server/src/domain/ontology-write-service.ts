@@ -88,7 +88,7 @@ import {
   updateNetworkProperty,
   updateTypeProperty,
 } from './property-service.js';
-import { assertParentValid } from './type-hierarchy.js';
+import { assertParentValid, getRootTypeId } from './type-hierarchy.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
@@ -305,7 +305,10 @@ function validateParentXor<T extends { parent?: string | null; parent_ref?: stri
   sectionLabel: string,
   index: number,
 ): void {
-  const hasParent = item.parent !== undefined && item.parent !== null && item.parent !== '';
+  // Явно заданный `parent` — любое значение, кроме отсутствующего ключа:
+  // `null` и `''` оба означают «под корень» (ошибка 1eb2a430), поэтому тоже
+  // конфликтуют с `parent_ref`.
+  const hasParent = item.parent !== undefined;
   const hasParentRef = item.parent_ref !== undefined && item.parent_ref !== null;
   if (hasParent && hasParentRef) {
     throw new EtnError(
@@ -384,6 +387,13 @@ function resolveThoughtTypes(
       parent = { kind: 'existing', id: pe.id };
     } else if (item.parent_ref !== undefined && item.parent_ref !== null) {
       parent = { kind: 'ref', ref: item.parent_ref };
+    } else if (item.parent === null || item.parent === '') {
+      // Явный `parent: null` ИЛИ пустая строка (`parent: ""`) — прикрепить тип
+      // под корневой тип. Пустая строка приравнена к null для паритета с REST
+      // `PATCH /thought-types` (там `parent_id: ""` → null), ошибка 1eb2a430.
+      // Отличаем от отсутствующего ключа (`undefined`), который у
+      // существующего типа оставляет родителя без изменений (ошибка f14962ca).
+      parent = { kind: 'root' };
     } else if (id === null) {
       parent = { kind: 'root' };
     } else {
@@ -463,6 +473,10 @@ function resolveLinkTypes(
       parent = { kind: 'existing', id: pe.id };
     } else if (item.parent_ref !== undefined && item.parent_ref !== null) {
       parent = { kind: 'ref', ref: item.parent_ref };
+    } else if (item.parent === null || item.parent === '') {
+      // Явный `parent: null` / `parent: ""` — под корневой тип связи
+      // (см. выше, ошибки f14962ca и 1eb2a430).
+      parent = { kind: 'root' };
     } else if (id === null) {
       parent = { kind: 'root' };
     } else {
@@ -1088,6 +1102,37 @@ export function writeOntology(
         ) {
           updateInput.comment_template_md = item.comment_template_md;
         }
+        // Явно заданный `parent` (id существующего типа, `null`/`""` — «под
+        // корень» или `parent_ref`) у СУЩЕСТВУЮЩЕГО типа раньше молча терялся:
+        // `parent` брался только на создании, а фаза 1.5 обрабатывала лишь
+        // `parent_ref`, поэтому патч с изменённым родителем отвечал
+        // `action: "unchanged"`, а родитель не менялся (ошибка f14962ca).
+        // Корневому типу родителя не назначают: REST `PATCH /thought-types`
+        // отдаёт `VALIDATION_ERROR` «у корневого типа нет родителя» — MCP
+        // приведён к тому же контракту (ошибка 1eb2a430).
+        if (existing.is_root) {
+          if (item.parent.kind !== 'unchanged') {
+            throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+              entity: 'thought_type',
+              id,
+              field: `thought_types[${item.index}].parent`,
+            });
+          }
+        } else {
+          const desiredParentId =
+            item.parent.kind === 'existing'
+              ? item.parent.id
+              : item.parent.kind === 'root'
+                ? getRootTypeId(ndb, 'thought_types')
+                : undefined;
+          if (
+            desiredParentId !== undefined &&
+            desiredParentId !== null &&
+            desiredParentId !== existing.parent_id
+          ) {
+            updateInput.parent_id = desiredParentId;
+          }
+        }
         if (Object.keys(updateInput).length > 0) {
           // 0.8.2, задача 8ea1ab6a: MCP не имеет интерактивного подтверждения;
           // смена parent_id у используемого типа мысли сразу применяется,
@@ -1184,6 +1229,33 @@ export function writeOntology(
         if (item.description !== undefined && item.description !== existing.description) {
           updateInput.description = item.description;
         }
+        // Явный `parent`/`parent: null` у существующего типа связи применяется
+        // так же, как у типа мысли (ошибки f14962ca и 1eb2a430): без этого
+        // патч отвечал `unchanged`, а родитель не менялся. Корневому типу
+        // связи родителя не назначают — `VALIDATION_ERROR` (как REST PATCH).
+        if (existing.is_root) {
+          if (item.parent.kind !== 'unchanged') {
+            throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+              entity: 'link_type',
+              id,
+              field: `link_types[${item.index}].parent`,
+            });
+          }
+        } else {
+          const desiredParentId =
+            item.parent.kind === 'existing'
+              ? item.parent.id
+              : item.parent.kind === 'root'
+                ? getRootTypeId(ndb, 'link_types')
+                : undefined;
+          if (
+            desiredParentId !== undefined &&
+            desiredParentId !== null &&
+            desiredParentId !== existing.parent_id
+          ) {
+            updateInput.parent_id = desiredParentId;
+          }
+        }
         if (Object.keys(updateInput).length > 0) {
           updateLinkType(ndb, id, updateInput, undefined, actorUserId);
           version = readVersion(ndb, 'link_types', id);
@@ -1196,13 +1268,34 @@ export function writeOntology(
       ltResults.push({ ref: item.ref, id, version, action });
       if (item.ref !== null) ltIdByRef.set(item.ref, id);
     }
-    for (const item of resolvedLinkTypes) {
+    for (const [i, item] of resolvedLinkTypes.entries()) {
       if (item.parent.kind !== 'ref') continue;
+      // `parent_ref` резолвится здесь, ПОСЛЕ того как все типы записаны: у
+      // только что СОЗДАННОГО типа связи `item.id` ещё `null` (id появляется
+      // лишь в `ltResults`/`ltIdByRef`), поэтому адресовать тип через
+      // `item.id` нельзя — итерация молча пропускалась (ошибка 98ab2c3e).
+      // Актуальный id берём из `ltResults` (порядок 1:1 с resolvedLinkTypes),
+      // как в фазе 1.5 thought_types.
       const targetId = ltIdByRef.get(item.parent.ref);
-      if (targetId === undefined) continue;
-      const id = item.id!;
+      if (targetId === undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `parent_ref "${item.parent.ref}" is not declared in this batch`,
+          {
+            field: `link_types[${item.index}].parent_ref`,
+            parent_ref: item.parent.ref,
+          },
+        );
+      }
+      const r = ltResults[i]!;
+      const id = r.id;
       const existing = getLinkType(ndb, id);
-      if (existing === null) continue;
+      if (existing === null) {
+        throw new EtnError('NOT_FOUND', `link type ${id} not found`, {
+          entity: 'link_type',
+          id,
+        });
+      }
       if (existing.parent_id === targetId) continue;
       assertParentValid(ndb, 'link_types', id, targetId);
       const updated = updateLinkType(
@@ -1212,11 +1305,8 @@ export function writeOntology(
         undefined,
         actorUserId,
       );
-      const r = ltResults.find((x) => x.id === id);
-      if (r !== undefined) {
-        r.version = updated.version;
-        if (r.action === 'unchanged') r.action = 'updated';
-      }
+      r.version = updated.version;
+      if (r.action === 'unchanged') r.action = 'updated';
     }
 
     // ---- properties ----------------------------------------------------
@@ -1288,6 +1378,35 @@ export function writeOntology(
         if (item.link_color !== undefined) updateInput.link_color = item.link_color;
         if (item.link_style !== undefined) updateInput.link_style = item.link_style;
         if (item.link_width !== undefined) updateInput.link_width = item.link_width;
+        // Ошибка 16766f82: явный `parent_link_type_id` у СУЩЕСТВУЮЩЕГО
+        // свойства-связи раньше молча терялся — у `NetworkPropertyUpdateInput`
+        // не было поля, и `updateNetworkProperty` не менял родителя уже
+        // созданного `link_type` (тот же класс, что `parent` у типа до
+        // f14962ca). Семантика как у `parent`: явный id применяется, `null` —
+        // прикрепление под корневой тип связи, пропущенный ключ (undefined)
+        // родителя не трогает. Неструктурное свойство-связь адресует свой
+        // `link_type` через `config.link_type_id`; структурные игнорируются.
+        if (item.parent_link_type_id !== undefined) {
+          const cfg = existing.config ?? {};
+          const linkTypeId =
+            typeof cfg.link_type_id === 'string' && cfg.link_type_id !== ''
+              ? cfg.link_type_id
+              : null;
+          if (linkTypeId !== null && cfg.structural !== true) {
+            const currentLink = getLinkType(ndb, linkTypeId);
+            const desiredParentId =
+              item.parent_link_type_id === null
+                ? getRootTypeId(ndb, 'link_types')
+                : item.parent_link_type_id;
+            if (
+              currentLink !== null &&
+              desiredParentId !== null &&
+              desiredParentId !== currentLink.parent_id
+            ) {
+              updateInput.parent_link_type_id = item.parent_link_type_id;
+            }
+          }
+        }
         if (Object.keys(updateInput).length > 0) {
           updateNetworkProperty(ndb, id, updateInput, actorUserId);
           version = readVersion(ndb, 'properties', id);

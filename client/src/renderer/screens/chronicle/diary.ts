@@ -149,6 +149,19 @@ export function resolvePeriodDay(value: string, today: string = todayLocal()): s
 }
 
 /**
+ * Суббота или воскресенье для локального дня `YYYY-MM-DD` (0.10.2, задача
+ * 41ed99ab): заголовок группы выходного дня красится отдельным токеном
+ * `--cal-weekend`. Праздники сверх сб/вс не учитываются. Неразобранный день —
+ * не выходной.
+ */
+export function isWeekend(day: string): boolean {
+  const d = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return false;
+  const dow = d.getDay();
+  return dow === 0 || dow === 6;
+}
+
+/**
  * Обратное преобразование периода календаря в значения полей панели
  * (требование 91f8d8dd, элемент 55b07702): клик по дате/неделе пытается
  * распознать ШАБЛОН и записать токены, а не точные даты:
@@ -336,6 +349,24 @@ export function rowDays(row: ChronicleRow, from = '', to = ''): string[] {
 }
 
 /**
+ * Лежит ли локальный день в применённом периоде ленты (границы включительные;
+ * пустая граница не ограничивает; `''` — не день). Тот же критерий, что у
+ * записей ({@link rowDays}), но без разворота интервала: нужен для решения,
+ * показывать ли день псевдо-записи (слот) в текущем периоде.
+ *
+ * Ошибка effefba3: `renderFeed` безусловно добавлял день слота в ленту, из-за
+ * чего несозданная/зависшая псевдо-запись (без `data-row-key`, с
+ * некликабельной датой-`span`) торчала при ЛЮБОМ периоде. Псевдо-запись, как и
+ * запись, обязана быть видна только в своём периоде.
+ */
+export function dayInPeriod(day: string, from = '', to = ''): boolean {
+  if (day === '') return false;
+  if (from !== '' && day < from) return false;
+  if (to !== '' && day > to) return false;
+  return true;
+}
+
+/**
  * Сравнение двух локальных дней `YYYY-MM-DD` по направлению сортировки
  * (0.10.1, итерация приёмки №8, п.3). Одна точка правды для группировки ленты
  * и для вставки дня слота псевдо-записи.
@@ -427,22 +458,6 @@ export function insertRowByDay(
 }
 
 /**
- * Выполнить отрисовку, сохранив позицию вертикальной прокрутки контейнера
- * (0.10.1, итерация приёмки №11, задача 45df70ed; ошибка 407b1827). Перерисовка
- * ленты после правки записи/real-time не должна сбрасывать список в начало.
- * `container === null` — прокрутку сохранять негде (смена отбора/первый показ),
- * отрисовка просто выполняется.
- */
-export function withPreservedScroll(
-  container: { scrollTop: number } | null,
-  render: () => void,
-): void {
-  const top = container !== null ? container.scrollTop : 0;
-  render();
-  if (container !== null) container.scrollTop = top;
-}
-
-/**
  * Группировка записей по локальным дням наблюдателя. Порядок записей внутри дня
  * — серверный (класс → `valid_from` → `valid_to` → `created_at` → `id`,
  * требование c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок
@@ -469,6 +484,40 @@ export function groupByLocalDays(
   return [...byDay.entries()]
     .sort((a, b) => compareDays(a[0], b[0], order))
     .map(([day, list]) => ({ day, rows: list }));
+}
+
+/**
+ * Забрать страницы ленты до глубины `depth` (0.10.2, ошибка f5809943).
+ *
+ * Refresh ТЕКУЩЕГО вида (правка записи, fallback realtime) обязан сохранять уже
+ * загруженную глубину: полный перезапрос только первой страницы терял
+ * дозагруженные «+50», состав ленты укорачивался, и позицию прокрутки держать
+ * становилось нечем (keyed-сверка снимает лишние узлы → клампинг `scrollTop`).
+ * Запросы идут до `max(pageSize, depth)` и не дальше `total`; страницы
+ * собираются ДО единственной перерисовки ленты — промежуточный рендер усечённого
+ * состава успел бы сбросить прокрутку.
+ *
+ * `fetchPage(offset, limit)` отдаёт очередную страницу в текущем отборе и
+ * порядке. Остановка — на пустой странице (сервер отдал меньше `total`) либо
+ * при достижении `total`. Смена критериев не терпит этой глубины: сброс на
+ * первую страницу — вызывающий передаёт `depth = pageSize`.
+ */
+export async function collectRowsToDepth<T>(
+  depth: number,
+  pageSize: number,
+  fetchPage: (offset: number, limit: number) => Promise<{ rows: T[]; total: number }>,
+): Promise<{ rows: T[]; total: number }> {
+  const target = Math.max(pageSize, depth);
+  const first = await fetchPage(0, pageSize);
+  let rows = first.rows;
+  let total = first.total;
+  while (rows.length < target && rows.length < total) {
+    const page = await fetchPage(rows.length, pageSize);
+    if (page.rows.length === 0) break;
+    rows = [...rows, ...page.rows];
+    total = page.total;
+  }
+  return { rows, total };
 }
 
 /** Период клика по дню календаря. */
@@ -562,13 +611,62 @@ export function hasRecordContent(draft: RecordDraft): boolean {
   return (draft.bindings ?? 0) > 0;
 }
 
+/** Решение о сохранении черновика псевдо-записи (ошибка 0757cd08). */
+export interface SlotCommitPlan {
+  action: 'create' | 'update' | 'none';
+  /** Заголовок записи (пробелы обрезаны; пустой — `null`). */
+  title: string | null;
+  /** Тело записи (для создания — как есть; для обновления — см. `bodyProvided`). */
+  body: string;
+  /** Передано ли тело вызывающим: правка только заголовка тело не трогает. */
+  bodyProvided: boolean;
+}
+
+/**
+ * Выбор операции для первого/очередного сохранения псевдо-записи (ошибка
+ * 0757cd08). Заголовок входит в ЛЮБОЕ сохранение; тело — только когда реально
+ * передано (`body !== undefined`), иначе правка заголовка затирала бы уже
+ * сохранённый текст, а правка текста — заголовок. Пока записи нет (`commentId
+ * === null`) и нет содержания — ничего не пишем (требование 26f0aa52). Если
+ * запись уже создана (например, первым содержательным blur заголовка),
+ * последующее сохранение ОБНОВЛЯЕТ её, а не создаёт дубль.
+ */
+export function planSlotCommit(input: {
+  commentId: string | null;
+  title: string;
+  body?: string;
+  bindings?: number;
+}): SlotCommitPlan {
+  const title = input.title.trim() || null;
+  const body = input.body ?? '';
+  const bodyProvided = input.body !== undefined;
+  if (input.commentId === null) {
+    const has = hasRecordContent({
+      title: input.title,
+      body,
+      bindings: input.bindings ?? 0,
+    });
+    return { action: has ? 'create' : 'none', title, body, bodyProvided };
+  }
+  return { action: 'update', title, body, bodyProvided };
+}
+
+/**
+ * Есть ли в ленте строка с таким id. Дедуп локальной вставки созданной записи
+ * (ошибка 0757cd08, круг 1): строку могла вставить другая ветка (realtime-
+ * событие, перезагрузка/сверка), пока слот ждал ухода фокуса. Повторная
+ * вставка даёт ленте два узла с одним ключом и роняет `reconcileKeyed`.
+ */
+export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
+  return rows.some((row) => row.id === id);
+}
+
 /**
  * Нужны ли сетевые вызовы при удалении слота: пустой слот (без id) удаляется
  * только в клиенте, без записи в сеть и real-time событий (требование
  * 26f0aa52).
  */
-export function slotDeleteNeedsNetwork(commentId: string | null): boolean {
-  return commentId !== null;
+export function slotDeleteNeedsNetwork(commentId: string | null): boolean {  return commentId !== null;
 }
 
 /**

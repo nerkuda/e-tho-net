@@ -22,6 +22,7 @@ import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
 import { createHandlers, selfMutationNetwork } from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
+import { toIpcErrorEnvelope } from './contract.js';
 import type { IpcCallContext, IpcInvokePayload } from './contract.js';
 
 /** IPC calls slower than this are journaled as WARN instead of INFO (f051bf95 §3). */
@@ -267,7 +268,12 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         duration_ms: Date.now() - startedAt,
         error: err instanceof Error ? err.message : String(err),
       });
-      throw err;
+      // Ошибка возвращается КОНВЕРТОМ, а не `throw` (ошибка f14962ca):
+      // `ipcMain.handle` + `contextBridge` сохраняют у ошибки только
+      // `name`/`message`/`stack`, теряя `code` и `details`. UI-ветки, которым
+      // нужны эти поля (диалог подтверждения смены родителя, `LOCKED`,
+      // `VERSION_CONFLICT`), восстанавливают `EtnError` в renderer из конверта.
+      return toIpcErrorEnvelope(err);
     } finally {
       if (requestId !== null) inflight.delete(requestId);
     }

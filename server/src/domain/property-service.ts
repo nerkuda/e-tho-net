@@ -215,6 +215,17 @@ function touchType(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string, ac
  * Открывает теневую копию владельца в текущем слое; записи `value_*` и
  * `property_values.updated_at` остаются независимыми (миллисекундные даты
  * значения и владельца могут различаться на пару мс).
+ *
+ * `version` владельца НЕ инкрементируется (ошибка af104f16). Версия мысли/
+ * связи — оптимистическая блокировка её СОБСТВЕННЫХ полей (PATCH `If-Match`,
+ * 03-server-api.md §6.4); запись значения свойства идёт отдельным маршрутом
+ * без `If-Match` (§9) и версию владельца как контракт не несёт. Инкремент
+ * делал бы любой открытый редактор протухшим: после правки свойства (в том
+ * числе чужим клиентом — событие `property-value.set` версию не доносит)
+ * следующее сохранение реквизита мысли падало бы `409 VERSION_CONFLICT`,
+ * хотя поля разные и мысль не захвачена. Авторство владельца при этом
+ * обновляется — приравнивание требование e6d4165e задаёт по `updated_*`,
+ * не по `version`.
  */
 function touchOwner(
   ndb: NetworkDb,
@@ -228,7 +239,7 @@ function touchOwner(
   materializeShadow(ndb, table, ownerId);
   ndb
     .prepare(
-      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
+      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ?
        WHERE id = ? AND layer_id = ?`,
     )
     .run(now, actorUserId, nowMs, ownerId, ndb.layerId);
@@ -1740,14 +1751,15 @@ export function updateNetworkProperty(
   // внутри сам откроет свою, но в одной сессии SQLite это нормально
   // (вложенные SAVEPOINT), если же она конфликтует — вызывающий код
   // должен ожидать отказ с понятным сообщением.
-  let linkUpdate: { name_forward?: string; name_reverse?: string; color?: string | null; style?: LinkStyle | null; width?: number | null } | null = null;
+  let linkUpdate: { name_forward?: string; name_reverse?: string; color?: string | null; style?: LinkStyle | null; width?: number | null; parent_id?: string | null } | null = null;
   if (
     linkTypeIdForUpdate !== null &&
     (changes.name_forward !== undefined ||
       changes.name_reverse !== undefined ||
       changes.link_color !== undefined ||
       changes.link_style !== undefined ||
-      changes.link_width !== undefined)
+      changes.link_width !== undefined ||
+      changes.parent_link_type_id !== undefined)
   ) {
     linkUpdate = {};
     if (changes.name_forward !== undefined) linkUpdate.name_forward = validateKey(changes.name_forward);
@@ -1755,6 +1767,25 @@ export function updateNetworkProperty(
     if (changes.link_color !== undefined) linkUpdate.color = changes.link_color ?? null;
     if (changes.link_style !== undefined) linkUpdate.style = changes.link_style ?? null;
     if (changes.link_width !== undefined) linkUpdate.width = changes.link_width ?? null;
+    // Ошибка 16766f82: явный `parent_link_type_id` правит `parent_id`
+    // связанного link_type (защита `reparent_blocked_by_layer` и валидация
+    // цикла — внутри `updateLinkType`). Сравниваем с текущим родителем,
+    // чтобы `null` (под корневой тип) и повтор не поднимали version впустую.
+    if (changes.parent_link_type_id !== undefined) {
+      const currentLinkForParent = getLinkType(ndb, linkTypeIdForUpdate);
+      const desiredParentId =
+        changes.parent_link_type_id === null
+          ? getRootTypeId(ndb, 'link_types')
+          : changes.parent_link_type_id;
+      if (
+        currentLinkForParent !== null &&
+        desiredParentId !== null &&
+        desiredParentId !== currentLinkForParent.parent_id
+      ) {
+        linkUpdate.parent_id = changes.parent_link_type_id;
+      }
+    }
+    if (Object.keys(linkUpdate).length === 0) linkUpdate = null;
   }
 
   return ndb.transaction(() => {

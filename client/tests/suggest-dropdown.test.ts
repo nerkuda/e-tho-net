@@ -580,6 +580,54 @@ describe('suggest-dropdown: закрытый список config.options', () =>
     assert.deepEqual(w.picked, [{ value: 'Тверь', label: 'Тверь' }]);
     assert.equal(openList(w.body), undefined, 'список закрыт после выбора');
   });
+
+  // Карточка ошибки 4a96d07a: у свойства со списком вариантов выпадашка
+  // открывается сразу при входе в поле и до первой правки показывает список
+  // ЦЕЛИКОМ; ввод (правка) сужает его фрагментом.
+  it('showAllUntilEdited: when=always, до правки — весь список, после — фильтр', async () => {
+    let edited = false;
+    const s = optionsSuggestSource(options, {
+      header: 'Варианты',
+      showAllUntilEdited: () => !edited,
+    });
+    assert.equal(s.when, 'always', 'список открывается сразу, а не только при вводе');
+    assert.deepEqual(
+      await s.load('Тверь'),
+      [
+        { value: 'Питер', label: 'Питер' },
+        { value: 'Москва', label: 'Москва' },
+        { value: 'Тверь', label: 'Тверь' },
+      ],
+      'содержимое поля (текущее значение) до правки запросом не считается',
+    );
+    edited = true;
+    assert.deepEqual(
+      await s.load('мо'),
+      [{ value: 'Москва', label: 'Москва' }],
+      'после правки — обычная фильтрация',
+    );
+    assert.deepEqual(await s.load('МО'), [{ value: 'Москва', label: 'Москва' }], 'регистр не важен');
+  });
+
+  it('фокус на поле с текущим значением открывает весь список, правка сужает его', async () => {
+    let edited = false;
+    const w = wire(
+      optionsSuggestSource(options, {
+        header: 'Варианты',
+        showAllUntilEdited: () => !edited,
+      }),
+    );
+    // Поле уже несёт текущее значение свойства; пользователь ещё не правил.
+    w.input.value = 'Тверь';
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(rowLabels(w.body), ['Питер', 'Москва', 'Тверь'], 'весь список вариантов');
+    assert.deepEqual(groupHeaders(w.body), ['Варианты']);
+
+    edited = true;
+    w.input.value = 'мо';
+    await openBy(() => w.input.emit('input'));
+    assert.deepEqual(rowLabels(w.body), ['Москва'], 'после правки — результат фильтрации');
+  });
 });
 
 // ---------------------------------------------------------------------------

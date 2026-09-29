@@ -161,7 +161,12 @@
 .cal-day {
   min-width: 0;
   padding: 2px 0;
-  text-align: center;
+  /* Индикатор записей — столбик точек слева от номера, по центру ячейки
+   * (0.10.2, задача 41ed99ab). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   border-radius: 4px;
 }
 
@@ -185,15 +190,20 @@
   font-weight: 700;
 }
 
-.cal-day.has-records {
-  background: var(--accent-soft);
+/* Точки-индикаторы записей дня: вертикальный столбик из 1–3 точек. */
+.cal-dots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
 }
 
-.cal-count {
-  display: block;
-  font-size: 10px;
-  line-height: 1;
-  color: var(--accent);
+.cal-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 /* ---------------------------------------------------------------------------
@@ -293,6 +303,23 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
+  /* Отступ сверху чуть больше снизу — группа отделяется от предыдущего дня
+   * (0.10.2, задача 41ed99ab). */
+  padding: 6px 0 4px;
+}
+
+/* Тонкая бледная линия СВЕРХУ группы, затухающая к прозрачности к 30 % длины
+ * (у левого края непрозрачна). Это именно линия сверху, а не нижняя граница
+ * заголовка (0.10.2, задача 41ed99ab); цвет — токен темы. */
+.diary-day::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border) 0%, transparent 30%);
 }
 
 .diary-day-head {
@@ -304,12 +331,19 @@
   text-align: left;
   font-weight: 600;
   text-transform: capitalize;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
+  /* Будний день — серый `--text-dim` (0.10.2, задача 41ed99ab). Раньше стоял
+   * несуществующий токен `--muted` — подстановка невалидна, заголовок наследовал
+   * `--text` (блокер проверки). Выходной перекрывается `--cal-weekend` ниже. */
+  color: var(--text-dim);
+  padding-bottom: 0;
   /* Дата-заголовок вдвое крупнее базового шрифта (0.10.1, приёмка №2). */
   font-size: calc(var(--font-size-s) * 2);
   line-height: 1.15;
+}
+
+/* Заголовок выходного дня (сб/вс) — розовый токен темы (0.10.2, задача 41ed99ab). */
+.diary-day-head.is-weekend {
+  color: var(--cal-weekend);
 }
 
 .diary-day-head .ui-btn-icon,
@@ -399,7 +433,44 @@
 .diary-record-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
+  /* Крупный заметный текст, не мельче заголовков внутри комментария (h1 = 2em
+   * от базового кегля тела записи) — 0.10.2, задача 41ed99ab. */
+  font-size: calc(var(--font-size-s) * 2);
+  line-height: var(--line-height-tight);
+  justify-content: flex-start;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Поле правки заголовка — тот же кегль, но обычное поле ввода. */
+.diary-record-title-input {
+  width: 100%;
+  font-weight: var(--font-weight-semibold);
+  font-size: calc(var(--font-size-s) * 2);
+}
+
+/* Индикатор сворачивания у заголовка записи (0.10.2, задача 472457bf) — тот же
+ * приём, что у группы дня: стрелка `chevron-down`, повёрнутая вправо (−90°) у
+ * свёрнутой записи. Поворот задаёт класс `is-collapsed` ЗАГОЛОВКА, который
+ * ставит `applyRecordCollapsed` (единый путь поворота; дубля по карточке нет).
+ * `flex: 0 0 auto` держит стрелку видимой при длинном тексте (overflow: hidden). */
+.diary-record-title svg {
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+
+.diary-record-title.is-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* Свёрнутая запись СКРЫВАЕТ только тело комментария: строка «период + мысли +
+ * меню» и заголовок остаются видимыми (0.10.2, задача 41ed99ab). Правило
+ * нужно вместе с `hidden`, иначе display тела перебил бы атрибут. */
+.diary-record.is-collapsed .diary-record-body {
+  display: none;
 }
 
 /* «Бутерброд» меню записи прижат к правому краю строки 1. */

@@ -46,6 +46,10 @@
   /* Selection outline of clouds picked into the selection panel — teal, so it
    * never reads as the editor halo (§5, L22 review). */
   --selection: #0f8f86;
+  /* Заголовок группы выходного дня (сб/вс) ленты «Дневника» (0.10.2, задача
+    41ed99ab): розовый вместо серого --text-dim. Праздники сверх сб/вс не
+    учитываются. Обе темы определяют токен явно. */
+  --cal-weekend: #d6478a;
   --danger: #d64545;
   --danger-soft: #fdeaea;
   --ok: #2f9e44;
@@ -309,6 +313,8 @@
   --selection-bg: rgba(91, 140, 255, 0.5);
   /* Selection outline of clouds picked into the selection panel — teal. */
   --selection: #2fbfae;
+  /* Заголовок группы выходного дня — розовый в тёмной теме (0.10.2). */
+  --cal-weekend: #ff8fc0;
   --danger: #e06a6a;
   --danger-soft: #3a2226;
   --ok: #4cb763;

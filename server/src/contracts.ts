@@ -712,8 +712,16 @@ export const LayersResetOverride = defineContract(
 
 const SearchFields = z
   .object({
-    network_id: NetworkId.optional(),
-    network_ids: z.array(NetworkId).optional(),
+    // Сеть обязательна, но в форме XOR: либо одна (`network_id`), либо веер
+    // (`network_ids`). JSON Schema не умеет «хотя бы одно из двух required» —
+    // обязательность выражена описанием каждого поля (ошибка 99f27451:
+    // раньше она была видна только в рантайме).
+    network_id: NetworkId.optional().describe(
+      'Single network. Provide either `network_id` or `network_ids` — one is required.',
+    ),
+    network_ids: z.array(NetworkId).optional().describe(
+      'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+    ),
     query: z.string().min(1),
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
@@ -770,8 +778,14 @@ const QueryPropertyFields = z
   });
 const QueryFields = z
   .object({
-    network_id: NetworkId.optional(),
-    network_ids: z.array(NetworkId).optional(),
+    // XOR сети — как в `SearchFields`: обязательность несёт описание полей
+    // (JSON Schema не выражает «хотя бы одно из двух required», ошибка 99f27451).
+    network_id: NetworkId.optional().describe(
+      'Single network. Provide either `network_id` or `network_ids` — one is required.',
+    ),
+    network_ids: z.array(NetworkId).optional().describe(
+      'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+    ),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
@@ -898,8 +912,14 @@ export const ThoughtsFindDuplicates = defineContract(
   'etn.thoughts.find_duplicates',
   z
     .object({
-      network_id: NetworkId.optional(),
-      network_ids: z.array(NetworkId).optional(),
+      // XOR сети — как в `SearchFields`/`QueryFields`: обязательность несёт
+      // описание полей (ошибка 99f27451).
+      network_id: NetworkId.optional().describe(
+        'Single network. Provide either `network_id` or `network_ids` — one is required.',
+      ),
+      network_ids: z.array(NetworkId).optional().describe(
+        'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+      ),
       title: z.string().min(1),
       synonyms: z.array(z.string().min(1)).optional(),
     })
@@ -1235,7 +1255,10 @@ const OntologyWriteThoughtTypeFields = z
     ref: z.string().min(1).optional(),
     id: z.string().min(1).nullable().optional(),
     name: z.string().min(1).optional(),
-    parent: z.string().min(1).nullable().optional(),
+    // Пустая строка трактуется как `null` — прикрепить под корневой тип
+    // (паритет с REST `PATCH /thought-types`, где `parse: '' → null`),
+    // ошибка 1eb2a430.
+    parent: z.string().nullable().optional(),
     parent_ref: z.string().min(1).nullable().optional(),
     description: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
@@ -1255,7 +1278,9 @@ const OntologyWriteLinkTypeFields = z
     id: z.string().min(1).nullable().optional(),
     name_forward: z.string().min(1).optional(),
     name_reverse: z.string().min(1).optional(),
-    parent: z.string().min(1).nullable().optional(),
+    // Пустая строка трактуется как `null` — под корневой тип связи
+    // (паритет с REST `PATCH /link-types`, ошибка 1eb2a430).
+    parent: z.string().nullable().optional(),
     parent_ref: z.string().min(1).nullable().optional(),
     color: z.string().nullable().optional(),
     style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),
@@ -3364,7 +3389,7 @@ export const RestHierarchyQuery = defineContract(
   },
 );
 
-/** Тело POST /thoughts/edges — { ids, show_inactive, show_trash } (+ network_id из params). */
+/** Тело POST /thoughts/edges — { ids, show_inactive, show_trash, link_filter } (+ network_id из params). */
 export const RestEdgesBody = defineContract(
   'rest:structures.edges-body',
   z.object({
@@ -3372,12 +3397,14 @@ export const RestEdgesBody = defineContract(
     ids: z.array(z.string()).min(1),
     show_inactive: z.boolean().optional(),
     show_trash: z.boolean().optional(),
+    link_filter: LinkFilter,
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     ids: { from: { kind: 'body' }, msg: 'ids должен быть массивом строк.' },
     show_inactive: { from: { kind: 'body' } },
     show_trash: { from: { kind: 'body' } },
+    link_filter: { from: { kind: 'body' } },
   },
 );
 

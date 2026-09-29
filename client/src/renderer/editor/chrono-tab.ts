@@ -56,9 +56,7 @@ import {
   openDatePeriodDialog,
   resolveDatePeriodInstants,
 } from '../lib/date-period-dialog.js';
-
-/** Сколько символов первой непустой строки заметки берём в колонку «Заголовок». */
-const TITLE_FROM_BODY_MAX = 250;
+import { EDITOR_RECORD_TITLE_MAX, recordDisplayTitle } from '../lib/record-title.js';
 
 /** Registers the «Дневник» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
@@ -113,6 +111,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   let activeWidget: HTMLElement | null = null;
   /** Row id the active editor area belongs to; `null` for a brand-new record. */
   let activeRowId: string | null = null;
+  /**
+   * Авто-выбор верхней строки выполняется один раз при открытии вкладки
+   * (0.10.2, задача 41ed99ab): поздние перезагрузки (правка, добавление) выбор
+   * пользователя не перебивают.
+   */
+  let autoSelectDone = false;
 
   // Таблица — единый фасад списков `lib/ui/table.ts`: колонки, сортировка,
   // клавиатурная навигация (стрелки, Home/End, PgUp/PgDn, Enter), контекстное
@@ -182,6 +186,22 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     table.element.hidden = false;
     table.setRows(chrono);
     if (selectedId !== null) table.setCurrent(selectedId);
+    // При открытии вкладки текущей становится САМАЯ ВЕРХНЯЯ строка (порядок —
+    // обратный хронологический, `defaultSort: period desc`), чтобы сразу
+    // показался текст её комментария (0.10.2, задача 41ed99ab). Авто-выбор — при
+    // отсутствии выбора и только однократно: явно выбранную строку возврат на
+    // ту же мысль не сбрасывает.
+    if (!autoSelectDone) {
+      autoSelectDone = true;
+      if (selectedId === null && chrono.length > 0) {
+        const top = table.getRows()[0];
+        if (top !== undefined) {
+          selectedId = top.id;
+          table.setCurrent(top.id);
+          buildEditor(top);
+        }
+      }
+    }
   }
 
   /** Opens the diary screen on this record (calendar date + current record). */
@@ -416,16 +436,15 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   return root;
 }
 
-/** Title for the «Заголовок» cell: `title`, else the first non-empty body line. */
+/**
+ * Title for the «Заголовок» cell: `title`, else the derived title from the body
+ * (first non-empty line with leading markdown markers stripped and HTML entities
+ * decoded), truncated to {@link EDITOR_RECORD_TITLE_MAX}. Parsing is shared with
+ * the diary feed (`lib/record-title.ts`, задача 8e4a965f): no cross-screen
+ * dependency `editor/` ← `screens/`, no second implementation.
+ */
 function recordTitle(comment: Comment): string {
-  const title = (comment.title ?? '').trim();
-  if (title !== '') return title;
-  for (const line of comment.body_md.split(/\r?\n/)) {
-    const text = line.trim();
-    if (text === '') continue;
-    return text.length > TITLE_FROM_BODY_MAX ? `${text.slice(0, TITLE_FROM_BODY_MAX)}…` : text;
-  }
-  return '';
+  return recordDisplayTitle(comment.title, comment.body_md, EDITOR_RECORD_TITLE_MAX);
 }
 
 /** Author name for the «Редактор» cell (falls back to the raw id in brackets). */

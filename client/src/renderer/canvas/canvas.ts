@@ -84,6 +84,7 @@ import {
   setEllipseHover,
   setDragLinkLine,
   setSupplementalEdges,
+  hasSupplementalEdges,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
 import {
@@ -123,6 +124,17 @@ export interface ZoneEntry {
   id: string;
   links: FocusNeighbor[];
   ref: ThoughtRef | null;
+  /**
+   * Related titles the cloud shortens its compound name against, when the
+   * entry comes from a view run result rather than a real focus neighbour
+   * (08-ui-spec.md §2.2.3). The lower zone under a view shows the focus's
+   * view result "with the same clouds as children" (spec 9984aa98), but its
+   * thoughts may have no link to the focus at all — so they cannot be found
+   * in {@link relatedTitles} (built from focus edges) and must carry the
+   * focus title explicitly. Undefined for real neighbours, which keep the
+   * edge-based map (regression cbb91b62).
+   */
+  viewResultRelated?: readonly string[];
 }
 
 /** Comment/attachment counts shown in the cloud indicators row. */
@@ -234,10 +246,26 @@ let indicatorRunning = 0;
 // ---------------------------------------------------------------------------
 
 /**
+ * Отписки глобальных подписок канваса (режим полосы отборов, store, lock-бейджи)
+ * и `ResizeObserver` хоста. Собираются на монтировании и снимаются возвращённым
+ * teardown-хендлом: без этого каждое перемонтирование рабочего пространства
+ * добавляло живого слушателя, и клик по кнопке отбора запускал `render()` по
+ * ВСЕМ прошлым монтированиям — N параллельных POST `views/run` (ошибка 37b713de).
+ */
+let stripModeUnsubscribe: (() => void) | null = null;
+let storeUnsubscribe: (() => void) | null = null;
+let lockBadgeUnsubscribe: (() => void) | null = null;
+
+/**
  * Mounts the canvas into the workspace canvas host. Called by the workspace
  * builder; the canvas re-renders on every store change (focus/width/gap).
+ *
+ * Returns a teardown handle that releases every global subscription/observer
+ * registered here. The workspace builder MUST call it before rebuilding the
+ * canvas (см. `teardownWorkspace`), otherwise listeners accumulate across
+ * mount cycles (ошибка 37b713de).
  */
-export function mountCanvas(canvasHost: HTMLElement): void {
+export function mountCanvas(canvasHost: HTMLElement): () => void {
   host = canvasHost;
   // A remount (layer/view switch) may find a transition still running against
   // the previous host — drop its layers/timers before the DOM is wiped.
@@ -276,7 +304,8 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   host.append(top, focusRow, zoneSplitterH, zoneChildren, empty, layerLabelEl);
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
-  redrawLinks = initLinksOverlay(host).redraw;
+  const linksOverlay = initLinksOverlay(host);
+  redrawLinks = linksOverlay.redraw;
   applyCanvasScaleVars(host);
 
   // Focus filter strip (task 02ba2ae7, spec 9984aa98) — sits between the
@@ -287,13 +316,15 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   // Wire the strip mode as a render trigger: every button click invalidates
   // the lower zone, so the canvas must repaint. The strip fires the
   // listener synchronously after persisting the new mode.
-  onStripModeChange(() => {
-    void render();
+  // Keep the unsubscribe handle — the listener must not survive a remount
+  // (ошибка 37b713de).
+  stripModeUnsubscribe = onStripModeChange(() => {
+    scheduleRender();
   });
   // Load the persisted strip map once per tab mount (the strip module owns
   // it). Errors are swallowed — L4 is best-effort.
   void loadPersistedStrip();
-  mountZoneSplitters({
+  const disposeZoneSplitters = mountZoneSplitters({
     host,
     top,
     focusRow,
@@ -331,7 +362,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
     }
   });
 
-  store.subscribe(() => {
+  storeUnsubscribe = store.subscribe(() => {
     if (host?.isConnected !== true) return;
     // The label follows layer/theme changes even when the canvas data itself
     // is unchanged (the fast path below skips the full rebuild).
@@ -373,14 +404,39 @@ export function mountCanvas(canvasHost: HTMLElement): void {
       store.state.editorTarget?.kind === 'thought'
         ? store.state.editorTarget.id
         : null;
-    void render();
+    scheduleRender();
   });
   // The focus band follows the focus row, whose position depends on the zone
   // shares and the host size — re-anchor it on resizes too (L12).
-  new ResizeObserver(() => {
+  const resizeObserver = new ResizeObserver(() => {
     if (host?.isConnected === true) updateFocusBand();
-  }).observe(host);
-  void render();
+  });
+  resizeObserver.observe(host);
+  scheduleRender();
+
+  // Teardown handle: releases every global subscription/observer wired above.
+  // Idempotent — a second call is a no-op (handles are cleared).
+  return () => {
+    stripModeUnsubscribe?.();
+    stripModeUnsubscribe = null;
+    storeUnsubscribe?.();
+    storeUnsubscribe = null;
+    lockBadgeUnsubscribe?.();
+    lockBadgeUnsubscribe = null;
+    lockBadgeRefreshWired = false;
+    resizeObserver.disconnect();
+    linksOverlay.dispose();
+    disposeZoneSplitters();
+    // Detach the DOM handles so no late async render paints into a dead host.
+    host = null;
+    zones = null;
+    focusRow = null;
+    emptyEl = null;
+    focusCloudEl = null;
+    layerLabelEl = null;
+    layerLabelText = null;
+    redrawLinks = null;
+  };
 }
 
 /** Returns the cached metadata for a thought id, or null. */
@@ -576,9 +632,56 @@ function paintHalo(): void {
   }
 }
 
+/**
+ * Счётчик фактических входов в `render()` (после гварда хозяина). Тестовый шов
+ * сторожа коалессирования: N синхронных триггеров → один рендер (см.
+ * {@link canvasInternals}.renderCount).
+ */
+let renderCount = 0;
+
+/**
+ * Счётчик ФАКТИЧЕСКИХ входов в `render()` — до гварда хозяина. Отличает
+ * «микротаск отложенного рендера дошёл, но render() стал no-op по `host === null`»
+ * от «микротаск потерян»: {@link renderCount} растёт лишь после гварда, поэтому
+ * после teardown он не двигается в обоих случаях (тестовый шов сторожа
+ * коалессирования, {@link canvasInternals}.renderEnterCount).
+ */
+let renderEnterCount = 0;
+
+/** Отметка «рендер уже запланирован на текущий тик» — схлопывает все
+ *  синхронные триггеры в один `render()` (см. {@link scheduleRender}). */
+let renderScheduled = false;
+
+/**
+ * Планирует рендер на конец текущего тика, схлопывая любое число синхронных
+ * триггеров — уведомления стора, смену режима полосы отборов, монтирование — в
+ * ОДИН `render()`, который читает финальное состояние стора: последний триггер
+ * выигрывает по построению. Защита в глубину после ошибки 37b713de — пачка
+ * уведомлений (или утёкший подписчик) больше не запускает серию полных
+ * отрисовок, каждая из которых тянет `renderStrip` + `thoughts.get` + `list` +
+ * `views/run`.
+ *
+ * Именно МИКРОТАСКА, а не `requestAnimationFrame`: она выполняется до отрисовки
+ * кадра, поэтому хореография смены фокуса по-прежнему укладывает свой первый
+ * нарисованный кадр со СТАРЫМ содержимым — задержка до rAF позволила бы браузеру
+ * нарисовать НОВЫЙ фокус в центре раньше, чем `playFocusTransition` успеет его
+ * спрятать (дефект 1 задачи e9f0af94, сторож `guard-focus-animation`). Та же
+ * идиома, что у коалессированной перерисовки строк в `selection.ts`.
+ */
+function scheduleRender(): void {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  queueMicrotask(() => {
+    renderScheduled = false;
+    void render();
+  });
+}
+
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
+  renderEnterCount++;
   if (host === null || zones === null || focusRow === null) return;
+  renderCount++;
   // A real data update arriving mid-flight wins: snap any running transition to
   // its final state (release the held focus, drop the clones/layers) BEFORE the
   // old layout is captured and rebuilt. The rebuild below then starts from the
@@ -746,6 +849,11 @@ function viewResultToZoneEntries(
         id: ref.id,
         links: [neighbor],
         ref,
+        // A view result is shown with the same clouds as a child, but its
+        // thought may have no link to the focus — shorten compound parts
+        // against the focused thought explicitly (08-ui-spec.md §2.2.3,
+        // ошибка ace5e73b). Real neighbours keep the edge-based map.
+        viewResultRelated: [focus.focused.title],
       };
     });
 }
@@ -918,7 +1026,7 @@ let lockBadgeRefreshWired = false;
 function wireLockBadgeRefresh(): void {
   if (lockBadgeRefreshWired) return;
   lockBadgeRefreshWired = true;
-  store.subscribe(() => {
+  lockBadgeUnsubscribe = store.subscribe(() => {
     // `lockCacheTick` is bumped on every cache transition; use it as the
     // signal so unrelated store updates do not re-paint badges.
     void store.state.lockCacheTick;
@@ -1181,7 +1289,17 @@ function syncZoneTotalsWithFreshFocus(): void {
   if (focus === null || focus === lastFocusResponse) return;
   if (focus.focused.id !== lastFocusId) return;
   lastFocusResponse = focus;
-  void reconcileZoneTotals(focus);
+  // Подгруженные рёбра — снимок `POST /thoughts/edges` по видимым мыслям,
+  // обновляется только при догрузке порции или здесь. Удаление связи между
+  // ДВУМЯ подгруженными соседями (её нет и не будет в `focus.edges`) снимок не
+  // трогает — линия висела бы до смены фокуса. Перечитываем снимок на свежем
+  // ответе ТОГО ЖЕ фокуса после сверки секторов (её догрузка успевает
+  // пополнить видимый набор, и запрос идёт по устоявшемуся составу мыслей;
+  // ошибка c02ff7dc). Общие рёбра фокуса чинятся самим `edgeSource` — снимок их
+  // не хранит.
+  void reconcileZoneTotals(focus).then(() => {
+    if (hasSupplementalEdges()) void refreshZoneEdges(focus);
+  });
 }
 
 /**
@@ -1356,17 +1474,28 @@ async function appendNextZonePage(
  * Re-fetches every active link among the currently VISIBLE thoughts (focus +
  * all appended pages) and hands them to the link overlay. Beyond the first
  * page the focus response's `edges` no longer covers the neighbourhood, so the
- * overlay is fed the authoritative set from `POST /thoughts/edges`.
+ * overlay is fed the authoritative set from `POST /thoughts/edges`; the edges
+ * already in `focus.edges` are dropped from the snapshot so the overlay renders
+ * shared edges from the live focus response (ошибка c02ff7dc).
  */
-async function refreshZoneEdges(_focus: FocusResponse): Promise<void> {
+async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const token = zonePagingToken;
   const ids = [...zoneVisibleIds];
   try {
-    const edges = await etn.structures.edges(networkId, ids, store.state.showInactive);
+    // Снимок обязан уважать активный фильтр типов связей — тот же, что уходит
+    // фокусу и порциям секторов (ошибка a617b4c6); иначе на холст вернутся
+    // рёбра отфильтрованных типов.
+    const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
+    const edges = await etn.structures.edges(
+      networkId,
+      ids,
+      store.state.showInactive,
+      linkFilter,
+    );
     if (token !== zonePagingToken) return;
-    setSupplementalEdges(edges);
+    setSupplementalEdges(edges, focus.edges ?? []);
     redrawLinks?.();
   } catch {
     // Best effort: the overlay keeps drawing the focus response's edges.
@@ -1897,8 +2026,14 @@ function buildCloud(
   // cached ref, which can lag behind after a rename until re-resolved.
   const cloudTitleFull = entry.links[0]?.title ?? ref?.title ?? '—';
   // Outside the focus, compound names hide the parts matching visible related
-  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name.
-  const cloudTitle = shortenCompoundName(cloudTitleFull, relatedTitles.get(entry.id) ?? []);
+  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name. A view
+  // result in the lower zone carries the focus title explicitly (its thoughts
+  // need no link to the focus, ошибка ace5e73b); real neighbours use the
+  // edge-based map built from the focus response.
+  const cloudTitle = shortenCompoundName(
+    cloudTitleFull,
+    entry.viewResultRelated ?? relatedTitles.get(entry.id) ?? [],
+  );
 
   // The base cloud (icon, colours, font, dim/trash states, deferred click,
   // Ctrl+click, context menu) comes from the shared factory; the canvas adds
@@ -2213,12 +2348,17 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
 /** Test seam for unit tests. */
 export const canvasInternals = {
   groupByThought,
+  viewResultToZoneEntries,
   refCache,
   indicatorCache,
   canvasRenderKey,
   selectionKey,
   deferSingleClick,
   SINGLE_CLICK_DELAY_MS,
+  /** Число фактических `render()` (после гварда хозяина) — тестовый шов сторожа коалессирования. */
+  renderCount: () => renderCount,
+  /** Число ВХОДОВ в `render()` (до гварда хозяина) — отличает no-op по `host === null` от потерянного микротаска. */
+  renderEnterCount: () => renderEnterCount,
 };
 
 // ---------------------------------------------------------------------------

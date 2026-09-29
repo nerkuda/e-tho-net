@@ -9,6 +9,13 @@
  * popup ignores pointer events, so it never disturbs hover/click handling
  * underneath.
  *
+ * Like the popup preview engine (`hover-preview.ts`), the magnifier opens only
+ * after the SHARED `CTRL_PREVIEW_OPEN_DELAY_MS` pause (`preview-open-delay.ts`,
+ * ошибка 34e61b47): Ctrl+hover is also used for Ctrl+click, and showing the
+ * magnifier instantly would cover the picture being clicked. Releasing Ctrl,
+ * pressing any mouse button, leaving the picture, scrolling or hitting Escape
+ * before the pause elapses cancels the not-yet-shown magnifier.
+ *
  * Thought icons backed by an attachment (L16) carry `data-zoom-thought` /
  * `data-zoom-attachment` (set by `applyThoughtIcon`, and by the mini-graph for
  * its SVG icons): the popup then shows the attachment's full picture instead
@@ -21,7 +28,8 @@
 import { etnimgUrl } from '../editor/markdown-field.js';
 import { etn } from './etn.js';
 import { el } from './dom.js';
-import { placeAtCursor } from './ui/popover.js';
+import { createDelayedOpen } from './preview-open-delay.js';
+import { placeAtCursor, watchOutsideTap } from './ui/popover.js';
 import { store } from '../state.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
@@ -235,30 +243,56 @@ export function initImageZoom(): void {
     });
   };
 
-  // Hover enters a picture with Ctrl held — magnify; leaving it — hide.
+  /** Общий планировщик отложенного показа (единая задержка Ctrl+предпросмотров,
+   *  ошибка 34e61b47) — см. `lib/preview-open-delay.ts`. */
+  const zoomScheduler = createDelayedOpen<ZoomAnchor>(show);
+
+  // Ctrl+hover enters a picture — magnify after the shared Ctrl+preview pause
+  // (ошибка 34e61b47): an instant magnifier covered the picture during
+  // Ctrl+click. Leaving the picture / any press cancels a not-yet-shown one.
+  const scheduleShow = (anchor: ZoomAnchor): void => {
+    if (current !== anchor) hide(); // не держим прошлую лупу, пока ждём новую
+    zoomScheduler.schedule(anchor);
+  };
+
   document.addEventListener('mouseover', (event) => {
     const target = event.target;
     if (event.ctrlKey && isZoomAnchor(target)) {
-      show(target);
+      scheduleShow(target);
       return;
     }
+    zoomScheduler.cancel();
     if (current !== null && target !== current) hide();
   });
 
   // Ctrl pressed while already hovering a picture (no new mouseover fires).
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      zoomScheduler.cancel();
       hide();
       return;
     }
     if (event.key === 'Control' && current === null) {
       const at = document.elementFromPoint(mouseX, mouseY);
-      if (isZoomAnchor(at)) show(at);
+      if (isZoomAnchor(at)) scheduleShow(at);
     }
   });
   document.addEventListener('keyup', (event) => {
-    if (event.key === 'Control') hide();
+    if (event.key === 'Control') {
+      zoomScheduler.cancel();
+      hide();
+    }
   });
+
+  // Нажатие любой кнопки мыши отменяет ещё не показанную лупу: щелчок не
+  // должен «натыкаться» на неё (ошибка 34e61b47, требование лупe не
+  // показываться по нажатию). Document-level слушатель нажатия держит только
+  // компонент `lib/ui` (сторож guard-ui-popover) — берём его `watchOutsideTap`
+  // с предикатом «ничего не удерживается», т.е. на каждое нажатие.
+  watchOutsideTap(
+    () => false,
+    () => zoomScheduler.cancel(),
+  );
 
   document.addEventListener('mousemove', (event) => {
     mouseX = event.clientX;
@@ -272,6 +306,16 @@ export function initImageZoom(): void {
   });
 
   // Any scroll moves the anchored picture away from its icon — close it.
-  document.addEventListener('scroll', hide, true);
-  window.addEventListener('blur', hide);
+  document.addEventListener(
+    'scroll',
+    () => {
+      zoomScheduler.cancel();
+      hide();
+    },
+    true,
+  );
+  window.addEventListener('blur', () => {
+    zoomScheduler.cancel();
+    hide();
+  });
 }

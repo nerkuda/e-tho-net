@@ -142,10 +142,18 @@ describe('положение зоны настроек по ширине окн�
 
   it('положение переключается на ресайзе, без перезапуска', () => {
     const search = readText(SEARCH_TS);
+    // Обработчик ресайза именованный, чтобы его можно было снять на teardown
+    // рабочего пространства (ошибка 37b713de); контракт тот же — ресайз окна
+    // пересчитывает положение зоны.
     assert.match(
       search,
-      /window\.addEventListener\('resize', \(\) => \{\s*positionPanel\(\);\s*applySettingsPlacement\(\);/,
+      /const onWindowResize = \(\): void => \{\s*positionPanel\(\);\s*applySettingsPlacement\(\);/,
       'ресайз окна пересчитывает положение зоны',
+    );
+    assert.match(
+      search,
+      /window\.addEventListener\('resize', onWindowResize\);/,
+      'обработчик ресайза подписан на window',
     );
     assert.match(
       search,

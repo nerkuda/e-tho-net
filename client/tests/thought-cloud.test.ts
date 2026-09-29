@@ -311,6 +311,18 @@ describe('цвет, начертание и значок', () => {
     assert.equal(root.style.color, '#ffffff');
   });
 
+  it('фон облачка не помечается классом — полоса иконки берёт его через inherit', () => {
+    // Признак cloud-has-bg удалён как мёртвый (задача 1dc56942, ревизия
+    // критериев 2026-09-29): фон иконочной полосы равен фону облачка всегда —
+    // правилом `background: inherit`, а не условным классом. Фабрика фона
+    // классом не помечает ни с фоном, ни без него.
+    const withBg = cloud(thought({ bg_color: '#222222' }), { profile: 'canvas' });
+    assert.ok(!withBg.classList.contains('cloud-has-bg'));
+
+    const withoutBg = cloud(thought({ bg_color: null }), { profile: 'canvas' });
+    assert.ok(!withoutBg.classList.contains('cloud-has-bg'));
+  });
+
   it('начертание — классы font-bold/font-italic', () => {
     const root = cloud(
       thought({ font_bold: true, font_italic: true, font_underline: false }),

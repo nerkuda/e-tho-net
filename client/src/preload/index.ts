@@ -129,8 +129,8 @@ function buildApi(): EtnBridgeApi {
         invokeCancellable('structures.queryIds', [networkId, request], requestId),
       hierarchy: (networkId, thoughtId, query) =>
         invoke('structures.hierarchy', networkId, thoughtId, query),
-      edges: (networkId, ids, showInactive) =>
-        invoke('structures.edges', networkId, ids, showInactive),
+      edges: (networkId, ids, showInactive, linkFilter) =>
+        invoke('structures.edges', networkId, ids, showInactive, linkFilter),
     },
     /**
      * Отмена вызова по `requestId` (требование ebed4980): fire-and-forget

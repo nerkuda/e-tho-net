@@ -12,7 +12,9 @@
  * | история последних значений (до 10)  | `empty`  | поле пустое, пользователь ещё не печатал    |
  * | результаты живого поиска            | `typed`  | введён хотя бы один символ                  |
  * | закрытый список `config.options`    | `typed`  | при вводе (сужается по фрагменту); полный   |
- * |                                     |          | список — вручную через `handle.open()`      |
+ * |                                     |          | список — вручную через `handle.open()`; у    |
+ * |                                     |          | свойства со списком — сразу при входе в поле |
+ * |                                     |          | (`showAllUntilEdited`)                       |
  * | произвольный список                 | `always` | при любом содержимом поля                   |
  *
  * Клавиатура одна на все источники: ↑/↓ — перебор, Enter — выбрать
@@ -705,16 +707,26 @@ export function searchSuggestSource(opts: {
  * Стандартный источник «закрытый список config.options»: активен при вводе,
  * сужается по фрагменту без учёта регистра (то же правило, что у прежнего
  * пикера вариантов); полный список — через `handle.open()` (кнопка ▾).
+ *
+ * `showAllUntilEdited` (карточка ошибки 4a96d07a) переводит источник в режим
+ * свойства с выбором из списка: список открывается сразу при входе в поле
+ * (`when: 'always'`) и до первой правки показывается ЦЕЛИКОМ — содержимое
+ * поля (текущее значение) запросом не считается. Как только пользователь
+ * меняет хотя бы один символ (предикат вернул `false`), источник ведёт себя
+ * как обычно — фильтрует список по введённому фрагменту.
  */
 export function optionsSuggestSource(
   options: readonly string[],
-  opts: { header?: string } = {},
+  opts: { header?: string; showAllUntilEdited?: () => boolean } = {},
 ): SuggestSource {
+  const showAllUntilEdited = opts.showAllUntilEdited;
   return {
-    when: 'typed',
+    // Поле со списком вариантов открывает его сразу при входе, а не только
+    // после первого символа; без предиката поведение прежнее — `typed`.
+    when: showAllUntilEdited === undefined ? 'typed' : 'always',
     header: opts.header,
     load: (query) => {
-      const fragment = query.trim().toLowerCase();
+      const fragment = showAllUntilEdited?.() === true ? '' : query.trim().toLowerCase();
       const visible =
         fragment === '' ? options : options.filter((o) => o.toLowerCase().includes(fragment));
       return visible.map((o) => ({ value: o, label: o }));

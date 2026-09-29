@@ -501,9 +501,18 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // инструментов урезаны до принципа прогрессивного раскрытия (детали
         // вынесены в темы `etn.guide`) → 25 / 40 203 Б. Бюджеты фиксируют
         // достигнутое сокращение и не дают описаниям расползтись обратно.
+        //
+        // 0.10.2 (ошибка 99f27451): у XOR-инструментов
+        // (`etn.thoughts.search`/`query`/`find_duplicates`) обязательность сети
+        // нельзя выразить через `required` (JSON Schema не умеет «хотя бы одно
+        // из network_id/network_ids»), поэтому требование вынесено в описание
+        // полей (`Single network. Provide either … — one is required.`). Плюс
+        // описания дают ~610 Б к `inputSchema`; замер — 41 282 / 36 543 Б.
+        // Планка поднята ровно под этот прирост (+контрактная ясность), с
+        // малым запасом.
         assert.ok(
-          bytes <= 41_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41000`,
+          bytes <= 41_500,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41500`,
         );
         // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
         // `inputSchema`. `inputSchema` не урезается — планка ограничивает
@@ -520,8 +529,8 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
           );
         }
         assert.ok(
-          descriptionsPlusInputSchema <= 36_000,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36000`,
+          descriptionsPlusInputSchema <= 36_700,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36700`,
         );
       } finally {
         await handle.close();

@@ -185,6 +185,172 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
     }
   });
 
+  // Ошибка 98ab2c3e: фаза 1.5 для link_types адресовала тип через `item.id`,
+  // а у только что СОЗДАННОГО типа он ещё null — `parent_ref` молча терялся,
+  // тип оставался под корнем. Теперь id берётся из результата записи, как в
+  // фазе thought_types.
+  it('builds a hierarchy of 3 link types via parent_ref in one call (98ab2c3e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              { ref: 'lwork', name_forward: 'иерарх-работа', name_reverse: 'иерарх-работа-обр' },
+              {
+                ref: 'ltask',
+                name_forward: 'иерарх-задача',
+                name_reverse: 'иерарх-задача-обр',
+                parent_ref: 'lwork',
+              },
+              {
+                ref: 'lsub',
+                name_forward: 'иерарх-подзадача',
+                name_reverse: 'иерарх-подзадача-обр',
+                parent_ref: 'ltask',
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<OntologyWriteResult>(result);
+        assert.equal(data.link_types.length, 3);
+        for (const t of data.link_types) assert.equal(t.action, 'created');
+        const lwork = data.link_types.find((t) => t.ref === 'lwork')!;
+        const ltask = data.link_types.find((t) => t.ref === 'ltask')!;
+        const lsub = data.link_types.find((t) => t.ref === 'lsub')!;
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const parentOf = (id: string): string | null =>
+          (
+            ndb.prepare('SELECT parent_id FROM link_types_v WHERE id = ?').get(id) as {
+              parent_id: string | null;
+            }
+          ).parent_id;
+        // lwork — прямой потомок корня.
+        assert.notEqual(parentOf(lwork.id), null);
+        assert.equal(parentOf(ltask.id), lwork.id, 'ltask подвешен под lwork');
+        assert.equal(parentOf(lsub.id), ltask.id, 'lsub подвешен под ltask');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('resolves parent_ref of a new link type to an existing one by name and by id (98ab2c3e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const seed = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                {
+                  ref: 'root',
+                  name_forward: 'существующий-родитель',
+                  name_reverse: 'существующий-родитель-обр',
+                },
+              ],
+            },
+          }),
+        );
+        const existingId = seed.link_types[0]!.id;
+
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              // Батч-псевдоним, совпадающий по паре имён с существующим типом:
+              // его id резолвится из БД ещё в resolve-фазе.
+              {
+                ref: 'byName',
+                name_forward: 'существующий-родитель',
+                name_reverse: 'существующий-родитель-обр',
+              },
+              {
+                ref: 'childByName',
+                name_forward: 'новичок-по-имени',
+                name_reverse: 'новичок-по-имени-обр',
+                parent_ref: 'byName',
+              },
+              // Батч-псевдоним с явным id существующего типа.
+              { ref: 'byId', id: existingId },
+              {
+                ref: 'childById',
+                name_forward: 'новичок-по-id',
+                name_reverse: 'новичок-по-id-обр',
+                parent_ref: 'byId',
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<OntologyWriteResult>(result);
+        const childByName = data.link_types.find((t) => t.ref === 'childByName')!;
+        const childById = data.link_types.find((t) => t.ref === 'childById')!;
+        assert.equal(childByName.action, 'created');
+        assert.equal(childById.action, 'created');
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const parentOf = (id: string): string | null =>
+          (
+            ndb.prepare('SELECT parent_id FROM link_types_v WHERE id = ?').get(id) as {
+              parent_id: string | null;
+            }
+          ).parent_id;
+        assert.equal(parentOf(childByName.id), existingId, 'родитель по имени существующего типа');
+        assert.equal(parentOf(childById.id), existingId, 'родитель по id существующего типа');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('rejects a link type parent_ref not declared in the batch (98ab2c3e)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              {
+                ref: 'orphan',
+                name_forward: 'нерезолв-ребёнок',
+                name_reverse: 'нерезолв-ребёнок-обр',
+                parent_ref: 'nope',
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, true, 'ожидается VALIDATION_ERROR, а не молчаливый игнор');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(text.includes('nope'), `ожидалось упоминание ref: ${text}`);
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const rows = ndb
+          .prepare("SELECT id FROM link_types_v WHERE name_forward = 'нерезолв-ребёнок'")
+          .all();
+        assert.equal(rows.length, 0, 'батч с нерезолвленным parent_ref откатывается');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('rejects a cycle in parent_ref with VALIDATION_ERROR before any write', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -1062,6 +1228,386 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         );
         assert.equal(del.isError, undefined, toolText(del));
         assert.equal(toolJson<OntologyDeleteResult>(del).deleted, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка f14962ca: патч существующего типа с изменившимся `parent` отвечал
+  // `action: "unchanged"`, а родитель не менялся — `parent` учитывался только
+  // на создании, фаза 1.5 обрабатывала лишь `parent_ref`. Явный `parent: null`
+  // («под корневой тип») тоже молча терялся.
+  it('applies an explicit parent on an existing thought type and link type (f14962ca)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [
+                { ref: 'a', name: 'ReparentProbeA' },
+                { ref: 'b', name: 'ReparentProbeB' },
+              ],
+              link_types: [
+                { ref: 'la', name_forward: 'проба-а', name_reverse: 'проба-а-обр' },
+                { ref: 'lb', name_forward: 'проба-б', name_reverse: 'проба-б-обр' },
+              ],
+            },
+          }),
+        );
+        const a = created.thought_types.find((t) => t.ref === 'a')!;
+        const b = created.thought_types.find((t) => t.ref === 'b')!;
+        const la = created.link_types.find((t) => t.ref === 'la')!;
+        const lb = created.link_types.find((t) => t.ref === 'lb')!;
+
+        // Патч типа мысли: явный parent — id существующего типа.
+        const patched = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: a.id, parent: b.id }],
+            },
+          }),
+        );
+        assert.equal(patched.thought_types[0]?.action, 'updated', 'parent применён, не unchanged');
+
+        // Патч типа связи: та же семантика.
+        const patchedLt = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [{ id: la.id, parent: lb.id }],
+            },
+          }),
+        );
+        assert.equal(patchedLt.link_types[0]?.action, 'updated');
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const aRow = ndb
+          .prepare('SELECT parent_id FROM thought_types_v WHERE id = ?')
+          .get(a.id) as { parent_id: string | null };
+        assert.equal(aRow.parent_id, b.id, 'родитель типа мысли сменён');
+        const laRow = ndb
+          .prepare('SELECT parent_id FROM link_types_v WHERE id = ?')
+          .get(la.id) as { parent_id: string | null };
+        assert.equal(laRow.parent_id, lb.id, 'родитель типа связи сменён');
+
+        // Явный `parent: null` — прикрепить под корневой тип.
+        const nulled = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: a.id, parent: null }],
+            },
+          }),
+        );
+        assert.equal(nulled.thought_types[0]?.action, 'updated');
+        const rootId = (
+          ndb
+            .prepare('SELECT id FROM thought_types_v WHERE is_root = 1')
+            .get() as { id: string }
+        ).id;
+        const aAgain = ndb
+          .prepare('SELECT parent_id FROM thought_types_v WHERE id = ?')
+          .get(a.id) as { parent_id: string | null };
+        assert.equal(aAgain.parent_id, rootId, 'parent: null возвращает тип под корень');
+
+        // Идемпотентность: тот же parent больше ничего не меняет.
+        const repeat = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: a.id, parent: null }],
+            },
+          }),
+        );
+        assert.equal(repeat.thought_types[0]?.action, 'unchanged');
+
+        // Пропущенный parent (ключ не задан) родителя не трогает.
+        const untouched = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: a.id, description: 'без смены родителя' }],
+            },
+          }),
+        );
+        assert.equal(untouched.thought_types[0]?.action, 'updated');
+        const aFinal = ndb
+          .prepare('SELECT parent_id FROM thought_types_v WHERE id = ?')
+          .get(a.id) as { parent_id: string | null };
+        assert.equal(aFinal.parent_id, rootId, 'пропущенный parent не меняет родителя');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка 1eb2a430 (замечания проверки f14962ca): MCP `ontology.write`
+  // расходился с REST в трактовке `parent`:
+  //   (а) явный `parent` у КОРНЕВОГО типа молча игнорировался (`unchanged`),
+  //       тогда как REST PATCH корня → `VALIDATION_ERROR`;
+  //   (б) `parent: ""` отвергался схемой `min(1)`, тогда как REST приводит
+  //       `parent_id: ""` к null → под корень.
+  // Контракты сведены к паритету: (а) → VALIDATION_ERROR, (б) → под корень.
+  it('root type rejects explicit parent; parent:"" is treated as null (1eb2a430)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const rootTtId = (
+          ndb.prepare('SELECT id FROM thought_types_v WHERE is_root = 1').get() as { id: string }
+        ).id;
+        const rootLtId = (
+          ndb.prepare('SELECT id FROM link_types_v WHERE is_root = 1').get() as { id: string }
+        ).id;
+
+        // (а) явный parent у корневого ТИПА МЫСЛИ → VALIDATION_ERROR.
+        const ttRootParent = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ id: rootTtId, parent: rootTtId }],
+          },
+        });
+        assert.equal(ttRootParent.isError, true, 'явный parent у корня должен отвергаться');
+        assert.ok(
+          toolText(ttRootParent).includes('корневого типа нет родителя'),
+          `expected root-parent error: ${toolText(ttRootParent)}`,
+        );
+
+        // (а) то же для корневого ТИПА СВЯЗИ.
+        const ltRootParent = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [{ id: rootLtId, parent: null }],
+          },
+        });
+        assert.equal(ltRootParent.isError, true, 'parent у корня типа связи должен отвергаться');
+        assert.ok(toolText(ltRootParent).includes('корневого типа нет родителя'));
+
+        // Родитель корня не изменился и не получил version-инкремента.
+        const rootRow = ndb
+          .prepare('SELECT parent_id FROM thought_types_v WHERE id = ?')
+          .get(rootTtId) as { parent_id: string | null };
+        assert.equal(rootRow.parent_id, null, 'parent_id корня остался null');
+
+        // (б) `parent: ""` на СОЗДАНИИ → под корень (не VALIDATION_ERROR).
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [
+                { ref: 'p', name: 'ReparentEmptyParent' },
+                { ref: 'c', name: 'ReparentEmptyChild', parent_ref: 'p' },
+              ],
+              link_types: [
+                { ref: 'lp', name_forward: 'пустой-родитель', name_reverse: 'пустой-родитель-обр' },
+                { ref: 'lc', name_forward: 'пустой-ребёнок', name_reverse: 'пустой-ребёнок-обр' },
+              ],
+            },
+          }),
+        );
+        const p = created.thought_types.find((t) => t.ref === 'p')!;
+        const c = created.thought_types.find((t) => t.ref === 'c')!;
+        const lp = created.link_types.find((t) => t.ref === 'lp')!;
+        const lc = created.link_types.find((t) => t.ref === 'lc')!;
+        assert.equal(
+          (ndb.prepare('SELECT parent_id FROM thought_types_v WHERE id = ?').get(c.id) as {
+            parent_id: string | null;
+          }).parent_id,
+          p.id,
+          'перед патчем ребёнок подвешен под p',
+        );
+        // Тип связи подвесим под `lp` явным parent-id, чтобы затем снять его
+        // пустой строкой. (`parent_ref` при СОЗДАНИИ link_type тоже работает —
+        // см. регресс 98ab2c3e ниже; здесь выбран явный id, чтобы отдельно
+        // проверить именно снятие родителя пустой строкой.)
+        toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [{ id: lc.id, parent: lp.id }],
+            },
+          }),
+        );
+        assert.equal(
+          (ndb.prepare('SELECT parent_id FROM link_types_v WHERE id = ?').get(lc.id) as {
+            parent_id: string | null;
+          }).parent_id,
+          lp.id,
+          'перед патчем тип связи подвешен под lp',
+        );
+
+        // (б) `parent: ""` на ПАТЧЕ существующего типа — под корень, как REST.
+        const emptied = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: c.id, parent: '' }],
+              link_types: [{ id: lc.id, parent: '' }],
+            },
+          }),
+        );
+        assert.equal(emptied.thought_types[0]?.action, 'updated', 'parent:"" применён, не отвергнут');
+        assert.equal(emptied.link_types[0]?.action, 'updated', 'parent:"" применён у типа связи');
+        assert.equal(
+          (ndb.prepare('SELECT parent_id FROM thought_types_v WHERE id = ?').get(c.id) as {
+            parent_id: string | null;
+          }).parent_id,
+          rootTtId,
+          'parent:"" прикрепил тип мысли под корень',
+        );
+        assert.equal(
+          (ndb.prepare('SELECT parent_id FROM link_types_v WHERE id = ?').get(lc.id) as {
+            parent_id: string | null;
+          }).parent_id,
+          rootLtId,
+          'parent:"" прикрепил тип связи под корень',
+        );
+
+        // (б) пустая строка и `null` равнозначны: повтор ничего не меняет.
+        const repeat = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: c.id, parent: null }],
+            },
+          }),
+        );
+        assert.equal(repeat.thought_types[0]?.action, 'unchanged');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка 16766f82: патч существующего свойства-связи с явным
+  // `parent_link_type_id` отвечал `action: "unchanged"` и родителя связанного
+  // link_type не менял — у `NetworkPropertyUpdateInput` не было поля, а
+  // `updateNetworkProperty` не умел менять родителя уже созданного link_type
+  // (тот же класс, что `parent` у типа до f14962ca).
+  it('applies an explicit parent_link_type_id on an existing link property (16766f82)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'p', name_forward: 'проба-родитель', name_reverse: 'проба-родитель-обр' },
+              ],
+              properties: [
+                {
+                  ref: 'prop',
+                  name: 'ZzLinkProp',
+                  value_type: 'link',
+                  name_forward: 'проба-свойство',
+                  name_reverse: 'проба-свойство-обр',
+                },
+              ],
+            },
+          }),
+        );
+        const ltParent = created.link_types.find((t) => t.ref === 'p')!;
+        const prop = created.properties.find((p) => p.ref === 'prop')!;
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const linkTypeIdOf = (propertyId: string): string => {
+          const row = ndb
+            .prepare('SELECT config FROM properties WHERE id = ?')
+            .get(propertyId) as { config: string | null };
+          return (JSON.parse(row.config ?? '{}') as { link_type_id: string }).link_type_id;
+        };
+        const parentOf = (linkTypeId: string): string | null =>
+          (
+            ndb
+              .prepare('SELECT parent_id FROM link_types_v WHERE id = ?')
+              .get(linkTypeId) as { parent_id: string | null }
+          ).parent_id;
+        const propLinkTypeId = linkTypeIdOf(prop.id);
+
+        // Явный parent_link_type_id — id существующего типа связи.
+        const patched = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [{ id: prop.id, parent_link_type_id: ltParent.id }],
+            },
+          }),
+        );
+        assert.equal(patched.properties[0]?.action, 'updated', 'родитель применён, не unchanged');
+        assert.equal(parentOf(propLinkTypeId), ltParent.id, 'родитель link_type сменён');
+
+        // Повтор того же значения — unchanged (идемпотентность).
+        const repeat = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [{ id: prop.id, parent_link_type_id: ltParent.id }],
+            },
+          }),
+        );
+        assert.equal(repeat.properties[0]?.action, 'unchanged', 'повтор не поднимает version');
+
+        // Явный `parent_link_type_id: null` — под корневой тип связи.
+        const nulled = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [{ id: prop.id, parent_link_type_id: null }],
+            },
+          }),
+        );
+        assert.equal(nulled.properties[0]?.action, 'updated');
+        const rootLinkTypeId = (
+          ndb.prepare('SELECT id FROM link_types_v WHERE is_root = 1').get() as { id: string }
+        ).id;
+        assert.equal(parentOf(propLinkTypeId), rootLinkTypeId, 'null — под корневой тип связи');
+
+        // Пропущенный ключ родителя не трогает: патч по другому полю.
+        const otherPatched = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [{ id: prop.id, description: 'родитель не тронут' }],
+            },
+          }),
+        );
+        assert.equal(otherPatched.properties[0]?.action, 'updated');
+        assert.equal(
+          parentOf(propLinkTypeId),
+          rootLinkTypeId,
+          'пропущенный ключ родителя не меняет родителя',
+        );
       } finally {
         await handle.close();
       }

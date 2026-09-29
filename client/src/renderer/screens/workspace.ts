@@ -54,6 +54,7 @@ import { mountTabStrip } from './tabs/tabs.js';
 import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 import { splitterElement } from '../lib/ui/splitter.js';
 import { fieldInput } from '../lib/ui/field.js';
+import { logUiEvent } from '../lib/ui-log.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -100,6 +101,42 @@ export interface WorkspaceHandles {
 }
 
 let current: WorkspaceHandles | null = null;
+
+/**
+ * Teardown-хендлы модулей, смонтированных `buildWorkspace`. Каждый `mountX`
+ * возвращает функцию снятия своих глобальных подписок/наблюдателей; их
+ * обязательно вызывать перед пересборкой рабочего пространства, иначе живые
+ * подписки накапливаются между монтированиями и каждое событие стора
+ * обрабатывается N раз (ошибка 37b713de).
+ */
+const teardowns: Array<() => void> = [];
+
+/** Регистрирует teardown модуля, смонтированного `buildWorkspace`. */
+export function onWorkspaceTeardown(fn: () => void): void {
+  teardowns.push(fn);
+}
+
+/**
+ * Снимает смонтированное рабочее пространство: вызывает все зарегистрированные
+ * teardown-хендлы и сбрасывает модульные ссылки. Зовётся `showScreen` ПЕРЕД
+ * `clear(root)` — модули обязаны отпустить свои подписки/наблюдатели до того,
+ * как их DOM будет уничтожен. Идемпотентна: повторный вызов ничего не делает.
+ */
+export function teardownWorkspace(): void {
+  for (const fn of teardowns.splice(0)) {
+    try {
+      fn();
+    } catch (err) {
+      // Teardown is best-effort: one failing handle must not block the rest.
+      // The failure itself is diagnostic — surface it in the client journal
+      // (fire-and-forget, `ui.workspace.teardown_failed`; 08-ui-spec.md §9.7).
+      logUiEvent('ui.workspace.teardown_failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  current = null;
+}
 
 /** Returns the mounted workspace handles (null before the first build). */
 export function getWorkspace(): WorkspaceHandles | null {
@@ -243,7 +280,7 @@ export function buildWorkspace(): HTMLElement {
   const topRight = div('top-right');
   topRight.append(userMenuButton);
   topRow.append(tabStripHost, topRight);
-  mountTabStrip(tabStripHost);
+  onWorkspaceTeardown(mountTabStrip(tabStripHost));
 
   // --- search drop panel -----------------------------------------------------
   const searchHost = div('search-panel hidden');
@@ -293,7 +330,7 @@ export function buildWorkspace(): HTMLElement {
   // above it, so the user can cancel by clicking any other tab.
   const pickerHost = div('workspace-picker hidden');
   body.append(pickerHost);
-  mountPicker(pickerHost);
+  onWorkspaceTeardown(mountPicker(pickerHost));
 
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
@@ -375,18 +412,18 @@ export function buildWorkspace(): HTMLElement {
   // moment a layer write happens, not on the next layer/tab switch.
   initLayerOverridesTracking();
   wireUserMenu(handles);
-  mountCanvas(canvasHost);
-  mountHistoryBar(historyHost);
-  mountPinnedBar(pinnedHost);
+  onWorkspaceTeardown(mountCanvas(canvasHost));
+  onWorkspaceTeardown(mountHistoryBar(historyHost));
+  onWorkspaceTeardown(mountPinnedBar(pinnedHost));
   mountEditor(editorHost);
   mountEditorResizer(editorResizer, body);
   mountSelectionResizer(selectionResizer, body);
   mountEventAreaResizer(eventAreaResizer, statusbar);
-  mountSearch({ input: searchInput, host: searchHost });
-  mountSelection(selectionHost);
-  mountStructures(structuresHost);
-  mountChronicle(chronicleHost);
-  mountActivity(activityHost);
+  onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));
+  onWorkspaceTeardown(mountSelection(selectionHost));
+  onWorkspaceTeardown(mountStructures(structuresHost));
+  onWorkspaceTeardown(mountChronicle(chronicleHost));
+  onWorkspaceTeardown(mountActivity(activityHost));
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   let lastMapActive = true;
@@ -444,9 +481,11 @@ export function buildWorkspace(): HTMLElement {
     lastMapActive = mapActive;
   }
 
-  store.subscribe(() => {
-    if (root.isConnected) refresh();
-  });
+  onWorkspaceTeardown(
+    store.subscribe(() => {
+      if (root.isConnected) refresh();
+    }),
+  );
   refresh();
   return root;
 }

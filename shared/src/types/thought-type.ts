@@ -215,6 +215,14 @@ export interface NetworkPropertyUpdateInput {
    * Новое обратное имя типа связи (0.8.1). См. {@link name_forward}.
    */
   name_reverse?: string;
+  /**
+   * Новый родительский тип связи свойства-связи (0.8.1). Применимо только к
+   * неструктурному `value_type = 'link'`: правит `parent_id` связанного
+   * `link_type` (с защитой `reparent_blocked_by_layer`). `null` — прикрепить
+   * под корневой тип связи; пропущенный ключ родителя не трогает
+   * (ошибка 16766f82, семантика как у `parent` типа мысли — f14962ca).
+   */
+  parent_link_type_id?: string | null;
   /** Опциональные атрибуты оформления (0.8.1). */
   link_color?: string | null;
   link_style?: LinkStyle | null;

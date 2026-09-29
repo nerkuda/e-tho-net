@@ -732,7 +732,12 @@ body.cloud-dragging * {
   cursor: grabbing !important;
 }
 
-/* Icon spine: a full-height band on the left, the glyph centered in it (L12). */
+/* Icon spine: a full-height band on the left, the glyph centered in it (L12).
+ * Its background is inherited from the cloud, so the band is always painted with
+ * the same colour as the rest of the cloud — default `--surface`, a type
+ * default, or a manually picked one (task 1dc56942). The band has no background
+ * of its own; the divider line stays 1px for the band geometry but is
+ * transparent, so no visible «step» separates the two zones. */
 .cloud-icon {
   flex: 0 0 auto;
   width: calc(var(--cloud-font) * 2.35);
@@ -740,8 +745,8 @@ body.cloud-dragging * {
   align-items: center;
   justify-content: center;
   font-size: calc(var(--cloud-font) * 1.45);
-  background: var(--surface-2);
-  border-right: 1px solid var(--border);
+  background: inherit;
+  border-right: 1px solid transparent;
   border-radius: calc(var(--radius-cloud) - 1px) 0 0 calc(var(--radius-cloud) - 1px);
   overflow: hidden;
 }

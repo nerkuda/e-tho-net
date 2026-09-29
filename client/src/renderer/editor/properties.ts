@@ -46,12 +46,14 @@ import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
 import { store } from '../state.js';
-import { registerTabContent, type EditorContext } from './editor.js';
+import { registerTabContent, registerTabRetarget, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import { uiButton } from '../lib/ui/button.js';
+import { reconcileKeyed, type KeyedRenderSpec } from '../lib/ui/keyed-list.js';
+import { deepEqual } from '../lib/ui/state.js';
 import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
@@ -61,6 +63,24 @@ import {
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
+
+/**
+ * Владелец, под которого построена показанная вкладка «Свойства» (задача
+ * 90b2256e, круг 1). Мутируемый: при смене сущности того же типа редактор
+ * переиспользует панель и перечитывает её содержимое под нового владельца —
+ * главная таблица обновляет СТРОКИ через `reconcileKeyed`, не пересобирая
+ * таблицу.
+ */
+interface PropertiesTarget {
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+  typeId: string | null;
+}
+
+/** Перепривязка показанной вкладки «Свойства» к другому владельцу (или null). */
+let retargetCurrent: ((ctx: EditorContext) => void) | null = null;
+/** Перечитывание тела группы «Свойства вне типа» (или null, если не построено). */
+let outsideReload: (() => void) | null = null;
 let wired = false;
 
 /**
@@ -90,6 +110,10 @@ function repaintAfterLinkValueWrite(ownerType: 'thought' | 'link', ownerId: stri
  */
 export function registerPropertiesGroup(): void {
   registerTabContent('properties', buildPropertiesTab);
+  // Entity switch of the same type reuses the pane: retarget it in place instead
+  // of dropping the cache, so `reconcileKeyed` reconciles the rows (task
+  // 90b2256e, круг 1).
+  registerTabRetarget('properties', (_pane, ctx) => retargetPropertiesTab(ctx));
   if (!wired) {
     wired = true;
     onRealtimeEvent((evt) => {
@@ -110,13 +134,20 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
     box.append(el('p', 'muted', 'Свойства недоступны — нет подходящего типа.'));
     return box;
   }
+  // The mutable target this pane renders: a same-type entity switch retargets it
+  // WITHOUT rebuilding the pane, and the built tables reload under the new owner
+  // (task 90b2256e, круг 1).
+  const target: PropertiesTarget = { ownerType: ctx.ownerType, ownerId: ctx.ownerId, typeId };
+  // A fresh pane resets the stale reload callbacks of the previous one.
+  currentReload = null;
+  outsideReload = null;
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
   const typeGroup = groupSection({
     id: 'properties.type',
     title: 'Свойства типа',
     defaultCollapsed: false,
-    buildBody: () => buildPropertiesBody(ctx),
+    buildBody: () => buildPropertiesBodyFor(target),
   });
   // Group 2 — «Свойства вне типа» (collapsed by default). Hidden entirely
   // when there are no such values (rendered inside the main body once the
@@ -127,13 +158,17 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
     defaultCollapsed: true,
     lazyCount: true,
     loadCount: async () => {
+      // Owner token: a slow badge count of the previous owner must not land on
+      // the new one (task 90b2256e, круг 3).
+      const requestOwnerId = target.ownerId;
       try {
         const networkId = requireNetworkId();
         const values = await etn.properties.get(
           networkId,
-          ctx.ownerType,
-          ctx.ownerId,
+          target.ownerType,
+          requestOwnerId,
         );
+        if (requestOwnerId !== target.ownerId) return undefined;
         // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
         // вне типа (dfaacb05), сервер отдаёт его формой LinkPropertyValues.
         const outside = values.filter((v) => v.outside_type === true);
@@ -142,8 +177,20 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
         return undefined;
       }
     },
-    buildBody: () => buildOutsidePropertiesBody(ctx),
+    buildBody: () => buildOutsidePropertiesBody(target),
   });
+  // Retarget of the SHOWN pane to another owner of the same type: the pane is
+  // reused (editor's `registerTabRetarget`), its bodies reload under the new
+  // owner and the outside-type badge is re-resolved (its owner lives on the
+  // group, not in the body, so it needs an explicit refresh).
+  retargetCurrent = (next) => {
+    target.ownerType = next.ownerType;
+    target.ownerId = next.ownerId;
+    target.typeId = resolveEditorTypeId(next);
+    currentReload?.();
+    outsideReload?.();
+    outsideGroup.dispatchEvent(new CustomEvent('etn:refresh-count'));
+  };
   // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
   // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
   // заголовка, единственная развёрнутая растягивается на всю вкладку,
@@ -196,27 +243,44 @@ function rootTypeIdFor(ownerType: 'thought' | 'link'): string | null {
 }
 
 /**
+ * Перепривязывает показанную вкладку «Свойства» к другой сущности того же типа
+ * (задача 90b2256e, круг 1). Редактор зовёт её вместо сброса кэша вкладок:
+ * главная таблица перечитывает значения нового владельца и сверяет строки по
+ * ключам привязок (`reconcileKeyed`) без пересборки таблицы, тело группы
+ * «Свойства вне типа» (если построено) — перечитывает свой список.
+ */
+export function retargetPropertiesTab(ctx: EditorContext): void {
+  retargetCurrent?.(ctx);
+}
+
+/**
  * Builds the «Свойства типа» body for the current owner — thoughts and links
  * share the same render path. The main table shows in-type values; outside-type
  * values are now in a separate group below.
  */
 function buildPropertiesBody(ctx: EditorContext): HTMLElement {
-  const networkId = requireNetworkId();
-  const ownerType = ctx.ownerType;
-  const ownerId = ctx.ownerId;
-  const typeOwner = ownerTypeOf(ctx);
-  const typeId = resolveEditorTypeId(ctx);
+  return buildPropertiesBodyFor({
+    ownerType: ctx.ownerType,
+    ownerId: ctx.ownerId,
+    typeId: resolveEditorTypeId(ctx),
+  });
+}
 
+/**
+ * Builds the «Свойства типа» body against a MUTABLE target: on an entity switch
+ * of the same type the pane is reused and the table reloads under the new owner
+ * (task 90b2256e). The owner-id is read at reload time, never captured per row,
+ * so a retarget never writes to the previous entity.
+ */
+function buildPropertiesBodyFor(target: PropertiesTarget): HTMLElement {
+  const networkId = requireNetworkId();
   const box = div('properties-body');
-  if (typeId === null) {
+  if (target.typeId === null) {
     box.append(el('p', 'muted', 'Свойства недоступны.'));
     return box;
   }
-  // Delegate the actual rendering to the standalone builder; this wrapper
-  // exists for the legacy `propertiesInternals.buildPropertiesBody` test seam
-  // (still called by `renderer-properties.test.ts`).
-  const typedId: string = typeId;
-  const typeBody = buildTypePropertiesBody(networkId, ownerType, ownerId, typeOwner, typedId);
+  const typeOwner = target.ownerType === 'thought' ? 'thought_type' : 'link_type';
+  const typeBody = buildTypePropertiesBody(networkId, target, typeOwner, target.typeId);
   box.append(typeBody);
   return box;
 }
@@ -227,39 +291,72 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
  * вне типа сохраняются»). The group is hidden entirely when no such values
  * exist (`loadCount` returns `(0)` and the section is rendered empty).
  */
-function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
+function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   const networkId = requireNetworkId();
-  const ownerId = ctx.ownerId;
-  const ownerType = ctx.ownerType;
 
   const box = div('properties-outside-body');
   const wrap = div('admin-table-wrap prop-wrap');
   wrap.append(el('span', 'muted', 'Загрузка…'));
   box.append(wrap);
 
+  // Инкрементальная таблица (стандарт «Списки рендерятся инкрементально»):
+  // узел таблицы держим, а строки сверяем по ключу через `reconcileKeyed`
+  // вместо пересборки коллекции на каждом перечитывании (realtime
+  // `property-value.*`, перепривязка). Так живы фокус, прокрутка и открытые
+  // редакторы неизменившихся строк.
+  const { table, tbody } = makeOutsideTypeTable();
+  /** Прикреплена ли таблица к обёртке; пока нет — в ней плейсхолдер/ошибка. */
+  let tableAttached = false;
   let everMounted = false;
-  const reload = async (): Promise<void> => {
-    if (everMounted && !box.isConnected) return;
-    wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  /** Owner currently rendered in this body (see the in-type table's guard). */
+  let shownOwnerId: string | null = null;
+
+  const rowSpec = outsideRowSpec(networkId, target, () => void reload());
+
+  async function reload(): Promise<void> {
+    // Owner token of this reload (same guard as the in-type table): a slow
+    // response of the previous owner must not be rendered after a retarget
+    // (task 90b2256e, круг 2); an owner CHANGE proceeds even while detached
+    // (круг 3).
+    const requestOwnerId = target.ownerId;
+    if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
+    // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
+    // обновление не мигает «Загрузкой…» на каждой правке значения.
+    if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: Array<PropertyValue | LinkPropertyValues>;
     try {
-      values = await etn.properties.get(networkId, ownerType, ownerId);
+      values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
     } catch (err) {
+      if (requestOwnerId !== target.ownerId) return;
+      // The table is NOT bound to this owner: drop the shown-owner mark so a
+      // retarget back to the previous owner is not mistaken for "already shown"
+      // and gets re-read instead of leaving the error text on screen
+      // (задача 90b2256e, круг 3).
+      shownOwnerId = null;
+      tableAttached = false;
       wrap.replaceChildren(operationError(err));
       return;
     }
+    if (requestOwnerId !== target.ownerId) return;
     if (box.isConnected) everMounted = true;
+    shownOwnerId = requestOwnerId;
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
     // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
     const outside: Array<PropertyValue | LinkPropertyValues> = values.filter(
       (v) => v.outside_type === true,
     );
     if (outside.length === 0) {
+      tableAttached = false;
       wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
     }
-    wrap.replaceChildren(buildOutsideTypeTable(outside, networkId, ownerType, ownerId, () => void reload()));
-  };
+    if (!tableAttached) {
+      wrap.replaceChildren(table);
+      tableAttached = true;
+    }
+    reconcileKeyed(tbody, outsideRows(outside, requestOwnerId), rowSpec);
+  }
+  outsideReload = () => void reload();
   void reload();
   // Keep the outside-type body in sync with the main properties reload (a
   // delete in either group should refresh the other). The realtime listener
@@ -315,44 +412,112 @@ function buildOutsideTypeTable(
   ownerId: string,
   onRemove: () => void,
 ): HTMLElement {
-    const root = div('prop-outside');
-    // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
-    // дублировал её и читался как «заголовок колонок таблицы». Таблица
-    // без `<thead>` — только строки значений; первая колонка содержит имя
-    // свойства, вторая — редактор/чип/крестик. `prop-grid` — фиксированная
-    // раскладка двух колонок (ошибка 2012f46b): чип не раздувает таблицу.
-    const table = el('table', 'table-list prop-outside-table prop-grid');
-    const tbody = el('tbody');
-    for (const value of values) {
-      const row = el('tr');
-      if (isLinkPropertyValues(value)) {
-        const nameCell = el('td', undefined, `${value.property_name} (связь)`);
-        setTooltip(
-          nameCell,
-          value.property_id !== ''
-            ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
-            : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
-        );
-        row.append(nameCell);
-        row.append(
-          buildOutsideLinkCell(value, networkId, ownerType, ownerId, onRemove),
-        );
-        tbody.append(row);
-        continue;
-      }
-      const nameCell = el('td', undefined, `${value.property_name} (${valueTypeName(value.value_type)})`);
+  const root = div('prop-outside');
+  // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
+  // дублировал её и читался как «заголовок колонок таблицы». Таблица
+  // без `<thead>` — только строки значений; первая колонка содержит имя
+  // свойства, вторая — редактор/чип/крестик.
+  const { table, tbody } = makeOutsideTypeTable();
+  root.append(table);
+  const target: PropertiesTarget = { ownerType, ownerId, typeId: null };
+  reconcileKeyed(tbody, outsideRows(values, ownerId), outsideRowSpec(networkId, target, onRemove));
+  return root;
+}
+
+/**
+ * Оболочка таблицы «Свойства вне типа»: `prop-grid` — фиксированная раскладка
+ * двух колонок (ошибка 2012f46b): чип не раздувает таблицу своим nowrap-именем.
+ * Единая точка для постоянной таблицы группы и одноразового тест-сима.
+ */
+function makeOutsideTypeTable(): { table: HTMLElement; tbody: HTMLElement } {
+  const table = el('table', 'table-list prop-outside-table prop-grid');
+  const tbody = el('tbody');
+  table.append(tbody);
+  return { table, tbody };
+}
+
+/** Строка таблицы «Свойства вне типа»: владелец + само внетиповое значение. */
+interface OutsideRow {
+  /** Владелец, под которого прочитано значение (меняется при перепривязке). */
+  ownerId: string;
+  value: PropertyValue | LinkPropertyValues;
+}
+
+/** Оборачивает внетиповые значения в строки keyed-сверки. */
+function outsideRows(
+  values: Array<PropertyValue | LinkPropertyValues>,
+  ownerId: string,
+): OutsideRow[] {
+  return values.map((value) => ({ ownerId, value }));
+}
+
+/**
+ * Ключ строки «Свойства вне типа»: внетиповое значение привязано к свойству
+ * реестра — его `property_id` и служит ключом (аналог id привязки основной
+ * таблицы). У рёбер типа связи без свойства в реестре `property_id` пуст —
+ * ключом становится уникальная серверная пара «тип связи + направление»
+ * (`link_type_id`/`direction`): display-имя стороны для этого не годится —
+ * уникальность имён типа связи только по паре forward/reverse, и два типа с
+ * одинаковым `name_forward` дали бы один и тот же ключ (регрессия круга 1).
+ */
+function outsideRowKey(value: PropertyValue | LinkPropertyValues): string {
+  if (isLinkPropertyValues(value)) {
+    return value.property_id !== ''
+      ? value.property_id
+      : `link:${value.link_type_id ?? ''}|${value.direction}`;
+  }
+  return value.property_id;
+}
+
+/**
+ * Спецификация keyed-сверки строк «Свойства вне типа» — по образцу основной
+ * таблицы: неизменившиеся строки не трогаются (живы фокус, прокрутка,
+ * открытые редакторы), изменившуюся пересобирает `update`. `equals` включает
+ * владельца: ячейки держат его замыканием, поэтому при перепривязке значение
+ * перерисовывается даже внешне равным (задача 90b2256e, круг 1).
+ */
+function outsideRowSpec(
+  networkId: string,
+  target: PropertiesTarget,
+  onRemove: () => void,
+): KeyedRenderSpec<OutsideRow> {
+  const fill = (row: HTMLElement, value: PropertyValue | LinkPropertyValues): void => {
+    row.replaceChildren();
+    if (isLinkPropertyValues(value)) {
+      const nameCell = el('td', undefined, `${value.property_name} (связь)`);
       setTooltip(
         nameCell,
-        'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+        value.property_id !== ''
+          ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
+          : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
       );
       row.append(nameCell);
-      row.append(buildOutsideValueCell(value, networkId, ownerType, ownerId, onRemove));
-      tbody.append(row);
+      row.append(buildOutsideLinkCell(value, networkId, target.ownerType, target.ownerId, onRemove));
+      return;
     }
-    table.append(tbody);
-    root.append(table);
-    return root;
-  }
+    const nameCell = el(
+      'td',
+      undefined,
+      `${value.property_name} (${valueTypeName(value.value_type)})`,
+    );
+    setTooltip(
+      nameCell,
+      'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+    );
+    row.append(nameCell);
+    row.append(buildOutsideValueCell(value, networkId, target.ownerType, target.ownerId, onRemove));
+  };
+  return {
+    key: (row) => outsideRowKey(row.value),
+    build: (row) => {
+      const tr = el('tr');
+      fill(tr, row.value);
+      return tr;
+    },
+    update: (tr, row) => fill(tr, row.value),
+    equals: (a, b) => a.ownerId === b.ownerId && deepEqual(a.value, b.value),
+  };
+}
 
 /**
  * Ячейка внетипового свойства-связи. Свойство есть в реестре (не подключено
@@ -631,13 +796,110 @@ function buildUrlOpenBtn(value: string): HTMLButtonElement {
   }
 
 /** Builds the «Свойства типа» body — основная таблица редактирования. */
-function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link', ownerId: string, typeOwner: 'thought_type' | 'link_type', typedId: string): HTMLElement {
+function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, typeOwner: 'thought_type' | 'link_type', typedId: string): HTMLElement {
   const box = div('properties-type-body');
   const tableWrap = div('admin-table-wrap prop-wrap');
   tableWrap.append(span('Загрузка…', 'muted'));
   box.append(tableWrap);
 
   let everMounted = false;
+  /**
+   * Прикреплена ли таблица к обёртке. Пока нет — в обёртке стоит плейсхолдер
+   * («Загрузка…» / ошибка / пустой набор); прикрепив таблицу один раз, держим
+   * её и обновляем СТРОКИ инкрементально (`reconcileKeyed`), не пересобирая
+   * коллекцию (задача 90b2256e, стандарт «Списки рендерятся инкрементально»).
+   */
+  let tableAttached = false;
+  /**
+   * Владелец, чьи значения сейчас нарисованы в таблице. Гард ниже пропускает
+   * перечитывание ОТСОЕДИНЁННОЙ панели, только если владелец не сменился: смена
+   * сущности того же типа обязана обновить скрытую панель (задача 90b2256e,
+   * круг 3), иначе при возврате на вкладку видны значения прежней сущности, а
+   * ячейки держат замыкание со старым ownerId.
+   */
+  let shownOwnerId: string | null = null;
+  // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
+  // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
+  const table = el('table', 'table-list prop-table prop-grid');
+  const tbody = el('tbody');
+  table.append(tbody);
+
+  /** Строка таблицы: определение свойства + его текущее значение. */
+  interface PropertyRow {
+    /** Владелец, под которого читалось значение (меняется при перепривязке). */
+    ownerId: string;
+    definition: EffectiveTypeProperty;
+    value: PropertyValue | LinkPropertyValues | undefined;
+  }
+
+  /** Собирает строку строки таблицы: имя (+ ⓘ) и ячейку значения. */
+  const fillRow = (
+    row: HTMLElement,
+    definition: EffectiveTypeProperty,
+    value: PropertyValue | LinkPropertyValues | undefined,
+  ): void => {
+    row.replaceChildren();
+    // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
+    // у множественных свойств; тип значения и место определения здесь не
+    // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
+    // ⓘ несёт tooltip с описанием свойства. Текст заголовка — отдельный узел:
+    // счётчик обновляется локально после своей записи значения-связи (ошибка
+    // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
+    const count = valueCountOf(definition, value);
+    const nameCell = el('td', 'prop-name-cell');
+    const nameText = span(propertyNameLabel(definition, count));
+    nameCell.append(nameText);
+    const hint = propertyHint(definition);
+    if (hint !== null) {
+      const info = span('ⓘ', 'muted prop-hint');
+      setTooltip(info, hint);
+      nameCell.append(info);
+    }
+    row.append(nameCell);
+    row.append(
+      buildEditorCell({
+        networkId,
+        ownerType: target.ownerType,
+        ownerId: target.ownerId,
+        definition,
+        current: value,
+        // Своя запись значения-связи не поднимает версию мысли (гейт полной
+        // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
+        // клиента до рендерера не доходит (G8) — счётчик строки, нарисованный
+        // при `reload()`, перерисовываем здесь же (ошибка 9ee8e608).
+        onLinkCountChange: (next) => {
+          nameText.textContent = propertyNameLabel(definition, next);
+        },
+      }),
+    );
+  };
+
+  /**
+   * Спецификация keyed-сверки строк: ключ — id привязки (уникален в
+   * эффективном наборе; `property_id` может повторяться при разных привязках).
+   * Неизменившиеся строки (ни определение, ни значение) не трогаются — живы их
+   * открытые редакторы значений, фокус и прокрутка. Изменившуюся строку
+   * пересобираем целиком: значение вводит общий `buildValueEditor`, точечного
+   * апдейта у него нет.
+   */
+  const rowSpec: KeyedRenderSpec<PropertyRow> = {
+    key: (row) => (row.definition.id !== '' ? row.definition.id : row.definition.property_id),
+    build: (row) => {
+      const tr = el('tr');
+      fillRow(tr, row.definition, row.value);
+      return tr;
+    },
+    update: (tr, row) => fillRow(tr, row.definition, row.value),
+    // A row is reused only within the SAME owner: on a retarget to another
+    // entity the value cell must be rebuilt even when the displayed value looks
+    // equal (an empty value still writes through the OLD owner closure
+    // otherwise — задача 90b2256e, круг 1).
+    equals: (a, b) =>
+      a.ownerId === b.ownerId &&
+      deepEqual(a.definition, b.definition) &&
+      deepEqual(a.value, b.value),
+  };
+
   currentReload = () => void reload();
   // Слушаем локальное уведомление о правке значений (общий канал
   // `PROPERTY_VALUES_REFRESHED_EVENT`, задача 7849008a / ошибка ec5ba58c):
@@ -655,78 +917,68 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
   void reload();
 
   async function reload(): Promise<void> {
-    if (everMounted && !box.isConnected) return;
+    // Token of THIS reload: the owner it reads for. The pane survives an entity
+    // switch (registerTabRetarget → retargetCurrent), so a slow response of the
+    // PREVIOUS owner must not be applied to the NEW one — otherwise its values
+    // would be written with the new ownerId and could save onto the wrong
+    // entity (task 90b2256e, круг 2).
+    const requestOwnerId = target.ownerId;
+    // A detached pane skips only a REDUNDANT reload of the owner it already
+    // shows; an owner change must proceed even while hidden (круг 3).
+    if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
     const startedAt = Date.now();
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
+    // обновление не мигает «Загрузкой…» на каждой правке значения.
+    if (!tableAttached) tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let definitions: EffectiveTypeProperty[];
     try {
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
     } catch (err) {
+      if (requestOwnerId !== target.ownerId) return;
+      // Same as the outside-type body: forgotten owner mark so returning to the
+      // previous entity re-reads instead of keeping the error (90b2256e, круг 3).
+      shownOwnerId = null;
       tableWrap.replaceChildren(operationError(err));
+      tableAttached = false;
       return;
     }
+    // The owner changed while the definitions were in flight — the retarget's
+    // own reload (fired by `retargetCurrent`) is authoritative; drop this one.
+    if (requestOwnerId !== target.ownerId) return;
     if (box.isConnected) everMounted = true;
+    // From here the table is considered bound to this owner (even the empty-set
+    // branch below) — the detached-pane guard keys off it.
+    shownOwnerId = requestOwnerId;
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
     // владельца для гейта берут из того, что реально отрисовано сейчас.
     rememberShownDefinitions(definitions);
     if (definitions.length === 0) {
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+      tableAttached = false;
       return;
     }
     let values: Array<PropertyValue | LinkPropertyValues> = [];
     try {
-      values = await etn.properties.get(networkId, ownerType, ownerId);
+      values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
     } catch {
       // The main table still renders even if the values fetch fails.
     }
+    // Same guard after the values fetch — the slowest leg of the pair.
+    if (requestOwnerId !== target.ownerId) return;
     const valueByProp = new Map(values.map((v) => [v.property_id, v]));
-    // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
-    // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
-    const table = el('table', 'table-list prop-table prop-grid');
-    const tbody = el('tbody');
-    for (const definition of definitions) {
-      const value = valueByProp.get(definition.property_id);
-      const row = el('tr');
-      // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
-      // у множественных свойств; тип значения и место определения здесь не
-      // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
-      // ⓘ несёт tooltip с описанием свойства. Текст заголовка — отдельный узел:
-      // счётчик обновляется локально после своей записи значения-связи (ошибка
-      // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
-      const count = valueCountOf(definition, value);
-      const nameCell = el('td', 'prop-name-cell');
-      const nameText = span(propertyNameLabel(definition, count));
-      nameCell.append(nameText);
-      const hint = propertyHint(definition);
-      if (hint !== null) {
-        const info = span('ⓘ', 'muted prop-hint');
-        setTooltip(info, hint);
-        nameCell.append(info);
-      }
-      row.append(nameCell);
-      row.append(
-        buildEditorCell({
-          networkId,
-          ownerType,
-          ownerId,
-          definition,
-          current: value,
-          // Своя запись значения-связи не поднимает версию мысли (гейт полной
-          // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
-          // клиента до рендерера не доходит (G8) — счётчик строки, нарисованный
-          // при `reload()`, перерисовываем здесь же (ошибка 9ee8e608).
-          onLinkCountChange: (next) => {
-            nameText.textContent = propertyNameLabel(definition, next);
-          },
-        }),
-      );
-      tbody.append(row);
+    if (!tableAttached) {
+      tableWrap.replaceChildren(table);
+      tableAttached = true;
     }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
+    const rows: PropertyRow[] = definitions.map((definition) => ({
+      ownerId: requestOwnerId,
+      definition,
+      value: valueByProp.get(definition.property_id),
+    }));
+    reconcileKeyed(tbody, rows, rowSpec);
     logUiEvent('ui.editor.props.loaded', {
-      id: ownerId,
+      id: requestOwnerId,
       ms: Date.now() - startedAt,
       definitions: definitions.length,
     });
@@ -900,7 +1152,11 @@ function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): 
 }
 
 /** Test seam for unit tests. */
-export const propertiesInternals = { buildPropertiesBody, buildOutsideTypeTable };
+export const propertiesInternals = {
+  buildPropertiesBody,
+  buildOutsideTypeTable,
+  buildOutsidePropertiesBody,
+};
 
 /**
  * Type guard: скалярное значение (`PropertyValue`) против формы

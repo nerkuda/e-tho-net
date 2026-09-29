@@ -47,6 +47,13 @@ export interface TreeRow {
    * its partner (came from a parents reveal). `null` for root rows.
    */
   via: { otherId: string; role: 'child' | 'parent' } | null;
+  /**
+   * Подпись видимого содержимого строки (метаданные мысли, эллипсы, раскрытость),
+   * которую прикрепляет вызывающий (`currentTree` в `structures.ts`). Плоский
+   * layout её не знает; поле нужно keyed-сверке, чтобы отличить обновление
+   * данных строки от неизменной строки и звать `update` только по факту.
+   */
+  rev?: string;
 }
 
 /** Serves the neighbour ids of an expanded node (from the hierarchy cache). */

@@ -224,8 +224,9 @@ function persistState(): void {
     .catch(() => undefined);
 }
 
-/** Mounts the view into the host element; called once from workspace.ts. */
-export function mountActivity(hostEl: HTMLElement): void {
+/** Mounts the view into the host element; called once from workspace.ts.
+ *  Returns a teardown handle that releases the store subscription (ошибка 37b713de). */
+export function mountActivity(hostEl: HTMLElement): () => void {
   host = hostEl;
   host.replaceChildren();
 
@@ -302,7 +303,7 @@ export function mountActivity(hostEl: HTMLElement): void {
   results.append(tableWrapEl, pager);
 
   // Restore the view when the network opens with `active_view = 'activity'`.
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
@@ -325,7 +326,13 @@ export function mountActivity(hostEl: HTMLElement): void {
   });
   // The names may resolve after the first paint — subscribe and re-render
   // author cells when the user cache changes.
-  subscribeUsers(() => repaintNames());
+  const unsubscribeUsers = subscribeUsers(() => repaintNames());
+
+  return () => {
+    unsubscribe();
+    unsubscribeUsers();
+    host = null;
+  };
 }
 
 // ---------------------------------------------------------------------------

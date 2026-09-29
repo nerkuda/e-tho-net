@@ -38,6 +38,7 @@ import type {
   PropertyCrossResolveResult,
   DuplicateHit,
   DuplicateMatchKind,
+  EtnErrorCode,
   ExportJob,
   ExportRequest,
   FocusDir,
@@ -147,6 +148,55 @@ export interface IpcInvokePayload {
  */
 export interface IpcCallContext {
   signal: AbortSignal;
+}
+
+/**
+ * Ошибка IPC-вызова, переданная из main в renderer ПЛОСКИМ объектом
+ * (ошибка f14962ca).
+ *
+ * `ipcMain.handle` сериализует брошенную ошибку только как `name`/`message`/
+ * `stack`, а `contextBridge` дополнительно теряет кастомные свойства —
+ * `code` и `details` до renderer не доезжают (Electron issue #24427). Без
+ * этого протокол-уровневые ветки UI (диалог подтверждения смены родителя,
+ * обработка `LOCKED`/`VERSION_CONFLICT`) никогда не срабатывают. Поэтому main
+ * резолвит вызов конвертом-объектом, а renderer восстанавливает из него
+ * `EtnError` в своём контексте — там `instanceof` и `details` работают.
+ */
+export interface IpcErrorEnvelope {
+  /** Маркер-дискриминатор: обычный результат им не бывает. */
+  __etnError: true;
+  error: {
+    name: string;
+    message: string;
+    code?: EtnErrorCode;
+    details?: unknown;
+    request_id?: string;
+  };
+}
+
+/**
+ * Упаковать брошенную main-обработчиком ошибку в {@link IpcErrorEnvelope}.
+ * Поля `code`/`details`/`requestId` берутся у `EtnError`; для прочих ошибок
+ * остаются только `name` и `message`.
+ */
+export function toIpcErrorEnvelope(err: unknown): IpcErrorEnvelope {
+  const message = err instanceof Error ? err.message : String(err);
+  const name = err instanceof Error && err.name !== '' ? err.name : 'Error';
+  const source = err as { code?: unknown; details?: unknown; requestId?: unknown };
+  const error: IpcErrorEnvelope['error'] = { name, message };
+  if (typeof source.code === 'string') error.code = source.code as EtnErrorCode;
+  if (source.details !== undefined) error.details = source.details;
+  if (typeof source.requestId === 'string') error.request_id = source.requestId;
+  return { __etnError: true, error };
+}
+
+/** Проверка формы {@link IpcErrorEnvelope} на стороне renderer (type guard). */
+export function isIpcErrorEnvelope(value: unknown): value is IpcErrorEnvelope {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { __etnError?: unknown; error?: unknown };
+  if (v.__etnError !== true) return false;
+  const e = v.error as { message?: unknown } | null | undefined;
+  return typeof e === 'object' && e !== null && typeof e.message === 'string';
 }
 
 /** Current connection state surfaced to the renderer (server domain). */
@@ -485,8 +535,16 @@ export interface EtnApi {
     /**
      * `POST /thoughts/edges` — every active link between the given visible
      * thoughts (03-server-api.md §6.12), for drawing the tree links.
+     *
+     * `linkFilter` (ошибка a617b4c6) — активный фильтр типов связей: снимок
+     * рёбер обязан уважать его так же, как фокус и страницы секторов.
      */
-    edges(networkId: string, ids: string[], showInactive: boolean): Promise<FocusEdge[]>;
+    edges(
+      networkId: string,
+      ids: string[],
+      showInactive: boolean,
+      linkFilter?: LinkTypeFilterInput,
+    ): Promise<FocusEdge[]>;
   };
   savedFilters: {
     list(networkId: string): Promise<SavedFilter[]>;

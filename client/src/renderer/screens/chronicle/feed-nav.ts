@@ -10,6 +10,12 @@
  * заголовок → комментарий). Enter на поле выполняет действие поля, Esc/клик вне
  * записи — выход из режима полей.
  *
+ * ←/→ сворачивают ТЕЛО записи в двух случаях (0.10.2, задачи 41ed99ab и
+ * 9cdede6b): когда запись выделена ЦЕЛИКОМ (режим полей не активен) — рабочий
+ * приём «↑/↓ выделить запись, ←/→ свернуть/развернуть, не заходя внутрь»; и,
+ * как раньше, когда текущее поле — «заголовок» в просмотре. На прочих полях
+ * записи (дата/период, мысли, комментарий) стрелки свёрнутость не трогают.
+ *
  * ИДЕНТИЧНОСТЬ ТЕКУЩЕЙ ЗАПИСИ — ПО ВХОЖДЕНИЮ «день + запись» (приёмка №10,
  * задача 197b3b05): длительная запись видна в каждой группе дня, и каждая её
  * копия — отдельная сущность навигации и клика. Номер дня хранится рядом с
@@ -56,6 +62,16 @@ type RecordElementKind = 'date' | 'chips' | 'title' | 'body';
 export interface FeedNavOptions {
   /** Свернуть (`true`) или развернуть (`false`) группу дня. */
   onSetDayCollapsed: (day: string, collapsed: boolean) => void;
+  /**
+   * Свернуть/развернуть ТЕЛО записи (0.10.2, задача 41ed99ab). Единица — вхождение
+   * «день + id»; `day` — день текущей копии записи.
+   */
+  onSetRecordCollapsed?: (day: string, id: string, collapsed: boolean) => void;
+  /**
+   * Вход в правку ЗАГОЛОВКА записи (Enter на поле «заголовок», 0.10.2, задача
+   * 41ed99ab). Раньше Enter на заголовке просто фокусировал поле ввода.
+   */
+  onEditTitle?: (recordId: string, card: HTMLElement) => void;
   /** Вход в правку текста записи (Enter на поле «комментарий»). */
   onEditBody: (recordId: string, card: HTMLElement) => void;
   /** Открыть диалог «Дата/период» (Enter на поле «дата/период»). */
@@ -133,6 +149,30 @@ function isEditingTarget(target: HTMLElement | null): boolean {
   const tag = (target.tagName ?? '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
   return closestWith(target, isContentEditable) !== null;
+}
+
+/** Класс корня прокрутки ленты «Дневника» (`chronicle.ts` → `feedWrap`). */
+const FEED_WRAP_CLASS = 'chron-feed-wrap';
+/** Классы редактора записи: обёртка поля комментария и её CM6-редактор. */
+const FEED_EDITOR_CLASSES = ['md-field', 'cm-editor'] as const;
+
+/**
+ * Клавиша адресована редактору ЗАПИСИ внутри ленты? Глобальный шорткат
+ * применения отбора (Ctrl+Enter, `filter-panel.ts`) в этом случае обязан
+ * молчать: комбинацию уже обработал внутренний редактор записи (коммит правки,
+ * M10) — ошибка f5809943. Панель отбора (`.chron-filter-area`) под этот гард НЕ
+ * подпадает: Ctrl+Enter в её полях по-прежнему применяет отбор (спека «Горячие
+ * клавиши», 50bb672a).
+ */
+export function isFeedRecordEditorTarget(target: HTMLElement | null): boolean {
+  if (target === null) return false;
+  // Редактор комментария записи (`.md-field` и вложенный CM6 `.cm-editor`).
+  for (const cls of FEED_EDITOR_CLASSES) {
+    if (closestWithClass(target, cls) !== null) return true;
+  }
+  // Любое поле правки ВНУТРИ ленты (поле заголовка записи).
+  if (closestWithClass(target, FEED_WRAP_CLASS) === null) return false;
+  return isEditingTarget(target);
 }
 
 /**
@@ -278,7 +318,12 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     if (date !== null) out.push({ kind: 'date', el: date });
     if (chips !== null) out.push({ kind: 'chips', el: chips });
     if (title !== null) out.push({ kind: 'title', el: title });
-    if (body !== null) out.push({ kind: 'body', el: body });
+    // Поле «комментарий» доступно ТОЛЬКО при развёрнутой группе заголовка
+    // (0.10.2, задача 41ed99ab): в свёрнутой записи тело скрыто и Tab с
+    // заголовка уходит на «дата/период».
+    if (body !== null && !card.classList.contains('is-collapsed')) {
+      out.push({ kind: 'body', el: body });
+    }
     return out;
   }
 
@@ -344,6 +389,23 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     opts.onSetDayCollapsed(day, collapsed);
   }
 
+  /**
+   * Свернуть/развернуть ТЕЛО текущей записи (0.10.2, задача 41ed99ab).
+   * Переключение — на месте: экран скрывает тело, не пересобирая ленту, поэтому
+   * фокус и выделение остаются на заголовке — после переключения возвращаем
+   * фокус туда (требование «свёрнутая запись снова разворачивается»).
+   */
+  function toggleRecordCollapsed(collapsed: boolean): void {
+    if (current?.kind !== 'record' || currentDay === null) return;
+    const id = current.key;
+    opts.onSetRecordCollapsed?.(currentDay, id, collapsed);
+    navActive = true;
+    applyHighlight();
+    const card = findCardIn(currentDay, id);
+    const title = card?.querySelector<HTMLElement>('.diary-record-title') ?? null;
+    (title ?? card)?.focus?.();
+  }
+
   /** Текущее поле записи (null — режим полей не активен или поле исчезло). */
   function currentField(): { card: HTMLElement; kind: RecordElementKind } | null {
     if (current === null || current.kind !== 'record' || elementCursor < 0) return null;
@@ -385,8 +447,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         opts.onAddThought?.(current.key, field.card);
         break;
       case 'title': {
-        const title = field.card.querySelector<HTMLElement>('.diary-record-title');
-        title?.focus?.();
+        opts.onEditTitle?.(current.key, field.card);
         break;
       }
       case 'body':
@@ -415,6 +476,18 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     activateField();
   }
 
+  /**
+   * Реагируют ли ←/→ на текущую ЗАПИСЬ (0.10.2, задача 9cdede6b)? Сворачивание
+   * тела доступно, когда режим полей НЕ активен — запись выделена целиком
+   * (`field === null`), — а также, по прежней редакции (задача 41ed99ab), когда
+   * текущее поле — «заголовок» в просмотре. На прочих полях записи
+   * (дата/период, мысли, комментарий) стрелки свёрнутость не трогают.
+   */
+  function arrowsToggleRecord(field: { kind: RecordElementKind } | null): boolean {
+    if (current?.kind !== 'record' || currentDay === null) return false;
+    return field === null || field.kind === 'title';
+  }
+
   /** Выход из правки по Esc: снять фокус и вернуть его в навигацию. */
   function exitEditing(target: HTMLElement): void {
     (target as unknown as { blur?: () => void }).blur?.();
@@ -441,18 +514,32 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
         event.preventDefault?.();
         move(-1);
         break;
-      case 'ArrowLeft':
+      case 'ArrowLeft': {
+        // Группа дня — свернуть; запись целиком (режим полей не активен) либо
+        // поле «заголовок» в просмотре — свернуть тело (0.10.2, задачи 41ed99ab,
+        // 9cdede6b). В правке заголовка сюда не доходим: isEditingTarget выше
+        // отдаёт стрелки полю ввода.
+        const field = currentField();
         if (current?.kind === 'day') {
           event.preventDefault?.();
           setDayCollapsed(current.key, true);
+        } else if (arrowsToggleRecord(field)) {
+          event.preventDefault?.();
+          toggleRecordCollapsed(true);
         }
         break;
-      case 'ArrowRight':
+      }
+      case 'ArrowRight': {
+        const field = currentField();
         if (current?.kind === 'day') {
           event.preventDefault?.();
           setDayCollapsed(current.key, false);
+        } else if (arrowsToggleRecord(field)) {
+          event.preventDefault?.();
+          toggleRecordCollapsed(false);
         }
         break;
+      }
       case 'Tab':
         // Tab/Shift+Tab ходят по полям только в режиме полей: вне его — обычная
         // навигация фокуса браузера.

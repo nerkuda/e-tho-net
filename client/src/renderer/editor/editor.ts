@@ -23,6 +23,23 @@
  * Если все табы не помещаются по ширине — справа появляется кнопка `▾N`,
  * открывающая выпадающий список со скрытыми табами (повторное использование
  * overflow-логики из `screens/tabs/tab-overflow.ts`).
+ *
+ * **Инкрементальная смена сущности (задача 90b2256e).** Скелет панели —
+ * заголовок панели, кнопка положения, полоса вкладок с кнопками, хост вкладок и
+ * overflow-механика — строится один раз (`renderFull`) и переиспользуется при
+ * переходе на другую сущность того же вида (`renderRetarget`): шапка той же
+ * формы обновляет ЗНАЧЕНИЯ полей на месте (`headerRetarget`), а содержимое уже
+ * построенных вкладок перечитывается под нового владельца без сброса кэша
+ * (вкладки с хуком `registerTabRetarget` — на месте, например «Свойства» через
+ * keyed-сверку; остальные — внутри того же узла вкладки). Полная пересборка
+ * остаётся для смены вида сущности (мысль ↔ связь), типа, дока, слоя и первой
+ * отрисовки после маунта.
+ *
+ * **Прокрутка при смене сущности не сохраняется** — сознательное решение: у
+ * другой сущности другой контент, заякорить прокрутку не на что, а визуального
+ * мигания каркаса теперь нет, поэтому сброс `scrollTop` к началу не «дёргает»
+ * панель. Прокрутка ВНУТРИ одной сущности (правка шапки/версии) сохраняется —
+ * этот путь (`patchHeader`) не трогает вкладки вовсе.
  */
 
 import {
@@ -283,9 +300,12 @@ export function openLinkInEditor(link: Link): void {
 
 /**
  * Opens a thought in the editor without changing the canvas focus (§2.2.4 —
- * a single cloud click / Enter). The editor target switches at once; the full
- * entity rides along as soon as it loads — until then the editor falls back to
- * the focused thought (same mechanism as the structures/chronicle views). The
+ * a single cloud click / Enter). The editor target switches at once (so the
+ * canvas halo and the visit history follow the click immediately); the full
+ * entity rides along as soon as it loads. While it is in flight `render()`
+ * HOLDS the previously shown entity instead of dropping to a loading
+ * placeholder — the same visual result the structures/chronicle views get by
+ * fetching the entity themselves before switching (error 253505a6). The
  * focused thought itself needs no target (editorTarget=null → follow focus).
  *
  * Bug fix (editor shaking on a repeat click of the same thought): this used
@@ -334,6 +354,16 @@ export function openThoughtInEditor(id: string): void {
   // write lands (`setHistoryChangeListener`).
   void noteThoughtWillOpen(id);
   logUiEvent('ui.editor.opened', { id, kind: 'thought' });
+  // Snapshot the pre-click state: the editor HOLDS the previously shown entity
+  // while the new payload is in flight (see `render()`), and a failed fetch
+  // must not leave that hold pointing at the new halo forever — the catch
+  // below restores this snapshot.
+  const previous = {
+    editorTarget: store.state.editorTarget,
+    selectedLinkId: store.state.selectedLinkId,
+    structuresActiveThoughtId: store.state.structuresActiveThoughtId,
+    structuresActiveThought: store.state.structuresActiveThought,
+  };
   store.update({
     editorTarget: { kind: 'thought', id },
     selectedLinkId: null,
@@ -353,7 +383,15 @@ export function openThoughtInEditor(id: string): void {
         store.update({ editorTarget: { kind: 'thought', id, thought }, structuresActiveThought: thought });
       }
     })
-    .catch(() => undefined);
+    .catch(() => {
+      // The entity never arrived (deleted, lost access, network hiccup). Drop
+      // the payload-less target back to the pre-click state — but only if it is
+      // still the one this call set (a newer click/selection wins).
+      const live = store.state.editorTarget;
+      if (live?.kind === 'thought' && live.id === id && live.thought === undefined) {
+        store.update(previous);
+      }
+    });
 }
 
 /**
@@ -427,12 +465,14 @@ let titleEl: HTMLElement | null = null;
 let lastSignature = '';
 
 /**
- * Identity part of the render signature (bug 6b757336): `ownerType|ownerId|
- * editorPosition`, without the version. A full DOM rebuild (`renderFull`) is
- * only warranted when this changes — a different entity/dock, not merely a
- * new version of the SAME entity. Kept separate from `lastSignature` (which
- * still includes the version, guarding the early "nothing changed at all"
- * exit) so a version-only change can take the cheaper `patchHeader` path.
+ * Identity part of the render signature (bug 6b757336; задача 90b2256e):
+ * `ownerType|editorPosition|layerId`, WITHOUT the entity id and version. A full
+ * DOM rebuild (`renderFull`) is only warranted when the KIND of entity or the
+ * dock changes — not when another thought of the same kind is opened, nor on a
+ * new version of the same entity. Kept separate from `lastSignature` (which
+ * adds the entity id/version/type and still guards the "nothing changed at
+ * all" exit) so an entity switch can reuse the skeleton (`renderRetarget`) and
+ * a version-only change the cheaper `patchHeader` path.
  */
 let lastIdentitySignature = '';
 
@@ -453,6 +493,73 @@ let builtPanes = new Map<EditorTabId, HTMLElement>();
  * свойств при смене типа»): кэш вкладок снаружи не наблюдаем.
  */
 const paneBuildCounts = new Map<EditorTabId, number>();
+
+/**
+ * Re-runs the tab-strip overflow layout of the CURRENT skeleton. Set by
+ * `renderFull` (the only place the strip is built) and cleared on teardown, so
+ * `renderRetarget` can reflow after the reused strip's counts settle
+ * (task 90b2256e).
+ */
+let reflowOverflow: (() => void) | null = null;
+
+/**
+ * Построенные вкладки, содержимое которых принадлежит ПРЕДЫДУЩЕЙ сущности
+ * (задача 90b2256e). При смене сущности того же типа скрытые вкладки не
+ * пересобираются эагерно — только помечаются здесь и пересобираются в СВОЁМ
+ * узле (`displayTab`) при следующей активации, так что identity узла вкладки
+ * сохраняется, а лишних чтений на переключение мысли нет. Показанная вкладка и
+ * вкладки с хуком `registerTabRetarget` обновляются сразу.
+ */
+let stalePanes = new Set<EditorTabId>();
+
+/**
+ * Хук перепривязки ЖИВОЙ шапки к другой сущности того же вида: обновляет
+ * значения полей НА МЕСТЕ, не пересоздавая узлы (задача 90b2256e, круг 1 —
+ * замечание проверки «поля шапки при том же типе — patchHeader»). Регистрирует
+ * конструктор боевой шапки (`buildThoughtHeader` / `buildLinkHeader`); у
+ * загрузочного плейсхолдера хука нет (`null`) — там шапка структурно другая и
+ * пересобирается законно. Сбрасывается при демонтаже/полной пересборке.
+ */
+let headerRetarget: ((ctx: EditorContext) => void) | null = null;
+/**
+ * Форма живой шапки: `ownerType|typeId` (у загруженной сущности) — перепривязка
+ * допустима только при совпадении формы, иначе состав полей иной и нужна
+ * пересборка (мысль ↔ связь, смена типа, loading ↔ loaded).
+ */
+let headerShapeKey: string | null = null;
+
+/**
+ * Эпоха рендера: инкрементируется на каждом пути, привязывающем полосу вкладок
+ * к (возможно) новой сущности. Асинхронные загрузчики счётчиков «(N)» захватывают
+ * её и отбрасывают устаревший результат — при переиспользованной полосе вкладок
+ * позднее разрешение загрузчика ПРЕДЫДУЩЕЙ сущности не должно перезаписать
+ * счётчик новой (задача 90b2256e, круг 1 — замечание проверки «гонка счётчиков»).
+ */
+let renderEpoch = 0;
+
+/**
+ * Хуки перепривязки построенного содержимого вкладки к другой сущности того же
+ * вида БЕЗ пересборки узла вкладки. Регистрирует модуль вкладки, если умеет
+ * обновлять содержимое на месте (пример — «Свойства»: keyed-сверка строк по
+ * ключам привязок). Для вкладок без хука `renderRetarget` пересобирает
+ * содержимое в том же узле вкладки.
+ */
+const tabRetargets = new Map<EditorTabId, (pane: HTMLElement, ctx: EditorContext) => void>();
+
+/** Registers an in-place content retarget hook for a tab (task 90b2256e). */
+export function registerTabRetarget(
+  id: EditorTabId,
+  retarget: (pane: HTMLElement, ctx: EditorContext) => void,
+): void {
+  tabRetargets.set(id, retarget);
+}
+
+/**
+ * Сколько раз строился скелет редактора (полоса вкладок + хост вкладок).
+ * Регрессионный шов задачи 90b2256e: переход loading→loaded не должен
+ * собирать каркас повторно — счётчик обязан вырасти на единицу.
+ */
+let skeletonBuildCount = 0;
 
 /**
  * Guards the one-time module registrations (sections, tabs, the document
@@ -500,7 +607,9 @@ export function refreshTabCount(id: EditorTabId): void {
   const badge = tabCountSpans.get(id);
   const loader = tabCountLoaders.get(id);
   if (badge === undefined || loader === undefined || renderCtx === null) return;
+  const epoch = renderEpoch;
   void Promise.resolve(loader(renderCtx)).then((n) => {
+    if (epoch !== renderEpoch) return;
     if (n !== undefined) badge.textContent = `(${n})`;
   });
 }
@@ -541,6 +650,10 @@ export function mountEditor(editorHost: HTMLElement): void {
   paneHostEl = null;
   tabButtons = new Map();
   builtPanes = new Map();
+  reflowOverflow = null;
+  headerRetarget = null;
+  headerShapeKey = null;
+  stalePanes = new Set();
   lastSignature = '';
   lastIdentitySignature = '';
 
@@ -787,6 +900,11 @@ function displayTab(id: EditorTabId): void {
   if (pane === undefined) {
     pane = buildTabPane(id);
     builtPanes.set(id, pane);
+  } else if (stalePanes.has(id)) {
+    // Content belongs to the previous entity — rebuild it inside the SAME pane
+    // node (identity survives the entity switch, task 90b2256e).
+    stalePanes.delete(id);
+    pane.replaceChildren(...buildTabPane(id).children);
   }
   paneHostEl.replaceChildren(pane);
 }
@@ -813,7 +931,10 @@ function activateEditorTab(id: EditorTabId): void {
  */
 function invalidatePanes(ids: readonly EditorTabId[]): void {
   const shownWasDropped = ids.includes(shownTab) ? builtPanes.delete(shownTab) : false;
-  for (const id of ids) builtPanes.delete(id);
+  for (const id of ids) {
+    builtPanes.delete(id);
+    stalePanes.delete(id);
+  }
   if (shownWasDropped) displayTab(shownTab);
 }
 
@@ -1153,51 +1274,64 @@ function updateTitleEl(ctx: EditorContext | null): void {
 }
 
 /**
- * Patches the editor for a version-only change of the SAME already-loaded
- * entity (bug 6b757336): replaces just the header — the small, cheap,
- * effectively stateless part — and leaves the tab bar, the pane cache and
- * their DOM (in particular the comment's CodeMirror instance, scroll
- * position and collapsed groups) untouched. Used when a header field save
- * (title/synonyms/type/icon/active/style) bumps `thought.version`/
- * `link.version` on the entity already open — previously this took the same
- * full-teardown path as switching to a different entity, visibly "flashing"
- * the whole editor for a one-field edit.
+ * Builds the header for the current context — the real header when the entity
+ * is loaded, the lightweight loading placeholder otherwise. Shared by the full
+ * rebuild and by {@link replaceHeader} so both render the same shape.
+ *
+ * The loading placeholder matters for a freshly-targeted thought whose full
+ * entity has not arrived yet (`etn.thoughts.get` in flight): the icon slot
+ * shows a preloader instead of the previous thought's icon, and the id sits in
+ * the title placeholder. Mirrors the real header's top-row structure so the
+ * swap to the loaded header is visually seamless (no height jump, no extra
+ * row).
  */
-function patchHeader(ctx: EditorContext): void {
+function buildHeaderFor(ctx: EditorContext): HTMLElement {
+  if (ctx.ownerType === 'thought' && ctx.thought !== null) return buildThoughtHeader(ctx.thought);
+  if (ctx.ownerType === 'link' && ctx.link !== null) return buildLinkHeader(ctx.link);
+  if (ctx.ownerType === 'thought') return buildThoughtHeaderLoading(ctx.ownerId);
+  return buildLinkHeaderLoading(ctx.ownerId);
+}
+
+/**
+ * Replaces just the header — the small, cheap, effectively stateless part of
+ * the editor — and leaves the tab bar, the pane cache and their DOM (in
+ * particular the comment's CodeMirror instance, scroll position and collapsed
+ * groups) untouched. Used for a version-only change of the SAME loaded entity
+ * (bug 6b757336) and, through {@link renderRetarget}, for an entity switch that
+ * keeps the skeleton (task 90b2256e). Deliberately does NO pane invalidation:
+ * the caller decides what stale content to drop.
+ */
+function replaceHeader(ctx: EditorContext): void {
   if (scrollBox === null || headerEl === null) return;
-  // Body-mounted widgets (entity-combo type dropdowns) anchored to the OLD header
-  // nodes must close before those nodes are replaced — same reasoning as the
-  // full rebuild below.
+  // Body-mounted widgets (entity-combo type dropdowns) anchored to the OLD
+  // header nodes must close before those nodes are replaced.
   window.dispatchEvent(new Event('etn:editor-rebuild'));
 
   const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const refocus = activeEl !== null && headerEl.contains(activeEl) ? activeEl : null;
 
-  const prevCtx = renderCtx;
   renderCtx = ctx;
   updateTitleEl(ctx);
 
-  const newHeader =
-    ctx.ownerType === 'thought' && ctx.thought !== null
-      ? buildThoughtHeader(ctx.thought)
-      : ctx.ownerType === 'link' && ctx.link !== null
-        ? buildLinkHeader(ctx.link)
-        : null;
-  if (newHeader === null) return; // guarded by the caller — kept for type-safety only
+  const newHeader = buildHeaderFor(ctx);
   scrollBox.replaceChild(newHeader, headerEl);
   headerEl = newHeader;
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
+}
 
-  // A thought's type change can add/remove properties (and NULL visual
-  // fields inherit new defaults) — every type-dependent pane must rebuild
-  // («Комментарий» sections and the «Свойства» table, ошибка 786bcd69).
-  // Every other header field (title/synonyms/icon/active/style) leaves the
-  // property set and the comment untouched, so no pane invalidation.
-  const typeChanged =
-    ctx.ownerType === 'thought' &&
-    prevCtx?.ownerType === 'thought' &&
-    prevCtx.thought?.type_id !== ctx.thought?.type_id;
+/**
+ * Patches the editor for a change of the SAME entity (bug 6b757336): replaces
+ * just the header and, on a type change, drops the type-dependent panes so
+ * they rebuild from the current context (ошибка 786bcd69). Every other header
+ * field (title/synonyms/icon/active/style) leaves the property set and the
+ * comment untouched, so no pane invalidation happens for them — the comment's
+ * CodeMirror must survive (bug 206e33a1).
+ */
+function patchHeader(ctx: EditorContext): void {
+  const prevCtx = renderCtx;
+  replaceHeader(ctx);
+  const typeChanged = prevCtx !== null && ctxTypeId(prevCtx) !== ctxTypeId(ctx);
   if (typeChanged) invalidateTypeDependentPanes();
 }
 
@@ -1210,55 +1344,112 @@ function ctxTypeId(ctx: EditorContext): string | null {
   return ctx.link?.type_id ?? null;
 }
 
-/** Renders the editor for the current target (signature-guarded). */
+/** Whether the context's full entity is loaded (not a loading placeholder). */
+function ctxLoaded(ctx: EditorContext | null): boolean {
+  if (ctx === null) return false;
+  return ctx.ownerType === 'thought' ? ctx.thought !== null : ctx.link !== null;
+}
+
+/**
+ * Shape key of the header for a context: same owner kind + same type (or both a
+ * loading placeholder) means the field set is identical, so the header can be
+ * retargeted in place instead of rebuilt (task 90b2256e). A loaded entity and a
+ * placeholder never share a shape — their headers are structurally different.
+ */
+function headerShapeOf(ctx: EditorContext): string {
+  return `${ctx.ownerType}|${ctxLoaded(ctx) ? (ctxTypeId(ctx) ?? '') : '@loading'}`;
+}
+
+/**
+ * Retargets the LIVE header to another entity of the same shape, updating field
+ * values in place (task 90b2256e). Returns `false` when no compatible live
+ * header exists — the caller then rebuilds it with {@link replaceHeader}.
+ *
+ * Body-mounted widgets (entity-combo dropdowns) anchored to the old values are
+ * closed first; the header nodes themselves survive, so a field focused across
+ * the switch keeps its node and its focus.
+ */
+function retargetHeader(ctx: EditorContext): boolean {
+  if (headerRetarget === null || headerShapeKey === null) return false;
+  if (headerShapeKey !== headerShapeOf(ctx)) return false;
+  if (scrollBox === null || headerEl === null) return false;
+  window.dispatchEvent(new Event('etn:editor-rebuild'));
+  renderCtx = ctx;
+  updateTitleEl(ctx);
+  headerRetarget(ctx);
+  return true;
+}
+
+/**
+ * Renders the editor for the current target (signature-guarded).
+ *
+ * Three paths, cheapest first (задача 90b2256e). The skeleton — panel title,
+ * position button, tab bar with its buttons, pane host and the overflow
+ * machinery — is built once by {@link renderFull} and then reused:
+ *
+ *  • same open entity, new version/type → {@link patchHeader} (header only);
+ *  • another entity of the SAME kind/dock, or the loading→loaded transition →
+ *    {@link renderRetarget} (header + tab CONTENT rebuilt, skeleton kept);
+ *  • another entity of the same kind whose full payload has not arrived yet
+ *    (the target id was set ahead of `etn.thoughts.get`) → HOLD: the previous
+ *    loaded entity stays on screen untouched until the payload lands, then the
+ *    single retarget runs (error 253505a6 — no loading-placeholder teardown);
+ *  • another kind/dock/layer, or no skeleton yet → {@link renderFull}.
+ *
+ * The dock position and the session layer stay in the identity signature
+ * (6b757336, dc4e0c07): a dock move rebuilds the panel, and a layer switch must
+ * re-read shadowed properties. The entity's TYPE belongs to `fullSignature`
+ * only (94b28014): a server-side detach changes `type_id` without bumping the
+ * version, and the header plus the «Свойства» set must follow it — but a type
+ * change on the SAME entity must stay the cheap `patchHeader` (206e33a1), so
+ * the type must NOT enter `identitySignature`. The entity ID is likewise out
+ * of `identitySignature` (90b2256e): switching to another thought of the same
+ * kind must reuse the skeleton, not tear the panel down.
+ */
 async function render(): Promise<void> {
   if (host === null || scrollBox === null || positionButton === null) return;
   const ctx = currentEditorContext();
 
-  // Two-part signature (bug 6b757336). `identitySignature` — the open entity
-  // and dock — governs which path runs; `fullSignature` adds the version and
-  // guards the "nothing changed at all" early exit that used to be the only
-  // check here. The session's `currentLayer` is part of both signatures on
-  // purpose (ETN error dc4e0c07): a layer switch must rebuild even when the
-  // focused thought is the same id+version in both layers — its properties
-  // can differ through shadow overrides, and the editor must not keep the
-  // old layer's header + property cache. The entity's TYPE belongs to
-  // `fullSignature` only (ETN error 94b28014): a server-side detach (the type
-  // was deleted) changes `type_id` without bumping the version, and the header
-  // plus the «Свойства» set must follow it. It must NOT enter
-  // `identitySignature` — that would turn every type change into a full
-  // teardown instead of the cheap `patchHeader` (bug 206e33a1: the rebuild
-  // destroys the comment's CodeMirror).
   const layerId = store.state.currentLayer?.id ?? '';
   const identitySignature =
-    ctx === null ? 'null' : `${ctx.ownerType}|${ctx.ownerId}|${store.state.editorPosition}|${layerId}`;
+    ctx === null ? 'null' : `${ctx.ownerType}|${store.state.editorPosition}|${layerId}`;
   const fullSignature =
     ctx === null
       ? 'null'
-      : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${ctxTypeId(ctx) ?? ''}`;
+      : `${identitySignature}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${ctxTypeId(ctx) ?? ''}`;
   if (fullSignature === lastSignature) return;
 
-  // A version-only change of the SAME already-rendered, already-loaded
-  // entity patches just the header (see `patchHeader`) instead of the full
-  // teardown+rebuild below — that full rebuild remains a Bug 206e33a1
-  // «Бессмысленное обновление редактора при получении внешних событий»
-  // concern: it destroys the CodeMirror comment instance, so it must still
-  // only run when the open entity itself changes (different id/kind, dock
-  // move) or on the very first render of it (loading → loaded — `renderCtx`
-  // below is the OLD, still-loading context in that case, so its own
-  // `thought`/`link` is null and this correctly falls through to the full
-  // rebuild instead of patching a header that was never really built for a
-  // loaded entity). `headerEl`/`tabBarEl`/`paneHostEl` are reset to null by
-  // `mountEditor` on every (re)mount, so they can only be non-null here when
-  // they belong to the CURRENT `scrollBox` — no DOM containment check needed.
-  const canPatch =
+  const prevCtx = renderCtx;
+  const identitySame = identitySignature === lastIdentitySignature;
+  const skeletonLive = headerEl !== null && tabBarEl !== null && paneHostEl !== null;
+  const sameOwner =
     ctx !== null &&
-    identitySignature === lastIdentitySignature &&
-    headerEl !== null &&
-    tabBarEl !== null &&
-    paneHostEl !== null &&
-    ((ctx.ownerType === 'thought' && ctx.thought !== null && renderCtx?.ownerType === 'thought' && renderCtx.thought !== null) ||
-      (ctx.ownerType === 'link' && ctx.link !== null && renderCtx?.ownerType === 'link' && renderCtx.link !== null));
+    prevCtx !== null &&
+    ctx.ownerType === prevCtx.ownerType &&
+    ctx.ownerId === prevCtx.ownerId;
+
+  // A thought→thought switch through `openThoughtInEditor` (canvas click,
+  // kbd-nav, links tab, mini-graph, value-editor): the target id arrives
+  // BEFORE the full entity (`etn.thoughts.get` in flight). Do NOT tear the
+  // header and the panes down into a loading placeholder and rebuild them
+  // again when the entity lands — that double rebuild is the "editor clears
+  // and redraws on every cloud click" jitter of error 253505a6, while the
+  // structures/chronicle views (which pass the already-fetched entity) stay
+  // smooth. Keep the previously shown loaded entity on screen, exactly as
+  // those views do while they fetch the target themselves; the store tick
+  // that delivers the entity re-enters `render()` and retargets ONCE (in
+  // place when the type matches, via `replaceHeader` otherwise). The render
+  // signatures are deliberately NOT advanced here, so that delivery is not
+  // swallowed by the "nothing changed" fast path.
+  const awaitingSameKindEntity =
+    identitySame &&
+    skeletonLive &&
+    ctx !== null &&
+    !ctxLoaded(ctx) &&
+    prevCtx !== null &&
+    ctxLoaded(prevCtx) &&
+    ctx.ownerType === prevCtx.ownerType;
+  if (awaitingSameKindEntity) return;
 
   lastSignature = fullSignature;
   lastIdentitySignature = identitySignature;
@@ -1281,12 +1472,149 @@ async function render(): Promise<void> {
           typeId: ctxTypeId(ctx),
         };
 
-  if (canPatch) {
+  if (ctx === null || !identitySame || !skeletonLive) {
+    renderFull(ctx);
+    return;
+  }
+  // A change of the SAME open entity (version bump, server-side type detach):
+  // patch only the header and, on a type change, the type-dependent panes. The
+  // tab cache — and with it the comment's CodeMirror — survives (bug 6b757336 /
+  // 206e33a1). `headerEl`/`tabBarEl`/`paneHostEl` are non-null here by
+  // `skeletonLive`, and `mountEditor` resets them on every (re)mount, so they
+  // can only belong to the CURRENT `scrollBox` — no DOM containment check.
+  if (sameOwner && ctxLoaded(prevCtx) && ctxLoaded(ctx)) {
     patchHeader(ctx);
     return;
   }
+  // Another entity of the same kind, or the loading→loaded transition of the
+  // same target: reuse the skeleton, rebuild only the content.
+  renderRetarget(ctx);
+}
 
-  // --- full teardown + rebuild (different entity, dock move, or first load) -
+/**
+ * Switches the editor to ANOTHER entity of the same kind WITHOUT tearing down
+ * the skeleton (задача 90b2256e): the panel title, position button, tab bar,
+ * its buttons, the pane host and the overflow machinery are entity-independent
+ * and stay in place. Only the header and the tab CONTENT change.
+ *
+ * Also used for the loading→loaded transition of the same target: the skeleton
+ * was already built from the loading placeholder by `renderFull`, so the card
+ * is no longer rebuilt twice (loading, then loaded). A same-shape header is
+ * retargeted in place; a placeholder's header is structurally different and is
+ * rebuilt. Built panes are retargeted in place (hook) or rebuilt inside their
+ * existing node, never dropped from the cache.
+ *
+ * Scroll is NOT preserved here — a different entity is different content and
+ * there is nothing to anchor to (see the module doc). The reset happens on the
+ * reused `scrollBox`, so the panel does not "flash" while doing it.
+ */
+function renderRetarget(ctx: EditorContext): void {
+  if (scrollBox === null) return;
+  // A new binding for the reused tab strip: bump the epoch so any count loader
+  // still in flight for the PREVIOUS entity drops its result (task 90b2256e).
+  renderEpoch += 1;
+  // A pane field focused in the old content must get the focus back on the
+  // freshly built field (same marker classes); a header field is handled by
+  // `replaceHeader` itself.
+  const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const refocus = activeEl !== null && scrollBox.contains(activeEl) ? activeEl : null;
+
+  const prevCtx = renderCtx;
+  const typeChanged = prevCtx !== null && ctxTypeId(prevCtx) !== ctxTypeId(ctx);
+
+  // Same-shape headers are retargeted in place (fields reused); a different
+  // shape (kind/type change, loading→loaded) is rebuilt as before.
+  if (!retargetHeader(ctx)) replaceHeader(ctx);
+
+  // A type change swaps the owner's property set — the type-dependent panes
+  // legitimately rebuild from the new context (bug 786bcd69). Panes that do not
+  // depend on the type keep their cache and are retargeted in place below.
+  if (typeChanged) invalidateTypeDependentPanes();
+  retargetBuiltPanes(ctx);
+
+  refreshTabCounts(ctx);
+  displayTab(shownTab);
+
+  // Different entity → different content: no scroll to preserve.
+  scrollBox.scrollTop = 0;
+
+  reflowOverflow?.();
+  if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
+}
+
+/**
+ * Binds the content of the built tab panes to the new owner WITHOUT dropping
+ * the pane cache (task 90b2256e, круг 1): resetting `builtPanes` on an entity
+ * switch destroyed the «Свойства» table and the keyed reconciliation never ran
+ * in the target scenario. A tab that registered a {@link registerTabRetarget}
+ * hook updates its content in place (живут строки по ключам, открытые редакторы
+ * значений и фокус); the SHOWN tab without a hook rebuilds its content inside
+ * the SAME pane node now; a hidden one is only marked {@link stalePanes} and
+ * rebuilds in its own node on next activation — no eager fetch/build, and the
+ * pane identity survives either way.
+ */
+function retargetBuiltPanes(ctx: EditorContext): void {
+  for (const [id, pane] of [...builtPanes]) {
+    const hook = tabRetargets.get(id);
+    if (hook !== undefined) {
+      hook(pane, ctx);
+      continue;
+    }
+    // The shown tab must update now; a hidden one is only marked stale and
+    // rebuilds in its own node on next activation (no eager fetch/build).
+    if (id === shownTab) {
+      pane.replaceChildren(...buildTabPane(id).children);
+      stalePanes.delete(id);
+    } else {
+      stalePanes.add(id);
+    }
+  }
+}
+
+/**
+ * Re-resolves the `(N)` badges of every counted tab for the given context and
+ * reflows the tab strip once their (async) widths settle. Needed because the
+ * tab bar is REUSED across entity switches (задача 90b2256e): its counters must
+ * follow the new entity, and the counter width feeds the overflow layout.
+ */
+function refreshTabCounts(ctx: EditorContext): void {
+  const epoch = renderEpoch;
+  for (const [id, badge] of tabCountSpans) {
+    const loader = tabCountLoaders.get(id);
+    if (loader === undefined) continue;
+    void Promise.resolve(loader(ctx)).then((n) => {
+      // The strip may have been retargeted to another entity while this loader
+      // was in flight — a stale count must not overwrite the new entity's badge.
+      if (epoch !== renderEpoch) return;
+      if (n === undefined) {
+        badge.classList.add('hidden');
+        reflowOverflow?.();
+        return;
+      }
+      if (!badge.isConnected) return;
+      badge.textContent = `(${n})`;
+      badge.classList.remove('hidden');
+      reflowOverflow?.();
+    });
+  }
+}
+
+/**
+ * Full teardown + rebuild of the editor skeleton: used for the first render
+ * after a (re)mount, a change of the entity KIND (мысль ↔ связь), a dock move,
+ * a layer switch, or "no target". An entity switch of the same kind does NOT
+ * come here — see {@link renderRetarget}.
+ */
+function renderFull(ctx: EditorContext | null): void {
+  if (host === null || scrollBox === null || positionButton === null) return;
+  // The strip is about to be rebuilt — drop the stale reflow hook until the
+  // new one is in place.
+  reflowOverflow = null;
+  // A full rebuild rebinds every badge: in-flight count loaders of the previous
+  // strip must not write into the new one (task 90b2256e).
+  renderEpoch += 1;
+
+  // --- full teardown + rebuild (different entity kind, dock move, or first load)
 
   // Panel title reflects what is selected (08-ui-spec.md §6.2). A thought in
   // the trash (S13) additionally shows the bright-red trash marker before the
@@ -1315,6 +1643,11 @@ async function render(): Promise<void> {
   paneHostEl = null;
   tabButtons = new Map();
   builtPanes = new Map();
+  // A fresh header is about to be built; the old retarget hook must not survive
+  // (the builder re-registers it). Placeholders leave it null.
+  headerRetarget = null;
+  headerShapeKey = null;
+  stalePanes = new Set();
   renderCtx = ctx;
 
   if (ctx === null) {
@@ -1324,24 +1657,9 @@ async function render(): Promise<void> {
     return;
   }
 
-  if (ctx.ownerType === 'thought' && ctx.thought !== null) {
-    headerEl = buildThoughtHeader(ctx.thought);
-  } else if (ctx.ownerType === 'link' && ctx.link !== null) {
-    headerEl = buildLinkHeader(ctx.link);
-  } else if (ctx.ownerType === 'thought' && ctx.thought === null) {
-    // The thought is the new editor target but its full entity has not
-    // arrived yet (`etn.thoughts.get` in flight from a canvas click, a
-    // structure pick or a deep link). The icon slot in the header shows
-    // a preloader instead of the previous thought's icon, so a long load
-    // (heavy thought with many properties / attachments / comments) is
-    // visibly "in progress" rather than a misleading static icon. The
-    // thought id sits in the title placeholder so the user sees which
-    // card is loading.
-    headerEl = buildThoughtHeaderLoading(ctx.ownerId);
-  } else if (ctx.ownerType === 'link' && ctx.link === null) {
-    headerEl = buildLinkHeaderLoading(ctx.ownerId);
-  }
-  if (headerEl !== null) scrollBox.append(headerEl);
+  skeletonBuildCount += 1;
+  headerEl = buildHeaderFor(ctx);
+  scrollBox.append(headerEl);
 
   // --- tab bar (L7) ---------------------------------------------------------
   // Набор вкладок зависит от сущности: у связи — свои три, у мысли — полный.
@@ -1358,7 +1676,11 @@ async function render(): Promise<void> {
       tabCountSpans.set(def.id, badge);
       const loader = tabCountLoaders.get(def.id);
       if (loader !== undefined) {
+        const epoch = renderEpoch;
         void Promise.resolve(loader(ctx)).then((n) => {
+          // The strip may have been retargeted while the count was in flight —
+          // a stale loader must not write into the new entity's badge.
+          if (epoch !== renderEpoch) return;
           if (n !== undefined && tab.isConnected) {
             badge.textContent = `(${n})`;
             badge.classList.remove('hidden');
@@ -1427,6 +1749,9 @@ async function render(): Promise<void> {
       minWidth: EDITOR_TAB_MIN_W_PX,
     });
   }
+  // Reusable hook for `renderRetarget` (task 90b2256e): the strip is now built,
+  // so an entity switch can reflow it after the counters settle.
+  reflowOverflow = reflowEditorOverflow;
   const overflowObserver = new ResizeObserver(reflowEditorOverflow);
   overflowObserver.observe(tabBar);
   // Первый маунт: `ResizeObserver` сработает только при изменении размера,
@@ -1773,7 +2098,13 @@ function synonymsEqual(a: string[], b: string[]): boolean {
  * (`VERSION_CONFLICT`). The title field already guarded against saving an
  * unchanged value (see `commitTitle` below); the synonyms field now does too.
  */
-function buildThoughtHeader(thought: Thought): HTMLElement {
+function buildThoughtHeader(initial: Thought): HTMLElement {
+  // The header is RETARGETED in place on an entity switch of the same type
+  // (task 90b2256e): every handler below reads the current `thought`, and
+  // `applyThought` mutates it together with the field VALUES. Rebuilding the
+  // header nodes is what the switch must avoid.
+  let thought = initial;
+  const initialId = initial.id;
   const box = div('editor-fields');
   const networkId = requireNetworkId();
 
@@ -1822,6 +2153,9 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }, 800);
   });
   void findDraft(networkId, 'thought', thought.id).then((hit) => {
+    // The header may have been retargeted to another thought while the draft
+    // lookup was in flight — an old thought's draft must not clobber the field.
+    if (thought.id !== initialId) return;
     if (hit === null) return;
     if (hit.value === thought.title) {
       // The debounced draft fired after the blur save — the text is already
@@ -1966,6 +2300,31 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
 
   row.append(typeCombo.root, activeLabel, actionsBtn);
   box.append(row);
+
+  /**
+   * Applies another thought of the SAME type to the live header: updates the
+   * icon and the field values in place, without recreating a single node (task
+   * 90b2256e, круг 1). Drops the previous entity's pending title draft so it
+   * cannot resurface on the reused field.
+   */
+  const applyThought = (next: Thought): void => {
+    thought = next;
+    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
+    titleDraftTimer = null;
+    titleDraftId = null;
+    applyThoughtIcon(iconBox, next);
+    titleArea.value = next.title;
+    titleArea.classList.toggle('title-strike', next.marked_for_deletion === true);
+    resizeTitle();
+    synonymsInput.value = next.synonyms.join(', ');
+    typeCombo.setValue(next.type_id);
+    activeCheck.checked = next.active;
+    activeCheck.disabled = next.is_protected && next.is_root;
+  };
+  headerRetarget = (ctx): void => {
+    if (ctx.ownerType === 'thought' && ctx.thought !== null) applyThought(ctx.thought);
+  };
+  headerShapeKey = `thought|${initial.type_id ?? ''}`;
 
   // The title height depends on layout; size it once mounted.
   queueMicrotask(resizeTitle);
@@ -2116,6 +2475,11 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
  * real header is visually seamless (no height jump, no extra row).
  */
 function buildThoughtHeaderLoading(thoughtId: string): HTMLElement {
+  // A placeholder has no retarget hook: its header is structurally different
+  // from a loaded one, so the loading→loaded transition rebuilds it (task
+  // 90b2256e).
+  headerRetarget = null;
+  headerShapeKey = 'thought|@loading';
   const box = div('editor-fields');
   const topRow = div('editor-top-row');
 
@@ -2149,6 +2513,8 @@ function buildThoughtHeaderLoading(thoughtId: string): HTMLElement {
  * future entry point (deep link, paste-id) may need it.
  */
 function buildLinkHeaderLoading(linkId: string): HTMLElement {
+  headerRetarget = null;
+  headerShapeKey = 'link|@loading';
   const box = div('editor-fields');
   const row = div('editor-header-row');
   const placeholder = el('span', 'muted editor-icon-loading', `…загрузка связи ${linkId.slice(0, 8)}`);
@@ -2158,7 +2524,10 @@ function buildLinkHeaderLoading(linkId: string): HTMLElement {
 }
 
 /** Builds the link header form (type + active). */
-function buildLinkHeader(link: Link): HTMLElement {
+function buildLinkHeader(initial: Link): HTMLElement {
+  // Same in-place retarget contract as the thought header (task 90b2256e):
+  // handlers read the current `link`, `applyLink` mutates values only.
+  let link = initial;
   const networkId = requireNetworkId();
   const box = div('editor-fields');
 
@@ -2224,6 +2593,17 @@ function buildLinkHeader(link: Link): HTMLElement {
   row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);
 
+  /** Applies another link of the same type to the live header, values only. */
+  const applyLink = (next: Link): void => {
+    link = next;
+    typeCombo.setValue(next.type_id);
+    activeCheck.checked = next.active;
+  };
+  headerRetarget = (ctx): void => {
+    if (ctx.ownerType === 'link' && ctx.link !== null) applyLink(ctx.link);
+  };
+  headerShapeKey = `link|${initial.type_id ?? ''}`;
+
   return box;
 }
 
@@ -2279,6 +2659,12 @@ export const editorInternals = {
    * читает счётчик.
    */
   paneBuildCount: (id: EditorTabId): number => paneBuildCounts.get(id) ?? 0,
+  /**
+   * Сколько раз собирался СКЕЛЕТ редактора (полоса вкладок + хост вкладок)
+   * за время жизни модуля (задача 90b2256e: переход loading→loaded не должен
+   * пересобирать каркас — прирост ровно на единицу).
+   */
+  skeletonBuildCount: (): number => skeletonBuildCount,
   /**
    * Активирует вкладку так же, как клик по её кнопке (ошибка 05bd8809):
    * тест строит вкладку «Вложения», уводит фокус на другую вкладку, шлёт

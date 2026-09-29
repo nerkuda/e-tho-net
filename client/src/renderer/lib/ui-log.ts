@@ -23,7 +23,10 @@ export type UiEventName =
   | 'ui.focus.applied'
   | 'ui.editor.opened'
   | 'ui.editor.comment.loaded'
-  | 'ui.editor.props.loaded';
+  | 'ui.editor.props.loaded'
+  // Сбой teardown-хендла рабочего пространства (ошибка 37b713de): диагностика
+  // того, что один из снимаемых модулей бросил исключение при демонтаже.
+  | 'ui.workspace.teardown_failed';
 
 /**
  * Emits one milestone event into the client file journal. Safe to call from

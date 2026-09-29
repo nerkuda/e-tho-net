@@ -19,8 +19,9 @@
  * - `isConnected` считается по цепочке `parent` до корня с флагом
  *   `connectedRoot` (по умолчанию `true` — как у «плоских» копий); запись
  *   `el.isConnected = false` меняет флаг корня;
- * - `remove()` вынимает узел из родителя и шлёт событие `remove` (контракт
- *   каркаса диалога `showDialog`); узел без родителя события не даёт;
+ * - `remove()` вынимает узел из родителя и НЕ шлёт событие `remove` (в
+ *   Chromium/Electron `Element.remove()` события не даёт — ошибка 0c45bce8);
+ *   очистку потребители зовут напрямую;
  * - `emit`/`dispatch`/`fire` — один и тот же тестовый драйвер событий.
  */
 
@@ -109,6 +110,16 @@ export class ShimClassList {
     return this.tokens().has(name);
   }
 
+  /**
+   * Итерация токенов, как у реального `DOMTokenList`: продукт обходит классы
+   * спредом (`[...el.classList]`, напр. поиск маркера фокуса в
+   * `editor.ts` → `restoreEditorFocus`). Без итератора такой код на шиме
+   * падал бы «not iterable».
+   */
+  [Symbol.iterator](): IterableIterator<string> {
+    return this.tokens().values();
+  }
+
   toggle(name: string, force?: boolean): void {
     const tokens = this.tokens();
     const next = force ?? !tokens.has(name);
@@ -169,7 +180,13 @@ export class ShimElement {
   colSpan = 0;
   options: ShimElement[] = [];
   scrollTop = 0;
+  /** Высота содержимого прокручиваемого контейнера (для клампинга `scrollTop`). */
+  scrollHeight = 0;
+  /** Видимая высота прокручиваемого контейнера. */
+  clientHeight = 0;
   offsetWidth = 0;
+  /** Смещение относительно `offsetParent` (якорь сохранения прокрутки). */
+  offsetTop = 0;
   tabIndex = 0;
   focused = false;
   /** Корень, подключённый к документу: читается геттером `isConnected`. */
@@ -214,6 +231,11 @@ export class ShimElement {
 
   get firstChild(): ShimElement | null {
     return this.children[0] ?? null;
+  }
+
+  /** Первый дочерний УЗЕЛ-элемент (текстовые узлы пропускаются, как в DOM). */
+  get firstElementChild(): ShimElement | null {
+    return this.children.find((child) => child.tagName !== '#text') ?? null;
   }
 
   /** Число дочерних УЗЛОВ-элементов (как у настоящего DOM; текстовые узлы,
@@ -263,6 +285,13 @@ export class ShimElement {
   }
 
   insertBefore(node: ShimElement, before: ShimElement | null): void {
+    // Реальная семантика DOM: insertBefore ПЕРЕМЕЩАЕТ уже подключённый узел
+    // (сначала снимает его с прежнего места), а не клонирует. Без этого
+    // keyed-reconcile давал бы дубли узлов на шиме.
+    if (node.parent !== null) {
+      const oldIndex = node.parent.children.indexOf(node);
+      if (oldIndex >= 0) node.parent.children.splice(oldIndex, 1);
+    }
     node.parent = this;
     if (before === null) {
       this.children.push(node);
@@ -313,15 +342,17 @@ export class ShimElement {
   }
 
   /**
-   * Снятие узла из DOM. Событие `remove` шлётся только когда узел был подключён
-   * (контракт каркаса диалога: повторный `remove()` не переигрывает `onClose`).
+   * Снятие узла из DOM. Событий НЕ шлёт: в Chromium/Electron
+   * `Element.remove()`/`removeChild()` события `remove` не дают, и шим,
+   * который бы его слал, вводил бы тесты в заблуждение (каркас диалога именно
+   * на этом событии ошибочно держал очистку — ошибка 0c45bce8, давнее
+   * происхождение f0e2fba4). Очистку потребители обязаны звать напрямую.
    */
   remove(): void {
     if (this.parent === null) return;
     const index = this.parent.children.indexOf(this);
     if (index >= 0) this.parent.children.splice(index, 1);
     this.parent = null;
-    this.emit('remove');
   }
 
   contains(node: ShimElement | null): boolean {
@@ -365,6 +396,18 @@ export class ShimElement {
 
   dispatch(type: string, event?: any): void {
     this.emit(type, event);
+  }
+
+  /**
+   * `dispatchEvent` реального DOM на элементе: тип берётся из `event.type`.
+   * Продукт шлёт на элементах `CustomEvent` (`editor/properties.ts` →
+   * `etn:refresh-count` для бейджа группы); шим-`CustomEvent` тестов обязан
+   * нести `type`. Без типа — no-op (совместимость с урезанными заглушками).
+   */
+  dispatchEvent(event: any): boolean {
+    const type = event?.type;
+    if (typeof type === 'string' && type !== '') this.emit(type, event);
+    return true;
   }
 
   fire(type: string, event?: any): void {

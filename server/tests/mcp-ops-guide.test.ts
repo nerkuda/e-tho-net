@@ -85,11 +85,23 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.match(toolText(ontologyTopic), /value_type/);
         assert.match(toolText(ontologyTopic), /reparent_blocked_by_layer/);
         // 8c64fdd4: тема обязана однозначно говорить, что принимают `parent`
-        // и `id`, — `parent` только id, `id` только существующий элемент.
+        // и `id`, — `parent` только id (имя не резолвится), `id` только
+        // существующий элемент.
+        // f14962ca: явный `parent` работает и на патче существующего типа,
+        // `parent: null` — прикрепление под корневой тип.
         const ontologyText = toolText(ontologyTopic);
         assert.match(ontologyText, /Адресация и создание элементов/);
-        assert.match(ontologyText, /`parent` — ТОЛЬКО id/);
+        assert.match(ontologyText, /`parent` — id существующего/);
+        // 1eb2a430: `null` и `""` равнозначны («под корень»), у корневого
+        // типа родителя нет — явный parent → VALIDATION_ERROR (паритет с REST).
+        assert.match(ontologyText, /`null`\/`""` — прикрепить тип/);
+        assert.match(ontologyText, /у КОРНЕВОГО типа родителя нет/);
         assert.match(ontologyText, /id ему\s*\n?генерирует сервер|генерирует сервер/);
+        // 16766f82: тема обязана говорить, что явный `parent_link_type_id`
+        // работает и на патче существующего свойства-связи (`null` — под
+        // корневой тип связи, пропущенный ключ родителя не трогает).
+        assert.match(ontologyText, /`parent_link_type_id` работает и на патче/);
+        assert.match(ontologyText, /`null` — прикрепить под корневой тип связи/);
 
         const queryTopic = await handle.client.callTool({
           name: 'etn.guide',

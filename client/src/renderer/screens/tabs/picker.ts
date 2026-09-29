@@ -45,7 +45,7 @@ function roleBadge(role: string): HTMLElement {
  * reloads the network list each time it opens so a freshly created or
  * revoked network is reflected immediately.
  */
-export function mountPicker(host: HTMLElement): void {
+export function mountPicker(host: HTMLElement): () => void {
   const errorLine = errorParagraph();
   errorLine.hidden = true;
 
@@ -215,6 +215,11 @@ export function mountPicker(host: HTMLElement): void {
     lastOpen = open;
   };
 
-  store.subscribe(update);
+  const unsubscribe = store.subscribe(update);
   update();
+
+  // Release the store subscription on workspace teardown (ошибка 37b713de).
+  return () => {
+    unsubscribe();
+  };
 }

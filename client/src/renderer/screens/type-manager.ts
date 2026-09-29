@@ -145,6 +145,10 @@ import {
   type PropertyListRow,
 } from '../lib/property-list.js';
 import { buildViewsTab } from './thought-type/views-tab.js';
+// Контракт панели объединённого диалога каталога (задача 979761cd) —
+// импорт только типа: в рантайме цикл не возникает (композитор импортирует
+// эту панель значением).
+import type { CataloguePanel } from './type-catalogue.js';
 import { store } from '../state.js';
 import { renderNewTypeHint } from '../lib/type-editor-hints.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
@@ -372,10 +376,15 @@ function typeTreeItems(types: readonly ThoughtType[]): TypeTreeItem[] {
 // Thought types: tree list + editor
 // ---------------------------------------------------------------------------
 
-/** Opens the thought-types tree dialog (L6/L21). */
-export function showThoughtTypesDialog(): void {
+/**
+ * Собирает панель списка «Типы мыслей» объединённого диалога каталога
+ * (задача 979761cd, `screens/type-catalogue.ts`). До 0.10.2 это был отдельный
+ * диалог (`showThoughtTypesDialog`); тело, дерево, поиск, кнопки и редактор —
+ * те же, изменилась только точка монтирования: панель отдаётся вкладке и
+ * получает фокус от каркаса объединённого диалога.
+ */
+export function buildThoughtTypesPanel(): CataloguePanel {
   const networkId = requireNetworkId();
-  const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
   const body = div('form-stack list-dialog-body');
 
@@ -675,21 +684,15 @@ export function showThoughtTypesDialog(): void {
     }
   }
 
-  showDialog({
-    title: t('thoughtTypes.title'),
-    body,
-    // Роль `l` (требование 13464c39): три колонки списка (тип, комментарий,
-    // количество) читаются без наезда; на узком контейнере — прокрутка
-    // (ошибка d866bc65).
-    size: 'l',
-    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
-    // (правило 9 требования 11ddd910, ошибка f68bb43c).
-    fixedHeight: true,
-    // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
-    footerError: errorLine,
-    buttons: [{ label: t('actions.close'), primary: true }],
-  });
   void reload();
+  return {
+    root: body,
+    // Своего realtime-канала у списка типов мыслей нет — освобождать нечего.
+    dispose: () => undefined,
+    // Стартовый фокус панели — строка горячего поиска (первая строка списка,
+    // правило 1 требования 11ddd910).
+    focus: () => searchInput.focus(),
+  };
 }
 
 // ---------------------------------------------------------------------------

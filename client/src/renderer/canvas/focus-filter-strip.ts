@@ -125,6 +125,16 @@ export function onModeChange(listener: ModeListener): () => void {
   };
 }
 
+/**
+ * Test seam: число живых подписчиков смены режима. Нужен сторожу
+ * `guard-canvas-teardown.test.ts`, который проверяет, что teardown канваса
+ * снимает слушателя и они не накапливаются между монтированиями рабочего
+ * пространства (ошибка 37b713de). Продуктовый код им не пользуется.
+ */
+export function debugModeListenerCount(): number {
+  return modeListeners.length;
+}
+
 /** Returns the current strip mode for the canvas render path. */
 export function getActiveMode(): StripMode {
   return currentMode;

@@ -37,6 +37,14 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
    Core-пакеты (`guard-ui-licenses`).
 9. **Диалоги — через `lib/dialog.ts`**, не через `lib/ui` (каркас, роли
    размера S/M/L/XL; сторож `guard-ui-dialog`, требование `13464c39`).
+10. **Списки обновляются инкрементально.** Keyed-сверка `reconcileKeyed`
+    (`keyed-list.ts`) вместо `replaceChildren`/`clear` всей коллекции: полная
+    пересборка — только при однократном монтировании экрана и смене сущности
+    (стандарт «Списки рендерятся инкрементально», сторож `guard-keyed-lists`).
+    На keyed-сверке: «Дневник», «Структуры», таблица «Свойства» редактора и
+    дерево `tree.ts`. Строки `table.ts` живут в вендорском Vaadin Grid
+    (набор — через `items`, свой keyed-механизм); фасад лишь не пере-назначает
+    набор при смене выделения (`syncSelection`).
 
 ## Каталог компонентов
 
@@ -57,9 +65,11 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `comment.ts` / `comment.css` | `commentShell`, классы `COMMENT_*` | Каркас просмотра/правки комментария: рамка, панель действий, состояния, режим `data-mode` | задача `9cb87c42`, требование `24ca6770` |
 | `splitter.ts` / `splitter.css` | `uiSplitter`, `wireSplitter`, `splitterElement`, `SPLITTER_CLASS` | Разделитель/ресайзер: pointer-drag и гриф; ось/знак/min/max задаёт владелец | задача `50f57b82` |
 | `state.ts` | `select`, `selectMany`, `deepEqual` | Реактивные селекторы поверх store (основа списков) | задача `60fcc702`, требование `628d33ee` |
-| `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы) | задача `dad2b029`, требование `93115633` |
+| `keyed-list.ts` | `reconcileKeyed`, `DEFAULT_KEY_ATTR` | Инкрементальная сверка списка по ключу (identity неизменных узлов) | задача `6952c619`, ADR keyed-обновления |
+| `scroll-anchor.ts` | `preserveScroll` | Возврат позиции прокрутки при легитимной полной пересборке | задача `3bfef1f7` |
+| `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы); строки — вендорский Grid, выделение синхронизируется точечно | задача `dad2b029`, требование `93115633`, задача `d59fdfb9` |
 | `table-grid.ts` | `vaadinGridAdapter` | Адаптер модели таблицы к Vaadin Grid | задача `dad2b029` |
-| `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории) | задача `d1c15a2d`, требование `0086037c` |
+| `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории); коллекция строк — на keyed-сверке | задача `d1c15a2d`, требование `0086037c`, задача `d59fdfb9` |
 | `chip-list.ts` / `chip-list.css` | `chipList`, классы `CHIP_*` | Чипы выбранных значений с крестиком и полем добавления | требование `d1cd2095` |
 | `empty-state.ts` / `empty-state.css` | `emptyState`, `loadingState`, `errorState`, классы `EMPTY_STATE_*`/`LOADING_STATE_CLASS`/`ERROR_STATE_CLASS` | «Пусто/грузлю/ошибка» с подсказкой и точкой входа к действию | задача `d7b7c367`, требование `e514768f` |
 | `register.ts` | (side-effect импорт) | Регистрация вендора и подключение CSS в правильном порядке | задача `95dd50b9` |
@@ -116,4 +126,4 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 `guard-ui-tree`, `guard-ui-empty-state`, `guard-ui-states`,
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
 `guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
-`guard-ui-licenses`, `guard-ui-dialog`.
+`guard-ui-licenses`, `guard-ui-dialog`, `guard-keyed-lists`.

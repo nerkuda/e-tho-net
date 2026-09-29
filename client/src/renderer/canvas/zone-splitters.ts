@@ -171,14 +171,18 @@ function wireHorizontalSplitter(hooks: ZoneSplitterHooks): void {
 
 /**
  * Mounts both zone splitters: applies the stored shares as CSS variables and
- * wires dragging/double-click-reset. Called once by `mountCanvas`.
+ * wires dragging/double-click-reset. Called once by `mountCanvas`. Returns a
+ * teardown handle that releases the store subscription (ошибка 37b713de).
  */
-export function mountZoneSplitters(hooks: ZoneSplitterHooks): void {
+export function mountZoneSplitters(hooks: ZoneSplitterHooks): () => void {
   applyCanvasLayoutVars(hooks.host);
   wireVerticalSplitter(hooks);
   wireHorizontalSplitter(hooks);
   // openNetwork() pushes new shares into the store when a network opens.
-  store.subscribe(() => {
+  const unsubscribe = store.subscribe(() => {
     if (hooks.host.isConnected) applyCanvasLayoutVars(hooks.host);
   });
+  return () => {
+    unsubscribe();
+  };
 }

@@ -124,6 +124,27 @@ export interface MonthCalendarHandle {
   getMonth(): { year: number; month: number };
 }
 
+/**
+ * Индикатор записей дня (0.10.2, задача 41ed99ab, элемент 55b07702): число
+ * чисел-счётчиков заменено 1–3 вертикальными точками. Пороги: записей нет —
+ * 0 точек; ≤ 50 — 1 точка; 51…100 — 2 точки; > 100 — 3 точки. Точки живут
+ * только там, где хозяин передал `counts` (панель «Дневника»); в диалоге
+ * даты/периода счётчики не задаются — вид прежний.
+ */
+export function calendarDotCount(count: number): 0 | 1 | 2 | 3 {
+  if (count <= 0) return 0;
+  if (count <= 50) return 1;
+  if (count <= 100) return 2;
+  return 3;
+}
+
+/** Столбик из `n` точек-индикаторов (слева от номера дня). */
+function buildDots(n: number): HTMLElement {
+  const box = el('span', 'cal-dots');
+  for (let i = 0; i < n; i++) box.append(el('span', 'cal-dot'));
+  return box;
+}
+
 /** Наименьшая из двух дат. */
 function minDay(a: string, b: string): string {
   return a <= b ? a : b;
@@ -408,7 +429,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     const count = opts.counts?.(cell.day) ?? 0;
     const label = String(Number(cell.day.slice(8, 10)));
     const button = uiButton({
-      label,
+      label: '',
       role: 'ghost',
       size: 's',
       title: cell.day,
@@ -422,10 +443,12 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
         opts.onPickDay?.(cell.day);
       },
     });
-    if (count > 0) {
-      button.append(el('span', 'cal-count', String(count)));
-      button.classList.add('has-records');
-    }
+    // Индикатор записей — столбик 1–3 точек СЛЕВА от номера дня, по центру
+    // ячейки (0.10.2, задача 41ed99ab); фоновой подсветки `.has-records` больше
+    // нет — счётчик-число упразднён.
+    const dots = calendarDotCount(count);
+    if (dots > 0) button.append(buildDots(dots));
+    button.append(span(label, 'cal-day-num'));
     if (dragEnabled) wireDrag(button, cell.day);
     return button;
   }

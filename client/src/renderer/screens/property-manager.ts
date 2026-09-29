@@ -90,7 +90,12 @@ import {
 } from '../lib/dialog.js';
 import { div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { formDirty } from '../lib/pure.js';
-import { footerErrorLine, operationError, operationErrorText } from '../lib/ui/messages.js';
+import {
+  footerErrorLine,
+  operationError,
+  operationErrorText,
+  type FooterErrorLine,
+} from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { showLinkStyleDialog } from '../editor/style-dialog.js';
@@ -126,6 +131,10 @@ import {
   ensurePropertyLinkTypes,
   type PropertyRegistryRow,
 } from '../lib/property-list.js';
+// Контракт панели объединённого диалога каталога (задача 979761cd) —
+// импорт только типа: в рантайме цикл не возникает (композитор импортирует
+// эти панели значением).
+import type { CataloguePanel } from './type-catalogue.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -173,9 +182,9 @@ export type RegistryRow = PropertyRegistryRow;
  * клик, контекстное меню «Изменить»/«Удалить». Ширина — 900 px (≈ на 25 %
  * шире прежних 720 px).
  */
-export function showPropertyManagerDialog(): void {
+export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): CataloguePanel {
   const networkId = requireNetworkId();
-  const errorLine = footerErrorLine();
+  const errorLine = opts.errorLine;
   let cachedRows: RegistryRow[] | null = null;
   // Свойство, созданное в открытом отсюда редакторе: после перезагрузки его
   // строка становится текущей (правило 7 требования 11ddd910).
@@ -353,21 +362,6 @@ export function showPropertyManagerDialog(): void {
     }
   }
 
-  showDialog({
-    title: 'Свойства',
-    body,
-    size: 'l',
-    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
-    // (правило 9 требования 11ddd910, ошибка f68bb43c).
-    fixedHeight: true,
-    // Ошибки реестра — в панели кнопок диалога (требование 397c5a56).
-    footerError: errorLine,
-    buttons: [{ label: t('actions.close'), primary: true }],
-    // Фокус на таблице: клавиатура (↑/↓, Home/End, Enter) сразу работает по
-    // списку — её ведёт фасад `lib/ui/table.ts`.
-    onMount: () => list.focus(),
-  });
-
   // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —
   // имена сторон (`name_forward` / `name_reverse`) в строке свойства-связи
   // и предварительная оценка числа рёбер зависят от каталога типов связей.
@@ -377,20 +371,17 @@ export function showPropertyManagerDialog(): void {
     cachedRows = null;
     void reload();
   });
-  // Диалог закрыт — дропаем realtime-подписку иначе закрытый диалог будет
-  // пере-рендериться. `showDialog` не отдаёт onClose; ловим отсоединение
-  // `body` от DOM (mutation observer на родителе).
-  const observer = new MutationObserver(() => {
-    if (!body.isConnected) {
-      unsubscribe();
-      observer.disconnect();
-    }
-  });
-  if (body.parentElement !== null) {
-    observer.observe(body.parentElement, { childList: true });
-  }
 
   void reload();
+  return {
+    root: body,
+    // Подписка снимается по закрытию объединённого диалога (каркас зовёт
+    // onClose): раньше её снимал MutationObserver на отсоединении тела.
+    dispose: () => unsubscribe(),
+    // Фокус на таблице: клавиатура (↑/↓, Home/End, Enter) сразу работает по
+    // списку — её ведёт фасад `lib/ui/table.ts`.
+    focus: () => list.focus(),
+  };
 }
 
 /**
@@ -2499,9 +2490,8 @@ function linkTypeTreeItems(
   }));
 }
 
-export function showLinkTypesTreeDialog(): void {
+export function buildLinkTypesPanel(): CataloguePanel {
   const networkId = requireNetworkId();
-  const errorLine = footerErrorLine();
   const tableWrap = div('admin-table-wrap');
   const body = div('form-stack list-dialog-body');
 
@@ -2776,20 +2766,6 @@ export function showLinkTypesTreeDialog(): void {
     tree.setFilter(searchQuery);
   });
 
-  showDialog({
-    title: t('linkTypes.title'),
-    body,
-    // Роль `l` (требование 13464c39): дерево типов связей единообразно с
-    // деревом типов мыслей — колонки читаются без наезда (ошибка d866bc65).
-    size: 'l',
-    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
-    // (правило 9 требования 11ddd910, ошибка f68bb43c).
-    fixedHeight: true,
-    // Ошибки списка — в панели кнопок (требование 397c5a56).
-    footerError: errorLine,
-    buttons: [{ label: t('actions.close'), primary: true }],
-  });
-
   // Realtime: `link-type.*` инвалидирует кеш; `property-registry.*` тоже —
   // клик открывает свойство, и его название/тип значения должны быть
   // актуальны в момент клика.
@@ -2801,15 +2777,13 @@ export function showLinkTypesTreeDialog(): void {
     cachedCounts = null;
     void reload();
   });
-  const observer = new MutationObserver(() => {
-    if (!body.isConnected) {
-      unsubscribe();
-      observer.disconnect();
-    }
-  });
-  if (body.parentElement !== null) {
-    observer.observe(body.parentElement, { childList: true });
-  }
 
   void reload();
+  return {
+    root: body,
+    // Подписка снимается по закрытию объединённого диалога (каркас зовёт
+    // onClose): раньше её снимал MutationObserver на отсоединении тела.
+    dispose: () => unsubscribe(),
+    focus: () => searchInput.focus(),
+  };
 }

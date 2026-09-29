@@ -17,16 +17,17 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
-import type { FocusEdge } from '@etn/shared';
+import type { FocusEdge, FocusResponse, Thought } from '@etn/shared';
 
-import { initLinksOverlay, linksInternals } from '../src/renderer/canvas/links.js';
+import { initLinksOverlay, linksInternals, setSupplementalEdges } from '../src/renderer/canvas/links.js';
 import { assembledStylesFile } from './renderer-css.js';
 import { ShimElement } from './dom-shim.js';
 
 const LINKS_SRC = resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'links.ts');
+const CANVAS_SRC = resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts');
 const STYLES_SRC = assembledStylesFile();
 
-const { groupBundles, bundleTrashed, rectsOverlap, edgeGeometry, edgePointAt } =
+const { groupBundles, bundleTrashed, rectsOverlap, edgeGeometry, edgePointAt, edgeSource } =
   linksInternals;
 
 function edge(
@@ -381,5 +382,98 @@ describe('initLinksOverlay: вьюпорт и структура слоёв (DOM
       // Визуальный слой — до зоны, hit/top/drag — после: облачка выше линий.
       assert.equal(host.children[0], layers.find((l) => l.classList.contains('links-overlay')));
     });
+  });
+});
+
+/**
+ * Источник рёбер оверлея при активной догрузке порций (ошибка c02ff7dc).
+ *
+ * `POST /thoughts/edges` даёт снимок рёбер среди ВСЕХ видимых мыслей, но
+ * обновляется лишь при догрузке. Если этот снимок заменял `focus.edges`,
+ * локальное «Удалить совсем» убирало связь из `focus.edges`, но не из снимка —
+ * линия висела на карте до смены фокуса. Общие рёбра обязаны браться из живого
+ * `focus.edges`, снимок хранит только рёбра вне него.
+ */
+describe('edgeSource: живые рёбра фокуса + подгруженные (ошибка c02ff7dc)', () => {
+  const thought = (id: string): Thought => ({
+    id,
+    title: id,
+    type_id: null,
+    icon: null,
+    icon_kind: 'emoji',
+    icon_attachment_id: null,
+    active: true,
+    is_protected: false,
+    is_root: false,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    synonyms: [],
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  });
+
+  const focus = (edges: FocusEdge[]): FocusResponse => ({
+    focused: thought('f'),
+    parents: [],
+    siblings: [],
+    children: [],
+    edges,
+    sorts: {
+      parents: { sort: 'created', order: 'asc' },
+      children: { sort: 'created', order: 'asc' },
+      siblings: { sort: 'created', order: 'asc' },
+    },
+  });
+
+  const ids = (list: FocusEdge[]): string[] => list.map((e) => e.id).sort();
+
+  it('без подгруженного набора рисует рёбра фокуса', () => {
+    setSupplementalEdges(null);
+    assert.deepEqual(ids(edgeSource(focus([edge('A', 'f', 'p')]))), ['A']);
+  });
+
+  it('подгруженные рёбра вне фокуса добавляются к живым', () => {
+    // Снимок по видимым мыслям: общее ребро A и связь подгруженных соседей B.
+    setSupplementalEdges([edge('A', 'f', 'p'), edge('B', 'p', 'c')], [edge('A', 'f', 'p')]);
+    assert.deepEqual(ids(edgeSource(focus([edge('A', 'f', 'p')]))), ['A', 'B']);
+    setSupplementalEdges(null);
+  });
+
+  it('удалённое общее ребро исчезает, хотя снимок его помнит (регресс)', () => {
+    setSupplementalEdges([edge('A', 'f', 'p'), edge('B', 'p', 'c')], [edge('A', 'f', 'p')]);
+    // Локальное «Удалить совсем» (patchFocusEdge) убрало A из живого ответа
+    // фокуса; снимок ещё держит A, но рисоваться он не должен.
+    assert.deepEqual(ids(edgeSource(focus([]))), ['B']);
+    setSupplementalEdges(null);
+  });
+
+  it('не дублирует рёбра, попавшие и в фокус, и в снимок', () => {
+    setSupplementalEdges([edge('A', 'f', 'p'), edge('B', 'p', 'q')], []);
+    assert.deepEqual(ids(edgeSource(focus([edge('A', 'f', 'p')]))), ['A', 'B']);
+    setSupplementalEdges(null);
+  });
+
+  it('canvas перечитывает снимок на свежем ответе того же фокуса (canvas.ts)', () => {
+    // Поведенческая проверка недостижима: `syncZoneTotalsWithFreshFocus` и
+    // `refreshZoneEdges` не экспортированы, а их прогон требует полностью
+    // смонтированного холста, реестра ссылок и мок-API ETN — это не
+    // пропорционально предмету. Контракт стережём структурно, но без привязки к
+    // форматированию: ищем цепочку «сверка секторов → (при наличии снимка)
+    // перечитать рёбра» регулярным выражением по вызовам, а не по подстрокам
+    // с точным отступом и порядком пробелов.
+    const src = readFileSync(CANVAS_SRC, 'utf8');
+    assert.match(
+      src,
+      /reconcileZoneTotals\(focus\)\.then\(\(\) => \{[\s\S]*?if \(hasSupplementalEdges\(\)\) void refreshZoneEdges\(focus\)/,
+      'снимок перечитывается ПОСЛЕ сверки секторов и только когда он есть',
+    );
   });
 });

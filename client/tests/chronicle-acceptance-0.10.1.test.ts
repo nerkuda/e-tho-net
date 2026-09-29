@@ -67,7 +67,9 @@ describe('приёмка «Дневника» 0.10.1: кнопка «Сегод�
 
 describe('приёмка «Дневника» 0.10.1: псевдо-запись по заголовку (пункт 4)', () => {
   it('blur заголовка создаёт запись без обходной меры-пробела', () => {
-    assert.match(CHRONICLE, /titleInput\.addEventListener\('blur', \(\) => void ensureSlot\(\{\}\)\)/);
+    // Заголовок слота — общий компонент (ошибка 36c330a3): и `Enter`, и `blur`
+    // завершают правку и зовут `ensureSlot` с введённым заголовком.
+    assert.match(CHRONICLE, /void ensureSlot\(\{ title: next \}\)/);
     assert.match(CHRONICLE, /body_md: body\b/, 'пустой текст отправляется как есть');
     assert.ok(!/\?\s*'\s'\s*:\s*body/.test(CHRONICLE), 'обходная мера «пробел» снята');
   });
@@ -87,8 +89,12 @@ describe('приёмка «Дневника» 0.10.1: счётчики кале�
     );
   });
 
-  it('день со счётчиком получает подпись независимо от выделения', () => {
-    assert.match(CALENDAR, /if \(count > 0\)[\s\S]*cal-count/);
+  it('день с записями получает индикатор независимо от выделения', () => {
+    // 0.10.2 (задача 41ed99ab): число-счётчик заменено столбиком точек слева от
+    // номера дня; пороги 50/100 — `calendarDotCount`, класс `cal-dots`.
+    assert.match(CALENDAR, /const dots = calendarDotCount\(count\)/);
+    assert.match(CALENDAR, /if \(dots > 0\) button\.append\(buildDots\(dots\)\)/);
+    assert.match(CALENDAR, /'cal-dots'/);
   });
 });
 

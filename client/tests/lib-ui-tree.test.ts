@@ -180,6 +180,24 @@ describe('lib/ui/tree: рендер строк и раскрытие', () => {
     assert.deepEqual(tree.getVisibleIds(), ['root'], 'каретка свернула ветвь root (скрылись a и c)');
   });
 
+  it('keyed-сверка: неизменные строки сохраняют identity (раскрытие соседней ветви)', async () => {
+    const { createTree } = await treeModule();
+    const host = new ShimElement('div');
+    const tree = createTree<Item>({
+      items: ITEMS,
+      expandedIds: ['root'],
+      renderContent: () => textNode('x'),
+    });
+    host.append(tree.root as unknown as ShimElement);
+    const cBefore = rowById(host, 'c');
+    const rootBefore = rowById(host, 'root');
+
+    tree.setExpanded('a', true); // раскрывает ветвь a (появляется b)
+    assert.ok(tree.getVisibleIds().includes('b'), 'новая строка b появилась');
+    assert.equal(rowById(host, 'c'), cBefore, 'identity неизменной строки c сохранён');
+    assert.equal(rowById(host, 'root'), rootBefore, 'identity неизменной строки root сохранён');
+  });
+
   it('пустое состояние — текст из опции', async () => {
     const { createTree } = await treeModule();
     const tree = createTree<Item>({

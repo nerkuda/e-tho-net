@@ -544,8 +544,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'structures.edges',
     bind(
-      (networkId: string, ids: string[], showInactive: boolean) =>
-        requireRest(deps).postStructureEdges(networkId, ids, showInactive),
+      (
+        networkId: string,
+        ids: string[],
+        showInactive: boolean,
+        linkFilter: Parameters<RestClient['postStructureEdges']>[3],
+      ) => requireRest(deps).postStructureEdges(networkId, ids, showInactive, linkFilter),
     ),
   );
   handlers.set(
