@@ -300,9 +300,12 @@ export function openLinkInEditor(link: Link): void {
 
 /**
  * Opens a thought in the editor without changing the canvas focus (§2.2.4 —
- * a single cloud click / Enter). The editor target switches at once; the full
- * entity rides along as soon as it loads — until then the editor falls back to
- * the focused thought (same mechanism as the structures/chronicle views). The
+ * a single cloud click / Enter). The editor target switches at once (so the
+ * canvas halo and the visit history follow the click immediately); the full
+ * entity rides along as soon as it loads. While it is in flight `render()`
+ * HOLDS the previously shown entity instead of dropping to a loading
+ * placeholder — the same visual result the structures/chronicle views get by
+ * fetching the entity themselves before switching (error 253505a6). The
  * focused thought itself needs no target (editorTarget=null → follow focus).
  *
  * Bug fix (editor shaking on a repeat click of the same thought): this used
@@ -351,6 +354,16 @@ export function openThoughtInEditor(id: string): void {
   // write lands (`setHistoryChangeListener`).
   void noteThoughtWillOpen(id);
   logUiEvent('ui.editor.opened', { id, kind: 'thought' });
+  // Snapshot the pre-click state: the editor HOLDS the previously shown entity
+  // while the new payload is in flight (see `render()`), and a failed fetch
+  // must not leave that hold pointing at the new halo forever — the catch
+  // below restores this snapshot.
+  const previous = {
+    editorTarget: store.state.editorTarget,
+    selectedLinkId: store.state.selectedLinkId,
+    structuresActiveThoughtId: store.state.structuresActiveThoughtId,
+    structuresActiveThought: store.state.structuresActiveThought,
+  };
   store.update({
     editorTarget: { kind: 'thought', id },
     selectedLinkId: null,
@@ -370,7 +383,15 @@ export function openThoughtInEditor(id: string): void {
         store.update({ editorTarget: { kind: 'thought', id, thought }, structuresActiveThought: thought });
       }
     })
-    .catch(() => undefined);
+    .catch(() => {
+      // The entity never arrived (deleted, lost access, network hiccup). Drop
+      // the payload-less target back to the pre-click state — but only if it is
+      // still the one this call set (a newer click/selection wins).
+      const live = store.state.editorTarget;
+      if (live?.kind === 'thought' && live.id === id && live.thought === undefined) {
+        store.update(previous);
+      }
+    });
 }
 
 /**
@@ -1369,6 +1390,10 @@ function retargetHeader(ctx: EditorContext): boolean {
  *  • same open entity, new version/type → {@link patchHeader} (header only);
  *  • another entity of the SAME kind/dock, or the loading→loaded transition →
  *    {@link renderRetarget} (header + tab CONTENT rebuilt, skeleton kept);
+ *  • another entity of the same kind whose full payload has not arrived yet
+ *    (the target id was set ahead of `etn.thoughts.get`) → HOLD: the previous
+ *    loaded entity stays on screen untouched until the payload lands, then the
+ *    single retarget runs (error 253505a6 — no loading-placeholder teardown);
  *  • another kind/dock/layer, or no skeleton yet → {@link renderFull}.
  *
  * The dock position and the session layer stay in the identity signature
@@ -1402,6 +1427,29 @@ async function render(): Promise<void> {
     prevCtx !== null &&
     ctx.ownerType === prevCtx.ownerType &&
     ctx.ownerId === prevCtx.ownerId;
+
+  // A thought→thought switch through `openThoughtInEditor` (canvas click,
+  // kbd-nav, links tab, mini-graph, value-editor): the target id arrives
+  // BEFORE the full entity (`etn.thoughts.get` in flight). Do NOT tear the
+  // header and the panes down into a loading placeholder and rebuild them
+  // again when the entity lands — that double rebuild is the "editor clears
+  // and redraws on every cloud click" jitter of error 253505a6, while the
+  // structures/chronicle views (which pass the already-fetched entity) stay
+  // smooth. Keep the previously shown loaded entity on screen, exactly as
+  // those views do while they fetch the target themselves; the store tick
+  // that delivers the entity re-enters `render()` and retargets ONCE (in
+  // place when the type matches, via `replaceHeader` otherwise). The render
+  // signatures are deliberately NOT advanced here, so that delivery is not
+  // swallowed by the "nothing changed" fast path.
+  const awaitingSameKindEntity =
+    identitySame &&
+    skeletonLive &&
+    ctx !== null &&
+    !ctxLoaded(ctx) &&
+    prevCtx !== null &&
+    ctxLoaded(prevCtx) &&
+    ctx.ownerType === prevCtx.ownerType;
+  if (awaitingSameKindEntity) return;
 
   lastSignature = fullSignature;
   lastIdentitySignature = identitySignature;

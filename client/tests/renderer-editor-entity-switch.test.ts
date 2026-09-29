@@ -676,4 +676,114 @@ describe('инкрементальная смена сущности в реда
       'таблица прежнего владельца показана, а не текст ошибки',
     );
   });
+
+  it('смена цели карты удерживает каркас до прихода сущности (253505a6)', async () => {
+    shimDom();
+    installEtn();
+    // `openThoughtInEditor` sets the target id BEFORE the entity is fetched —
+    // the deferred fetch lets us observe the in-flight window.
+    const pending = new Map<string, (t: Thought) => void>();
+    const win = (globalThis as any).window as Record<string, any>;
+    win.etn.thoughts = {
+      get: (_networkId: string, id: string) =>
+        new Promise<Thought>((resolve) => pending.set(id, resolve)),
+    };
+    const { mountEditor, editorInternals, openThoughtInEditor } = await import(
+      '../src/renderer/editor/editor.js'
+    );
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    const scrollBox = host.children[1]!;
+    const tabBar = scrollBox.querySelector('.editor-tabs')!;
+    const titleA = scrollBox.querySelector('.editor-title-input')!;
+    const skeletons = editorInternals.skeletonBuildCount();
+
+    // A map cloud click: the target switches at once, the entity is in flight.
+    openThoughtInEditor('t2');
+    await flush();
+
+    assert.equal(scrollBox.querySelector('.editor-empty'), null, 'пустого редактора нет');
+    assert.equal(host.children[1], scrollBox, 'scrollBox удержан во время загрузки');
+    assert.equal(scrollBox.querySelector('.editor-tabs'), tabBar, 'полоса вкладок удержана');
+    assert.equal(
+      scrollBox.querySelector('.editor-title-input'),
+      titleA,
+      'прежняя шапка удержана, а не заменена loading-заглушкой',
+    );
+    assert.equal(titleA.value, 'A', 'до прихода сущности показано прежнее значение');
+    assert.equal(
+      scrollBox.querySelector('.editor-icon-loading'),
+      null,
+      'loading-заглушка не строится на смене мысли того же вида',
+    );
+    assert.equal(editorInternals.skeletonBuildCount(), skeletons, 'каркас не пересобирается');
+
+    // The entity arrives: ONE in-place retarget — same skeleton, same header node.
+    pending.get('t2')!(makeThought({ id: 't2', title: 'B', type_id: 'ta' }));
+    await flush();
+
+    assert.equal(host.children[1], scrollBox, 'scrollBox тот же после загрузки');
+    assert.equal(scrollBox.querySelector('.editor-tabs'), tabBar, 'полоса вкладок та же после загрузки');
+    assert.equal(
+      scrollBox.querySelector('.editor-title-input'),
+      titleA,
+      'шапка переопределена на месте — тот же узел',
+    );
+    assert.equal(titleA.value, 'B', 'значение обновлено на новую мысль');
+    assert.equal(
+      editorInternals.skeletonBuildCount(),
+      skeletons,
+      'смена цели не собирает каркас повторно',
+    );
+  });
+
+  it('неудачная загрузка сущности карты возвращает цель к прежнему состоянию', async () => {
+    shimDom();
+    installEtn();
+    const win = (globalThis as any).window as Record<string, any>;
+    win.etn.thoughts = {
+      get: async () => {
+        throw new Error('boom');
+      },
+    };
+    const { mountEditor, openThoughtInEditor } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({
+      networkId: 'n1',
+      focus: makeFocus(makeThought({ id: 't1', title: 'A', type_id: 'ta' })),
+      thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+      editorTarget: null,
+      collapsedGroups: {},
+    } as any);
+
+    const host = new ShimElement('div');
+    mountEditor(host as any);
+    await flush();
+
+    openThoughtInEditor('t2');
+    await flush();
+
+    assert.equal(
+      store.state.editorTarget,
+      null,
+      'неудачная загрузка вернула цель к прежнему состоянию (follow focus)',
+    );
+    const scrollBox = host.children[1]!;
+    assert.equal(
+      scrollBox.querySelector('.editor-title-input')!.value,
+      'A',
+      'редактор вернулся к прежней мысли',
+    );
+  });
 });
