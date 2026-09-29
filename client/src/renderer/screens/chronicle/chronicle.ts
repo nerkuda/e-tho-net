@@ -117,8 +117,6 @@ import {
   localDayStart,
   periodValuesForRange,
   planSlotCommit,
-  recordDisplayTitle,
-  recordTitleFromBody,
   resolvePeriodDay,
   rowDays,
   slotDeleteNeedsNetwork,
@@ -127,6 +125,7 @@ import {
   weekPeriod,
   type SlotCommitPlan,
 } from './diary.js';
+import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
 import {
   addThoughtToFilter,
   chronicleDefinition,

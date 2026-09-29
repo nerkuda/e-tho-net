@@ -131,11 +131,24 @@ describe('вкладка «Дневник» редактора: таблица �
     assert.match(tab, /header: t\('chrono\.col\.editor'\)/);
   });
 
-  it('п.1: «Заголовок» — title, иначе первая непустая строка заметки', () => {
+  it('п.1: «Заголовок» — title, иначе производный из тела общим разбором', () => {
     assert.match(tab, /function recordTitle\(comment: Comment\): string/, 'помощник заголовка');
-    assert.match(tab, /const title = \(comment\.title \?\? ''\)\.trim\(\)/, 'сначала title');
-    assert.match(tab, /comment\.body_md\.split\(\/\\r\?\\n\/\)/, 'иначе — строки заметки');
-    assert.match(tab, /TITLE_FROM_BODY_MAX = 250/, 'не более 250 символов');
+    // Разбор производного заголовка один на ленту и вкладку — общий модуль
+    // `lib/record-title.ts` (задача 8e4a965f); своей второй реализации нет.
+    assert.match(
+      tab,
+      /import \{ EDITOR_RECORD_TITLE_MAX, recordDisplayTitle \} from '\.\.\/lib\/record-title\.js'/,
+      'общий разбор подключён',
+    );
+    assert.match(
+      tab,
+      /recordDisplayTitle\(comment\.title, comment\.body_md, EDITOR_RECORD_TITLE_MAX\)/,
+      'ячейка — общий помощник с лимитом вкладки',
+    );
+    assert.ok(
+      !/comment\.body_md\.split\(/.test(tab),
+      'собственного разбора строк заметки в вкладке нет',
+    );
   });
 
   it('п.1: «Редактор» — последний изменивший (updated_by), через кэш пользователей', () => {

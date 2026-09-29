@@ -56,9 +56,7 @@ import {
   openDatePeriodDialog,
   resolveDatePeriodInstants,
 } from '../lib/date-period-dialog.js';
-
-/** Сколько символов первой непустой строки заметки берём в колонку «Заголовок». */
-const TITLE_FROM_BODY_MAX = 250;
+import { EDITOR_RECORD_TITLE_MAX, recordDisplayTitle } from '../lib/record-title.js';
 
 /** Registers the «Дневник» tab content and its badge counter (L7). */
 export function registerChronoTab(): void {
@@ -438,16 +436,15 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   return root;
 }
 
-/** Title for the «Заголовок» cell: `title`, else the first non-empty body line. */
+/**
+ * Title for the «Заголовок» cell: `title`, else the derived title from the body
+ * (first non-empty line with leading markdown markers stripped and HTML entities
+ * decoded), truncated to {@link EDITOR_RECORD_TITLE_MAX}. Parsing is shared with
+ * the diary feed (`lib/record-title.ts`, задача 8e4a965f): no cross-screen
+ * dependency `editor/` ← `screens/`, no second implementation.
+ */
 function recordTitle(comment: Comment): string {
-  const title = (comment.title ?? '').trim();
-  if (title !== '') return title;
-  for (const line of comment.body_md.split(/\r?\n/)) {
-    const text = line.trim();
-    if (text === '') continue;
-    return text.length > TITLE_FROM_BODY_MAX ? `${text.slice(0, TITLE_FROM_BODY_MAX)}…` : text;
-  }
-  return '';
+  return recordDisplayTitle(comment.title, comment.body_md, EDITOR_RECORD_TITLE_MAX);
 }
 
 /** Author name for the «Редактор» cell (falls back to the raw id in brackets). */

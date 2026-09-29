@@ -15,11 +15,12 @@ import {
   calendarDotCount,
 } from '../src/renderer/lib/month-calendar.js';
 import {
+  EDITOR_RECORD_TITLE_MAX,
   RECORD_DISPLAY_TITLE_MAX,
-  isWeekend,
   recordDisplayTitle,
   recordTitleFromBody,
-} from '../src/renderer/screens/chronicle/diary.js';
+} from '../src/renderer/lib/record-title.js';
+import { isWeekend } from '../src/renderer/screens/chronicle/diary.js';
 import {
   applyRecordCollapsed,
   dayOfCard,
@@ -73,6 +74,18 @@ describe('производный заголовок записи (задача 4
     // `snippet` уже мог быть обрезан сервером — второе многоточие не добавляется.
     const truncated = `${'a'.repeat(160)}…`;
     assert.equal(recordDisplayTitle(null, truncated), `${'a'.repeat(150)}…`);
+  });
+
+  it('лимит вкладки редактора — 250 символов, маркеры снимаются (задача 8e4a965f)', () => {
+    // Тот же разбор, что у ленты, но со своим лимитом вкладки: «## Заголовок»
+    // показывается без маркеров (DoD №2), длинная строка — 250 + «…».
+    assert.equal(
+      recordDisplayTitle(null, '## Запись без заголовка', EDITOR_RECORD_TITLE_MAX),
+      'Запись без заголовка',
+    );
+    const shown = recordDisplayTitle(null, 'b'.repeat(300), EDITOR_RECORD_TITLE_MAX);
+    assert.equal(shown.length, EDITOR_RECORD_TITLE_MAX + 1);
+    assert.ok(shown.endsWith('…'));
   });
 });
 
@@ -198,3 +211,4 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
     assert.equal(body.hidden, true, 'тело скрыто');
   });
 });
+
