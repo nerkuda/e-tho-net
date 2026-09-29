@@ -7,15 +7,16 @@
  * - «Мыслесеть» (правый край строки меню мыслесети, прижата вправо): всё,
  *   что относится к ОТКРЫТОЙ мыслесети — счётчики и входы в каталоги типов
  *   мыслей/связей и свойства мыслей, корзина, «Настройка мыслесети»,
- *   участники и выход, открытие/создание мыслесети, показ/скрытие редактора
- *   мысли. Команды «Открыть сеть (список)»/«Создать сеть» переехали сюда из
- *   меню пользователя, а показ/скрытие редактора — из упразднённого меню
- *   «бутерброд» (☰).
- * - Меню пользователя (верхняя строка, справа): «Администрирование» (только
- *   админу сервера), «Настройки» (объединённый диалог на вкладке
- *   «Пользователь»), «О программе» и «Отключиться». Команды
- *   открытия/создания мыслесети ушли в меню «Мыслесеть»; «О программе»
- *   доступно и здесь, и на экране списка мыслесетей (прежняя точка входа).
+ *   участники и выход, показ/скрытие редактора мысли. Показ/скрытие редактора
+ *   переехало сюда из упразднённого меню «бутерброд» (☰).
+ * - Меню пользователя (верхняя строка, справа): «Открыть мыслесеть (список)»
+ *   и «Создать мыслесеть» (перед «Настройки», за разделителем),
+ *   «Администрирование» (только админу сервера), «Настройки» (объединённый
+ *   диалог на вкладке «Пользователь»), «О программе» и «Отключиться».
+ *   Открытие/создание мыслесети — команды уровня пользователя (решение
+ *   пользователя 2026-09-29, задача a9cb53dd): они вернулись сюда из меню
+ *   «Мыслесеть», где жили после компоновки a0cdd731. «О программе» доступно
+ *   и здесь, и на экране списка мыслесетей (прежняя точка входа).
  *
  * Меню «бутерброд» (☰, «Все настройки») упразднено: его «Все настройки»
  * дублировало пункт «Настройки» меню пользователя, а показ/скрытие редактора
@@ -90,10 +91,11 @@ export function wireNetMenu(handles: WorkspaceHandles): void {
 
 /**
  * Builds the «Мыслесеть» menu items from the current state (Q3-bugfix,
- * 08-ui-spec.md §8.1; задача a0cdd731). Состав и порядок — по карточке задачи
- * a0cdd731: счётчики каталогов и корзины, затем настройка/участники/выход/
- * открытие/создание мыслесети, затем показ/скрытие редактора мысли. Числа
- * типов мыслей и типов связей — из store (`thoughtTypes`/`linkTypes`).
+ * 08-ui-spec.md §8.1; задачи a0cdd731, a9cb53dd). Состав и порядок — по
+ * карточкам задач: счётчики каталогов и корзины, затем настройка/статистика/
+ * участники/выход, затем показ/скрытие редактора мысли. Команды
+ * открытия/создания мыслесети вернулись в меню пользователя (a9cb53dd).
+ * Числа типов мыслей и типов связей — из store (`thoughtTypes`/`linkTypes`).
  */
 export function buildNetMenuItems(counts: NetMenuCounts): MenuItem[] {
   const net = store.state.network;
@@ -119,8 +121,6 @@ export function buildNetMenuItems(counts: NetMenuCounts): MenuItem[] {
     menuAction(t('netMenu.statistics'), () => void showNetworkStatisticsDialog()),
     menuAction(t('netMenu.members'), () => void membersDialog(), { disabled: !isOwner }),
     menuAction(t('netMenu.leave'), () => void leaveNetwork(), { disabled: isOwner, danger: true }),
-    menuAction(t('netMenu.openNetwork'), () => backToNetworks()),
-    menuAction(t('netMenu.createNetwork'), () => void showCreateNetworkDialog()),
     MENU_SEPARATOR,
     menuAction(
       editorHidden ? t('netMenu.showEditor') : t('netMenu.hideEditor'),
@@ -397,9 +397,11 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 
 /**
  * Builds the user menu items (H18, 08-ui-spec.md §8.2; задачи a0cdd731,
- * ошибка 0e623d4c). Menu houses: administration (admin only), the unified
- * Settings dialog on the «Пользователь» section, «О программе» (restored) and
- * disconnect. Opening/creating a network moved to the «Мыслесеть» menu.
+ * a9cb53dd; ошибка 0e623d4c). Menu houses: opening/creating a network (level
+ * commands, before Settings behind a separator — решением пользователя
+ * 2026-09-29, задача a9cb53dd, вернулись сюда из меню «Мыслесеть»),
+ * administration (admin only), the unified Settings dialog on the
+ * «Пользователь» section, «О программе» (restored) and disconnect.
  * «О программе» also stays on the network list screen
  * (screens/networks.ts) — its original entry point. Персональные настройки
  * (display_name, размер облачка, тема) живут в объединённом диалоге настроек.
@@ -410,6 +412,11 @@ export function buildUserMenuItems(): MenuItem[] {
     items.push(menuAction(t('userMenu.admin'), () => openAdminPanel()), MENU_SEPARATOR);
   }
   items.push(
+    // Открытие/создание мыслесети — команды уровня пользователя (a9cb53dd):
+    // стоят перед «Настройки», отделены от неё разделителем.
+    menuAction(t('userMenu.openNetwork'), () => backToNetworks()),
+    menuAction(t('userMenu.createNetwork'), () => void showCreateNetworkDialog()),
+    MENU_SEPARATOR,
     menuAction(t('userMenu.settings'), () => showSettingsDialog('user')),
     // «О программе» (ошибка 0e623d4c): пункт вернулся в меню пользователя —
     // его потеряли при перекомпоновке верхних меню (a0cdd731). Прежняя точка
