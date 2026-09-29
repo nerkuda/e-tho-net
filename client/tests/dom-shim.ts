@@ -233,6 +233,11 @@ export class ShimElement {
     return this.children[0] ?? null;
   }
 
+  /** Первый дочерний УЗЕЛ-элемент (текстовые узлы пропускаются, как в DOM). */
+  get firstElementChild(): ShimElement | null {
+    return this.children.find((child) => child.tagName !== '#text') ?? null;
+  }
+
   /** Число дочерних УЗЛОВ-элементов (как у настоящего DOM; текстовые узлы,
    *  которыми `append` из строки заворачивает строку в `#text`, тоже
    *  считаются — вызывающие из продукта им не пользуются). */

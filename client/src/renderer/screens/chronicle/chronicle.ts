@@ -184,8 +184,17 @@ let loadingMore = false;
  * перезагрузкой, а не offset-пагинацией, чтобы не потерять/не удвоить строку.
  */
 let pendingReconcile = false;
-/** Id of the HOME (root) thought — primary owner of a day record. */
+/**
+ * Id of the HOME (root) thought — primary owner of a day record.
+ *
+ * HOME — идентификатор, разрешаемый ПО СЕТИ, поэтому его кэш привязан к сети
+ * (`homeNetworkId`); при смене сети он недействителен (ошибка ab4e499f).
+ * Смена сети/вкладки сбрасывает кэш в `ensureChronicleInitialised` вместе с
+ * остальным состоянием вида; `homeNetworkId` дополнительно закрывает гонку,
+ * когда промис прежней сети завершается уже после смены (см. `getHome`).
+ */
 let homeId: string | null = null;
+let homeNetworkId: string | null = null;
 let homePromise: Promise<string> | null = null;
 /** Stable scroll container of the feed (`.chron-table-wrap`). */
 let feedWrap: HTMLElement | null = null;
@@ -459,6 +468,12 @@ export async function ensureChronicleInitialised(): Promise<void> {
   // Подсветка перехода — состояние текущего входа, не персистится.
   jumpHighlightId = null;
   recordSearch?.hide();
+  // Кэш HOME — тоже состояние сети: без сброса в сети, открытой не первой,
+  // первичная привязка новой записи уходила бы с HOME прежней сети и сервер
+  // отвечал `thought … not found` (ошибка ab4e499f).
+  homeId = null;
+  homeNetworkId = null;
+  homePromise = null;
 
   try {
     let raw: string | null = null;
@@ -2450,18 +2465,25 @@ export async function openChronicleLinkById(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function getHome(): Promise<string> {
-  if (homeId !== null) return homeId;
-  if (homePromise === null) {
-    homePromise = findRootThought(requireNetworkId())
+  const networkId = requireNetworkId();
+  if (homeId !== null && homeNetworkId === networkId) return homeId;
+  if (homePromise === null || homeNetworkId !== networkId) {
+    homeNetworkId = networkId;
+    homePromise = findRootThought(networkId)
       .then((root) => {
-        homeId = root.id;
+        // Промис мог завершиться уже после смены сети: не затираем кэш HOME
+        // чужой сети (ошибка ab4e499f).
+        if (homeNetworkId === networkId) homeId = root.id;
         return root.id;
       })
       .catch((err: unknown) => {
         // Сбой разрешения HOME не кэшируем навсегда: сбрасываем промис, чтобы
         // следующее обращение сделало новую попытку, а не осталось в fallback до
         // перезагрузки экрана (ошибка 810520c5).
-        homePromise = null;
+        if (homeNetworkId === networkId) {
+          homePromise = null;
+          homeNetworkId = null;
+        }
         throw err;
       });
   }
