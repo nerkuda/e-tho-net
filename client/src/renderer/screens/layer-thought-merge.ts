@@ -113,8 +113,10 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
 
   void (async () => {
     // «Объединить» доступно, только если у каждой мысли комментарий изменён и
-    // присутствует в основе; ошибка чтения диффа трактуется как «недоступно».
+    // присутствует в основе. Ошибку чтения диффа не глотаем молча: сообщаем
+    // тостом и оставляем безопасный минимум вариантов (1–2).
     let combineAvailable = subjects.length > 0;
+    let diffFailed = false;
     for (const subject of subjects) {
       try {
         const diff = await etn.layers.thoughtDiff(networkId, layerId, subject.id);
@@ -126,6 +128,7 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
         if (!variants.includes('combine')) combineAvailable = false;
       } catch {
         combineAvailable = false;
+        diffFailed = true;
       }
     }
 
@@ -139,8 +142,19 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
     const hint = div('layer-hint');
     hint.textContent = `Правки ${titleText} в слое «${current.title}» разрешаются по отношению к «${target}».`;
     body.append(hint);
+    if (diffFailed) {
+      // Инлайн-сообщение в теле диалога (штатный паттерн: тост для ошибок
+      // диалога не используется — lib/notice.ts, требование 397c5a56).
+      const warn = div('layer-hint layer-hint-error');
+      warn.textContent =
+        'Не удалось прочитать отличия мысли — вариант «Объединить изменения» недоступен.';
+      body.append(warn);
+    }
 
-    const group = choiceGroup();
+    // Варианты — вертикально (модификатор группы `merge-variants`): подпись и
+    // пояснение не помещаются в строку, поэтому каждый вариант — блок
+    // «строка-переключатель + пояснение под ней».
+    const group = choiceGroup('merge-variants');
     const name = 'layer-merge-variant';
     let selected: LayerMergeVariant = 'overwrite';
     const rows: Array<[LayerMergeVariant, string, string]> = [
@@ -164,14 +178,12 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
     }
     for (const [value, label, hintText] of rows) {
       const handle = radioRow({ label, value, name, checked: value === selected });
-      handle.row.classList.add('merge-variant');
-      const hintEl = span('merge-variant-hint');
-      hintEl.textContent = hintText;
-      handle.row.append(hintEl);
       handle.input.addEventListener('change', () => {
         if (handle.input.checked) selected = value;
       });
-      group.append(handle.row);
+      const variant = div('merge-variant');
+      variant.append(handle.row, span(hintText, 'merge-variant-hint'));
+      group.append(variant);
     }
     body.append(group);
 

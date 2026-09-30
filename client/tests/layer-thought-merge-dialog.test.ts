@@ -33,6 +33,8 @@ const discardCalls: DiscardCall[] = [];
 
 /** Комментарий-дифф: `changed` и наличие основы в комментарии решают 3-й вариант. */
 let commentField = { key: 'comment' as const, target: 'строка A\nстрока B', layer: 'строка A\nстрока C', changed: true };
+/** Сымитировать сбой чтения диффа (проверка инлайн-сообщения). */
+let failDiff = false;
 
 function installShim(): void {
   mergeCalls.length = 0;
@@ -59,17 +61,20 @@ installShim();
 
 const etnMock = {
   layers: {
-    thoughtDiff: async (_networkId: string, _layerId: string, thoughtId: string) => ({
-      layer: { id: 'l1', title: 'Правки' },
-      target_layer: { id: 'base', title: 'Основа' },
-      thought_id: thoughtId,
-      title: 'Мысль',
-      kind: 'changed' as const,
-      fields: [
-        { key: 'title' as const, target: 'Мысль', layer: 'Мысль', changed: false },
-        commentField,
-      ],
-    }),
+    thoughtDiff: async (_networkId: string, _layerId: string, thoughtId: string) => {
+      if (failDiff) throw new Error('diff unavailable');
+      return {
+        layer: { id: 'l1', title: 'Правки' },
+        target_layer: { id: 'base', title: 'Основа' },
+        thought_id: thoughtId,
+        title: 'Мысль',
+        kind: 'changed' as const,
+        fields: [
+          { key: 'title' as const, target: 'Мысль', layer: 'Мысль', changed: false },
+          commentField,
+        ],
+      };
+    },
     mergeThought: async (_n: string, _l: string, thoughtId: string, mode: string) => {
       mergeCalls.push({ thoughtId, mode });
       return {
@@ -192,12 +197,43 @@ describe('диалог разрешения изменений мысли (f5c36
     await flush();
     await flush();
     try {
-      const inputs = variantInputs(openBackdrop());
+      const backdrop = openBackdrop();
+      const inputs = variantInputs(backdrop);
       assert.deepEqual(
         inputs.map((i) => i.value),
         ['discard', 'overwrite', 'combine'],
       );
+      // Вертикальная раскладка: группа с модификатором и блок на каждый вариант.
+      const group = findAllByClass(backdrop, 'ui-choice-group');
+      assert.equal(group.length, 1);
+      assert.equal(group[0]!.classList.contains('merge-variants'), true);
+      assert.equal(findAllByClass(backdrop, 'merge-variant').length, 3);
+      // Пояснения — реальные узлы с классом и полным текстом.
+      const hints = findAllByClass(backdrop, 'merge-variant-hint');
+      assert.equal(hints.length, 3);
+      assert.ok(hints.every((h) => (h.textContent ?? '').length > 20));
     } finally {
+      closeAllDialogs();
+    }
+  });
+
+  it('сбой чтения диффа: два варианта и инлайн-сообщение (без молчаливого скрытия)', async () => {
+    commentField = { key: 'comment', target: 'x', layer: 'x', changed: true };
+    failDiff = true;
+    openThoughtMergeDialog('net', 't1', 'Мысль t1');
+    await flush();
+    await flush();
+    try {
+      const backdrop = openBackdrop();
+      assert.deepEqual(
+        variantInputs(backdrop).map((i) => i.value),
+        ['discard', 'overwrite'],
+      );
+      const warn = findAllByClass(backdrop, 'layer-hint-error');
+      assert.equal(warn.length, 1);
+      assert.ok((warn[0]!.textContent ?? '').includes('Объединить'));
+    } finally {
+      failDiff = false;
       closeAllDialogs();
     }
   });
