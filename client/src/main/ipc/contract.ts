@@ -110,8 +110,9 @@ import type {
   Layer,
   LayerColors,
   LayerDeleteResult,
-  LayerDiffDoc,
+  LayerDiffPage,
   LayerDiffResult,
+  LayerThoughtDiff,
   LayerEcho,
   LayerMergeReport,
   ActivityListResult,
@@ -1181,8 +1182,20 @@ export interface EtnApi {
     ): Promise<LayerMergeReport>;
     /** Structural diff + overridden ids (§10.3). */
     diff(networkId: string, layerId: string): Promise<LayerDiffResult>;
-    /** Textual diff: two deterministic markdown documents (§10.3). */
-    diffDoc(networkId: string, layerId: string): Promise<LayerDiffDoc>;
+    /**
+     * One page of the structural diff (§10.3; задача ddb67ddc) — the diff
+     * dialog walks pages by `next_cursor` instead of pulling the full report.
+     */
+    diffPage(
+      networkId: string,
+      layerId: string,
+      options?: { limit?: number; cursor?: string | null },
+    ): Promise<LayerDiffPage>;
+    /**
+     * Display-ready field pairs of ONE thought in both contexts (задача
+     * 52c776f1) — the source of the per-thought line diff dialog.
+     */
+    thoughtDiff(networkId: string, layerId: string, thoughtId: string): Promise<LayerThoughtDiff>;
   };
   system: {
     /**

@@ -116,11 +116,36 @@
   margin-bottom: 0;
 }
 
-/* Diff dialog (S11): вкладки «Связи»/«Содержание» — общий механизм
-   `lib/ui/tabs.ts` (задача a57e7998). */
-.diff-content {
-  max-height: 55vh;
-  overflow: auto;
+/* Diff dialog (задача 52c776f1): единый лениво подгружаемый список отличий.
+   Прокрутка — в теле диалога (роль `l` + fixedHeight), поэтому собственных
+   max-height/overflow у списка нет. */
+.diff-body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-family: var(--mono, Consolas, monospace);
+}
+
+.diff-state {
+  padding: 4px 0;
+}
+
+.diff-row {
+  cursor: default;
+}
+
+/* Изменённая мысль — кликабельна: открывает отдельный диалог текстового диффа. */
+.diff-row-thought {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.diff-row-thought:hover,
+.diff-row-thought:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+.diff-thought {
   font-size: 12.5px;
   line-height: 1.5;
   font-family: var(--mono, Consolas, monospace);

@@ -769,9 +769,19 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, layerId: string) => requireRest(deps).getLayerDiff(networkId, layerId)),
   );
   handlers.set(
-    'layers.diffDoc',
-    bind((networkId: string, layerId: string) =>
-      requireRest(deps).getLayerDiffDoc(networkId, layerId),
+    'layers.diffPage',
+    bind(
+      (
+        networkId: string,
+        layerId: string,
+        options?: { limit?: number; cursor?: string | null },
+      ) => requireRest(deps).getLayerDiffPage(networkId, layerId, options ?? {}),
+    ),
+  );
+  handlers.set(
+    'layers.thoughtDiff',
+    bind((networkId: string, layerId: string, thoughtId: string) =>
+      requireRest(deps).getLayerThoughtDiff(networkId, layerId, thoughtId),
     ),
   );
 

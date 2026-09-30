@@ -2239,14 +2239,42 @@ export class RestClient {
     );
   }
 
-  /** `GET /networks/{nid}/layers/{id}/diff/doc` — textual diff docs (S11). */
-  public async getLayerDiffDoc(
+  /**
+   * `GET /networks/{nid}/layers/{id}/diff?sections=&limit=&cursor=` — ONE page
+   * of the structural diff (задача ddb67ddc). Passing any of `limit`/`cursor`
+   * (or `sections`) switches the route to paged mode; the dialog walks the
+   * pages by `next_cursor` instead of pulling the whole (heavy) report.
+   */
+  public async getLayerDiffPage(
     networkId: string,
     layerId: string,
-  ): Promise<import('@etn/shared').LayerDiffDoc> {
+    options: { limit?: number; cursor?: string | null } = {},
+  ): Promise<import('@etn/shared').LayerDiffPage> {
+    const query: QueryRecord = {};
+    if (options.limit !== undefined) query['limit'] = options.limit;
+    if (options.cursor !== undefined && options.cursor !== null && options.cursor !== '') {
+      query['cursor'] = options.cursor;
+    }
     return this.request(
       'GET',
-      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/diff/doc`,
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/diff`,
+      { query },
+    );
+  }
+
+  /**
+   * `GET /networks/{nid}/layers/{id}/diff/thought/{thoughtId}` — display-ready
+   * field pairs of ONE thought in both contexts (задача 52c776f1), fed to the
+   * client-side line diff in a separate dialog.
+   */
+  public async getLayerThoughtDiff(
+    networkId: string,
+    layerId: string,
+    thoughtId: string,
+  ): Promise<import('@etn/shared').LayerThoughtDiff> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/diff/thought/${encodeURIComponent(thoughtId)}`,
     );
   }
 

@@ -406,7 +406,10 @@ function buildApi(): EtnBridgeApi {
       select: (networkId, layerId) => invoke('layers.select', networkId, layerId),
       merge: (networkId, layerId, tables) => invoke('layers.merge', networkId, layerId, tables),
       diff: (networkId, layerId) => invoke('layers.diff', networkId, layerId),
-      diffDoc: (networkId, layerId) => invoke('layers.diffDoc', networkId, layerId),
+      diffPage: (networkId, layerId, options) =>
+        invoke('layers.diffPage', networkId, layerId, options),
+      thoughtDiff: (networkId, layerId, thoughtId) =>
+        invoke('layers.thoughtDiff', networkId, layerId, thoughtId),
     },
     system: {
       appInfo: () => invoke('system.appInfo'),
