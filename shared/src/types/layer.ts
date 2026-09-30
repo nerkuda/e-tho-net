@@ -352,3 +352,52 @@ export interface LayerDiffDoc {
   layer_doc: string;
   target_doc: string;
 }
+
+// ---------------------------------------------------------------------------
+// Per-thought textual diff (задача 52c776f1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Comparable attributes of a single thought, resolved in BOTH contexts (the
+ * diffed layer and its merge target) — the display-ready pairs the client
+ * feeds to the line diff.
+ *
+ * The server is the only side that can read the same thought out of the layer
+ * and out of the base at once: from inside a layer the client cannot see the
+ * base version of a shadowed thought.
+ */
+export const LAYER_THOUGHT_DIFF_FIELD_KEYS = [
+  'title',
+  'type',
+  'synonyms',
+  'active',
+  'comment',
+] as const;
+export type LayerThoughtDiffFieldKey = (typeof LAYER_THOUGHT_DIFF_FIELD_KEYS)[number];
+
+/** One attribute in two contexts; `target` — base/parent layer, `layer` —
+ *  the diffed layer. An attribute absent on one side is the empty string. */
+export interface LayerThoughtDiffField {
+  key: LayerThoughtDiffFieldKey;
+  target: string;
+  layer: string;
+  changed: boolean;
+}
+
+/** How the thought itself relates to the diffed layer:
+ * `added` — new in the layer, `removed` — deleted (tombstoned) in the layer,
+ * `changed` — present in both with at least one different attribute,
+ * `unchanged` — present in both and identical. */
+export type LayerThoughtDiffKind = 'changed' | 'added' | 'removed' | 'unchanged';
+
+/** Response of `GET /networks/{nid}/layers/{id}/diff/thought/{thoughtId}`. */
+export interface LayerThoughtDiff {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  thought_id: string;
+  /** Best-known title (the layer's version wins when present). */
+  title: string;
+  kind: LayerThoughtDiffKind;
+  /** One entry per {@link LAYER_THOUGHT_DIFF_FIELD_KEYS}, in that order. */
+  fields: LayerThoughtDiffField[];
+}

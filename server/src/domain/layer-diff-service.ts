@@ -29,6 +29,7 @@ import {
   LAYER_DIFF_MAX_LIMIT,
   LAYER_DIFF_PAGE_BUDGET_BYTES,
   LAYER_DIFF_SECTIONS,
+  LAYER_THOUGHT_DIFF_FIELD_KEYS,
   type LayerDiffCounts,
   type LayerDiffDoc,
   type LayerDiffLinkRow,
@@ -41,9 +42,14 @@ import {
   type LayerDiffTypeChange,
   type LayerEcho,
   type LayerMergeReorderCollapsed,
+  type LayerThoughtDiff,
+  type LayerThoughtDiffField,
+  type LayerThoughtDiffFieldKey,
+  type LayerThoughtDiffKind,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { getPermanentFull } from './comment-service.js';
 import { exportToMarkdown } from './export-service.js';
 
 /** Physical row shape read from `links_v` — the view already dropped links
@@ -589,5 +595,113 @@ export function resolveDiffTarget(
   return {
     layer: { id: layerRow.id, title: layerRow.title },
     target: { id: targetRow.id, title: targetRow.title },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-thought textual diff (задача 52c776f1): the same thought read in both
+// contexts, field by field, display-ready.
+// ---------------------------------------------------------------------------
+
+/** One thought's comparable attributes as seen in a single context. */
+interface ThoughtVersionSnapshot {
+  title: string;
+  type_name: string;
+  synonyms: string;
+  active: string;
+  comment: string;
+}
+
+/** Display-ready value of one field key in a snapshot. */
+function snapshotField(snapshot: ThoughtVersionSnapshot, key: LayerThoughtDiffFieldKey): string {
+  return snapshot[key === 'type' ? 'type_name' : key];
+}
+
+/**
+ * Read `thoughtId` as visible in `ndb`'s context, resolving the type name,
+ * synonyms (display order) and the permanent comment. `null` — the thought is
+ * not visible there (absent or tombstoned in this layer).
+ */
+function readThoughtVersion(ndb: NetworkDb, thoughtId: string): ThoughtVersionSnapshot | null {
+  const row = ndb
+    .prepare(
+      `SELECT t.title AS title, COALESCE(tt.name, '') AS type_name, t.active AS active
+         FROM thoughts_v t
+         LEFT JOIN thought_types_v tt ON tt.id = t.type_id
+        WHERE t.id = ?
+        LIMIT 1`,
+    )
+    .get(thoughtId) as { title: string; type_name: string; active: number } | undefined;
+  if (row === undefined) return null;
+
+  const synonyms = (
+    ndb
+      .prepare('SELECT synonym FROM thought_synonyms_v WHERE thought_id = ? ORDER BY synonym')
+      .all(thoughtId) as { synonym: string }[]
+  )
+    .map((r) => r.synonym)
+    .join(', ');
+
+  const comment = getPermanentFull(ndb, 'thought', thoughtId)?.body_md ?? '';
+
+  return {
+    title: row.title,
+    type_name: row.type_name,
+    synonyms,
+    active: row.active !== 0 ? 'активна' : 'неактивна',
+    comment,
+  };
+}
+
+/**
+ * Textual diff of ONE thought between the diffed layer and its merge target
+ * (§10.3; задача 52c776f1). The client cannot build it itself: from inside a
+ * layer it cannot read the base version of a shadowed thought. Both versions
+ * are read through `*_v`, so layer visibility (§4.1) applies uniformly.
+ *
+ * Returns one entry per {@link LAYER_THOUGHT_DIFF_FIELD_KEYS} in that order —
+ * `{ target, layer, changed }` — plus the relation `kind`:
+ * `added` (new in the layer), `removed` (tombstoned in the layer), `changed`
+ * (present in both, at least one different attribute) or `unchanged`.
+ * A thought invisible in BOTH contexts is `NOT_FOUND`.
+ */
+export function layerThoughtDiff(
+  layerNdb: NetworkDb,
+  targetNdb: NetworkDb,
+  layer: LayerEcho,
+  targetLayer: LayerEcho,
+  thoughtId: string,
+): LayerThoughtDiff {
+  const layerVersion = readThoughtVersion(layerNdb, thoughtId);
+  const targetVersion = readThoughtVersion(targetNdb, thoughtId);
+  if (layerVersion === null && targetVersion === null) {
+    throw new EtnError('NOT_FOUND', `thought ${thoughtId} not found in layer or target`, {
+      entity: 'thought',
+      id: thoughtId,
+    });
+  }
+
+  const fields: LayerThoughtDiffField[] = LAYER_THOUGHT_DIFF_FIELD_KEYS.map((key) => {
+    const layerText = layerVersion === null ? '' : snapshotField(layerVersion, key);
+    const targetText = targetVersion === null ? '' : snapshotField(targetVersion, key);
+    return { key, target: targetText, layer: layerText, changed: layerText !== targetText };
+  });
+
+  const kind: LayerThoughtDiffKind =
+    layerVersion === null
+      ? 'removed'
+      : targetVersion === null
+        ? 'added'
+        : fields.some((f) => f.changed)
+          ? 'changed'
+          : 'unchanged';
+
+  return {
+    layer,
+    target_layer: targetLayer,
+    thought_id: thoughtId,
+    title: layerVersion?.title ?? targetVersion?.title ?? '',
+    kind,
+    fields,
   };
 }

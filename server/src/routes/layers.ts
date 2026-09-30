@@ -10,6 +10,8 @@
  *   POST   /networks/:networkId/layers/:layerId/merge   — merge into the parent (S8)
  *   GET    /networks/:networkId/layers/:layerId/diff     — structural diff (S11)
  *   GET    /networks/:networkId/layers/:layerId/diff/doc — textual diff (S11)
+ *   GET    /networks/:networkId/layers/:layerId/diff/thought/:thoughtId
+ *                                                        — per-thought text diff (52c776f1)
  *
  * Rights (13-layers.md §7.2): identical for every network member. The layer
  * metadata lives outside the branchable tables, so these handlers run on the
@@ -44,6 +46,7 @@ import {
 import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
 import {
   layerDiffDoc,
+  layerThoughtDiff,
   resolveDiffTarget,
   structuralLayerDiff,
   structuralLayerDiffPage,
@@ -56,6 +59,7 @@ import {
   LayersDelete,
   LayersDiff,
   LayersDiffDoc,
+  LayersDiffThought,
   LayersList,
   LayersMerge,
   LayersSelect,
@@ -413,6 +417,25 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const layerNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, layer.id);
         const targetNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, target.id);
         sendSuccess(reply, layerDiffDoc(layerNdb, targetNdb, layer, target));
+      },
+    );
+
+    // --- Per-thought textual diff (задача 52c776f1, §10.3): the display-ready
+    // field pairs of ONE thought as seen in the diffed layer and in its parent
+    // (base). Powers the separate text-diff dialog opened from the diff list.
+    app.get(
+      '/networks/:networkId/layers/:layerId/diff/thought/:thoughtId',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(LayersDiffThought, req);
+        const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+        const { layer, target } = resolveDiffTarget(ndb, input.layer_id);
+        const layerNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, layer.id);
+        const targetNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, target.id);
+        sendSuccess(
+          reply,
+          layerThoughtDiff(layerNdb, targetNdb, layer, target, input.thought_id),
+        );
       },
     );
   };

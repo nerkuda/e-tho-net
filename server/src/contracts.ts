@@ -600,6 +600,23 @@ export const LayersDiffDoc = defineContract(
   },
 );
 
+/**
+ * По-мысленный текстовый дифф слоя против родителя (задача 52c776f1):
+ * `GET /networks/:networkId/layers/:layerId/diff/thought/:thoughtId`.
+ * Сервер читает одну мысль в обоих контекстах и отдаёт пары «основа/слой»
+ * в готовом для построчного диффа виде (REST-only; MCP-паритет не нужен —
+ * сценарий обслуживает GUI-диалог).
+ */
+export const LayersDiffThought = defineContract(
+  'etn.layers.diff_thought',
+  LayersDiffFields.extend({ thought_id: ThoughtId }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    layer_id: { from: { kind: 'param', name: 'layerId' } },
+    thought_id: { from: { kind: 'param', name: 'thoughtId' } },
+  },
+);
+
 /** REST `POST /networks/:networkId/layers` = MCP `etn.layers.create`. */
 export const LayersCreate = defineContract(
   'etn.layers.create',
