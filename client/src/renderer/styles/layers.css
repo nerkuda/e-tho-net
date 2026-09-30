@@ -93,6 +93,20 @@
   padding: 2px 0;
 }
 
+/* Диалог разрешения изменений мысли (задача f5c363a3): строка варианта с
+ * пояснением под подписью. */
+.merge-variant {
+  display: block;
+}
+
+.merge-variant-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim, #777);
+  line-height: 1.4;
+  margin: 2px 0 8px 24px;
+}
+
 /* Layer colours editor (0.6.4, 13-layers.md §2.2a): two picker rows of the
  * «Свойства слоя» dialog. Native colour input (the same .color-input the
  * thought/link style dialogs use) + a hex field for exact values. */

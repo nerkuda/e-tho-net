@@ -2228,6 +2228,42 @@ export class RestClient {
     );
   }
 
+  /**
+   * `POST /networks/{nid}/layers/{id}/merge { thought_id, mode }` — слияние
+   * ОДНОЙ мысли из слоя в основу (задача f5c363a3). `overwrite` — версия слоя
+   * побеждает; `combine` — постоянный комментарий объединяется с основой.
+   */
+  public async mergeLayerThought(
+    networkId: string,
+    layerId: string,
+    thoughtId: string,
+    mode: 'overwrite' | 'combine',
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').LayerMergeReport> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/merge`,
+      { body: { thought_id: thoughtId, mode }, requestOptions: opts },
+    );
+  }
+
+  /**
+   * `POST /networks/{nid}/layers/{id}/discard { thought_id }` — «Отказаться от
+   * изменений»: строки мысли физически удаляются из слоя (задача f5c363a3).
+   */
+  public async discardLayerThought(
+    networkId: string,
+    layerId: string,
+    thoughtId: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').LayerDiscardReport> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/discard`,
+      { body: { thought_id: thoughtId }, requestOptions: opts },
+    );
+  }
+
   /** `GET /networks/{nid}/layers/{id}/diff` — structural diff (S11). */
   public async getLayerDiff(
     networkId: string,

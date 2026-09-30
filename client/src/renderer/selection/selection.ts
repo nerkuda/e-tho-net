@@ -45,6 +45,8 @@ import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './
 import { openThoughtDeleteDialog, openThoughtGroupDeleteDialog } from '../trash.js';
 import { THOUGHT_RESOLVE_MAX_IDS, type ExportEtnxOptions, type ExportFormat, type ExportRequest, type ThoughtRef } from '@etn/shared';
 import { uiButton } from '../lib/ui/button.js';
+import { isInBaseLayer } from '../lib/layer-base.js';
+import { openMergeDialog } from '../screens/layer-thought-merge.js';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
@@ -412,11 +414,26 @@ function buildActionsMenu(): MenuItem[] {
   const focusId = store.state.focus?.focused.id;
   const needFocus = focusId === undefined;
   const hasSelection = store.state.selection.length > 0;
+  // Задача f5c363a3: «слить в основу» — только для выбранных мыслей, изменённых
+  // в текущем слое изменений.
+  const overridden = new Set(store.state.layerOverrides.thought_ids);
+  const mergeIds = isInBaseLayer()
+    ? []
+    : store.state.selection.filter((id) => overridden.has(id));
   return [
     {
       label: 'Скопировать мысли',
       disabled: !hasSelection,
       onClick: () => void copySelection(),
+    },
+    {
+      label: 'Слить в основу…',
+      disabled: mergeIds.length === 0,
+      onClick: () =>
+        openMergeDialog(
+          requireNetworkId(),
+          mergeIds.map((id) => ({ id, title: getRef(id)?.title ?? id })),
+        ),
     },
     MENU_SEPARATOR,
     {
@@ -1030,3 +1047,6 @@ async function runImport(): Promise<void> {
     notice(`Импорт не удался: ${errText(err)}`, 'error');
   }
 }
+
+/** Internals for unit tests: the «Действия» item list. */
+export const selectionMenuInternals = { buildActionsMenu };

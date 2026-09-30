@@ -765,6 +765,23 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'layers.mergeThought',
+    bind(
+      (
+        networkId: string,
+        layerId: string,
+        thoughtId: string,
+        mode: 'overwrite' | 'combine',
+      ) => requireRest(deps).mergeLayerThought(networkId, layerId, thoughtId, mode),
+    ),
+  );
+  handlers.set(
+    'layers.discardThought',
+    bind((networkId: string, layerId: string, thoughtId: string) =>
+      requireRest(deps).discardLayerThought(networkId, layerId, thoughtId),
+    ),
+  );
+  handlers.set(
     'layers.diff',
     bind((networkId: string, layerId: string) => requireRest(deps).getLayerDiff(networkId, layerId)),
   );
