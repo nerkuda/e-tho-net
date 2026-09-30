@@ -8,6 +8,8 @@
  * и сервера), справа — сторонние компоненты. Левая помещается целиком без
  * прокруток, правая прокручивается по вертикали независимо (роль размера `l` +
  * `fixedHeight`, скролл — у правой колонки). Горизонтальных прокруток нет.
+ * Высота — 450px вместо ролевых 680px: модификатор `dialog-about` на боксе
+ * подменяет только высоту (см. styles/dialogs.css, токен `--dialog-h-about`).
  *
  * Purely client-side: opens without a server connection — the client version
  * and runtime info come from the main process over `etn.system.appInfo`
@@ -83,11 +85,14 @@ export function showAboutDialog(): void {
     title: 'О программе',
     body,
     // Две равные половины требуют места: прежняя роль `s` (460px) обрезала даже
-    // версию/авторство. `l` (900×680) + фиксированная высота — тело не
-    // прокручивается, скролл отдан правой колонке (задача dd7e490e).
+    // версию/авторство. `l` (900px шириной) + фиксированная высота: тело не
+    // прокручивается, скролл отдан правой колонке, а высота задаётся
+    // модификатором `dialog-about` (450px) вместо ролевых 680px — задача
+    // dd7e490e.
     size: 'l',
     fixedHeight: true,
     buttons: [{ label: t('actions.close'), primary: true }],
+    onMount: (_close, box) => box.classList.add('dialog-about'),
   });
 
   void etn.system.appInfo().then((info) => {
