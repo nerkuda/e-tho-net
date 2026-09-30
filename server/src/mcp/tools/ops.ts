@@ -98,7 +98,7 @@ import {
   layerSubtreeIds,
   updateLayer,
 } from '../../domain/layer-service.js';
-import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../../domain/layer-diff-service.js';
+import { layerDiffDoc, resolveDiffTarget, structuralLayerDiffPage } from '../../domain/layer-diff-service.js';
 import { listPendingMergeConflicts, mergeLayer, resetLayerOverride } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
 import { findPath } from '../../domain/graph-traversal.js';
@@ -612,7 +612,13 @@ const HANDLERS: Record<string, OpHandler> = {
       const { layer, target } = resolveDiffTarget(ndb, a.layer_id);
       const layerNdb = openNetworkDb(rt.deps.dataDir, a.network_id, rt.deps.logger, layer.id);
       const targetNdb = openNetworkDb(rt.deps.dataDir, a.network_id, rt.deps.logger, target.id);
-      return structuralLayerDiff(layerNdb, targetNdb, layer, target);
+      // Всегда постранично: вызов без параметров отдаёт первую страницу с
+      // дефолтным лимитом + counts по всем секциям (задача ddb67ddc).
+      return structuralLayerDiffPage(layerNdb, targetNdb, layer, target, {
+        sections: a.sections,
+        limit: a.limit,
+        cursor: a.cursor,
+      });
     });
   },
   'layers.diff_doc': (rt, p) => {

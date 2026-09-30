@@ -46,6 +46,7 @@ import {
   layerDiffDoc,
   resolveDiffTarget,
   structuralLayerDiff,
+  structuralLayerDiffPage,
 } from '../domain/layer-diff-service.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
@@ -380,7 +381,23 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { layer, target } = resolveDiffTarget(ndb, input.layer_id);
         const layerNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, layer.id);
         const targetNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, target.id);
-        sendSuccess(reply, structuralLayerDiff(layerNdb, targetNdb, layer, target));
+        // Без параметров пагинации — прежний полный отчёт (текущий клиент не
+        // ломается, задача 52c776f1 переведёт GUI на страницы позже); с любым
+        // из sections/limit/cursor — страница (задача ddb67ddc).
+        const paged =
+          (input.sections?.length ?? 0) > 0 ||
+          input.limit !== undefined ||
+          input.cursor !== undefined;
+        sendSuccess(
+          reply,
+          paged
+            ? structuralLayerDiffPage(layerNdb, targetNdb, layer, target, {
+                sections: input.sections,
+                limit: input.limit,
+                cursor: input.cursor,
+              })
+            : structuralLayerDiff(layerNdb, targetNdb, layer, target),
+        );
       },
     );
 

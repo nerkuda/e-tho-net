@@ -47,6 +47,8 @@ import {
   SORT_ORDERS,
   FOCUS_DIRS,
   ICON_KINDS,
+  LAYER_DIFF_MAX_LIMIT,
+  LAYER_DIFF_SECTIONS,
   LINK_STYLES,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
@@ -563,12 +565,30 @@ const LayersDiffFields = z.object({
   network_id: NetworkId,
   layer_id: LayerId,
 });
+/**
+ * Структурный дифф слоя (задача ddb67ddc): к общим полям добавлены выбор
+ * секций и keyset-пагинация. В MCP вызов без параметров отдаёт первую страницу
+ * (дефолтный лимит) + counts по всем секциям. В REST отсутствие ВСЕХ трёх
+ * полей сохраняет прежний полный отчёт — текущий клиент не ломается.
+ */
 export const LayersDiff = defineContract(
   'etn.layers.diff',
-  LayersDiffFields,
+  LayersDiffFields.extend({
+    sections: z.array(z.enum(LAYER_DIFF_SECTIONS)).optional(),
+    limit: z.number().int().min(1).max(LAYER_DIFF_MAX_LIMIT).optional(),
+    cursor: z.string().min(1).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
+    // `repeatable` — `?sections=links.removed&sections=links.added`; без
+    // параметра парсер кладёт `[]` («все секции»).
+    sections: { from: { kind: 'query', repeatable: true } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    cursor: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined),
+    },
   },
 );
 export const LayersDiffDoc = defineContract(

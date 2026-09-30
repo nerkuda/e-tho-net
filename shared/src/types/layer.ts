@@ -261,14 +261,86 @@ export interface LayerDiffLinks {
   reparented: LayerDiffReparented[];
 }
 
-/** Structural diff response of `GET /networks/{nid}/layers/{id}/diff`. */
+/** Ids that physically exist in the layer (shadow rows, inserts AND tombstones
+ * alike) — exactly what the canvas marks as «перекрыто». */
+export interface LayerDiffOverridden {
+  thought_ids: string[];
+  link_ids: string[];
+}
+
+/** Structural diff response of `GET /networks/{nid}/layers/{id}/diff` without
+ * pagination parameters — the full report (REST default, задача ddb67ddc). */
 export interface LayerDiffResult {
   layer: LayerEcho;
   target_layer: LayerEcho;
   links: LayerDiffLinks;
-  /** Ids that physically exist in the layer (shadow rows, inserts AND
-   * tombstones alike) — exactly what the canvas marks as «перекрыто». */
-  overridden: { thought_ids: string[]; link_ids: string[] };
+  overridden: LayerDiffOverridden;
+}
+
+/**
+ * Addressable sections of the structural diff report (задача ddb67ddc).
+ *
+ * They are exactly the leaf collections of {@link LayerDiffResult}: each link
+ * batch and each `overridden` id set. A section name is `<object>.<field>` and
+ * is the unit of both the `sections` filter and the keyset cursor.
+ */
+export const LAYER_DIFF_SECTIONS = [
+  'links.added',
+  'links.removed',
+  'links.type_changed',
+  'links.reorder_collapsed',
+  'links.reparented',
+  'overridden.thought_ids',
+  'overridden.link_ids',
+] as const;
+export type LayerDiffSection = (typeof LAYER_DIFF_SECTIONS)[number];
+
+/** Totals per section across the WHOLE report (not just the current page).
+ * Present in every paged answer so the caller can plan the audit. */
+export type LayerDiffCounts = Record<LayerDiffSection, number>;
+
+/** Default page size of `layers.diff` in the MCP contour — a first page is
+ * returned even when the caller passes no pagination parameters. */
+export const LAYER_DIFF_DEFAULT_LIMIT = 200;
+/** Hard ceiling on `limit`; the byte budget can trim a page further. */
+export const LAYER_DIFF_MAX_LIMIT = 1000;
+/**
+ * Soft byte budget of one paged answer, measured on the exact JSON text the
+ * MCP transport hands to the model (`JSON.stringify(page, null, 2)`, UTF-8).
+ * Sits below the default MCP-client `maxModelBytes = 50000` (05-mcp-server.md
+ * §4.1) so the transport never truncates a page silently — задача ddb67ddc.
+ */
+export const LAYER_DIFF_PAGE_BUDGET_BYTES = 48_000;
+
+/**
+ * One page of the structural diff report (задача ddb67ddc).
+ *
+ * `links` / `overridden` carry only the requested sections, each holding at
+ * most the page's items; `counts` always describes the whole report. The page
+ * is guaranteed to fit {@link LAYER_DIFF_PAGE_BUDGET_BYTES}; `truncated` +
+ * `next_cursor` signal that more items remain (keyset continuation, ADR
+ * 5f6cb775).
+ */
+export interface LayerDiffPage {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  /** Sections included in this page, in the canonical order of
+   * {@link LAYER_DIFF_SECTIONS} (all of them when no filter was passed). */
+  sections: LayerDiffSection[];
+  /** Totals per section across the whole report. */
+  counts: LayerDiffCounts;
+  /** Page items, grouped by section; only requested sections are present. */
+  links: Partial<LayerDiffLinks>;
+  overridden: Partial<LayerDiffOverridden>;
+  /** Echo of the effective page size. */
+  limit: number;
+  /** True when more items remain (this is not the whole report). */
+  truncated: boolean;
+  /** Why the page is incomplete: `has_more` — items remain; `null` — complete. */
+  reason: 'has_more' | null;
+  /** Opaque keyset cursor for the next page (section + last item id); `null`
+   * when the page is the last one. */
+  next_cursor: string | null;
 }
 
 /** Textual diff response of `GET /networks/{nid}/layers/{id}/diff/doc`: two

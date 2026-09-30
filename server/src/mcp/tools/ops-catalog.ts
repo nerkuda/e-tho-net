@@ -376,29 +376,50 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.diff',
     tool: 'etn.layers.diff',
     group: 'layers',
-    when: 'структурное отличие слоя от родителя (ссылки: добавлено/удалено/сменён тип/переподчинено)',
+    when: 'структурное отличие слоя от родителя (ссылки: добавлено/удалено/сменён тип/переподчинено), постранично и по секциям',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'layer_id', required: true, desc: 'id слоя' },
+      {
+        name: 'sections',
+        desc:
+          'подмножество секций: `links.added`/`links.removed`/`links.type_changed`/' +
+          '`links.reorder_collapsed`/`links.reparented`/`overridden.thought_ids`/' +
+          '`overridden.link_ids` (по умолчанию — все; неизвестная секция → VALIDATION_ERROR)',
+      },
+      {
+        name: 'limit',
+        desc: 'размер страницы в элементах, 1…1000 (по умолчанию 200); байтовый бюджет может вернуть меньше',
+      },
+      { name: 'cursor', desc: '`next_cursor` предыдущей страницы (непрозрачный keyset: секция + id)' },
     ],
     destructive: false,
     readOnly: true,
-    effects: 'чтение, без записи.',
-    errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
+    effects:
+      'чтение, без записи. Ответ ВСЕГДА постраничный: `counts` — итоги по всем секциям, ' +
+      '`links`/`overridden` — только запрошенные секции со страницей элементов, ' +
+      '`truncated: true` + `reason: "has_more"` + `next_cursor` при остатке. Каждая страница ' +
+      'гарантированно укладывается в бюджет MCP (~48 КБ против `maxModelBytes = 50000`), ' +
+      'транспорт её не режет. Вызов без параметров — первая страница (дефолтный лимит).',
+    errors: '`VALIDATION_ERROR` (неизвестная секция, невалидный/чужой курсор), `NOT_FOUND`.',
     paramsContract: LayersDiff,
   },
   {
     action: 'layers.diff_doc',
     tool: 'etn.layers.diff_doc',
     group: 'layers',
-    when: 'содержательное отличие слоя — два markdown-документа для построчного сравнения',
+    when: 'содержательное отличие слоя — два markdown-документа для построчного сравнения (малые слои, точечный аудит)',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'layer_id', required: true, desc: 'id слоя' },
     ],
     destructive: false,
     readOnly: true,
-    effects: 'чтение, без записи.',
+    effects:
+      'чтение, без записи. НЕ секционируется и НЕ пагинируется: вся разница отдаётся одним ' +
+      'markdown-блоком (`layer_doc` + `target_doc`). Ориентиры: слой ~1142 перекрытые строки ' +
+      'давал ~17,5 МБ markdown — модели нечитаемо. Назначение — малые слои и точечный аудит; ' +
+      'для больших слоёв берите постраничный `layers.diff` (sections + cursor).',
     errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
     paramsContract: LayersDiffDoc,
   },

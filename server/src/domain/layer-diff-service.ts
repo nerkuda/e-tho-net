@@ -23,7 +23,25 @@
  * applied uniformly.
  */
 
-import { EtnError, type LayerDiffDoc, type LayerDiffLinks, type LayerDiffResult } from '@etn/shared';
+import {
+  EtnError,
+  LAYER_DIFF_DEFAULT_LIMIT,
+  LAYER_DIFF_MAX_LIMIT,
+  LAYER_DIFF_PAGE_BUDGET_BYTES,
+  LAYER_DIFF_SECTIONS,
+  type LayerDiffCounts,
+  type LayerDiffDoc,
+  type LayerDiffLinkRow,
+  type LayerDiffLinks,
+  type LayerDiffOverridden,
+  type LayerDiffPage,
+  type LayerDiffReparented,
+  type LayerDiffResult,
+  type LayerDiffSection,
+  type LayerDiffTypeChange,
+  type LayerEcho,
+  type LayerMergeReorderCollapsed,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { exportToMarkdown } from './export-service.js';
@@ -126,8 +144,14 @@ function sameTriple(a: VisibleLinkRow, b: VisibleLinkRow): boolean {
   );
 }
 
+/** The un-paged structural core shared by the full report and the page. */
+interface FullLayerDiff {
+  links: LayerDiffLinks;
+  overridden: LayerDiffOverridden;
+}
+
 /**
- * Structural diff of `layerId` against its parent (§10.3).
+ * Compute the whole structural diff of `layerId` against its parent (§10.3).
  *
  * `layerNdb` must be opened in the diffed layer's context; `targetNdb` in its
  * parent's. The layer's own `layers` metadata row (parent resolution) is read
@@ -140,12 +164,7 @@ function sameTriple(a: VisibleLinkRow, b: VisibleLinkRow): boolean {
  * thought — anything more complex (many parents at once) stays honest as
  * added/removed pairs.
  */
-export function structuralLayerDiff(
-  layerNdb: NetworkDb,
-  targetNdb: NetworkDb,
-  layer: { id: string; title: string },
-  targetLayer: { id: string; title: string },
-): LayerDiffResult {
+function computeLayerDiff(layerNdb: NetworkDb, targetNdb: NetworkDb, layerId: string): FullLayerDiff {
   const layerLinks = visibleLinks(layerNdb);
   const targetLinks = visibleLinks(targetNdb);
   const targetById = new Map(targetLinks.map((l) => [l.id, l]));
@@ -225,12 +244,298 @@ export function structuralLayerDiff(
   }
   links.reparented.sort((a, b) => a.thought_id.localeCompare(b.thought_id));
 
+  return { links, overridden: overriddenIds(layerNdb, layerId) };
+}
+
+/**
+ * Structural diff of `layerId` against its parent (§10.3) — the FULL report,
+ * used by the REST default (`GET …/diff` without pagination parameters). Paged
+ * callers use {@link structuralLayerDiffPage}.
+ */
+export function structuralLayerDiff(
+  layerNdb: NetworkDb,
+  targetNdb: NetworkDb,
+  layer: { id: string; title: string },
+  targetLayer: { id: string; title: string },
+): LayerDiffResult {
+  const full = computeLayerDiff(layerNdb, targetNdb, layer.id);
+  return { layer, target_layer: targetLayer, links: full.links, overridden: full.overridden };
+}
+
+// ---------------------------------------------------------------------------
+// Paged structural diff (задача ddb67ddc): sections filter + keyset cursor
+// (ADR 5f6cb775) under a hard byte budget (05-mcp-server.md §4.1).
+// ---------------------------------------------------------------------------
+
+/** One addressable item of the flattened page stream: its section, its stable
+ * sort key (the row id) and the payload pushed back into the answer. */
+interface DiffEntry {
+  section: LayerDiffSection;
+  key: string;
+  item: unknown;
+}
+
+/** Keyset cursor of a paged diff — section + last returned item id. */
+interface DiffCursor {
+  v: 1;
+  s: LayerDiffSection;
+  k: string;
+}
+
+/** Canonical (deterministic) order of the sections within a page. */
+const SECTION_ORDER: readonly LayerDiffSection[] = LAYER_DIFF_SECTIONS;
+
+/** Items of one section, sorted by their stable key (ADR 5f6cb775). */
+function sectionEntries(full: FullLayerDiff, section: LayerDiffSection): DiffEntry[] {
+  const sortById = <T extends { id: string }>(rows: T[]): DiffEntry[] =>
+    rows
+      .map((row) => ({ section, key: row.id, item: row }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  const sortByThoughtId = <T extends { thought_id: string }>(rows: T[]): DiffEntry[] =>
+    rows
+      .map((row) => ({ section, key: row.thought_id, item: row }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  switch (section) {
+    case 'links.added':
+      return sortById(full.links.added);
+    case 'links.removed':
+      return sortById(full.links.removed);
+    case 'links.type_changed':
+      return sortById(full.links.type_changed);
+    case 'links.reorder_collapsed':
+      return sortByThoughtId(full.links.reorder_collapsed);
+    case 'links.reparented':
+      return sortByThoughtId(full.links.reparented);
+    case 'overridden.thought_ids':
+      return [...full.overridden.thought_ids]
+        .sort()
+        .map((id) => ({ section, key: id, item: id }));
+    case 'overridden.link_ids':
+      return [...full.overridden.link_ids].sort().map((id) => ({ section, key: id, item: id }));
+  }
+}
+
+/** Totals per section across the whole report. */
+function diffCounts(full: FullLayerDiff): LayerDiffCounts {
+  return {
+    'links.added': full.links.added.length,
+    'links.removed': full.links.removed.length,
+    'links.type_changed': full.links.type_changed.length,
+    'links.reorder_collapsed': full.links.reorder_collapsed.length,
+    'links.reparented': full.links.reparented.length,
+    'overridden.thought_ids': full.overridden.thought_ids.length,
+    'overridden.link_ids': full.overridden.link_ids.length,
+  };
+}
+
+function encodeDiffCursor(section: LayerDiffSection, key: string): string {
+  const cursor: DiffCursor = { v: 1, s: section, k: key };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeDiffCursor(raw: string, allowed: readonly LayerDiffSection[]): DiffCursor {
+  const invalid = (details: Record<string, unknown> = {}): never => {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Некорректный keyset-курсор диффа: продолжение страницы невозможно.',
+      { field: 'cursor', ...details },
+    );
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    return invalid();
+  }
+  if (typeof parsed !== 'object' || parsed === null) return invalid();
+  const c = parsed as Partial<DiffCursor>;
+  if (c.v !== 1) return invalid({ reason: 'version' });
+  if (typeof c.s !== 'string' || !allowed.includes(c.s as LayerDiffSection)) {
+    return invalid({ reason: 'section' });
+  }
+  if (typeof c.k !== 'string' || c.k === '') return invalid({ reason: 'shape' });
+  return c as DiffCursor;
+}
+
+/** Assemble a page from the chosen items, keeping every requested section key
+ * present in the answer (an empty array means «no items in this section»). */
+function makeDiffPage(
+  layer: LayerEcho,
+  targetLayer: LayerEcho,
+  sections: readonly LayerDiffSection[],
+  counts: LayerDiffCounts,
+  taken: readonly DiffEntry[],
+  limit: number,
+  truncated: boolean,
+  nextCursor: string | null,
+): LayerDiffPage {
+  const links: Partial<LayerDiffLinks> = {};
+  const overridden: Partial<LayerDiffOverridden> = {};
+  for (const section of sections) {
+    switch (section) {
+      case 'links.added':
+        links.added ??= [];
+        break;
+      case 'links.removed':
+        links.removed ??= [];
+        break;
+      case 'links.type_changed':
+        links.type_changed ??= [];
+        break;
+      case 'links.reorder_collapsed':
+        links.reorder_collapsed ??= [];
+        break;
+      case 'links.reparented':
+        links.reparented ??= [];
+        break;
+      case 'overridden.thought_ids':
+        overridden.thought_ids ??= [];
+        break;
+      case 'overridden.link_ids':
+        overridden.link_ids ??= [];
+        break;
+    }
+  }
+  for (const entry of taken) {
+    switch (entry.section) {
+      case 'links.added':
+        links.added?.push(entry.item as LayerDiffLinkRow);
+        break;
+      case 'links.removed':
+        links.removed?.push(entry.item as LayerDiffLinkRow);
+        break;
+      case 'links.type_changed':
+        links.type_changed?.push(entry.item as LayerDiffTypeChange);
+        break;
+      case 'links.reorder_collapsed':
+        links.reorder_collapsed?.push(entry.item as LayerMergeReorderCollapsed);
+        break;
+      case 'links.reparented':
+        links.reparented?.push(entry.item as LayerDiffReparented);
+        break;
+      case 'overridden.thought_ids':
+        overridden.thought_ids?.push(entry.item as string);
+        break;
+      case 'overridden.link_ids':
+        overridden.link_ids?.push(entry.item as string);
+        break;
+    }
+  }
   return {
     layer,
     target_layer: targetLayer,
+    sections: [...sections],
+    counts,
     links,
-    overridden: overriddenIds(layerNdb, layer.id),
+    overridden,
+    limit,
+    truncated,
+    reason: truncated ? 'has_more' : null,
+    next_cursor: nextCursor,
   };
+}
+
+/** Byte size of one answer exactly as the MCP transport serialises it. */
+function pageBytes(page: LayerDiffPage): number {
+  return Buffer.byteLength(JSON.stringify(page, null, 2), 'utf8');
+}
+
+/** Arguments of the paged structural diff. */
+export interface StructuralLayerDiffPageOptions {
+  /** Sections to include (subset); omitted/empty — all sections. */
+  sections?: readonly LayerDiffSection[];
+  /** Page size in items; defaults to {@link LAYER_DIFF_DEFAULT_LIMIT}. */
+  limit?: number;
+  /** Opaque keyset cursor from a previous page's `next_cursor`. */
+  cursor?: string;
+}
+
+/**
+ * Paged structural diff (§10.3; задача ddb67ddc).
+ *
+ * The report is flattened into a deterministic stream ordered by section
+ * ({@link LAYER_DIFF_SECTIONS}) and, within a section, by the row id — the
+ * keyset key (ADR 5f6cb775). `cursor` continues the stream; `limit` caps items
+ * and the byte budget ({@link LAYER_DIFF_PAGE_BUDGET_BYTES}) can trim a page
+ * further, so every answer fits the MCP client budget and is never cut by the
+ * transport silently. `counts` always carries the totals of the WHOLE report.
+ *
+ * `sections` restricts the stream to the named sections; an unknown name is
+ * rejected with `VALIDATION_ERROR`, as is a cursor whose section is not part of
+ * the request (its continuation would read a different order).
+ */
+export function structuralLayerDiffPage(
+  layerNdb: NetworkDb,
+  targetNdb: NetworkDb,
+  layer: LayerEcho,
+  targetLayer: LayerEcho,
+  options: StructuralLayerDiffPageOptions = {},
+): LayerDiffPage {
+  const requested = options.sections ?? [];
+  for (const section of requested) {
+    if (!SECTION_ORDER.includes(section)) {
+      throw new EtnError('VALIDATION_ERROR', `Неизвестная секция диффа «${section}».`, {
+        field: 'sections',
+        section,
+        allowed: SECTION_ORDER,
+      });
+    }
+  }
+  const effectiveSet = new Set<LayerDiffSection>(
+    requested.length > 0 ? requested : SECTION_ORDER,
+  );
+  const sections = SECTION_ORDER.filter((s) => effectiveSet.has(s));
+
+  const full = computeLayerDiff(layerNdb, targetNdb, layer.id);
+  const counts = diffCounts(full);
+
+  const flat: DiffEntry[] = [];
+  for (const section of sections) flat.push(...sectionEntries(full, section));
+
+  let startIndex = 0;
+  if (options.cursor !== undefined) {
+    const cursor = decodeDiffCursor(options.cursor, sections);
+    // Skip everything up to and including the cursor position: earlier
+    // sections, then the cursor's section up to its key.
+    const cursorSectionIndex = sections.indexOf(cursor.s);
+    startIndex = flat.findIndex((entry) => {
+      const entrySectionIndex = sections.indexOf(entry.section);
+      return entrySectionIndex > cursorSectionIndex ||
+        (entrySectionIndex === cursorSectionIndex && entry.key > cursor.k);
+    });
+    if (startIndex === -1) startIndex = flat.length;
+  }
+
+  const remaining = flat.slice(startIndex);
+  const limit = Math.min(
+    Math.max(Math.trunc(options.limit ?? LAYER_DIFF_DEFAULT_LIMIT), 1),
+    LAYER_DIFF_MAX_LIMIT,
+  );
+  const maxByLimit = Math.min(limit, remaining.length);
+
+  const build = (count: number): LayerDiffPage => {
+    const taken = remaining.slice(0, count);
+    const more = startIndex + count < flat.length;
+    const last = taken[taken.length - 1];
+    const nextCursor = more && last !== undefined ? encodeDiffCursor(last.section, last.key) : null;
+    return makeDiffPage(layer, targetLayer, sections, counts, taken, limit, more, nextCursor);
+  };
+
+  // Largest page (up to the item limit) that fits the byte budget: page size
+  // grows monotonically with the item count, so binary search is exact.
+  let low = 0;
+  let high = maxByLimit;
+  let best = 0;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (pageBytes(build(mid)) <= LAYER_DIFF_PAGE_BUDGET_BYTES) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return build(best);
 }
 
 /** All thoughts visible in a context, ordered by id — the deterministic seed
