@@ -128,6 +128,20 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.equal(writeTopicEtn.isError, undefined, toolText(writeTopicEtn));
         assert.equal(toolText(writeTopicEtn), toolText(writeTopic));
 
+        // Ошибка 5f08daee: постоянный `etn.activity.list` обязан иметь тему в
+        // гайде — описание инструмента ссылается на неё, а агент ищет в
+        // справочнике детали фильтров и пагинации (раньше — VALIDATION_ERROR).
+        const activityTopic = await handle.client.callTool({
+          name: 'etn.guide',
+          arguments: { topic: 'activity.list' },
+        });
+        assert.equal(activityTopic.isError, undefined, toolText(activityTopic));
+        const activityText = toolText(activityTopic);
+        for (const marker of ['from_ms', 'to_ms', 'user_id', 'entity_type', 'entity_id', 'limit', 'offset']) {
+          assert.match(activityText, new RegExp(marker), `тема activity.list не описывает «${marker}»`);
+        }
+        assert.match(activityText, /occurred_at_ms DESC/, 'тема обязана называть сортировку журнала');
+
         const bad = await handle.client.callTool({
           name: 'etn.guide',
           arguments: { topic: 'no.such.action' },

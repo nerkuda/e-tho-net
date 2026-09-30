@@ -18,6 +18,7 @@
 import { z } from 'zod';
 
 import { writeBatchHowToText } from '../how-to.js';
+import { ACTIVITY_LIMIT_DEFAULT, ACTIVITY_LIMIT_MAX } from '../../domain/activity-service.js';
 import type { OperationContract } from '../../contracts.js';
 import {
   ActivityRollup,
@@ -1046,6 +1047,46 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '## Ответ',
       'Несёт справочник `thought_types` плюс опциональные эхо `resolved_types`/`resolved_properties`',
       'для входов, заданных по имени.',
+    ].join('\n'),
+  },
+  {
+    // Ошибка 5f08daee-5bb6-45c5-a7ed-53eda44c3c38: постоянный инструмент
+    // `etn.activity.list` остался без темы в реестре гайда — группа `activity`
+    // знала только `rollup`/`truncate`. Тема добавлена; правило «у каждой
+    // операции набора MCP либо полное описание в tools/list, либо тема в
+    // etn.guide» держит сторож `guard-mcp-guide-coverage.test.ts`.
+    topic: 'activity.list',
+    when: 'журнал активности сети: фильтры from_ms/to_ms/user_id/entity_type/entity_id, пагинация limit/offset, сортировка occurred_at_ms DESC',
+    body_md: [
+      '# activity.list — лента журнала активности',
+      '',
+      'Read-only лента мутирующих операций сети: одна строка на операцию участника —',
+      'создание, правка, удаление, корзина/восстановление мысли, связи, типа, свойства,',
+      'комментария, вложения или слоя. `entity_title` — снимок имени на момент события;',
+      'захваты `edit.*` (locks) в журнал не пишутся.',
+      '',
+      '## Фильтры (комбинируются по AND)',
+      '',
+      '| Фильтр | Что делает |',
+      '|---|---|',
+      '| `from_ms` / `to_ms` | диапазон `occurred_at_ms` включительно (`>=` / `<=`) |',
+      '| `user_id` | только операции указанного участника |',
+      '| `entity_type` | тип сущности, например `thought`, `link`, `comment`, `attachment`, `layer` |',
+      '| `entity_id` | id конкретной сущности (в паре с `entity_type`) |',
+      '',
+      'Пустая строка в `user_id`/`entity_type`/`entity_id` фильтр не накладывает.',
+      '',
+      '## Пагинация и сортировка',
+      '',
+      `- \`limit\` — размер страницы, 1…${ACTIVITY_LIMIT_MAX} (по умолчанию ${ACTIVITY_LIMIT_DEFAULT});`,
+      `  значения вне диапазона зажимаются к границам.`,
+      '- `offset` — смещение от начала выборки (по умолчанию 0).',
+      '- Сортировка — `occurred_at_ms DESC`, при равенстве — `id DESC` (свежие сверху).',
+      '',
+      '## Ответ',
+      '',
+      '`data[]` — строки выборки, `meta { total, offset, limit }`, где `total` — число строк',
+      'под фильтром ДО пагинации (для листания). Паритет с REST `GET /activity`.',
     ].join('\n'),
   },
   {
