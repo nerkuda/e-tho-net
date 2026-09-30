@@ -3,6 +3,12 @@
  * version, authorship, licence, project links (changelog, releases) and —
  * task 4ec4a685 — the currently connected server (name, address, version).
  *
+ * Layout (задача dd7e490e): две РАВНЫЕ независимые половины — слева всё, что
+ * было (логотип, название, слоган, версия, авторство, ссылки, строки окружения
+ * и сервера), справа — сторонние компоненты. Левая помещается целиком без
+ * прокруток, правая прокручивается по вертикали независимо (роль размера `l` +
+ * `fixedHeight`, скролл — у правой колонки). Горизонтальных прокруток нет.
+ *
  * Purely client-side: opens without a server connection — the client version
  * and runtime info come from the main process over `etn.system.appInfo`
  * (docs/07-client-electron.md §6). The server block is optional: it reuses
@@ -39,7 +45,7 @@ const ABOUT_LINKS: Array<{ label: string; url: string }> = [
 
 /** Opens the «О программе» dialog. */
 export function showAboutDialog(): void {
-  const body = div('about-body');
+  const left = div('about-left');
 
   const logo = el('img', 'about-logo');
   logo.src = './logo.svg';
@@ -56,7 +62,7 @@ export function showAboutDialog(): void {
     linksRow.append(button(link.label, () => void openLink(link.url), 'link-btn'));
   }
 
-  body.append(
+  left.append(
     logo,
     el('h2', 'about-title', 'ETN'),
     el('p', 'about-tagline muted', 'The Endless Thought Network — self-hosted граф мыслей'),
@@ -65,13 +71,22 @@ export function showAboutDialog(): void {
     linksRow,
     techLine,
     serverLine,
-    thirdPartyBlock(),
   );
+
+  const right = div('about-right');
+  right.append(thirdPartyBlock());
+
+  const body = div('about-body');
+  body.append(left, right);
 
   showDialog({
     title: 'О программе',
     body,
-    size: 's',
+    // Две равные половины требуют места: прежняя роль `s` (460px) обрезала даже
+    // версию/авторство. `l` (900×680) + фиксированная высота — тело не
+    // прокручивается, скролл отдан правой колонке (задача dd7e490e).
+    size: 'l',
+    fixedHeight: true,
     buttons: [{ label: t('actions.close'), primary: true }],
   });
 
@@ -116,7 +131,8 @@ async function loadServerLine(serverLine: HTMLElement): Promise<void> {
  * Блок «Сторонние компоненты» (задача 35b9cc05, ADR 03eb2c61): краткий
  * перечень библиотек из общего каталога `lib/third-party.ts` — того же, по
  * которому генератор `scripts/generate-notices.ts` собирает полный
- * `THIRD-PARTY-NOTICES.txt` в поставке.
+ * `THIRD-PARTY-NOTICES.txt` в поставке. Живёт в правой половине диалога
+ * (задача dd7e490e) и прокручивается в ней независимо от левой.
  */
 function thirdPartyBlock(): HTMLElement {
   const block = div('about-third');

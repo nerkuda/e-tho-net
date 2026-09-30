@@ -584,26 +584,58 @@ button.ui-btn--icon.trash-act {
   border-color: var(--danger);
 }
 
-/* --- «О программе» dialog (08-ui-spec.md §8.2) ----------------------------- */
+/* --- «О программе» dialog (08-ui-spec.md §8.2, задача dd7e490e) ------------- */
+/* Тело — две РАВНЫЕ независимые половины: слева логотип, название, авторство и
+   окружение (помещается целиком без прокруток), справа — сторонние компоненты
+   с независимой вертикальной прокруткой. Диалог фиксирует высоту ролью
+   (`fixedHeight`), поэтому прокручивается не тело, а правая колонка: тело без
+   отступов и без собственной прокрутки. Горизонтальной прокрутки нет нигде. */
+.dialog-body:has(> .about-body) {
+  padding: 0;
+  overflow: hidden;
+}
 
 .about-body {
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
+  text-align: left;
+}
+
+.about-left {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   text-align: center;
   gap: 4px;
-  padding: 6px 4px 2px;
+  padding: 6px 16px 2px;
+  /* Левая половина обязана помещаться без прокруток — ни вертикальной, ни
+     горизонтальной; содержимое рассчитано на высоту/ширину роли `l`. */
+  overflow: hidden;
+}
+
+.about-right {
+  flex: 1 1 50%;
+  min-width: 0;
+  /* Независимая вертикальная прокрутка правой половины; по горизонтали —
+     никогда. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 16px;
+  border-left: 1px solid var(--border);
 }
 
 .about-logo {
   /* Размер и пропорции логотипа в диалоге «О программе»: фиксированная
-     ширина в пределах доступной ширины тела диалога (≈420 − 28 − 8 ≈ 384 px)
-     и `height: auto`, чтобы логотип пропорционально масштабировался по
-     `viewBox` 1015×536 SVG-файла (`public/logo.svg`). Без `height: auto` и
-     при `width: 56px; height: 56px;` (как было) SVG растягивался по обеим
-     осям `object-fit: fill` по умолчанию, и при смещённом влево дизайне
-     внутри старого `logo.svg` (translate(0, …)) содержимое оказывалось
-     прижатым к левому краю. */
+     ширина с `max-width: 100%` (логотип не выходит за левую половину) и
+     `height: auto`, чтобы SVG масштабировался по `viewBox` 1015×536
+     (`public/logo.svg`). Без `height: auto` SVG растягивался по обеим осям
+     `object-fit: fill`. */
   display: block;
   width: 240px;
   max-width: 100%;
@@ -632,6 +664,8 @@ button.ui-btn--icon.trash-act {
 
 .about-links {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 14px;
   margin: 10px 0 2px;
 }
@@ -647,13 +681,9 @@ button.ui-btn--icon.trash-act {
 }
 
 /* Раздел сторонних компонентов (задача 35b9cc05): краткий перечень библиотек
-   из общего каталога `lib/third-party.ts`. Слева, в отличие от остального
-   центрированного тела диалога. */
+   из общего каталога `lib/third-party.ts` — правая половина диалога. */
 .about-third {
   align-self: stretch;
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
   text-align: left;
 }
 
@@ -670,6 +700,7 @@ button.ui-btn--icon.trash-act {
 
 .about-third-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   font-size: 12px;
@@ -677,10 +708,12 @@ button.ui-btn--icon.trash-act {
 
 .about-third-name {
   flex: 0 1 auto;
+  min-width: 0;
 }
 
 .about-third-license {
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .about-third-hint {
