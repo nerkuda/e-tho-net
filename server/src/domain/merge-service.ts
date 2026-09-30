@@ -44,6 +44,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BASE_LAYER_ID,
   EtnError,
+  type LayerDiscardReport,
   type LayerMergeConflict,
   type LayerMergeMissingClosure,
   type LayerMergeReport,
@@ -53,7 +54,11 @@ import {
   type LayerOverrideRow,
   type LayerPendingConflictsReport,
   type LayerResetOverrideReport,
+  type LayerThoughtMergeMode,
+  type LayerThoughtMergeResult,
 } from '@etn/shared';
+
+import { renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
@@ -1000,4 +1005,420 @@ function mergeLayerInner(
     target_layer: { id: target.id, title: target.title },
     activity_rollup: activityRollup,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Разрешение изменений ОДНОЙ мысли (задача f5c363a3, «Слияние отдельных мыслей
+// в основу из GUI с разрешением конфликтов»).
+//
+// Три варианта из GUI отображаются на серверные операции так:
+//   * «Отказаться от изменений»  → discardLayerThought (строки мысли удаляются
+//     из слоя, мысль возвращается к состоянию основы);
+//   * «Полностью переписать…»    → mergeLayerThought режим `overwrite`;
+//   * «Объединить изменения»     → mergeLayerThought режим `combine`
+//     (единственное отступление от «посрочного реплея без слияния
+//     содержимого» — постоянный комментарий объединяется; ADR-мысль задачи).
+// ---------------------------------------------------------------------------
+
+/**
+ * Все физические строки слоя, принадлежащие одной мысли, как замкнутое
+ * подмножество для слияния/отказа (требование 406f432e).
+ *
+ * В набор входит сама мысль, её зависимые строки (синонимы, значения свойств,
+ * комментарии с их целями, вложения) и её рёбра (связи, у которых мысль —
+ * любой конец) вместе с зависимыми строками этих рёбер. Типы/справочники
+ * свойств НЕ добавляются: они либо уже есть в основе, либо дадут честный
+ * `missing_closure` — сервер, как и раньше, набор не расширяет.
+ */
+export function collectThoughtLayerRows(
+  ndb: NetworkDb,
+  layerId: string,
+  thoughtId: string,
+): MergeSelection {
+  const selection: MergeSelection = {};
+  const push = (table: BranchableTable, ids: string[]): void => {
+    if (ids.length === 0) return;
+    (selection[table] ??= []).push(...ids);
+  };
+
+  push('thoughts', layerIds(ndb, 'thoughts', layerId, 'id = ?', thoughtId));
+  push('thought_synonyms', layerIds(ndb, 'thought_synonyms', layerId, 'thought_id = ?', thoughtId));
+  push(
+    'property_values',
+    layerIds(ndb, 'property_values', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
+  );
+  push(
+    'attachments',
+    layerIds(ndb, 'attachments', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
+  );
+  const commentIds = layerIds(
+    ndb,
+    'comments',
+    layerId,
+    "owner_type = 'thought' AND owner_id = ?",
+    thoughtId,
+  );
+  push('comments', commentIds);
+  push('comment_targets', commentTargetRows(ndb, layerId, commentIds));
+
+  const linkIds = layerIds(
+    ndb,
+    'links',
+    layerId,
+    '(source_id = ? OR target_id = ?)',
+    thoughtId,
+    thoughtId,
+  );
+  push('links', linkIds);
+  if (linkIds.length > 0) {
+    const placeholders = linkIds.map(() => '?').join(', ');
+    push(
+      'property_values',
+      layerIds(
+        ndb,
+        'property_values',
+        layerId,
+        `owner_type = 'link' AND owner_id IN (${placeholders})`,
+        ...linkIds,
+      ),
+    );
+    push(
+      'attachments',
+      layerIds(
+        ndb,
+        'attachments',
+        layerId,
+        `owner_type = 'link' AND owner_id IN (${placeholders})`,
+        ...linkIds,
+      ),
+    );
+    const linkCommentIds = layerIds(
+      ndb,
+      'comments',
+      layerId,
+      `owner_type = 'link' AND owner_id IN (${placeholders})`,
+      ...linkIds,
+    );
+    push('comments', linkCommentIds);
+    push('comment_targets', commentTargetRows(ndb, layerId, linkCommentIds));
+  }
+
+  for (const table of Object.keys(selection) as BranchableTable[]) {
+    selection[table] = [...new Set(selection[table])];
+  }
+  return selection;
+}
+
+/** Ids of the layer's own rows of `table` matching `where` (§4.2 intentional
+ * physical read). */
+function layerIds(
+  ndb: NetworkDb,
+  table: BranchableTable,
+  layerId: string,
+  where: string,
+  ...args: unknown[]
+): string[] {
+  return (
+    ndb
+      .prepare(`SELECT id FROM ${table} WHERE layer_id = ? AND ${where} -- layers:physical-read`)
+      .all(layerId, ...args) as { id: string }[]
+  ).map((r) => r.id);
+}
+
+/** Layer `comment_targets` rows attached to any of `commentIds`. */
+function commentTargetRows(ndb: NetworkDb, layerId: string, commentIds: string[]): string[] {
+  if (commentIds.length === 0) return [];
+  const placeholders = commentIds.map(() => '?').join(', ');
+  return layerIds(ndb, 'comment_targets', layerId, `comment_id IN (${placeholders})`, ...commentIds);
+}
+
+// ---------------------------------------------------------------------------
+// Объединение постоянного комментария (режим combine)
+// ---------------------------------------------------------------------------
+
+/** Маркеры конфликтов git-стиля для объединённого комментария. */
+export const COMMENT_MERGE_MARKER_LAYER = '<<<<<<< слой';
+export const COMMENT_MERGE_MARKER_SEPARATOR = '=======';
+export const COMMENT_MERGE_MARKER_TARGET = '>>>>>>> основа';
+
+/** Верхняя граница таблицы LCS (строки²): выше — конфликт всем текстом, чтобы
+ * не съесть память на гигантском комментарии. */
+const COMMENT_MERGE_LCS_MAX_CELLS = 4_000_000;
+
+/** Разбить текст на строки; пустой текст — пустой список (без `['']`). */
+function splitCommentLines(body: string): string[] {
+  return body.length === 0 ? [] : body.split('\n');
+}
+
+/** Результат построчного объединения постоянного комментария. */
+export interface CommentMergeResult {
+  body: string;
+  /** Число вставленных конфликтных блоков. */
+  conflicts: number;
+}
+
+/** Целый текст как один конфликтный блок (крупные тексты и спорные случаи). */
+function wholeTextConflict(layerBody: string, targetBody: string): CommentMergeResult {
+  const block = [
+    COMMENT_MERGE_MARKER_LAYER,
+    layerBody,
+    COMMENT_MERGE_MARKER_SEPARATOR,
+    targetBody,
+    COMMENT_MERGE_MARKER_TARGET,
+  ].join('\n');
+  return { body: block, conflicts: 1 };
+}
+
+/**
+ * Объединение двух доступных версий постоянного комментария (слоя и основы)
+ * построчно, с маркерами конфликтов git-стиля.
+ *
+ * Общего предка система не хранит (в `comments` — только текущее содержимое и
+ * `version`), поэтому настоящий трёхсторонний дифф невозможен. Алгоритм: LCS по
+ * строкам даёт общие строки; в промежутках строки, которые есть только в одной
+ * версии, приписываются ей (непересекающиеся правки объединяются без
+ * конфликта), а промежуток, где у обеих версий есть свои строки, помечается
+ * конфликтом и сохраняет ОБА варианта — ни один текст не теряется.
+ */
+export function mergeCommentText(layerBody: string, targetBody: string): CommentMergeResult {
+  if (layerBody === targetBody) return { body: layerBody, conflicts: 0 };
+  const ours = splitCommentLines(layerBody);
+  const theirs = splitCommentLines(targetBody);
+  if ((ours.length + 1) * (theirs.length + 1) > COMMENT_MERGE_LCS_MAX_CELLS) {
+    return wholeTextConflict(layerBody, targetBody);
+  }
+
+  // LCS по строкам: dp[i][j] — длина LCS(ours[i:], theirs[j:]).
+  const width = theirs.length + 1;
+  const dp = new Uint32Array((ours.length + 1) * width);
+  for (let i = ours.length - 1; i >= 0; i -= 1) {
+    for (let j = theirs.length - 1; j >= 0; j -= 1) {
+      dp[i * width + j] =
+        ours[i] === theirs[j]
+          ? (dp[(i + 1) * width + j + 1] as number) + 1
+          : Math.max(dp[(i + 1) * width + j] as number, dp[i * width + j + 1] as number);
+    }
+  }
+
+  // Пары совпавших строк (обратный ход), в прямом порядке.
+  const matches: Array<[number, number]> = [];
+  let i = ours.length;
+  let j = theirs.length;
+  while (i > 0 && j > 0) {
+    if (ours[i - 1] === theirs[j - 1]) {
+      matches.push([i - 1, j - 1]);
+      i -= 1;
+      j -= 1;
+    } else if ((dp[(i - 1) * width + j] as number) >= (dp[i * width + j - 1] as number)) {
+      i -= 1;
+    } else {
+      j -= 1;
+    }
+  }
+  matches.reverse();
+
+  const out: string[] = [];
+  let conflicts = 0;
+  let oi = 0;
+  let tj = 0;
+  const flushHunk = (oiEnd: number, tjEnd: number): void => {
+    const layerSeg = ours.slice(oi, oiEnd);
+    const targetSeg = theirs.slice(tj, tjEnd);
+    if (layerSeg.length === 0 && targetSeg.length === 0) return;
+    if (targetSeg.length === 0) {
+      out.push(...layerSeg);
+      return;
+    }
+    if (layerSeg.length === 0) {
+      out.push(...targetSeg);
+      return;
+    }
+    out.push(
+      COMMENT_MERGE_MARKER_LAYER,
+      ...layerSeg,
+      COMMENT_MERGE_MARKER_SEPARATOR,
+      ...targetSeg,
+      COMMENT_MERGE_MARKER_TARGET,
+    );
+    conflicts += 1;
+  };
+  for (const [mo, mt] of matches) {
+    flushHunk(mo, mt);
+    out.push(ours[mo] as string);
+    oi = mo + 1;
+    tj = mt + 1;
+  }
+  flushHunk(ours.length, theirs.length);
+  return { body: out.join('\n'), conflicts };
+}
+
+/** Постоянный комментарий мысли, как его видит цепочка слияния (предок). */
+function resolveTargetPermanentComment(
+  ndb: NetworkDb,
+  thoughtId: string,
+): { id: string; body_md: string; version: number } | undefined {
+  return ndb
+    .prepare(
+      `SELECT c.id AS id, c.body_md AS body_md, c.version AS version FROM main.comments c
+       JOIN temp.merge_chain mc ON mc.layer_id = c.layer_id
+       WHERE c.owner_type = 'thought' AND c.owner_id = ? AND c.kind = 'permanent'
+         AND NOT EXISTS (
+           SELECT 1 FROM main.comments c2
+           JOIN temp.merge_chain mc2 ON mc2.layer_id = c2.layer_id
+           WHERE c2.owner_type = 'thought' AND c2.owner_id = c.owner_id
+             AND c2.kind = 'permanent' AND mc2.depth < mc.depth
+         )
+       LIMIT 1`,
+    )
+    .get(thoughtId) as { id: string; body_md: string; version: number } | undefined;
+}
+
+/**
+ * Режим `combine`: постоянный комментарий мысли в слое переписывается
+ * объединением с текущей версией основы (маркеры конфликтов). Хроно-записи и
+ * остальные строки сюда не входят — их переносит обычный реплей (версия слоя).
+ *
+ * Объединение выполняется только при настоящем конфликте (`base_version` тени
+ * отстал от версии основы): если основа комментарий не меняла, побеждает версия
+ * слоя без маркеров.
+ */
+function combineThoughtComment(
+  ndb: NetworkDb,
+  layerId: string,
+  thoughtId: string,
+): LayerThoughtMergeResult {
+  const result: LayerThoughtMergeResult = {
+    thought_id: thoughtId,
+    mode: 'combine',
+    comment_merged: false,
+    comment_conflicts: 0,
+  };
+  const layerRow = ndb
+    .prepare(
+      `SELECT id, body_md, base_version FROM comments WHERE layer_id = ? AND owner_type = 'thought' AND owner_id = ? AND kind = 'permanent' -- layers:physical-read`,
+    )
+    .get(layerId, thoughtId) as { id: string; body_md: string; base_version: number } | undefined;
+  if (layerRow === undefined) return result; // слой комментарий не менял
+  const target = resolveTargetPermanentComment(ndb, thoughtId);
+  // Основа не меняла комментарий с момента материализации тени — версия слоя
+  // побеждает целиком, объединять нечего.
+  if (target === undefined || layerRow.base_version === target.version) return result;
+  const merged = mergeCommentText(layerRow.body_md, target.body_md);
+  if (merged.body !== layerRow.body_md) {
+    ndb
+      .prepare(
+        `UPDATE comments SET body_md = ?, body_html = ?, version = version + 1, updated_at = ?
+          WHERE id = ? -- layers:physical-read`,
+      )
+      .run(merged.body, renderMarkdown(merged.body), new Date().toISOString(), layerRow.id);
+    result.comment_merged = true;
+    result.comment_conflicts = merged.conflicts;
+  }
+  return result;
+}
+
+/** Итог слияния одной мысли: обычный отчёт + режим разрешения. */
+export interface LayerThoughtMergeOutcome extends LayerMergeOutcome {
+  thought_merge: LayerThoughtMergeResult;
+}
+
+/**
+ * Разрешить изменения ОДНОЙ мысли слоя слиянием в родителя (задача f5c363a3).
+ *
+ * Набор строк собирается сервером как замкнутое подмножество мысли
+ * ({@link collectThoughtLayerRows}); `base_version`-расхождения по этим строкам
+ * снимаются — выбранный вариант «версия слоя побеждает» (варианты 2–3 из GUI).
+ * Режим `combine` дополнительно объединяет постоянный комментарий.
+ */
+export function mergeLayerThought(
+  ndb: NetworkDb,
+  layerId: string,
+  thoughtId: string,
+  mode: LayerThoughtMergeMode,
+  actorUserId: string,
+): LayerThoughtMergeOutcome {
+  try {
+    return ndb.transaction(() => {
+      const selection = collectThoughtLayerRows(ndb, layerId, thoughtId);
+      if (Object.keys(selection).length === 0) {
+        throw new EtnError('VALIDATION_ERROR', 'в слое нет изменений этой мысли — сливать нечего.', {
+          field: 'thought_id',
+          thought_id: thoughtId,
+        });
+      }
+      // Варианты 2–3: версия слоя побеждает целиком — расхождение base_version
+      // по строкам мысли снимается до реплея (иначе слияние откажет 422).
+      // Порядок важен: объединение комментария читает `base_version` тени, пока
+      // он ещё показывает расхождение, поэтому выполняется ДО сброса.
+      const { target } = loadMergeTarget(ndb, layerId);
+      setupMergeChain(ndb, target.id);
+      const thoughtMerge: LayerThoughtMergeResult =
+        mode === 'combine'
+          ? combineThoughtComment(ndb, layerId, thoughtId)
+          : { thought_id: thoughtId, mode, comment_merged: false, comment_conflicts: 0 };
+      resetLayerOverride(ndb, layerId, selection);
+      const outcome = mergeLayerInner(ndb, layerId, selection, actorUserId);
+      return { ...outcome, thought_merge: thoughtMerge };
+    });
+  } catch (err) {
+    if (err instanceof EtnError) throw err;
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'слияние нарушает уникальный ключ в родителе: независимая правка предка создала конфликтующую строку.',
+        { constraint: code },
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * «Отказаться от изменений»: физически удалить из слоя все строки, принадлежащие
+ * мысли (замкнутое подмножество {@link collectThoughtLayerRows}). Основа не
+ * затрагивается: мысль возвращается к своему состоянию в основе, а созданная
+ * только в слое — исчезает. Деструктивно по смыслу (правки слоя теряются),
+ * поэтому GUI спрашивает подтверждение.
+ */
+export function discardLayerThought(
+  ndb: NetworkDb,
+  layerId: string,
+  thoughtId: string,
+): LayerDiscardReport {
+  return ndb.transaction(() => {
+    const { layer, target } = loadMergeTarget(ndb, layerId);
+    const selection = collectThoughtLayerRows(ndb, layerId, thoughtId);
+    const discarded: Record<string, number> = {};
+    let total = 0;
+    for (const table of BRANCHABLE_TABLES) {
+      const ids = selection[table];
+      if (ids === undefined || ids.length === 0) continue;
+      let removed = 0;
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        const res = ndb
+          .prepare(
+            `DELETE FROM ${table} WHERE layer_id = ? AND id IN (${chunk.map(() => '?').join(', ')})
+             -- layers:physical-read`,
+          )
+          .run(layerId, ...chunk);
+        removed += Number(res.changes);
+      }
+      if (removed > 0) discarded[table] = removed;
+      total += removed;
+    }
+    if (total > 0) {
+      ndb
+        .prepare('UPDATE layers SET last_activity_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), layerId);
+    }
+    return {
+      layer: { id: layer.id, title: layer.title },
+      target_layer: { id: target.id, title: target.title },
+      thought_id: thoughtId,
+      discarded,
+      total,
+    };
+  });
 }

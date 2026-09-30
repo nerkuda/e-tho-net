@@ -48,6 +48,7 @@ import {
   LayersDiff,
   LayersDiffDoc,
   LayersConflicts,
+  LayersDiscard,
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
@@ -99,7 +100,7 @@ import {
   updateLayer,
 } from '../../domain/layer-service.js';
 import { layerDiffDoc, resolveDiffTarget, structuralLayerDiffPage } from '../../domain/layer-diff-service.js';
-import { listPendingMergeConflicts, mergeLayer, resetLayerOverride } from '../../domain/merge-service.js';
+import { listPendingMergeConflicts, mergeLayer, mergeLayerThought, resetLayerOverride, discardLayerThought } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
 import { findPath } from '../../domain/graph-traversal.js';
 import { subgraphAsync } from '../../domain/heavy-read.js';
@@ -636,6 +637,58 @@ const HANDLERS: Record<string, OpHandler> = {
     return runWriteTool(rt, a.network_id, () => {
       requireWritable(rt);
       requireWriteBudget(rt);
+      const ndb = openMemberNetworkBase(rt, a.network_id);
+      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      // Задача f5c363a3: слияние одной мысли — сервер собирает замкнутое
+      // подмножество её строк, `tables` не участвует.
+      if (a.thought_id !== undefined) {
+        const result = runWrite(ndb, fx, () => {
+          const merged = mergeLayerThought(
+            ndb,
+            a.layer_id,
+            a.thought_id as string,
+            a.mode ?? 'overwrite',
+            rt.deps.auth.userId,
+          );
+          const report: LayerMergeReport = {
+            applied: merged.applied,
+            skipped: merged.skipped,
+            reorder_collapsed: merged.reorder_collapsed,
+            reserve_layer_id: merged.reserve_layer_id,
+            purged: merged.purged,
+            activity_rollup: merged.activity_rollup,
+            thought_merge: merged.thought_merge,
+          };
+          return {
+            result: merged,
+            events: [
+              {
+                type: 'layer.merged',
+                data: { ...report, layer: merged.merged_layer, target_layer: merged.target_layer },
+                options: { layerId: merged.target_layer.id },
+              },
+              ...merged.deleted_thought_ids.map((id) => ({ type: 'thought.deleted' as const, data: { id } })),
+              ...merged.deleted_link_ids.map((id) => ({ type: 'link.deleted' as const, data: { id } })),
+            ],
+            audit: {
+              action: 'etn.layers.merge',
+              targetType: 'layer',
+              targetId: a.layer_id,
+              details: { thought_id: a.thought_id, mode: a.mode ?? 'overwrite', applied: report.applied },
+            },
+          };
+        });
+        return {
+          applied: result.applied,
+          skipped: result.skipped,
+          reorder_collapsed: result.reorder_collapsed,
+          reserve_layer_id: result.reserve_layer_id,
+          purged: result.purged,
+          activity_rollup: result.activity_rollup,
+          thought_merge: result.thought_merge,
+          request_id: String(extra.requestId),
+        };
+      }
       let selection: MergeSelection | undefined;
       if (a.tables !== undefined) {
         selection = {};
@@ -650,8 +703,6 @@ const HANDLERS: Record<string, OpHandler> = {
           selection[table as BranchableTable] = ids;
         }
       }
-      const ndb = openMemberNetworkBase(rt, a.network_id);
-      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const result = runWrite(ndb, fx, () => {
         const merged = mergeLayer(ndb, a.layer_id, selection, rt.deps.auth.userId);
         const report: LayerMergeReport = {
@@ -757,6 +808,45 @@ const HANDLERS: Record<string, OpHandler> = {
         unchanged: result.unchanged,
         request_id: String(extra.requestId),
       };
+    });
+  },
+  'layers.discard': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof LayersDiscard.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      const ndb = openMemberNetworkBase(rt, a.network_id);
+      // Строки удаляются из слоя — журнал и слой события приписываем ему.
+      const fx = { ...mcpWriteFx(rt, a.network_id, extra.requestId), layerId: a.layer_id };
+      const result = runWrite(ndb, fx, () => {
+        const report = discardLayerThought(ndb, a.layer_id, a.thought_id);
+        const empty: LayerMergeReport = {
+          applied: {},
+          skipped: [],
+          reorder_collapsed: [],
+          reserve_layer_id: null,
+          purged: 0,
+          activity_rollup: { groups: 0, removed: 0 },
+        };
+        return {
+          result: report,
+          events: [
+            {
+              type: 'layer.merged',
+              data: { ...empty, layer: report.layer, target_layer: report.target_layer },
+              options: { layerId: report.layer.id },
+            },
+          ],
+          activity: [{ kind: 'layer' as const, action: 'updated' as const, layer: report.layer }],
+          audit: {
+            action: 'etn.layers.discard',
+            targetType: 'layer',
+            targetId: a.layer_id,
+            details: { thought_id: a.thought_id, total: report.total },
+          },
+        };
+      });
+      return { ...result, request_id: String(extra.requestId) };
     });
   },
 

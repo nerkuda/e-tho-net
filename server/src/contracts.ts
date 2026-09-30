@@ -49,6 +49,7 @@ import {
   ICON_KINDS,
   LAYER_DIFF_MAX_LIMIT,
   LAYER_DIFF_SECTIONS,
+  LAYER_THOUGHT_MERGE_MODES,
   LINK_STYLES,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
@@ -693,15 +694,53 @@ export const LayersSelect = defineContract(
 /** REST `POST /networks/:networkId/layers/:layerId/merge` = MCP `etn.layers.merge`. */
 export const LayersMerge = defineContract(
   'etn.layers.merge',
-  z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-    tables: z.record(z.string(), z.array(z.string().min(1))).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId,
+      layer_id: LayerId,
+      tables: z.record(z.string(), z.array(z.string().min(1))).optional(),
+      // Задача f5c363a3: слияние ОДНОЙ мысли — сервер сам собирает замкнутое
+      // подмножество её строк; `mode` выбирает, что делать с конфликтом.
+      thought_id: ThoughtId.optional(),
+      mode: z.enum(LAYER_THOUGHT_MERGE_MODES).optional(),
+    })
+    .refine((v) => v.mode === undefined || v.thought_id !== undefined, {
+      message: 'режим слияния (mode) задаётся только вместе с thought_id.',
+      path: ['mode'],
+    })
+    .refine((v) => v.thought_id === undefined || v.tables === undefined, {
+      message: 'thought_id и tables взаимоисключающи: либо мысль, либо набор строк.',
+      path: ['thought_id'],
+    }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
     tables: { from: { kind: 'body' }, msg: 'tables должен быть объектом { таблица: [id, …] }.' },
+    thought_id: { from: { kind: 'body' } },
+    mode: { from: { kind: 'body' } },
+  },
+);
+
+/**
+ * REST `POST /networks/:networkId/layers/:layerId/discard` = MCP
+ * `etn.layers.discard` (задача f5c363a3, вариант «Отказаться от изменений»).
+ *
+ * Физически удаляет из слоя ВСЕ строки одной мысли (мысль, синонимы, значения
+ * свойств, комментарии с целями, вложения и её рёбра). Основа не затрагивается;
+ * мысль возвращается к состоянию основы, созданная только в слое — исчезает.
+ * Деструктивно, поэтому в GUI требует подтверждения.
+ */
+export const LayersDiscard = defineContract(
+  'etn.layers.discard',
+  z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+    thought_id: ThoughtId,
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    layer_id: { from: { kind: 'param', name: 'layerId' } },
+    thought_id: { from: { kind: 'body' } },
   },
 );
 

@@ -38,6 +38,7 @@ import {
   LayersDiff,
   LayersDiffDoc,
   LayersConflicts,
+  LayersDiscard,
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
@@ -428,17 +429,45 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.merge',
     tool: 'etn.layers.merge',
     group: 'layers',
-    when: 'слить слой в родителя — целиком или замкнутым подмножеством `tables`',
+    when: 'слить слой в родителя — целиком, замкнутым подмножеством `tables` или одной мыслью `thought_id`',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'layer_id', required: true, desc: 'id слоя' },
       { name: 'tables', desc: '`{ ветвимая_таблица: [id…] }` для частичного слияния' },
+      {
+        name: 'thought_id',
+        desc: 'слить одну мысль: сервер сам собирает замкнутое подмножество её строк (сама мысль, синонимы, свойства, комментарии, вложения, её рёбра)',
+      },
+      {
+        name: 'mode',
+        desc: 'с `thought_id`: `overwrite` (по умолчанию — версия слоя побеждает) | `combine` (постоянный комментарий объединяется с основой, маркеры конфликтов)',
+      },
     ],
     destructive: true,
     readOnly: false,
-    effects: 'применяет изменения слоя в родителя; при конфликте — отказ целиком; создаёт резервный слой.',
+    effects:
+      'применяет изменения слоя в родителя; при конфликте — отказ целиком (кроме слияния мысли: `base_version` расхождения по её строкам снимаются — выбранный вариант «версия слоя побеждает»); создаёт резервный слой.',
     errors: '`VALIDATION_ERROR` (`conflicts`/`missing_closure`), `NOT_FOUND`.',
     paramsContract: LayersMerge,
+  },
+  {
+    action: 'layers.discard',
+    tool: 'etn.layers.discard',
+    group: 'layers',
+    when: '«Отказаться от изменений»: убрать из слоя все правки одной мысли (мысль вернётся к состоянию основы)',
+    params: [
+      { name: 'network_id', required: true, desc: 'сеть' },
+      { name: 'layer_id', required: true, desc: 'id слоя' },
+      { name: 'thought_id', required: true, desc: 'мысль, чьи правки в слое отбрасываются' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'физически удаляет из слоя строки мысли (сама мысль, синонимы, значения свойств, комментарии с целями, ' +
+      'вложения и её рёбра); основа не затрагивается. Мысль возвращается к состоянию основы, созданная только ' +
+      'в слое — исчезает. Журнальная строка `layer.updated`, audit-запись.',
+    errors: '`VALIDATION_ERROR` (основа/служебный слой, нет изменений мысли), `NOT_FOUND`.',
+    paramsContract: LayersDiscard,
   },
   {
     action: 'layers.conflicts',

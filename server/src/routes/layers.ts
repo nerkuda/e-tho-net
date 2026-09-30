@@ -43,7 +43,8 @@ import {
   setSessionLayer,
   updateLayer,
 } from '../domain/layer-service.js';
-import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
+import { mergeLayer, mergeLayerThought, type MergeSelection } from '../domain/merge-service.js';
+import { discardLayerThought } from '../domain/merge-service.js';
 import {
   layerDiffDoc,
   layerThoughtDiff,
@@ -60,6 +61,7 @@ import {
   LayersDiff,
   LayersDiffDoc,
   LayersDiffThought,
+  LayersDiscard,
   LayersList,
   LayersMerge,
   LayersSelect,
@@ -309,6 +311,58 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(LayersMerge, req);
 
+        // Задача f5c363a3: слияние одной мысли — сервер сам собирает замкнутое
+        // подмножество её строк; `tables` здесь не участвует.
+        if (input.thought_id !== undefined) {
+          const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+          const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+            const merged = mergeLayerThought(
+              ndb,
+              input.layer_id,
+              input.thought_id as string,
+              input.mode ?? 'overwrite',
+              req.auth!.user.id,
+            );
+            const report: LayerMergeReport = {
+              applied: merged.applied,
+              skipped: merged.skipped,
+              reorder_collapsed: merged.reorder_collapsed,
+              reserve_layer_id: merged.reserve_layer_id,
+              purged: merged.purged,
+              activity_rollup: merged.activity_rollup,
+              thought_merge: merged.thought_merge,
+            };
+            return {
+              result: merged,
+              events: [
+                {
+                  type: 'layer.merged',
+                  data: { ...report, layer: merged.merged_layer, target_layer: merged.target_layer },
+                  options: { layerId: merged.target_layer.id },
+                },
+                ...merged.deleted_thought_ids.map((id) => ({
+                  type: 'thought.deleted' as const,
+                  data: { id },
+                })),
+                ...merged.deleted_link_ids.map((id) => ({
+                  type: 'link.deleted' as const,
+                  data: { id },
+                })),
+              ],
+            };
+          });
+          sendSuccess(reply, {
+            applied: result.applied,
+            skipped: result.skipped,
+            reorder_collapsed: result.reorder_collapsed,
+            reserve_layer_id: result.reserve_layer_id,
+            purged: result.purged,
+            activity_rollup: result.activity_rollup,
+            thought_merge: result.thought_merge,
+          });
+          return;
+        }
+
         let selection: MergeSelection | undefined;
         if (input.tables !== undefined) {
           selection = {};
@@ -370,6 +424,53 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           purged: result.purged,
           activity_rollup: result.activity_rollup,
         });
+      },
+    );
+
+    // --- Discard ONE thought's changes (задача f5c363a3, вариант «Отказаться от
+    // изменений»): все строки мысли физически удаляются из слоя, основа не
+    // затрагивается — мысль возвращается к состоянию основы. Полный ресинк у
+    // получателей — тем же сигналом, что у слияния (`layer.merged`): видимое
+    // состояние слоя изменилось целиком.
+    app.post(
+      '/networks/:networkId/layers/:layerId/discard',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(LayersDiscard, req);
+        const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+        const result = runWrite(
+          ndb,
+          { ...restWriteFx(deps, req, input.network_id), layerId: input.layer_id },
+          () => {
+            const report = discardLayerThought(ndb, input.layer_id, input.thought_id);
+            const empty: LayerMergeReport = {
+              applied: {},
+              skipped: [],
+              reorder_collapsed: [],
+              reserve_layer_id: null,
+              purged: 0,
+              activity_rollup: { groups: 0, removed: 0 },
+            };
+            return {
+              result: report,
+              events: [
+                {
+                  type: 'layer.merged',
+                  data: { ...empty, layer: report.layer, target_layer: report.target_layer },
+                  options: { layerId: report.layer.id },
+                },
+              ],
+              activity: [{ kind: 'layer' as const, action: 'updated' as const, layer: report.layer }],
+              audit: {
+                action: 'etn.layers.discard',
+                targetType: 'layer',
+                targetId: input.layer_id,
+                details: { thought_id: input.thought_id, total: report.total },
+              },
+            };
+          },
+        );
+        sendSuccess(reply, result);
       },
     );
 
