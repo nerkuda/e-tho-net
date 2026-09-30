@@ -21,6 +21,7 @@ import type {
   ThoughtBundleInput,
   ThoughtBundleResult,
   ThoughtBundleThoughtAction,
+  ThoughtDuplicateCandidate,
 } from '@etn/shared';
 import { EtnError } from '@etn/shared';
 
@@ -35,8 +36,56 @@ import {
   setPropertyValue,
 } from './property-service.js';
 import { findDuplicates } from './search-service.js';
+import type { DuplicateHit } from './search-service.js';
 import { projectThoughtRows } from './response-projection.js';
 import { createThought, getThoughtOrThrow, updateThought } from './thought-service.js';
+
+/**
+ * Project a `find_duplicates` hit to the compact candidate the write gate
+ * reports for a NON-blocking match (задача bf9f46bd) — id, title, match
+ * strength, matched synonym, type and parent, without the visual fields.
+ */
+function toDuplicateCandidate(hit: DuplicateHit): ThoughtDuplicateCandidate {
+  return {
+    id: hit.id,
+    title: hit.title,
+    matched_on: hit.matched_on,
+    ...(hit.matched_synonym === undefined ? {} : { matched_synonym: hit.matched_synonym }),
+    type_id: hit.type_id,
+    parent_title: hit.parent_title,
+  };
+}
+
+/**
+ * Find the **blocking** duplicate of a proposed thought title (задача
+ * bf9f46bd-afe0-41a5-8fe9-a90290f86db7).
+ *
+ * A match blocks creation only when BOTH hold:
+ *   - it is an exact (normalised) match — `matched_on: 'title'`, or
+ *     `matched_on: 'synonym'` where the matched synonym is **literal**, not a
+ *     `*`-mask (`matched_synonym` without a `*`). A wildcard-mask match is a
+ *     wordform/prefix match, never an exact name, so it never blocks;
+ *   - the matched thought has the **same type** as the proposed one (`null`
+ *     on both sides counts as the same type — both untyped).
+ *
+ * Partial matches and exact matches at a different type do NOT block: the
+ * thought is created and the matches are reported as candidates instead.
+ * Only the proposed TITLE is checked — proposed synonyms do not block (their
+ * matches are still reported as candidates via `findDuplicates`).
+ */
+function findBlockingDuplicate(
+  ndb: NetworkDb,
+  title: string,
+  typeId: string | null,
+): DuplicateHit | undefined {
+  const hits = findDuplicates(ndb, title);
+  for (const hit of hits) {
+    if (hit.type_id !== typeId) continue;
+    if (hit.matched_on === 'title') return hit;
+    if (hit.matched_on === 'synonym' && hit.matched_synonym?.includes('*') !== true) return hit;
+  }
+  return undefined;
+}
 
 /** Resolve the bundle's thought: explicit `thought_id`, or find-or-create-or-match. */
 function resolveThought(
@@ -48,6 +97,7 @@ function resolveThought(
   thought: Thought;
   action: ThoughtBundleThoughtAction;
   matchedOn: 'title' | 'synonym' | 'partial' | null;
+  duplicateCandidates?: ThoughtDuplicateCandidate[];
 } {
   if (input.thought_id !== undefined) {
     let thought = getThoughtOrThrow(ndb, input.thought_id);
@@ -100,8 +150,13 @@ function resolveThought(
   // rejected up front for a `thought` item (see `validateEnvelope`).
   const mergedActive = input.active !== undefined ? input.active : spec.active;
   const policy = input.on_duplicate ?? 'fail';
+  const typeId = spec.type_id ?? null;
+  // All matches (title + synonyms) — reported as candidates when creation is
+  // NOT blocked; also the `details.candidates` payload for `on_duplicate: fail`.
   const hits = findDuplicates(ndb, spec.title, spec.synonyms ?? []);
-  if (hits.length === 0) {
+  // Only a same-type exact title/literal-synonym match blocks creation.
+  const blocking = findBlockingDuplicate(ndb, spec.title, typeId);
+  if (blocking === undefined) {
     const thought = createThought(
       ndb,
       {
@@ -114,14 +169,16 @@ function resolveThought(
       // Рёбра link-дефолтов типа — в результат и события (ошибка 8655842b).
       defaultLinkIds,
     );
-    return { thought, action: 'created', matchedOn: null };
+    // Non-blocking matches (partial / wildcard / different type) are surfaced
+    // so the caller can still judge whether the new thought is redundant.
+    return {
+      thought,
+      action: 'created',
+      matchedOn: null,
+      ...(hits.length > 0 ? { duplicateCandidates: hits.map(toDuplicateCandidate) } : {}),
+    };
   }
 
-  const topHit = hits[0];
-  if (topHit === undefined) {
-    // Unreachable (hits.length > 0 guaranteed above); satisfies noUncheckedIndexedAccess.
-    throw new EtnError('INTERNAL', 'find_duplicates returned an empty hit unexpectedly');
-  }
   if (policy === 'fail') {
     // Кандидаты в ответе той же формы, что и у `etn.thoughts.find_duplicates`:
     // снимаем визуальные/сервисные поля (fg_color, font_*, …) единым
@@ -130,7 +187,7 @@ function resolveThought(
       candidates: projectThoughtRows(hits),
     });
   }
-  const matched = getThoughtOrThrow(ndb, topHit.id);
+  const matched = getThoughtOrThrow(ndb, blocking.id);
   if (policy === 'update') {
     const thought = updateThought(
       ndb,
@@ -144,10 +201,10 @@ function resolveThought(
       undefined,
       actorUserId,
     );
-    return { thought, action: 'updated', matchedOn: topHit.matched_on };
+    return { thought, action: 'updated', matchedOn: blocking.matched_on };
   }
   // policy === 'reuse': attach the bundle's other parts without touching the thought itself.
-  return { thought: matched, action: 'reused', matchedOn: topHit.matched_on };
+  return { thought: matched, action: 'reused', matchedOn: blocking.matched_on };
 }
 
 /** Create-or-update the bundle owner's permanent comment (как удалённый `etn.comments.upsert`). */
@@ -202,7 +259,12 @@ export function upsertThoughtBundle(
     // возвращаются в результате, чтобы фасад опубликовал `link.created`
     // (ошибка 8655842b).
     const defaultLinkIds: string[] = [];
-    const { thought, action, matchedOn } = resolveThought(ndb, input, actorUserId, defaultLinkIds);
+    const { thought, action, matchedOn, duplicateCandidates } = resolveThought(
+      ndb,
+      input,
+      actorUserId,
+      defaultLinkIds,
+    );
 
     let comment: Comment | undefined;
     let commentAction: 'created' | 'updated' | undefined;
@@ -330,6 +392,7 @@ export function upsertThoughtBundle(
       thought: freshThought,
       thought_action: action,
       matched_on: matchedOn,
+      ...(duplicateCandidates !== undefined ? { duplicate_candidates: duplicateCandidates } : {}),
       comment,
       comment_action: commentAction,
       ...(chronicle !== undefined ? { chronicle } : {}),

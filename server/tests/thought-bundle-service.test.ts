@@ -20,6 +20,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import { upsertThoughtBundle } from '../src/domain/thought-bundle-service.js';
+import { getThoughtOrThrow } from '../src/domain/thought-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -231,6 +232,173 @@ describe(
 
           const count = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts').get() as { c: number };
           assert.equal(count.c, 1);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    // Задача bf9f46bd: гейт дублей блокирует создание ТОЛЬКО при точном
+    // совпадении нормализованного названия новой мысли с названием или
+    // ЛИТЕРАЛЬНЫМ синонимом существующей мысли ТОГО ЖЕ типа. Частичное
+    // совпадение, wildcard-маска и точное совпадение при чужом типе не
+    // блокируют: мысль создаётся, кандидаты возвращаются в
+    // `duplicate_candidates`.
+    describe('dedup gate: blocking vs non-blocking (bf9f46bd)', () => {
+      it('blocking: exact title of the same (untyped) thought still refuses / reuses', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const existing = upsertThoughtBundle(ndb, { thought: { title: 'Конкуренты 1С' } }, USER);
+          assert.throws(
+            () => upsertThoughtBundle(ndb, { thought: { title: 'Конкуренты 1С' } }, USER),
+            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          );
+          const reused = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Конкуренты 1С' }, on_duplicate: 'reuse' },
+            USER,
+          );
+          assert.equal(reused.thought.id, existing.thought.id);
+          assert.equal(reused.thought_action, 'reused');
+          assert.equal(reused.matched_on, 'title');
+          assert.equal(reused.duplicate_candidates, undefined, 'a blocking match is not a candidate');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('non-blocking: exact title at a DIFFERENT type creates a new thought with a candidate', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const pod = createThoughtType(ndb, { name: 'Подсистема' }, USER);
+          const term = createThoughtType(ndb, { name: 'Термин' }, USER);
+          const existing = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Слои', type_id: pod.id } },
+            USER,
+          );
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Слои', type_id: term.id } },
+            USER,
+          );
+
+          assert.equal(result.thought_action, 'created');
+          assert.equal(result.matched_on, null);
+          assert.notEqual(result.thought.id, existing.thought.id, 'new thought must be created');
+          assert.equal(result.thought.type_id, term.id);
+          assert.equal(result.duplicate_candidates?.length, 1);
+          const cand = result.duplicate_candidates[0]!;
+          assert.equal(cand.id, existing.thought.id);
+          assert.equal(cand.matched_on, 'title');
+          assert.equal(cand.type_id, pod.id);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('blocking: exact LITERAL synonym of the same type refuses / reuses', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Термин' }, USER);
+          const existing = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Слои изменений', synonyms: ['слои'], type_id: tt.id } },
+            USER,
+          );
+
+          assert.throws(
+            () => upsertThoughtBundle(ndb, { thought: { title: 'слои', type_id: tt.id } }, USER),
+            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          );
+
+          const reused = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'слои', type_id: tt.id }, on_duplicate: 'reuse' },
+            USER,
+          );
+          assert.equal(reused.thought.id, existing.thought.id);
+          assert.equal(reused.thought_action, 'reused');
+          assert.equal(reused.matched_on, 'synonym');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('non-blocking: wildcard-mask synonym of the same type never blocks', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Подсистема' }, USER);
+          const existing = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Слои изменений', synonyms: ['layer*'], type_id: tt.id } },
+            USER,
+          );
+
+          const result = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'layering', type_id: tt.id } },
+            USER,
+          );
+
+          assert.equal(result.thought_action, 'created', '`layer*` must not block `layering`');
+          assert.notEqual(result.thought.id, existing.thought.id);
+          const cand = result.duplicate_candidates?.find((c) => c.id === existing.thought.id);
+          assert.ok(cand, 'the wildcard match is reported as a candidate');
+          assert.equal(cand.matched_on, 'synonym');
+          assert.equal(cand.matched_synonym, 'layer*');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('non-blocking: `layer*` does not block the Russian «Слои»', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const existing = upsertThoughtBundle(
+            ndb,
+            { thought: { title: 'Слои изменений', synonyms: ['layer*'] } },
+            USER,
+          );
+
+          const result = upsertThoughtBundle(ndb, { thought: { title: 'Слои' } }, USER);
+
+          assert.equal(result.thought_action, 'created');
+          assert.notEqual(result.thought.id, existing.thought.id);
+          assert.equal(result.duplicate_candidates?.[0]?.id, existing.thought.id);
+          assert.equal(result.duplicate_candidates?.[0]?.matched_on, 'partial');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('non-blocking: on_duplicate=reuse at a partial-only match creates a NEW thought', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const existing = upsertThoughtBundle(ndb, { thought: { title: 'Конкуренты 1С' } }, USER);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            {
+              thought: { title: 'Конкуренты' },
+              on_duplicate: 'reuse',
+              comment: { body_md: 'новая мысль; чужая не тронута' },
+            },
+            USER,
+          );
+
+          assert.equal(result.thought_action, 'created', 'partial match must not be reused');
+          assert.notEqual(result.thought.id, existing.thought.id);
+          assert.equal(result.thought.title, 'Конкуренты');
+          assert.equal(result.duplicate_candidates?.[0]?.id, existing.thought.id);
+          assert.equal(result.duplicate_candidates?.[0]?.matched_on, 'partial');
+          // The existing thought's card is untouched: no comment, no version bump.
+          assert.equal(getThoughtOrThrow(ndb, existing.thought.id).version, existing.thought.version);
+          const commentCount = ndb
+            .prepare('SELECT COUNT(*) AS c FROM comments WHERE owner_id = ?')
+            .get(existing.thought.id) as { c: number };
+          assert.equal(commentCount.c, 0, 'the comment must NOT land on the existing thought');
         } finally {
           ndb.close();
         }
