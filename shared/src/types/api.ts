@@ -199,6 +199,14 @@ export interface ImportSummary {
   chronological_comments_added: number;
   property_values_set: number;
   attachments_imported: number;
+  /** Публикации, созданные импортом (0.11.1, задача 950e0a59). */
+  publications_created?: number;
+  /** Публикации, обновлённые импортом по совпадению `id`. */
+  publications_updated?: number;
+  /** Полки, созданные импортом. */
+  shelves_created?: number;
+  /** Полки, обновлённые импортом по совпадению `id`. */
+  shelves_updated?: number;
   /** Manifest version echoed back for the caller to log. */
   manifest_version: string;
 }

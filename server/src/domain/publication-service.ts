@@ -721,6 +721,21 @@ export function listPublications(
   return { items: rows.map(rowToPublication), total: totalRow.n };
 }
 
+/**
+ * ВСЕ публикации среза без пагинации и фильтров — для экспорта `.etnx`
+ * (0.11.1, задача 950e0a59, требование de697045: «экспорт — все публикации
+ * среза, не фильтруются по содержимому подграфа»). Включает неактуальные и
+ * помеченные на удаление: манифест несёт их флаги и повторный экспорт обязан
+ * совпасть. Порядок детерминирован (`created_at`, затем `id`) — раунд-трип
+ * стабилен, потому что `created_at` и `id` сохраняются при импорте.
+ */
+export function listAllPublications(ndb: NetworkDb): Publication[] {
+  const rows = ndb
+    .prepare('SELECT * FROM publications_v ORDER BY created_at ASC, id ASC')
+    .all() as PublicationRow[];
+  return rows.map(rowToPublication);
+}
+
 // ---------------------------------------------------------------------------
 // Локальный порядок и исключения
 // ---------------------------------------------------------------------------

@@ -15,6 +15,8 @@ import { promisify } from 'node:util';
 import { describe, it } from 'node:test';
 import yauzl from 'yauzl';
 
+import { ETNX_VERSION } from '@etn/shared';
+
 import {
   authHeaders,
   buildRestContext,
@@ -314,7 +316,7 @@ describe(
         const manifestRaw = await readZipEntry(buf, 'manifest.json');
         const manifest = JSON.parse(manifestRaw.toString('utf8')) as Record<string, unknown>;
         assert.equal(manifest['format'], 'etnx');
-        assert.equal(manifest['version'], '1.1');
+        assert.equal(manifest['version'], ETNX_VERSION);
         assert.equal(typeof manifest['exported_at'], 'string');
         // source.network_name — display_name сети, а не её id (ошибка b52caa66).
         const source = manifest['source'] as { network_id: string; network_name: string };

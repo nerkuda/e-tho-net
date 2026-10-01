@@ -27,6 +27,10 @@ import {
   type EtnxManifestSource,
   type EtnxManifest,
   type EtnxManifestType,
+  type EtnxPublicationExclusion,
+  type EtnxPublicationOrder,
+  type EtnxShelf,
+  type EtnxShelfItem,
   type ExportEtnxOptions,
   type Link,
   type NetworkProperty,
@@ -44,6 +48,12 @@ import { listAttachments } from './attachment-service.js';
 import { getThoughtType } from './thought-type-service.js';
 import { getLinkType } from './link-type-service.js';
 import { listNetworkProperties, listTypeProperties } from './property-service.js';
+import {
+  listAllPublications,
+  listPublicationExclusions,
+  listPublicationOrder,
+  listShelves,
+} from './publication-service.js';
 import { traverse } from './graph-traversal.js';
 
 /**
@@ -111,9 +121,26 @@ export function buildManifest(
   //    importer will rebind `owner_id` after link creation)
   const propertyValues = collectPropertyValues(ndb, allIds);
 
-  // 7. Attachments (only thought attachments; the whole slice is gated by
-  //    `include_attachments` — both URL metadata and file binaries).
-  const attachments = options.include_attachments ? collectAttachments(ndb, allIds) : [];
+  // 6b. Публикации и полки среза (0.11.1, задача 950e0a59, требование
+  //     de697045): экспортируются ВСЕ публикации/полки сети, без фильтра по
+  //     содержимому подграфа. Идемпотентность — по `id`.
+  const publications = listAllPublications(ndb);
+  const { publicationOrder, publicationExclusions } = collectPublicationDetails(
+    ndb,
+    publications.map((p) => p.id),
+  );
+  const { shelves, shelfItems } = collectShelves(ndb);
+
+  // 7. Attachments (thought attachments + строка-вложение-обложка
+  //    `owner_type='publication'`). The whole slice is gated by
+  //    `include_attachments` — both URL metadata and file binaries.
+  const attachments = options.include_attachments
+    ? collectAttachments(
+        ndb,
+        allIds,
+        publications.map((p) => p.id),
+      )
+    : [];
 
   // 8. Type graph: referenced types + root types
   const referencedThoughtTypeIds = collectThoughtTypeIds(ndb, thoughts);
@@ -144,6 +171,11 @@ export function buildManifest(
     comment_targets: commentTargets,
     property_values: propertyValues,
     attachments,
+    publications,
+    publication_order: publicationOrder,
+    publication_exclusions: publicationExclusions,
+    shelves,
+    shelf_items: shelfItems,
   };
 
   if (logger !== undefined) {
@@ -155,6 +187,8 @@ export function buildManifest(
         comments: comments.length,
         attachments: attachments.length,
         properties: properties.length,
+        publications: publications.length,
+        shelves: shelves.length,
       },
       'etnx manifest built',
     );
@@ -246,6 +280,24 @@ export function parseManifest(json: unknown): EtnxManifest {
     'property_values',
     'attachments',
   ]) {
+    if (!Array.isArray(obj[key])) {
+      throw new EtnError('VALIDATION_ERROR', `${key} должен быть массивом.`, { field: key });
+    }
+  }
+  // Секции «Публикации» (формат 1.2, задача 950e0a59) ОПЦИОНАЛЬНЫ: манифест
+  // 1.1 без них читается как пустой набор (обратная совместимость, требование
+  // de697045). Если ключ присутствует, он обязан быть массивом.
+  for (const key of [
+    'publications',
+    'publication_order',
+    'publication_exclusions',
+    'shelves',
+    'shelf_items',
+  ]) {
+    if (obj[key] === undefined) {
+      obj[key] = [];
+      continue;
+    }
     if (!Array.isArray(obj[key])) {
       throw new EtnError('VALIDATION_ERROR', `${key} должен быть массивом.`, { field: key });
     }
@@ -370,22 +422,61 @@ function collectPropertyValues(ndb: NetworkDb, ids: string[]): PropertyValue[] {
   });
 }
 
-function collectAttachments(ndb: NetworkDb, ids: string[]): EtnxManifest['attachments'] {
+/**
+ * `file_path` вложения в манифесте — путь ОТНОСИТЕЛЬНО `attachments/` внутри
+ * архива (см. {@link import('@etn/shared').EtnxAttachment}). Сервер хранит
+ * файлы плоско в каталоге `attachments/` сети абсолютным путём; в манифест
+ * едет basename. Без этого `.etnx` терял файловые вложения: zip-слой искал файл
+ * по абсолютному пути и молча пропускал его (0.11.1, задача 950e0a59).
+ */
+function archiveRelativePath(raw: string | null): string | null {
+  if (raw === null) return null;
+  const parts = raw.split(/[\\/]/).filter((p) => p !== '');
+  const base = parts.length > 0 ? (parts[parts.length - 1] ?? '') : '';
+  return base === '' ? raw : base;
+}
+
+/**
+ * Вложения манифеста: строки мыслей (`owner_type='thought'`) плюс
+ * строки-вложения-обложки публикаций (`owner_type='publication'`, ADR
+ * 73cfcf64, требование de697045). Вложения ссылок (`owner_type='link'`) в
+ * `.etnx` не переносятся — как и раньше.
+ */
+function collectAttachments(
+  ndb: NetworkDb,
+  thoughtIds: string[],
+  publicationIds: string[],
+): EtnxManifest['attachments'] {
   const rows: EtnxManifest['attachments'] = [];
-  for (const id of ids) {
-    const atts = listAttachments(ndb, 'thought', id);
-    for (const a of atts) {
+  for (const id of thoughtIds) {
+    for (const a of listAttachments(ndb, 'thought', id)) {
       rows.push({
         id: a.id,
-        // `listAttachments(ndb, 'thought', …)` возвращает только вложения
-        // мыслей; вложения-обложки публикаций (owner_type='publication') в
-        // манифест .etnx этой задачи не входят (перенос публикаций — отдельная
-        // работа техпроекта c5261d02).
         owner_type: 'thought',
         owner_id: a.owner_id,
         kind: a.kind,
         url: a.url,
-        file_path: a.file_path,
+        file_path: a.kind === 'file' ? archiveRelativePath(a.file_path) : a.file_path,
+        file_size: a.file_size,
+        mime_type: a.mime_type,
+        title: a.title,
+        description: a.description,
+        icon: a.icon,
+        position: a.position,
+        created_at: a.created_at,
+        created_by: a.created_by,
+      });
+    }
+  }
+  for (const id of publicationIds) {
+    for (const a of listAttachments(ndb, 'publication', id)) {
+      rows.push({
+        id: a.id,
+        owner_type: 'publication',
+        owner_id: a.owner_id,
+        kind: a.kind,
+        url: a.url,
+        file_path: a.kind === 'file' ? archiveRelativePath(a.file_path) : a.file_path,
         file_size: a.file_size,
         mime_type: a.mime_type,
         title: a.title,
@@ -398,6 +489,58 @@ function collectAttachments(ndb: NetworkDb, ids: string[]): EtnxManifest['attach
     }
   }
   return rows;
+}
+
+/** Поузловый порядок и исключения всех экспортируемых публикаций. */
+function collectPublicationDetails(
+  ndb: NetworkDb,
+  publicationIds: string[],
+): {
+  publicationOrder: EtnxPublicationOrder[];
+  publicationExclusions: EtnxPublicationExclusion[];
+} {
+  const publicationOrder: EtnxPublicationOrder[] = [];
+  const publicationExclusions: EtnxPublicationExclusion[] = [];
+  for (const id of publicationIds) {
+    for (const item of listPublicationOrder(ndb, id)) {
+      publicationOrder.push({
+        publication_id: id,
+        node_key: item.node_key,
+        position: item.position,
+      });
+    }
+    publicationExclusions.push(...listPublicationExclusions(ndb, id));
+  }
+  return { publicationOrder, publicationExclusions };
+}
+
+/** Полки библиотеки и их состав (строки `shelves` + `shelf_items`). */
+function collectShelves(ndb: NetworkDb): {
+  shelves: EtnxShelf[];
+  shelfItems: EtnxShelfItem[];
+} {
+  const shelves: EtnxShelf[] = [];
+  const shelfItems: EtnxShelfItem[] = [];
+  for (const shelf of listShelves(ndb)) {
+    shelves.push({
+      id: shelf.id,
+      title: shelf.title,
+      position: shelf.position,
+      version: shelf.version,
+      created_at: shelf.created_at,
+      created_by: shelf.created_by,
+      updated_at: shelf.updated_at,
+      updated_by: shelf.updated_by,
+    });
+    for (const item of shelf.items) {
+      shelfItems.push({
+        shelf_id: item.shelf_id,
+        publication_id: item.publication_id,
+        position: item.position,
+      });
+    }
+  }
+  return { shelves, shelfItems };
 }
 
 function collectThoughtTypeIds(ndb: NetworkDb, thoughts: Thought[]): Set<string> {

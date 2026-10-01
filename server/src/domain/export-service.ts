@@ -323,15 +323,22 @@ function collectZip(manifest: EtnxManifest, ndb: NetworkDb, outputPath: string):
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
 
     const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
+    // Дедупликация имён внутри архива: строка-вложение-обложка публикации
+    // ссылается на тот же физический файл, что и вложение мысли (ADR 73cfcf64),
+    // поэтому два ряда манифеста дают один и тот же `attachments/<basename>`.
+    // Повторный `append` создал бы дубль-запись в zip.
+    const archived = new Set<string>();
     for (const att of manifest.attachments) {
       if (att.kind !== 'file' || att.file_path === null) continue;
       const rel = att.file_path.replace(/^\/+/, '');
+      if (archived.has(rel)) continue;
       const abs = joinWithinDir(attachDir, rel);
       if (abs === null) continue;
       if (!existsSync(abs)) {
         logger.warn({ rel }, 'attachment missing on export — skipping');
         continue;
       }
+      archived.add(rel);
       archive.append(createReadStream(abs), { name: `attachments/${rel}` });
     }
 
