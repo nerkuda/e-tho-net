@@ -58,7 +58,7 @@ import {
   flattenSections,
   positionsFor,
   reorderIds,
-  sectionNodeKey,
+  siblingNodeKeys,
 } from './model.js';
 import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
@@ -117,11 +117,12 @@ type TocLine =
       kind: 'section';
       key: string;
       thoughtId: string;
+      nodeKey: string;
+      parentThoughtId: string | null;
       depth: number;
       label: string;
       repeat: boolean;
       cycle: boolean;
-      root: boolean;
       hasChildren: boolean;
       collapsed: boolean;
     }
@@ -179,11 +180,12 @@ function toLines(assembly: PublicationAssembly | null, collapsed: ReadonlySet<st
       kind: 'section',
       key: item.section.anchor,
       thoughtId: item.section.thought_id,
+      nodeKey: item.section.node_key,
+      parentThoughtId: item.parentThoughtId,
       depth: item.depth,
       label: item.section.heading,
       repeat: item.section.flags.repeat_of !== null,
       cycle: item.section.flags.cycle_cut,
-      root: sectionNodeKey(item) !== null,
       hasChildren: item.section.children.length > 0,
       collapsed: collapsed.has(item.section.thought_id),
     });
@@ -212,7 +214,7 @@ function toLines(assembly: PublicationAssembly | null, collapsed: ReadonlySet<st
 function tocSignature(line: TocLine): string {
   switch (line.kind) {
     case 'section':
-      return `s:${line.label}:${line.depth}:${line.repeat}:${line.cycle}:${line.root}:${line.hasChildren}:${line.collapsed}`;
+      return `s:${line.label}:${line.depth}:${line.repeat}:${line.cycle}:${line.nodeKey}:${line.parentThoughtId ?? ''}:${line.hasChildren}:${line.collapsed}`;
     case 'text':
       return `t:${line.label}:${line.depth}`;
     case 'excluded':
@@ -258,7 +260,8 @@ export function mountPublicationWorkspace(
   const tocCollapsed = { value: false };
   let currentAnchor: string | null = null;
   let reloadTimer: number | null = null;
-  let draggingRootId: string | null = null;
+  let draggingKey: string | null = null;
+  let draggingParent: string | null = null;
 
   const root = div('pub-ws hidden');
   const header = div('pub-ws-header');
@@ -449,10 +452,8 @@ export function mountPublicationWorkspace(
       node.dataset['anchor'] = line.key;
       node.dataset['thoughtId'] = line.thoughtId;
       node.style.paddingLeft = `${line.depth}rem`;
-      if (line.root) {
-        node.draggable = true;
-        node.classList.add('pub-toc-root');
-      }
+      node.draggable = true;
+      node.classList.add('pub-toc-draggable');
       const caret = line.hasChildren ? iconButton({
         icon: svgIcon('chevron-down'),
         title: line.collapsed ? t('publications.ws.tocExpand') : t('publications.ws.tocCollapse'),
@@ -520,16 +521,21 @@ export function mountPublicationWorkspace(
       ev.preventDefault();
       showMenuAt(ev.clientX, ev.clientY, rowMenu(thoughtId));
     });
-    if (line.kind === 'section' && line.root) {
+    if (line.kind === 'section') {
       node.addEventListener('dragstart', (ev) => {
-        draggingRootId = thoughtId;
-        ev.dataTransfer?.setData('text/plain', thoughtId);
+        draggingKey = line.nodeKey;
+        draggingParent = line.parentThoughtId;
+        ev.dataTransfer?.setData('text/plain', line.nodeKey);
       });
       node.addEventListener('dragend', () => {
-        draggingRootId = null;
+        draggingKey = null;
+        draggingParent = null;
       });
       node.addEventListener('dragover', (ev) => {
-        if (draggingRootId === null || draggingRootId === thoughtId) return;
+        // Переставляем только внутри одной группы соседей (разделы одного
+        // родителя) — иначе изменился бы не порядок, а структура.
+        if (draggingKey === null || draggingKey === line.nodeKey) return;
+        if (draggingParent !== line.parentThoughtId) return;
         ev.preventDefault();
         node.classList.add('pub-toc-drop');
       });
@@ -537,7 +543,8 @@ export function mountPublicationWorkspace(
       node.addEventListener('drop', (ev) => {
         ev.preventDefault();
         node.classList.remove('pub-toc-drop');
-        if (draggingRootId !== null) void moveRoot(draggingRootId, thoughtId);
+        if (draggingKey === null || draggingParent !== line.parentThoughtId) return;
+        void moveSibling(draggingKey, line.nodeKey, line.parentThoughtId);
       });
     }
   }
@@ -561,15 +568,18 @@ export function mountPublicationWorkspace(
     ];
   }
 
-  /** Перенос корневого раздела перед другим корнем (PUT order, батч). */
-  async function moveRoot(movedId: string, beforeId: string | null): Promise<void> {
+  /** Перенос раздела перед соседом в пределах одной группы (PUT order, батч). */
+  async function moveSibling(
+    movedKey: string,
+    beforeKey: string,
+    parentThoughtId: string | null,
+  ): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null || publicationId === null || assembly === null) return;
-    const roots = flattenSections(assembly.sections)
-      .filter((item) => sectionNodeKey(item) !== null)
-      .map((item) => item.section.thought_id);
-    const next = reorderIds(roots, movedId, beforeId);
-    if (next.join(',') === roots.join(',')) return;
+    const flat = flattenSections(assembly.sections);
+    const keys = siblingNodeKeys(flat, parentThoughtId);
+    const next = reorderIds(keys, movedKey, beforeKey);
+    if (next.join(',') === keys.join(',')) return;
     const items: PublicationOrderItem[] = positionsFor(next);
     try {
       await etn.publications.setOrder(networkId, publicationId, items);

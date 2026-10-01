@@ -319,13 +319,26 @@ export function flattenSections(
 /**
  * Ключ локального порядка раздела (`node_key` операции f6b242fe).
  *
- * Корневой раздел адресуется id своей мысли; вложенный — родительским ребром
- * вхождения, которого DTO сборки НЕ отдаёт (`PublicationAssemblySection` несёт
- * только `thought_id`/`anchor`). Поэтому вложенный узел ключа не имеет — клиент
- * переставляет только корневые разделы (ограничение зафиксировано ошибкой).
+ * Приходит из DTO сборки (`PublicationAssemblySection.node_key`): для корня —
+ * id мысли, для вложенного раздела — id родительского ребра вхождения. Клиент
+ * переставляет разделы любого уровня, не зная рёбер графа.
  */
-export function sectionNodeKey(flat: FlatSection): string | null {
-  return flat.depth === 0 ? flat.section.thought_id : null;
+export function sectionNodeKey(flat: FlatSection): string {
+  return flat.section.node_key;
+}
+
+/**
+ * Ключи `node_key` одной группы соседей — прямых детей `parentThoughtId`
+ * (`null` — корневые разделы) в порядке отображения. Батч PUT order
+ * переставляет узлы внутри группы.
+ */
+export function siblingNodeKeys(
+  flat: readonly FlatSection[],
+  parentThoughtId: string | null,
+): string[] {
+  return flat
+    .filter((item) => item.parentThoughtId === parentThoughtId)
+    .map((item) => item.section.node_key);
 }
 
 /**

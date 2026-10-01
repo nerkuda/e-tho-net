@@ -14,15 +14,21 @@ import {
   positionsFor,
   reorderIds,
   sectionNodeKey,
+  siblingNodeKeys,
 } from '../src/renderer/screens/publications/model.js';
 
-/** Раздел сборки: минимальный узел с детьми. */
+/**
+ * Раздел сборки: минимальный узел с детьми. `nodeKey` по умолчанию — id мысли
+ * (корень), у вложенного — id ребра вхождения (`e:<id>`).
+ */
 function section(
   thoughtId: string,
   children: PublicationAssemblySection[] = [],
+  nodeKey = `e:${thoughtId}`,
 ): PublicationAssemblySection {
   return {
     thought_id: thoughtId,
+    node_key: nodeKey,
     anchor: `pub-${thoughtId}`,
     level: 1,
     heading: thoughtId,
@@ -50,11 +56,22 @@ describe('модель рабочей области публикации: де�
     );
   });
 
-  it('ключ порядка есть только у корневых разделов (вложенные DTO не адресует)', () => {
-    const flat = flattenSections([section('A', [section('B')])]);
+  it('ключ порядка берётся из DTO для корня и для вложенного раздела', () => {
+    const flat = flattenSections([section('A', [section('B')], 'A')]);
     const [root, child] = flat;
     assert.equal(sectionNodeKey(root!), 'A');
-    assert.equal(sectionNodeKey(child!), null);
+    assert.equal(sectionNodeKey(child!), 'e:B');
+  });
+
+  it('выделяет группу соседей одного родителя (корни — parentThoughtId null)', () => {
+    const tree = [
+      section('A', [section('B'), section('C')], 'A'),
+      section('D', [], 'D'),
+    ];
+    const flat = flattenSections(tree);
+    assert.deepEqual(siblingNodeKeys(flat, null), ['A', 'D']);
+    assert.deepEqual(siblingNodeKeys(flat, 'A'), ['e:B', 'e:C']);
+    assert.deepEqual(siblingNodeKeys(flat, 'B'), []);
   });
 });
 
@@ -82,5 +99,21 @@ describe('модель рабочей области публикации: пе�
       { node_key: 'B', position: 2 },
       { node_key: 'C', position: 3 },
     ]);
+  });
+
+  it('переставляет вложенные разделы по node_key, не трогая корни', () => {
+    const tree = [section('A', [section('B'), section('C'), section('D')], 'A')];
+    const flat = flattenSections(tree);
+    const keys = siblingNodeKeys(flat, 'A');
+    assert.deepEqual(keys, ['e:B', 'e:C', 'e:D']);
+    const next = reorderIds(keys, 'e:D', 'e:B');
+    assert.deepEqual(next, ['e:D', 'e:B', 'e:C']);
+    assert.deepEqual(positionsFor(next), [
+      { node_key: 'e:D', position: 1 },
+      { node_key: 'e:B', position: 2 },
+      { node_key: 'e:C', position: 3 },
+    ]);
+    // Корневая группа при перестановке вложенных не меняется.
+    assert.deepEqual(siblingNodeKeys(flat, null), ['A']);
   });
 });
