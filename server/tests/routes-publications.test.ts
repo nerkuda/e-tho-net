@@ -389,16 +389,18 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       assert.equal(heldEntry?.blocked, true);
       assert.ok((heldEntry?.blocking.layers.length ?? 0) >= 1);
       const shelfEntry = trash.shelves.find((s) => s.id === shelf.id);
-      assert.equal(shelfEntry?.blocked, true);
+      // Собственных блокировок у полки нет (состав удаляется каскадом,
+      // публикации живы) — в основе она не заблокирована.
+      assert.equal(shelfEntry?.blocked, false);
       assert.equal(shelfEntry?.blocking.items, 1);
 
-      // Purge: свободная публикация уходит; заблокированные публикация и полка —
-      // пропускаются без ошибки.
+      // Purge: свободная публикация и полка (вместе с составом) уходят;
+      // удержанная слоем публикация пропускается без ошибки.
       const sweep = await api(ctx, 'POST', '/trash/purge');
       assert.equal(sweep.statusCode, 200, sweep.body);
       const counts = sweep.json().data as { purged: number; skipped: number };
-      assert.equal(counts.purged, 1);
-      assert.equal(counts.skipped, 2);
+      assert.equal(counts.purged, 2);
+      assert.equal(counts.skipped, 1);
       assert.equal((await api(ctx, 'GET', `/publications/${pubFree.id}`)).statusCode, 404);
       assert.equal((await api(ctx, 'GET', `/publications/${pubHeld.id}`)).statusCode, 200);
       const trashAfter = (await api(ctx, 'GET', '/trash')).json().data as {
@@ -406,27 +408,7 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
         shelves: unknown[];
       };
       assert.equal(trashAfter.publications.length, 1);
-      assert.equal(trashAfter.shelves.length, 1);
-
-      // Опустошить полку — она перестаёт быть заблокированной и уходит
-      // следующим проходом; публикация остаётся удержанной слоем.
-      const removeItem = await api(
-        ctx,
-        'DELETE',
-        `/shelves/${shelf.id}/items?publication_id=${pubHeld.id}`,
-      );
-      assert.equal(removeItem.statusCode, 200, removeItem.body);
-      const sweep2 = await api(ctx, 'POST', '/trash/purge');
-      const counts2 = sweep2.json().data as { purged: number; skipped: number };
-      assert.equal(counts2.purged, 1);
-      assert.equal(counts2.skipped, 1);
-      const shelfEmptyEntry = (await api(ctx, 'GET', '/trash')).json().data as {
-        publications: unknown[];
-        shelves: unknown[];
-      };
-      assert.equal(shelfEmptyEntry.shelves.length, 0);
-      assert.equal(shelfEmptyEntry.publications.length, 1);
-      assert.equal((await api(ctx, 'GET', `/publications/${pubHeld.id}`)).statusCode, 200);
+      assert.equal(trashAfter.shelves.length, 0);
 
       // Пометка и восстановление полки — отдельный цикл.
       const restoredShelf = (await api(ctx, 'POST', '/shelves', { payload: { title: 'Возврат' } }))

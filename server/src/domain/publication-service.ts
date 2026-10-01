@@ -953,6 +953,19 @@ export function listShelves(ndb: NetworkDb): Shelf[] {
   return rows.map((row) => shelfWithItems(ndb, row));
 }
 
+/**
+ * ВСЕ полки среза без фильтра корзины — для экспорта `.etnx` (0.11.1, задача
+ * c59ce742): помеченная полка обязана уехать вместе с пометкой, иначе после
+ * импорта она приезжала бы живой. Порядок детерминирован (`position`, затем
+ * `created_at`, `id`) — раунд-трип стабилен.
+ */
+export function listAllShelves(ndb: NetworkDb): Shelf[] {
+  const rows = ndb
+    .prepare('SELECT * FROM shelves_v ORDER BY position ASC, created_at ASC, id ASC')
+    .all() as ShelfRow[];
+  return rows.map((row) => shelfWithItems(ndb, row));
+}
+
 /** Полка по id в контексте слоя; `null` — не видна. */
 export function getShelf(ndb: NetworkDb, id: string): Shelf | null {
   const row = ndb.prepare('SELECT * FROM shelves_v WHERE id = ? LIMIT 1').get(id) as
@@ -979,8 +992,14 @@ function validateShelfTitle(ndb: NetworkDb, title: unknown, excludeId?: string):
   const key = normalizeTitle(value);
   // Уникальность — только среди живых строк (`shelves_v`); надгробие не
   // считается занятым именем — оно выведено из частичного индекса
-  // idx_shelves_title_key_live (миграция 047). Так удаление полки в рабочем
-  // слое не делает её имя невосстановимым.
+  // idx_shelves_title_key_live (миграция 047). Так удаление полки в основе
+  // (физическое) не делает её имя невосстановимым.
+  //
+  // Помеченная в корзину полка (`marked_for_deletion = 1`, `deleted = 0`) имя
+  // УДЕРЖИВАЕТ — сознательное решение (пользователь, 2026-10-01): полка
+  // восстановима, её имя принадлежит ей до физического удаления (purge);
+  // освобождать имя при пометке значило бы отдавать его другой полке и ломать
+  // restore.
   const clash = ndb
     .prepare('SELECT id FROM shelves_v WHERE title_key = ? AND id <> ? LIMIT 1')
     .get(key, excludeId ?? '') as { id: string } | undefined;
@@ -1071,13 +1090,19 @@ export function updateShelf(
 }
 
 /**
- * Проверка физического удаления полки (0.11.1, задача c59ce742): непустую
- * полку удалять нельзя — сначала убери из неё публикации. Само физическое
- * удаление возможно только в основе (проверяет {@link deleteShelf}).
+ * Проверка физического удаления полки (0.11.1, задача c59ce742). Собственных
+ * блокировок у полки нет: состав уходит каскадом, публикации не трогаются
+ * (полка — как плейлист, карточка c80951ea). Ограничение одно — контекст:
+ * физическое удаление доступно только в основе (см. {@link deleteShelf}),
+ * поэтому `blocked` отражает именно рабочий слой. `blocking.items` —
+ * информационно: сколько строк состава снесёт каскад.
  */
 export function checkShelfDeletion(ndb: NetworkDb, id: string): ShelfDeletionCheckResult {
   const shelf = getShelfOrThrow(ndb, id);
-  return { blocked: shelf.items.length > 0, blocking: { items: shelf.items.length } };
+  return {
+    blocked: !isBaseContext(ndb),
+    blocking: { items: shelf.items.length },
+  };
 }
 
 /**
@@ -1129,11 +1154,11 @@ function markShelfTrashed(
 }
 
 /**
- * Физическое удаление полки (purge; 0.11.1, задача c59ce742, решение
- * пользователя 2026-10-01): только в основе (в слое — `VALIDATION_ERROR`
- * `purge_base_only`) и только у ПУСТОЙ полки (иначе `shelf_has_publications` —
- * сначала убери публикации или используй корзину). Строки состава удаляются
- * каскадом (их к этому моменту нет), публикации не трогаются.
+ * Физическое удаление полки (purge; 0.11.1, задача c59ce742, карточка
+ * c80951ea): только в основе (в слое — `VALIDATION_ERROR` `purge_base_only`).
+ * Строки состава удаляются каскадом, публикации НЕ трогаются — полка ведёт
+ * себя как плейлист, поэтому удалять её можно и непустой. Отдельной
+ * блокировки «есть публикации» нет: это сверхспековое ограничение убрано.
  */
 export function deleteShelf(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
@@ -1144,14 +1169,7 @@ export function deleteShelf(ndb: NetworkDb, id: string): void {
         { entity: 'shelf', id, code: 'purge_base_only' },
       );
     }
-    const shelf = getShelfOrThrow(ndb, id);
-    if (shelf.items.length > 0) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'полку с публикациями удалить нельзя: сначала убери их или помести полку в корзину',
-        { entity: 'shelf', id, code: 'shelf_has_publications', items: shelf.items.length },
-      );
-    }
+    getShelfOrThrow(ndb, id);
     const itemIds = (
       ndb.prepare('SELECT id FROM shelf_items_v WHERE shelf_id = ?').all(id) as { id: string }[]
     ).map((r) => r.id);

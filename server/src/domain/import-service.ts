@@ -1251,14 +1251,20 @@ function upsertPublicationExclusion(
 
 /**
  * Идемпотентный upsert полки по `id`. Аудит-поля и `version` — из манифеста
- * (тождественность повторного экспорта/импорта, как у публикаций).
+ * (тождественность повторного экспорта/импорта, как у публикаций). Пометка
+ * корзины (`marked_for_deletion`/`_at`/`_by`) переносится, если манифест её
+ * несёт (0.11.1, c59ce742); отсутствие трактуется как «не помечена».
  */
 function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
+  const marked = row.marked_for_deletion === true ? 1 : 0;
+  const markedAt = row.marked_for_deletion_at ?? null;
+  const markedBy = row.marked_for_deletion_by ?? null;
   const existing = ndb.prepare('SELECT 1 FROM shelves_v WHERE id = ? LIMIT 1').get(row.id);
   if (existing !== undefined) {
     ndb
       .prepare(
         `UPDATE shelves SET title = ?, title_key = ?, position = ?, version = ?,
+           marked_for_deletion = ?, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
            updated_at = ?, updated_by = ? WHERE id = ?`,
       )
       .run(
@@ -1266,6 +1272,9 @@ function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
         normalizeTitle(row.title),
         row.position,
         row.version,
+        marked,
+        markedAt,
+        markedBy,
         row.updated_at,
         row.updated_by,
         row.id,
@@ -1275,8 +1284,9 @@ function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
   ndb
     .prepare(
       `INSERT INTO shelves (id, title, title_key, position, version,
+         marked_for_deletion, marked_for_deletion_at, marked_for_deletion_by,
          created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.id,
@@ -1284,6 +1294,9 @@ function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
       normalizeTitle(row.title),
       row.position,
       row.version,
+      marked,
+      markedAt,
+      markedBy,
       row.created_at,
       row.created_by,
       row.updated_at,

@@ -34,6 +34,7 @@ import {
   createPublication,
   createShelf,
   setPublicationOrder,
+  trashShelf,
   updatePublication,
 } from '../src/domain/publication-service.js';
 import {
@@ -142,6 +143,8 @@ describe(
         addPublicationExclusion(src.ndb, publication.id, thoughtId, src.adminId);
         const shelf = createShelf(src.ndb, { title: 'Полка RT' }, src.adminId);
         addShelfItem(src.ndb, shelf.id, publication.id, 7, src.adminId);
+        // Пометка корзины полки обязана пережить раунд-трип (0.11.1, c59ce742).
+        trashShelf(src.ndb, shelf.id, src.adminId);
 
         outA = await exportArchive(src, [thoughtId]);
         const manifestA = await readManifestFromBuffer(readFileSync(outA), logger);
@@ -151,6 +154,11 @@ describe(
         assert.equal(manifestA.publication_exclusions.length, 1);
         assert.equal(manifestA.shelves.length, 1);
         assert.equal(manifestA.shelf_items.length, 1);
+        assert.equal(
+          manifestA.shelves[0]?.marked_for_deletion,
+          true,
+          'пометка корзины полки уехала в манифест',
+        );
 
         // Импорт в чистую сеть.
         const result = await importFromEtnx(

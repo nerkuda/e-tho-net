@@ -258,19 +258,20 @@ describe(
         assert.equal(getPublication(ndb, pub.id), null);
         assert.equal(getShelf(ndb, shelf.id), null);
 
-        // --- непустая полка блокирована --------------------------------------
+        // --- непустая полка НЕ блокируется: состав уходит каскадом -----------
         const pubOnShelf = createPublication(ndb, { title: 'На полке' }, USER);
         const busy = createShelf(ndb, { title: 'Занятая' }, USER);
         addShelfItem(ndb, busy.id, pubOnShelf.id, 1, USER);
         trashShelf(ndb, busy.id, USER);
         const busyEntry = listTrash(ndb).shelves.find((s) => s.id === busy.id);
-        assert.equal(busyEntry?.blocked, true);
+        assert.equal(busyEntry?.blocked, false);
         assert.equal(busyEntry?.blocking.items, 1);
-        // Публикация не помечена — переживает проход; полка остаётся помеченной
-        // и по-прежнему не пуста.
-        const sweep2 = purgeTrash(ndb);
-        assert.notEqual(getShelf(ndb, busy.id), null);
-        assert.ok(sweep2.result.skipped >= 1);
+        const sweep2 = purgeTrash(ndb, [busy.id]);
+        assert.equal(sweep2.result.purged, 1);
+        assert.equal(sweep2.result.skipped, 0);
+        assert.equal(getShelf(ndb, busy.id), null);
+        // Публикация жива — полка ведёт себя как плейлист (карточка c80951ea).
+        assert.notEqual(getPublication(ndb, pubOnShelf.id), null);
 
         // --- удерживающий слой блокирует purge в основе ----------------------
         const held = createPublication(ndb, { title: 'Удерживаемая' }, USER);

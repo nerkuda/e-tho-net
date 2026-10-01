@@ -134,13 +134,14 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
     });
   }
 
-  // Полки: блокирует непустой состав (сначала убери публикации) и рабочий слой.
+  // Полки: собственных блокировок нет (состав уходит каскадом, публикации
+  // живы); блокирует только рабочий слой — purge доступен лишь в основе.
   const shelves: TrashShelfEntry[] = [];
   for (const id of shelfIds) {
     const shelf = getShelf(ndb, id);
     if (shelf === null) continue; // deleted concurrently — defensive
     const check = checkShelfDeletion(ndb, id);
-    shelves.push({ ...shelf, blocked: check.blocked || !base, blocking: check.blocking });
+    shelves.push({ ...shelf, blocked: check.blocked, blocking: check.blocking });
   }
 
   return { thoughts, links, publications, shelves };
@@ -278,8 +279,9 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
     deletedPublicationIds.push(id);
     purged += 1;
   }
-  // Полки — после публикаций: удаление публикации подчищает её строки состава
-  // (cascade), поэтому помеченная полка может опустеть этим же проходом.
+  // Полки — после публикаций (порядок не принципиален: своих блокировок у
+  // полки нет, состав уходит каскадом, публикации живы). В рабочем слое
+  // помеченная полка пропускается до слияния в основу.
   for (const id of shelfIds) {
     const shelf = getShelf(ndb, id);
     if (shelf === null) {
@@ -287,7 +289,7 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
       purged += 1;
       continue;
     }
-    if (!base || shelf.items.length > 0) {
+    if (!base) {
       skipped += 1;
       continue;
     }

@@ -107,12 +107,24 @@ export interface EtnxPublicationExclusion {
   created_by: string;
 }
 
-/** Полка библиотеки публикаций (зеркало `shelves` без состава). */
+/**
+ * Полка библиотеки публикаций (зеркало `shelves` без состава).
+ *
+ * Пометка корзины (`marked_for_deletion`) переносится форматом 1.2 — по тому же
+ * образцу, что у публикаций (`EtnxPublication`): без неё помеченная полка после
+ * импорта приезжала бы живой. Поля опциональны при чтении: манифест 1.2,
+ * записанный до этой правки, их не несёт — импорт трактует отсутствие как
+ * «не помечена».
+ */
 export interface EtnxShelf {
   id: string;
   title: string;
   position: number;
   version: number;
+  /** Корзина: пометка обратима, purge — только в основе (0.11.1, c59ce742). */
+  marked_for_deletion?: boolean;
+  marked_for_deletion_at?: string | null;
+  marked_for_deletion_by?: string | null;
   created_at: string;
   created_by: string;
   updated_at: string;

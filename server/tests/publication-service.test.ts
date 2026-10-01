@@ -373,19 +373,14 @@ describe(
         const withItem = addShelfItem(ndb, shelf.id, p.id, 1, 'u');
         assert.equal(withItem.items.length, 1);
         assert.equal(withItem.items[0]?.publication_id, p.id);
-        // Непустую полку физически удалять нельзя (0.11.1, c59ce742).
-        assert.throws(
-          () => deleteShelf(ndb, shelf.id),
-          (e) => codeOf(e) === 'VALIDATION_ERROR',
-        );
-        assert.equal(removeShelfItem(ndb, shelf.id, p.id).items.length, 0);
+        // Удалять полку можно и непустой (карточка c80951ea): состав уходит
+        // каскадом, публикация остаётся.
         deleteShelf(ndb, shelf.id);
         assert.equal(listShelves(ndb).length, 0);
+        assert.notEqual(getPublication(ndb, p.id), null);
         // Физическое удаление освобождает имя — повторное создание проходит.
         const again = createShelf(ndb, { title: 'Полка' }, 'u');
         assert.notEqual(again.id, shelf.id);
-        // Публикация не тронута удалением полки.
-        assert.notEqual(getPublication(ndb, p.id), null);
       } finally {
         ndb.close();
       }

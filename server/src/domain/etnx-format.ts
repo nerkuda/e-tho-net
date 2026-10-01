@@ -50,9 +50,9 @@ import { getLinkType } from './link-type-service.js';
 import { listNetworkProperties, listTypeProperties } from './property-service.js';
 import {
   listAllPublications,
+  listAllShelves,
   listPublicationExclusions,
   listPublicationOrder,
-  listShelves,
 } from './publication-service.js';
 import { traverse } from './graph-traversal.js';
 
@@ -521,12 +521,18 @@ function collectShelves(ndb: NetworkDb): {
 } {
   const shelves: EtnxShelf[] = [];
   const shelfItems: EtnxShelfItem[] = [];
-  for (const shelf of listShelves(ndb)) {
+  // `listAllShelves`, а не `listShelves`: помеченная в корзину полка обязана
+  // уехать вместе с пометкой (0.11.1, c59ce742) — иначе после импорта она
+  // приезжала бы живой.
+  for (const shelf of listAllShelves(ndb)) {
     shelves.push({
       id: shelf.id,
       title: shelf.title,
       position: shelf.position,
       version: shelf.version,
+      marked_for_deletion: shelf.marked_for_deletion,
+      marked_for_deletion_at: shelf.marked_for_deletion_at,
+      marked_for_deletion_by: shelf.marked_for_deletion_by,
       created_at: shelf.created_at,
       created_by: shelf.created_by,
       updated_at: shelf.updated_at,
