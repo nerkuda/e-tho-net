@@ -364,27 +364,33 @@ describe('приёмка №5, п.3: диалог «Дата/период»', ()
 
 describe('приёмка №5, п.1: компоновка карточки записи', () => {
   it('строка 1: дата/период, облачка, «+ мысль», «бутерброд» с точными тултипами', () => {
-    assert.match(CHRONICLE, /title: 'Период дневниковой записи'/, 'тултип даты/периода');
-    assert.match(CHRONICLE, /label: '\+ мысль'/, 'подпись кнопки — «+ мысль»');
-    assert.match(CHRONICLE, /title: 'Добавить мысль'/, 'тултип добавления мысли');
+    // Строку полей собирает ЕДИНЫЙ конструктор шапки (0.10.3, ошибка 47c2bf05) —
+    // те же поля у карточки и у слота; в экране остаются доменные привязки.
+    const RECORD_HEAD = read('screens/chronicle/record-head.ts');
+    assert.match(CHRONICLE, /dateTitle: 'Период дневниковой записи'/, 'тултип даты/периода');
+    assert.match(RECORD_HEAD, /label: '\+ мысль'/, 'подпись кнопки — «+ мысль»');
+    assert.match(RECORD_HEAD, /title: 'Добавить мысль'/, 'тултип добавления мысли');
     assert.match(
       CHRONICLE,
       /title: 'Действия с дневниковой записью'/,
       'тултип «бутерброда» меню записи',
     );
     assert.ok(!CHRONICLE.includes('Действия…'), 'текстовая кнопка «Действия…» упразднена');
-    // Порядок строки 1: дата → чипсы → «+ мысль» → «бутерброд».
-    const head = CHRONICLE.slice(
-      CHRONICLE.indexOf('const head = div('),
-      CHRONICLE.indexOf('card.replaceChildren('),
+    // Порядок строки полей в конструкторе: дата → привязки → «+ мысль» → завершение.
+    const row = RECORD_HEAD.slice(
+      RECORD_HEAD.indexOf('const date ='),
+      RECORD_HEAD.indexOf('// Заголовок'),
     );
-    const order = ["class: 'diary-record-date'", 'buildChipsRow(row)', "label: '+ мысль'", 'diary-record-actions'];
+    const order = ["'diary-record-date'", 'hooks.chips', "label: '+ мысль'", 'hooks.trailing'];
     let last = -1;
     for (const token of order) {
-      const at = head.indexOf(token);
-      assert.ok(at > last, `строка 1 в порядке: ${token}`);
+      const at = row.indexOf(token);
+      assert.ok(at > last, `строка полей в порядке: ${token}`);
       last = at;
     }
+    // Экран привязывает к строке чипсы и «бутерброд» меню записи.
+    assert.match(CHRONICLE, /chips: buildChipsRow\(row\)/, 'оболочка привязок карточки');
+    assert.match(CHRONICLE, /class: 'diary-record-actions'/, '«бутерброд» меню записи');
     assert.match(
       read('styles/screens/chronicle.css'),
       /\.diary-record-actions\s*\{[^}]*margin-left:\s*auto/,
@@ -395,10 +401,18 @@ describe('приёмка №5, п.1: компоновка карточки за�
   it('строка 2 — заголовок-группа, далее оболочка комментария', () => {
     // 0.10.2 (задача 41ed99ab): заголовок стал сворачиваемой группой записи —
     // в просмотре это крупная текстовая кнопка, а не всегда-редактируемый ввод.
+    // 0.10.3 (ошибка 47c2bf05): строка полей и строка заголовка собираются одним
+    // конструктором — обе входят в `head.root`, затем идёт тело.
     assert.match(
       CHRONICLE,
-      /card\.replaceChildren\(head, buildTitle\(row, card\), buildRecordBody\(row, card\)\)/,
-      'порядок: строка 1, заголовок (строка 2), тело',
+      /card\.replaceChildren\(head\.root, buildRecordBody\(row, card\)\)/,
+      'порядок: шапка (строка полей + заголовок), затем тело',
+    );
+    const RECORD_HEAD = read('screens/chronicle/record-head.ts');
+    assert.match(
+      RECORD_HEAD,
+      /root\.append\(row, title\.node\(\)\)/,
+      'заголовок — вторая строка шапки (после строки полей)',
     );
     assert.match(
       CHRONICLE,

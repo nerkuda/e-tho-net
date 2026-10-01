@@ -30,6 +30,7 @@ function read(...parts: string[]): string {
 }
 
 const CHRONICLE = read('screens', 'chronicle', 'chronicle.ts');
+const RECORD_HEAD = read('screens', 'chronicle', 'record-head.ts');
 const RECORD_GROUPS = read('screens', 'chronicle', 'record-groups.ts');
 const RECORD_TITLE = read('screens', 'chronicle', 'record-title.ts');
 const FEED_NAV = read('screens', 'chronicle', 'feed-nav.ts');
@@ -195,16 +196,17 @@ describe('сторож: сворачиваемая запись «Дневник
       /view\.prepend\(svgIcon\('chevron-down',\s*\d+\)\)/,
       'стрелка-индикатор внутри кнопки-заголовка (общий `svgIcon`)',
     );
-    // Карточка собирает заголовок через общий компонент, а не своей разметкой.
-    const buildTitle =
-      /function buildTitle\(row: ChronicleRow, card: HTMLElement\): HTMLElement \{([\s\S]*?)\n\}/.exec(
-        CHRONICLE,
-      )?.[1] ?? '';
-    assert.ok(buildTitle !== '', 'тело buildTitle найдено');
+    // Карточка собирает заголовок через ЕДИНЫЙ конструктор шапки, а сам узел
+    // компонента создаётся в его модуле (ошибка 47c2bf05; ранее — buildTitle).
     assert.match(
-      buildTitle,
+      CHRONICLE,
+      /buildRecordHead\(/,
+      'карточка берёт заголовок из единого конструктора шапки',
+    );
+    assert.match(
+      RECORD_HEAD,
       /createRecordTitle\(/,
-      'карточка берёт заголовок из общего компонента',
+      'узел заголовка создаётся общим компонентом',
     );
     assert.match(
       RECORD_GROUPS,

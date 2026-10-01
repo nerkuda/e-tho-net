@@ -10,7 +10,7 @@
  *
  * Сторож ПОВЕДЕНЧЕСКИЙ: он поднимает РЕАЛЬНЫЙ экран `mountChronicle` под Node с
  * DOM-шимом, открывает «Дневник» в сети A, переключает сеть на B, создаёт запись
- * штатным путём (кнопка «Добавить хроно-запись» → заголовок → Enter) и проверяет
+ * штатным путём (кнопка «Добавить запись дневника» → заголовок → Enter) и проверяет
  * `networkId` и `targets[0].owner_id` у исходящего `comments.createMulti` — это и
  * есть тело `POST /comments`. Совпадение текста исходника не проверяется: при
  * откате фикса проба краснеет по значению `owner_id`.
@@ -176,7 +176,7 @@ function baseEtn(win: Record<string, any>, onCreate: (networkId: string, targets
 /** Создать запись штатным путём: кнопка «Добавить» → заголовок → Enter. */
 function createRecord(host: ShimElement): void {
   const add = host.querySelector('.diary-add-btn');
-  assert.ok(add, 'кнопка «Добавить хроно-запись» смонтирована');
+  assert.ok(add, 'кнопка «Добавить запись дневника» смонтирована');
   add!.click();
   const input = host.querySelector('.diary-record-title-input');
   assert.ok(input, 'поле заголовка слота смонтировано');
