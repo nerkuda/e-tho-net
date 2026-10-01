@@ -68,7 +68,10 @@ export function buildDeepLinkUrl(params: DeepLink): string {
  * - missing or non-UUID `net` / `thought` query parameters;
  * - unexpected URL shape (extra pathname, malformed query, …).
  *
- * Extra query parameters are ignored (forward-compatible).
+ * Extra query parameters are ignored (forward-compatible), EXCEPT the
+ * publication form (`publication`) — a URL carrying it is the mutually
+ * exclusive publication deep link and is rejected here (see
+ * `parsePublicationDeepLinkUrl`).
  */
 export function parseDeepLinkUrl(input: string): DeepLink | null {
   if (typeof input !== 'string' || input.length === 0) return null;
