@@ -14,7 +14,7 @@ import { store, type WorkspaceView } from '../state.js';
 import { ensureActivityInitialised } from './activity/activity.js';
 import { ensureStructuresInitialised } from './structures/structures.js';
 import { ensureChronicleInitialised } from './chronicle/chronicle.js';
-import { ensurePublicationsInitialised } from './publications/publications.js';
+import { ensurePublicationsInitialised, openPublicationWorkspace } from './publications/publications.js';
 
 /** Switches the workspace view and persists the L4 `active_view` key per tab. */
 export function setActiveView(view: WorkspaceView): void {
@@ -54,4 +54,16 @@ export async function focusThoughtOnMap(id: string): Promise<void> {
   // Ленивый импорт: статический замкнул бы цикл app → … → active-view.
   const { setFocus } = await import('../app.js');
   await setFocus(id);
+}
+
+/**
+ * Единый путь «открыть публикацию» из любого места клиента (0.11.1, задача
+ * 3275fd8d): переключить экран на «Публикации» и открыть в рабочей области
+ * чтения конкретную публикацию. Используют ссылки `[[#pub:]]` в комментариях,
+ * значения свойства «Публикация» и deep-link `?publication=`.
+ */
+export async function openPublicationInWorkspace(id: string): Promise<void> {
+  setActiveView('publications');
+  await ensurePublicationsInitialised();
+  await openPublicationWorkspace(id);
 }

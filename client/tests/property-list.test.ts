@@ -183,9 +183,9 @@ describe('иконки видов значения (требование 4)', ()
       link: null,
       // Кросс-сетевая ссылка (задача 7849008a): своя иконка для UX.
       cross_network_ref: 'value-cross-network-ref',
-      // `publication` (0.11.1, задача f37b468d): своей иконки пока нет —
-      // поле/иконку добавляет клиентская задача 3275fd8d.
-      publication: null,
+      // `publication` (0.11.1, задача 3275fd8d): ссылка на публикацию сети —
+      // своя иконка-книга.
+      publication: 'value-publication',
     };
     for (const [vt, icon] of Object.entries(expected)) {
       assert.equal(valueTypeIconName(vt as PropertyValueType), icon, `иконка вида ${vt}`);
@@ -194,7 +194,7 @@ describe('иконки видов значения (требование 4)', ()
 
   it('иконки объявлены в общем наборе (lib/icons.ts)', () => {
     const src = read(ICONS_TS);
-    for (const icon of ['value-text', 'value-number', 'value-date', 'value-bool', 'value-url', 'value-ref']) {
+    for (const icon of ['value-text', 'value-number', 'value-date', 'value-bool', 'value-url', 'value-ref', 'value-publication']) {
       assert.ok(src.includes(`'${icon}'`), `иконка «${icon}» объявлена в IconName`);
     }
   });

@@ -404,8 +404,9 @@ const VALUE_TYPE_ICONS: Partial<Record<PropertyValueType, IconName>> = {
   thought_ref: 'value-ref',
   // Кросс-сетевая ссылка (задача 7849008a).
   cross_network_ref: 'value-cross-network-ref',
-  // `publication` (0.11.1, задача f37b468d) — иконку и полный рендер поля
-  // добавляет клиентская задача 3275fd8d («поле свойства «Публикация»»).
+  // `publication` (0.11.1, задача 3275fd8d) — ссылка на публикацию сети:
+  // иконка-книга. Полный рендер поля — общий редактор значения.
+  publication: 'value-publication',
 };
 
 export function valueTypeIconName(valueType: PropertyValueType): IconName | null {
