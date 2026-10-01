@@ -88,6 +88,40 @@ describe('MCP: загрузка файла в вложение (75c75a2f)', { sk
         const onDisk = fs.readFileSync(stored.file_path!);
         assert.equal(onDisk.length, png.length);
         assert.ok(onDisk.equals(png), 'содержимое серверной копии совпадает с загруженным');
+
+        // Аудит-строка содержит описательные поля (`title`), но НЕ саму
+        // base64-нагрузку — только её длину (иначе строка аудита в десятки МБ).
+        const auditRow = ctx.rawDb
+          .prepare(
+            `SELECT details FROM audit_log WHERE action = ? AND network_id = ? ORDER BY ts DESC LIMIT 1`,
+          )
+          .get('etn.attachments.add', ctx.networkId) as { details: string } | undefined;
+        assert.ok(auditRow !== undefined, 'должна быть аудит-строка etn.attachments.add');
+        const details = JSON.parse(auditRow!.details) as Record<string, unknown>;
+        assert.equal(details.title, 'Скриншот из ops');
+        assert.equal(details.mime_type, 'image/png');
+        assert.equal(details.data_base64_chars, png.toString('base64').length);
+        assert.equal('data_base64' in details, false, 'base64-полезная нагрузка в аудит не пишется');
+
+        // Вложение-ссылка: `description` не теряется в аудите (регрессия — поле
+        // выпало при добавлении ветки данных файла).
+        await callOp(handle.client, 'attachments.add', {
+          network_id: ctx.networkId,
+          owner_type: 'thought',
+          owner_id: ctx.homeId,
+          kind: 'url',
+          url: 'https://example.test/doc',
+          title: 'Ссылка',
+          description: 'Описание ссылки',
+        });
+        const urlAudit = ctx.rawDb
+          .prepare(
+            `SELECT details FROM audit_log WHERE action = ? AND network_id = ? ORDER BY ts DESC LIMIT 1`,
+          )
+          .get('etn.attachments.add', ctx.networkId) as { details: string } | undefined;
+        const urlDetails = JSON.parse(urlAudit!.details) as Record<string, unknown>;
+        assert.equal(urlDetails.description, 'Описание ссылки');
+        assert.equal(urlDetails.url, 'https://example.test/doc');
       } finally {
         await handle.close();
       }

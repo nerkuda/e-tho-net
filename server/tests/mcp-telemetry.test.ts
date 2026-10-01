@@ -513,8 +513,10 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.10.3 (задача 75c75a2f): `attachments[]` инструмента
         // `etn.thoughts.write` принял `mime_type`/`data_base64` (загрузка файла
         // в вложение, паритет с REST `POST …/attachments/file`). Прирост —
-        // только `inputSchema` (+52 Б), проза не менялась; планка поднята ровно
-        // под этот контракт.
+        // только `inputSchema`: +146 Б (две пары `anyOf` для новых nullable-
+        // полей; замер до/после на `etn.thoughts.write` — 4 470 → 4 616 Б,
+        // суммарно `descriptions+inputSchema` 36 641 → 36 787 Б), проза не
+        // менялась; планка поднята ровно под этот контракт.
         assert.ok(
           bytes <= 41_600,
           `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41600`,

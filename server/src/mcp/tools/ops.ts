@@ -313,6 +313,7 @@ const HANDLERS: Record<string, OpHandler> = {
           kind: a.kind,
         };
         if (a.title !== undefined) auditDetails.title = a.title;
+        if (a.description !== undefined) auditDetails.description = a.description;
         if (a.url !== undefined) auditDetails.url = a.url;
         if (a.file_path !== undefined) auditDetails.file_path = a.file_path;
         if (a.mime_type !== undefined) auditDetails.mime_type = a.mime_type;
