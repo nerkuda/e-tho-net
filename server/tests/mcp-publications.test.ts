@@ -7,7 +7,7 @@
  *     чтение (list/get) → сборка → порядок → исключение → использование →
  *     экспорт (content и artifact) → пакетный экспорт → корзина/purge; полки
  *     (CRUD, состав, корзина);
- *   * assembly большой публикации (45 корневых разделов) отдаётся страницами;
+ *   * assembly большой публикации (55 корневых разделов, 50+) отдаётся страницами;
  *   * валидация и сообщения ошибок идентичны REST (общие контракты и домен);
  *   * экспорт детерминирован (повторный md-экспорт байтово идентичен).
  *
@@ -244,7 +244,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assertZipArtifact(artifact.artifact);
         assert.ok(artifact.files.some((f) => f.endsWith('.md')));
 
-        // --- пакетный экспорт ---------------------------------------------
+        // --- пакетный экспорт: md и html (обе ветки format) ----------------
         const batch = (await call(handle.client, 'etn.publications.export_batch', {
           network_id: ctx.networkId,
           ids: [pubId],
@@ -252,6 +252,14 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         })) as { artifact: string; report: { publications: Array<{ status: string }> } };
         assertZipArtifact(batch.artifact);
         assert.equal(batch.report.publications[0]?.status, 'ok');
+
+        const batchHtml = (await call(handle.client, 'etn.publications.export_batch', {
+          network_id: ctx.networkId,
+          ids: [pubId],
+          format: 'html',
+        })) as { artifact: string; report: { publications: Array<{ status: string }> } };
+        assertZipArtifact(batchHtml.artifact);
+        assert.equal(batchHtml.report.publications[0]?.status, 'ok');
 
         // --- корзина и purge ----------------------------------------------
         const trashed = (await call(handle.client, 'etn.publications.trash', {
@@ -282,12 +290,12 @@ describe('MCP-публикации: сквозной сценарий', { skip }
     }
   });
 
-  it('assembly большой публикации (45 корневых разделов) отдаётся страницами', async () => {
+  it('assembly большой публикации (55 корневых разделов) отдаётся страницами 20+20+15', async () => {
     const ctx = await buildMcpContext();
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const type = createThoughtType(ndb, { name: 'Big' }, ctx.adminId);
-      for (let i = 1; i <= 45; i += 1) {
+      for (let i = 1; i <= 55; i += 1) {
         seedThought(ndb, `Раздел ${String(i).padStart(2, '0')}`, type.id, ctx.adminId);
       }
 
@@ -304,17 +312,26 @@ describe('MCP-публикации: сквозной сценарий', { skip }
           publication_id: pub.id,
           page: 1,
         })) as { data: { sections: unknown[]; meta: { page: number; per_page: number; total_roots: number; has_more: boolean } } };
-        assert.equal(page1.data.meta.total_roots, 45);
-        assert.equal(page1.data.sections.length, page1.data.meta.per_page);
+        assert.equal(page1.data.meta.total_roots, 55);
+        assert.equal(page1.data.meta.per_page, 20);
+        assert.equal(page1.data.sections.length, 20);
         assert.equal(page1.data.meta.has_more, true);
+
+        const page2 = (await call(handle.client, 'etn.publications.assembly', {
+          network_id: ctx.networkId,
+          publication_id: pub.id,
+          page: 2,
+        })) as { data: { sections: unknown[]; meta: { has_more: boolean } } };
+        assert.equal(page2.data.sections.length, 20);
+        assert.equal(page2.data.meta.has_more, true);
 
         const page3 = (await call(handle.client, 'etn.publications.assembly', {
           network_id: ctx.networkId,
           publication_id: pub.id,
           page: 3,
         })) as { data: { sections: unknown[]; meta: { has_more: boolean } } };
+        assert.equal(page3.data.sections.length, 15);
         assert.equal(page3.data.meta.has_more, false);
-        assert.equal(page3.data.sections.length, 45 - page1.data.meta.per_page * 2);
       } finally {
         await handle.close();
       }
