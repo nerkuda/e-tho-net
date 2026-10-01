@@ -149,6 +149,9 @@ interface Attachment {
 /** Промежуточный узел дерева (без рендера). */
 interface RawNode {
   thoughtId: string;
+  /** Ключ локального порядка (`node_key`, операция f6b242fe): id мысли для
+   *  корня, id ребра вхождения — для подраздела ([[#18f3bebf]]). */
+  nodeKey: string;
   repeat: boolean;
   cycleCut: boolean;
   children: RawNode[];
@@ -157,6 +160,8 @@ interface RawNode {
 /** Узел дерева с уровнем и сквозными счётчиками нумерации. */
 export interface PublicationContentNode {
   thoughtId: string;
+  /** Ключ локального порядка; совпадает с `node_key` батча PUT order. */
+  nodeKey: string;
   level: number;
   counters: number[];
   repeatOf: string | null;
@@ -620,6 +625,7 @@ export function buildSectionTree(
     if (emitted.has(id)) {
       const repeat: RawNode = {
         thoughtId: id,
+        nodeKey: parent === null ? id : placementKeyOf(id),
         repeat: true,
         cycleCut: inPath.has(id),
         children: [],
@@ -629,7 +635,13 @@ export function buildSectionTree(
       continue;
     }
     emitted.add(id);
-    const node: RawNode = { thoughtId: id, repeat: false, cycleCut: false, children: [] };
+    const node: RawNode = {
+      thoughtId: id,
+      nodeKey: parent === null ? id : placementKeyOf(id),
+      repeat: false,
+      cycleCut: false,
+      children: [],
+    };
     if (parent === null) rootNodes.push(node);
     else parent.children.push(node);
     inPath.add(id);
@@ -661,6 +673,7 @@ export function buildSectionTree(
     const { raw, level, counters, parent } = levelStack.pop()!;
     const node: PublicationContentNode = {
       thoughtId: raw.thoughtId,
+      nodeKey: raw.nodeKey,
       level,
       counters,
       repeatOf: raw.repeat ? publicationAnchor(raw.thoughtId) : null,
@@ -937,6 +950,7 @@ function renderSection(
 
   const dto: PublicationAssemblySection = {
     thought_id: node.thoughtId,
+    node_key: node.nodeKey,
     anchor: publicationAnchor(node.thoughtId),
     level: node.level,
     heading,

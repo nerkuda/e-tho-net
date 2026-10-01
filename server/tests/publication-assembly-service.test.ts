@@ -252,6 +252,54 @@ describe('publication-assembly-service: дерево разделов', { skip }
     }
   });
 
+  it('отдаёт node_key раздела и применяет по нему локальный порядок вложенных', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const a = seedThought(ndb, 'A', type.id);
+      const b = seedThought(ndb, 'B', type.id);
+      const c = seedThought(ndb, 'C', type.id);
+      const edgeB = seedUntypedLink(ndb, a, b, 0);
+      const edgeC = seedUntypedLink(ndb, a, c, 1);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+
+      const before = assemblePublication(ndb, pub.id, USER);
+      const root = before.sections[0]!;
+      // Корень адресуется id мысли, вложенные — id ребра вхождения.
+      assert.equal(root.node_key, a);
+      assert.deepEqual(
+        root.children.map((child) => [child.thought_id, child.node_key]),
+        [
+          [b, edgeB],
+          [c, edgeC],
+        ],
+      );
+
+      // Локальный порядок по этим же ключам переставляет вложенные разделы.
+      setPublicationOrder(
+        ndb,
+        pub.id,
+        [
+          { node_key: edgeC, position: 0 },
+          { node_key: edgeB, position: 1 },
+        ],
+        USER,
+      );
+      const after = assemblePublication(ndb, pub.id, USER);
+      assert.deepEqual(
+        after.sections[0]!.children.map((child) => child.thought_id),
+        [c, b],
+      );
+      // node_key следовал за узлом и после перестановки.
+      assert.deepEqual(
+        after.sections[0]!.children.map((child) => child.node_key),
+        [edgeC, edgeB],
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('пагинирует по разделам верхнего уровня, сохраняя сквозную нумерацию', () => {
     const ndb = createInMemoryNetworkDb();
     try {
