@@ -46,6 +46,8 @@ import {
 import { mergeLayer } from '../src/domain/merge-service.js';
 import { createLayer, deleteLayer } from '../src/domain/layer-service.js';
 import { checkLayerIntegrity as sweep } from '../src/domain/layer-integrity.js';
+import { createPublication } from '../src/domain/publication-service.js';
+import { createAttachment } from '../src/domain/attachment-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -207,6 +209,38 @@ describe(
         ndb.useLayer(BASE_LAYER_ID);
         deleteLayer(ndb, layerId, undefined, 0);
         assertIntegrity(ndb);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('integrity: вложение-обложка публикации — не оборванная ссылка', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Живая публикация с обложкой-вложением (owner_type='publication',
+        // задача f37b468d) — целостность держится.
+        const pub = createPublication(ndb, { title: 'Публикация' }, USER);
+        const cover = createAttachment(
+          ndb,
+          'publication',
+          pub.id,
+          { kind: 'url', url: 'https://e/cover.png' },
+          USER,
+        );
+        assertIntegrity(ndb);
+
+        // Физическое удаление публикации с живой строкой-вложением — нарушение:
+        // владелец-публикация не существует, ссылка оборвана.
+        ndb.prepare('DELETE FROM publications WHERE id = ?').run(pub.id);
+        const violations = sweep(ndb);
+        assert.equal(violations.length, 1, 'ровно одна оборванная ссылка');
+        assert.equal(violations[0]!.table, 'attachments');
+        assert.equal(violations[0]!.id, cover.id);
+        assert.equal(violations[0]!.ref, 'owner');
+        assert.deepEqual(violations[0]!.missing, {
+          table: 'publications',
+          id: pub.id,
+        });
       } finally {
         ndb.close();
       }

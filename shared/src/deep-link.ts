@@ -83,6 +83,9 @@ export function parseDeepLinkUrl(input: string): DeepLink | null {
   // constant exactly (case-insensitive) and no extra path components.
   if (url.host.toLowerCase() !== 'open') return null;
   if (url.pathname !== '' && url.pathname !== '/') return null;
+  // The thought and publication forms are mutually exclusive: a URL carrying
+  // both is ambiguous and rejected (симметрично с parsePublicationDeepLinkUrl).
+  if (url.searchParams.has(PUBLICATION_DEEP_LINK_PARAM)) return null;
 
   const net = url.searchParams.get('net');
   const thought = url.searchParams.get('thought');

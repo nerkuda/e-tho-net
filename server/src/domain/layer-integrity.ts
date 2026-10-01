@@ -12,7 +12,7 @@
  *     live row in ANY layer;
  *   * a live `comments` / `comment_targets` / `attachments` /
  *     `property_values` row whose owner does not exist as a live row in ANY
- *     layer;
+ *     layer (attachments have a third owner kind — `publication`, 0.11.1);
  *   * a live `type_properties` / `type_property_overrides` /
  *     `property_values` row whose property (registry) is not live in ANY layer
  *     (0.6.5: every property reference now points at the `properties` registry).
@@ -57,6 +57,15 @@ function liveLinkIds(ndb: NetworkDb): Set<string> {
   return new Set(rows.map((r) => r.id));
 }
 
+/** Ids of live publications across ALL layers (physical read; 0.11.1 — обложка
+ *  публикации это вложение с владельцем `publication`, задача f37b468d). */
+function livePublicationIds(ndb: NetworkDb): Set<string> {
+  const rows = ndb
+    .prepare('SELECT id FROM publications WHERE deleted = 0 -- layers:physical-read')
+    .all() as { id: string }[];
+  return new Set(rows.map((r) => r.id));
+}
+
 /** Ids of live registry properties across ALL layers (physical read, 0.6.5). */
 function livePropertyIds(ndb: NetworkDb): Set<string> {
   const rows = ndb
@@ -91,6 +100,7 @@ export function checkLayerIntegrity(ndb: NetworkDb): LayerIntegrityViolation[] {
   const violations: LayerIntegrityViolation[] = [];
   const thoughts = liveThoughtIds(ndb);
   const links = liveLinkIds(ndb);
+  const publications = livePublicationIds(ndb);
   const properties = livePropertyIds(ndb);
   const thoughtTypes = liveThoughtTypeIds(ndb);
   const linkTypes = liveLinkTypeIds(ndb);
@@ -153,19 +163,38 @@ export function checkLayerIntegrity(ndb: NetworkDb): LayerIntegrityViolation[] {
     }
   }
 
-  // attachments: the owner must be live somewhere.
+  // attachments: the owner (thought, link or publication) must be live
+  // somewhere. Publications are owners since 0.11.1 (обложка публикации,
+  // задача f37b468d) — их отсутствие в наборе превращало живую обложку в
+  // ложное нарушение целостности.
   for (const row of ndb
     .prepare(
       'SELECT id, owner_type, owner_id FROM attachments WHERE deleted = 0 -- layers:physical-read',
     )
-    .all() as { id: string; owner_type: 'thought' | 'link'; owner_id: string }[]) {
-    const alive = row.owner_type === 'thought' ? thoughts.has(row.owner_id) : links.has(row.owner_id);
+    .all() as { id: string; owner_type: string; owner_id: string }[]) {
+    let alive: boolean;
+    let ownerTable: string;
+    if (row.owner_type === 'thought') {
+      alive = thoughts.has(row.owner_id);
+      ownerTable = 'thoughts';
+    } else if (row.owner_type === 'link') {
+      alive = links.has(row.owner_id);
+      ownerTable = 'links';
+    } else if (row.owner_type === 'publication') {
+      alive = publications.has(row.owner_id);
+      ownerTable = 'publications';
+    } else {
+      // Неизвестный владелец — сам по себе нарушение (раньше молча считался
+      // связью, что скрывало бы новый вид владельца).
+      alive = false;
+      ownerTable = row.owner_type;
+    }
     if (!alive) {
       violations.push({
         table: 'attachments',
         id: row.id,
         ref: 'owner',
-        missing: { table: row.owner_type === 'thought' ? 'thoughts' : 'links', id: row.owner_id },
+        missing: { table: ownerTable, id: row.owner_id },
       });
     }
   }

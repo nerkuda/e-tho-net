@@ -174,6 +174,12 @@ describe('публикационный deep-link [[#pub:]] (f37b468d)', () => {
     assert.equal(parseDeepLinkUrl(url), null);
   });
 
+  it('смешанная форма (thought + publication) отвергается и мысловым парсером', () => {
+    const url = `${DEEP_LINK_SCHEME}?net=${NET_A}&thought=${THOUGHT}&publication=${PUBLICATION}`;
+    assert.equal(parseDeepLinkUrl(url), null);
+    assert.equal(extractDeepLinkFromArgv([url]), null);
+  });
+
   it('extractPublicationDeepLinkFromArgv находит URL среди аргументов', () => {
     const argv = [
       'C:\\path\\to\\electron.exe',
