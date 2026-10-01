@@ -764,6 +764,24 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, id: string) => requireRest(deps).rebuildPublication(networkId, id)),
   );
   handlers.set(
+    'publications.setOrder',
+    bind((networkId: string, id: string, items: Parameters<RestClient['setPublicationOrder']>[2]) =>
+      requireRest(deps).setPublicationOrder(networkId, id, items),
+    ),
+  );
+  handlers.set(
+    'publications.addExclusion',
+    bind((networkId: string, id: string, thoughtId: string) =>
+      requireRest(deps).addPublicationExclusion(networkId, id, thoughtId),
+    ),
+  );
+  handlers.set(
+    'publications.removeExclusion',
+    bind((networkId: string, id: string, thoughtId: string) =>
+      requireRest(deps).removePublicationExclusion(networkId, id, thoughtId),
+    ),
+  );
+  handlers.set(
     'publications.assembly',
     bind(
       (networkId: string, id: string, query?: Parameters<RestClient['getPublicationAssembly']>[2]) =>

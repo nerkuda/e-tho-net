@@ -721,6 +721,42 @@ export const ru = {
     'Комментарии мыслей этих свойств образуют текст раздела. Шаг можно пропустить.',
   'publications.wizard.titleRequired': 'Укажите название публикации.',
 
+  // -- Публикации: рабочая область открытой публикации (0.11.1, задача 4f03b9d5) --
+  /** Кнопка возврата в библиотеку (шапка рабочей области). */
+  'publications.ws.back': 'Назад',
+  'publications.ws.settings': 'Настройки',
+  'publications.ws.rebuild': 'Пересобрать',
+  'publications.ws.export': 'Экспорт',
+  /** Оглавление документа. */
+  'publications.ws.toc': 'Оглавление',
+  'publications.ws.tocCollapse': 'Свернуть оглавление',
+  'publications.ws.tocExpand': 'Развернуть оглавление',
+  /** Подпись строки текста раздела в оглавлении (подстановка — номер текста). */
+  'publications.ws.text': 'Текст %1',
+  /** Пометки раздела. */
+  'publications.ws.repeat': 'Повторное вхождение',
+  'publications.ws.cycle': 'Обрыв кольца',
+  /** Контекстное меню раздела/текста. */
+  'publications.ws.openThought': 'Открыть мысль',
+  'publications.ws.exclude': 'Исключить',
+  'publications.ws.restore': 'Вернуть',
+  'publications.ws.createSection': 'Создать подраздел',
+  'publications.ws.createText': 'Создать текст',
+  /** Плашка новых кандидатов (подстановка — число). */
+  'publications.ws.candidates': '+%1 новых мыслей под отбор',
+  'publications.ws.candidatesEmpty': 'Новые кандидаты не найдены',
+  /** Блок «дополнительные материалы». */
+  'publications.ws.extra': 'Дополнительные материалы',
+  /** Пагинация разделов (подстановки — с, по, всего). */
+  'publications.ws.prev': 'Назад',
+  'publications.ws.next': 'Вперёд',
+  'publications.ws.page': 'Разделы %1–%2 из %3',
+  /** Состояния и предупреждения документа. */
+  'publications.ws.loadError': 'Не удалось загрузить документ',
+  'publications.ws.retry': 'Повторить',
+  'publications.ws.noTextSources': 'У публикации не заданы свойства текстов.',
+  'publications.ws.createMiss': 'Мысль создана, но в отбор публикации не попала.',
+
   // -- Публикации: карточка в панели редактора (0.11.1, задача a3cfc018) ----
   /** Заголовок панели редактора для цели publication. */
   'publication.card.title': 'Публикация',

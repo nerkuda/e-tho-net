@@ -38,7 +38,7 @@ import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chr
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
-import { applyPublicationsRealtime } from './screens/publications/publications.js';
+import { applyPublicationsRealtime, applyPublicationDocumentRealtime } from './screens/publications/publications.js';
 
 /**
  * Tiny wrapper so the inline call sites above stay readable. Drops the cached
@@ -172,6 +172,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
   if (evt.network_id !== store.state.networkId) return;
   switch (evt.type) {
     case 'thought.deleted':
+      applyPublicationDocumentRealtime();
       invalidateIndicators(evt.data.id);
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
@@ -194,6 +195,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.created':
+      applyPublicationDocumentRealtime();
       if (inNeighbourhood(evt.data.thought.id)) scheduleRefresh();
       scheduleStructuresRefresh();
       scheduleChronicleRefresh();
@@ -204,6 +206,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.updated':
+      applyPublicationDocumentRealtime();
       invalidateRef(evt.data.id);
       // A pinned chip mirrors the thought's title/icon/styles — refresh it.
       if (store.state.pins.includes(evt.data.id)) {
@@ -263,6 +266,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
       applyChronicleRealtime(evt);
+      applyPublicationDocumentRealtime();
       break;
 
     case 'comment.deleted':
@@ -271,6 +275,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // editor's comment view is patched by its own listener.
       invalidateIndicators(evt.data.owner_id);
       applyChronicleRealtime(evt);
+      applyPublicationDocumentRealtime();
       break;
 
     case 'comment.updated':
@@ -280,6 +285,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
       applyChronicleRealtime(evt);
+      applyPublicationDocumentRealtime();
       break;
 
     case 'attachment.created':

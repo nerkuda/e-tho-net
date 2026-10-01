@@ -53,6 +53,7 @@ import {
   type PublicationCreateInput,
   type PublicationExportRequest,
   type PublicationListResult,
+  type PublicationOrderItem,
   type PublicationSort,
   type PublicationUpdateInput,
   type PublicationUsageResult,
@@ -3191,6 +3192,61 @@ export class RestClient {
       'POST',
       `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/rebuild`,
       { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /**
+   * `PUT …/publications/{id}/order` — батч локального порядка узлов.
+   * Сервер отвечает `{ items }` с сохранённым порядком; клиенту он не нужен
+   * (перечитывание assembly даёт истину), поэтому метод возвращает `void`.
+   */
+  public async setPublicationOrder(
+    networkId: string,
+    id: string,
+    items: readonly PublicationOrderItem[],
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'PUT',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/order`,
+      {
+        body: { items: items.map((item) => ({ node_key: item.node_key, position: item.position })) },
+        requestOptions: opts ?? { clientRequestId: randomUUID() },
+      },
+    );
+  }
+
+  /** `POST …/publications/{id}/exclusions` — исключить мысль из публикации. */
+  public async addPublicationExclusion(
+    networkId: string,
+    id: string,
+    thoughtId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/exclusions`,
+      {
+        body: { thought_id: thoughtId },
+        requestOptions: opts ?? { clientRequestId: randomUUID() },
+      },
+    );
+  }
+
+  /** `DELETE …/publications/{id}/exclusions?thought_id=` — вернуть мысль. */
+  public async removePublicationExclusion(
+    networkId: string,
+    id: string,
+    thoughtId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/exclusions`,
+      {
+        query: { thought_id: thoughtId },
+        requestOptions: opts ?? { clientRequestId: randomUUID() },
+      },
     );
   }
 

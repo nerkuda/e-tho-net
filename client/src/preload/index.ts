@@ -186,6 +186,11 @@ function buildApi(): EtnBridgeApi {
       restore: (networkId, id) => invoke('publications.restore', networkId, id),
       purge: (networkId, id) => invoke('publications.purge', networkId, id),
       rebuild: (networkId, id) => invoke('publications.rebuild', networkId, id),
+      setOrder: (networkId, id, items) => invoke('publications.setOrder', networkId, id, items),
+      addExclusion: (networkId, id, thoughtId) =>
+        invoke('publications.addExclusion', networkId, id, thoughtId),
+      removeExclusion: (networkId, id, thoughtId) =>
+        invoke('publications.removeExclusion', networkId, id, thoughtId),
       assembly: (networkId, id, query) => invoke('publications.assembly', networkId, id, query),
       candidates: (networkId, id, query) => invoke('publications.candidates', networkId, id, query),
       usage: (networkId, thoughtId, query) =>

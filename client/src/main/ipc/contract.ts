@@ -84,6 +84,7 @@ import type {
   PublicationCreateInput,
   PublicationExportRequest,
   PublicationListResult,
+  PublicationOrderItem,
   PublicationSort,
   PublicationUpdateInput,
   PublicationUsageResult,
@@ -689,6 +690,16 @@ export interface EtnApi {
     restore(networkId: string, id: string): Promise<Publication>;
     purge(networkId: string, id: string): Promise<void>;
     rebuild(networkId: string, id: string): Promise<Publication>;
+    /** `PUT …/publications/{id}/order` — батч локального порядка узлов. */
+    setOrder(
+      networkId: string,
+      id: string,
+      items: readonly PublicationOrderItem[],
+    ): Promise<void>;
+    /** `POST …/publications/{id}/exclusions` — исключить мысль. */
+    addExclusion(networkId: string, id: string, thoughtId: string): Promise<void>;
+    /** `DELETE …/publications/{id}/exclusions?thought_id=` — вернуть мысль. */
+    removeExclusion(networkId: string, id: string, thoughtId: string): Promise<void>;
     assembly(
       networkId: string,
       id: string,

@@ -59,6 +59,10 @@ import {
   type PublicationsViewState,
 } from './model.js';
 import { openPublicationWizard } from './wizard.js';
+import {
+  mountPublicationWorkspace,
+  type PublicationWorkspaceHandle,
+} from './workspace.js';
 
 /** Размер страницы списка публикаций. */
 const PAGE_SIZE = 24;
@@ -122,6 +126,10 @@ interface Ui {
 
 let ui: Ui | null = null;
 
+/** Хост и дескриптор рабочей области открытой публикации (2ebacd12). */
+let wsHost: HTMLElement | null = null;
+let workspace: PublicationWorkspaceHandle | null = null;
+
 /** Хост карточек внутри секции полки (для вложенной keyed-сверки). */
 const cardsHosts = new WeakMap<HTMLElement, HTMLElement>();
 
@@ -137,6 +145,13 @@ export async function ensurePublicationsInitialised(): Promise<void> {
 /** Монтирует вид в хост рабочего пространства; возвращает teardown. */
 export function mountPublications(hostEl: HTMLElement): () => void {
   ui = buildUi(hostEl);
+  wsHost = div('publications-host pub-ws-host hidden');
+  hostEl.append(wsHost);
+  workspace = mountPublicationWorkspace(wsHost, {
+    onClose: () => closePublicationWorkspace(),
+    onSettings: (id) => void openPublicationCard(id),
+    onExport: (id, ev) => openWorkspaceExportMenu(id, ev),
+  });
   unsubStore = store.subscribe(() => {
     if (hostEl.isConnected !== true) return;
     if (store.state.activeView === 'publications') void initForNetwork(false);
@@ -150,9 +165,33 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     searchTimer = null;
     for (const handle of tableHandles.values()) handle.destroy();
     tableHandles.clear();
+    workspace?.destroy();
+    workspace = null;
+    wsHost = null;
     ui = null;
     initializedNetworkId = null;
   };
+}
+
+/** Открывает рабочую область чтения публикации (элемент интерфейса 2ebacd12). */
+export async function openPublicationWorkspace(id: string): Promise<void> {
+  if (ui === null || wsHost === null || workspace === null) return;
+  ui.root.classList.add('hidden');
+  wsHost.classList.remove('hidden');
+  await workspace.open(id);
+}
+
+/** Возвращает экран в библиотеку (кнопка «Назад», Esc). */
+export function closePublicationWorkspace(): void {
+  workspace?.close();
+  wsHost?.classList.add('hidden');
+  ui?.root.classList.remove('hidden');
+  invalidatePublications();
+}
+
+/** Realtime-событие правки контента: открытая рабочая область перечитывается. */
+export function applyPublicationDocumentRealtime(): void {
+  if (workspace?.isOpen() === true) workspace.reload();
 }
 
 /** Инвалидирует список (перечитать из сервера с дебаунсом). */
@@ -172,6 +211,9 @@ export function applyPublicationsRealtime(eventType: string): void {
     eventType === 'shelf.deleted'
   ) {
     if (store.state.activeView === 'publications') invalidatePublications();
+    // Открытая рабочая область перечитывает документ (в т.ч. порядок,
+    // исключения, пересборку) — элемент интерфейса 2ebacd12.
+    if (workspace?.isOpen() === true) workspace.reload();
   }
 }
 
@@ -668,9 +710,9 @@ function updateCard(card: HTMLElement, publication: Publication): void {
 }
 
 function wireCardEvents(card: HTMLElement, publication: Publication): void {
-  card.addEventListener('click', () => void openPublicationCard(publication.id));
+  card.addEventListener('click', () => void openPublicationWorkspace(publication.id));
   card.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') void openPublicationCard(publication.id);
+    if (ev.key === 'Enter') void openPublicationWorkspace(publication.id);
   });
   card.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
@@ -843,8 +885,8 @@ function buildListGroup(group: ListGroup): HTMLElement {
     rows: [],
     rowKey: (row) => row.id,
     emptyText: t('publications.emptySearch'),
-    onRowClick: (row) => void openPublicationCard(row.id),
-    onActivate: (row) => void openPublicationCard(row.id),
+    onRowClick: (row) => void openPublicationWorkspace(row.id),
+    onActivate: (row) => void openPublicationWorkspace(row.id),
     rowMenu: (row) => publicationMenuItems(row),
   });
   tableHandles.set(group.id, table);
@@ -1074,6 +1116,14 @@ async function trashShelf(shelf: Shelf): Promise<void> {
   }
   if (viewState.shelfFilter === shelf.id) viewState = { ...viewState, shelfFilter: null };
   invalidatePublications();
+}
+
+/** Меню формата экспорта из рабочей области открытой публикации (2ebacd12). */
+function openWorkspaceExportMenu(publicationId: string, ev: MouseEvent): void {
+  showMenuAt(ev.clientX, ev.clientY, [
+    menuAction(t('publications.menu.exportMd'), () => void runExport(publicationId, 'md')),
+    menuAction(t('publications.menu.exportHtml'), () => void runExport(publicationId, 'html')),
+  ]);
 }
 
 /** Экспорт документа публикации: старт джобы → ожидание → сохранение zip. */

@@ -13,6 +13,8 @@ import {
   PUBLICATION_SORTS,
   type Publication,
   type PublicationActiveFilter,
+  type PublicationAssemblySection,
+  type PublicationOrderItem,
   type PublicationSort,
   type Shelf,
   type ShelfItem,
@@ -283,4 +285,69 @@ export function dedupePropertyOptions(options: readonly EntityOption[]): EntityO
     }
   }
   return [...byProperty.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Рабочая область открытой публикации (0.11.1, задача 4f03b9d5; элемент
+// интерфейса 2ebacd12). Чистые преобразования дерева сборки и порядка узлов —
+// проверяются юнит-тестами; DOM и сеть держит `workspace.ts`.
+// ---------------------------------------------------------------------------
+
+/** Раздел дерева сборки, развёрнутый в плоский список (для оглавления). */
+export interface FlatSection {
+  section: PublicationAssemblySection;
+  /** Уровень в дереве, 0 — корневой раздел. */
+  depth: number;
+  /** id мысли раздела-родителя; `null` — корневой. */
+  parentThoughtId: string | null;
+}
+
+/** Разворачивает дерево разделов в плоский список в порядке документа (DFS). */
+export function flattenSections(
+  sections: readonly PublicationAssemblySection[],
+  depth = 0,
+  parentThoughtId: string | null = null,
+): FlatSection[] {
+  const out: FlatSection[] = [];
+  for (const section of sections) {
+    out.push({ section, depth, parentThoughtId });
+    out.push(...flattenSections(section.children, depth + 1, section.thought_id));
+  }
+  return out;
+}
+
+/**
+ * Ключ локального порядка раздела (`node_key` операции f6b242fe).
+ *
+ * Корневой раздел адресуется id своей мысли; вложенный — родительским ребром
+ * вхождения, которого DTO сборки НЕ отдаёт (`PublicationAssemblySection` несёт
+ * только `thought_id`/`anchor`). Поэтому вложенный узел ключа не имеет — клиент
+ * переставляет только корневые разделы (ограничение зафиксировано ошибкой).
+ */
+export function sectionNodeKey(flat: FlatSection): string | null {
+  return flat.depth === 0 ? flat.section.thought_id : null;
+}
+
+/**
+ * Новый порядок ключей после переноса `movedId` перед `beforeId`
+ * (`beforeId === null` — в конец). Неизвестный `movedId` возвращает исходный
+ * список без изменений; неизвестный `beforeId` трактуется как «в конец».
+ */
+export function reorderIds(
+  ids: readonly string[],
+  movedId: string,
+  beforeId: string | null,
+): string[] {
+  const without = ids.filter((id) => id !== movedId);
+  if (without.length === ids.length) return [...ids];
+  const at = beforeId === null ? -1 : without.indexOf(beforeId);
+  const insertAt = at === -1 ? without.length : at;
+  const next = [...without];
+  next.splice(insertAt, 0, movedId);
+  return next;
+}
+
+/** Позиции 1..N для списка ключей узлов (батч PUT order). */
+export function positionsFor(ids: readonly string[]): PublicationOrderItem[] {
+  return ids.map((node_key, index) => ({ node_key, position: index + 1 }));
 }
