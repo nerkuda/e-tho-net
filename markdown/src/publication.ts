@@ -24,6 +24,7 @@ import type Token from 'markdown-it/lib/token.mjs';
 import { DEFAULT_MAX_LENGTH, getRenderer } from './renderer.js';
 import {
   inlinePlainText,
+  type WikiLinkRef,
   type WikiLinkResolver,
 } from './wiki-link.js';
 
@@ -255,7 +256,9 @@ function publicationPlugin(md: MarkdownIt): void {
   };
 }
 
-/** Numeric heading level from a `heading_open` token tag (`h3` → 3). */
+/**
+ * Numeric heading level from a `heading_open` token tag (`h3` → 3).
+ */
 function headingNumber(token: Token): number {
   const tag = token.tag;
   if (tag.length !== 2 || tag[0] !== 'h') return 0;
@@ -293,4 +296,191 @@ export function renderPublicationFragment(
   };
   const html = md.render(source, env);
   return { html, headings: env.pub.headings };
+}
+
+// ---------------------------------------------------------------------------
+// Markdown-экспорт фрагмента (задача 6d87f1f2, операция 1f161c74)
+// ---------------------------------------------------------------------------
+
+/** Options of {@link renderPublicationMarkdownFragment}. */
+export interface PublicationMarkdownOptions {
+  /** Heading level of the enclosing section (same semantics as the HTML render). */
+  baseLevel?: number;
+  /** Anchor ids for the collected headings (TOC parity with the HTML render). */
+  headingAnchor?: HeadingAnchorProvider;
+  /** Turns wiki links into `[text](#anchor)` / plain text / «удалена». */
+  resolveLink?: WikiLinkResolver;
+  /** Maximum input length in characters (default 256 KiB). */
+  maxLength?: number;
+}
+
+/** Result of {@link renderPublicationMarkdownFragment}. */
+export interface PublicationMarkdownResult {
+  /** Fragment with shifted headings, resolved links and block anchors kept inline. */
+  markdown: string;
+  /** Headings in document order (same shape as the HTML render). */
+  headings: PublicationHeading[];
+}
+
+/** UUID v4-ish pattern (mirrors wiki-link.ts). */
+const UUID_RE_SRC = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Render one publication block to Markdown. Same heading shift / decapitation
+ * and the same link resolver as {@link renderPublicationFragment}, so the
+ * exported Markdown and the previewed HTML never diverge (requirement
+ * [[#9969e586]]). Pure and server-free.
+ *
+ * Images and other inline markdown are preserved verbatim; `src` rewriting for
+ * the `assets/` directory is the caller's business (it knows the file layout).
+ *
+ * @throws when `source` is not a string or exceeds the configured length cap.
+ */
+export function renderPublicationMarkdownFragment(
+  source: unknown,
+  opts: PublicationMarkdownOptions = {},
+): PublicationMarkdownResult {
+  if (typeof source !== 'string') {
+    throw new Error('renderPublicationMarkdownFragment: source must be a string');
+  }
+  const maxLength = opts.maxLength ?? DEFAULT_MAX_LENGTH;
+  if (source.length > maxLength) {
+    throw new Error(`renderPublicationMarkdownFragment: source exceeds ${maxLength} characters`);
+  }
+  const md = getRenderer();
+  const tokens = md.parse(source, {});
+  const lines = source.split('\n');
+
+  // Protected line ranges: fenced and indented code blocks are never rewritten.
+  const protectedRanges: Array<[number, number]> = [];
+  for (const token of tokens) {
+    if ((token.type === 'fence' || token.type === 'code_block') && token.map !== null) {
+      protectedRanges.push([token.map[0]!, token.map[1]!]);
+    }
+  }
+  const isProtected = (line: number): boolean =>
+    protectedRanges.some(([from, to]) => line >= from && line < to);
+
+  const headings: PublicationHeading[] = [];
+  // Heading blocks to replace: start line → { endExclusive, text }.
+  const headingReplacements = new Map<number, { end: number; text: string }>();
+  let minLevel = 7;
+  for (const token of tokens) {
+    if (token.type === 'heading_open') {
+      const n = headingNumber(token);
+      if (n > 0 && n < minLevel) minLevel = n;
+    }
+  }
+  if (minLevel !== 7) {
+    const base = opts.baseLevel ?? 0;
+    let index = 0;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i]!;
+      if (token.type !== 'heading_open' || token.map === null) continue;
+      const from = headingNumber(token);
+      if (from === 0) continue;
+      const shifted = base > 0 ? base + 1 + (from - minLevel) : from;
+      const decapitated = shifted > 6;
+      const level = decapitated ? 6 : shifted;
+      const inline = tokens[i + 1];
+      const rawContent = inline !== undefined ? inline.content : '';
+      const text = inline !== undefined ? inlinePlainText(inline) : '';
+      let anchor: string | null = null;
+      if (!decapitated && opts.headingAnchor !== undefined) {
+        anchor = opts.headingAnchor({ level, text, decapitated, index }) ?? null;
+      }
+      headings.push({ level, text, anchor, decapitated });
+      index += 1;
+      const end = token.map[1]!;
+      const rendered = decapitated
+        ? `**${rawContent.trim()}**`
+        : `${'#'.repeat(level)} ${rawContent.trim()}`;
+      headingReplacements.set(token.map[0]!, { end, text: rendered });
+    }
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const replacement = headingReplacements.get(i);
+    if (replacement !== undefined) {
+      out.push(replacement.text);
+      i = replacement.end - 1; // skip the original heading lines
+      continue;
+    }
+    if (isProtected(i)) {
+      out.push(lines[i]!);
+      continue;
+    }
+    out.push(opts.resolveLink === undefined ? lines[i]! : resolveWikiLinksInLine(lines[i]!, opts.resolveLink));
+  }
+  return { markdown: out.join('\n'), headings };
+}
+
+/** Parsed wiki link (source-level, mirrors the inline rule of wiki-link.ts). */
+interface ParsedWikiLink {
+  ref: WikiLinkRef;
+}
+
+/** Parse a `[[…]]` body into a resolver ref, or `null` when malformed. */
+function parseWikiLinkBody(content: string): ParsedWikiLink | null {
+  if (content === '' || content.includes('\n') || content.includes('\r')) return null;
+  const pipe = content.indexOf('|');
+  const target = (pipe === -1 ? content : content.slice(0, pipe)).trim();
+  const aliasRaw = pipe === -1 ? null : content.slice(pipe + 1).trim();
+  const alias = aliasRaw !== null && aliasRaw !== '' ? aliasRaw : null;
+  if (target === '') return null;
+
+  let kind: WikiLinkRef['kind'] = 'name';
+  let targetId: string | null = null;
+  let networkId: string | null = null;
+  if (target.startsWith('#')) {
+    const id = target.slice(1).trim();
+    if (UUID_RE_SRC.test(id)) {
+      kind = 'id';
+      targetId = id.toLowerCase();
+    } else if (id.startsWith('pub:')) {
+      const pubId = id.slice('pub:'.length).trim();
+      if (UUID_RE_SRC.test(pubId)) {
+        kind = 'pub';
+        targetId = pubId.toLowerCase();
+      }
+    }
+  } else if (target.startsWith('n:')) {
+    const hashAt = target.indexOf('#', 2);
+    if (hashAt !== -1) {
+      const net = target.slice(2, hashAt).trim();
+      const id = target.slice(hashAt + 1).trim();
+      if (UUID_RE_SRC.test(net) && UUID_RE_SRC.test(id)) {
+        kind = 'cross';
+        networkId = net.toLowerCase();
+        targetId = id.toLowerCase();
+      }
+    }
+  }
+  return { ref: { kind, id: targetId, networkId, target, alias } };
+}
+
+/**
+ * Replace `[[…]]` links on one source line, skipping backtick code spans.
+ * The resolver decision is the same one the HTML render uses, so an in-document
+ * thought link becomes `[text](#pub-<shortid>)`.
+ */
+function resolveWikiLinksInLine(line: string, resolveLink: WikiLinkResolver): string {
+  const segments = line.split(/(`+[^`]*`+)/g);
+  for (let s = 0; s < segments.length; s += 1) {
+    if (s % 2 === 1) continue; // a backtick code span — leave as-is
+    segments[s] = segments[s]!.replace(/\[\[([^\n]*?)\]\]/g, (whole, body: string) => {
+      const parsed = parseWikiLinkBody(body);
+      if (parsed === null) return whole;
+      const resolved = resolveLink(parsed.ref);
+      if (resolved === undefined) {
+        if (parsed.ref.kind === 'name') return parsed.ref.alias ?? parsed.ref.target;
+        return parsed.ref.alias ?? 'удалена';
+      }
+      if (resolved.kind === 'anchor') return `[${resolved.text}](#${resolved.anchor})`;
+      if (resolved.kind === 'text') return resolved.text;
+      return 'удалена';
+    });
+  }
+  return segments.join('');
 }

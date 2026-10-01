@@ -148,7 +148,7 @@ export interface Shelf {
   title: string;
   position: number;
   version: number;
-  /** Пометка на удаление (корзина); purge — только в основе и только пустой. */
+  /** Пометка на удаление (корзина); purge — только в основе, состав сносится каскадом. */
   marked_for_deletion: boolean;
   marked_for_deletion_at: string | null;
   marked_for_deletion_by: string | null;
@@ -165,9 +165,13 @@ export interface ShelfInput {
   position?: number;
 }
 
-/** Что мешает физически удалить полку (0.11.1, задача c59ce742). */
+/** Что блокирует физическое удаление полки (0.11.1, задача c59ce742). */
 export interface ShelfDeletionBlocking {
-  /** Живых публикаций в составе: непустую полку удалять нельзя. */
+  /**
+   * Число строк состава полки, которые снесёт каскад. Информационно: непустая
+   * полка физически удаляется (полка — как плейлист, публикации не трогаются);
+   * `blocked` отражает только контекст слоя.
+   */
   items: number;
 }
 
@@ -320,4 +324,56 @@ export interface PublicationUsageResult {
   limit: number;
   offset: number;
   has_more: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Экспорт документа публикации (0.11.1, задача 6d87f1f2; операции 1f161c74 и
+// 074d7a97; детерминизм a26135ad/06874c5d). Оба формата — zip-артефакт джобы.
+// ---------------------------------------------------------------------------
+
+/** Формат экспорта документа публикации: Markdown или самодостаточный HTML. */
+export const PUBLICATION_EXPORT_FORMATS = ['md', 'html'] as const;
+export type PublicationExportFormat = (typeof PUBLICATION_EXPORT_FORMATS)[number];
+
+/** Тело `POST /networks/:networkId/publications/:id/export` (операция 1f161c74). */
+export interface PublicationExportRequest {
+  format: PublicationExportFormat;
+  /** Копировать доступные серверу картинки-вложения в `assets/` (по умолчанию да). */
+  with_assets?: boolean;
+}
+
+/** Тело `POST /networks/:networkId/publications/export-batch` (операция 074d7a97). */
+export interface PublicationExportBatchRequest {
+  /** Явный список публикаций; взаимоисключим с `active_only`. */
+  ids?: string[];
+  /** Все актуальные публикации сети. */
+  active_only?: boolean;
+  format: PublicationExportFormat;
+  /** Копировать доступные серверу картинки-вложения в `assets/` (по умолчанию да). */
+  with_assets?: boolean;
+}
+
+/** Итог обработки одной публикации в отчёте экспортной джобы. */
+export const PUBLICATION_EXPORT_STATUSES = ['ok', 'skipped', 'error'] as const;
+export type PublicationExportStatus = (typeof PUBLICATION_EXPORT_STATUSES)[number];
+
+/** Одна запись отчёта джобы: публикация, её slug, статус и предупреждения. */
+export interface PublicationExportEntry {
+  publication_id: string;
+  title: string;
+  slug: string;
+  status: PublicationExportStatus;
+  /** Недоступные вложения и прочие нефатальные замечания сборки. */
+  warnings: string[];
+  /** Сообщение об ошибке при `status = 'error'`. */
+  error?: string;
+  /** Относительные пути файлов публикации внутри архива. */
+  files?: string[];
+}
+
+/** Отчёт экспортной джобы публикаций (`ExportJob.report`). */
+export interface PublicationExportReport {
+  publications: PublicationExportEntry[];
+  /** Сводные предупреждения, не привязанные к одной публикации. */
+  warnings: string[];
 }

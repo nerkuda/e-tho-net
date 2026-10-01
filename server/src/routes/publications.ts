@@ -14,12 +14,14 @@
  *   DELETE /networks/:networkId/publications/:id/exclusions      — вернуть мысль
  *   POST   /networks/:networkId/publications/:id/rebuild         — пересборка
  *   GET    /networks/:networkId/publications/:id/assembly        — сборка документа
+ *   POST   /networks/:networkId/publications/:id/export          — экспорт документа (zip)
+ *   POST   /networks/:networkId/publications/export-batch        — пакетный экспорт
  *   GET    /networks/:networkId/publications/:id/candidates      — новые кандидаты
  *   GET    /networks/:networkId/thoughts/:id/publications        — использование мысли
  *   POST   /networks/:networkId/shelves                          — создать полку
  *   GET    /networks/:networkId/shelves                          — список полок
  *   PATCH  /networks/:networkId/shelves/:id                      — переименовать/порядок
- *   DELETE /networks/:networkId/shelves/:id                      — purge (основа, пустая)
+ *   DELETE /networks/:networkId/shelves/:id                      — purge (основа; состав уходит каскадом)
  *   POST   /networks/:networkId/shelves/:id/trash                — в корзину
  *   POST   /networks/:networkId/shelves/:id/restore              — из корзины
  *   POST   /networks/:networkId/shelves/:id/items                — положить публикацию
@@ -38,6 +40,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
+  type ExportJobStartResult,
   type Publication,
   type PublicationActiveFilter,
   type PublicationCreateInput,
@@ -77,6 +80,10 @@ import {
   listPublicationUsage,
 } from '../domain/publication-assembly-service.js';
 import {
+  startPublicationBatchExportJob,
+  startPublicationExportJob,
+} from '../domain/publication-export-service.js';
+import {
   parseRest,
   RestPublicationAssembly,
   RestPublicationById,
@@ -84,6 +91,8 @@ import {
   RestPublicationCreate,
   RestPublicationExclusionAdd,
   RestPublicationExclusionRemove,
+  RestPublicationExport,
+  RestPublicationExportBatch,
   RestPublicationList,
   RestPublicationOrder,
   RestPublicationRebuild,
@@ -489,6 +498,56 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
             : {}),
         });
         sendSuccess(reply, assembly);
+      },
+    );
+
+    // -------------------------------------------------------------------------
+    // Экспорт документа (задача 6d87f1f2; операции 1f161c74 и 074d7a97)
+    // -------------------------------------------------------------------------
+    /** Авторство-фолбэк «пусто → создатель»: отображаемое имя из системной БД. */
+    const resolveUserName = (userId: string): string | null => {
+      const user = app.systemDb.getUserById(userId);
+      return user === null ? null : (user.display_name ?? user.username);
+    };
+
+    app.post(
+      '/networks/:networkId/publications/export-batch',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestPublicationExportBatch, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const job = await startPublicationBatchExportJob(
+          ndb,
+          {
+            ...(input.ids !== undefined ? { ids: input.ids } : {}),
+            ...(input.active_only !== undefined ? { active_only: input.active_only } : {}),
+            format: input.format,
+            ...(input.with_assets !== undefined ? { with_assets: input.with_assets } : {}),
+          },
+          req.auth!.user.id,
+          resolveUserName,
+        );
+        sendSuccess(reply, { job_id: job.job_id } satisfies ExportJobStartResult, undefined, 202);
+      },
+    );
+
+    app.post(
+      '/networks/:networkId/publications/:id/export',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestPublicationExport, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const job = await startPublicationExportJob(
+          ndb,
+          input.publication_id,
+          {
+            format: input.format,
+            ...(input.with_assets !== undefined ? { with_assets: input.with_assets } : {}),
+          },
+          req.auth!.user.id,
+          resolveUserName,
+        );
+        sendSuccess(reply, { job_id: job.job_id } satisfies ExportJobStartResult, undefined, 202);
       },
     );
 

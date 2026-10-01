@@ -33,6 +33,7 @@ export {
   formatSectionNumber,
   buildToc,
   renderPublicationFragment,
+  renderPublicationMarkdownFragment,
 } from './publication.js';
 export type {
   NumberingRange,
@@ -41,6 +42,8 @@ export type {
   HeadingAnchorProvider,
   PublicationRenderOptions,
   PublicationRenderResult,
+  PublicationMarkdownOptions,
+  PublicationMarkdownResult,
   TocNode,
 } from './publication.js';
 

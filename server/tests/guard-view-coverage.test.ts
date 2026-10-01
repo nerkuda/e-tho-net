@@ -153,6 +153,24 @@ const WRITE_VIEW_COVERAGE: readonly WriteViewEntry[] = [
     },
   },
   {
+    contract: 'RestPublicationExport',
+    field: 'format',
+    operation: 'POST /networks/:networkId/publications/:id/export',
+    tests: {
+      md: 'publication-export.test.ts::markdown: титул, якоря, ссылки, ассеты и предупреждения о недоступных вложениях',
+      html: 'publication-export.test.ts::html: внутренний якорь кликабелен, оглавление и обложка-URL',
+    },
+  },
+  {
+    contract: 'RestPublicationExportBatch',
+    field: 'format',
+    operation: 'POST /networks/:networkId/publications/export-batch',
+    tests: {
+      md: 'publication-export.test.ts::пакетный экспорт: подкаталоги публикаций и суффикс при коллизии slug',
+      html: 'publication-export.test.ts::пакетный экспорт: подкаталоги публикаций и суффикс при коллизии slug',
+    },
+  },
+  {
     contract: 'RestFocusPrefsBody',
     field: 'dir',
     operation: 'PUT /networks/:networkId/thoughts/:fid/focus-preferences',

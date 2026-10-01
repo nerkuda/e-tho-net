@@ -7,6 +7,7 @@
 import type { AuditCategory, ExportFormat, JobStatus } from '../enums.js';
 import type { EtnErrorBody } from '../errors.js';
 import type { LayerEcho } from './layer.js';
+import type { PublicationExportReport } from './publication.js';
 
 /** Optional metadata returned on a single-item success response. */
 export interface SuccessMeta {
@@ -141,6 +142,16 @@ export interface ExportJob {
   status: JobStatus;
   /** Present once the job reaches `done`; short-lived URL with TTL. */
   download_url?: string;
+  /**
+   * Рекомендуемое имя файла результата (для экспорта публикаций — `<slug>.zip`).
+   * Отсутствует у классического экспорта подграфа, где имя выводится из формата.
+   */
+  filename?: string;
+  /**
+   * Отчёт джобы: перечень публикаций с результатами и предупреждениями
+   * (операции 1f161c74 / 074d7a97). `null`/отсутствует у прочих экспортов.
+   */
+  report?: PublicationExportReport | null;
 }
 
 /**

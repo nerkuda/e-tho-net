@@ -78,8 +78,8 @@ export type TrashPublicationEntry = Publication & {
 
 /**
  * A marked-for-deletion shelf with its precomputed blocking (GET /trash;
- * 0.11.1). Полка блокирована, пока в её составе есть публикации, и в рабочем
- * слое (физическое удаление — только в основе).
+ * 0.11.1). Полка блокирована только в рабочем слое (физическое удаление — в
+ * основе); состав сносится каскадом и удалению не мешает.
  */
 export type TrashShelfEntry = Shelf & {
   blocked: boolean;

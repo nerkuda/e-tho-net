@@ -48,6 +48,7 @@ import {
   type PublicationCandidate,
   type PublicationCandidatesResult,
   type PublicationListQuery,
+  type PublicationSectionFlags,
   type PublicationUsageItem,
   type PublicationUsageResult,
   type SavedFilterDefinition,
@@ -59,6 +60,7 @@ import {
   formatSectionNumber,
   publicationAnchor,
   renderPublicationFragment,
+  type PublicationHeading,
   type WikiLinkRef,
   type WikiLinkResolution,
 } from '@etn/markdown';
@@ -185,6 +187,64 @@ interface BuiltDocument {
   textsBySection: Map<string, SectionText[]>;
   excluded: PublicationAssemblyExcluded[];
   warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Модель экспорта документа (задача 6d87f1f2, операция 1f161c74)
+// ---------------------------------------------------------------------------
+
+/** Титульный блок экспортного документа (резолвленное авторство). */
+export interface PublicationExportTitle {
+  title: string;
+  subtitle: string | null;
+  /** Авторство; пусто — подставлен создатель (`creator`). */
+  authorship: string | null;
+  /** Создатель публикации (резолвленное отображаемое имя) — фолбэк авторства. */
+  creator: string;
+  assembly_date: string | null;
+  /** Резюме — исходный markdown без заголовков (валидация это гарантирует). */
+  summary_md: string;
+  cover: PublicationAssemblyCover;
+}
+
+/** Текст раздела в экспортной модели: markdown-источник и HTML. */
+export interface PublicationExportText {
+  thought_id: string;
+  anchor: string;
+  body_md: string;
+  body_html: string;
+}
+
+/** Узел дерева разделов в экспортной модели (markdown + HTML одной сборкой). */
+export interface PublicationExportSection {
+  thought_id: string;
+  anchor: string;
+  level: number;
+  heading: string;
+  preamble_md: string;
+  preamble_html: string;
+  texts: PublicationExportText[];
+  extra: PublicationAssemblyExtraGroup[];
+  flags: PublicationSectionFlags;
+  children: PublicationExportSection[];
+}
+
+/** Готовая модель документа для экспорта в Markdown/HTML. */
+export interface PublicationExportDocument {
+  publication_id: string;
+  title: PublicationExportTitle;
+  sections: PublicationExportSection[];
+  /** Плоский список заголовков в порядке документа — для оглавления. */
+  headings: PublicationHeading[];
+  warnings: string[];
+  /** Резолвер wiki-ссылок той же сборки (используется markdown-экспортом). */
+  resolveLink: (ref: WikiLinkRef) => WikiLinkResolution | undefined;
+}
+
+/** Накопитель экспортной модели во время общего рендера секций. */
+interface ExportSink {
+  sections: Map<PublicationContentNode, PublicationExportSection>;
+  headings: PublicationHeading[];
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +876,8 @@ interface RenderContext {
   resolver: (ref: WikiLinkRef) => WikiLinkResolution | undefined;
   /** Кеш «доп. материалов» по мысли (раздел рендерится один раз, но защищаемся). */
   extraCache: Map<string, PublicationAssemblyExtraGroup[]>;
+  /** Накопитель экспортной модели; отсутствует при обычной сборке страницы. */
+  exportSink?: ExportSink;
 }
 
 /**
@@ -837,34 +899,35 @@ function renderSection(
   const heading = number !== null ? `${number}. ${title}` : title;
 
   const preambleSource = ctx.comments.get(node.thoughtId) ?? '';
-  const preamble_html =
+  const preambleResult =
     preambleSource.trim() === ''
-      ? ''
+      ? { html: '', headings: [] as PublicationHeading[] }
       : renderPublicationFragment(preambleSource, {
           baseLevel: headingNumber,
           headingAnchor: headingAnchorFor(node.thoughtId),
           resolveLink: ctx.resolver,
-        }).html;
+        });
 
-  const texts: PublicationAssemblyText[] =
-    node.repeatOf === null
-      ? (ctx.textsBySection.get(node.thoughtId) ?? []).map((t) => {
-          const body = ctx.comments.get(t.thoughtId) ?? '';
-          return {
-            thought_id: t.thoughtId,
-            anchor: publicationAnchor(t.thoughtId),
-            edge_id: t.edgeId,
-            body_html:
-              body.trim() === ''
-                ? ''
-                : renderPublicationFragment(body, {
-                    baseLevel: headingNumber,
-                    headingAnchor: headingAnchorFor(t.thoughtId),
-                    resolveLink: ctx.resolver,
-                  }).html,
-          };
-        })
-      : [];
+  const sectionTexts = node.repeatOf === null ? (ctx.textsBySection.get(node.thoughtId) ?? []) : [];
+  const textRenders = sectionTexts.map((t) => {
+    const body = ctx.comments.get(t.thoughtId) ?? '';
+    const result =
+      body.trim() === ''
+        ? { html: '', headings: [] as PublicationHeading[] }
+        : renderPublicationFragment(body, {
+            baseLevel: headingNumber,
+            headingAnchor: headingAnchorFor(t.thoughtId),
+            resolveLink: ctx.resolver,
+          });
+    return { text: t, body, result };
+  });
+
+  const texts: PublicationAssemblyText[] = textRenders.map(({ text, result }) => ({
+    thought_id: text.thoughtId,
+    anchor: publicationAnchor(text.thoughtId),
+    edge_id: text.edgeId,
+    body_html: result.html,
+  }));
 
   let extra = ctx.extraCache.get(node.thoughtId);
   if (extra === undefined) {
@@ -872,17 +935,49 @@ function renderSection(
     ctx.extraCache.set(node.thoughtId, extra);
   }
 
-  return {
+  const dto: PublicationAssemblySection = {
     thought_id: node.thoughtId,
     anchor: publicationAnchor(node.thoughtId),
     level: node.level,
     heading,
-    preamble_html,
+    preamble_html: preambleResult.html,
     texts,
     extra: node.repeatOf === null ? extra : [],
     flags: { repeat_of: node.repeatOf, cycle_cut: node.cycleCut },
     children: [],
   };
+
+  if (ctx.exportSink !== undefined) {
+    // Оглавление собирается в порядке документа: заголовок раздела, затем
+    // заголовки предисловия и текстов (дети добавляются обходом следом).
+    ctx.exportSink.headings.push({
+      level: headingNumber,
+      text: heading,
+      anchor: dto.anchor,
+      decapitated: false,
+    });
+    ctx.exportSink.headings.push(...preambleResult.headings);
+    for (const { result } of textRenders) ctx.exportSink.headings.push(...result.headings);
+    ctx.exportSink.sections.set(node, {
+      thought_id: node.thoughtId,
+      anchor: dto.anchor,
+      level: node.level,
+      heading,
+      preamble_md: preambleSource,
+      preamble_html: preambleResult.html,
+      texts: textRenders.map(({ text, body, result }) => ({
+        thought_id: text.thoughtId,
+        anchor: publicationAnchor(text.thoughtId),
+        body_md: body,
+        body_html: result.html,
+      })),
+      extra: dto.extra,
+      flags: dto.flags,
+      children: [],
+    });
+  }
+
+  return dto;
 }
 
 /**
@@ -928,15 +1023,28 @@ function getPublicationOrThrow(ndb: NetworkDb, id: string): Publication {
  * по разделам верхнего уровня; нумерация и якоря считаются по всему дереву,
  * поэтому стабильны между страницами.
  */
-export function assemblePublication(
+/** Обложка титула по настройкам публикации (общая для сборки и экспорта). */
+function coverFor(pub: Publication): PublicationAssemblyCover {
+  return pub.cover_kind === 'attachment'
+    ? { kind: 'attachment', ref: pub.cover_attachment_id }
+    : pub.cover_kind === 'url'
+      ? { kind: 'url', ref: pub.cover_url }
+      : { kind: 'placeholder', ref: null };
+}
+
+/**
+ * Общая подготовка документа: структура, якоря блоков, резолвер ссылок и
+ * контекст рендера. Используется сборкой страницы и экспортом — обе стороны
+ * видят одно дерево, одни якоря и одну резолюцию ссылок ([[#888453b6]]).
+ */
+function prepareDocument(
   ndb: NetworkDb,
-  publicationId: string,
+  pub: Publication,
   userId: string,
-  query: { page?: number; include_excluded?: boolean } = {},
-): PublicationAssembly {
-  const pub = getPublicationOrThrow(ndb, publicationId);
-  const includeExcluded = query.include_excluded === true;
-  const warnings: string[] = [];
+  includeExcluded: boolean,
+  warnings: string[],
+  exportSink?: ExportSink,
+): { doc: BuiltDocument; ctx: RenderContext } {
   const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
 
   // Якоря всех блоков документа (разделы + тексты): ссылка на мысль внутри
@@ -959,7 +1067,26 @@ export function assemblePublication(
     textsBySection: doc.textsBySection,
     resolver,
     extraCache: new Map(),
+    ...(exportSink === undefined ? {} : { exportSink }),
   };
+  return { doc, ctx };
+}
+
+/**
+ * Собрать страницу документа (`GET /publications/{id}/assembly`). Пагинация —
+ * по разделам верхнего уровня; нумерация и якоря считаются по всему дереву,
+ * поэтому стабильны между страницами.
+ */
+export function assemblePublication(
+  ndb: NetworkDb,
+  publicationId: string,
+  userId: string,
+  query: { page?: number; include_excluded?: boolean } = {},
+): PublicationAssembly {
+  const pub = getPublicationOrThrow(ndb, publicationId);
+  const includeExcluded = query.include_excluded === true;
+  const warnings: string[] = [];
+  const { doc, ctx } = prepareDocument(ndb, pub, userId, includeExcluded, warnings);
 
   const perPage = PUBLICATION_ASSEMBLY_PAGE_SIZE;
   const totalRoots = doc.tree.length;
@@ -968,17 +1095,11 @@ export function assemblePublication(
   const pageRoots = doc.tree.slice(start, start + perPage);
   const sections = renderSections(ndb, pageRoots, ctx);
 
-  const cover: PublicationAssemblyCover =
-    pub.cover_kind === 'attachment'
-      ? { kind: 'attachment', ref: pub.cover_attachment_id }
-      : pub.cover_kind === 'url'
-        ? { kind: 'url', ref: pub.cover_url }
-        : { kind: 'placeholder', ref: null };
   const summary = pub.summary_md ?? '';
   const summaryHtml =
     summary.trim() === ''
       ? ''
-      : renderPublicationFragment(summary, { resolveLink: resolver }).html;
+      : renderPublicationFragment(summary, { resolveLink: ctx.resolver }).html;
 
   return {
     publication: {
@@ -987,7 +1108,7 @@ export function assemblePublication(
       authorship: pub.authorship,
       assembly_date: pub.assembly_date,
       summary_html: summaryHtml,
-      cover,
+      cover: coverFor(pub),
       new_candidates: doc.candidateIds.length,
     },
     sections,
@@ -999,6 +1120,65 @@ export function assemblePublication(
       total_roots: totalRoots,
       has_more: start + pageRoots.length < totalRoots,
     },
+  };
+}
+
+/**
+ * Собрать полную модель документа для экспорта (задача 6d87f1f2, операция
+ * 1f161c74): все разделы без пагинации, markdown-источники и HTML-фрагменты
+ * одной сборкой, плоское оглавление и резолвер ссылок. Той же сборкой, что
+ * `/assembly` (требование «превью и файл не расходятся»), в контексте слоя
+ * соединения; исключённые не попадают.
+ *
+ * @param resolveUserName отображаемое имя пользователя (для авторства-фолбэка
+ *   «пусто → создатель»); домен не знает системной БД.
+ */
+export function buildPublicationExportDocument(
+  ndb: NetworkDb,
+  publicationId: string,
+  userId: string,
+  resolveUserName: (userId: string) => string | null,
+): PublicationExportDocument {
+  const pub = getPublicationOrThrow(ndb, publicationId);
+  const warnings: string[] = [];
+  const sink: ExportSink = { sections: new Map(), headings: [] };
+  const { doc, ctx } = prepareDocument(ndb, pub, userId, false, warnings, sink);
+  renderSections(ndb, doc.tree, ctx); // заполняет sink по всему дереву
+
+  const byNode = new Map<PublicationContentNode, PublicationExportSection>();
+  for (const node of flattenTree(doc.tree)) {
+    const section = sink.sections.get(node);
+    if (section !== undefined) byNode.set(node, section);
+  }
+  for (const node of flattenTree(doc.tree)) {
+    const section = byNode.get(node);
+    if (section === undefined) continue;
+    section.children = node.children
+      .map((child) => byNode.get(child))
+      .filter((c): c is PublicationExportSection => c !== undefined);
+  }
+  const sections = doc.tree
+    .map((root) => byNode.get(root))
+    .filter((s): s is PublicationExportSection => s !== undefined);
+
+  const creator = resolveUserName(pub.created_by) ?? pub.created_by;
+  const authorship = pub.authorship !== null && pub.authorship.trim() !== '' ? pub.authorship : creator;
+
+  return {
+    publication_id: pub.id,
+    title: {
+      title: pub.title,
+      subtitle: pub.subtitle,
+      authorship,
+      creator,
+      assembly_date: pub.assembly_date,
+      summary_md: pub.summary_md ?? '',
+      cover: coverFor(pub),
+    },
+    sections,
+    headings: sink.headings,
+    warnings,
+    resolveLink: ctx.resolver,
   };
 }
 

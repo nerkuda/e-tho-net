@@ -58,6 +58,7 @@ import {
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
   PUBLICATION_ACTIVE_FILTERS,
+  PUBLICATION_EXPORT_FORMATS,
   PUBLICATION_SORTS,
   REALTIME_DEFAULTS,
   SAVED_FILTER_VIEWS,
@@ -4140,6 +4141,42 @@ export const RestPublicationAssembly = defineContract(
     publication_id: { from: { kind: 'param', name: 'id' } },
     page: { from: { kind: 'query', coerce: 'int', min: 1 } },
     include_excluded: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/** POST /networks/:id/publications/{id}/export — экспорт документа (операция 1f161c74). */
+export const RestPublicationExport = defineContract(
+  'rest:publications.export',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    format: z.enum(PUBLICATION_EXPORT_FORMATS),
+    with_assets: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    format: { from: { kind: 'body' }, msg: 'Недопустимый format (ожидается md|html).' },
+    with_assets: { from: { kind: 'body' } },
+  },
+);
+
+/** POST /networks/:id/publications/export-batch — пакетный экспорт (операция 074d7a97). */
+export const RestPublicationExportBatch = defineContract(
+  'rest:publications.export-batch',
+  z.object({
+    network_id: NetworkId,
+    ids: z.array(z.string().min(1)).optional(),
+    active_only: z.boolean().optional(),
+    format: z.enum(PUBLICATION_EXPORT_FORMATS),
+    with_assets: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    ids: { from: { kind: 'body' } },
+    active_only: { from: { kind: 'body' } },
+    format: { from: { kind: 'body' }, msg: 'Недопустимый format (ожидается md|html).' },
+    with_assets: { from: { kind: 'body' } },
   },
 );
 
