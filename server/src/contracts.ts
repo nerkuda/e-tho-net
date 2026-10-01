@@ -4319,3 +4319,188 @@ export const RestShelfItemRemove = defineContract(
     },
   },
 );
+
+// ---------------------------------------------------------------------------
+// MCP-контракты публикаций и полок (0.11.1, задача 8f6857f8; карточки
+// cab597a8 управление, f236bb22 чтение, a610c091 экспорт)
+//
+// Один контракт на инструмент; вход — та же zod-схема и REST-карта, что у
+// соответствующей REST-операции, поэтому валидация и канонические сообщения
+// ошибок совпадают с REST (требование «валидация и ошибки идентичны REST»).
+// `defineContract` делает MCP-схему `.strict()` (задача c245e7de) — агент
+// получает `VALIDATION_ERROR` на опечатку в ключе.
+// ---------------------------------------------------------------------------
+
+/** MCP `etn.publications.create` = REST `POST /publications`. */
+export const McpPublicationCreate = defineContract(
+  'etn.publications.create',
+  RestPublicationCreate.schema,
+  RestPublicationCreate.rest,
+);
+
+/** MCP `etn.publications.list` = REST `GET /publications`. */
+export const McpPublicationList = defineContract(
+  'etn.publications.list',
+  RestPublicationList.schema,
+  RestPublicationList.rest,
+);
+
+/** MCP `etn.publications.get` = REST `GET /publications/{id}`. */
+export const McpPublicationGet = defineContract(
+  'etn.publications.get',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.update` = REST `PATCH /publications/{id}`. */
+export const McpPublicationUpdate = defineContract(
+  'etn.publications.update',
+  RestPublicationUpdate.schema,
+  RestPublicationUpdate.rest,
+);
+
+/** MCP `etn.publications.order` = REST `PUT /publications/{id}/order`. */
+export const McpPublicationOrder = defineContract(
+  'etn.publications.order',
+  RestPublicationOrder.schema,
+  RestPublicationOrder.rest,
+);
+
+/**
+ * MCP `etn.publications.exclusions` — один инструмент на добавление и снятие
+ * исключения (карточка cab597a8 «добавить/снять исключение»). `excluded`
+ * (по умолчанию `true`) выбирает ветку; REST-пары exclusion-add/remove
+ * остаются двумя операциями.
+ */
+export const McpPublicationExclusions = defineContract(
+  'etn.publications.exclusions',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+    excluded: z.boolean().optional(),
+  }),
+  {},
+);
+
+/** MCP `etn.publications.rebuild` = REST `POST /publications/{id}/rebuild`. */
+export const McpPublicationRebuild = defineContract(
+  'etn.publications.rebuild',
+  RestPublicationRebuild.schema,
+  RestPublicationRebuild.rest,
+);
+
+/** MCP `etn.publications.trash` = REST `POST /publications/{id}/trash`. */
+export const McpPublicationTrash = defineContract(
+  'etn.publications.trash',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.restore` = REST `POST /publications/{id}/restore`. */
+export const McpPublicationRestore = defineContract(
+  'etn.publications.restore',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.delete` = REST `DELETE /publications/{id}` (purge). */
+export const McpPublicationDelete = defineContract(
+  'etn.publications.delete',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.assembly` = REST `GET /publications/{id}/assembly`. */
+export const McpPublicationAssembly = defineContract(
+  'etn.publications.assembly',
+  RestPublicationAssembly.schema,
+  RestPublicationAssembly.rest,
+);
+
+/** MCP `etn.publications.candidates` = REST `GET /publications/{id}/candidates`. */
+export const McpPublicationCandidates = defineContract(
+  'etn.publications.candidates',
+  RestPublicationCandidates.schema,
+  RestPublicationCandidates.rest,
+);
+
+/** MCP `etn.publications.usage` = REST `GET /thoughts/{id}/publications`. */
+export const McpPublicationUsage = defineContract(
+  'etn.publications.usage',
+  RestPublicationUsage.schema,
+  RestPublicationUsage.rest,
+);
+
+/** MCP `etn.publications.export` = REST `POST /publications/{id}/export`. */
+export const McpPublicationExport = defineContract(
+  'etn.publications.export',
+  RestPublicationExport.schema,
+  RestPublicationExport.rest,
+);
+
+/** MCP `etn.publications.export_batch` = REST `POST /publications/export-batch`. */
+export const McpPublicationExportBatch = defineContract(
+  'etn.publications.export_batch',
+  RestPublicationExportBatch.schema,
+  RestPublicationExportBatch.rest,
+);
+
+/** MCP `etn.shelves.list` = REST `GET /shelves`. */
+export const McpShelfList = defineContract(
+  'etn.shelves.list',
+  RestShelfList.schema,
+  RestShelfList.rest,
+);
+
+/** MCP `etn.shelves.create` = REST `POST /shelves`. */
+export const McpShelfCreate = defineContract(
+  'etn.shelves.create',
+  RestShelfCreate.schema,
+  RestShelfCreate.rest,
+);
+
+/** MCP `etn.shelves.update` = REST `PATCH /shelves/{id}`. */
+export const McpShelfUpdate = defineContract(
+  'etn.shelves.update',
+  RestShelfUpdate.schema,
+  RestShelfUpdate.rest,
+);
+
+/** MCP `etn.shelves.delete` = REST `DELETE /shelves/{id}` (purge, состав каскадом). */
+export const McpShelfDelete = defineContract(
+  'etn.shelves.delete',
+  RestShelfDelete.schema,
+  RestShelfDelete.rest,
+);
+
+/** MCP `etn.shelves.trash` = REST `POST /shelves/{id}/trash`. */
+export const McpShelfTrash = defineContract(
+  'etn.shelves.trash',
+  RestShelfTrash.schema,
+  RestShelfTrash.rest,
+);
+
+/** MCP `etn.shelves.restore` = REST `POST /shelves/{id}/restore`. */
+export const McpShelfRestore = defineContract(
+  'etn.shelves.restore',
+  RestShelfRestore.schema,
+  RestShelfRestore.rest,
+);
+
+/**
+ * MCP `etn.shelves.assign` — доложить/убрать публикацию в составе полки
+ * (карточка cab597a8 «полки и состав»). `assigned` (по умолчанию `true`)
+ * выбирает ветку; REST-пара item-add/item-remove остаётся двумя операциями.
+ */
+export const McpShelfAssign = defineContract(
+  'etn.shelves.assign',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    publication_id: z.string().min(1),
+    position: z.number().optional(),
+    assigned: z.boolean().optional(),
+  }),
+  {},
+);

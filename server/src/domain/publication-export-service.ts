@@ -437,18 +437,32 @@ export interface PublicationFile {
 }
 
 /**
- * Write entries into `outputPath` with a fixed date and in sorted order so two
- * runs over unchanged data yield byte-identical archives (ADR 06874c5d).
+ * Shared deterministic archive for `entries`: fixed entry date and sorted order,
+ * so two runs over unchanged data yield byte-identical archives (ADR 06874c5d).
  * `archiver.on('warning')` is logged, never rejecting (same pitfall as `.etnx`).
+ * Both the HTTP job (`writePublicationZip`) and the MCP artifact
+ * ({@link buildPublicationZipBuffer}) build from here — one archive recipe.
  */
+function createPublicationArchive(entries: readonly PublicationFile[]): archiver.Archiver {
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('warning', (err: Error) => {
+    logger.warn({ err: err.message }, 'archiver warning — non-fatal, ignoring');
+  });
+  const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of sorted) {
+    archive.append(entry.data, { name: entry.name, date: ZIP_ENTRY_DATE });
+  }
+  return archive;
+}
+
+/** Write entries into `outputPath` as a deterministic zip; resolves its size. */
 export function writePublicationZip(
   outputPath: string,
   entries: readonly PublicationFile[],
 ): Promise<number> {
   return new Promise<number>((resolve, reject) => {
-    const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const fileStream = createWriteStream(outputPath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = createPublicationArchive(entries);
     let settled = false;
 
     fileStream.on('close', () => {
@@ -470,14 +484,34 @@ export function writePublicationZip(
       settled = true;
       reject(err);
     });
-    archive.on('warning', (err: Error) => {
-      logger.warn({ err: err.message }, 'archiver warning — non-fatal, ignoring');
-    });
 
     archive.pipe(fileStream);
-    for (const entry of sorted) {
-      archive.append(entry.data, { name: entry.name, date: ZIP_ENTRY_DATE });
-    }
+    void archive.finalize();
+  });
+}
+
+/**
+ * Build the same deterministic zip in memory and return its bytes — the MCP
+ * artifact path (карточка a610c091: `etn.publications.export`/`export_batch`
+ * возвращают base64-zip, а не джобу во временном файле). Детерминизм тот же,
+ * что у HTTP-джобы: общий `createPublicationArchive`.
+ */
+export function buildPublicationZipBuffer(entries: readonly PublicationFile[]): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const archive = createPublicationArchive(entries);
+    const chunks: Buffer[] = [];
+    let settled = false;
+    archive.on('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    archive.on('data', (chunk: Buffer) => chunks.push(chunk));
+    archive.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
     void archive.finalize();
   });
 }

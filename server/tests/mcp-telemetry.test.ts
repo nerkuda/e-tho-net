@@ -517,9 +517,18 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // полей; замер до/после на `etn.thoughts.write` — 4 470 → 4 616 Б,
         // суммарно `descriptions+inputSchema` 36 641 → 36 787 Б), проза не
         // менялась; планка поднята ровно под этот контракт.
+        // 0.11.1 (задача 8f6857f8, «Публикации»): MCP-фасад подсистемы — 22
+        // новых инструмента (карточки cab597a8 управление, f236bb22 чтение,
+        // a610c091 экспорт) поверх общих с REST контрактов. Проза держится
+        // принципом прогрессивного раскрытия (детали — тема
+        // `etn.guide { topic: "publications" }`), но `inputSchema` — контракт
+        // вызова, его резать нельзя: 25 инструментов / 41 600 Б → 47 / 60 204 Б
+        // (`descriptions+inputSchema` 36 801 → 51 134 Б). Планка поднята ровно
+        // под этот прирост, осознанным пересмотром ADR b2eebf8b (дата
+        // 2026-10-01 — хроно-запись ADR).
         assert.ok(
-          bytes <= 41_600,
-          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41600`,
+          bytes <= 60_400,
+          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 60400`,
         );
         // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
         // `inputSchema`. `inputSchema` не урезается — планка ограничивает
@@ -542,9 +551,11 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
             'utf8',
           );
         }
+        // 0.11.1 (задача 8f6857f8): прирост целиком от 22 новых инструментов
+        // подсистемы «Публикации» — см. блок выше. Планка 36 801 → 51 200.
         assert.ok(
-          descriptionsPlusInputSchema <= 36_801,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36801`,
+          descriptionsPlusInputSchema <= 51_200,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 51200`,
         );
       } finally {
         await handle.close();

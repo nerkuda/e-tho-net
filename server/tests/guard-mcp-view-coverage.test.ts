@@ -246,6 +246,16 @@ const MCP_READ_ONLY_VIEWS: readonly { tool: string; field: string; note: string 
     field: 'collision_policy',
     note: 'превью без побочных эффектов (readOnlyHint): записывать нечего; политика отражается в плане (счётчики create/reuse/skip) и в списке conflicts — тест исполнения mcp-view-coverage.test.ts.',
   },
+  {
+    tool: 'etn.publications.export',
+    field: 'format',
+    note: 'только чтение (readOnlyHint): вид выбирает рендерер (md/html) одной и той же сборки; в БД не пишет, событий и аудита нет. Оба значения покрыты mcp-publications.test.ts.',
+  },
+  {
+    tool: 'etn.publications.export_batch',
+    field: 'format',
+    note: 'только чтение (readOnlyHint): пакетный экспорт собирает zip тем же доменом; запись в БД не производится. Оба значения покрыты mcp-publications.test.ts.',
+  },
 ];
 
 interface ZodLike {

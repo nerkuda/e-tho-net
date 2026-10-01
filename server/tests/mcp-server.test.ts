@@ -501,10 +501,15 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // `ontology.delete` (−1 destructive), `thoughts.trash`/`links.restore`/
         // `properties.resolve` (−3 idempotent) → 23 из 25: 17 readOnly,
         // 0 destructive (витрина деструктивных инструментов пуста), 4 idempotent.
-        assert.equal(annotated, 23);
-        assert.equal(hintReadOnly, 17);
-        assert.equal(hintDestructive, 0);
-        assert.equal(hintIdempotent, 4);
+        // 0.11.1 (задача 8f6857f8, «Публикации»): +22 инструмента, все
+        // аннотированы → 45. readOnly: 6 чтения + 2 экспорта (сборка без
+        // записи в БД) = +8 → 25. destructive: `publications.delete` и
+        // `shelves.delete` (purge) = +2 → 2. idempotent: order, exclusions,
+        // trash, restore, shelves.trash, shelves.restore, shelves.assign = +7 → 11.
+        assert.equal(annotated, 45);
+        assert.equal(hintReadOnly, 25);
+        assert.equal(hintDestructive, 2);
+        assert.equal(hintIdempotent, 11);
       } finally {
         await handle.close();
       }
