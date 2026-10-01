@@ -40,6 +40,7 @@ import { buildCover } from '../screens/publications/cover.js';
 import {
   assemblyDateLabel,
   displayAuthorship,
+  shelfSwapUpdates,
 } from '../screens/publications/model.js';
 import {
   buildRecipeBuilder,
@@ -503,22 +504,25 @@ function renderShelfCheckboxes(host: HTMLElement, publicationId?: string): void 
 }
 
 /**
- * Меняет порядок публикации внутри полки на одну позицию. Отдельного эндпоинта
- * перестановки состава у полок нет — позиция задаётся повторной укладкой
- * (`addShelfItem` с позицией соседа, сервер обновляет вхождение).
+ * Меняет порядок публикации внутри полки на одну позицию: ОБМЕН позициями
+ * перемещаемой и соседа (две записи `addShelfItem`, ключ состава —
+ * `(shelf_id, publication_id)`). Одной записи недостаточно — сервер отдаёт
+ * состав `ORDER BY position ASC` без второго ключа, и равные позиции порядок
+ * не меняют (замечание проверки).
  */
 async function moveWithinShelf(shelfId: string, publicationId: string, direction: -1 | 1): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const shelf = allShelvesCache.find((s) => s.id === shelfId);
   if (shelf === undefined) return;
-  const ordered = [...shelf.items].sort((a, b) => a.position - b.position);
-  const index = ordered.findIndex((item) => item.publication_id === publicationId);
-  const swap = index + direction;
-  if (index === -1 || swap < 0 || swap >= ordered.length) return;
-  const targetPosition = ordered[swap]!.position;
+  const updates = shelfSwapUpdates(shelf.items, publicationId, direction);
+  if (updates === null) return;
   try {
-    await etn.publications.addShelfItem(networkId, shelfId, publicationId, targetPosition);
+    // Сначала перемещаемая, затем сосед: набор позиций после двух записей —
+    // обменянный.
+    for (const update of updates) {
+      await etn.publications.addShelfItem(networkId, shelfId, update.publication_id, update.position);
+    }
     allShelvesCache = await loadShelves();
     if (shelvesHostRef !== null) renderShelfCheckboxes(shelvesHostRef, publicationId);
   } catch (err) {

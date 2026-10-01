@@ -15,7 +15,10 @@ import {
   type PublicationActiveFilter,
   type PublicationSort,
   type Shelf,
+  type ShelfItem,
 } from '@etn/shared';
+
+import type { EntityOption } from '../../lib/entity-picker.js';
 
 /** Вид библиотеки: горизонтальные полки или плоский список (полки — группы). */
 export type PublicationsViewMode = 'shelves' | 'list';
@@ -206,4 +209,78 @@ export function assemblyDateLabel(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleDateString('ru-RU');
+}
+
+// ---------------------------------------------------------------------------
+// Перестановка публикации внутри полки (вкладка «Полки и статус», c3e44cab)
+// ---------------------------------------------------------------------------
+
+/** Целевая позиция одной публикации в составе полки после перестановки. */
+export interface ShelfPositionUpdate {
+  publication_id: string;
+  position: number;
+}
+
+/**
+ * Обмен позициями перемещаемой публикации и соседа в составе полки.
+ *
+ * Возвращает ДВЕ записи с обменянными позициями (уникальный состав полки —
+ * `(shelf_id, publication_id)`, апдейт идёт по ключу, поэтому обмен позициями
+ * двух строк эквивалентен их перестановке). Состав сервер отдаёт
+ * `ORDER BY position ASC` без второго ключа, поэтому одной записи недостаточно:
+ * равные позиции порядок не меняют — меняем обе. `null` — переставлять нечего
+ * (крайние границы, неизвестная публикация). Сортировка — по `position`
+ * (порядок отображения состава), при равенстве — по исходному порядку массива.
+ */
+export function shelfSwapUpdates(
+  items: readonly ShelfItem[],
+  publicationId: string,
+  direction: -1 | 1,
+): ShelfPositionUpdate[] | null {
+  const ordered = items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) =>
+      a.item.position === b.item.position ? a.index - b.index : a.item.position - b.item.position,
+    )
+    .map((entry) => entry.item);
+  const index = ordered.findIndex((item) => item.publication_id === publicationId);
+  if (index === -1) return null;
+  const swap = index + direction;
+  if (swap < 0 || swap >= ordered.length) return null;
+  const moved = ordered[index]!;
+  const neighbor = ordered[swap]!;
+  return [
+    { publication_id: moved.publication_id, position: neighbor.position },
+    { publication_id: neighbor.publication_id, position: moved.position },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Варианты свойств-связей для пикера (без дублей)
+// ---------------------------------------------------------------------------
+
+/**
+ * Сводит варианты свойств-связей к ОДНОМУ на реестровое свойство.
+ *
+ * `linkPropertyEntityOptions` даёт строку на каждую сторону связи
+ * (`prop:source`, `prop:target`), а источники текстов публикации адресуются
+ * id реестрового свойства — поэтому варианты дедуплицируются по `propertyId`.
+ * При двух сторонах выбирается сторона `source` (прямое имя свойства — та же
+ * семантика, что у прежнего выбора по реестру). Порядок первых вхождений
+ * сохраняется.
+ */
+export function dedupePropertyOptions(options: readonly EntityOption[]): EntityOption[] {
+  const byProperty = new Map<string, EntityOption>();
+  for (const option of options) {
+    const propertyId = option.linkProperty?.propertyId ?? option.id;
+    const existing = byProperty.get(propertyId);
+    if (existing === undefined) {
+      byProperty.set(propertyId, { ...option, id: propertyId });
+      continue;
+    }
+    if (existing.linkProperty?.side !== 'source' && option.linkProperty?.side === 'source') {
+      byProperty.set(propertyId, { ...option, id: propertyId });
+    }
+  }
+  return [...byProperty.values()];
 }

@@ -46,6 +46,7 @@ import {
 import { etn } from '../../lib/etn.js';
 import { t } from '../../lib/i18n.js';
 import { store } from '../../state.js';
+import { dedupePropertyOptions } from './model.js';
 
 /** Построитель рецепта заголовков. */
 export interface RecipeBuilder {
@@ -79,16 +80,14 @@ export async function loadPropertyRegistry(
 
 /**
  * Варианты свойств-связей для чип-поля: общий конструктор вариантов
- * (`linkPropertyEntityOptions`), приведённый к id реестрового свойства (сервер
- * адресует источники текстов именно id, а не строкой стороны), плюс системные
+ * (`linkPropertyEntityOptions`), приведённый к id реестрового свойства и
+ * ДЕДУПЛИЦИРОВАННЫЙ по нему (`dedupePropertyOptions` — у связи две стороны,
+ * а сервер адресует источники текстов id свойства), плюс системные
  * «Родители»/«Потомки» (они пропускаются общим конструктором как структурные).
  */
 export function propertyEntityOptions(rows: readonly PropertyRegistryRow[]): EntityOption[] {
   const listRows = buildPropertyListRows(rows, store.state.linkTypes);
-  const options = linkPropertyEntityOptions(listRows).map((option) => ({
-    ...option,
-    id: option.linkProperty?.propertyId ?? option.id,
-  }));
+  const options = dedupePropertyOptions(linkPropertyEntityOptions(listRows));
   const seen = new Set(options.map((option) => option.id));
   for (const row of listRows) {
     if (!row.structural || row.valueType !== 'link' || seen.has(row.propertyId)) continue;

@@ -13,11 +13,14 @@ import {
   coverInitials,
   coverTone,
   COVER_TONES,
+  dedupePropertyOptions,
   defaultPublicationsViewState,
   groupByShelves,
   parsePublicationsViewState,
   serializePublicationsViewState,
+  shelfSwapUpdates,
 } from '../src/renderer/screens/publications/model.js';
+import type { EntityOption } from '../src/renderer/lib/entity-picker.js';
 
 function publication(id: string, overrides: Partial<Publication> = {}): Publication {
   return {
@@ -180,5 +183,104 @@ describe('публикации: дата сборки (model)', () => {
 
   it('некорректная строка возвращается как есть', () => {
     assert.equal(assemblyDateLabel('не дата'), 'не дата');
+  });
+});
+
+// --- Перестановка внутри полки (вкладка «Полки и статус») -------------------
+
+type ShelfItem = { shelf_id: string; publication_id: string; position: number };
+
+function items(...pairs: Array<[string, number]>): ShelfItem[] {
+  return pairs.map(([publication_id, position]) => ({
+    shelf_id: 's1',
+    publication_id,
+    position,
+  }));
+}
+
+/** Видимый порядок: сортировка по `position` (как сервер и список). */
+function visibleOrder(list: readonly ShelfItem[]): string[] {
+  return [...list]
+    .sort((a, b) => a.position - b.position)
+    .map((item) => item.publication_id);
+}
+
+/** Применить правки порядка к составу (как это сделает сервер по ключу). */
+function applyUpdates(list: readonly ShelfItem[], updates: Array<{ publication_id: string; position: number }>): ShelfItem[] {
+  return list.map((item) => {
+    const found = updates.find((u) => u.publication_id === item.publication_id);
+    return found === undefined ? item : { ...item, position: found.position };
+  });
+}
+
+describe('публикации: перестановка внутри полки (model)', () => {
+  it('«A вниз» обменивает позиции A и B — видимый порядок меняется', () => {
+    const list = items(['A', 1], ['B', 2], ['C', 3]);
+    const updates = shelfSwapUpdates(list, 'A', 1);
+    assert.deepEqual(updates, [
+      { publication_id: 'A', position: 2 },
+      { publication_id: 'B', position: 1 },
+    ]);
+    assert.deepEqual(visibleOrder(applyUpdates(list, updates!)), ['B', 'A', 'C']);
+  });
+
+  it('«C вверх» обменивает позиции C и B', () => {
+    const list = items(['A', 1], ['B', 2], ['C', 3]);
+    const updates = shelfSwapUpdates(list, 'C', -1);
+    assert.deepEqual(updates, [
+      { publication_id: 'C', position: 2 },
+      { publication_id: 'B', position: 3 },
+    ]);
+    assert.deepEqual(visibleOrder(applyUpdates(list, updates!)), ['A', 'C', 'B']);
+  });
+
+  it('повторные перемещения продолжают двигать публикацию', () => {
+    let list = items(['A', 1], ['B', 2], ['C', 3]);
+    for (let i = 0; i < 2; i += 1) {
+      const updates = shelfSwapUpdates(list, 'A', 1);
+      assert.notEqual(updates, null);
+      list = applyUpdates(list, updates!);
+    }
+    assert.deepEqual(visibleOrder(list), ['B', 'C', 'A']);
+  });
+
+  it('границы и неизвестная публикация — переставлять нечего', () => {
+    const list = items(['A', 1], ['B', 2]);
+    assert.equal(shelfSwapUpdates(list, 'A', -1), null);
+    assert.equal(shelfSwapUpdates(list, 'B', 1), null);
+    assert.equal(shelfSwapUpdates(list, 'X', 1), null);
+  });
+
+  it('при исходно равных позициях обмен возвращает те же позиции (видимый порядок не меняется)', () => {
+    const list = items(['A', 2], ['B', 2], ['C', 3]);
+    const updates = shelfSwapUpdates(list, 'A', 1);
+    assert.deepEqual(updates, [
+      { publication_id: 'A', position: 2 },
+      { publication_id: 'B', position: 2 },
+    ]);
+  });
+});
+
+// --- Варианты свойств-связей без дублей -------------------------------------
+
+describe('публикации: варианты свойств без дублей (model)', () => {
+  it('две стороны одной связи сводятся к одному id, предпочитается source', () => {
+    const options: EntityOption[] = [
+      { id: 'p1:target', title: 'Обратное имя', linkProperty: { propertyId: 'p1', side: 'target', key: 'x' } },
+      { id: 'p1:source', title: 'Прямое имя', linkProperty: { propertyId: 'p1', side: 'source', key: 'x' } },
+      { id: 'p2:source', title: 'Другая связь', linkProperty: { propertyId: 'p2', side: 'source', key: 'y' } },
+    ];
+    const deduped = dedupePropertyOptions(options);
+    assert.deepEqual(deduped.map((o) => o.id), ['p1', 'p2']);
+    assert.equal(deduped[0]?.title, 'Прямое имя');
+  });
+
+  it('одиночные свойства и структурные (без linkProperty) не дублируются', () => {
+    const options: EntityOption[] = [
+      { id: 'p1', title: 'Одна' },
+      { id: 'p1', title: 'Одна повторно' },
+      { id: 'p2', title: 'Две' },
+    ];
+    assert.deepEqual(dedupePropertyOptions(options).map((o) => o.id), ['p1', 'p2']);
   });
 });
