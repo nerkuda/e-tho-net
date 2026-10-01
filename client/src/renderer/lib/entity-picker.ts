@@ -249,22 +249,30 @@ export function publicationEntityOptions(pubs: readonly Publication[]): EntityOp
   return pubs.map(publicationEntityOption);
 }
 
+/** Размер порции живого поиска публикаций (догрузка при скролле выпадашки). */
+export const PUBLICATIONS_PAGE_SIZE = 50;
+
 /**
  * Кандидаты-публикации текущего слоя для живого поиска/каталога пикера
  * (`GET /publications`, поиск по названию/подзаголовку/автору). Пустой запрос
- * возвращает первую страницу каталога. Ошибка сети — пустой список
- * (best-effort, как у прочих источников пикера).
+ * возвращает первую страницу каталога. Порционный источник (0.11.1, задача
+ * 3275fd8d): выпадашка догружает следующую страницу при скролле вниз
+ * (`SuggestSource.loadMore`), поэтому ответ короче {@link PUBLICATIONS_PAGE_SIZE}
+ * — последний. Ошибка сети — пустой список (best-effort, как у прочих
+ * источников пикера).
  */
 export async function loadPublicationOptions(
   networkId: string,
   query: string,
-  limit = 50,
+  offset = 0,
+  limit = PUBLICATIONS_PAGE_SIZE,
 ): Promise<EntityOption[]> {
   const trimmed = query.trim();
   try {
     const res = await etn.publications.list(networkId, {
       ...(trimmed !== '' ? { q: trimmed } : {}),
       limit,
+      offset,
     });
     return publicationEntityOptions(res.items);
   } catch {
@@ -686,13 +694,15 @@ export async function pickEntitiesModal(
         }
       };
 
+      /** Строка выпадашки по варианту публикации (облачко с мини-обложкой). */
+      const publicationEntries = (options: EntityOption[]): SuggestEntry[] =>
+        options.map((opt) => ({ value: opt.id, label: opt.title, thought: opt.cloud }));
+
       const searchSource: SuggestSource = {
         when: 'typed',
         load: (query) => {
           if (isPublications) {
-            return loadPublicationOptions(opts.networkId, query).then((options) =>
-              options.map((opt) => ({ value: opt.id, label: opt.title, thought: opt.cloud })),
-            );
+            return loadPublicationOptions(opts.networkId, query).then(publicationEntries);
           }
           const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
           return loadThoughtHits(opts.networkId, query, typeIds).then((hits) =>
@@ -701,6 +711,15 @@ export async function pickEntitiesModal(
             hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
           );
         },
+        // Публикации — порционный серверный источник: скролл выпадашки вниз
+        // догружает следующую страницу (0.11.1, задача 3275fd8d).
+        ...(isPublications
+          ? {
+              loadMore: (query: string, offset: number) =>
+                loadPublicationOptions(opts.networkId, query, offset).then(publicationEntries),
+              pageSize: PUBLICATIONS_PAGE_SIZE,
+            }
+          : {}),
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
@@ -1027,11 +1046,19 @@ export interface EntityChipFieldOptions {
   onChange: (values: string[]) => void;
   /**
    * Кандидаты для живого поиска (и для облачков уже выбранных значений).
-   * Пустой запрос — весь каталог (типы) либо пусто (мысли).
+   * Пустой запрос — весь каталог (типы) либо пусто (мысли). Второй аргумент —
+   * смещение для порционной догрузки (только при заданном {@link pageSize}).
    */
-  loadOptions: (query: string) => EntityOption[] | Promise<EntityOption[]>;
+  loadOptions: (query: string, offset?: number) => EntityOption[] | Promise<EntityOption[]>;
   /** Когда источник кандидатов участвует в списке (по умолчанию `always`). */
   optionsWhen?: 'always' | 'typed';
+  /**
+   * Размер порции живого поиска: задан — источник догружает следующую
+   * страницу при скролле выпадашки (`loadOptions(query, offset)`), по образцу
+   * порционного поиска целей связи (0.11.1, задача 3275fd8d). Ответ короче
+   * порции считается последним.
+   */
+  pageSize?: number;
   /** Заголовок группы кандидатов. */
   optionsHeader?: string;
   /** Источники подсказок вызывающего (токены) — общий список выпадашки. */
@@ -1174,14 +1201,23 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     renderChips();
   };
 
+  const mapOptions = (options: EntityOption[]): SuggestEntry[] => {
+    for (const opt of options) byId.set(opt.id, opt);
+    return options.map(entityEntry);
+  };
   const source: SuggestSource = {
     when: opts.optionsWhen ?? 'always',
     ...(opts.optionsHeader !== undefined ? { header: opts.optionsHeader } : {}),
-    load: (query) =>
-      Promise.resolve(opts.loadOptions(query)).then((options) => {
-        for (const opt of options) byId.set(opt.id, opt);
-        return options.map(entityEntry);
-      }),
+    load: (query) => Promise.resolve(opts.loadOptions(query, 0)).then(mapOptions),
+    // Порционная догрузка (публикации): скролл выпадашки вниз зовёт
+    // `loadOptions(query, offset)`.
+    ...(opts.pageSize !== undefined
+      ? {
+          loadMore: (query: string, offset: number) =>
+            Promise.resolve(opts.loadOptions(query, offset)).then(mapOptions),
+          pageSize: opts.pageSize,
+        }
+      : {}),
   };
   const sources: SuggestSource[] = [source, ...(opts.extraSources ?? [])];
   wireSuggest(input, {
@@ -1729,19 +1765,25 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   } else if (opts.kind === 'publications') {
     // Публикации: живой поиск по серверу (`GET /publications`), как у мыслей;
     // вариант — название с мини-обложкой (элемент интерфейса 9626efb6).
+    // Порционный источник: скролл выпадашки вниз догружает страницу.
+    const publicationEntries = (options: EntityOption[]): SuggestEntry[] =>
+      options.map((opt) => {
+        byId.set(opt.id, opt);
+        const entry: SuggestEntry = { value: opt.id, label: opt.title };
+        if (opt.cloud !== undefined) entry.thought = opt.cloud;
+        return entry;
+      });
     sources.push({
       when: 'typed',
       load: (query) => {
         if (opts.disabled === true) return [];
-        return loadPublicationOptions(opts.networkId, query).then((options) =>
-          options.map((opt) => {
-            byId.set(opt.id, opt);
-            const entry: SuggestEntry = { value: opt.id, label: opt.title };
-            if (opt.cloud !== undefined) entry.thought = opt.cloud;
-            return entry;
-          }),
-        );
+        return loadPublicationOptions(opts.networkId, query).then(publicationEntries);
       },
+      loadMore: (query, offset) => {
+        if (opts.disabled === true) return Promise.resolve([]);
+        return loadPublicationOptions(opts.networkId, query, offset).then(publicationEntries);
+      },
+      pageSize: PUBLICATIONS_PAGE_SIZE,
     });
   } else {
     // Мысли: живой поиск по серверу; полный список без запроса невозможен.

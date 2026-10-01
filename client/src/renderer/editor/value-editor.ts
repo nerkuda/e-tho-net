@@ -64,6 +64,7 @@ import {
   buildEntityChipField,
   loadPublicationOptions,
   pickEntitiesModal,
+  PUBLICATIONS_PAGE_SIZE,
   resolvePublicationOptions,
 } from '../lib/entity-picker.js';
 import { createThoughtCloud, type ThoughtCloudInput } from '../lib/thought-cloud.js';
@@ -278,12 +279,13 @@ function buildPublicationRefEditor(opts: ValueEditorOptions): HTMLElement {
       ids = isMultiple ? [...next] : next.slice(-1);
       publish();
     },
-    loadOptions: (query) =>
-      loadPublicationOptions(networkId, query).then((options) => {
+    loadOptions: (query, offset = 0) =>
+      loadPublicationOptions(networkId, query, offset).then((options) => {
         remember(options);
         return options;
       }),
     optionsWhen: 'typed',
+    pageSize: PUBLICATIONS_PAGE_SIZE,
     picker: {
       label: t('publications.field.pickerTitle'),
       open: (managed) =>
