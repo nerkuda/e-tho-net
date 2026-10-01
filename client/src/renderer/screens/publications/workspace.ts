@@ -83,8 +83,12 @@ export interface PublicationWorkspaceOptions {
 
 /** Публичный дескриптор рабочей области. */
 export interface PublicationWorkspaceHandle {
-  /** Открыть публикацию (перечитывает карточку и сборку). */
-  open(publicationId: string): Promise<void>;
+  /**
+   * Открыть публикацию (перечитывает карточку и сборку). `target.page` —
+   * сразу на нужной странице корневых разделов, `target.anchor` — прокрутка
+   * к блоку (`domId` первого вхождения; 0.11.1, задача 3275fd8d).
+   */
+  open(publicationId: string, target?: PublicationOpenTarget): Promise<void>;
   /** Скрыть рабочую область, не разбирая узел (возврат в библиотеку). */
   close(): void;
   /** Перечитать сборку и карточку (realtime/локальные правки). */
@@ -93,6 +97,29 @@ export interface PublicationWorkspaceHandle {
   isOpen(publicationId?: string): boolean;
   /** Разобрать узел и снять слушатели. */
   destroy(): void;
+}
+
+/** Куда открыть публикацию в рабочей области (0.11.1, задача 3275fd8d). */
+export interface PublicationOpenTarget {
+  /** Номер страницы корневых разделов (1-based). */
+  page?: number;
+  /** Якорь блока (`pub-<shortid>`): прокрутка к первому вхождению. */
+  anchor?: string;
+}
+
+/**
+ * Модель выбора страницы при открытии (чистая — юнит-тест): заданный
+ * `target.page > 1` побеждает; иначе та же публикация сохраняет текущую
+ * страницу (переоткрытие не сбрасывает листание), другая — открывается с
+ * первой.
+ */
+export function resolveOpenPage(
+  currentPage: number,
+  samePublication: boolean,
+  target?: PublicationOpenTarget,
+): number {
+  if (target?.page !== undefined && target.page > 1) return target.page;
+  return samePublication ? currentPage : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -854,16 +881,18 @@ export function mountPublicationWorkspace(
 
   // --- Публичный дескриптор ------------------------------------------------
 
-  async function open(id: string): Promise<void> {
-    if (publicationId !== id) {
-      page = 1;
+  async function open(id: string, target?: PublicationOpenTarget): Promise<void> {
+    const samePublication = publicationId === id;
+    if (!samePublication) {
       candidates = null;
       candidatesOpen = false;
       collapsed.clear();
     }
+    page = resolveOpenPage(page, samePublication, target);
     publicationId = id;
     root.classList.remove('hidden');
     await load();
+    if (target?.anchor !== undefined) scrollToAnchor(target.anchor);
   }
 
   function isOpen(id?: string): boolean {

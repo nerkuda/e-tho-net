@@ -61,6 +61,7 @@ import {
 import { openPublicationWizard } from './wizard.js';
 import {
   mountPublicationWorkspace,
+  type PublicationOpenTarget,
   type PublicationWorkspaceHandle,
 } from './workspace.js';
 
@@ -174,11 +175,14 @@ export function mountPublications(hostEl: HTMLElement): () => void {
 }
 
 /** Открывает рабочую область чтения публикации (элемент интерфейса 2ebacd12). */
-export async function openPublicationWorkspace(id: string): Promise<void> {
+export async function openPublicationWorkspace(
+  id: string,
+  target?: PublicationOpenTarget,
+): Promise<void> {
   if (ui === null || wsHost === null || workspace === null) return;
   ui.root.classList.add('hidden');
   wsHost.classList.remove('hidden');
-  await workspace.open(id);
+  await workspace.open(id, target);
 }
 
 /** Возвращает экран в библиотеку (кнопка «Назад», Esc). */

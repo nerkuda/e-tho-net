@@ -21,7 +21,6 @@
  */
 
 import type { MentionHit, PublicationUsageItem, ThoughtRef } from '@etn/shared';
-import { publicationAnchor } from '@etn/markdown';
 
 import { requireNetworkId, setFocus } from '../app.js';
 // Облачка мыслей во вкладке «Связи» (эндпоинты и строки упоминаний) собирает
@@ -411,26 +410,11 @@ function publicationRoleLabel(item: PublicationUsageItem): string {
 }
 
 /**
- * Якорь раздела в документе публикации, на который ведёт клик по строке
- * (0.11.1, задача 3275fd8d): для роли «раздел» — сама мысль (её id), для
- * «текст» — содержащий раздел (`section_thought_id`); у прямой ссылки
- * свойством раздела нет (документ открывается сверху). Якорь детерминирован
- * (`pub-<shortid>`, `@etn/markdown`), DOM-узлы рабочей области несут его id.
- */
-function publicationRoleAnchor(item: PublicationUsageItem, ownerId: string): string | null {
-  if (item.role === 'section') return publicationAnchor(ownerId);
-  if (item.role === 'text' && item.section_thought_id !== undefined) {
-    return publicationAnchor(item.section_thought_id);
-  }
-  return null;
-}
-
-/**
  * Builds the «Публикации» group body (0.11.1, задача 3275fd8d): ленивая
  * загрузка `GET /thoughts/{id}/publications` — список публикаций, в которые
  * входит мысль, с ролью (раздел/текст/прямое свойство). Клик по строке
- * открывает публикацию на соответствующем разделе (best-effort: раздел мог
- * остаться на другой странице сборки).
+ * открывает публикацию на странице и якоре, которые посчитал сервер
+ * (`usage.page`/`usage.anchor`); у прямой ссылки раздела нет — верх документа.
  */
 function buildPublicationsBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
@@ -461,14 +445,13 @@ function buildPublicationsBody(ctx: EditorContext): HTMLElement {
     }
     for (const item of items) {
       const row = div('mention-item');
+      // Клик обрабатывает САМА строка (не облачко): один путь открытия,
+      // без повторной загрузки сборки (клик по облачку всплывает сюда же).
       const cloud = createThoughtCloud(
         { id: item.publication_id, title: item.title, icon: '📄', icon_kind: 'emoji' },
         {
           profile: 'chip',
           width: 'container',
-          actions: {
-            onClick: () => void open(item),
-          },
         },
       );
       const role = el('div', 'muted mention-snippet', publicationRoleLabel(item));
@@ -483,13 +466,12 @@ function buildPublicationsBody(ctx: EditorContext): HTMLElement {
     }
   }
 
-  /** Открыть публикацию на её экране и, если возможно, прокрутить к разделу. */
+  /** Открыть публикацию на посчитанной сервером странице и якоре вхождения. */
   async function open(item: PublicationUsageItem): Promise<void> {
-    const anchor = publicationRoleAnchor(item, ctx.ownerId);
-    await openPublicationInWorkspace(item.publication_id);
-    if (anchor === null) return;
-    const node = document.getElementById(anchor);
-    node?.scrollIntoView({ block: 'start' });
+    await openPublicationInWorkspace(item.publication_id, {
+      ...(item.page !== undefined ? { page: item.page } : {}),
+      ...(item.anchor !== undefined ? { anchor: item.anchor } : {}),
+    });
   }
 
   return box;
