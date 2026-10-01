@@ -34,6 +34,7 @@ import {
   type PublicationUpdateInput,
   type SavedFilterDefinition,
   type Shelf,
+  type ShelfDeletionCheckResult,
   type ShelfInput,
   type ShelfItem,
 } from '@etn/shared';
@@ -915,6 +916,9 @@ interface ShelfRow {
   title: string;
   position: number;
   version: number;
+  marked_for_deletion: number;
+  marked_for_deletion_at: string | null;
+  marked_for_deletion_by: string | null;
   created_at: string;
   created_by: string;
   updated_at: string;
@@ -931,26 +935,39 @@ function shelfWithItems(ndb: NetworkDb, row: ShelfRow): Shelf {
       )
       .all(row.id) as ShelfItem[]
   ).map((i) => ({ ...i }));
-  return { ...row, items };
+  return {
+    ...row,
+    marked_for_deletion: row.marked_for_deletion === 1,
+    items,
+  };
 }
 
-/** Список полок с составом (общие для участников сети). */
+/**
+ * Список полок с составом (общие для участников сети). Пометка корзины
+ * скрывает полку из списка (0.11.1, задача c59ce742) — по образцу публикаций.
+ */
 export function listShelves(ndb: NetworkDb): Shelf[] {
   const rows = ndb
-    .prepare('SELECT * FROM shelves_v ORDER BY position ASC, created_at ASC')
+    .prepare('SELECT * FROM shelves_v WHERE marked_for_deletion = 0 ORDER BY position ASC, created_at ASC')
     .all() as ShelfRow[];
   return rows.map((row) => shelfWithItems(ndb, row));
 }
 
-/** Полка по id или `NOT_FOUND`. */
-function getShelfOrThrow(ndb: NetworkDb, id: string): Shelf {
+/** Полка по id в контексте слоя; `null` — не видна. */
+export function getShelf(ndb: NetworkDb, id: string): Shelf | null {
   const row = ndb.prepare('SELECT * FROM shelves_v WHERE id = ? LIMIT 1').get(id) as
     | ShelfRow
     | undefined;
-  if (row === undefined) {
+  return row === undefined ? null : shelfWithItems(ndb, row);
+}
+
+/** Полка по id или `NOT_FOUND`. */
+function getShelfOrThrow(ndb: NetworkDb, id: string): Shelf {
+  const shelf = getShelf(ndb, id);
+  if (shelf === null) {
     throw new EtnError('NOT_FOUND', `shelf ${id} not found`, { entity: 'shelf', id });
   }
-  return shelfWithItems(ndb, row);
+  return shelf;
 }
 
 /** Проверить название полки (непустое, в пределах слоя уникальное среди ЖИВЫХ). */
@@ -1054,12 +1071,87 @@ export function updateShelf(
 }
 
 /**
- * Удалить полку: её строки состава удаляются, публикации не трогаются.
- * В основе — физически, в слое — надгробиями.
+ * Проверка физического удаления полки (0.11.1, задача c59ce742): непустую
+ * полку удалять нельзя — сначала убери из неё публикации. Само физическое
+ * удаление возможно только в основе (проверяет {@link deleteShelf}).
+ */
+export function checkShelfDeletion(ndb: NetworkDb, id: string): ShelfDeletionCheckResult {
+  const shelf = getShelfOrThrow(ndb, id);
+  return { blocked: shelf.items.length > 0, blocking: { items: shelf.items.length } };
+}
+
+/**
+ * Пометить полку на удаление (корзина). Доступно в любом слое; пометка —
+ * ветвимая правка и уезжает слиянием (0.11.1, требование 200b87be).
+ */
+export function trashShelf(ndb: NetworkDb, id: string, actorUserId: string): Shelf {
+  return markShelfTrashed(ndb, id, true, actorUserId);
+}
+
+/** Снять пометку на удаление. */
+export function restoreShelf(ndb: NetworkDb, id: string, actorUserId: string): Shelf {
+  return markShelfTrashed(ndb, id, false, actorUserId);
+}
+
+/** Общая реализация пометки/снятия пометки корзины полки. */
+function markShelfTrashed(
+  ndb: NetworkDb,
+  id: string,
+  trashed: boolean,
+  actorUserId: string,
+): Shelf {
+  return ndb.transaction(() => {
+    getShelfOrThrow(ndb, id);
+    const now = new Date().toISOString();
+    materializeShadow(ndb, 'shelves', id);
+    if (trashed) {
+      ndb
+        .prepare(
+          `UPDATE shelves
+              SET marked_for_deletion = 1, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
+                  version = version + 1, updated_at = ?, updated_by = ?
+            WHERE id = ? AND layer_id = ?`,
+        )
+        .run(now, actorUserId, now, actorUserId, id, ndb.layerId);
+    } else {
+      ndb
+        .prepare(
+          `UPDATE shelves
+              SET marked_for_deletion = 0, marked_for_deletion_at = NULL,
+                  marked_for_deletion_by = NULL,
+                  version = version + 1, updated_at = ?, updated_by = ?
+            WHERE id = ? AND layer_id = ?`,
+        )
+        .run(now, actorUserId, id, ndb.layerId);
+    }
+    return getShelfOrThrow(ndb, id);
+  });
+}
+
+/**
+ * Физическое удаление полки (purge; 0.11.1, задача c59ce742, решение
+ * пользователя 2026-10-01): только в основе (в слое — `VALIDATION_ERROR`
+ * `purge_base_only`) и только у ПУСТОЙ полки (иначе `shelf_has_publications` —
+ * сначала убери публикации или используй корзину). Строки состава удаляются
+ * каскадом (их к этому моменту нет), публикации не трогаются.
  */
 export function deleteShelf(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
-    getShelfOrThrow(ndb, id);
+    if (!isBaseContext(ndb)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'физическое удаление полки доступно только в основе',
+        { entity: 'shelf', id, code: 'purge_base_only' },
+      );
+    }
+    const shelf = getShelfOrThrow(ndb, id);
+    if (shelf.items.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'полку с публикациями удалить нельзя: сначала убери их или помести полку в корзину',
+        { entity: 'shelf', id, code: 'shelf_has_publications', items: shelf.items.length },
+      );
+    }
     const itemIds = (
       ndb.prepare('SELECT id FROM shelf_items_v WHERE shelf_id = ?').all(id) as { id: string }[]
     ).map((r) => r.id);

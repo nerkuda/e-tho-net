@@ -1891,7 +1891,11 @@ export const RestTrashList = defineContract(
   { network_id: { from: { kind: 'param', name: 'networkId' } } },
 );
 
-/** POST /networks/:id/trash/purge — очистка (опционально targeted `ids`). */
+/**
+ * POST /networks/:id/trash/purge — очистка (опционально targeted `ids`).
+ * С 0.11.1 (задача c59ce742) корзина охватывает и публикации/полки, поэтому
+ * `ids` принимает id строк любого вида — см. `listTrash`.
+ */
 export const RestTrashPurge = defineContract(
   'rest:trash.purge',
   z.object({ network_id: NetworkId }),
@@ -4213,9 +4217,29 @@ export const RestShelfUpdate = defineContract(
   },
 );
 
-/** DELETE /networks/:id/shelves/{id} — удалить полку. */
+/** DELETE /networks/:id/shelves/{id} — удалить полку (purge). */
 export const RestShelfDelete = defineContract(
   'rest:shelves.delete',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/shelves/{id}/trash — пометить полку на удаление. */
+export const RestShelfTrash = defineContract(
+  'rest:shelves.trash',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/shelves/{id}/restore — снять пометку. */
+export const RestShelfRestore = defineContract(
+  'rest:shelves.restore',
   z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },

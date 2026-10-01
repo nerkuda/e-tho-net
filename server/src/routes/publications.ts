@@ -19,7 +19,9 @@
  *   POST   /networks/:networkId/shelves                          — создать полку
  *   GET    /networks/:networkId/shelves                          — список полок
  *   PATCH  /networks/:networkId/shelves/:id                      — переименовать/порядок
- *   DELETE /networks/:networkId/shelves/:id                      — удалить полку
+ *   DELETE /networks/:networkId/shelves/:id                      — purge (основа, пустая)
+ *   POST   /networks/:networkId/shelves/:id/trash                — в корзину
+ *   POST   /networks/:networkId/shelves/:id/restore              — из корзины
  *   POST   /networks/:networkId/shelves/:id/items                — положить публикацию
  *   DELETE /networks/:networkId/shelves/:id/items                — убрать публикацию
  *
@@ -54,6 +56,7 @@ import {
   createShelf,
   deleteShelf,
   getPublication,
+  getShelf,
   listPublications,
   listShelves,
   purgePublication,
@@ -61,8 +64,10 @@ import {
   removePublicationExclusion,
   removeShelfItem,
   restorePublication,
+  restoreShelf,
   setPublicationOrder,
   trashPublication,
+  trashShelf,
   updatePublication,
   updateShelf,
 } from '../domain/publication-service.js';
@@ -89,6 +94,8 @@ import {
   RestShelfItemAdd,
   RestShelfItemRemove,
   RestShelfList,
+  RestShelfRestore,
+  RestShelfTrash,
   RestShelfUpdate,
 } from '../contracts.js';
 
@@ -597,14 +604,13 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestShelfDelete, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const existing = listShelves(ndb).find((s) => s.id === input.shelf_id) ?? null;
+          // Снимок для журнала — до физического удаления; `getShelf` (не
+          // `listShelves`) видит и помеченную в корзину полку.
+          const existing = getShelf(ndb, input.shelf_id);
           deleteShelf(ndb, input.shelf_id);
           return {
             result: undefined,
-            events:
-              existing === null
-                ? []
-                : [{ type: 'shelf.deleted' as const, data: { id: input.shelf_id } }],
+            events: [{ type: 'shelf.deleted' as const, data: { id: input.shelf_id } }],
             activity:
               existing === null
                 ? []
@@ -612,6 +618,50 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           };
         });
         reply.code(204).send();
+      },
+    );
+
+    app.post(
+      '/networks/:networkId/shelves/:id/trash',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestShelfTrash, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const shelf = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const trashed = trashShelf(ndb, input.shelf_id, req.auth!.user.id);
+          return {
+            result: trashed,
+            events: [{ type: 'shelf.updated' as const, data: { shelf: trashed } }],
+            activity: [{ kind: 'shelf' as const, action: 'trashed' as const, shelf: trashed }],
+          };
+        });
+        sendSuccess(reply, shelf, {
+          version: shelf.version,
+          updated_at: shelf.updated_at,
+          request_id: req.id,
+        });
+      },
+    );
+
+    app.post(
+      '/networks/:networkId/shelves/:id/restore',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestShelfRestore, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const shelf = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const restored = restoreShelf(ndb, input.shelf_id, req.auth!.user.id);
+          return {
+            result: restored,
+            events: [{ type: 'shelf.updated' as const, data: { shelf: restored } }],
+            activity: [{ kind: 'shelf' as const, action: 'restored' as const, shelf: restored }],
+          };
+        });
+        sendSuccess(reply, shelf, {
+          version: shelf.version,
+          updated_at: shelf.updated_at,
+          request_id: req.id,
+        });
       },
     );
 

@@ -148,6 +148,10 @@ export interface Shelf {
   title: string;
   position: number;
   version: number;
+  /** Пометка на удаление (корзина); purge — только в основе и только пустой. */
+  marked_for_deletion: boolean;
+  marked_for_deletion_at: string | null;
+  marked_for_deletion_by: string | null;
   created_at: string;
   created_by: string;
   updated_at: string;
@@ -159,6 +163,18 @@ export interface Shelf {
 export interface ShelfInput {
   title?: string;
   position?: number;
+}
+
+/** Что мешает физически удалить полку (0.11.1, задача c59ce742). */
+export interface ShelfDeletionBlocking {
+  /** Живых публикаций в составе: непустую полку удалять нельзя. */
+  items: number;
+}
+
+/** Результат проверки удаления полки. */
+export interface ShelfDeletionCheckResult {
+  blocked: boolean;
+  blocking: ShelfDeletionBlocking;
 }
 
 // ---------------------------------------------------------------------------

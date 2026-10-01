@@ -334,6 +334,124 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       await closeRestContext(ctx);
     }
   });
+
+  it('общая корзина: публикации и полки в GET /trash и POST /trash/purge', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const pubFree = (await api(ctx, 'POST', '/publications', { payload: { title: 'Свободная' } }))
+        .json().data as { id: string };
+      const pubHeld = (await api(ctx, 'POST', '/publications', { payload: { title: 'Удерживаемая' } }))
+        .json().data as { id: string };
+
+      // Блокировка публикации: живая теневая строка в рабочем слое удерживает
+      // её от физического удаления (та же проверка, что у DELETE).
+      const layer = createLayer(ctx.ndb, {
+        parentId: BASE_LAYER_ID,
+        title: 'Удерживающий слой',
+        createdBy: ctx.adminId,
+      });
+      setSessionLayer(ctx.ndb, ctx.adminId, 'held', layer.id, 0);
+      const shadowEdit = await api(ctx, 'PATCH', `/publications/${pubHeld.id}`, {
+        payload: { subtitle: 'правка слоя' },
+        headers: { 'client-id': 'held' },
+      });
+      assert.equal(shadowEdit.statusCode, 200, shadowEdit.body);
+
+      // Полка с публикацией (непустая — блокирована).
+      const shelf = (await api(ctx, 'POST', '/shelves', { payload: { title: 'Корзинная полка' } }))
+        .json().data as { id: string };
+      const addItem = await api(ctx, 'POST', `/shelves/${shelf.id}/items`, {
+        payload: { publication_id: pubHeld.id, position: 1 },
+      });
+      assert.equal(addItem.statusCode, 200, addItem.body);
+
+      // Пометить всё: публикации и полку.
+      assert.equal((await api(ctx, 'POST', `/publications/${pubFree.id}/trash`)).statusCode, 200);
+      assert.equal((await api(ctx, 'POST', `/publications/${pubHeld.id}/trash`)).statusCode, 200);
+      assert.equal((await api(ctx, 'POST', `/shelves/${shelf.id}/trash`)).statusCode, 200);
+      // Помеченная полка исчезает из библиотеки.
+      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 0);
+
+      // GET /trash показывает оба раздела и честный blocked.
+      const trash = (await api(ctx, 'GET', '/trash')).json().data as {
+        publications: Array<{
+          id: string;
+          blocked: boolean;
+          blocking: { properties: number; layers: Array<{ id: string }> };
+        }>;
+        shelves: Array<{ id: string; blocked: boolean; blocking: { items: number } }>;
+      };
+      assert.equal(trash.publications.length, 2);
+      assert.equal(trash.shelves.length, 1);
+      const freeEntry = trash.publications.find((p) => p.id === pubFree.id);
+      assert.equal(freeEntry?.blocked, false);
+      const heldEntry = trash.publications.find((p) => p.id === pubHeld.id);
+      assert.equal(heldEntry?.blocked, true);
+      assert.ok((heldEntry?.blocking.layers.length ?? 0) >= 1);
+      const shelfEntry = trash.shelves.find((s) => s.id === shelf.id);
+      assert.equal(shelfEntry?.blocked, true);
+      assert.equal(shelfEntry?.blocking.items, 1);
+
+      // Purge: свободная публикация уходит; заблокированные публикация и полка —
+      // пропускаются без ошибки.
+      const sweep = await api(ctx, 'POST', '/trash/purge');
+      assert.equal(sweep.statusCode, 200, sweep.body);
+      const counts = sweep.json().data as { purged: number; skipped: number };
+      assert.equal(counts.purged, 1);
+      assert.equal(counts.skipped, 2);
+      assert.equal((await api(ctx, 'GET', `/publications/${pubFree.id}`)).statusCode, 404);
+      assert.equal((await api(ctx, 'GET', `/publications/${pubHeld.id}`)).statusCode, 200);
+      const trashAfter = (await api(ctx, 'GET', '/trash')).json().data as {
+        publications: unknown[];
+        shelves: unknown[];
+      };
+      assert.equal(trashAfter.publications.length, 1);
+      assert.equal(trashAfter.shelves.length, 1);
+
+      // Опустошить полку — она перестаёт быть заблокированной и уходит
+      // следующим проходом; публикация остаётся удержанной слоем.
+      const removeItem = await api(
+        ctx,
+        'DELETE',
+        `/shelves/${shelf.id}/items?publication_id=${pubHeld.id}`,
+      );
+      assert.equal(removeItem.statusCode, 200, removeItem.body);
+      const sweep2 = await api(ctx, 'POST', '/trash/purge');
+      const counts2 = sweep2.json().data as { purged: number; skipped: number };
+      assert.equal(counts2.purged, 1);
+      assert.equal(counts2.skipped, 1);
+      const shelfEmptyEntry = (await api(ctx, 'GET', '/trash')).json().data as {
+        publications: unknown[];
+        shelves: unknown[];
+      };
+      assert.equal(shelfEmptyEntry.shelves.length, 0);
+      assert.equal(shelfEmptyEntry.publications.length, 1);
+      assert.equal((await api(ctx, 'GET', `/publications/${pubHeld.id}`)).statusCode, 200);
+
+      // Пометка и восстановление полки — отдельный цикл.
+      const restoredShelf = (await api(ctx, 'POST', '/shelves', { payload: { title: 'Возврат' } }))
+        .json().data as { id: string };
+      assert.equal((await api(ctx, 'POST', `/shelves/${restoredShelf.id}/trash`)).statusCode, 200);
+      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 0);
+      assert.equal(
+        (await api(ctx, 'POST', `/shelves/${restoredShelf.id}/restore`)).statusCode,
+        200,
+      );
+      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 1);
+
+      // Журнал: purge публикаций и полок оставил строки.
+      const pubActivity = (await api(ctx, 'GET', '/activity?entity_type=publication&limit=200'))
+        .json().data as Array<{ action: string }>;
+      assert.ok(pubActivity.some((r) => r.action === 'deleted'));
+      const shelfLog = (await api(ctx, 'GET', '/activity?entity_type=shelf&limit=200'))
+        .json().data as Array<{ action: string }>;
+      assert.ok(shelfLog.some((r) => r.action === 'trashed'));
+      assert.ok(shelfLog.some((r) => r.action === 'restored'));
+      assert.ok(shelfLog.some((r) => r.action === 'deleted'));
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

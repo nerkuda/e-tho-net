@@ -32,8 +32,10 @@ import {
   removePublicationExclusion,
   removeShelfItem,
   restorePublication,
+  restoreShelf,
   setPublicationOrder,
   trashPublication,
+  trashShelf,
   updatePublication,
 } from '../src/domain/publication-service.js';
 
@@ -371,10 +373,17 @@ describe(
         const withItem = addShelfItem(ndb, shelf.id, p.id, 1, 'u');
         assert.equal(withItem.items.length, 1);
         assert.equal(withItem.items[0]?.publication_id, p.id);
+        // Непустую полку физически удалять нельзя (0.11.1, c59ce742).
+        assert.throws(
+          () => deleteShelf(ndb, shelf.id),
+          (e) => codeOf(e) === 'VALIDATION_ERROR',
+        );
         assert.equal(removeShelfItem(ndb, shelf.id, p.id).items.length, 0);
-        addShelfItem(ndb, shelf.id, p.id, 1, 'u');
         deleteShelf(ndb, shelf.id);
         assert.equal(listShelves(ndb).length, 0);
+        // Физическое удаление освобождает имя — повторное создание проходит.
+        const again = createShelf(ndb, { title: 'Полка' }, 'u');
+        assert.notEqual(again.id, shelf.id);
         // Публикация не тронута удалением полки.
         assert.notEqual(getPublication(ndb, p.id), null);
       } finally {
@@ -382,26 +391,27 @@ describe(
       }
     });
 
-    it('удаление полки в слое освобождает имя: повторное создание проходит', () => {
+    it('полку в слое нельзя удалить физически: только корзина', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const layerId = seedLayer(ndb);
         ndb.useLayer(layerId);
 
         const shelf = createShelf(ndb, { title: 'Полка' }, 'u');
-        deleteShelf(ndb, shelf.id);
-        assert.equal(listShelves(ndb).length, 0);
-
-        // Надгробие не удерживает имя: создаём заново — без сырого SqliteError.
-        const again = createShelf(ndb, { title: 'Полка' }, 'u');
-        assert.notEqual(again.id, shelf.id);
-        assert.equal(listShelves(ndb).length, 1);
-
-        // А живой дубль по-прежнему отвергается штатной ошибкой валидации.
         assert.throws(
-          () => createShelf(ndb, { title: 'полка' }, 'u'),
+          () => deleteShelf(ndb, shelf.id),
           (e) => codeOf(e) === 'VALIDATION_ERROR',
         );
+
+        // Пометка убирает полку из списка слоя; имя занято до purge.
+        assert.equal(trashShelf(ndb, shelf.id, 'u').marked_for_deletion, true);
+        assert.equal(listShelves(ndb).length, 0);
+        assert.throws(
+          () => createShelf(ndb, { title: 'Полка' }, 'u'),
+          (e) => codeOf(e) === 'VALIDATION_ERROR',
+        );
+        assert.equal(restoreShelf(ndb, shelf.id, 'u').marked_for_deletion, false);
+        assert.equal(listShelves(ndb).length, 1);
       } finally {
         ndb.close();
       }

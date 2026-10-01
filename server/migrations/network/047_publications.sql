@@ -141,6 +141,12 @@ CREATE TABLE shelves (
   created_by   TEXT NOT NULL,
   updated_at   TEXT NOT NULL,
   updated_by   TEXT NOT NULL,
+  -- Корзина полки (0.11.1, задача c59ce742; требование 200b87be): пометка
+  -- обратима и ветвима, purge — физическое удаление (только в основе и только
+  -- у пустой полки). По образцу публикаций/мыслей.
+  marked_for_deletion    INTEGER NOT NULL DEFAULT 0,
+  marked_for_deletion_at TEXT,
+  marked_for_deletion_by TEXT,
   UNIQUE (id, layer_id)
 );
 
