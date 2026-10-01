@@ -379,6 +379,8 @@ export type DocBlock =
   | {
       kind: 'section';
       key: string;
+      /** DOM-id блока: уникален на вхождение (`anchor` — только у первого). */
+      domId: string;
       thoughtId: string;
       level: number;
       heading: string;
@@ -386,8 +388,29 @@ export type DocBlock =
       repeat: boolean;
       cycle: boolean;
     }
-  | { kind: 'text'; key: string; thoughtId: string; anchor: string; html: string }
+  | {
+      kind: 'text';
+      key: string;
+      domId: string;
+      thoughtId: string;
+      html: string;
+    }
   | { kind: 'extra'; key: string; groups: PublicationAssemblyExtraGroup[] };
+
+/**
+ * Ключ вхождения (DOM-key и DOM-id) для якоря мысли. Якорь
+ * `publicationAnchor(thoughtId)` один на мысль, а при повторе (несколько
+ * отобранных родителей/кольцо) сборка содержит её дважды — поэтому ключ
+ * keyed-сверки и `id` узла обязаны нести номер вхождения, иначе
+ * `reconcileKeyed` бросит `duplicate key`, а в DOM будет два одинаковых `id`.
+ * Первое вхождение сохраняет чистый `anchor` (цель перехода к первому
+ * вхождению — `repeat_of`), последующие получают суффикс.
+ */
+function occurrence(counter: Map<string, number>, anchor: string): { key: string; domId: string } {
+  const index = counter.get(anchor) ?? 0;
+  counter.set(anchor, index + 1);
+  return { key: `${anchor}#${index}`, domId: index === 0 ? anchor : `${anchor}-r${index}` };
+}
 
 /** Подпись титульного блока: меняется при любой правке настроек публикации. */
 function titleSignature(publication: Publication | null, summaryHtml: string): string {
@@ -409,6 +432,7 @@ function titleSignature(publication: Publication | null, summaryHtml: string): s
  * Разворачивает дерево разделов в плоские блоки документа в порядке чтения.
  * Титульный блок несёт подпись, зависящую от карточки публикации и резюме
  * сборки, — иначе правка настроек не пересобирала бы титул (realtime).
+ * Ключи и `domId` блоков уникальны на вхождение (см. {@link occurrence}).
  */
 export function documentBlocks(
   assembly: PublicationAssembly | null,
@@ -418,11 +442,14 @@ export function documentBlocks(
   const out: DocBlock[] = [
     { kind: 'title', key: 'title', sig: titleSignature(publication, assembly.publication.summary_html) },
   ];
+  const counter = new Map<string, number>();
   const walk = (sections: readonly PublicationAssemblySection[]): void => {
     for (const section of sections) {
+      const occ = occurrence(counter, section.anchor);
       out.push({
         kind: 'section',
-        key: section.anchor,
+        key: occ.key,
+        domId: occ.domId,
         thoughtId: section.thought_id,
         level: section.level,
         heading: section.heading,
@@ -431,16 +458,17 @@ export function documentBlocks(
         cycle: section.flags.cycle_cut,
       });
       for (const text of section.texts) {
+        const textOcc = occurrence(counter, text.anchor);
         out.push({
           kind: 'text',
-          key: text.anchor,
+          key: textOcc.key,
+          domId: textOcc.domId,
           thoughtId: text.thought_id,
-          anchor: text.anchor,
           html: text.body_html,
         });
       }
       if (section.extra.length > 0) {
-        out.push({ kind: 'extra', key: `${section.anchor}#extra`, groups: section.extra });
+        out.push({ kind: 'extra', key: `${occ.key}#extra`, groups: section.extra });
       }
       walk(section.children);
     }
@@ -465,5 +493,104 @@ export function blockSignature(block: DocBlock): string {
             `${group.property}=${group.targets.map((target) => `${target.id}:${target.title}`).join(',')}`,
         )
         .join('|')}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Плоские строки оглавления (задача 4f03b9d5). Как и блоки документа, строки
+// несут уникальный ключ вхождения (повтор раздела даёт две строки).
+// ---------------------------------------------------------------------------
+
+/** Строка оглавления — плоская единица keyed-сверки. */
+export type TocLine =
+  | {
+      kind: 'section';
+      key: string;
+      /** DOM-id для навигации/подсветки (уникален на вхождение). */
+      anchor: string;
+      thoughtId: string;
+      nodeKey: string;
+      parentThoughtId: string | null;
+      depth: number;
+      label: string;
+      repeat: boolean;
+      /** Якорь первого вхождения (цель перехода по пометке повтора). */
+      repeatOf: string | null;
+      cycle: boolean;
+      hasChildren: boolean;
+      collapsed: boolean;
+    }
+  | { kind: 'text'; key: string; anchor: string; thoughtId: string; depth: number; label: string }
+  | { kind: 'excluded'; key: string; thoughtId: string; title: string };
+
+/**
+ * Строит плоский список строк оглавления (разделы/тексты/исключённые).
+ * `textLabel(index)` — подпись строки текста (нумерация в разделе); вынесена
+ * параметром, чтобы модель оставалась без зависимости от словаря строк.
+ */
+export function tocLines(
+  assembly: PublicationAssembly | null,
+  collapsed: ReadonlySet<string>,
+  textLabel: (index: number) => string,
+): TocLine[] {
+  if (assembly === null) return [];
+  const out: TocLine[] = [];
+  const flat = flattenSections(assembly.sections);
+  const hidden = new Set<string>();
+  const counter = new Map<string, number>();
+  for (const item of flat) {
+    const parent = item.parentThoughtId;
+    if (parent !== null && (hidden.has(parent) || collapsed.has(parent))) {
+      hidden.add(item.section.thought_id);
+      continue;
+    }
+    const occ = occurrence(counter, item.section.anchor);
+    out.push({
+      kind: 'section',
+      key: occ.key,
+      anchor: occ.domId,
+      thoughtId: item.section.thought_id,
+      nodeKey: item.section.node_key,
+      parentThoughtId: item.parentThoughtId,
+      depth: item.depth,
+      label: item.section.heading,
+      repeat: item.section.flags.repeat_of !== null,
+      repeatOf: item.section.flags.repeat_of,
+      cycle: item.section.flags.cycle_cut,
+      hasChildren: item.section.children.length > 0,
+      collapsed: collapsed.has(item.section.thought_id),
+    });
+    item.section.texts.forEach((text, index) => {
+      const textOcc = occurrence(counter, text.anchor);
+      out.push({
+        kind: 'text',
+        key: textOcc.key,
+        anchor: textOcc.domId,
+        thoughtId: text.thought_id,
+        depth: item.depth + 1,
+        label: textLabel(index + 1),
+      });
+    });
+  }
+  for (const excluded of assembly.excluded) {
+    out.push({
+      kind: 'excluded',
+      key: `x:${excluded.thought_id}`,
+      thoughtId: excluded.thought_id,
+      title: excluded.title,
+    });
+  }
+  return out;
+}
+
+/** Подпись строки оглавления для сравнения при keyed-сверке. */
+export function tocSignature(line: TocLine): string {
+  switch (line.kind) {
+    case 'section':
+      return `s:${line.label}:${line.depth}:${line.repeat}:${line.repeatOf ?? ''}:${line.cycle}:${line.nodeKey}:${line.parentThoughtId ?? ''}:${line.hasChildren}:${line.collapsed}`;
+    case 'text':
+      return `t:${line.label}:${line.depth}`;
+    case 'excluded':
+      return `x:${line.title}`;
   }
 }

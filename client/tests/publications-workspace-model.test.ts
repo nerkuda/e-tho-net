@@ -21,7 +21,10 @@ import {
   reorderIds,
   sectionNodeKey,
   siblingNodeKeys,
+  tocLines,
 } from '../src/renderer/screens/publications/model.js';
+import { reconcileKeyed } from '../src/renderer/lib/ui/keyed-list.js';
+import { ShimElement } from './dom-shim.js';
 
 /** Минимальная карточка публикации для подписи титула. */
 function makePublication(overrides: Partial<Publication> = {}): Publication {
@@ -217,5 +220,55 @@ describe('модель рабочей области публикации: бл�
     const b = withExtra('Новое');
     assert.equal(a.kind, 'extra');
     assert.notEqual(blockSignature(a), blockSignature(b));
+  });
+});
+
+describe('модель рабочей области публикации: повторное вхождение раздела', () => {
+  /** Дерево из пробы сервера: A→D и B→D, D показан дважды (repeat_of). */
+  const repeatTree = (): PublicationAssemblySection[] => [
+    section('A', [section('D')]),
+    section('B', [{ ...section('D'), flags: { repeat_of: 'pub-D', cycle_cut: false } }]),
+  ];
+
+  it('блоки документа несут уникальные ключи и DOM-id при повторе', () => {
+    const blocks = documentBlocks(makeAssembly(repeatTree()), null);
+    const keys = blocks.map((block) => block.key);
+    assert.equal(new Set(keys).size, keys.length, 'ключи блоков уникальны');
+
+    const sections = blocks.filter(
+      (block): block is Extract<typeof block, { kind: 'section' }> => block.kind === 'section',
+    );
+    const domIds = sections.map((block) => block.domId);
+    assert.equal(new Set(domIds).size, domIds.length, 'DOM-id уникальны');
+    // Первое вхождение — чистый якорь (цель repeat_of), повтор — с суффиксом.
+    assert.deepEqual(domIds, ['pub-A', 'pub-D', 'pub-B', 'pub-D-r1']);
+    assert.equal(sections[3]!.repeat, true);
+  });
+
+  it('строки оглавления не дублируют ключи и reconcileKeyed не бросает', () => {
+    const lines = tocLines(makeAssembly(repeatTree()), new Set(), (i) => `Текст ${i}`);
+    const keys = lines.map((line) => line.key);
+    assert.equal(new Set(keys).size, keys.length, 'ключи строк уникальны');
+
+    const dRows = lines.filter(
+      (line): line is Extract<typeof line, { kind: 'section' }> =>
+        line.kind === 'section' && line.thoughtId === 'D',
+    );
+    assert.equal(dRows.length, 2, 'повтор даёт вторую строку');
+    assert.equal(dRows[0]!.anchor, 'pub-D');
+    assert.equal(dRows[0]!.repeat, false);
+    assert.equal(dRows[1]!.anchor, 'pub-D-r1');
+    assert.equal(dRows[1]!.repeat, true);
+    // Переход по пометке повтора ведёт к первому вхождению (repeat_of).
+    assert.equal(dRows[1]!.repeatOf, 'pub-D');
+
+    // Прямая проверка: сверка списка с такими ключами не бросает duplicate key.
+    const host = new ShimElement('div') as unknown as HTMLElement;
+    reconcileKeyed(host, lines, {
+      key: (line) => line.key,
+      build: () => new ShimElement('div') as unknown as HTMLElement,
+      update: () => undefined,
+    });
+    assert.equal(host.children.length, lines.length);
   });
 });

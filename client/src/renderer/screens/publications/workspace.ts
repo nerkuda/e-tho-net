@@ -59,7 +59,10 @@ import {
   positionsFor,
   reorderIds,
   siblingNodeKeys,
+  tocLines,
+  tocSignature,
   type DocBlock,
+  type TocLine,
 } from './model.js';
 import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
@@ -90,88 +93,6 @@ export interface PublicationWorkspaceHandle {
   isOpen(publicationId?: string): boolean;
   /** Разобрать узел и снять слушатели. */
   destroy(): void;
-}
-
-// ---------------------------------------------------------------------------
-// Разметка-модель оглавления (блоки документа — чистая модель в `model.ts`)
-// ---------------------------------------------------------------------------
-
-/** Строка оглавления — плоская единица keyed-сверки. */
-type TocLine =
-  | {
-      kind: 'section';
-      key: string;
-      thoughtId: string;
-      nodeKey: string;
-      parentThoughtId: string | null;
-      depth: number;
-      label: string;
-      repeat: boolean;
-      repeatOf: string | null;
-      cycle: boolean;
-      hasChildren: boolean;
-      collapsed: boolean;
-    }
-  | { kind: 'text'; key: string; thoughtId: string; depth: number; label: string }
-  | { kind: 'excluded'; key: string; thoughtId: string; title: string };
-
-/** Строит плоский список строк оглавления (разделы/тексты/исключённые). */
-function toLines(assembly: PublicationAssembly | null, collapsed: ReadonlySet<string>): TocLine[] {
-  if (assembly === null) return [];
-  const out: TocLine[] = [];
-  const flat = flattenSections(assembly.sections);
-  const hidden = new Set<string>();
-  for (const item of flat) {
-    const parent = item.parentThoughtId;
-    if (parent !== null && (hidden.has(parent) || collapsed.has(parent))) {
-      hidden.add(item.section.thought_id);
-      continue;
-    }
-    out.push({
-      kind: 'section',
-      key: item.section.anchor,
-      thoughtId: item.section.thought_id,
-      nodeKey: item.section.node_key,
-      parentThoughtId: item.parentThoughtId,
-      depth: item.depth,
-      label: item.section.heading,
-      repeat: item.section.flags.repeat_of !== null,
-      repeatOf: item.section.flags.repeat_of,
-      cycle: item.section.flags.cycle_cut,
-      hasChildren: item.section.children.length > 0,
-      collapsed: collapsed.has(item.section.thought_id),
-    });
-    item.section.texts.forEach((text, index) => {
-      out.push({
-        kind: 'text',
-        key: text.anchor,
-        thoughtId: text.thought_id,
-        depth: item.depth + 1,
-        label: t('publications.ws.text', index + 1),
-      });
-    });
-  }
-  for (const excluded of assembly.excluded) {
-    out.push({
-      kind: 'excluded',
-      key: `x:${excluded.thought_id}`,
-      thoughtId: excluded.thought_id,
-      title: excluded.title,
-    });
-  }
-  return out;
-}
-
-/** Подпись строки оглавления для сравнения при сверке. */
-function tocSignature(line: TocLine): string {
-  switch (line.kind) {
-    case 'section':
-      return `s:${line.label}:${line.depth}:${line.repeat}:${line.repeatOf ?? ''}:${line.cycle}:${line.nodeKey}:${line.parentThoughtId ?? ''}:${line.hasChildren}:${line.collapsed}`;
-    case 'text':
-      return `t:${line.label}:${line.depth}`;
-    case 'excluded':
-      return `x:${line.title}`;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +295,7 @@ export function mountPublicationWorkspace(
   // --- Оглавление ----------------------------------------------------------
 
   function renderToc(): void {
-    const lines = toLines(assembly, collapsed);
+    const lines = tocLines(assembly, collapsed, (index) => t('publications.ws.text', index));
     reconcileKeyed<TocLine>(tocList, lines, {
       key: (line) => line.key,
       build: (line) => buildTocLine(line),
@@ -387,7 +308,7 @@ export function mountPublicationWorkspace(
     const node = div('pub-toc-line');
     node.dataset['key'] = line.key;
     if (line.kind === 'section') {
-      node.dataset['anchor'] = line.key;
+      node.dataset['anchor'] = line.anchor;
       node.dataset['thoughtId'] = line.thoughtId;
       node.style.paddingLeft = `${line.depth}rem`;
       node.draggable = true;
@@ -427,7 +348,7 @@ export function mountPublicationWorkspace(
       node.classList.toggle('pub-toc-folded', line.collapsed);
       wireTocSection(node, line);
     } else if (line.kind === 'text') {
-      node.dataset['anchor'] = line.key;
+      node.dataset['anchor'] = line.anchor;
       node.dataset['thoughtId'] = line.thoughtId;
       node.style.paddingLeft = `${line.depth}rem`;
       node.classList.add('pub-toc-text');
@@ -461,7 +382,7 @@ export function mountPublicationWorkspace(
       node.style.paddingLeft = `${line.depth}rem`;
       node.classList.toggle('pub-toc-folded', line.collapsed);
     }
-    node.classList.toggle('pub-toc-current', line.kind !== 'excluded' && line.key === currentAnchor);
+    node.classList.toggle('pub-toc-current', line.kind !== 'excluded' && line.anchor === currentAnchor);
   }
 
   function toggleCollapsed(thoughtId: string): void {
@@ -472,7 +393,7 @@ export function mountPublicationWorkspace(
 
   function wireTocSection(node: HTMLElement, line: TocLine): void {
     if (line.kind === 'excluded') return;
-    const anchor = line.key;
+    const anchor = line.anchor;
     const thoughtId = line.thoughtId;
     node.addEventListener('click', () => scrollToAnchor(anchor));
     node.addEventListener('contextmenu', (ev) => {
@@ -567,7 +488,7 @@ export function mountPublicationWorkspace(
     if (block.kind === 'title') return buildTitleBlock();
     if (block.kind === 'section') {
       const node = div('pub-doc-section');
-      node.id = block.key;
+      node.id = block.domId;
       node.dataset['thoughtId'] = block.thoughtId;
       const heading = el(headingTag(block.level), 'pub-doc-heading');
       heading.textContent = block.heading;
@@ -585,7 +506,7 @@ export function mountPublicationWorkspace(
     }
     if (block.kind === 'text') {
       const node = div('pub-doc-text');
-      node.id = block.anchor;
+      node.id = block.domId;
       node.dataset['thoughtId'] = block.thoughtId;
       renderHtml(node, block.html);
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
