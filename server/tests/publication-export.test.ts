@@ -329,6 +329,45 @@ describe('publication-export: одиночный экспорт', { skip }, () =
     assert.ok(html.includes('src="https://example.test/cover.png"'), html);
   });
 
+  it('разделы глубже H6: обезглавливание в абзац, а не кламп (md и html)', async () => {
+    const ctx = await buildRestContext();
+    cleanups.push(() => closeRestContext(ctx));
+
+    const docType = createThoughtType(ctx.ndb, { name: 'Doc' }, ctx.adminId);
+    // Цепочка из 8 разделов: уровни 1..8 → заголовки H2..H9.
+    const ids: string[] = [];
+    for (let i = 1; i <= 8; i += 1) {
+      ids.push(seedThought(ctx.ndb, `A${i}`, docType.id, ctx.adminId));
+    }
+    for (let i = 0; i < ids.length - 1; i += 1) {
+      seedLink(ctx.ndb, ids[i]!, ids[i + 1]!, null, 0, ctx.adminId);
+    }
+    const pub = createPublication(
+      ctx.ndb,
+      {
+        title: 'Глубокий Док',
+        title_recipe: { type_ids: [docType.id], sort: 'alpha', order: 'asc' },
+      },
+      ctx.adminId,
+    );
+
+    // Markdown: до H6 — решётки, глубже — абзац с жирным текстом.
+    const mdZip = await downloadJob(ctx, await startExport(ctx, pub.id, 'md'));
+    const md = (await readZipEntry(mdZip, 'glubokiy-dok.md')).toString('utf8');
+    assert.ok(md.includes('###### A5'), md);
+    assert.ok(md.includes('**A6**'), md);
+    assert.ok(md.includes('**A7**'), md);
+    assert.ok(!md.includes('####### '), md);
+
+    // HTML: до H6 — <hN>, глубже — <p><strong> (без клампа к H6).
+    const htmlZip = await downloadJob(ctx, await startExport(ctx, pub.id, 'html'));
+    const html = (await readZipEntry(htmlZip, 'glubokiy-dok.html')).toString('utf8');
+    assert.ok(html.includes('<h6>A5</h6>'), html);
+    assert.ok(html.includes('<p><strong>A6</strong></p>'), html);
+    assert.ok(html.includes('<p><strong>A7</strong></p>'), html);
+    assert.ok(!html.includes('<h7>'), html);
+  });
+
   it('пакетный экспорт: подкаталоги публикаций и суффикс при коллизии slug', async () => {
     const ctx = await buildRestContext();
     cleanups.push(() => closeRestContext(ctx));

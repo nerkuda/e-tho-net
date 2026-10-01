@@ -71,6 +71,13 @@ const ASSETS_DIR = 'assets';
 /** Размер короткого хеша содержимого ассета (hex-символов). */
 const ASSET_HASH_LENGTH = 8;
 
+/**
+ * Потолок уровня заголовка: за H6 заголовок обезглавливается в абзац с жирным
+ * текстом (требование 9969e586 п.4), а не клампится к H6. Тот же порог, что у
+ * `renderPublicationFragment`/`renderPublicationMarkdownFragment`.
+ */
+const SECTION_HEADING_MAX_LEVEL = 6;
+
 /** Транслитерация кириллицы для slug (детерминированная, без библиотек). */
 const TRANSLIT: Record<string, string> = {
   а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z',
@@ -145,7 +152,15 @@ function renderMarkdownSection(
 ): string {
   const parts: string[] = [];
   parts.push(`<a id="${section.anchor}"></a>`);
-  parts.push(`${'#'.repeat(section.level + 1)} ${section.heading}`);
+  // За H6 — не решётки (в CommonMark 7+ решёток не заголовок), а абзац с
+  // жирным текстом: то же обезглавливание, что делает renderPublicationFragment
+  // (требование 9969e586 п.4).
+  const headingLevel = section.level + 1;
+  parts.push(
+    headingLevel > SECTION_HEADING_MAX_LEVEL
+      ? `**${section.heading}**`
+      : `${'#'.repeat(headingLevel)} ${section.heading}`,
+  );
   if (section.preamble_md.trim() !== '') {
     parts.push(
       renderPublicationMarkdownFragment(section.preamble_md, {
@@ -229,8 +244,14 @@ function renderToc(nodes: readonly TocNode[]): string {
 /** HTML of one section (recursive over children); anchors are element ids. */
 function renderHtmlSection(section: PublicationExportSection): string {
   const parts: string[] = [`<section id="${escapeHtml(section.anchor)}">`];
-  const level = Math.min(section.level + 1, 6);
-  parts.push(`<h${level}>${escapeHtml(section.heading)}</h${level}>`);
+  // За H6 — абзац `<p><strong>`, а не кламп к H6 (требование 9969e586 п.4) —
+  // ровно как renderPublicationFragment обезглавливает заголовки фрагментов.
+  const headingLevel = section.level + 1;
+  parts.push(
+    headingLevel > SECTION_HEADING_MAX_LEVEL
+      ? `<p><strong>${escapeHtml(section.heading)}</strong></p>`
+      : `<h${headingLevel}>${escapeHtml(section.heading)}</h${headingLevel}>`,
+  );
   if (section.preamble_html.trim() !== '') parts.push(section.preamble_html);
   for (const text of section.texts) {
     parts.push(`<div class="pub-text" id="${escapeHtml(text.anchor)}">${text.body_html}</div>`);
