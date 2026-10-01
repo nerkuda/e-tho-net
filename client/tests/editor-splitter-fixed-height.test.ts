@@ -114,19 +114,23 @@ describe('always-fixed политика сплиттера (bug 4cc6248c, тре
     }
   });
 
-  it('вкладка «Упоминания» использует парную раскладку клампов для обеих групп', () => {
+  it('вкладка «Упоминания» использует общую раскладку клампов для всех групп', () => {
     const src = readText(SRC.links);
     assert.ok(
-      /applyTabGroupClamp\(backlinks,\s*'links\.backlinks'/.test(src),
-      'backlinks group uses applyTabGroupClamp(links.backlinks)',
+      src.includes("'links.backlinks', 'links.text-mentions', 'links.publications'"),
+      'all three flat groups share the relayout',
     );
     assert.ok(
-      /applyTabGroupClamp\(textMentions,\s*'links\.text-mentions'/.test(src),
-      'textMentions group uses applyTabGroupClamp(links.text-mentions)',
+      src.includes('applyTabGroupClamp(group, groupKeys[i]!'),
+      'each group uses applyTabGroupClamp with its own persist key',
     );
     assert.ok(
       /persistKey:\s*'links\.mentions'/.test(src),
       'splitter carries the persistKey for the mentions height',
+    );
+    assert.ok(
+      /persistKey:\s*'links\.publications'/.test(src),
+      'publications splitter carries its own persist key',
     );
   });
 
