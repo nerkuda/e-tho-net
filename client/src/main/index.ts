@@ -16,7 +16,7 @@ import { app, BrowserWindow, powerMonitor, protocol, screen, shell } from 'elect
 import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { CLIENT_META_KEY, type DeepLink } from '@etn/shared';
+import { CLIENT_META_KEY } from '@etn/shared';
 import { LocalDb } from './db/local-db.js';
 import {
   defaultMigrationsDir,
@@ -29,7 +29,7 @@ import {
 import { getOrCreateClientId } from './client-id.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
-import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
+import { dispatchDeepLink, extractDeepLink, type DeepLinkPayload } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
 import {
   loadWindowBounds,
@@ -183,7 +183,7 @@ const THEME_BG: Record<'light' | 'dark', string> = {
  * asynchronously via `app.on('open-url')`. We buffer it here and dispatch
  * once the renderer is ready.
  */
-let pendingDeepLink: DeepLink | null = null;
+let pendingDeepLink: DeepLinkPayload | null = null;
 
 /** Reads the stored L5 theme, defaulting to light. */
 function storedTheme(db: LocalDb): 'light' | 'dark' {

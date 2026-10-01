@@ -24,11 +24,11 @@ import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
-import { focusThoughtOnMap, setActiveView } from '../screens/active-view.js';
+import { focusThoughtOnMap, openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
-import { searchLegacyWikiTarget } from './wiki-link-resolver.js';
+import { searchLegacyWikiTarget, WIKI_LINK_PUB_ATTR } from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
@@ -312,6 +312,15 @@ export function initWikiLinkNavigation(): void {
     // Внутри редактора клик раскрывает исходник блока (M6), а не переходит;
     // снятые со страницы виджеты (клик уже раскрыл блок) тоже пропускаются.
     if (!link.isConnected || link.closest('.cm-editor') !== null) return;
+
+    // Pub-ссылка (0.11.1, задача 3275fd8d, требование 7f583ef9): резолвер
+    // пометил серверную legacy-форму атрибутом `data-wiki-pub` — открываем
+    // публикацию на её экране (deep-link сюда же).
+    const publicationId = link.getAttribute(WIKI_LINK_PUB_ATTR);
+    if (publicationId !== null && publicationId !== '') {
+      void openPublicationInWorkspace(publicationId);
+      return;
+    }
 
     // ID-based form (task R8): прямой lookup по UUID, без FTS-поиска.
     // Кросс-сеть — сначала переключаем активную сеть через openNetwork.

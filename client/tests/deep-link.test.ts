@@ -44,3 +44,22 @@ test('extractDeepLink возвращает null когда URL есть, но UU
 test('extractDeepLink возвращает null для URL другой схемы', () => {
   assert.equal(extractDeepLink(['obsidian://open?vault=x&file=y']), null);
 });
+
+// ---------------------------------------------------------------------------
+// Публикации (0.11.1, задача 3275fd8d, требование 7f583ef9)
+// ---------------------------------------------------------------------------
+
+test('extractDeepLink распознаёт форму публикации etn://open?net=&publication=', () => {
+  const argv = ['C:\\path\\to\\electron.exe', `etn://open?net=${ID_A}&publication=${ID_B}`];
+  assert.deepEqual(extractDeepLink(argv), { networkId: ID_A, publicationId: ID_B });
+});
+
+test('extractDeepLink: форма публикации приоритетна и взаимоисключающа с мыслью', () => {
+  // URL с обоими параметрами невалиден для обеих форм — deep-link нет.
+  assert.equal(extractDeepLink([`etn://open?net=${ID_A}&thought=${ID_B}&publication=${ID_B}`]), null);
+});
+
+test('extractDeepLink: невалидный publication-uuid не даёт deep-link', () => {
+  assert.equal(extractDeepLink([`etn://open?net=${ID_A}&publication=not-a-uuid`]), null);
+});
+

@@ -283,6 +283,15 @@ export interface DeleteLogsResult {
 export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity' | 'publications';
 
 /**
+ * Разобранная цель `etn://open`-deep-link (task R11; публикации — 0.11.1,
+ * задача 3275fd8d, требование 7f583ef9): мысль (`thoughtId`) или публикация
+ * (`publicationId`). Формы взаимоисключающи.
+ */
+export type DeepLinkPayload =
+  | { networkId: string; thoughtId: string }
+  | { networkId: string; publicationId: string };
+
+/**
  * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
  * `focus_id`/`view_mode`/etc. may be `null` while the tab is freshly created.
  */
@@ -1154,10 +1163,12 @@ export interface EtnApi {
   /**
    * Deep-link subscription (task R11, docs/12-wiki-id-refs.md §7.4). The main
    * process pushes `etn://open?net=<id>&thought=<id>` payloads here — cold
-   * start (Win/Linux), `second-instance`, or `open-url` (macOS).
+   * start (Win/Linux), `second-instance`, or `open-url` (macOS). Публикации
+   * (0.11.1, задача 3275fd8d, требование 7f583ef9) несут `publicationId`
+   * вместо `thoughtId` — формы взаимоисключающи.
    */
   deepLink: {
-    onDeepLink(cb: (payload: { networkId: string; thoughtId: string }) => void): () => void;
+    onDeepLink(cb: (payload: DeepLinkPayload) => void): () => void;
   };
   ui: {
     getState(networkId: string, key: string, tabId?: string | null): Promise<string | null>;

@@ -156,3 +156,21 @@ test('substituteWikiIdsInSnippet: legacy [[Имя]] и обрывки не тр�
   const out = substituteWikiIdsInSnippet(source, 'net-a', () => ({ title: 'X', exists: true }));
   assert.equal(out, source);
 });
+
+// ---------------------------------------------------------------------------
+// Публикации (0.11.1, задача 3275fd8d, требование 7f583ef9)
+// ---------------------------------------------------------------------------
+
+test('publicationIdFromTarget: распознаёт серверную legacy-подпись #pub:<uuid>', () => {
+  const { publicationIdFromTarget } = __testing;
+  assert.equal(publicationIdFromTarget(`#pub:${ID_A}`), ID_A.toLowerCase());
+  assert.equal(publicationIdFromTarget(`#pub:${ID_A.toUpperCase()}`), ID_A.toLowerCase());
+});
+
+test('publicationIdFromTarget: не публикация — null', () => {
+  const { publicationIdFromTarget } = __testing;
+  assert.equal(publicationIdFromTarget(`#${ID_A}`), null);
+  assert.equal(publicationIdFromTarget('Имя мысли'), null);
+  assert.equal(publicationIdFromTarget('#pub:not-a-uuid'), null);
+  assert.equal(publicationIdFromTarget(''), null);
+});

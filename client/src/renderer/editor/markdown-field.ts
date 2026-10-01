@@ -15,6 +15,8 @@ import type { MentionsScanThought } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
+import { pickEntitiesModal } from '../lib/entity-picker.js';
+import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -292,18 +294,17 @@ export function createMarkdownField(opts: {
       },
       true,
     );
-    // Контекстное меню: «Вставить текст шаблона из типа мысли»
-    // (08-ui-spec.md §6.4). Пункт появляется только когда тип назначен и
-    // шаблон непустой — тогда нативное контекстное меню редактора не
-    // показывается; иначе пропускаем событие, и пользователь видит
-    // стандартное меню CM6.
+    // Контекстное меню редактора: «Вставить текст шаблона из типа мысли»
+    // (08-ui-spec.md §6.4) и «Вставить ссылку на публикацию…» (0.11.1, задача
+    // 3275fd8d, требование 7f583ef9). Меню показывается, только когда есть
+    // хотя бы один применимый пункт; иначе пропускаем событие, и пользователь
+    // видит стандартное меню CM6.
     editor.dom.addEventListener('contextmenu', (event) => {
-      if (opts.onInsertTemplate === undefined || editor === null) return;
-      const template = opts.onInsertTemplate();
-      if (template === null || template.trim() === '') return;
-      event.preventDefault();
-      const items: MenuItem[] = [
-        {
+      if (editor === null) return;
+      const items: MenuItem[] = [];
+      const template = opts.onInsertTemplate?.() ?? null;
+      if (template !== null && template.trim() !== '') {
+        items.push({
           label: 'Вставить текст шаблона из типа мысли',
           onClick: () => {
             if (editor === null) return;
@@ -314,8 +315,32 @@ export function createMarkdownField(opts: {
               editor.insertAtCaret(template);
             }
           },
+        });
+      }
+      items.push({
+        label: t('publications.link.insert'),
+        onClick: () => {
+          if (editor === null) return;
+          void pickEntitiesModal({
+            networkId,
+            kind: 'publications',
+            title: t('publications.field.pickerTitle'),
+            single: true,
+          }).then((ids) => {
+            const id = ids?.[0];
+            if (id === undefined || editor === null) return;
+            void etn.publications
+              .get(networkId, id)
+              .then((pub) => {
+                if (editor === null) return;
+                editor.insertAtCaret(`[[#pub:${pub.id}|${pub.title}]]`);
+              })
+              .catch(() => undefined);
+          });
         },
-      ];
+      });
+      if (items.length === 0) return;
+      event.preventDefault();
       showMenuAt(event.clientX, event.clientY, items);
     });
     area.replaceChildren(editor.dom);

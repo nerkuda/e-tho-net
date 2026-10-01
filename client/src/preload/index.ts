@@ -12,7 +12,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
+import type { DeepLinkPayload, EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
 import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
@@ -397,13 +397,13 @@ function buildApi(): EtnBridgeApi {
     },
     deepLink: {
       /**
-       * Subscribe to `etn://open?net=<id>&thought=<id>` deep links dispatched
-       * by the main process (task R11). The callback receives the parsed
-       * payload `{ networkId, thoughtId }`.
+       * Subscribe to `etn://open?net=<id>&thought=<id>` (или `…&publication=<id>`)
+       * deep links dispatched by the main process (task R11; публикации — 0.11.1,
+       * задача 3275fd8d). The callback receives the parsed payload.
        */
       onDeepLink(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
-          cb(payload as { networkId: string; thoughtId: string });
+          cb(payload as DeepLinkPayload);
         ipcRenderer.on('etn:deep-link', listener);
         return () => ipcRenderer.removeListener('etn:deep-link', listener);
       },

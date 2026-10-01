@@ -18,13 +18,44 @@
 
 import type { ThoughtRef } from '@etn/shared';
 
-import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR } from '@etn/markdown';
+import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
 
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 
 /** CSS class added to a span whose target thought is missing/deleted. */
 export const CSS_WIKI_LINK_RESOLVED = 'wiki-link-resolved';
+
+/**
+ * Атрибут pub-ссылки (0.11.1, задача 3275fd8d): проставляется резолвером на
+ * серверную legacy-разметку `[[#pub:<uuid>]]` (plain `renderMarkdown` не знает
+ * префикса — ADR 7168009e), чтобы клик открывал публикацию, а не искал мысль
+ * по имени. Парная константа к `WIKI_LINK_ID_ATTR` мыслей.
+ */
+export const WIKI_LINK_PUB_ATTR = 'data-wiki-pub';
+
+/** Публикация в сессионном кеше резолвера. */
+interface PubEntry {
+  title: string;
+  exists: boolean;
+}
+
+/** Сессионный кеш публикаций, ключ `${networkId}:${publicationId}`. */
+const pubCache = new Map<string, PubEntry>();
+
+/** Target серверной legacy-формы pub-ссылки (`#pub:<uuid>`). */
+const PUB_TARGET_RE =
+  /^#pub:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * id публикации из target серверной legacy-подписи (`#pub:<uuid>`), иначе
+ * `null`. Чистая — ключ распознавания префикса клиентским резолвером
+ * (требование 7f583ef9, ADR 7168009e).
+ */
+export function publicationIdFromTarget(target: string): string | null {
+  const match = PUB_TARGET_RE.exec(target.trim());
+  return match === null ? null : match[1]!.toLowerCase();
+}
 
 /** Per-session cache, keyed by `${networkId}:${thoughtId}`. */
 const cache = new Map<string, { title: string; exists: boolean }>();
@@ -165,6 +196,88 @@ async function resolveBatch(networkId: string, ids: string[]): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Публикации (0.11.1, задача 3275fd8d, требование 7f583ef9)
+//
+// Plain `renderMarkdown` не знает префикса `pub:` (ADR 7168009e, тест
+// совместимости `@etn/markdown`), поэтому серверный HTML комментария несёт
+// legacy name-форму: `<span class="wiki-link" data-wiki-target="#pub:<uuid>"
+// data-legacy-link="true">…</span>`. Резолвер РАСПОЗНАЁТ её по target, метит
+// атрибутом {@link WIKI_LINK_PUB_ATTR} (клик открывает публикацию) и
+// подставляет название тем же правилом, что у мыслей: явный алиас побеждает,
+// пустая/сырая подпись заменяется названием, отсутствующая публикация —
+// пометка «удалена».
+// ---------------------------------------------------------------------------
+
+function pubCacheKey(networkId: string, publicationId: string): string {
+  return `${networkId}:${publicationId}`;
+}
+
+/** Span-подпись pub-ссылки + её id (target `#pub:<uuid>`). */
+function pubSpans(root: HTMLElement): Array<{ span: HTMLElement; id: string }> {
+  const out: Array<{ span: HTMLElement; id: string }> = [];
+  const spans = root.querySelectorAll<HTMLElement>(`span.${WIKI_LINK_CLASS}[${WIKI_LINK_TARGET_ATTR}]`);
+  for (const span of spans) {
+    const target = span.getAttribute(WIKI_LINK_TARGET_ATTR);
+    if (target === null) continue;
+    const id = publicationIdFromTarget(target);
+    if (id === null) continue;
+    out.push({ span, id });
+  }
+  return out;
+}
+
+/** Собирает id публикаций, ещё не попавших в кеш. */
+function collectUnresolvedPubs(root: HTMLElement, networkId: string): string[] {
+  const out = new Set<string>();
+  for (const { id } of pubSpans(root)) {
+    if (!pubCache.has(pubCacheKey(networkId, id))) out.add(id);
+  }
+  return [...out];
+}
+
+/**
+ * Разрешить пачку публикаций сети (`GET /publications/{id}`). Ошибка/404 —
+ * запись «не найдена» (метка «удалена», как у мыслей).
+ */
+async function resolvePubBatch(networkId: string, ids: string[]): Promise<void> {
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const pub = await etn.publications.get(networkId, id);
+        pubCache.set(pubCacheKey(networkId, id), { title: pub.title, exists: true });
+      } catch {
+        pubCache.set(pubCacheKey(networkId, id), { title: '', exists: false });
+      }
+    }),
+  );
+}
+
+/**
+ * Разметить pub-ссылки: проставить {@link WIKI_LINK_PUB_ATTR} (клик) и, если
+ * цель разрешена, подставить название/пометку «удалена» теми же правилами,
+ * что у мыслей ({@link wikiSpanPaint}).
+ */
+function paintPubSpans(root: HTMLElement, networkId: string): void {
+  for (const { span, id } of pubSpans(root)) {
+    span.setAttribute(WIKI_LINK_PUB_ATTR, id);
+    // Legacy-действие (контекстное меню «Обновить формат на [[#<id>]]») к
+    // pub-ссылке неприменимо — снимаем маркер.
+    span.removeAttribute('data-legacy-link');
+    const entry = pubCache.get(pubCacheKey(networkId, id));
+    if (entry === undefined) continue;
+    const paint = wikiSpanPaint(span.textContent ?? '', entry, store.state.showInactive);
+    if (paint.text !== null) span.textContent = paint.text;
+    span.classList.toggle('wiki-link-deleted', paint.deleted);
+    if (paint.markResolved) span.classList.add(CSS_WIKI_LINK_RESOLVED);
+  }
+}
+
+/** Синхронная отрисовка pub-ссылок по сессионному кешу. */
+export function paintPublicationLinksInDom(root: HTMLElement, networkId: string): void {
+  paintPubSpans(root, networkId);
+}
+
 /**
  * Pure replacement of ID-form wiki-links in an HTML-escaped snippet with
  * display names. `lookup` provides resolved entries (see {@link getCached});
@@ -246,15 +359,21 @@ export async function resolveWikiIdsInSnippet(snippet: string, defaultNetworkId:
 export async function resolveWikiLinksInDom(root: HTMLElement, networkId: string): Promise<void> {
   // First, paint anything we already know about.
   paintCachedSpans(root, networkId);
+  paintPubSpans(root, networkId);
   // Then collect the rest and fetch.
   const unresolved = collectUnresolved(root, networkId);
-  if (unresolved.size === 0) return;
+  const unresolvedPubs = collectUnresolvedPubs(root, networkId);
+  if (unresolved.size === 0 && unresolvedPubs.length === 0) return;
   const tasks: Promise<void>[] = [];
   for (const [netId, ids] of unresolved) {
     tasks.push(resolveBatch(netId, [...ids]));
   }
+  if (unresolvedPubs.length > 0) {
+    tasks.push(resolvePubBatch(networkId, unresolvedPubs));
+  }
   await Promise.all(tasks);
   paintCachedSpans(root, networkId);
+  paintPubSpans(root, networkId);
 }
 
 /**
@@ -311,4 +430,12 @@ export async function searchLegacyWikiTarget(
 }
 
 /** Test-only hook. */
-export const __testing = { cache, RESOLVE_BATCH, substituteWikiIdsInSnippet, collectSnippetIds, wikiSpanPaint };
+export const __testing = {
+  cache,
+  pubCache,
+  RESOLVE_BATCH,
+  substituteWikiIdsInSnippet,
+  collectSnippetIds,
+  wikiSpanPaint,
+  publicationIdFromTarget,
+};

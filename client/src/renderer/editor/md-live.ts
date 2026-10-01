@@ -168,6 +168,13 @@ export function wikiLabel(source: string): { target: string; label: string } | n
 export function isIdWikiLinkTarget(target: string): boolean {
   if (target.startsWith('#')) {
     const id = target.slice(1).trim();
+    // Публикация (0.11.1, задача 3275fd8d): `[[#pub:<uuid>]]` — префиксная
+    // ID-форма (ADR 7168009e); виджет рисует `wikiIdPlugin`, не live-preview.
+    if (id.startsWith('pub:')) {
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id.slice('pub:'.length).trim(),
+      );
+    }
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
   }
   if (target.startsWith('n:')) {

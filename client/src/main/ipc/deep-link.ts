@@ -12,18 +12,31 @@
 
 import type { BrowserWindow } from 'electron';
 
-import { extractDeepLinkFromArgv, type DeepLink } from '@etn/shared';
+import {
+  extractDeepLinkFromArgv,
+  extractPublicationDeepLinkFromArgv,
+  type DeepLink,
+  type PublicationDeepLink,
+} from '@etn/shared';
 
 /** Channel name listened to by `client/src/renderer/editor/deep-link-handler.ts`. */
 export const DEEP_LINK_CHANNEL = 'etn:deep-link';
 
 /**
+ * Разобранная цель deep-link: мысль (`thoughtId`) или публикация
+ * (`publicationId`, 0.11.1, задача 3275fd8d, требование 7f583ef9). Формы
+ * взаимоисключающи — URL несёт ровно один параметр.
+ */
+export type DeepLinkPayload = DeepLink | PublicationDeepLink;
+
+/**
  * Pull the first `etn://open?…` URL out of an argv-style array. Returns
  * `null` when no valid deep link is present (cold start without one, or
  * launch flags that happen to share the `etn` prefix but aren't our scheme).
+ * Сначала пробуется форма публикации, затем мысли.
  */
-export function extractDeepLink(argv: readonly string[]): DeepLink | null {
-  return extractDeepLinkFromArgv(argv);
+export function extractDeepLink(argv: readonly string[]): DeepLinkPayload | null {
+  return extractPublicationDeepLinkFromArgv(argv) ?? extractDeepLinkFromArgv(argv);
 }
 
 /**
@@ -31,6 +44,6 @@ export function extractDeepLink(argv: readonly string[]): DeepLink | null {
  * is open yet (cold start before `whenReady`), the caller should buffer the
  * payload and replay it after `createWindow` resolves.
  */
-export function dispatchDeepLink(window: BrowserWindow, payload: DeepLink): void {
+export function dispatchDeepLink(window: BrowserWindow, payload: DeepLinkPayload): void {
   window.webContents.send(DEEP_LINK_CHANNEL, payload);
 }

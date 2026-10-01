@@ -15,12 +15,13 @@
  * Wired once from `client/src/renderer/main.ts`.
  */
 
-import type { DeepLink } from '@etn/shared';
+import type { DeepLinkPayload } from '../../main/ipc/contract.js';
 
 import { openNetwork, requireNetworkId, setFocus } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
+import { openPublicationInWorkspace } from '../screens/active-view.js';
 
 let wired = false;
 
@@ -33,7 +34,7 @@ export function initDeepLinkHandler(): void {
   });
 }
 
-async function handleDeepLink(link: DeepLink): Promise<void> {
+async function handleDeepLink(link: DeepLinkPayload): Promise<void> {
   // 1. Switch to the target network if needed.
   const currentNetworkId = safeCurrentNetworkId();
   if (currentNetworkId !== link.networkId) {
@@ -45,7 +46,20 @@ async function handleDeepLink(link: DeepLink): Promise<void> {
     }
   }
 
-  // 2. Try to fetch + open the thought.
+  // 2. Публикация (0.11.1, задача 3275fd8d, требование 7f583ef9): открыть её
+  //    в рабочей области экрана «Публикации».
+  if ('publicationId' in link) {
+    try {
+      await etn.publications.get(link.networkId, link.publicationId);
+    } catch (err) {
+      notice(`Публикация удалена или недоступна: ${errToText(err)}`, 'error');
+      return;
+    }
+    await openPublicationInWorkspace(link.publicationId);
+    return;
+  }
+
+  // 3. Try to fetch + open the thought.
   let thought;
   try {
     thought = await etn.thoughts.get(link.networkId, link.thoughtId);
