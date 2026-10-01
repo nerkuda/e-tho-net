@@ -36,6 +36,10 @@ const CYRILLIC_LITERAL = /['"`][^'"`\n]*[А-Яа-яЁё][^'"`\n]*['"`]/;
 /** Файлы, где пользовательских литералов быть не должно вовсе. */
 const TRANSLATED_FILES = (rel: string): boolean =>
   rel.startsWith('lib/ui/') ||
+  // Подсистема «Публикации» (0.11.1, задача a3cfc018, замечание проверки):
+  // строки экрана и карточки — только из словаря.
+  rel.startsWith('screens/publications/') ||
+  rel === 'editor/publication-card.ts' ||
   rel === 'lib/dialog.ts' ||
   rel === 'lib/i18n.ts' ||
   rel === 'lib/lang.ts';

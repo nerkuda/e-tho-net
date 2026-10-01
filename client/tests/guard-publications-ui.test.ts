@@ -130,4 +130,48 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       'library screen must not rebuild collections with replaceChildren',
     );
   });
+
+  it('вид «список» построен на фасаде таблиц, а не на самодельных div-строках', () => {
+    assertGuardClean(
+      RENDERER_ROOT,
+      [
+        {
+          name: 'no-custom-list-row-classes',
+          description:
+            'Списочные строки в модулях «Публикаций» собираются фасадом таблиц ' +
+            '`lib/ui/table.ts` (правило каталога lib/ui п.3/п.10, требование 93115633): ' +
+            'самодельные классы строк (`pub-row*`) запрещены.',
+          pattern: /\bpub-row/,
+          include: PUBLICATIONS_SCOPE,
+          allow: (_rel, line) => isCommentLine(line),
+        },
+      ],
+    );
+    const source = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'publications', 'publications.ts'),
+      'utf8',
+    );
+    assert.ok(
+      source.includes('createTable'),
+      'вид «список» обязан строиться фасадом createTable (lib/ui/table.ts)',
+    );
+  });
+
+  it('карточку публикации импортирует только общая панель редактора (ADR eb687eea)', () => {
+    assertGuardClean(
+      RENDERER_ROOT,
+      [
+        {
+          name: 'publication-card-only-from-editor',
+          description:
+            'Карточка публикации — третий EditorTarget общей панели: её модуль ' +
+            '`editor/publication-card.ts` импортирует только `editor/editor.ts` ' +
+            '(ADR eb687eea запрещает отдельный хост/панель карточки).',
+          filePattern: /(?:from\s+|import\s*\(\s*)['"][^'"]*publication-card(?:\.js)?['"]/,
+          allow: (rel) =>
+            rel === 'editor/editor.ts' || rel.endsWith('editor/publication-card.ts'),
+        },
+      ],
+    );
+  });
 });

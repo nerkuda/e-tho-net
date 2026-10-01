@@ -81,7 +81,7 @@
 }
 
 .pub-shelf-head.pub-drop,
-.pub-row-group.pub-drop {
+.pub-list-head.pub-drop {
   background: var(--accent-soft, var(--surface-alt, var(--surface)));
   outline: 1px dashed var(--accent);
 }
@@ -108,8 +108,7 @@
   border-color: var(--accent);
 }
 
-.pub-card.pub-inactive,
-.pub-row.pub-inactive {
+.pub-card.pub-inactive {
   opacity: var(--state-disabled-opacity);
 }
 
@@ -124,16 +123,14 @@
   min-width: 0;
 }
 
-.pub-card-title,
-.pub-row-title {
+.pub-card-title {
   font-weight: var(--font-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pub-card-subtitle,
-.pub-row-subtitle {
+.pub-card-subtitle {
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -141,9 +138,7 @@
 }
 
 .pub-card-author,
-.pub-card-date,
-.pub-row-author,
-.pub-row-date {
+.pub-card-date {
   color: var(--text-dim);
   font-size: var(--font-size-3xs);
 }
@@ -196,43 +191,37 @@
 .pub-list {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
 }
 
-.pub-row-group {
+/* Группа списка: полка-заголовок + таблица строк внутри (единый фасад table). */
+.pub-list-section {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+}
+
+.pub-list-head {
+  justify-content: flex-start;
   gap: var(--space-2);
-  padding: var(--space-2);
   font-weight: var(--font-weight-semibold);
   color: var(--text-dim);
-  border-bottom: 1px solid var(--border);
 }
 
-.pub-row-group-collapsible {
-  cursor: pointer;
-}
-
-.pub-row-group-collapsed {
-  color: var(--text-dim);
-}
-
-.pub-row-group-count {
+.pub-list-count {
   color: var(--text-dim);
   font-size: var(--font-size-3xs);
 }
 
-.pub-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto auto;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2);
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
+.pub-list-collapsed .pub-list-head .icon {
+  transform: rotate(-90deg);
 }
 
-.pub-row:hover {
-  background: var(--surface-alt, var(--surface));
+.pub-list-collapsed .pub-list-table {
+  display: none;
+}
+
+.pub-list-table {
+  min-width: 0;
 }
 
 .pub-state {
@@ -314,6 +303,18 @@
 
 .pub-card-empty {
   color: var(--text-dim);
+}
+
+.pub-card-shelf-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pub-card-shelf-order {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
 }
 
 .pub-cover-list {

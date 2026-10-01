@@ -147,6 +147,7 @@ import {
   type LockHandle,
 } from '../lib/lock-guard.js';
 import { disposePublicationCard, showPublicationTarget } from './publication-card.js';
+import { t } from '../lib/i18n.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -1434,7 +1435,7 @@ async function render(): Promise<void> {
       lastPublicationSignature = pubSignature;
       emptyChildren(scrollBox);
     }
-    titleEl.textContent = 'Публикация';
+    titleEl.textContent = t('publication.card.title');
     showPublicationTarget(
       { scrollBox },
       pubTarget.id,

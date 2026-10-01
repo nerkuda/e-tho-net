@@ -19,14 +19,21 @@ import type { Attachment, Publication, PublicationUpdateInput, Shelf } from '@et
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { div, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
+import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { showDialog, errorDialog } from '../lib/dialog.js';
-import { uiButton } from '../lib/ui/button.js';
+import { uiButton, iconButton } from '../lib/ui/button.js';
 import { uiTabs } from '../lib/ui/tabs.js';
 import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { fieldError } from '../lib/ui/messages.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
-import { chipList } from '../lib/ui/chip-list.js';
 import { createTable } from '../lib/ui/table.js';
+import {
+  buildEntityChipField,
+  filterEntityOptions,
+  type EntityChipField,
+  type EntityOption,
+} from '../lib/entity-picker.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { store } from '../state.js';
 import { buildCover } from '../screens/publications/cover.js';
@@ -36,11 +43,11 @@ import {
 } from '../screens/publications/model.js';
 import {
   buildRecipeBuilder,
-  linkPropertyChoices,
   loadPropertyRegistry,
+  loadPropertyRows,
+  propertyEntityOptions,
   type RecipeBuilder,
 } from '../screens/publications/recipe.js';
-import type { NetworkProperty } from '@etn/shared';
 import * as users from '../lib/users.js';
 
 /** Что редактор передаёт карточке для отрисовки. */
@@ -63,6 +70,8 @@ let saveTimer: number | null = null;
 let pendingChanges: PublicationUpdateInput = {};
 let suppressFieldEvents = false;
 let coverPreview: HTMLElement | null = null;
+/** Хост чекбоксов полок текущей карточки (для перерисовки после перестановки). */
+let shelvesHostRef: HTMLElement | null = null;
 const updaters: Array<(publication: Publication) => void> = [];
 
 /** Сброс карточки при пересборке рабочего пространства. */
@@ -75,6 +84,7 @@ export function disposePublicationCard(): void {
   saveTimer = null;
   pendingChanges = {};
   updaters.length = 0;
+  shelvesHostRef = null;
 }
 
 /**
@@ -206,7 +216,7 @@ function buildMetaPane(): HTMLElement {
   );
 
   const authorInput = fieldInput({ id: 'pub-card-author' });
-  authorInput.placeholder = t('publication.field.author');
+  authorInput.placeholder = t('publication.field.authorPlaceholder');
   authorInput.addEventListener('input', () => queueSave({ authorship: emptyToNull(authorInput.value) }));
   pane.append(
     fieldRow({ label: t('publication.field.author'), control: authorInput, id: 'pub-card-author' }),
@@ -286,10 +296,27 @@ function buildRecipePane(): HTMLElement {
   let lastRecipeKey = '';
 
   const textsHost = div('pub-card-texts');
-  pane.append(fieldRow({ label: t('publication.field.texts'), control: textsHost, id: 'pub-card-texts' }));
+  const textsError = fieldError('');
+  textsError.classList.add('hidden');
+  const textsFieldRow = fieldRow({
+    label: t('publication.field.texts'),
+    control: textsHost,
+    id: 'pub-card-texts',
+    error: textsError,
+  });
+  pane.append(textsFieldRow);
 
   const extrasHost = div('pub-card-extras');
-  pane.append(fieldRow({ label: t('publication.field.extras'), control: extrasHost, id: 'pub-card-extras' }));
+  const extrasError = fieldError('');
+  extrasError.classList.add('hidden');
+  pane.append(
+    fieldRow({
+      label: t('publication.field.extras'),
+      control: extrasHost,
+      id: 'pub-card-extras',
+      error: extrasError,
+    }),
+  );
 
   const numberRow = div('pub-card-numbering');
   const fromInput = fieldInput({ type: 'number', min: 1, id: 'pub-card-num-from' });
@@ -310,57 +337,59 @@ function buildRecipePane(): HTMLElement {
   pane.append(numberRow);
 
   const networkId = store.state.networkId;
-  let registry: Map<string, NetworkProperty> | null = null;
+  let registry: Map<string, import('@etn/shared').NetworkProperty> | null = null;
   let textSources: string[] = [];
   let extraProperties: string[] = [];
-  let textsField: ReturnType<typeof chipList> | null = null;
-  let extrasField: ReturnType<typeof chipList> | null = null;
+  let textsField: EntityChipField | null = null;
+  let extrasField: EntityChipField | null = null;
+
+  /** Пересечение источников текстов и доп. материалов — ошибка настройки. */
+  const checkOverlap = (): void => {
+    const shared = textSources.filter((id) => extraProperties.includes(id));
+    const invalid = shared.length > 0;
+    const message = invalid ? t('publication.recipe.overlap') : '';
+    textsError.textContent = message;
+    extrasError.textContent = message;
+    textsError.classList.toggle('hidden', !invalid);
+    extrasError.classList.toggle('hidden', !invalid);
+  };
 
   if (networkId !== null) {
-    void loadPropertyRegistry(networkId).then((loaded) => {
-      registry = loaded;
-      const choices = linkPropertyChoices(loaded);
-      const byId = new Map(choices.map((c) => [c.id, c.name]));
-      const options = (selected: string[]) =>
-        choices.filter((c) => !selected.includes(c.id)).map((c) => ({ value: c.id, label: c.name }));
-      textsField = chipList({
-        getValues: () => textSources,
-        labelOf: (value) => byId.get(value) ?? value,
-        onRemove: (value) => {
-          textSources = textSources.filter((id) => id !== value);
-          queueSave({ text_sources: textSources });
-        },
-        getOptions: () => options(textSources),
-        onAdd: (value) => {
-          if (value !== '' && !textSources.includes(value)) {
-            textSources = [...textSources, value];
+    void Promise.all([loadPropertyRows(networkId), loadPropertyRegistry(networkId)]).then(
+      ([rows, loadedRegistry]) => {
+        registry = loadedRegistry;
+        const choices: EntityOption[] = propertyEntityOptions(rows);
+        textsField = buildEntityChipField({
+          getValues: () => textSources,
+          onChange: (values) => {
+            textSources = values;
+            checkOverlap();
             queueSave({ text_sources: textSources });
-          }
-        },
-        addPlaceholder: 'Добавить свойство…',
-        emptyText: t('publication.field.texts'),
-      });
-      extrasField = chipList({
-        getValues: () => extraProperties,
-        labelOf: (value) => byId.get(value) ?? value,
-        onRemove: (value) => {
-          extraProperties = extraProperties.filter((id) => id !== value);
-          queueSave({ extra_properties: extraProperties });
-        },
-        getOptions: () => options(extraProperties),
-        onAdd: (value) => {
-          if (value !== '' && !extraProperties.includes(value)) {
-            extraProperties = [...extraProperties, value];
+          },
+          loadOptions: (query) => filterEntityOptions(choices, query),
+          optionsHeader: t('publication.field.texts'),
+          placeholder: t('typeEditor.addProperty'),
+          addPlaceholder: t('typeEditor.addProperty'),
+          reorderable: true,
+        });
+        extrasField = buildEntityChipField({
+          getValues: () => extraProperties,
+          onChange: (values) => {
+            extraProperties = values;
+            checkOverlap();
             queueSave({ extra_properties: extraProperties });
-          }
-        },
-        addPlaceholder: 'Добавить свойство…',
-        emptyText: t('publication.field.extras'),
-      });
-      textsHost.append(textsField.root);
-      extrasHost.append(extrasField.root);
-      if (instance?.publication != null) apply(instance.publication);
-    });
+          },
+          loadOptions: (query) => filterEntityOptions(choices, query),
+          optionsHeader: t('publication.field.extras'),
+          placeholder: t('typeEditor.addProperty'),
+          addPlaceholder: t('typeEditor.addProperty'),
+          reorderable: true,
+        });
+        textsHost.append(textsField.root);
+        extrasHost.append(extrasField.root);
+        if (instance?.publication != null) apply(instance.publication);
+      },
+    );
   }
 
   updaters.push((p) => {
@@ -370,6 +399,7 @@ function buildRecipePane(): HTMLElement {
     extraProperties = [...p.extra_properties];
     textsField?.refresh();
     extrasField?.refresh();
+    checkOverlap();
     const recipeKey = JSON.stringify(p.title_recipe ?? null);
     if (registry !== null && (builder === null || recipeKey !== lastRecipeKey)) {
       lastRecipeKey = recipeKey;
@@ -394,6 +424,7 @@ function intOrNull(value: string): number | null {
 function buildShelvesPane(): HTMLElement {
   const pane = div('pub-card-pane form-stack');
   const shelvesHost = div('pub-card-shelves');
+  shelvesHostRef = shelvesHost;
   pane.append(fieldRow({ label: t('publication.shelves'), control: shelvesHost, id: 'pub-card-shelves' }));
   const activeRow = checkboxRow({ label: t('publication.inactive') });
   activeRow.input.addEventListener('change', () =>
@@ -436,13 +467,62 @@ function renderShelfCheckboxes(host: HTMLElement, publicationId?: string): void 
     return;
   }
   for (const shelf of allShelvesCache) {
-    const on = shelf.items.some((item) => item.publication_id === id);
+    const ordered = [...shelf.items].sort((a, b) => a.position - b.position);
+    const index = ordered.findIndex((item) => item.publication_id === id);
+    const on = index !== -1;
     const row = checkboxRow({ label: shelf.title, checked: on });
     row.input.addEventListener('change', () => {
       if (id === '') return;
       void toggleShelfMembership(id, shelf.id, row.input.checked);
     });
-    host.append(row.row);
+    const line = div('pub-card-shelf-row');
+    line.append(row.row);
+    // Порядок публикации внутри полки (c3e44cab, «Полки и статус»): стрелки
+    // меняют позицию, когда публикация на полке.
+    if (on) {
+      const up = iconButton({
+        icon: svgIcon('chevrons-up', 14),
+        title: t('publication.orderUp'),
+        role: 'ghost',
+        disabled: index === 0,
+        onClick: () => void moveWithinShelf(shelf.id, id, -1),
+      });
+      const down = iconButton({
+        icon: svgIcon('chevrons-down', 14),
+        title: t('publication.orderDown'),
+        role: 'ghost',
+        disabled: index === ordered.length - 1,
+        onClick: () => void moveWithinShelf(shelf.id, id, 1),
+      });
+      const controls = div('pub-card-shelf-order');
+      controls.append(up, down);
+      line.append(controls);
+    }
+    host.append(line);
+  }
+}
+
+/**
+ * Меняет порядок публикации внутри полки на одну позицию. Отдельного эндпоинта
+ * перестановки состава у полок нет — позиция задаётся повторной укладкой
+ * (`addShelfItem` с позицией соседа, сервер обновляет вхождение).
+ */
+async function moveWithinShelf(shelfId: string, publicationId: string, direction: -1 | 1): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const shelf = allShelvesCache.find((s) => s.id === shelfId);
+  if (shelf === undefined) return;
+  const ordered = [...shelf.items].sort((a, b) => a.position - b.position);
+  const index = ordered.findIndex((item) => item.publication_id === publicationId);
+  const swap = index + direction;
+  if (index === -1 || swap < 0 || swap >= ordered.length) return;
+  const targetPosition = ordered[swap]!.position;
+  try {
+    await etn.publications.addShelfItem(networkId, shelfId, publicationId, targetPosition);
+    allShelvesCache = await loadShelves();
+    if (shelvesHostRef !== null) renderShelfCheckboxes(shelvesHostRef, publicationId);
+  } catch (err) {
+    errorDialog(t('publication.error'), err);
   }
 }
 

@@ -4,9 +4,14 @@
  *
  * Переиспользует ЕДИНЫЙ конструктор условий клиента: модель состояния —
  * `FilterCriteriaState` (`lib/filter-builder.ts`), вид элементов — общий каркас
- * формы (`lib/filter-form.ts`), конвертация в wire — `buildWireFilter`. Своих
- * моделей и элементов отбора модуль не заводит (стандарт S4). Применяется в
- * двух местах: шаг 2 мастера создания и вкладка «Рецепты» карточки публикации.
+ * формы (`lib/form.ts`), конвертация в wire — `buildWireFilter`. Своих моделей
+ * и элементов отбора модуль не заводит (стандарт S4). Применяется в двух
+ * местах: шаг 2 мастера создания и вкладка «Рецепты» карточки публикации.
+ *
+ * Свойства-источники текстов и «дополнительных материалов» собираются общим
+ * пикером сущностей (`buildEntityChipField` + `linkPropertyEntityOptions`) —
+ * по образцу остальных полей выбора свойств; порядок значений меняется
+ * перетаскиванием чипов (`reorderable`).
  */
 
 import type { NetworkProperty, SavedFilterDefinition } from '@etn/shared';
@@ -27,8 +32,19 @@ import {
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
-import { filterEntityOptions, thoughtTypeEntityOptions } from '../../lib/entity-picker.js';
+import {
+  filterEntityOptions,
+  linkPropertyEntityOptions,
+  thoughtTypeEntityOptions,
+  type EntityOption,
+} from '../../lib/entity-picker.js';
+import {
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  type PropertyRegistryRow,
+} from '../../lib/property-list.js';
 import { etn } from '../../lib/etn.js';
+import { t } from '../../lib/i18n.js';
 import { store } from '../../state.js';
 
 /** Построитель рецепта заголовков. */
@@ -39,6 +55,13 @@ export interface RecipeBuilder {
   getDefinition: () => SavedFilterDefinition;
 }
 
+/** Реестр свойств сети в виде строк общего списка (для пикера свойств). */
+export async function loadPropertyRows(networkId: string): Promise<PropertyRegistryRow[]> {
+  const registry = await etn.propertyRegistry.list(networkId).catch(() => []);
+  await ensurePropertyLinkTypes(networkId, registry).catch(() => undefined);
+  return registry;
+}
+
 /**
  * Загружает реестр свойств сети как карту `id → строка реестра` с обратными
  * сторонами связей — так же, как панель «Структур» (общий конвертер ожидает
@@ -47,11 +70,37 @@ export interface RecipeBuilder {
 export async function loadPropertyRegistry(
   networkId: string,
 ): Promise<Map<string, NetworkProperty>> {
-  const list = await etn.propertyRegistry.list(networkId).catch(() => []);
+  const list = await loadPropertyRows(networkId);
   const base = new Map<string, NetworkProperty>(
     list.map((row): [string, NetworkProperty] => [row.id, row]),
   );
   return withReverseLinkPropertySides(base, store.state.linkTypes);
+}
+
+/**
+ * Варианты свойств-связей для чип-поля: общий конструктор вариантов
+ * (`linkPropertyEntityOptions`), приведённый к id реестрового свойства (сервер
+ * адресует источники текстов именно id, а не строкой стороны), плюс системные
+ * «Родители»/«Потомки» (они пропускаются общим конструктором как структурные).
+ */
+export function propertyEntityOptions(rows: readonly PropertyRegistryRow[]): EntityOption[] {
+  const listRows = buildPropertyListRows(rows, store.state.linkTypes);
+  const options = linkPropertyEntityOptions(listRows).map((option) => ({
+    ...option,
+    id: option.linkProperty?.propertyId ?? option.id,
+  }));
+  const seen = new Set(options.map((option) => option.id));
+  for (const row of listRows) {
+    if (!row.structural || row.valueType !== 'link' || seen.has(row.propertyId)) continue;
+    seen.add(row.propertyId);
+    options.push({
+      id: row.propertyId,
+      title: row.name,
+      selectable: true,
+      linkProperty: { propertyId: row.propertyId, side: row.side ?? 'source', key: row.name },
+    });
+  }
+  return options;
 }
 
 /** Строит форму рецепта заголовков по сохранённому определению (или пустую). */
@@ -69,8 +118,6 @@ export function buildRecipeBuilder(opts: {
     for (const section of sections) section.refresh();
   };
   const ctx: FilterFormContext = {
-    // networkId в секциях не используется для сети (только для подсказок), но
-    // тип требует строку — берём открытую сеть.
     networkId: store.state.networkId ?? '',
     getState: () => state,
     registry: opts.registry,
@@ -79,30 +126,26 @@ export function buildRecipeBuilder(opts: {
 
   sections.push(
     buildKeywordsSection(ctx, {
-      placeholder: 'счет* -вод*',
-      tooltip: 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
+      placeholder: t('publication.recipe.keywordsPlaceholder'),
+      tooltip: t('publication.recipe.keywordsTooltip'),
       showScope: true,
     }),
   );
   sections.push(
     buildEntityChipSection(ctx, {
-      title: 'Типы мыслей',
+      title: t('publication.recipe.types'),
       getValues: () => state.typeIds,
       setValues: (values) => {
         state.typeIds = values;
       },
       loadOptions: (query) =>
         filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
-      optionsHeader: 'Типы мыслей',
-      placeholder: 'Название типа…',
+      optionsHeader: t('publication.recipe.types'),
+      placeholder: t('publication.recipe.typesPlaceholder'),
     }),
   );
   sections.push(
-    buildConditionsSection(
-      ctx,
-      { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) },
-      {},
-    ),
+    buildConditionsSection(ctx, { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) }, {}),
   );
   sections.push(
     buildExtrasSection(ctx, { get: () => extrasCollapsed, set: (v) => (extrasCollapsed = v) }),
@@ -114,31 +157,4 @@ export function buildRecipeBuilder(opts: {
     getDefinition: () =>
       buildWireFilter(state, opts.registry, { activeMode: 'view' }) as SavedFilterDefinition,
   };
-}
-
-/** Пара «id → подпись» свойства-связи для чип-листов источников текстов. */
-export interface PropertyChoice {
-  id: string;
-  name: string;
-}
-
-/**
- * Свойства-связи реестра (в том числе структурные «Родители»/«Потомки») —
- * кандидаты для рецепта текстов и блока «дополнительные материалы».
- */
-export function linkPropertyChoices(
-  registry: ReadonlyMap<string, NetworkProperty>,
-): PropertyChoice[] {
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const seen = new Set<string>();
-  const out: PropertyChoice[] = [];
-  for (const row of registry.values()) {
-    if (row.value_type !== 'link') continue;
-    // Обратные стороны связей в карте — псевдо-id (имя свойства), не id
-    // реестра; сервер адресует источники текстов реальными id.
-    if (!UUID_RE.test(row.id) || seen.has(row.id)) continue;
-    seen.add(row.id);
-    out.push({ id: row.id, name: row.name });
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }

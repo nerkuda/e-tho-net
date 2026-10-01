@@ -400,3 +400,13 @@
 .mini-graph-hint {
   font-size: 11px;
 }
+
+/* DnD-подсветка чипов поля выбора сущностей (lib/entity-picker.ts, 0.11.1):
+ * перетаскивание меняет порядок значений (reorderable). */
+.entity-chip-drag {
+  opacity: 0.5;
+}
+.entity-chip-drop {
+  outline: 1px dashed var(--accent);
+  border-radius: var(--radius-s);
+}

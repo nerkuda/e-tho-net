@@ -730,6 +730,20 @@ export const ru = {
   'publication.field.title': 'Название',
   'publication.field.subtitle': 'Подзаголовок',
   'publication.field.author': 'Автор',
+  /** Placeholder автора: пустое авторство показывается создателем (c3e44cab). */
+  'publication.field.authorPlaceholder': 'создатель',
+  /** Ошибка настройки рецепта: свойство и в текстах, и в доп. материалах. */
+  'publication.recipe.overlap':
+    'Свойство не может быть одновременно источником текстов и дополнительным материалом.',
+  /** Управление порядком публикации внутри полки (вкладка «Полки и статус»). */
+  'publication.orderUp': 'Переместить выше',
+  'publication.orderDown': 'Переместить ниже',
+  /** Рецепт заголовков: ключевые слова. */
+  'publication.recipe.keywordsPlaceholder': 'счет* -вод*',
+  'publication.recipe.keywordsTooltip':
+    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
+  'publication.recipe.types': 'Типы мыслей',
+  'publication.recipe.typesPlaceholder': 'Название типа…',
   'publication.field.summary': 'Резюме',
   'publication.field.cover': 'Обложка',
   'publication.field.assembly': 'Дата сборки',

@@ -876,6 +876,30 @@ export async function pickEntitiesModal(
 // ---------------------------------------------------------------------------
 
 /** Параметры {@link buildEntityChipField}. */
+/**
+ * Перемещение значения `moved` ПЕРЕД значением `before` в списке выбранных
+ * (0.11.1, задача a3cfc018): чистая логика drag-переупорядочения чип-поля
+ * ({@link EntityChipFieldOptions.reorderable}). `moved` отсутствует во входе
+ * или совпадает с `before` — порядок не меняется; `before` не найден (брошено
+ * на пустое место/за пределы) — `moved` уходит в конец. Возвращается НОВЫЙ
+ * массив.
+ */
+export function reorderValues(
+  values: readonly string[],
+  moved: string,
+  before: string | null,
+): string[] {
+  if (!values.includes(moved) || before === moved) return [...values];
+  const without = values.filter((value) => value !== moved);
+  if (before === null) return [...without, moved];
+  const index = without.indexOf(before);
+  if (index === -1) return [...without, moved];
+  const out = [...without];
+  out.splice(index, 0, moved);
+  return out;
+}
+
+/** Опции чип-поля множественного выбора сущностей. */
 export interface EntityChipFieldOptions {
   /** Текущие значения (id сущностей или `$`-токены) — читаются при отрисовке. */
   getValues: () => string[];
@@ -907,6 +931,13 @@ export interface EntityChipFieldOptions {
    * («Название мысли…»), есть значения — `addPlaceholder` («+ ещё одну мысль»).
    */
   addPlaceholder?: string;
+  /**
+   * Перетаскивание чипов меняет ПОРЯДОК значений (0.11.1, задача a3cfc018:
+   * «порядок перетаскиванием» в рецептах публикации). При `true` каждый чип —
+   * источник DnD: брошенный на другой чип, перемещается перед ним; `onChange`
+   * получает переупорядоченный массив. По умолчанию порядок не меняется.
+   */
+  reorderable?: boolean;
   /** Начальное состояние «поле недоступно» (поле ввода и кнопка пикера). */
   disabled?: boolean;
 }
@@ -991,6 +1022,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
 
   /** Заблокировано ли поле (выключатель зоны настроек поиска, задача a3247f84). */
   let disabled = opts.disabled === true;
+  /** Значение чипа, который сейчас тащат (drag-переупорядочение). */
+  let dragValue: string | null = null;
   /** Угловая кнопка «…» — создаётся ниже, если пикер задан. */
   let pickBtn: HTMLButtonElement | null = null;
   /** Угловая кнопка «✕» — очистка всего значения. */
@@ -1049,20 +1082,22 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     const chips: HTMLElement[] = [];
     for (const value of opts.getValues()) {
       const cloud = opts.cloudOf?.(value) ?? byId.get(value)?.cloud ?? { id: value, title: value };
-      chips.push(
-        createThoughtCloud(cloud, {
-          profile: 'chip',
-          width: 'container',
-          actions: disabled
-            ? {}
-            : {
-                onRemove: () => {
-                  opts.onChange(opts.getValues().filter((v) => v !== value));
-                  renderChips();
-                },
+      const chip = createThoughtCloud(cloud, {
+        profile: 'chip',
+        width: 'container',
+        actions: disabled
+          ? {}
+          : {
+              onRemove: () => {
+                opts.onChange(opts.getValues().filter((v) => v !== value));
+                renderChips();
               },
-        }),
-      );
+            },
+      });
+      if (opts.reorderable === true && !disabled) {
+        wireChipReorder(chip, value);
+      }
+      chips.push(chip);
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
     field.replaceChildren(...chips, input);
@@ -1075,6 +1110,43 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     // Перерисовку может затеять и вызывающий (асинхронная догрузка каталога) —
     // его фокус не перехватываем, возвращаем только потерянный здесь.
     restoreKeyboardFocus(input, hadFocus, false);
+  }
+
+  /**
+   * DnD одного чипа (при `reorderable`): брошенный на другой чип, перемещается
+   * перед ним; переупорядоченный набор уходит в `onChange`. Порядок значений —
+   * порядок чипов; перерисовка сохраняет его.
+   */
+  function wireChipReorder(chip: HTMLElement, value: string): void {
+    chip.draggable = true;
+    chip.dataset['chipValue'] = value;
+    chip.addEventListener('dragstart', (ev) => {
+      dragValue = value;
+      chip.classList.add('entity-chip-drag');
+      if (ev.dataTransfer !== null) {
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', value);
+      }
+    });
+    chip.addEventListener('dragend', () => {
+      chip.classList.remove('entity-chip-drag');
+      dragValue = null;
+    });
+    chip.addEventListener('dragover', (ev) => {
+      if (dragValue === null || dragValue === value) return;
+      ev.preventDefault();
+      chip.classList.add('entity-chip-drop');
+    });
+    chip.addEventListener('dragleave', () => chip.classList.remove('entity-chip-drop'));
+    chip.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      chip.classList.remove('entity-chip-drop');
+      const moved = dragValue ?? ev.dataTransfer?.getData('text/plain') ?? '';
+      dragValue = null;
+      if (moved === '' || moved === value) return;
+      opts.onChange(reorderValues(opts.getValues(), moved, value));
+      renderChips();
+    });
   }
 
   /** Приводит поле ввода, кнопку пикера и рамку к состоянию `disabled`. */

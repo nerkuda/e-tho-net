@@ -31,13 +31,21 @@ import { t, type MessageKey } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
 import { svgIcon } from '../../lib/icons.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
-import { MENU_SEPARATOR, menuAction, menuChoice, menuSubmenu, showMenuAt } from '../../lib/menu.js';
+import {
+  MENU_SEPARATOR,
+  menuAction,
+  menuChoice,
+  menuSubmenu,
+  showMenuAt,
+  type MenuItem,
+} from '../../lib/menu.js';
 import { uiButton, iconButton } from '../../lib/ui/button.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { segmentedControl } from '../../lib/ui/segmented.js';
 import { badge, setBadgeText } from '../../lib/ui/badge.js';
 import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
+import { createTable, type TableHandle } from '../../lib/ui/table.js';
 import { store } from '../../state.js';
 import * as users from '../../lib/users.js';
 import { buildCover } from './cover.js';
@@ -140,6 +148,8 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     reloadTimer = null;
     searchTimer = null;
+    for (const handle of tableHandles.values()) handle.destroy();
+    tableHandles.clear();
     ui = null;
     initializedNetworkId = null;
   };
@@ -678,135 +688,183 @@ function wireCardEvents(card: HTMLElement, publication: Publication): void {
   });
 }
 
-// --- Список (строки, полки-группы) -----------------------------------------
+// --- Список (полки-группы на фасаде таблиц) --------------------------------
 
-interface ListRow {
-  kind: 'group' | 'pub';
-  key: string;
+/**
+ * Группа списка: полка и её строки. Секция — раскрываемая (кроме «Без полки»),
+ * строки внутри — таблица единого фасада `lib/ui/table.ts` (правило каталога
+ * lib/ui п.3/п.10, требование 93115633). Самодельных списочных div-строк нет.
+ */
+interface ListGroup {
+  id: string;
   shelfId: string | null;
-  title?: string;
-  count?: number;
-  publication?: Publication;
+  title: string;
+  count: number;
+  rows: Publication[];
 }
+
+/** Живые таблицы групп по id: переиспользуются при сверке, снимаются при уходе. */
+const tableHandles = new Map<string, TableHandle<Publication>>();
 
 function renderList(): void {
   if (ui === null) return;
   const grouped = groupByShelves(publications, shelves);
-  const rows: ListRow[] = [];
+  const groups: ListGroup[] = [];
   const seen = new Set<string>();
-  const pushGroup = (shelfId: string | null, title: string, count: number, items: Publication[]): void => {
+  const pushGroup = (
+    shelfId: string | null,
+    title: string,
+    items: Publication[],
+  ): void => {
+    const id = shelfId ?? '__unshelved__';
     const expanded = shelfId === null || expandedShelves.has(shelfId);
-    rows.push({ kind: 'group', key: `g:${shelfId ?? '__unshelved__'}`, shelfId, title, count });
-    if (!expanded) return;
-    for (const publication of items) {
-      if (seen.has(publication.id)) continue;
-      seen.add(publication.id);
-      rows.push({ kind: 'pub', key: `p:${shelfId ?? 'u'}:${publication.id}`, shelfId, publication });
+    const rows: Publication[] = [];
+    if (expanded) {
+      for (const publication of items) {
+        if (seen.has(publication.id)) continue;
+        seen.add(publication.id);
+        rows.push(publication);
+      }
     }
+    groups.push({ id, shelfId, title, count: items.length, rows });
   };
   for (const { shelf, items } of grouped.byShelf) {
     if (items.length === 0) continue;
-    pushGroup(shelf.id, shelf.title, items.length, items);
+    pushGroup(shelf.id, shelf.title, items);
   }
   if (grouped.unshelved.length > 0) {
-    pushGroup(null, t('publications.shelf.none'), grouped.unshelved.length, grouped.unshelved);
+    pushGroup(null, t('publications.shelf.none'), grouped.unshelved);
   }
-  reconcileKeyed(ui.listHost, rows, {
-    key: (row) => row.key,
-    build: (row) => buildRow(row),
-    update: (node, row) => updateRow(node, row),
+  const liveIds = new Set(groups.map((g) => g.id));
+  for (const [id, handle] of tableHandles) {
+    if (!liveIds.has(id)) {
+      handle.destroy();
+      tableHandles.delete(id);
+    }
+  }
+  reconcileKeyed(ui.listHost, groups, {
+    key: (group) => group.id,
+    build: (group) => buildListGroup(group),
+    update: (node, group) => updateListGroup(node, group),
     equals: (a, b) =>
-      a.kind === b.kind &&
-      a.key === b.key &&
       a.title === b.title &&
       a.count === b.count &&
-      (a.publication?.version ?? '') === (b.publication?.version ?? '') &&
-      a.publication?.title === b.publication?.title &&
-      a.publication?.active === b.publication?.active,
+      a.rows.length === b.rows.length &&
+      a.rows.every((row, index) => rowSignature(row) === rowSignature(b.rows[index])),
   });
 }
 
-function buildRow(row: ListRow): HTMLElement {
-  return row.kind === 'group' ? buildGroupRow(row) : buildPubRow(row);
+/** Подпись строки для сравнения (версия + визуально значимые поля). */
+function rowSignature(row: Publication | undefined): string {
+  if (row === undefined) return '';
+  return `${row.id}:${row.version}:${row.title}:${row.subtitle ?? ''}:${row.authorship ?? ''}:${row.assembly_date ?? ''}:${row.active}:${row.cover_kind}`;
 }
 
-function updateRow(node: HTMLElement, row: ListRow): void {
-  if (row.kind === 'group') {
-    const title = node.querySelector('.pub-row-group-title');
-    if (title !== null) title.textContent = row.title ?? '';
-    const count = node.querySelector('.pub-row-group-count');
-    if (count !== null) count.textContent = String(row.count ?? 0);
-    node.classList.toggle(
-      'pub-row-group-collapsed',
-      row.shelfId !== null && !expandedShelves.has(row.shelfId),
-    );
-    return;
+function buildListGroup(group: ListGroup): HTMLElement {
+  const section = div('pub-list-section');
+  section.dataset['groupId'] = group.id;
+  if (group.shelfId !== null && !expandedShelves.has(group.shelfId)) {
+    section.classList.add('pub-list-collapsed');
   }
-  const publication = row.publication;
-  if (publication === undefined) return;
-  node.dataset['pubId'] = publication.id;
-  node.classList.toggle('pub-inactive', !publication.active);
-  const title = node.querySelector('.pub-row-title');
-  if (title !== null) title.textContent = publication.title;
-  const subtitle = node.querySelector('.pub-row-subtitle');
-  if (subtitle !== null) subtitle.textContent = publication.subtitle ?? '';
-  const author = node.querySelector('.pub-row-author');
-  if (author !== null) author.textContent = authorLine(publication);
-  const date = node.querySelector('.pub-row-date');
-  if (date !== null) date.textContent = assemblyDateLabel(publication.assembly_date);
-}
-
-function buildGroupRow(row: ListRow): HTMLElement {
-  const node = div('pub-row-group');
-  node.append(svgIcon('chevron-down', 14));
-  node.append(span(row.title ?? '', 'pub-row-group-title'));
-  node.append(span(String(row.count ?? 0), 'pub-row-group-count'));
-  if (row.shelfId !== null) {
-    node.classList.add('pub-row-group-collapsible');
-    node.addEventListener('click', () => {
-      if (expandedShelves.has(row.shelfId!)) expandedShelves.delete(row.shelfId!);
-      else expandedShelves.add(row.shelfId!);
+  const head = uiButton({
+    role: 'ghost',
+    class: 'pub-list-head',
+    onClick: () => {
+      if (group.shelfId === null) return;
+      if (expandedShelves.has(group.shelfId)) expandedShelves.delete(group.shelfId);
+      else expandedShelves.add(group.shelfId);
       renderList();
-    });
-    node.addEventListener('contextmenu', (ev) => {
+    },
+  });
+  head.append(
+    svgIcon('chevron-down', 14),
+    span(group.title, 'pub-list-title'),
+    span(String(group.count), 'pub-list-count'),
+  );
+  if (group.shelfId !== null) {
+    head.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
-      const shelf = shelves.find((s) => s.id === row.shelfId);
+      const shelf = shelves.find((s) => s.id === group.shelfId);
       if (shelf !== undefined) openShelfMenu(ev, shelf);
     });
   }
-  wireDropTarget(node, row.shelfId);
-  return node;
+  wireDropTarget(head, group.shelfId);
+
+  const tableHost = div('pub-list-table');
+  const table = createTable<Publication>({
+    ariaLabel: group.title,
+    columns: [
+      {
+        key: 'cover',
+        header: '',
+        width: '56px',
+        render: (row) => buildCover(row, 'row'),
+      },
+      {
+        key: 'title',
+        header: t('publication.field.title'),
+        text: (row) => row.title,
+        render: (row) => span(row.title, 'pub-list-row-title'),
+      },
+      {
+        key: 'subtitle',
+        header: t('publication.field.subtitle'),
+        text: (row) => row.subtitle ?? '',
+        render: (row) => span(row.subtitle ?? '', 'muted'),
+      },
+      {
+        key: 'author',
+        header: t('publication.field.author'),
+        text: (row) => authorLine(row),
+        render: (row) => span(authorLine(row), 'muted'),
+      },
+      {
+        key: 'date',
+        header: t('publication.field.assembly'),
+        width: '110px',
+        text: (row) => assemblyDateLabel(row.assembly_date),
+        render: (row) => span(assemblyDateLabel(row.assembly_date), 'muted'),
+      },
+      {
+        key: 'badge',
+        header: '',
+        width: '90px',
+        render: (row) => {
+          const count = badgeCounts.get(row.id) ?? 0;
+          const node = badge(count > 0 ? t('publications.newBadge', count) : '', {
+            kind: 'pill',
+            tone: 'accent',
+          });
+          node.classList.toggle('hidden', count <= 0);
+          return node;
+        },
+      },
+    ],
+    rows: [],
+    rowKey: (row) => row.id,
+    emptyText: t('publications.emptySearch'),
+    onRowClick: (row) => void openPublicationCard(row.id),
+    onActivate: (row) => void openPublicationCard(row.id),
+    rowMenu: (row) => publicationMenuItems(row),
+  });
+  tableHandles.set(group.id, table);
+  tableHost.append(table.element);
+  table.setRows(group.rows);
+  section.append(head, tableHost);
+  return section;
 }
 
-function buildPubRow(row: ListRow): HTMLElement {
-  const publication = row.publication;
-  const node = div('pub-row');
-  if (publication === undefined) return node;
-  node.dataset['pubId'] = publication.id;
-  node.draggable = true;
-  node.tabIndex = 0;
-  node.append(buildCover(publication, 'row'));
-  node.append(span(publication.title, 'pub-row-title'));
-  node.append(span(publication.subtitle ?? '', 'pub-row-subtitle'));
-  node.append(span(authorLine(publication), 'pub-row-author'));
-  node.append(span(assemblyDateLabel(publication.assembly_date), 'pub-row-date'));
-  node.addEventListener('click', () => void openPublicationCard(publication.id));
-  node.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') void openPublicationCard(publication.id);
-  });
-  node.addEventListener('contextmenu', (ev) => {
-    ev.preventDefault();
-    openPublicationMenu(ev, publication);
-  });
-  node.addEventListener('dragstart', (ev) => {
-    draggingPublicationId = publication.id;
-    ev.dataTransfer?.setData('text/plain', publication.id);
-    if (ev.dataTransfer !== null) ev.dataTransfer.effectAllowed = 'move';
-  });
-  node.addEventListener('dragend', () => {
-    draggingPublicationId = null;
-  });
-  return node;
+function updateListGroup(node: HTMLElement, group: ListGroup): void {
+  const handle = tableHandles.get(group.id);
+  handle?.setRows(group.rows);
+  const title = node.querySelector('.pub-list-title');
+  if (title !== null) title.textContent = group.title;
+  const count = node.querySelector('.pub-list-count');
+  if (count !== null) count.textContent = String(group.count);
+  node.classList.toggle(
+    'pub-list-collapsed',
+    group.shelfId !== null && !expandedShelves.has(group.shelfId),
+  );
 }
 
 /** Отображаемая строка автора: текст авторства или создатель (через users). */
@@ -900,8 +958,11 @@ function openShelfFilterMenu(ev: MouseEvent): void {
 }
 
 function openPublicationMenu(ev: MouseEvent, publication: Publication): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  showMenuAt(ev.clientX, ev.clientY, publicationMenuItems(publication));
+}
+
+/** Пункты контекстного меню публикации (карточки полки и строки таблицы). */
+function publicationMenuItems(publication: Publication): MenuItem[] {
   const shelfItems = shelves.map((shelf) =>
     menuChoice(
       shelf.title,
@@ -909,23 +970,20 @@ function openPublicationMenu(ev: MouseEvent, publication: Publication): void {
       () => void toggleShelf(publication.id, shelf.id),
     ),
   );
-  const items = [
+  return [
     menuAction(t('publications.menu.settings'), () => void openPublicationCard(publication.id)),
     menuSubmenu(t('publications.menu.export'), [
       menuAction(t('publications.menu.exportMd'), () => void runExport(publication.id, 'md')),
       menuAction(t('publications.menu.exportHtml'), () => void runExport(publication.id, 'html')),
     ]),
     MENU_SEPARATOR,
-    ...(shelfItems.length > 0
-      ? [menuSubmenu(t('publications.menu.shelves'), shelfItems)]
-      : []),
+    ...(shelfItems.length > 0 ? [menuSubmenu(t('publications.menu.shelves'), shelfItems)] : []),
     menuAction(
       publication.active ? t('publications.menu.inactive') : t('publications.menu.active'),
       () => void toggleActive(publication),
     ),
     menuAction(t('actions.toTrash'), () => void trash(publication.id), { danger: true }),
   ];
-  showMenuAt(ev.clientX, ev.clientY, items);
 }
 
 function openShelfMenu(ev: MouseEvent, shelf: Shelf): void {

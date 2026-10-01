@@ -1,9 +1,9 @@
 /**
  * Мастер создания публикации (0.11.1, задача a3cfc018; элемент интерфейса
  * ebfa93f3). Три шага: (1) название/подзаголовок/автор, (2) отбор заголовков
- * (общий конструктор отбора), (3) свойства текстов (мульти-выбор, можно
- * пропустить). Кнопка «Создать» делает POST и передаёт id созданной публикации
- * вызывающему — тот открывает черновик в карточке редактора.
+ * (общий конструктор отбора), (3) свойства текстов (мульти-выбор общим пикером
+ * сущностей, можно пропустить). Кнопка «Создать» делает POST и передаёт id
+ * созданной публикации вызывающему — тот открывает черновик в карточке.
  *
  * Диалог построен фасадом `lib/dialog.ts`; шаги — вкладки `lib/ui/tabs.ts`
  * (единый диалог со вкладками, требование 13464c39). Полей «на 20 штук» нет —
@@ -18,10 +18,10 @@ import { div, el } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { footerErrorLine } from '../../lib/ui/messages.js';
 import { fieldInput, fieldRow } from '../../lib/ui/field.js';
-import { chipList } from '../../lib/ui/chip-list.js';
+import { buildEntityChipField, filterEntityOptions, type EntityOption } from '../../lib/entity-picker.js';
 import { loadingState, errorState } from '../../lib/ui/empty-state.js';
 import { store } from '../../state.js';
-import { buildRecipeBuilder, linkPropertyChoices, loadPropertyRegistry } from './recipe.js';
+import { buildRecipeBuilder, loadPropertyRegistry, loadPropertyRows, propertyEntityOptions } from './recipe.js';
 
 /** Опции мастера. */
 export interface PublicationWizardOptions {
@@ -56,7 +56,7 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
   const recipeHost = div('pub-recipe-host');
   recipeBody.append(recipeLoading, recipeHost);
 
-  // --- Шаг 3: свойства текстов (мульти-выбор из справочника) -----------------
+  // --- Шаг 3: свойства текстов (мульти-выбор общим пикером сущностей) --------
   const textsBody = div('form-stack');
   const hint = el('p', 'dialog-text', t('publications.wizard.fTextsHint'));
   const textsHost = div('pub-wizard-texts');
@@ -67,25 +67,19 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
   let textSources: string[] = [];
   let recipeState: ReturnType<typeof buildRecipeBuilder> | null = null;
 
-  void loadPropertyRegistry(netId).then(
-    (registry) => {
-      const choices = linkPropertyChoices(registry);
-      const byId = new Map(choices.map((c) => [c.id, c.name]));
-      const field = chipList({
+  void Promise.all([loadPropertyRows(netId), loadPropertyRegistry(netId)]).then(
+    ([rows, registry]) => {
+      const choices: EntityOption[] = propertyEntityOptions(rows);
+      const field = buildEntityChipField({
         getValues: () => textSources,
-        labelOf: (value) => byId.get(value) ?? value,
-        onRemove: (value) => {
-          textSources = textSources.filter((id) => id !== value);
+        onChange: (values) => {
+          textSources = values;
         },
-        getOptions: () =>
-          choices
-            .filter((c) => !textSources.includes(c.id))
-            .map((c) => ({ value: c.id, label: c.name })),
-        onAdd: (value) => {
-          if (value !== '' && !textSources.includes(value)) textSources = [...textSources, value];
-        },
-        addPlaceholder: 'Добавить свойство…',
-        emptyText: 'Источники текстов не выбраны',
+        loadOptions: (query) => filterEntityOptions(choices, query),
+        optionsHeader: t('publication.field.texts'),
+        placeholder: t('typeEditor.addProperty'),
+        addPlaceholder: t('typeEditor.addProperty'),
+        reorderable: true,
       });
       textsHost.append(field.root);
 
