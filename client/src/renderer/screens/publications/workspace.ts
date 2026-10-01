@@ -108,8 +108,9 @@ export interface PublicationOpenTarget {
 }
 
 /**
- * Модель выбора страницы при открытии (чистая — юнит-тест): заданный
- * `target.page > 1` побеждает; иначе та же публикация сохраняет текущую
+ * Модель выбора страницы при открытии (чистая — юнит-тест): ЛЮБОЙ явно
+ * заданный `target.page` побеждает (в т.ч. `1` — переход к вхождению на
+ * первой странице при открытой N-й); иначе та же публикация сохраняет текущую
  * страницу (переоткрытие не сбрасывает листание), другая — открывается с
  * первой.
  */
@@ -118,7 +119,7 @@ export function resolveOpenPage(
   samePublication: boolean,
   target?: PublicationOpenTarget,
 ): number {
-  if (target?.page !== undefined && target.page > 1) return target.page;
+  if (target?.page !== undefined) return Math.max(1, Math.trunc(target.page));
   return samePublication ? currentPage : 1;
 }
 

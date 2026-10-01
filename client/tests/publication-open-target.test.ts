@@ -45,19 +45,18 @@ function publication(id: string, title: string): Publication {
 }
 
 describe('resolveOpenPage — страница открытия рабочей области (2ebacd12)', () => {
-  it('целевая страница > 1 побеждает (переход из «Упоминаний»)', () => {
+  it('любая явно заданная страница побеждает (в т.ч. 1 при открытой N)', () => {
     assert.equal(resolveOpenPage(5, true, { page: 3 }), 3);
     assert.equal(resolveOpenPage(1, false, { page: 2 }), 2);
+    // Явная первая страница обязана победить текущую N>1 (иначе якорь не
+    // находится / клик по разделу стр.1 при открытой стр.2).
+    assert.equal(resolveOpenPage(2, true, { page: 1 }), 1);
+    assert.equal(resolveOpenPage(4, false, { page: 1 }), 1);
   });
 
-  it('та же публикация без цели сохраняет текущую страницу', () => {
+  it('без цели: та же публикация сохраняет страницу, другая — с первой', () => {
     assert.equal(resolveOpenPage(4, true), 4);
-    assert.equal(resolveOpenPage(4, true, { page: 1 }), 4);
-  });
-
-  it('другая публикация без цели открывается с первой', () => {
     assert.equal(resolveOpenPage(4, false), 1);
-    assert.equal(resolveOpenPage(2, false, { page: 1 }), 1);
   });
 });
 

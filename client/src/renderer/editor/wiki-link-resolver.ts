@@ -217,7 +217,9 @@ function pubCacheKey(networkId: string, publicationId: string): string {
 /** Span-подпись pub-ссылки + её id (target `#pub:<uuid>`). */
 function pubSpans(root: HTMLElement): Array<{ span: HTMLElement; id: string }> {
   const out: Array<{ span: HTMLElement; id: string }> = [];
-  const spans = root.querySelectorAll<HTMLElement>(`span.${WIKI_LINK_CLASS}[${WIKI_LINK_TARGET_ATTR}]`);
+  // Простой класс-селектор: атрибутный фильтр по target делаем в коде —
+  // DOM-шим тестов не разбирает составные селекторы (`span.wiki-link[…]`).
+  const spans = root.querySelectorAll<HTMLElement>(`.${WIKI_LINK_CLASS}`);
   for (const span of spans) {
     const target = span.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (target === null) continue;
@@ -261,17 +263,24 @@ async function resolvePubBatch(networkId: string, ids: string[]): Promise<void> 
  */
 function paintPubSpans(root: HTMLElement, networkId: string): void {
   for (const { span, id } of pubSpans(root)) {
+    const target = span.getAttribute(WIKI_LINK_TARGET_ATTR) ?? '';
     span.setAttribute(WIKI_LINK_PUB_ATTR, id);
     // Legacy-действие (контекстное меню «Обновить формат на [[#<id>]]») к
     // pub-ссылке неприменимо — снимаем маркер.
     span.removeAttribute('data-legacy-link');
     const entry = pubCache.get(pubCacheKey(networkId, id));
     if (entry === undefined) continue;
-    const paint = wikiSpanPaint(span.textContent ?? '', entry, store.state.showInactive);
+    // Серверный HTML pub-ссылки — legacy name-форма: без алиаса её текст равен
+    // сырому target (`#pub:<uuid>`), с алиасом — сам алиас. `wikiSpanPaint`
+    // считает ЛЮБОЙ непустой текст авторским алиасом, поэтому сырец подменяем
+    // пустой строкой — только тогда подставляется название или «удалена».
+    const raw = span.textContent ?? '';
+    const alias = raw !== '' && raw !== target ? raw : '';
+    const paint = wikiSpanPaint(alias, entry, store.state.showInactive);
     if (paint.text !== null) span.textContent = paint.text;
-    // Отсутствующая публикация без алиаса: пометка «удалена» (требование
-    // 7f583ef9 п.4, элемент интерфейса d421c5d8).
     if (paint.deleted && (span.textContent ?? '') === '') {
+      // Отсутствующая публикация без алиаса: пометка «удалена»
+      // (требование 7f583ef9 п.4, элемент интерфейса d421c5d8).
       span.textContent = t('publications.link.deleted');
     }
     span.classList.toggle('wiki-link-deleted', paint.deleted);
