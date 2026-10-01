@@ -134,16 +134,26 @@ CREATE TABLE shelves (
   deleted      INTEGER NOT NULL DEFAULT 0,
   base_version INTEGER NOT NULL DEFAULT 0,
   title        TEXT NOT NULL,                              -- имя полки
-  title_key    TEXT NOT NULL,                              -- нормализованное имя (уникальность в слое)
+  title_key    TEXT NOT NULL,                              -- нормализованное имя
   position     REAL NOT NULL,
   version      INTEGER NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL,
   created_by   TEXT NOT NULL,
   updated_at   TEXT NOT NULL,
   updated_by   TEXT NOT NULL,
-  UNIQUE (id, layer_id),
-  UNIQUE (title_key, layer_id)
+  UNIQUE (id, layer_id)
 );
+
+-- Уникальность имени полки в слое — только среди ЖИВЫХ строк (частичный
+-- индекс по deleted = 0). Раньше здесь стоял табличный UNIQUE
+-- (title_key, layer_id), который включал надгробия: удаление полки в рабочем
+-- слое делает её имя невосстановимым — повторное createShelf с тем же именем
+-- падало сырым SQLITE_CONSTRAINT, хотя удалённой полки для пользователя уже
+-- нет. Табличный UNIQUE нельзя сделать частичным, поэтому ограничение вынесено
+-- в индекс. Домен дополнительно проверяет уникальность по `shelves_v` и
+-- возвращает штатную VALIDATION_ERROR.
+CREATE UNIQUE INDEX idx_shelves_title_key_live
+  ON shelves (title_key, layer_id) WHERE deleted = 0;
 
 CREATE INDEX idx_shelves_layer ON shelves (layer_id);
 CREATE INDEX idx_shelves_position ON shelves (position);

@@ -66,6 +66,19 @@ function seedProperty(ndb: NetworkDb, valueType = 'link'): string {
   return id;
 }
 
+/** Рабочий слой-ребёнок основы. */
+function seedLayer(ndb: NetworkDb): string {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
+       VALUES (?, (SELECT id FROM layers WHERE is_base = 1), 'Слой', 0, 1, 'u', ?, ?)`,
+    )
+    .run(id, now, now);
+  return id;
+}
+
 describe(
   'publication-service: CRUD и валидация',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
@@ -268,14 +281,7 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const p = createPublication(ndb, { title: 'X' }, 'u');
-        const layerId = randomUUID();
-        const now = new Date().toISOString();
-        ndb
-          .prepare(
-            `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
-             VALUES (?, (SELECT id FROM layers WHERE is_base = 1), 'L', 0, 1, 'u', ?, ?)`,
-          )
-          .run(layerId, now, now);
+        const layerId = seedLayer(ndb);
         ndb.useLayer(layerId);
         assert.throws(
           () => purgePublication(ndb, p.id),
@@ -294,14 +300,7 @@ describe(
           blocked: false,
           blocking: { properties: 0, layers: [] },
         });
-        const layerId = randomUUID();
-        const now = new Date().toISOString();
-        ndb
-          .prepare(
-            `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
-             VALUES (?, (SELECT id FROM layers WHERE is_base = 1), 'L', 0, 1, 'u', ?, ?)`,
-          )
-          .run(layerId, now, now);
+        const layerId = seedLayer(ndb);
         ndb.useLayer(layerId);
         updatePublication(ndb, p.id, { title: 'в слое' }, 'u');
         ndb.useLayer('00000000-0000-4000-8000-0000000000ba5e');
@@ -377,6 +376,31 @@ describe(
         assert.equal(listShelves(ndb).length, 0);
         // Публикация не тронута удалением полки.
         assert.notEqual(getPublication(ndb, p.id), null);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('удаление полки в слое освобождает имя: повторное создание проходит', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+
+        const shelf = createShelf(ndb, { title: 'Полка' }, 'u');
+        deleteShelf(ndb, shelf.id);
+        assert.equal(listShelves(ndb).length, 0);
+
+        // Надгробие не удерживает имя: создаём заново — без сырого SqliteError.
+        const again = createShelf(ndb, { title: 'Полка' }, 'u');
+        assert.notEqual(again.id, shelf.id);
+        assert.equal(listShelves(ndb).length, 1);
+
+        // А живой дубль по-прежнему отвергается штатной ошибкой валидации.
+        assert.throws(
+          () => createShelf(ndb, { title: 'полка' }, 'u'),
+          (e) => codeOf(e) === 'VALIDATION_ERROR',
+        );
       } finally {
         ndb.close();
       }

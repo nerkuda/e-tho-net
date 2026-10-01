@@ -692,10 +692,13 @@ export function setPublicationOrder(
       const id = publicationOrderId(publicationId, item.node_key);
       const materialized = materializeShadow(ndb, 'publication_order', id);
       if (materialized) {
+        // `deleted = 0` — надгробие той же поузловой строки (детерминированный
+        // id) при повторной перестановке оживляется, иначе позиция молча
+        // терялась бы (та же семантика, что у исключений и состава полок).
         ndb
           .prepare(
             `UPDATE publication_order
-                SET position = ?, updated_at = ?, updated_by = ?
+                SET position = ?, deleted = 0, updated_at = ?, updated_by = ?
               WHERE id = ? AND layer_id = ?`,
           )
           .run(item.position, now, actorUserId, id, ndb.layerId);
@@ -842,13 +845,17 @@ function getShelfOrThrow(ndb: NetworkDb, id: string): Shelf {
   return shelfWithItems(ndb, row);
 }
 
-/** Проверить название полки (непустое, в пределах слоя уникальное). */
+/** Проверить название полки (непустое, в пределах слоя уникальное среди ЖИВЫХ). */
 function validateShelfTitle(ndb: NetworkDb, title: unknown, excludeId?: string): string {
   if (typeof title !== 'string' || title.trim() === '') {
     throw new EtnError('VALIDATION_ERROR', 'title полки обязателен', { field: 'title' });
   }
   const value = title.trim();
   const key = normalizeTitle(value);
+  // Уникальность — только среди живых строк (`shelves_v`); надгробие не
+  // считается занятым именем — оно выведено из частичного индекса
+  // idx_shelves_title_key_live (миграция 047). Так удаление полки в рабочем
+  // слое не делает её имя невосстановимым.
   const clash = ndb
     .prepare('SELECT id FROM shelves_v WHERE title_key = ? AND id <> ? LIMIT 1')
     .get(key, excludeId ?? '') as { id: string } | undefined;
@@ -859,6 +866,27 @@ function validateShelfTitle(ndb: NetworkDb, title: unknown, excludeId?: string):
     });
   }
   return value;
+}
+
+/**
+ * Обернуть запись полки: нарушение частичного индекса имени (`SQLITE_CONSTRAINT`)
+ * — это гонка двух параллельных созданий/переименований, а не внутренняя
+ * ошибка. Отдаём штатную `VALIDATION_ERROR` того же кода, что и доменная
+ * проверка, вместо сырого `SqliteError`.
+ */
+function asShelfTitleConflict<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+      throw new EtnError('VALIDATION_ERROR', 'полка с таким именем уже существует', {
+        field: 'title',
+        code: 'shelf_title_taken',
+      });
+    }
+    throw err;
+  }
 }
 
 /** Создать полку. */
@@ -872,13 +900,15 @@ export function createShelf(ndb: NetworkDb, input: ShelfInput, actorUserId: stri
         ? Math.trunc(input.position)
         : ((ndb.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM shelves_v').get() as { p: number })
             .p + 1);
-    ndb
-      .prepare(
-        `INSERT INTO shelves (id, layer_id, title, title_key, position, version,
-                              created_at, created_by, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-      )
-      .run(id, ndb.layerId, title, normalizeTitle(title), position, now, actorUserId, now, actorUserId);
+    asShelfTitleConflict(() =>
+      ndb
+        .prepare(
+          `INSERT INTO shelves (id, layer_id, title, title_key, position, version,
+                                created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+        )
+        .run(id, ndb.layerId, title, normalizeTitle(title), position, now, actorUserId, now, actorUserId),
+    );
     return getShelfOrThrow(ndb, id);
   });
 }
@@ -908,7 +938,9 @@ export function updateShelf(
     sets.push('version = version + 1', 'updated_at = ?', 'updated_by = ?');
     args.push(now, actorUserId, id, ndb.layerId);
     materializeShadow(ndb, 'shelves', id);
-    ndb.prepare(`UPDATE shelves SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(...args);
+    asShelfTitleConflict(() =>
+      ndb.prepare(`UPDATE shelves SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(...args),
+    );
     return getShelfOrThrow(ndb, id);
   });
 }
