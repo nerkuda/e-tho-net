@@ -232,7 +232,21 @@ function getPropertyRow(ndb: NetworkDb, id: string): PropertyRow | null {
   return { id: row.id, name: row.name, value_type: row.value_type, config };
 }
 
-/** Входящие нетипизированные рёбра (структурные родители) мысли. */
+/**
+ * Входящие нетипизированные рёбра (структурные родители) мысли.
+ *
+ * **Почему локальный SQL, а не `traverse` из graph-traversal.** Восходящему
+ * поиску «ближайшего отобранного предка» нужны три вещи, которых обходчик не
+ * отдаёт: (1) `links.position` каждого ребра — именно им детерминируется обход
+ * ([[#599414b6]]); (2) `edge_id` ребра — это ключ локального порядка публикации
+ * (`node_key`, [[#18f3bebf]]); (3) отсутствие `maxDepth`/`maxNodes` —
+ * требование «глубина дерева без лимита». `traverse` возвращает только id
+ * узлов и ограничен потолком — на роли транспорта поддерева он и рассчитан.
+ * Гарантия этой выборки: рёбра отдаются в сетевом порядке `position ASC, id ASC`
+ * и несут свой `edge_id` — вызывающий строит на них детерминированный обход.
+ * Фильтры активности и корзины совпадают с обходчиком (`active=1`,
+ * `marked_for_deletion=0`).
+ */
 function untypedParents(ndb: NetworkDb, thoughtId: string): StructuralEdge[] {
   return (
     ndb
@@ -247,7 +261,23 @@ function untypedParents(ndb: NetworkDb, thoughtId: string): StructuralEdge[] {
   ).map((r) => ({ edgeId: r.edge_id, otherId: r.other_id, position: r.position }));
 }
 
-/** Рёбра свойства-связи, направленные от владельца к цели. */
+/**
+ * Рёбра свойства-связи, направленные от владельца к цели.
+ *
+ * **Почему не `getLinkPropertyValues` (property-service.ts).** Та функция почти
+ * совпадает по SELECT, но сортирует ТИПИЗИРОВАННЫЕ рёбра `created_at DESC`,
+ * тогда как требование текстов [[#620aa285]] задаёт порядок «сетевой порядок
+ * рёбер (`links.position`), перекрытый локальным порядком публикации (по
+ * `edge_id`)». Кроме того, вызывающему нужны `edge_id` и `position` каждой
+ * цели — для локального порядка и детерминированной сортировки; DTO
+ * `getLinkPropertyValues` отдаёт лишь `link_id`/цель/комментарий без
+ * `position`. Поэтому чтение локальное, но с ПЕРЕИСПОЛЬЗОВАНИЕМ резолва
+ * направления и типа связи (`resolveOwnerBindingSide` /
+ * `linkPropertySideFromConfig` / `linkPropertyDirection` /
+ * `linkPropertyLinkTypeId`) — логика интерпретации свойства здесь не
+ * дублируется. Гарантия: `links.position ASC, l.id ASC`, обе формы владения
+ * (типизированная и структурная), фильтры `active=1`, `marked_for_deletion=0`.
+ */
 function readPropertyEdges(ndb: NetworkDb, ownerId: string, prop: PropertyRow): PropertyEdge[] {
   const structural = isStructuralLinkProperty(prop.config);
   const side = structural
@@ -294,33 +324,48 @@ function readPropertyEdges(ndb: NetworkDb, ownerId: string, prop: PropertyRow): 
   }));
 }
 
-/** Заголовки и типы мыслей одним запросом. */
+/** Размер порции для `IN (…)`: не упираться в лимит переменных SQLite. */
+const SQL_PARAM_CHUNK = 400;
+
+/** Разбить список id на порции для `IN (…)`. */
+function chunkIds(ids: readonly string[]): string[][] {
+  if (ids.length <= SQL_PARAM_CHUNK) return [ids as string[]];
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += SQL_PARAM_CHUNK) {
+    out.push(ids.slice(i, i + SQL_PARAM_CHUNK));
+  }
+  return out;
+}
+
+/** Заголовки и типы мыслей (порциями, чтобы держать деревья в тысячи узлов). */
 function loadThoughtMeta(
   ndb: NetworkDb,
   ids: readonly string[],
 ): Map<string, { title: string; type_id: string | null }> {
   const out = new Map<string, { title: string; type_id: string | null }>();
-  if (ids.length === 0) return out;
-  const placeholders = ids.map(() => '?').join(', ');
-  const rows = ndb
-    .prepare(`SELECT id, title, type_id FROM thoughts_v WHERE id IN (${placeholders})`)
-    .all(...ids) as Array<{ id: string; title: string | null; type_id: string | null }>;
-  for (const r of rows) out.set(r.id, { title: r.title ?? '', type_id: r.type_id });
+  for (const chunk of chunkIds(ids)) {
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = ndb
+      .prepare(`SELECT id, title, type_id FROM thoughts_v WHERE id IN (${placeholders})`)
+      .all(...chunk) as Array<{ id: string; title: string | null; type_id: string | null }>;
+    for (const r of rows) out.set(r.id, { title: r.title ?? '', type_id: r.type_id });
+  }
   return out;
 }
 
-/** Постоянные комментарии мыслей (`body_md`) одним запросом. */
+/** Постоянные комментарии мыслей (`body_md`), порциями по id. */
 function loadPermanentComments(ndb: NetworkDb, ids: readonly string[]): Map<string, string> {
   const out = new Map<string, string>();
-  if (ids.length === 0) return out;
-  const placeholders = ids.map(() => '?').join(', ');
-  const rows = ndb
-    .prepare(
-      `SELECT owner_id, body_md FROM comments_v
-        WHERE owner_type = 'thought' AND kind = 'permanent' AND owner_id IN (${placeholders})`,
-    )
-    .all(...ids) as Array<{ owner_id: string; body_md: string }>;
-  for (const r of rows) out.set(r.owner_id, r.body_md);
+  for (const chunk of chunkIds(ids)) {
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = ndb
+      .prepare(
+        `SELECT owner_id, body_md FROM comments_v
+          WHERE owner_type = 'thought' AND kind = 'permanent' AND owner_id IN (${placeholders})`,
+      )
+      .all(...chunk) as Array<{ owner_id: string; body_md: string }>;
+    for (const r of rows) out.set(r.owner_id, r.body_md);
+  }
   return out;
 }
 
@@ -773,7 +818,11 @@ interface RenderContext {
   extraCache: Map<string, PublicationAssemblyExtraGroup[]>;
 }
 
-/** Отрендерить один раздел и его поддерево в DTO. */
+/**
+ * Отрендерить один раздел БЕЗ поддерева (shallow). `children` заполняет
+ * {@link renderSections} после обхода — итеративно, чтобы не упираться в стек
+ * на легальном дереве большой глубины (требование «глубина без лимита»).
+ */
 function renderSection(
   ndb: NetworkDb,
   node: PublicationContentNode,
@@ -832,8 +881,33 @@ function renderSection(
     texts,
     extra: node.repeatOf === null ? extra : [],
     flags: { repeat_of: node.repeatOf, cycle_cut: node.cycleCut },
-    children: node.children.map((child) => renderSection(ndb, child, ctx)),
+    children: [],
   };
+}
+
+/**
+ * Собрать DTO страницы раздела: shallow-рендер всех узлов поддерева итеративным
+ * обходом, затем связывание детей ссылками. Рекурсии нет — глубина не
+ * ограничена (блокер независимой проверки: `Maximum call stack size exceeded`
+ * на цепочке ≳2000).
+ */
+function renderSections(
+  ndb: NetworkDb,
+  roots: readonly PublicationContentNode[],
+  ctx: RenderContext,
+): PublicationAssemblySection[] {
+  const byNode = new Map<PublicationContentNode, PublicationAssemblySection>();
+  const stack: PublicationContentNode[] = [...roots].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (byNode.has(node)) continue;
+    byNode.set(node, renderSection(ndb, node, ctx));
+    for (let i = node.children.length - 1; i >= 0; i -= 1) stack.push(node.children[i]!);
+  }
+  for (const [node, dto] of byNode) {
+    dto.children = node.children.map((child) => byNode.get(child)!);
+  }
+  return roots.map((root) => byNode.get(root)!);
 }
 
 // ---------------------------------------------------------------------------
@@ -892,7 +966,7 @@ export function assemblePublication(
   const page = Math.max(1, Math.trunc(query.page ?? 1));
   const start = (page - 1) * perPage;
   const pageRoots = doc.tree.slice(start, start + perPage);
-  const sections = pageRoots.map((root) => renderSection(ndb, root, ctx));
+  const sections = renderSections(ndb, pageRoots, ctx);
 
   const cover: PublicationAssemblyCover =
     pub.cover_kind === 'attachment'

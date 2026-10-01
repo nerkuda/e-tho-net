@@ -276,6 +276,34 @@ describe('publication-assembly-service: дерево разделов', { skip }
       ndb.close();
     }
   });
+
+  it('не ограничивает глубину дерева: цепочка 5000 рендерится без переполнения стека', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Deep' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      let prev = seedThought(ndb, 'N0', type.id);
+      for (let i = 1; i < 5000; i += 1) {
+        const cur = seedThought(ndb, `N${i}`, type.id);
+        seedUntypedLink(ndb, prev, cur, 0);
+        prev = cur;
+      }
+
+      const doc = assemblePublication(ndb, pub.id, USER);
+      // Обход результата итеративный — рекурсия в тесте упала бы так же, как
+      // прежний рекурсивный рендер.
+      let node = doc.sections[0]!;
+      let depth = 1;
+      while (node.children.length > 0) {
+        node = node.children[0]!;
+        depth += 1;
+      }
+      assert.equal(depth, 5000);
+      assert.equal(node.level, 5000);
+    } finally {
+      ndb.close();
+    }
+  });
 });
 
 describe('publication-assembly-service: тексты и исключения', { skip }, () => {
