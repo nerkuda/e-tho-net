@@ -76,6 +76,7 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
           textSources = values;
         },
         loadOptions: (query) => filterEntityOptions(choices, query),
+        initialOptions: choices,
         optionsHeader: t('publication.field.texts'),
         placeholder: t('typeEditor.addProperty'),
         addPlaceholder: t('typeEditor.addProperty'),

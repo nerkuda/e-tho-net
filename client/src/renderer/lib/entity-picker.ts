@@ -1050,6 +1050,14 @@ export interface EntityChipFieldOptions {
    * смещение для порционной догрузки (только при заданном {@link pageSize}).
    */
   loadOptions: (query: string, offset?: number) => EntityOption[] | Promise<EntityOption[]>;
+  /**
+   * Каталог, уже известный вызывающему: заполняет облачка значений ДО первого
+   * поиска и открытия пикера. Без него чипы предзаданных значений (например,
+   * свойств текстов «Рецептов») рисовались бы по одному id: `byId` наполняется
+   * только при загрузке источника (ошибка fb4173d9). Порядок вариантов
+   * задаёт вызывающий; повторный ввод значения перекрывает.
+   */
+  initialOptions?: readonly EntityOption[];
   /** Когда источник кандидатов участвует в списке (по умолчанию `always`). */
   optionsWhen?: 'always' | 'typed';
   /**
@@ -1243,7 +1251,13 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     const hadFocus = hasKeyboardFocus(field);
     const chips: HTMLElement[] = [];
     for (const value of opts.getValues()) {
-      const cloud = opts.cloudOf?.(value) ?? byId.get(value)?.cloud ?? { id: value, title: value };
+      const known = byId.get(value);
+      const explicitCloud = opts.cloudOf?.(value) ?? null;
+      // Вариант без облачка мысли (свойство-связь, структурная строка): у него
+      // есть лишь `title`, поэтому облачко собирается из имени варианта, а не из
+      // сырого id — иначе чип показывал UUID вместо имени (ошибка fb4173d9).
+      const cloud: ThoughtCloudInput =
+        explicitCloud ?? known?.cloud ?? { id: value, title: known?.title ?? value };
       const chip = createThoughtCloud(cloud, {
         profile: 'chip',
         width: 'container',
@@ -1259,6 +1273,13 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
               }),
         },
       });
+      // Знак варианта-свойства-связи — значок конца связи, как в строках
+      // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
+      // значка светился глиф мысли по умолчанию.
+      if (explicitCloud === null && known?.cloud === undefined && known?.linkEnd != null) {
+        const iconBox = chip.querySelector('.mini-icon');
+        if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(known.linkEnd));
+      }
       if (opts.reorderable === true && !disabled) {
         wireChipReorder(chip, value);
       }
@@ -1321,6 +1342,11 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     root.classList.toggle('disabled', disabled);
   }
 
+  // Предзаданный каталог — до первой отрисовки чипов, чтобы предзаполненные
+  // значения получали имя сразу (ошибка fb4173d9).
+  if (opts.initialOptions !== undefined) {
+    for (const option of opts.initialOptions) byId.set(option.id, option);
+  }
   field.append(input);
   renderChips();
   // Угловые кнопки поля: «…» (список) — когда задан пикер, «✕» — очистка всего.

@@ -386,6 +386,7 @@ function buildRecipePane(): HTMLElement {
             queueSave({ text_sources: textSources });
           },
           loadOptions: (query) => filterEntityOptions(choices, query),
+          initialOptions: choices,
           optionsHeader: t('publication.field.texts'),
           placeholder: t('typeEditor.addProperty'),
           addPlaceholder: t('typeEditor.addProperty'),
@@ -399,6 +400,7 @@ function buildRecipePane(): HTMLElement {
             queueSave({ extra_properties: extraProperties });
           },
           loadOptions: (query) => filterEntityOptions(choices, query),
+          initialOptions: choices,
           optionsHeader: t('publication.field.extras'),
           placeholder: t('typeEditor.addProperty'),
           addPlaceholder: t('typeEditor.addProperty'),
