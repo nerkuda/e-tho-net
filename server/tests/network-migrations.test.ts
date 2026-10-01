@@ -68,6 +68,7 @@ const EXPECTED_FILES = [
   '044_cross_network_ref.sql',
   '045_links_covering_indexes.sql',
   '046_comments_time.sql',
+  '047_publications.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -87,6 +88,11 @@ const EXPECTED_TABLES = [
   'comments',
   'comment_targets',
   'attachments',
+  'publications',
+  'publication_order',
+  'publication_exclusions',
+  'shelves',
+  'shelf_items',
   'user_preferences',
   'thought_views',
   'user_focus_preferences',
@@ -616,6 +622,7 @@ describe(
           '044_cross_network_ref.sql',
           '045_links_covering_indexes.sql',
           '046_comments_time.sql',
+          '047_publications.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -912,6 +919,7 @@ describe(
           '044_cross_network_ref.sql',
           '045_links_covering_indexes.sql',
           '046_comments_time.sql',
+          '047_publications.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);
@@ -978,7 +986,7 @@ describe(
       registerMigrationHelpers(db);
       try {
         const res = runMigrations(db, networkMigrationsDir());
-        assert.equal(res.applied[res.applied.length - 1], '046_comments_time.sql');
+        assert.equal(res.applied[res.applied.length - 1], '047_publications.sql');
         // 040 уже применён в прогоне — откатываем запись, сеем данные
         // thought_ref-эпохи и применяем повторно (как апгрейд живой сети).
         // 041 (DDL — добавление колонки `side`) и 042 (DML — снятие direction,
@@ -1426,6 +1434,7 @@ describe(
           '044_cross_network_ref.sql',
           '045_links_covering_indexes.sql',
           '046_comments_time.sql',
+          '047_publications.sql',
         ]);
 
         // Сценарий 1: p-backward удалён, его привязки перенесены на

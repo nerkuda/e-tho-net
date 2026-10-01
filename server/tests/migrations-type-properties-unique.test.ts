@@ -55,14 +55,16 @@ const MIGRATIONS_AFTER_043: readonly string[] = [
   '044_cross_network_ref.sql',
   '045_links_covering_indexes.sql',
   '046_comments_time.sql',
+  '047_publications.sql',
 ];
 
 /**
  * Подмножество «повторно прогоняемых» миграций после 043: тесты дважды гоняют
  * `runMigrations` на одном соединении, доказывая идемпотентность пересборки
  * 043. 046 (`ALTER TABLE comments ADD COLUMN use_time`) неидемпотентна — в
- * SQLite нет `ADD COLUMN IF NOT EXISTS` (та же особенность у 033); повторно она
- * не проигрывается, как и в реальном миграторе, который помнит применённый файл.
+ * SQLite нет `ADD COLUMN IF NOT EXISTS` (та же особенность у 033), а 047
+ * создаёт таблицы публикаций без `IF NOT EXISTS` — повторно они не
+ * проигрываются, как и в реальном миграторе, который помнит применённый файл.
  */
 const REPLAYED_AFTER_043: readonly string[] = [
   MIGRATION,

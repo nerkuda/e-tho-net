@@ -1,0 +1,978 @@
+/**
+ * Домен подсистемы «Публикации» (0.11.1, задача 8178e007; тех.проект
+ * c5261d02; сущности bc147b40 / 18f3bebf / e6aeb7ba / f0a51091; ADR 1d7e4b43;
+ * жизненный цикл 200b87be; владелец-вложение 71c2d194; ветвимость e7487d77).
+ *
+ * Модель данных и CRUD публикаций, поузлового локального порядка, исключений,
+ * полок библиотеки и владельца вложений `publication` — без сборки документа
+ * (это задача 34119c67) и без REST/MCP-фасадов (c59ce742/8f6857f8).
+ *
+ * **Ветвимость.** Все таблицы подсистемы — ветвимые: чтения идут через `*_v`
+ * (контекст слоя соединения), запись — материализацией теневой строки
+ * (`materializeShadow`/`deleteRowLayered`), физическое удаление возможно
+ * только в основе. У строк-деталей (`publication_order`,
+ * `publication_exclusions`, `shelf_items`) `id` детерминирован от
+ * естественного ключа (`db/publication-id.ts`) — иначе независимые первые
+ * записи одного узла в разных слоях разошлись бы в два «победителя»
+ * (прецедент property_values, ошибка dc119240).
+ */
+
+import { randomUUID } from 'node:crypto';
+
+import {
+  buildLikePattern,
+  EtnError,
+  type HoldingLayerRef,
+  type Publication,
+  type PublicationActiveFilter,
+  type PublicationCreateInput,
+  type PublicationDeletionCheckResult,
+  type PublicationExclusion,
+  type PublicationListQuery,
+  type PublicationOrderItem,
+  type PublicationSort,
+  type PublicationUpdateInput,
+  type SavedFilterDefinition,
+  type Shelf,
+  type ShelfInput,
+  type ShelfItem,
+} from '@etn/shared';
+
+import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext, materializeShadow, deleteRowLayered } from '../db/layer-write.js';
+import {
+  publicationExclusionId,
+  publicationOrderId,
+  shelfItemId,
+} from '../db/publication-id.js';
+import { listPublicationHoldingLayers } from './holding-layers.js';
+import { removeStoredFile, storedFileInUse } from './attachment-service.js';
+import {
+  numberingRangeInvalid,
+  recipeOverlap,
+  summaryHasMarkdownHeadings,
+} from './publication-validation.js';
+import { normalizeTitle } from './thought-service.js';
+
+/** Cap длины названия — по образцу мыслей (защита от мусора). */
+const TITLE_MAX = 500;
+
+/** Строка `publications_v` (без вычисляемых полей). */
+interface PublicationRow {
+  id: string;
+  title: string;
+  subtitle: string | null;
+  summary_md: string | null;
+  authorship: string | null;
+  cover_attachment_id: string | null;
+  cover_url: string | null;
+  assembly_date: string | null;
+  title_recipe: string | null;
+  text_sources: string | null;
+  extra_properties: string | null;
+  numbering_from: number | null;
+  numbering_to: number | null;
+  active: number;
+  marked_for_deletion: number;
+  marked_for_deletion_at: string | null;
+  marked_for_deletion_by: string | null;
+  version: number;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+// ---------------------------------------------------------------------------
+// Чтение и преобразование строк
+// ---------------------------------------------------------------------------
+
+/** Пустая строка → `null`; иначе — исходное значение. */
+function nullable(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  return value.trim() === '' ? null : value;
+}
+
+/** Разобрать JSON-массив строк; битое значение → `[]` (данные защищены схемой). */
+function parseStringArray(text: string | null): string[] {
+  if (text === null || text === '') return [];
+  try {
+    const value = JSON.parse(text) as unknown;
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Разобрать JSON-объект рецепта; битое значение → `null`. */
+function parseRecipe(text: string | null): SavedFilterDefinition | null {
+  if (text === null || text === '') return null;
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value !== null && typeof value === 'object' ? (value as SavedFilterDefinition) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Источник обложки, вычисляемый из пары полей. */
+function coverKindOf(row: PublicationRow): Publication['cover_kind'] {
+  if (row.cover_attachment_id !== null) return 'attachment';
+  if (row.cover_url !== null) return 'url';
+  return 'none';
+}
+
+/** Преобразовать строку БД в DTO публикации. */
+function rowToPublication(row: PublicationRow): Publication {
+  return {
+    id: row.id,
+    title: row.title,
+    subtitle: row.subtitle,
+    summary_md: row.summary_md,
+    authorship: row.authorship,
+    cover_attachment_id: row.cover_attachment_id,
+    cover_url: row.cover_url,
+    cover_kind: coverKindOf(row),
+    assembly_date: row.assembly_date,
+    title_recipe: parseRecipe(row.title_recipe),
+    text_sources: parseStringArray(row.text_sources),
+    extra_properties: parseStringArray(row.extra_properties),
+    numbering_from: row.numbering_from,
+    numbering_to: row.numbering_to,
+    active: row.active === 1,
+    marked_for_deletion: row.marked_for_deletion === 1,
+    marked_for_deletion_at: row.marked_for_deletion_at,
+    marked_for_deletion_by: row.marked_for_deletion_by,
+    version: row.version,
+    created_at: row.created_at,
+    created_by: row.created_by,
+    updated_at: row.updated_at,
+    updated_by: row.updated_by,
+  };
+}
+
+/** Публикация по id в контексте слоя соединения; `null` — не видна. */
+export function getPublication(ndb: NetworkDb, id: string): Publication | null {
+  const row = ndb.prepare('SELECT * FROM publications_v WHERE id = ? LIMIT 1').get(id) as
+    | PublicationRow
+    | undefined;
+  return row === undefined ? null : rowToPublication(row);
+}
+
+/** Публикация по id или `NOT_FOUND`. */
+function getPublicationOrThrow(ndb: NetworkDb, id: string): Publication {
+  const publication = getPublication(ndb, id);
+  if (publication === null) {
+    throw new EtnError('NOT_FOUND', `publication ${id} not found`, {
+      entity: 'publication',
+      id,
+    });
+  }
+  return publication;
+}
+
+// ---------------------------------------------------------------------------
+// Валидация (требования карточки CRUD 5af247e4, жизненного цикла 200b87be)
+// ---------------------------------------------------------------------------
+
+/**
+ * Резюме — markdown БЕЗ заголовков (титул не место для структуры,
+ * требование титула): наличие заголовка → `VALIDATION_ERROR`
+ * `summary_headings_forbidden`.
+ */
+function assertSummaryHasNoHeadings(summaryMd: string | null): void {
+  if (summaryMd === null) return;
+  if (summaryHasMarkdownHeadings(summaryMd)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'резюме публикации не может содержать заголовки (markdown без заголовков)',
+      { field: 'summary_md', code: 'summary_headings_forbidden' },
+    );
+  }
+}
+
+/** Диапазон нумерации: `numbering_from ≤ numbering_to`, когда обе заданы. */
+function assertNumberingRange(from: number | null, to: number | null): void {
+  if (numberingRangeInvalid(from, to)) {
+    throw new EtnError('VALIDATION_ERROR', 'numbering_from не может быть больше numbering_to', {
+      field: 'numbering_from',
+      code: 'numbering_range',
+    });
+  }
+}
+
+/** Ровно один источник обложки: вложение ИЛИ URL (оба `null` допустимы). */
+function assertSingleCover(
+  coverAttachmentId: string | null,
+  coverUrl: string | null,
+): void {
+  if (coverAttachmentId !== null && coverUrl !== null) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'у публикации может быть только один источник обложки: вложение или URL',
+      { field: 'cover_attachment_id', code: 'cover_conflict' },
+    );
+  }
+}
+
+/** Строка-вложение-обложка обязана принадлежать этой публикации. */
+function assertCoverAttachmentOwned(
+  ndb: NetworkDb,
+  publicationId: string,
+  attachmentId: string | null,
+): void {
+  if (attachmentId === null) return;
+  const row = ndb
+    .prepare(
+      `SELECT 1 FROM attachments_v
+       WHERE id = ? AND owner_type = 'publication' AND owner_id = ? LIMIT 1`,
+    )
+    .get(attachmentId, publicationId);
+  if (row === undefined) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'обложка должна ссылаться на строку-вложение этой публикации',
+      { field: 'cover_attachment_id', code: 'cover_attachment_invalid' },
+    );
+  }
+}
+
+/** Рецепты не пересекаются: `text_sources ∩ extra_properties = ∅`. */
+function assertRecipeNoOverlap(textSources: string[], extraProperties: string[]): void {
+  const overlap = recipeOverlap(textSources, extraProperties);
+  if (overlap.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'свойства текстов и «дополнительных материалов» не должны пересекаться',
+      { field: 'text_sources', code: 'recipe_overlap', overlap },
+    );
+  }
+}
+
+/** Нормализовать и проверить список id свойств (существование в реестре). */
+function normalizePropertyIds(ndb: NetworkDb, ids: string[] | undefined, field: string): string[] {
+  if (ids === undefined) return [];
+  const unique = Array.from(new Set(ids));
+  if (unique.length === 0) return [];
+  const placeholders = unique.map(() => '?').join(', ');
+  const found = new Set(
+    (
+      ndb
+        .prepare(`SELECT id FROM properties_v WHERE id IN (${placeholders})`)
+        .all(...unique) as { id: string }[]
+    ).map((r) => r.id),
+  );
+  const missing = unique.filter((id) => !found.has(id));
+  if (missing.length > 0) {
+    throw new EtnError('VALIDATION_ERROR', 'указаны несуществующие свойства рецепта', {
+      field,
+      missing,
+    });
+  }
+  return unique;
+}
+
+/** Проверить название публикации. */
+function validatePublicationTitle(title: unknown): string {
+  if (typeof title !== 'string' || title.trim() === '') {
+    throw new EtnError('VALIDATION_ERROR', 'title обязателен', { field: 'title' });
+  }
+  const value = title.trim();
+  if (value.length > TITLE_MAX) {
+    throw new EtnError('VALIDATION_ERROR', `title длиннее ${TITLE_MAX} символов`, {
+      field: 'title',
+    });
+  }
+  return value;
+}
+
+/** Итоговые значения полей после создания/правки — единая точка валидации. */
+function resolvePublicationFields(
+  ndb: NetworkDb,
+  publicationId: string,
+  current: PublicationRow | null,
+  input: PublicationCreateInput | PublicationUpdateInput,
+): {
+  title: string;
+  subtitle: string | null;
+  summary_md: string | null;
+  authorship: string | null;
+  cover_attachment_id: string | null;
+  cover_url: string | null;
+  title_recipe: string | null;
+  text_sources: string | null;
+  extra_properties: string | null;
+  numbering_from: number | null;
+  numbering_to: number | null;
+} {
+  const pick = <T>(next: T | undefined, prev: T): T => (next === undefined ? prev : next);
+
+  const title =
+    current === null || input.title !== undefined
+      ? validatePublicationTitle(input.title)
+      : current.title;
+  const subtitle = pick(
+    input.subtitle === undefined ? undefined : nullable(input.subtitle),
+    current?.subtitle ?? null,
+  );
+  const summaryMd = pick(
+    input.summary_md === undefined ? undefined : nullable(input.summary_md),
+    current?.summary_md ?? null,
+  );
+  const authorship = pick(
+    input.authorship === undefined ? undefined : nullable(input.authorship),
+    current?.authorship ?? null,
+  );
+  const coverAttachmentId = pick(
+    input.cover_attachment_id === undefined ? undefined : nullable(input.cover_attachment_id),
+    current?.cover_attachment_id ?? null,
+  );
+  const coverUrl = pick(
+    input.cover_url === undefined ? undefined : nullable(input.cover_url),
+    current?.cover_url ?? null,
+  );
+
+  let titleRecipe = current?.title_recipe ?? null;
+  if (input.title_recipe !== undefined) {
+    titleRecipe =
+      input.title_recipe === null ? null : JSON.stringify(input.title_recipe);
+  }
+
+  let textSources = parseStringArray(current?.text_sources ?? null);
+  if (input.text_sources !== undefined) {
+    textSources = normalizePropertyIds(ndb, input.text_sources, 'text_sources');
+  }
+  let extraProperties = parseStringArray(current?.extra_properties ?? null);
+  if (input.extra_properties !== undefined) {
+    extraProperties = normalizePropertyIds(ndb, input.extra_properties, 'extra_properties');
+  }
+
+  const numberingFrom = pick(input.numbering_from, current?.numbering_from ?? null);
+  const numberingTo = pick(input.numbering_to, current?.numbering_to ?? null);
+
+  assertSummaryHasNoHeadings(summaryMd);
+  assertSingleCover(coverAttachmentId, coverUrl);
+  assertCoverAttachmentOwned(ndb, publicationId, coverAttachmentId);
+  assertRecipeNoOverlap(textSources, extraProperties);
+  assertNumberingRange(numberingFrom, numberingTo);
+
+  return {
+    title,
+    subtitle,
+    summary_md: summaryMd,
+    authorship,
+    cover_attachment_id: coverAttachmentId,
+    cover_url: coverUrl,
+    title_recipe: titleRecipe,
+    text_sources: JSON.stringify(textSources),
+    extra_properties: JSON.stringify(extraProperties),
+    numbering_from: numberingFrom,
+    numbering_to: numberingTo,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CRUD публикаций
+// ---------------------------------------------------------------------------
+
+/** Создать публикацию (POST /publications). */
+export function createPublication(
+  ndb: NetworkDb,
+  input: PublicationCreateInput,
+  actorUserId: string,
+): Publication {
+  return ndb.transaction(() => {
+    const id = randomUUID();
+    const fields = resolvePublicationFields(ndb, id, null, input);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    ndb
+      .prepare(
+        `INSERT INTO publications (id, layer_id, title, subtitle, summary_md, authorship,
+                                   cover_attachment_id, cover_url, title_recipe, text_sources,
+                                   extra_properties, numbering_from, numbering_to,
+                                   active, version, created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        ndb.layerId,
+        fields.title,
+        fields.subtitle,
+        fields.summary_md,
+        fields.authorship,
+        fields.cover_attachment_id,
+        fields.cover_url,
+        fields.title_recipe,
+        fields.text_sources,
+        fields.extra_properties,
+        fields.numbering_from,
+        fields.numbering_to,
+        now,
+        actorUserId,
+        now,
+        actorUserId,
+      );
+    return getPublicationOrThrow(ndb, id);
+  });
+}
+
+/** Патч настроек публикации. `assembly_date` не меняется — только rebuild. */
+export function updatePublication(
+  ndb: NetworkDb,
+  id: string,
+  input: PublicationUpdateInput,
+  actorUserId: string,
+): Publication {
+  return ndb.transaction(() => {
+    const current = getPublicationOrThrow(ndb, id);
+    const raw = ndb
+      .prepare('SELECT * FROM publications_v WHERE id = ? LIMIT 1')
+      .get(id) as PublicationRow;
+    const fields = resolvePublicationFields(ndb, id, raw, input);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    const active = input.active === undefined ? (current.active ? 1 : 0) : input.active ? 1 : 0;
+
+    materializeShadow(ndb, 'publications', id);
+    ndb
+      .prepare(
+        `UPDATE publications
+            SET title = ?, subtitle = ?, summary_md = ?, authorship = ?,
+                cover_attachment_id = ?, cover_url = ?, title_recipe = ?, text_sources = ?,
+                extra_properties = ?, numbering_from = ?, numbering_to = ?, active = ?,
+                version = version + 1, updated_at = ?, updated_by = ?
+          WHERE id = ? AND layer_id = ?`,
+      )
+      .run(
+        fields.title,
+        fields.subtitle,
+        fields.summary_md,
+        fields.authorship,
+        fields.cover_attachment_id,
+        fields.cover_url,
+        fields.title_recipe,
+        fields.text_sources,
+        fields.extra_properties,
+        fields.numbering_from,
+        fields.numbering_to,
+        active,
+        now,
+        actorUserId,
+        id,
+        ndb.layerId,
+      );
+    return getPublicationOrThrow(ndb, id);
+  });
+}
+
+/** Пометить публикацию на удаление (корзина). Доступно в любом слое. */
+export function trashPublication(ndb: NetworkDb, id: string, actorUserId: string): Publication {
+  return markPublicationTrashed(ndb, id, true, actorUserId);
+}
+
+/** Снять пометку на удаление. */
+export function restorePublication(ndb: NetworkDb, id: string, actorUserId: string): Publication {
+  return markPublicationTrashed(ndb, id, false, actorUserId);
+}
+
+/** Общая реализация пометки/снятия пометки корзины. */
+function markPublicationTrashed(
+  ndb: NetworkDb,
+  id: string,
+  trashed: boolean,
+  actorUserId: string,
+): Publication {
+  return ndb.transaction(() => {
+    getPublicationOrThrow(ndb, id);
+    const now = new Date().toISOString();
+    materializeShadow(ndb, 'publications', id);
+    if (trashed) {
+      ndb
+        .prepare(
+          `UPDATE publications
+              SET marked_for_deletion = 1, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
+                  version = version + 1, updated_at = ?, updated_by = ?
+            WHERE id = ? AND layer_id = ?`,
+        )
+        .run(now, actorUserId, now, actorUserId, id, ndb.layerId);
+    } else {
+      ndb
+        .prepare(
+          `UPDATE publications
+              SET marked_for_deletion = 0, marked_for_deletion_at = NULL, marked_for_deletion_by = NULL,
+                  version = version + 1, updated_at = ?, updated_by = ?
+            WHERE id = ? AND layer_id = ?`,
+        )
+        .run(now, actorUserId, id, ndb.layerId);
+    }
+    return getPublicationOrThrow(ndb, id);
+  });
+}
+
+/**
+ * Число живых значений свойств типа «Публикация», ссылающихся на публикацию.
+ *
+ * Тип значения `publication` реализуется задачей f37b468d; до его появления
+ * живых свойств такого вида в сети нет, и счётчик равен нулю. Запрос построен
+ * на реестре (`properties_v` по `value_type`) и всех `value_*`-колонках
+ * `property_values`, поэтому не зависит от имени колонки хранения ссылки,
+ * которую введёт та задача.
+ */
+export function countPublicationRefUsages(ndb: NetworkDb, publicationId: string): number {
+  const props = (
+    ndb
+      .prepare("SELECT id FROM properties_v WHERE value_type = 'publication'")
+      .all() as { id: string }[]
+  ).map((r) => r.id);
+  if (props.length === 0) return 0;
+
+  const columns = (ndb.pragma('table_info(property_values)') as Array<{ name: string; type: string }>)
+    .filter((c) => c.name.startsWith('value_'))
+    .map((c) => c.name);
+  if (columns.length === 0) return 0;
+
+  const placeholders = props.map(() => '?').join(', ');
+  const match = columns.map((c) => `${c} = ?`).join(' OR ');
+  const params: unknown[] = [...props];
+  for (let i = 0; i < columns.length; i += 1) params.push(publicationId);
+  const row = ndb
+    .prepare(
+      `SELECT COUNT(*) AS c FROM property_values_v
+        WHERE property_id IN (${placeholders}) AND (${match})`,
+    )
+    .get(...params) as { c: number };
+  return row.c;
+}
+
+/** Проверка физического удаления публикации (аналог deletion-check мысли). */
+export function checkPublicationDeletion(
+  ndb: NetworkDb,
+  id: string,
+): PublicationDeletionCheckResult {
+  getPublicationOrThrow(ndb, id);
+  const properties = countPublicationRefUsages(ndb, id);
+  const layers: HoldingLayerRef[] = listPublicationHoldingLayers(ndb, id);
+  return { blocked: properties > 0 || layers.length > 0, blocking: { properties, layers } };
+}
+
+/**
+ * Физическое удаление публикации — только в основе (в слое
+ * `VALIDATION_ERROR purge_base_only`). Каскад: строки `publication_order`,
+ * `publication_exclusions`, `shelf_items` и строки-вложения обложки ВСЕХ
+ * слоёв; физический файл удаляется, когда на него не осталось строк.
+ * Блокировки (`deletion_blocked`): живые значения свойств типа «Публикация» и
+ * живая теневая строка в ином слое.
+ */
+export function purgePublication(ndb: NetworkDb, id: string): void {
+  ndb.transaction(() => {
+    if (!isBaseContext(ndb)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'физическое удаление публикации доступно только в основе',
+        { entity: 'publication', id, code: 'purge_base_only' },
+      );
+    }
+    getPublicationOrThrow(ndb, id);
+    const check = checkPublicationDeletion(ndb, id);
+    if (check.blocked) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'публикация используется в свойствах или удерживается слоем и не может быть удалена',
+        { entity: 'publication', id, blocking: check.blocking, code: 'deletion_blocked' },
+      );
+    }
+
+    // Строки-вложения обложки: сначала запомнить файлы для сборки мусора.
+    const attachments = ndb
+      .prepare(
+        `SELECT kind, file_path FROM attachments -- layers:physical-read
+          WHERE owner_type = 'publication' AND owner_id = ?`,
+      )
+      .all(id) as { kind: string; file_path: string | null }[];
+    ndb
+      .prepare("DELETE FROM attachments WHERE owner_type = 'publication' AND owner_id = ?")
+      .run(id);
+
+    ndb.prepare('DELETE FROM publication_order WHERE publication_id = ?').run(id);
+    ndb.prepare('DELETE FROM publication_exclusions WHERE publication_id = ?').run(id);
+    ndb.prepare('DELETE FROM shelf_items WHERE publication_id = ?').run(id);
+    ndb.prepare('DELETE FROM publications WHERE id = ?').run(id);
+
+    for (const a of attachments) {
+      if (a.kind === 'file' && a.file_path !== null && !storedFileInUse(ndb, a.file_path)) {
+        removeStoredFile(ndb, 'file', a.file_path);
+      }
+    }
+
+    // Строки состава полок удалены каскадом — «полки не блокируют удаление».
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Список публикаций
+// ---------------------------------------------------------------------------
+
+/** Список публикаций с пагинацией, поиском, фильтром полки и актуальности. */
+export function listPublications(
+  ndb: NetworkDb,
+  query: PublicationListQuery = {},
+): { items: Publication[]; total: number } {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  let join = '';
+
+  if (query.shelf !== undefined) {
+    join = 'JOIN shelf_items_v si ON si.publication_id = p.id AND si.shelf_id = ?';
+    params.push(query.shelf);
+  }
+  const active: PublicationActiveFilter = query.active ?? 'true';
+  if (active === 'true') where.push('p.active = 1');
+  else if (active === 'false') where.push('p.active = 0');
+  if (query.include_trashed !== true) where.push('p.marked_for_deletion = 0');
+
+  if (query.q !== undefined && query.q.trim() !== '') {
+    const pattern = buildLikePattern(query.q.trim()).toLowerCase();
+    // `unicode_lower` (registerQueryFunctions) сворачивает регистр кириллицы —
+    // встроенный SQLite `lower()` умеет только ASCII.
+    where.push(
+      "(unicode_lower(COALESCE(p.title, '') || '\\n' || COALESCE(p.subtitle, '') || '\\n' || COALESCE(p.authorship, '')) LIKE ? ESCAPE '\\')",
+    );
+    params.push(pattern);
+  }
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const totalRow = ndb
+    .prepare(`SELECT COUNT(DISTINCT p.id) AS n FROM publications_v p ${join} ${whereSql}`)
+    .get(...params) as { n: number };
+
+  const sort: PublicationSort = query.sort ?? 'manual';
+  const orderSql =
+    sort === 'title'
+      ? 'p.title COLLATE NOCASE ASC'
+      : sort === 'date'
+        ? 'p.created_at DESC'
+        : sort === 'author'
+          ? 'COALESCE(p.authorship, p.created_by) COLLATE NOCASE ASC'
+          : query.shelf !== undefined
+            ? 'si.position ASC'
+            : 'p.created_at ASC';
+
+  const limit =
+    typeof query.limit === 'number' ? Math.max(0, Math.min(200, Math.trunc(query.limit))) : 50;
+  const offset = typeof query.offset === 'number' ? Math.max(0, Math.trunc(query.offset)) : 0;
+
+  const rows = ndb
+    .prepare(
+      `SELECT p.* FROM publications_v p ${join} ${whereSql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as PublicationRow[];
+  return { items: rows.map(rowToPublication), total: totalRow.n };
+}
+
+// ---------------------------------------------------------------------------
+// Локальный порядок и исключения
+// ---------------------------------------------------------------------------
+
+/**
+ * Батч перестановок порядка: одна транзакция, upsert поузловых строк.
+ * Неизвестные/лишние узлы не проверяются — позиция мертва, если узел исчез.
+ */
+export function setPublicationOrder(
+  ndb: NetworkDb,
+  publicationId: string,
+  items: PublicationOrderItem[],
+  actorUserId: string,
+): PublicationOrderItem[] {
+  return ndb.transaction(() => {
+    getPublicationOrThrow(ndb, publicationId);
+    const now = new Date().toISOString();
+    for (const item of items) {
+      if (typeof item.node_key !== 'string' || item.node_key === '') continue;
+      const id = publicationOrderId(publicationId, item.node_key);
+      const materialized = materializeShadow(ndb, 'publication_order', id);
+      if (materialized) {
+        ndb
+          .prepare(
+            `UPDATE publication_order
+                SET position = ?, updated_at = ?, updated_by = ?
+              WHERE id = ? AND layer_id = ?`,
+          )
+          .run(item.position, now, actorUserId, id, ndb.layerId);
+      } else {
+        ndb
+          .prepare(
+            `INSERT INTO publication_order (id, layer_id, publication_id, node_key, position,
+                                            updated_at, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(id, ndb.layerId, publicationId, item.node_key, item.position, now, actorUserId);
+      }
+    }
+    return listPublicationOrder(ndb, publicationId);
+  });
+}
+
+/** Видимый локальный порядок публикации. */
+export function listPublicationOrder(
+  ndb: NetworkDb,
+  publicationId: string,
+): PublicationOrderItem[] {
+  return (
+    ndb
+      .prepare(
+        `SELECT node_key, position FROM publication_order_v
+          WHERE publication_id = ? ORDER BY position ASC`,
+      )
+      .all(publicationId) as { node_key: string; position: number }[]
+  ).map((r) => ({ node_key: r.node_key, position: r.position }));
+}
+
+/** Исключить мысль из публикации (все её вхождения). */
+export function addPublicationExclusion(
+  ndb: NetworkDb,
+  publicationId: string,
+  thoughtId: string,
+  actorUserId: string,
+): PublicationExclusion[] {
+  return ndb.transaction(() => {
+    getPublicationOrThrow(ndb, publicationId);
+    const id = publicationExclusionId(publicationId, thoughtId);
+    const materialized = materializeShadow(ndb, 'publication_exclusions', id);
+    if (materialized) {
+      ndb
+        .prepare(
+          `UPDATE publication_exclusions SET deleted = 0 WHERE id = ? AND layer_id = ?`,
+        )
+        .run(id, ndb.layerId);
+    } else {
+      const now = new Date().toISOString();
+      ndb
+        .prepare(
+          `INSERT INTO publication_exclusions (id, layer_id, publication_id, thought_id,
+                                               created_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, ndb.layerId, publicationId, thoughtId, now, actorUserId);
+    }
+    return listPublicationExclusions(ndb, publicationId);
+  });
+}
+
+/** Снять исключение мысли. */
+export function removePublicationExclusion(
+  ndb: NetworkDb,
+  publicationId: string,
+  thoughtId: string,
+): PublicationExclusion[] {
+  return ndb.transaction(() => {
+    getPublicationOrThrow(ndb, publicationId);
+    const id = publicationExclusionId(publicationId, thoughtId);
+    const visible = ndb
+      .prepare('SELECT 1 FROM publication_exclusions_v WHERE id = ? LIMIT 1')
+      .get(id);
+    if (visible !== undefined) {
+      deleteRowLayered(ndb, 'publication_exclusions', id);
+    }
+    return listPublicationExclusions(ndb, publicationId);
+  });
+}
+
+/** Видимые исключения публикации. */
+export function listPublicationExclusions(
+  ndb: NetworkDb,
+  publicationId: string,
+): PublicationExclusion[] {
+  return (
+    ndb
+      .prepare(
+        `SELECT publication_id, thought_id, created_at, created_by
+           FROM publication_exclusions_v
+          WHERE publication_id = ? ORDER BY created_at ASC, thought_id ASC`,
+      )
+      .all(publicationId) as PublicationExclusion[]
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Полки библиотеки
+// ---------------------------------------------------------------------------
+
+/** Строка `shelves_v`. */
+interface ShelfRow {
+  id: string;
+  title: string;
+  position: number;
+  version: number;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+/** Собрать полку с составом. */
+function shelfWithItems(ndb: NetworkDb, row: ShelfRow): Shelf {
+  const items = (
+    ndb
+      .prepare(
+        `SELECT shelf_id, publication_id, position FROM shelf_items_v
+          WHERE shelf_id = ? ORDER BY position ASC`,
+      )
+      .all(row.id) as ShelfItem[]
+  ).map((i) => ({ ...i }));
+  return { ...row, items };
+}
+
+/** Список полок с составом (общие для участников сети). */
+export function listShelves(ndb: NetworkDb): Shelf[] {
+  const rows = ndb
+    .prepare('SELECT * FROM shelves_v ORDER BY position ASC, created_at ASC')
+    .all() as ShelfRow[];
+  return rows.map((row) => shelfWithItems(ndb, row));
+}
+
+/** Полка по id или `NOT_FOUND`. */
+function getShelfOrThrow(ndb: NetworkDb, id: string): Shelf {
+  const row = ndb.prepare('SELECT * FROM shelves_v WHERE id = ? LIMIT 1').get(id) as
+    | ShelfRow
+    | undefined;
+  if (row === undefined) {
+    throw new EtnError('NOT_FOUND', `shelf ${id} not found`, { entity: 'shelf', id });
+  }
+  return shelfWithItems(ndb, row);
+}
+
+/** Проверить название полки (непустое, в пределах слоя уникальное). */
+function validateShelfTitle(ndb: NetworkDb, title: unknown, excludeId?: string): string {
+  if (typeof title !== 'string' || title.trim() === '') {
+    throw new EtnError('VALIDATION_ERROR', 'title полки обязателен', { field: 'title' });
+  }
+  const value = title.trim();
+  const key = normalizeTitle(value);
+  const clash = ndb
+    .prepare('SELECT id FROM shelves_v WHERE title_key = ? AND id <> ? LIMIT 1')
+    .get(key, excludeId ?? '') as { id: string } | undefined;
+  if (clash !== undefined) {
+    throw new EtnError('VALIDATION_ERROR', 'полка с таким именем уже существует', {
+      field: 'title',
+      code: 'shelf_title_taken',
+    });
+  }
+  return value;
+}
+
+/** Создать полку. */
+export function createShelf(ndb: NetworkDb, input: ShelfInput, actorUserId: string): Shelf {
+  return ndb.transaction(() => {
+    const title = validateShelfTitle(ndb, input.title);
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const position =
+      typeof input.position === 'number'
+        ? Math.trunc(input.position)
+        : ((ndb.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM shelves_v').get() as { p: number })
+            .p + 1);
+    ndb
+      .prepare(
+        `INSERT INTO shelves (id, layer_id, title, title_key, position, version,
+                              created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+      )
+      .run(id, ndb.layerId, title, normalizeTitle(title), position, now, actorUserId, now, actorUserId);
+    return getShelfOrThrow(ndb, id);
+  });
+}
+
+/** Переименовать полку / изменить её порядок. */
+export function updateShelf(
+  ndb: NetworkDb,
+  id: string,
+  input: ShelfInput,
+  actorUserId: string,
+): Shelf {
+  return ndb.transaction(() => {
+    getShelfOrThrow(ndb, id);
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (input.title !== undefined) {
+      const title = validateShelfTitle(ndb, input.title, id);
+      sets.push('title = ?', 'title_key = ?');
+      args.push(title, normalizeTitle(title));
+    }
+    if (input.position !== undefined) {
+      sets.push('position = ?');
+      args.push(Math.trunc(input.position));
+    }
+    if (sets.length === 0) return getShelfOrThrow(ndb, id);
+    const now = new Date().toISOString();
+    sets.push('version = version + 1', 'updated_at = ?', 'updated_by = ?');
+    args.push(now, actorUserId, id, ndb.layerId);
+    materializeShadow(ndb, 'shelves', id);
+    ndb.prepare(`UPDATE shelves SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(...args);
+    return getShelfOrThrow(ndb, id);
+  });
+}
+
+/**
+ * Удалить полку: её строки состава удаляются, публикации не трогаются.
+ * В основе — физически, в слое — надгробиями.
+ */
+export function deleteShelf(ndb: NetworkDb, id: string): void {
+  ndb.transaction(() => {
+    getShelfOrThrow(ndb, id);
+    const itemIds = (
+      ndb.prepare('SELECT id FROM shelf_items_v WHERE shelf_id = ?').all(id) as { id: string }[]
+    ).map((r) => r.id);
+    for (const itemId of itemIds) {
+      deleteRowLayered(ndb, 'shelf_items', itemId);
+    }
+    deleteRowLayered(ndb, 'shelves', id);
+  });
+}
+
+/** Положить публикацию на полку / изменить её позицию. */
+export function addShelfItem(
+  ndb: NetworkDb,
+  shelfId: string,
+  publicationId: string,
+  position: number,
+  _actorUserId: string,
+): Shelf {
+  return ndb.transaction(() => {
+    getShelfOrThrow(ndb, shelfId);
+    getPublicationOrThrow(ndb, publicationId);
+    const id = shelfItemId(shelfId, publicationId);
+    const materialized = materializeShadow(ndb, 'shelf_items', id);
+    const pos = Math.trunc(position);
+    if (materialized) {
+      ndb
+        .prepare('UPDATE shelf_items SET position = ?, deleted = 0 WHERE id = ? AND layer_id = ?')
+        .run(pos, id, ndb.layerId);
+    } else {
+      ndb
+        .prepare(
+          `INSERT INTO shelf_items (id, layer_id, shelf_id, publication_id, position)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(id, ndb.layerId, shelfId, publicationId, pos);
+    }
+    return getShelfOrThrow(ndb, shelfId);
+  });
+}
+
+/** Убрать публикацию с полки. */
+export function removeShelfItem(
+  ndb: NetworkDb,
+  shelfId: string,
+  publicationId: string,
+): Shelf {
+  return ndb.transaction(() => {
+    getShelfOrThrow(ndb, shelfId);
+    const id = shelfItemId(shelfId, publicationId);
+    const visible = ndb.prepare('SELECT 1 FROM shelf_items_v WHERE id = ? LIMIT 1').get(id);
+    if (visible !== undefined) {
+      deleteRowLayered(ndb, 'shelf_items', id);
+    }
+    return getShelfOrThrow(ndb, shelfId);
+  });
+}

@@ -56,6 +56,8 @@ import {
   parseLinkTypeFilterValue,
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
+  PUBLICATION_ACTIVE_FILTERS,
+  PUBLICATION_SORTS,
   REALTIME_DEFAULTS,
   SAVED_FILTER_VIEWS,
   SEARCH_SCOPES,
@@ -70,6 +72,11 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
+import {
+  numberingRangeInvalid,
+  recipeOverlap,
+  summaryHasMarkdownHeadings,
+} from './domain/publication-validation.js';
 import { validateLayerColors } from './domain/layer-service.js';
 import type { TraversalBounds } from './domain/graph-traversal.js';
 import type {
@@ -3789,3 +3796,151 @@ export interface ReaderTaskFail {
 
 /** Ответ reader-воркера. */
 export type ReaderTaskResponse = ReaderTaskOk | ReaderTaskFail;
+
+// ---------------------------------------------------------------------------
+// Публикации (0.11.1, задача 8178e007; карточка CRUD 5af247e4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Объект рецепта заголовков — тот же формат, что `saved_filters.definition`
+ * (отбор «Структур мыслей»). Домен и сборка разбирают его своими парсерами,
+ * контракт проверяет только «объект или null».
+ */
+const PublicationTitleRecipe = z.record(z.string(), z.unknown()).nullable().optional();
+
+/** Резюме публикации (markdown без заголовков — проверяется refine). */
+const PublicationSummary = z.string().nullable().optional();
+
+/** Общие поля тела публикации (создание и патч). */
+const PublicationBodyShape = {
+  title: z.string().min(1),
+  subtitle: z.string().nullable().optional(),
+  summary_md: PublicationSummary,
+  authorship: z.string().nullable().optional(),
+  cover_attachment_id: z.string().min(1).nullable().optional(),
+  cover_url: z.string().min(1).nullable().optional(),
+  title_recipe: PublicationTitleRecipe,
+  text_sources: z.array(z.string().min(1)).optional(),
+  extra_properties: z.array(z.string().min(1)).optional(),
+  numbering_from: z.number().int().nullable().optional(),
+  numbering_to: z.number().int().nullable().optional(),
+};
+
+/**
+ * Межполевые правила публикации (единый источник — domain/publication-validation).
+ * Вызывается из `.superRefine` обеих схем.
+ */
+function refinePublicationFields(
+  value: {
+    summary_md?: string | null;
+    cover_attachment_id?: string | null;
+    cover_url?: string | null;
+    text_sources?: string[];
+    extra_properties?: string[];
+    numbering_from?: number | null;
+    numbering_to?: number | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.summary_md != null && summaryHasMarkdownHeadings(value.summary_md)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['summary_md'],
+      message: 'резюме не может содержать заголовки (markdown без заголовков)',
+      params: { code: 'summary_headings_forbidden' },
+    });
+  }
+  if (value.cover_attachment_id != null && value.cover_url != null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['cover_attachment_id'],
+      message: 'только один источник обложки: вложение или URL',
+      params: { code: 'cover_conflict' },
+    });
+  }
+  const overlap = recipeOverlap(value.text_sources ?? [], value.extra_properties ?? []);
+  if (overlap.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['text_sources'],
+      message: 'свойства текстов и «дополнительных материалов» пересекаются',
+      params: { code: 'recipe_overlap' },
+    });
+  }
+  if (numberingRangeInvalid(value.numbering_from ?? null, value.numbering_to ?? null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['numbering_from'],
+      message: 'numbering_from не может быть больше numbering_to',
+      params: { code: 'numbering_range' },
+    });
+  }
+}
+
+/** Вход создания публикации (POST /publications). */
+export const PublicationCreateFields = z
+  .object(PublicationBodyShape)
+  .strict()
+  .superRefine(refinePublicationFields);
+export type PublicationCreateFields = z.infer<typeof PublicationCreateFields>;
+
+/** Вход патча публикации (PATCH /publications/{id}): все поля необязательны. */
+export const PublicationUpdateFields = z
+  .object({
+    ...PublicationBodyShape,
+    title: z.string().min(1).optional(),
+    active: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine(refinePublicationFields);
+export type PublicationUpdateFields = z.infer<typeof PublicationUpdateFields>;
+
+/** Параметры списка публикаций (GET /publications). */
+export const PublicationListFields = z
+  .object({
+    q: z.string().optional(),
+    shelf: z.string().min(1).optional(),
+    active: z.enum(PUBLICATION_ACTIVE_FILTERS).optional(),
+    sort: z.enum(PUBLICATION_SORTS).optional(),
+    include_trashed: z.boolean().optional(),
+    limit: z.number().int().min(0).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .strict();
+export type PublicationListFields = z.infer<typeof PublicationListFields>;
+
+/** Батч перестановок порядка (POST /publications/{id}/order). */
+export const PublicationOrderFields = z
+  .object({
+    items: z
+      .array(
+        z
+          .object({ node_key: z.string().min(1), position: z.number() })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+export type PublicationOrderFields = z.infer<typeof PublicationOrderFields>;
+
+/** Исключения мысли (POST/DELETE /publications/{id}/exclusions). */
+export const PublicationExclusionFields = z.object({ thought_id: z.string().min(1) }).strict();
+export type PublicationExclusionFields = z.infer<typeof PublicationExclusionFields>;
+
+/** Вход создания/правки полки. */
+export const ShelfFields = z
+  .object({
+    title: z.string().min(1).optional(),
+    position: z.number().optional(),
+  })
+  .strict();
+export type ShelfFields = z.infer<typeof ShelfFields>;
+
+/** Элемент состава полки (POST/DELETE /shelves/{id}/items). */
+export const ShelfItemFields = z
+  .object({
+    publication_id: z.string().min(1),
+    position: z.number().optional(),
+  })
+  .strict();
+export type ShelfItemFields = z.infer<typeof ShelfItemFields>;

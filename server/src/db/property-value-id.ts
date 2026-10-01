@@ -26,7 +26,7 @@
  * как UUID), поэтому используется именно UUIDv5, а не «сырой» хеш.
  */
 
-import { createHash } from 'node:crypto';
+import { uuidV5 } from './uuid-v5.js';
 
 /**
  * Фиксированный namespace UUIDv5 для `property_values`. Никогда не менять:
@@ -34,11 +34,6 @@ import { createHash } from 'node:crypto';
  * слои (см. миграцию 036).
  */
 export const PROPERTY_VALUE_ID_NAMESPACE = '7c26af25-9294-4e49-bc9d-51dd0d0ff44c';
-
-/** 16 байтов UUID-строки (без дефисов). */
-function uuidBytes(uuid: string): Buffer {
-  return Buffer.from(uuid.replaceAll('-', ''), 'hex');
-}
 
 /**
  * Детерминированный id строки `property_values` от её natural key:
@@ -52,12 +47,5 @@ export function propertyValueId(
   ownerId: string,
   propertyId: string,
 ): string {
-  const hash = createHash('sha1')
-    .update(uuidBytes(PROPERTY_VALUE_ID_NAMESPACE))
-    .update(`${ownerType}:${ownerId}:${propertyId}`, 'utf8')
-    .digest();
-  hash[6] = (hash[6]! & 0x0f) | 0x50; // version 5
-  hash[8] = (hash[8]! & 0x3f) | 0x80; // variant: RFC 4122
-  const hex = hash.subarray(0, 16).toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return uuidV5(PROPERTY_VALUE_ID_NAMESPACE, `${ownerType}:${ownerId}:${propertyId}`);
 }

@@ -92,3 +92,26 @@ export function listLinkHoldingLayers(ndb: NetworkDb, linkId: string): HoldingLa
   return holding;
 }
 
+/**
+ * Layers holding a **publication** back from physical deletion (0.11.1,
+ * задача 8178e007; требование жизненного цикла 200b87be): удерживает живая
+ * теневая строка самой публикации в ином слое; в рабочем слое — и живая
+ * строка основы (удаление там было бы надгробием, а не физическим
+ * удалением). Ссылки `[[#pub:]]` и состав полок не удерживают — остаются
+ * висячими / подчищаются каскадом.
+ */
+export function listPublicationHoldingLayers(
+  ndb: NetworkDb,
+  publicationId: string,
+): HoldingLayerRef[] {
+  const holding = otherHoldingLayers(
+    ndb,
+    `SELECT layer_id FROM publications WHERE id = ? AND deleted = 0 -- layers:physical-read`,
+    [publicationId],
+  );
+  if (!isBaseContext(ndb) && existsInBaseLayer(ndb, 'publications', publicationId)) {
+    holding.unshift({ id: BASE_LAYER_ID, title: BASE_LAYER_TITLE });
+  }
+  return holding;
+}
+

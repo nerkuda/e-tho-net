@@ -152,7 +152,7 @@ describe(
         seedComment(db, 'c-permanent', 'permanent', '2024-01-01T00:00:00.000Z', null);
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [MIGRATION]);
+        assert.deepEqual(res.applied, [MIGRATION, '047_publications.sql']);
 
         // date-only в valid_from + пустой valid_to → оба стали маркером.
         assert.deepEqual(readComment(db, 'c-date-only'), {

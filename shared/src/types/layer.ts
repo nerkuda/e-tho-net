@@ -137,6 +137,14 @@ export interface LayerMergeReorderCollapsed {
   count: number;
 }
 
+/** A collapsed batch of position-only `publication_order` updates (0.11.1,
+ * требование e7487d77 п.2: свёртка пачек перестановок порядка публикации). */
+export interface LayerMergePublicationReorderCollapsed {
+  /** Публикация, у которой переставили узлы (`publication_order.publication_id`). */
+  publication_id: string;
+  count: number;
+}
+
 /** Response of `POST /networks/{nid}/layers/{id}/merge` (§8.3). */
 export interface LayerMergeReport {
   /** How many logical rows moved to the parent, per branchable table. */
@@ -145,6 +153,9 @@ export interface LayerMergeReport {
   skipped: LayerMergeSkip[];
   /** Position-only link batches collapsed into single report entries. */
   reorder_collapsed: LayerMergeReorderCollapsed[];
+  /** Свёрнутые пачки перестановок порядка публикаций (0.11.1). Необязательно —
+   * старые сохранённые отчёты и клиенты, не знающие публикаций, поля не имеют. */
+  publication_reorder_collapsed?: LayerMergePublicationReorderCollapsed[];
   /** Service layer holding the pre-merge state of the affected rows (§8.2);
    * `null` when there was nothing to overwrite. */
   reserve_layer_id: string | null;

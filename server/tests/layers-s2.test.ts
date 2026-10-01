@@ -290,6 +290,7 @@ describe(
           '044_cross_network_ref.sql',
           '045_links_covering_indexes.sql',
           '046_comments_time.sql',
+          '047_publications.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
@@ -313,6 +314,12 @@ describe(
           // Миграция 044 (задача 7849008a) — служебная таблица снапшотов
           // кросс-сетевых ссылок. На свежеобновлённой сети строк нет.
           property_value_cross_refs: 0,
+          // Миграция 047 (0.11.1) — таблицы публикаций, при апгрейде пустые.
+          publications: 0,
+          publication_order: 0,
+          publication_exclusions: 0,
+          shelves: 0,
+          shelf_items: 0,
         });
 
         // 2. The base layer row.
