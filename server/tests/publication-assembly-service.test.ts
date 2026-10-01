@@ -517,10 +517,16 @@ describe('publication-assembly-service: использование мысли', 
         ['section'],
       );
       assert.deepEqual(sectionUsage.items[0]!.breadcrumbs, ['Section']);
+      // Цель перехода (0.11.1, задача 3275fd8d): якорь первого вхождения и
+      // страница корневого раздела.
+      assert.equal(sectionUsage.items[0]!.anchor, publicationAnchor(section));
+      assert.equal(sectionUsage.items[0]!.page, 1);
 
       const textUsage = listPublicationUsage(ndb, text, USER);
       assert.equal(textUsage.items[0]!.role, 'text');
       assert.equal(textUsage.items[0]!.section_title, 'Section');
+      assert.equal(textUsage.items[0]!.anchor, publicationAnchor(text));
+      assert.equal(textUsage.items[0]!.page, 1);
 
       // Прямое свойство типа «Публикация».
       const pubPropType = createThoughtType(ndb, { name: 'Holder' }, USER);
@@ -538,12 +544,42 @@ describe('publication-assembly-service: использование мысли', 
       assert.equal(directUsage.items[0]!.role, 'direct');
       assert.equal(directUsage.items[0]!.publication_id, pub.id);
       assert.equal(directUsage.items[0]!.property, 'pub');
+      // У прямой ссылки раздела нет — якоря и страницы тоже.
+      assert.equal(directUsage.items[0]!.anchor, undefined);
+      assert.equal(directUsage.items[0]!.page, undefined);
 
       // Лимит.
       const limited = listPublicationUsage(ndb, section, USER, { limit: 0 });
       assert.equal(limited.items.length, 0);
       assert.equal(limited.total, 1);
       assert.equal(limited.has_more, true);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('страница вхождения — по корневому разделу (21-й корень → страница 2)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Root' }, USER);
+      // 21 корневой раздел: рабочий стол сборки — 20 корней на страницу.
+      const roots = Array.from({ length: 21 }, (_, i) =>
+        seedThought(ndb, `R${String(i + 1).padStart(2, '0')}`, type.id),
+      );
+      createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id) },
+        USER,
+      );
+      const first = listPublicationUsage(ndb, roots[0]!, USER).items[0]!;
+      assert.equal(first.role, 'section');
+      assert.equal(first.page, 1);
+      assert.equal(first.anchor, publicationAnchor(roots[0]!));
+
+      const last = listPublicationUsage(ndb, roots[20]!, USER).items[0]!;
+      assert.equal(last.role, 'section');
+      assert.equal(last.page, 2);
+      assert.equal(last.anchor, publicationAnchor(roots[20]!));
     } finally {
       ndb.close();
     }

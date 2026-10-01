@@ -1297,6 +1297,18 @@ function findSectionPath(
 }
 
 /**
+ * Номер страницы сборки (1-based) для корневого раздела: рабочая область
+ * постранично грузит корневые разделы по {@link PUBLICATION_ASSEMBLY_PAGE_SIZE}
+ * (0.11.1, задача 3275fd8d). Не найден (нет в дереве/повтор) — первая
+ * страница.
+ */
+function rootPageOf(tree: readonly PublicationContentNode[], rootThoughtId: string): number {
+  const index = tree.findIndex((node) => node.thoughtId === rootThoughtId && node.repeatOf === null);
+  if (index < 0) return 1;
+  return Math.floor(index / PUBLICATION_ASSEMBLY_PAGE_SIZE) + 1;
+}
+
+/**
  * Использование мысли в публикациях слоя (`GET /thoughts/{id}/publications`):
  * роли «раздел» (хлебные крошки имён разделов) и «текст» по рецептам, плюс
  * прямые значения свойств типа «Публикация». Ленивый расчёт с лимитом публикаций.
@@ -1341,18 +1353,26 @@ export function listPublicationUsage(
           title: pub.title,
           role: 'section',
           breadcrumbs: path.map((id) => titles.get(id)?.title ?? ''),
+          // Цель перехода: якорь первого вхождения и страница его корневого
+          // раздела (0.11.1, задача 3275fd8d, элемент интерфейса 928fb3fc).
+          anchor: publicationAnchor(thoughtId),
+          page: rootPageOf(doc.tree, path[0]!),
         });
         continue;
       }
       for (const [sectionId, texts] of doc.textsBySection) {
         if (texts.some((t) => t.thoughtId === thoughtId)) {
           const titles = loadThoughtMeta(ndb, [sectionId]);
+          // Страница — по содержащему разделу (его первое вхождение).
+          const sectionPath = findSectionPath(doc.tree, sectionId);
           items.push({
             publication_id: pub.id,
             title: pub.title,
             role: 'text',
             section_title: titles.get(sectionId)?.title ?? '',
             section_thought_id: sectionId,
+            anchor: publicationAnchor(thoughtId),
+            page: sectionPath === null ? 1 : rootPageOf(doc.tree, sectionPath[0]!),
           });
           break;
         }
