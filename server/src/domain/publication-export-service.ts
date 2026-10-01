@@ -686,6 +686,22 @@ export function resolvePublicationSlugs(
 }
 
 /**
+ * Отобрать id актуальных публикаций сети в детерминированном порядке
+ * (title, затем id), не более {@link PUBLICATION_EXPORT_BATCH_MAX}. Общий
+ * помощник пакетного экспорта (`active_only`) и CLI-пересборки (f7824d11):
+ * `total` — полное число актуальных в сети, чтобы вызывающий сам сформулировал
+ * предупреждение об усечении по своему предмету.
+ */
+export function selectActivePublicationIds(ndb: NetworkDb): { ids: string[]; total: number } {
+  const listed = listPublications(ndb, { active: 'true', limit: PUBLICATION_EXPORT_BATCH_MAX });
+  const ids = listed.items
+    .slice()
+    .sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : a.id < b.id ? -1 : 1))
+    .map((p) => p.id);
+  return { ids, total: listed.total };
+}
+
+/**
  * Собрать файлы пачки публикаций (`ids` или `active_only`) без упаковки:
  * `<slug>/…` на публикацию (коллизия → суффикс), отчёт со статусами и
  * предупреждениями. Падение одной публикации — запись `status='error'`, не
@@ -714,14 +730,11 @@ export function buildPublicationBatchArtifact(
     }
     ids = [...opts.ids];
   } else if (opts.active_only === true) {
-    const listed = listPublications(ndb, { active: 'true', limit: PUBLICATION_EXPORT_BATCH_MAX });
-    ids = listed.items
-      .slice()
-      .sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : a.id < b.id ? -1 : 1))
-      .map((p) => p.id);
-    if (listed.total > PUBLICATION_EXPORT_BATCH_MAX) {
+    const selected = selectActivePublicationIds(ndb);
+    ids = selected.ids;
+    if (selected.total > PUBLICATION_EXPORT_BATCH_MAX) {
       warnings.push(
-        `пакет усечён до ${PUBLICATION_EXPORT_BATCH_MAX} публикаций (в сети ${listed.total} актуальных)`,
+        `пакет усечён до ${PUBLICATION_EXPORT_BATCH_MAX} публикаций (в сети ${selected.total} актуальных)`,
       );
     }
   } else {

@@ -34,12 +34,13 @@ import { createApiKeyAuthProvider } from './mcp/auth.js';
 import { runStdioMcp } from './mcp/stdio.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
 import { listLayers } from './domain/layer-service.js';
-import { getPublication, listPublications } from './domain/publication-service.js';
+import { getPublication } from './domain/publication-service.js';
 import { buildPublicationExportDocument } from './domain/publication-assembly-service.js';
 import {
   PUBLICATION_EXPORT_BATCH_MAX,
   buildPublicationArtifact,
   resolvePublicationSlugs,
+  selectActivePublicationIds,
   writePublicationZip,
   type PublicationFile,
 } from './domain/publication-export-service.js';
@@ -434,14 +435,11 @@ async function runPublicationsRebuild(
     if (args.ids !== null) {
       ids = args.ids;
     } else {
-      const listed = listPublications(ndb, { active: 'true', limit: PUBLICATION_EXPORT_BATCH_MAX });
-      ids = listed.items
-        .slice()
-        .sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : a.id < b.id ? -1 : 1))
-        .map((p) => p.id);
-      if (listed.total > PUBLICATION_EXPORT_BATCH_MAX) {
+      const selected = selectActivePublicationIds(ndb);
+      ids = selected.ids;
+      if (selected.total > PUBLICATION_EXPORT_BATCH_MAX) {
         warnings.push(
-          `список усечён до ${PUBLICATION_EXPORT_BATCH_MAX} публикаций (в сети ${listed.total} актуальных)`,
+          `список усечён до ${PUBLICATION_EXPORT_BATCH_MAX} публикаций (в сети ${selected.total} актуальных)`,
         );
       }
     }
