@@ -85,7 +85,7 @@ import {
 } from '../../domain/lock-service.js';
 import {
   copyAttachment,
-  createAttachment,
+  createAttachmentFromInput,
   deleteAttachment,
   getAttachment,
   searchAttachments,
@@ -290,7 +290,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const attachment = runWrite(ndb, fx, () => {
-        const created = createAttachment(
+        const created = createAttachmentFromInput(
           ndb,
           a.owner_type,
           a.owner_id,
@@ -298,11 +298,27 @@ const HANDLERS: Record<string, OpHandler> = {
             kind: a.kind,
             url: a.url ?? null,
             file_path: a.file_path ?? null,
+            mime_type: a.mime_type ?? null,
+            data_base64: a.data_base64 ?? null,
             title: a.title ?? null,
             description: a.description ?? null,
           },
           rt.deps.auth.userId,
         );
+        // `details` пишутся в audit_log: base64-полезная нагрузка там не
+        // нужна (десятки МБ на строку) — сохраняем только её длину.
+        const auditDetails: Record<string, unknown> = {
+          owner_type: a.owner_type,
+          owner_id: a.owner_id,
+          kind: a.kind,
+        };
+        if (a.title !== undefined) auditDetails.title = a.title;
+        if (a.url !== undefined) auditDetails.url = a.url;
+        if (a.file_path !== undefined) auditDetails.file_path = a.file_path;
+        if (a.mime_type !== undefined) auditDetails.mime_type = a.mime_type;
+        if (a.data_base64 !== undefined && a.data_base64 !== null) {
+          auditDetails.data_base64_chars = a.data_base64.length;
+        }
         return {
           result: created,
           events: [{ type: 'attachment.created', data: { attachment: created } }],
@@ -311,7 +327,7 @@ const HANDLERS: Record<string, OpHandler> = {
             action: 'etn.attachments.add',
             targetType: 'attachment',
             targetId: created.id,
-            details: a,
+            details: auditDetails,
           },
         };
       });

@@ -109,6 +109,12 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       kind: z.enum(ATTACHMENT_KINDS),
       url: z.string().min(1).nullable().optional(),
       file_path: z.string().min(1).nullable().optional(),
+      // Загрузка данных файла (задача 75c75a2f): с `mime_type`+`data_base64`
+      // сервер сохраняет копию под каталогом вложений сети (паритет с REST
+      // `POST …/attachments/file`). Требует `kind='file'`; `data_base64` не
+      // сочетается с `url`/`file_path`/`description` — отвергает домен.
+      mime_type: z.string().min(1).nullable().optional(),
+      data_base64: z.string().min(1).nullable().optional(),
       title: z.string().nullable().optional(),
       description: z.string().nullable().optional(),
     })

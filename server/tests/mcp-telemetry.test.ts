@@ -510,13 +510,21 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // описания дают ~610 Б к `inputSchema`; замер — 41 282 / 36 543 Б.
         // Планка поднята ровно под этот прирост (+контрактная ясность), с
         // малым запасом.
+        // 0.10.3 (задача 75c75a2f): `attachments[]` инструмента
+        // `etn.thoughts.write` принял `mime_type`/`data_base64` (загрузка файла
+        // в вложение, паритет с REST `POST …/attachments/file`). Прирост —
+        // только `inputSchema` (+52 Б), проза не менялась; планка поднята ровно
+        // под этот контракт.
         assert.ok(
-          bytes <= 41_500,
-          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41500`,
+          bytes <= 41_600,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.3 budget of 41600`,
         );
         // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
         // `inputSchema`. `inputSchema` не урезается — планка ограничивает
         // только prose (задача 2bf09236, цель ≤ 36 000 Б).
+        // 0.10.3 (задача 75c75a2f): прирост `inputSchema` от
+        // `attachments[].mime_type`/`data_base64` — планка поднята ровно под
+        // контракт (36 700 → 36 800), проза не менялась.
         let descriptionsPlusInputSchema = 0;
         for (const tool of tools) {
           descriptionsPlusInputSchema += Buffer.byteLength(
@@ -529,8 +537,8 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
           );
         }
         assert.ok(
-          descriptionsPlusInputSchema <= 36_700,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36700`,
+          descriptionsPlusInputSchema <= 36_800,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36800`,
         );
       } finally {
         await handle.close();

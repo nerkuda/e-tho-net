@@ -26,7 +26,7 @@ import type {
 import { EtnError } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { createAttachment } from './attachment-service.js';
+import { createAttachmentFromInput } from './attachment-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import { createLink } from './link-service.js';
@@ -375,7 +375,9 @@ export function upsertThoughtBundle(
 
     let attachments: Attachment[] | undefined;
     if (input.attachments !== undefined) {
-      attachments = input.attachments.map((a) => createAttachment(ndb, 'thought', thought.id, a, actorUserId));
+      attachments = input.attachments.map((a) =>
+        createAttachmentFromInput(ndb, 'thought', thought.id, a, actorUserId),
+      );
     }
 
     // Task O6: "card completeness" warnings — computed against the freshly

@@ -434,6 +434,12 @@ export interface McpThoughtWriteAttachmentSpec {
   kind: AttachmentKind;
   url?: string | null;
   file_path?: string | null;
+  /** MIME-тип загружаемого файла — обязателен вместе с `data_base64`. */
+  mime_type?: string | null;
+  /** Содержимое файла в base64 (≤10 МиБ декодированного) — `kind="file"`;
+   *  сервер сохраняет копию в каталоге вложений сети, `file_path` строки
+   *  указывает на неё. Взаимоисключим с `url`/`file_path`/`description`. */
+  data_base64?: string | null;
   title?: string | null;
   description?: string | null;
 }

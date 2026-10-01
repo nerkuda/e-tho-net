@@ -1226,6 +1226,13 @@ export const AttachmentsAdd = defineContract(
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
     file_path: z.string().min(1).nullable().optional(),
+    // Загрузка данных файла (задача 75c75a2f, паритет с REST
+    // `POST …/attachments/file`): с `data_base64` сервер сохраняет копию под
+    // каталогом вложений сети, `file_path` строки указывает на неё. Требует
+    // `kind='file'`; сочетание с `url`/`file_path`/`description` отвергает
+    // домен (`createAttachmentFromInput`).
+    mime_type: z.string().min(1).nullable().optional(),
+    data_base64: z.string().min(1).nullable().optional(),
     title: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
   }),

@@ -200,21 +200,32 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'attachments.add',
     tool: 'etn.attachments.add',
     group: 'attachments',
-    when: 'прикрепить URL или файл к мысли/связи',
+    when: 'прикрепить URL, путь к файлу или загрузить данные файла (`mime_type`+`data_base64`) к мысли/связи',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'owner_type', required: true, desc: '`thought` | `link`' },
       { name: 'owner_id', required: true, desc: 'id владельца' },
-      { name: 'kind', required: true, desc: '`url` (тогда `url`) | `file` (тогда `file_path`)' },
+      {
+        name: 'kind',
+        required: true,
+        desc: '`url` (тогда `url`) | `file` (тогда `file_path` ИЛИ `mime_type`+`data_base64`)',
+      },
       { name: 'url', desc: 'URL для kind=url' },
-      { name: 'file_path', desc: 'путь к файлу для kind=file' },
+      { name: 'file_path', desc: 'путь к файлу для kind=file (машина сервера)' },
+      { name: 'mime_type', desc: 'MIME-тип данных файла — обязателен вместе с `data_base64`' },
+      {
+        name: 'data_base64',
+        desc: 'содержимое файла в base64 (kind=file, ≤10 МиБ декодированного): сервер сохраняет копию в каталоге вложений сети, `file_path` строки указывает на неё. Не сочетается с `url`/`file_path`/`description`',
+      },
       { name: 'title', desc: 'подпись' },
       { name: 'description', desc: 'описание' },
     ],
     destructive: false,
     readOnly: false,
-    effects: 'создаёт вложение, событие `attachment.created`.',
-    errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
+    effects:
+      'создаёт вложение, событие `attachment.created`. С `data_base64` файл сохраняется в каталог вложений сети (рядом с БД) — паритет с REST `POST /attachments/file`.',
+    errors:
+      '`VALIDATION_ERROR` (в т.ч. неверный/пустой base64, превышение лимита 10 МиБ, отсутствие `mime_type`, `data_base64` вне `kind=file`), `NOT_FOUND`.',
     paramsContract: AttachmentsAdd,
   },
   {

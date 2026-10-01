@@ -29,6 +29,7 @@ import {
   type AttachmentContentUpdateResult,
   type AttachmentCopyInput,
   type AttachmentCopyResult,
+  type AttachmentCreateInput,
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
@@ -343,6 +344,60 @@ export function createAttachmentFile(
       file_size: buffer.length,
       mime_type: mime,
       title: nullable(input.title ?? null),
+    },
+    actorUserId,
+  );
+}
+
+/**
+ * Single attachment-creation entry point for the REST/MCP facades (задача
+ * 75c75a2f): ordinary metadata-only creation, or an inline file upload when
+ * `data_base64` carries a payload. Both branches delegate to the existing
+ * domain primitives ({@link createAttachment} / {@link createAttachmentFile}),
+ * so no file-writing logic lives in the facades (ADR 8c93f03a).
+ *
+ * Throws `VALIDATION_ERROR` (422) when `data_base64` is combined with `kind`
+ * other than `'file'` or with fields that only describe a metadata attachment,
+ * plus every error of the underlying primitive (bad base64, oversize, missing
+ * `mime_type`); `NOT_FOUND` (404) when the owner does not exist.
+ */
+export function createAttachmentFromInput(
+  ndb: NetworkDb,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  input: AttachmentCreateInput,
+  actorUserId: string,
+): Attachment {
+  const hasData =
+    input.data_base64 !== undefined &&
+    input.data_base64 !== null &&
+    input.data_base64.trim() !== '';
+  if (!hasData) {
+    return createAttachment(ndb, ownerType, ownerId, input, actorUserId);
+  }
+  if (input.kind !== 'file') {
+    throw new EtnError('VALIDATION_ERROR', "data_base64 requires kind='file'", {
+      field: 'kind',
+    });
+  }
+  const conflicts = (['url', 'file_path', 'file_size', 'position', 'description'] as const).filter(
+    (field) => input[field] !== undefined && input[field] !== null,
+  );
+  if (conflicts.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `data_base64 cannot be combined with ${conflicts.join('/')}`,
+      { fields: conflicts },
+    );
+  }
+  return createAttachmentFile(
+    ndb,
+    ownerType,
+    ownerId,
+    {
+      title: input.title ?? null,
+      mime_type: input.mime_type ?? '',
+      data_base64: input.data_base64 as string,
     },
     actorUserId,
   );

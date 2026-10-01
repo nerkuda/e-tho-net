@@ -7,7 +7,7 @@
  * entities); the MCP-facing parameter/result shapes live in `mcp.ts`.
  */
 
-import type { AttachmentInput, Attachment } from './attachment.js';
+import type { AttachmentCreateInput, Attachment } from './attachment.js';
 import type { Comment } from './comment.js';
 import type { Link } from './link.js';
 import type { Thought } from './thought.js';
@@ -112,7 +112,7 @@ export interface ThoughtBundleInput {
   chronicle?: ThoughtBundleChronicleItem[];
   properties?: Record<string, PropertyValueValue>;
   links?: ThoughtBundleLinkInput[];
-  attachments?: AttachmentInput[];
+  attachments?: AttachmentCreateInput[];
 }
 
 /** What {@link upsertThoughtBundle} actually did to the bundle's thought. */
