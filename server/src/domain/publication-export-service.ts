@@ -426,8 +426,12 @@ function applyAssetReplacements(text: string, replacements: Map<string, string>)
 // Zip
 // ---------------------------------------------------------------------------
 
-/** One file going into the archive. */
-interface ZipEntry {
+/**
+ * Один файл артефакта публикации: имя внутри архива/каталога и байты. Общий
+ * тип экспортного домена — одна и та же сборка даёт и zip (HTTP-джоба), и
+ * каталог файлов (CLI-пересборка, операция f7824d11).
+ */
+export interface PublicationFile {
   name: string;
   data: Buffer | string;
 }
@@ -437,7 +441,10 @@ interface ZipEntry {
  * runs over unchanged data yield byte-identical archives (ADR 06874c5d).
  * `archiver.on('warning')` is logged, never rejecting (same pitfall as `.etnx`).
  */
-function writeZip(outputPath: string, entries: readonly ZipEntry[]): Promise<number> {
+export function writePublicationZip(
+  outputPath: string,
+  entries: readonly PublicationFile[],
+): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const fileStream = createWriteStream(outputPath);
@@ -480,17 +487,21 @@ function writeZip(outputPath: string, entries: readonly ZipEntry[]): Promise<num
 // ---------------------------------------------------------------------------
 
 /** Собранные файлы одной публикации: записи zip + отчётная запись. */
-interface PublicationArtifact {
-  entries: ZipEntry[];
+export interface PublicationArtifact {
+  entries: PublicationFile[];
   entry: PublicationExportEntry;
 }
 
 /**
  * Build the zip entries of one publication under `prefix` ('' for a single
- * export; `<slug>/` inside a batch). Never throws for asset problems — they
- * land in the report entry's `warnings`.
+ * export/CLI catalog; `<slug>/` inside a batch). Never throws for asset
+ * problems — they land in the report entry's `warnings`.
+ *
+ * Экспортируется как общий сборщик: HTTP-джоба одиночного экспорта и CLI
+ * (`etn publications rebuild`, операция f7824d11) используют ровно его —
+ * второй сборки публикации в каталог нет.
  */
-function buildPublicationArtifact(
+export function buildPublicationArtifact(
   ndb: NetworkDb,
   document: PublicationExportDocument,
   format: PublicationExportFormat,
@@ -511,7 +522,7 @@ function buildPublicationArtifact(
   const extension = format === 'md' ? 'md' : 'html';
   const mainName = `${prefix}${slug}.${extension}`;
   const rendered = renderDocument(document, format, coverSrc);
-  const entries: ZipEntry[] = [
+  const entries: PublicationFile[] = [
     { name: mainName, data: applyAssetReplacements(rendered, assets.replacements) },
   ];
   const fileNames: string[] = [mainName];
@@ -626,7 +637,7 @@ export async function startPublicationExportJob(
 
   const jobId = randomUUID();
   const filePath = tempZipPath(jobId);
-  await writeZip(filePath, artifact.entries);
+  await writePublicationZip(filePath, artifact.entries);
   const report: PublicationExportReport = {
     publications: [artifact.entry],
     warnings: [],
@@ -640,17 +651,57 @@ export async function startPublicationExportJob(
 }
 
 /**
- * Start a batch export job (operation 074d7a97): `ids` or `active_only`.
- * Result is a zip with one `<slug>/` sub-directory per publication (collision →
- * `-<shortid>` suffix). A failing publication is reported with `status='error'`
- * and does not abort the whole archive.
+ * Детерминированные slug'и публикаций по их id: одинаковые названия получают
+ * суффикс `-<shortid>`, поэтому имена не зависят от порядка входного списка
+ * (ADR 06874c5d). Публикации, которых нет в сети, в карты не попадают.
  */
-export async function startPublicationBatchExportJob(
+export function resolvePublicationSlugs(
   ndb: NetworkDb,
-  opts: { ids?: string[]; active_only?: boolean; format: PublicationExportFormat; with_assets?: boolean },
+  ids: readonly string[],
+): { slugById: Map<string, string>; titleById: Map<string, string> } {
+  const titleById = new Map<string, string>();
+  for (const id of ids) {
+    const pub = getPublication(ndb, id);
+    if (pub !== null) titleById.set(id, pub.title);
+  }
+  const slugCount = new Map<string, number>();
+  for (const id of ids) {
+    const title = titleById.get(id);
+    if (title === undefined) continue;
+    const slug = publicationSlug(title);
+    slugCount.set(slug, (slugCount.get(slug) ?? 0) + 1);
+  }
+  const slugById = new Map<string, string>();
+  const usedDirs = new Set<string>();
+  for (const id of ids) {
+    const title = titleById.get(id);
+    if (title === undefined) continue;
+    const base = publicationSlug(title);
+    let slug = (slugCount.get(base) ?? 0) > 1 ? `${base}-${shortId(id)}` : base;
+    while (usedDirs.has(slug)) slug = `${slug}-${shortId(id)}`;
+    usedDirs.add(slug);
+    slugById.set(id, slug);
+  }
+  return { slugById, titleById };
+}
+
+/**
+ * Собрать файлы пачки публикаций (`ids` или `active_only`) без упаковки:
+ * `<slug>/…` на публикацию (коллизия → суффикс), отчёт со статусами и
+ * предупреждениями. Падение одной публикации — запись `status='error'`, не
+ * исключение ([[#074d7a97]]). Общий сборщик HTTP-джобы и CLI (f7824d11).
+ */
+export function buildPublicationBatchArtifact(
+  ndb: NetworkDb,
+  opts: {
+    ids?: string[];
+    active_only?: boolean;
+    format: PublicationExportFormat;
+    with_assets?: boolean;
+  },
   userId: string,
   resolveUserName: (userId: string) => string | null,
-): Promise<ExportJob> {
+): { entries: PublicationFile[]; report: PublicationExportReport } {
   const warnings: string[] = [];
   let ids: string[];
   if (Array.isArray(opts.ids) && opts.ids.length > 0) {
@@ -682,35 +733,13 @@ export async function startPublicationBatchExportJob(
   }
 
   // Детерминированные slug'и с суффиксом -<shortid> при коллизии (ADR 06874c5d).
-  const titles = new Map<string, string>();
-  for (const id of ids) {
-    const pub = getPublication(ndb, id);
-    if (pub !== null) titles.set(id, pub.title);
-  }
-  const slugCount = new Map<string, number>();
-  for (const id of ids) {
-    const title = titles.get(id);
-    if (title === undefined) continue;
-    const slug = publicationSlug(title);
-    slugCount.set(slug, (slugCount.get(slug) ?? 0) + 1);
-  }
-  const slugById = new Map<string, string>();
-  const usedDirs = new Set<string>();
-  for (const id of ids) {
-    const title = titles.get(id);
-    if (title === undefined) continue;
-    const base = publicationSlug(title);
-    let slug = (slugCount.get(base) ?? 0) > 1 ? `${base}-${shortId(id)}` : base;
-    while (usedDirs.has(slug)) slug = `${slug}-${shortId(id)}`;
-    usedDirs.add(slug);
-    slugById.set(id, slug);
-  }
+  const { slugById, titleById } = resolvePublicationSlugs(ndb, ids);
 
-  const entries: ZipEntry[] = [];
+  const entries: PublicationFile[] = [];
   const publications: PublicationExportEntry[] = [];
   for (const id of ids) {
     const slug = slugById.get(id);
-    const title = titles.get(id);
+    const title = titleById.get(id);
     if (slug === undefined || title === undefined) {
       publications.push({
         publication_id: id,
@@ -745,11 +774,25 @@ export async function startPublicationBatchExportJob(
       });
     }
   }
+  return { entries, report: { publications, warnings } };
+}
 
+/**
+ * Start a batch export job (operation 074d7a97): `ids` or `active_only`.
+ * Result is a zip with one `<slug>/` sub-directory per publication (collision →
+ * `-<shortid>` suffix). A failing publication is reported with `status='error'`
+ * and does not abort the whole archive.
+ */
+export async function startPublicationBatchExportJob(
+  ndb: NetworkDb,
+  opts: { ids?: string[]; active_only?: boolean; format: PublicationExportFormat; with_assets?: boolean },
+  userId: string,
+  resolveUserName: (userId: string) => string | null,
+): Promise<ExportJob> {
+  const { entries, report } = buildPublicationBatchArtifact(ndb, opts, userId, resolveUserName);
   const jobId = randomUUID();
   const filePath = tempZipPath(jobId);
-  await writeZip(filePath, entries);
-  const report: PublicationExportReport = { publications, warnings };
+  await writePublicationZip(filePath, entries);
   return registerFinishedFileJob({
     filePath,
     contentType: 'application/zip',
