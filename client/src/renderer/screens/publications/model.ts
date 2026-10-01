@@ -13,6 +13,8 @@ import {
   PUBLICATION_SORTS,
   type Publication,
   type PublicationActiveFilter,
+  type PublicationAssembly,
+  type PublicationAssemblyExtraGroup,
   type PublicationAssemblySection,
   type PublicationOrderItem,
   type PublicationSort,
@@ -363,4 +365,105 @@ export function reorderIds(
 /** Позиции 1..N для списка ключей узлов (батч PUT order). */
 export function positionsFor(ids: readonly string[]): PublicationOrderItem[] {
   return ids.map((node_key, index) => ({ node_key, position: index + 1 }));
+}
+
+// ---------------------------------------------------------------------------
+// Плоские блоки документа для keyed-рендера (задача 4f03b9d5). Чистые данные:
+// разметку строит `workspace.ts`, но состав блоков и их подписи сравнения
+// живут здесь — их проверяют юнит-тесты (в т.ч. realtime-пересборка).
+// ---------------------------------------------------------------------------
+
+/** Блок документа — плоская единица keyed-сверки. */
+export type DocBlock =
+  | { kind: 'title'; key: 'title'; sig: string }
+  | {
+      kind: 'section';
+      key: string;
+      thoughtId: string;
+      level: number;
+      heading: string;
+      preambleHtml: string;
+      repeat: boolean;
+      cycle: boolean;
+    }
+  | { kind: 'text'; key: string; thoughtId: string; anchor: string; html: string }
+  | { kind: 'extra'; key: string; groups: PublicationAssemblyExtraGroup[] };
+
+/** Подпись титульного блока: меняется при любой правке настроек публикации. */
+function titleSignature(publication: Publication | null, summaryHtml: string): string {
+  if (publication === null) return `title|||||${summaryHtml}`;
+  return [
+    publication.title,
+    publication.subtitle ?? '',
+    publication.authorship ?? '',
+    publication.created_by,
+    publication.assembly_date ?? '',
+    publication.cover_kind,
+    publication.cover_attachment_id ?? '',
+    publication.cover_url ?? '',
+    summaryHtml,
+  ].join('|');
+}
+
+/**
+ * Разворачивает дерево разделов в плоские блоки документа в порядке чтения.
+ * Титульный блок несёт подпись, зависящую от карточки публикации и резюме
+ * сборки, — иначе правка настроек не пересобирала бы титул (realtime).
+ */
+export function documentBlocks(
+  assembly: PublicationAssembly | null,
+  publication: Publication | null,
+): DocBlock[] {
+  if (assembly === null) return [];
+  const out: DocBlock[] = [
+    { kind: 'title', key: 'title', sig: titleSignature(publication, assembly.publication.summary_html) },
+  ];
+  const walk = (sections: readonly PublicationAssemblySection[]): void => {
+    for (const section of sections) {
+      out.push({
+        kind: 'section',
+        key: section.anchor,
+        thoughtId: section.thought_id,
+        level: section.level,
+        heading: section.heading,
+        preambleHtml: section.preamble_html,
+        repeat: section.flags.repeat_of !== null,
+        cycle: section.flags.cycle_cut,
+      });
+      for (const text of section.texts) {
+        out.push({
+          kind: 'text',
+          key: text.anchor,
+          thoughtId: text.thought_id,
+          anchor: text.anchor,
+          html: text.body_html,
+        });
+      }
+      if (section.extra.length > 0) {
+        out.push({ kind: 'extra', key: `${section.anchor}#extra`, groups: section.extra });
+      }
+      walk(section.children);
+    }
+  };
+  walk(assembly.sections);
+  return out;
+}
+
+/** Подпись блока документа для сравнения при keyed-сверке. */
+export function blockSignature(block: DocBlock): string {
+  switch (block.kind) {
+    case 'title':
+      return block.sig;
+    case 'section':
+      return `s:${block.heading}:${block.level}:${block.preambleHtml}:${block.repeat}:${block.cycle}`;
+    case 'text':
+      return `t:${block.html}`;
+    case 'extra':
+      return `e:${block.groups
+        .map(
+          (group) =>
+            `${group.property}=${group.targets.map((target) => `${target.id}:${target.title}`).join(',')}`,
+        )
+        .join('|')}`;
+  }
 }

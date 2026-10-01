@@ -23,8 +23,6 @@
 import type {
   Publication,
   PublicationAssembly,
-  PublicationAssemblyExtraGroup,
-  PublicationAssemblySection,
   PublicationCandidatesResult,
   PublicationOrderItem,
 } from '@etn/shared';
@@ -54,11 +52,14 @@ import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { buildCover } from './cover.js';
 import {
   assemblyDateLabel,
+  blockSignature,
   displayAuthorship,
+  documentBlocks,
   flattenSections,
   positionsFor,
   reorderIds,
   siblingNodeKeys,
+  type DocBlock,
 } from './model.js';
 import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
@@ -92,24 +93,8 @@ export interface PublicationWorkspaceHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Разметка-модель документа и оглавления
+// Разметка-модель оглавления (блоки документа — чистая модель в `model.ts`)
 // ---------------------------------------------------------------------------
-
-/** Блок документа — плоская единица keyed-сверки. */
-type DocBlock =
-  | { kind: 'title'; key: string }
-  | {
-      kind: 'section';
-      key: string;
-      thoughtId: string;
-      level: number;
-      heading: string;
-      preambleHtml: string;
-      repeat: boolean;
-      cycle: boolean;
-    }
-  | { kind: 'text'; key: string; thoughtId: string; anchor: string; html: string }
-  | { kind: 'extra'; key: string; groups: PublicationAssemblyExtraGroup[] };
 
 /** Строка оглавления — плоская единица keyed-сверки. */
 type TocLine =
@@ -122,47 +107,13 @@ type TocLine =
       depth: number;
       label: string;
       repeat: boolean;
+      repeatOf: string | null;
       cycle: boolean;
       hasChildren: boolean;
       collapsed: boolean;
     }
   | { kind: 'text'; key: string; thoughtId: string; depth: number; label: string }
   | { kind: 'excluded'; key: string; thoughtId: string; title: string };
-
-/** Разворачивает дерево разделов в плоские блоки документа в порядке чтения. */
-function documentBlocks(assembly: PublicationAssembly | null): DocBlock[] {
-  if (assembly === null) return [];
-  const out: DocBlock[] = [{ kind: 'title', key: 'title' }];
-  const walk = (sections: readonly PublicationAssemblySection[]): void => {
-    for (const section of sections) {
-      out.push({
-        kind: 'section',
-        key: section.anchor,
-        thoughtId: section.thought_id,
-        level: section.level,
-        heading: section.heading,
-        preambleHtml: section.preamble_html,
-        repeat: section.flags.repeat_of !== null,
-        cycle: section.flags.cycle_cut,
-      });
-      for (const text of section.texts) {
-        out.push({
-          kind: 'text',
-          key: text.anchor,
-          thoughtId: text.thought_id,
-          anchor: text.anchor,
-          html: text.body_html,
-        });
-      }
-      if (section.extra.length > 0) {
-        out.push({ kind: 'extra', key: `${section.anchor}#extra`, groups: section.extra });
-      }
-      walk(section.children);
-    }
-  };
-  walk(assembly.sections);
-  return out;
-}
 
 /** Строит плоский список строк оглавления (разделы/тексты/исключённые). */
 function toLines(assembly: PublicationAssembly | null, collapsed: ReadonlySet<string>): TocLine[] {
@@ -185,6 +136,7 @@ function toLines(assembly: PublicationAssembly | null, collapsed: ReadonlySet<st
       depth: item.depth,
       label: item.section.heading,
       repeat: item.section.flags.repeat_of !== null,
+      repeatOf: item.section.flags.repeat_of,
       cycle: item.section.flags.cycle_cut,
       hasChildren: item.section.children.length > 0,
       collapsed: collapsed.has(item.section.thought_id),
@@ -214,25 +166,11 @@ function toLines(assembly: PublicationAssembly | null, collapsed: ReadonlySet<st
 function tocSignature(line: TocLine): string {
   switch (line.kind) {
     case 'section':
-      return `s:${line.label}:${line.depth}:${line.repeat}:${line.cycle}:${line.nodeKey}:${line.parentThoughtId ?? ''}:${line.hasChildren}:${line.collapsed}`;
+      return `s:${line.label}:${line.depth}:${line.repeat}:${line.repeatOf ?? ''}:${line.cycle}:${line.nodeKey}:${line.parentThoughtId ?? ''}:${line.hasChildren}:${line.collapsed}`;
     case 'text':
       return `t:${line.label}:${line.depth}`;
     case 'excluded':
       return `x:${line.title}`;
-  }
-}
-
-/** Подпись блока документа для сравнения при сверке. */
-function blockSignature(block: DocBlock): string {
-  switch (block.kind) {
-    case 'title':
-      return 'title';
-    case 'section':
-      return `s:${block.heading}:${block.level}:${block.preambleHtml}:${block.repeat}:${block.cycle}`;
-    case 'text':
-      return `t:${block.html}`;
-    case 'extra':
-      return `e:${block.groups.map((g) => `${g.property}=${g.targets.map((x) => x.id).join(',')}`).join('|')}`;
   }
 }
 
@@ -466,7 +404,24 @@ export function mountPublicationWorkspace(
       }) : span('', 'pub-toc-caret');
       node.append(caret, span(line.label, 'pub-toc-label'));
       const marks = div('pub-toc-marks');
-      if (line.repeat) marks.append(tocMark('repeat', t('publications.ws.repeat')));
+      if (line.repeat) {
+        // Пометка повтора — переходу к первому вхождению раздела (2ebacd12).
+        const repeatAnchor = line.repeatOf;
+        marks.append(
+          repeatAnchor !== null
+            ? iconButton({
+                icon: svgIcon('rotate-ccw'),
+                title: t('publications.ws.repeat'),
+                role: 'ghost',
+                class: 'pub-toc-mark',
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  scrollToAnchor(repeatAnchor);
+                },
+              })
+            : tocMark('repeat', t('publications.ws.repeat')),
+        );
+      }
       if (line.cycle) marks.append(tocMark('cycle', t('publications.ws.cycle')));
       node.append(marks);
       node.classList.toggle('pub-toc-folded', line.collapsed);
@@ -494,11 +449,14 @@ export function mountPublicationWorkspace(
     return node;
   }
 
+  /**
+   * Пересобирает содержимое строки (пометки/каретка тоже), сохраняя сам узел и
+   * его слушатели (клик/меню/drag привязаны к узлу, а не к детям).
+   */
   function updateTocLine(node: HTMLElement, line: TocLine): void {
-    const label = node.querySelector('.pub-toc-label');
-    if (label === null) return;
-    if (line.kind === 'excluded') label.textContent = line.title;
-    else label.textContent = line.label;
+    const fresh = buildTocLine(line);
+    emptyNode(node);
+    while (fresh.firstChild !== null) node.append(fresh.firstChild);
     if (line.kind === 'section') {
       node.style.paddingLeft = `${line.depth}rem`;
       node.classList.toggle('pub-toc-folded', line.collapsed);
@@ -593,7 +551,7 @@ export function mountPublicationWorkspace(
   // --- Документ ------------------------------------------------------------
 
   function renderDocument(): void {
-    const blocks = documentBlocks(assembly);
+    const blocks = documentBlocks(assembly, publication);
     preserveScroll(docHost, () => {
       reconcileKeyed<DocBlock>(docHost, blocks, {
         key: (block) => block.key,
@@ -651,15 +609,16 @@ export function mountPublicationWorkspace(
     return node;
   }
 
+  /**
+   * Точечная сверка неполна для блоков с изменчивой структурой (появление/
+   * исчезновение предисловия, титул, «доп. материалы»), поэтому содержимое
+   * блока пересобирается целиком в его же узле — identity узла сохраняется,
+   * слушатели на самом узле (выделение раздела) остаются.
+   */
   function updateBlock(node: HTMLElement, block: DocBlock): void {
-    if (block.kind === 'section') {
-      const heading = node.querySelector('.pub-doc-heading');
-      if (heading !== null) heading.textContent = block.heading;
-      const preamble = node.querySelector<HTMLElement>('.pub-doc-preamble');
-      if (preamble !== null && block.preambleHtml !== '') renderHtml(preamble, block.preambleHtml);
-      return;
-    }
-    if (block.kind === 'text') renderHtml(node, block.html);
+    const fresh = buildBlock(block);
+    emptyNode(node);
+    while (fresh.firstChild !== null) node.append(fresh.firstChild);
   }
 
   function buildTitleBlock(): HTMLElement {
@@ -707,6 +666,16 @@ export function mountPublicationWorkspace(
 
   // --- Подсветка текущего раздела -----------------------------------------
 
+  /**
+   * Верх узла в системе координат прокрутки документа. `offsetTop` считается
+   * от `offsetParent` (`.pub-ws-content`), а не от `docHost`, поэтому вычитаем
+   * смещение самого документа — иначе видимая плашка кандидатов (сосед в
+   * потоке) сдвигала бы и подсветку, и переход по якорю на свою высоту.
+   */
+  function topWithinDoc(node: HTMLElement): number {
+    return node.offsetTop - docHost.offsetTop;
+  }
+
   function updateCurrentSection(): void {
     const headings = docHost.querySelectorAll<HTMLElement>('.pub-doc-section');
     if (headings.length === 0) {
@@ -716,7 +685,7 @@ export function mountPublicationWorkspace(
     const top = docHost.scrollTop + 24;
     let current: string | null = null;
     for (const heading of headings) {
-      if (heading.offsetTop <= top) current = heading.id;
+      if (topWithinDoc(heading) <= top) current = heading.id;
       else break;
     }
     current ??= headings[0]?.id ?? null;
@@ -730,7 +699,7 @@ export function mountPublicationWorkspace(
   function scrollToAnchor(anchor: string): void {
     const node = docHost.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`);
     if (node === null) return;
-    docHost.scrollTop = Math.max(0, node.offsetTop - 8);
+    docHost.scrollTop = Math.max(0, topWithinDoc(node) - 8);
     currentAnchor = anchor;
     for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
       row.classList.toggle('pub-toc-current', row.dataset['anchor'] === anchor);

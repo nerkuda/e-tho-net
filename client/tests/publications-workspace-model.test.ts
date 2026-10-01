@@ -7,15 +7,73 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { PublicationAssemblySection } from '@etn/shared';
+import type {
+  Publication,
+  PublicationAssembly,
+  PublicationAssemblySection,
+} from '@etn/shared';
 
 import {
+  blockSignature,
+  documentBlocks,
   flattenSections,
   positionsFor,
   reorderIds,
   sectionNodeKey,
   siblingNodeKeys,
 } from '../src/renderer/screens/publications/model.js';
+
+/** Минимальная карточка публикации для подписи титула. */
+function makePublication(overrides: Partial<Publication> = {}): Publication {
+  return {
+    id: 'pub1',
+    title: 'Док',
+    subtitle: null,
+    summary_md: null,
+    authorship: null,
+    cover_attachment_id: null,
+    cover_url: null,
+    cover_kind: 'none',
+    assembly_date: null,
+    title_recipe: null,
+    text_sources: [],
+    extra_properties: [],
+    numbering_from: null,
+    numbering_to: null,
+    active: true,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
+    version: 1,
+    created_at: '2024-01-01T00:00:00Z',
+    created_by: 'u',
+    updated_at: '2024-01-01T00:00:00Z',
+    updated_by: 'u',
+    ...overrides,
+  };
+}
+
+/** Минимальная сборка документа с заданными разделами. */
+function makeAssembly(
+  sections: PublicationAssemblySection[],
+  summaryHtml = '',
+): PublicationAssembly {
+  return {
+    publication: {
+      title: 'Док',
+      subtitle: null,
+      authorship: null,
+      assembly_date: null,
+      summary_html: summaryHtml,
+      cover: { kind: 'placeholder', ref: null },
+      new_candidates: 0,
+    },
+    sections,
+    excluded: [],
+    warnings: [],
+    meta: { page: 1, per_page: 20, total_roots: sections.length, has_more: false },
+  };
+}
 
 /**
  * Раздел сборки: минимальный узел с детьми. `nodeKey` по умолчанию — id мысли
@@ -115,5 +173,49 @@ describe('модель рабочей области публикации: пе�
     ]);
     // Корневая группа при перестановке вложенных не меняется.
     assert.deepEqual(siblingNodeKeys(flat, null), ['A']);
+  });
+});
+
+describe('модель рабочей области публикации: блоки документа и их подписи', () => {
+  it('титульный блок меняет подпись при правке настроек публикации и резюме', () => {
+    const asm = makeAssembly([section('A', [], 'A')], '<p>резюме</p>');
+    const base = documentBlocks(asm, makePublication())[0]!;
+    const renamed = documentBlocks(asm, makePublication({ title: 'Другое' }))[0]!;
+    const resummed = documentBlocks(makeAssembly([section('A', [], 'A')], '<p>иное</p>'), makePublication())[0]!;
+    assert.equal(base.kind, 'title');
+    assert.notEqual(blockSignature(base), blockSignature(renamed));
+    assert.notEqual(blockSignature(base), blockSignature(resummed));
+    // Идентичная карточка — подпись стабильна (лишних пересборок нет).
+    assert.equal(
+      blockSignature(base),
+      blockSignature(documentBlocks(asm, makePublication())[0]!),
+    );
+  });
+
+  it('раздел меняет подпись при появлении предисловия', () => {
+    const empty = documentBlocks(makeAssembly([section('A', [], 'A')]), null)[1]!;
+    const withPreamble = documentBlocks(
+      makeAssembly([{ ...section('A', [], 'A'), preamble_html: '<p>текст</p>' }]),
+      null,
+    )[1]!;
+    assert.equal(empty.kind, 'section');
+    assert.notEqual(blockSignature(empty), blockSignature(withPreamble));
+  });
+
+  it('блок «доп. материалы» меняет подпись при переименовании цели', () => {
+    const withExtra = (title: string) =>
+      documentBlocks(
+        makeAssembly([
+          {
+            ...section('A', [], 'A'),
+            extra: [{ property: 'p1', targets: [{ id: 't1', title }] }],
+          },
+        ]),
+        null,
+      )[2]!;
+    const a = withExtra('Старое');
+    const b = withExtra('Новое');
+    assert.equal(a.kind, 'extra');
+    assert.notEqual(blockSignature(a), blockSignature(b));
   });
 });
