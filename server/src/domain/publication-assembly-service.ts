@@ -1,0 +1,1192 @@
+/**
+ * Сборка документа публикации (0.11.1, задача 34119c67; тех.проект c5261d02).
+ *
+ * Собирает DTO документа ([[#8b849dfc]]) из живой мыслесети в контексте слоя
+ * соединения: дерево разделов по правилам [[#599414b6]], тексты и предисловия
+ * по [[#620aa285]], нумерация [[#a33f7b0e]], титул [[#745fdc48]], единый рендер
+ * фрагментов из `@etn/markdown` (`renderPublicationFragment`, задача d8ad884e).
+ *
+ * Дополнительно — членство: новые кандидаты (`GET /{id}/candidates`,
+ * [[#f9a20c3f]]) и использование мысли (`GET /thoughts/{id}/publications`,
+ * [[#f49c6420]]). Членство считает сервер исполнением рецептов (ADR 7adf7778,
+ * требование 6e8bc3f0): клиент семантику отбора не реплицирует. Вызовы
+ * ленивые, с лимитами и серверным кешем с дебаунсом.
+ *
+ * **Переиспользование.** Отбор заголовков исполняется существующим движком
+ * выборки мыслей (`parseStructureFilter` + `structureRequestToQuery` +
+ * `queryThoughtIds`) — формат рецепта тот же, что у панели «Структуры мыслей»;
+ * локальных реализаций SQL-отбора здесь нет. Чтение рёбер свойств-связей идёт
+ * существующим резолвом направления (`resolveOwnerBindingSide`,
+ * `linkPropertyDirection`, `linkPropertyLinkTypeId`). Строение документа
+ * рендерится единым markdown-рендерером, поэтому превью и экспорт не расходятся
+ * (требование [[#9969e586]]).
+ *
+ * **Детерминизм.** Обход всегда даёт одно дерево на одном графе: рёбра
+ * сортируются `links.position ASC, id ASC`, локальный порядок публикации
+ * ([[#18f3bebf]]) перекрывает сетевой по ключу узла. Якоря `pub-<shortid>`
+ * выводятся из id мысли и не зависят от пагинации (стабильны между страницами).
+ * Построение дерева итеративное — глубина алгоритмически не ограничена.
+ *
+ * **Семантика «кандидата».** Кандидат — мысль, подошедшая под рецепт
+ * заголовков, но не попавшая в дерево сборки ([[#f9a20c3f]]: «сервер исполняет
+ * отбор и диффицирует с деревом»), за вычетом исключений. При живой сборке в
+ * дерево попадают все достижимые отобранные разделы (правило «нет отобранных
+ * предков → корень»), поэтому кандидатами становятся недостижимые разделы —
+ * например, чистое кольцо отбора без точки входа.
+ */
+
+import {
+  EtnError,
+  type PropertyConfig,
+  type Publication,
+  type PublicationAssembly,
+  type PublicationAssemblyCover,
+  type PublicationAssemblyExcluded,
+  type PublicationAssemblyExtraGroup,
+  type PublicationAssemblySection,
+  type PublicationAssemblyText,
+  type PublicationCandidate,
+  type PublicationCandidatesResult,
+  type PublicationListQuery,
+  type PublicationUsageItem,
+  type PublicationUsageResult,
+  type SavedFilterDefinition,
+  type SortOrder,
+  type StructureFilter,
+  type StructureSort,
+} from '@etn/shared';
+import {
+  formatSectionNumber,
+  publicationAnchor,
+  renderPublicationFragment,
+  type WikiLinkRef,
+  type WikiLinkResolution,
+} from '@etn/markdown';
+
+import type { NetworkDb } from '../db/network-db.js';
+import { queryThoughtIds, structureRequestToQuery } from './query-service.js';
+import { parseStructureFilter } from './structure-service.js';
+import {
+  isStructuralLinkProperty,
+  linkPropertyDirection,
+  linkPropertyLinkTypeId,
+  linkPropertySideFromConfig,
+  resolveOwnerBindingSide,
+} from './property-service.js';
+import { resolveThoughts } from './thought-service.js';
+import {
+  getPublication,
+  listPublicationExclusions,
+  listPublicationOrder,
+  listPublications,
+  resolvePublicationRefs,
+} from './publication-service.js';
+
+// ---------------------------------------------------------------------------
+// Константы и лимиты
+// ---------------------------------------------------------------------------
+
+/** Размер страницы сборки по разделам верхнего уровня. */
+export const PUBLICATION_ASSEMBLY_PAGE_SIZE = 20;
+
+/** Лимит кандидатов по умолчанию и потолок (`GET /candidates`). */
+export const PUBLICATION_CANDIDATES_DEFAULT_LIMIT = 50;
+export const PUBLICATION_CANDIDATES_MAX_LIMIT = 200;
+
+/** Лимит использований по умолчанию и потолок (`GET /thoughts/{id}/publications`). */
+export const PUBLICATION_USAGE_DEFAULT_LIMIT = 20;
+export const PUBLICATION_USAGE_MAX_LIMIT = 100;
+
+/** Сколько публикаций слоя просматривается для расчёта использования мысли. */
+export const PUBLICATION_USAGE_MAX_PUBLICATIONS = 100;
+
+/**
+ * Потолок числа разделов, извлекаемых из рецепта за одну сборку. Защита от
+ * неограниченного отбора; превышение — предупреждение в `warnings`, а не
+ * ошибка (требование 6e8bc3f0: усечение, не отказ).
+ */
+export const PUBLICATION_RECIPE_MAX_NODES = 20000;
+
+/** Окно дебаунса серверного кеша членства (мс). */
+export const PUBLICATION_MEMBERSHIP_DEBOUNCE_MS = 400;
+
+// ---------------------------------------------------------------------------
+// Внутренние типы
+// ---------------------------------------------------------------------------
+
+/** Ребро-связь с одним концом-мыслью (`otherId` — противоположный конец). */
+interface StructuralEdge {
+  edgeId: string;
+  otherId: string;
+  position: number;
+}
+
+/** Строка значения свойства-связи: ребро + цель. */
+interface PropertyEdge {
+  edge_id: string;
+  thought_id: string;
+  title: string;
+  type_id: string | null;
+  position: number;
+}
+
+/** Реестровое свойство (прочитанное из `properties_v`). */
+interface PropertyRow {
+  id: string;
+  name: string;
+  value_type: string;
+  config: PropertyConfig | null;
+}
+
+/** Ближайший отобранный предок с ребром-ветвью (первым шагом вниз от предка). */
+interface Attachment {
+  parentId: string;
+  branchPosition: number;
+}
+
+/** Промежуточный узел дерева (без рендера). */
+interface RawNode {
+  thoughtId: string;
+  repeat: boolean;
+  cycleCut: boolean;
+  children: RawNode[];
+}
+
+/** Узел дерева с уровнем и сквозными счётчиками нумерации. */
+export interface PublicationContentNode {
+  thoughtId: string;
+  level: number;
+  counters: number[];
+  repeatOf: string | null;
+  cycleCut: boolean;
+  children: PublicationContentNode[];
+}
+
+/** Текст раздела до рендера: мысль и ребро-источник. */
+interface SectionText {
+  thoughtId: string;
+  edgeId: string;
+}
+
+/** Собранная (ещё не отрендеренная) структура документа. */
+interface BuiltDocument {
+  /** Отобранные мысли (результат рецепта), в порядке движка. */
+  selectedIds: string[];
+  tree: PublicationContentNode[];
+  /** id показанных мыслей-разделов (содержательные + повторные). */
+  shownIds: Set<string>;
+  /** id содержательных разделов (не повторов). */
+  contentIds: Set<string>;
+  /** id мыслей-текстов, попавших в документ. */
+  textIds: Set<string>;
+  /** Кандидаты: отбор минус дерево минус исключения. */
+  candidateIds: string[];
+  /** Тексты по каждому содержательному разделу. */
+  textsBySection: Map<string, SectionText[]>;
+  excluded: PublicationAssemblyExcluded[];
+  warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Чтение примитивов (в контексте слоя соединения)
+// ---------------------------------------------------------------------------
+
+/** Устойчиво разобрать JSON-массив строк. */
+function parseStringArray(text: string | null): string[] {
+  if (text === null || text === '') return [];
+  try {
+    const value = JSON.parse(text) as unknown;
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Валидный `StructureSort` или `null`. */
+function asStructureSort(value: unknown): StructureSort | null {
+  return value === 'alpha' || value === 'created' || value === 'viewed' || value === 'updated'
+    ? value
+    : null;
+}
+
+/** Валидный `SortOrder` или `null`. */
+function asSortOrder(value: unknown): SortOrder | null {
+  return value === 'asc' || value === 'desc' ? value : null;
+}
+
+/** Прочитать реестровое свойство по id в контексте слоя. */
+function getPropertyRow(ndb: NetworkDb, id: string): PropertyRow | null {
+  const row = ndb
+    .prepare('SELECT id, name, value_type, config FROM properties_v WHERE id = ? LIMIT 1')
+    .get(id) as { id: string; name: string; value_type: string; config: string | null } | undefined;
+  if (row === undefined) return null;
+  let config: PropertyConfig | null = null;
+  if (row.config !== null && row.config !== '') {
+    try {
+      const parsed = JSON.parse(row.config) as unknown;
+      if (parsed !== null && typeof parsed === 'object') config = parsed as PropertyConfig;
+    } catch {
+      config = null;
+    }
+  }
+  return { id: row.id, name: row.name, value_type: row.value_type, config };
+}
+
+/** Входящие нетипизированные рёбра (структурные родители) мысли. */
+function untypedParents(ndb: NetworkDb, thoughtId: string): StructuralEdge[] {
+  return (
+    ndb
+      .prepare(
+        `SELECT l.id AS edge_id, l.source_id AS other_id, l.position AS position
+           FROM links_v l
+          WHERE l.target_id = ? AND l.type_id IS NULL
+            AND l.active = 1 AND l.marked_for_deletion = 0
+          ORDER BY l.position ASC, l.id ASC`,
+      )
+      .all(thoughtId) as Array<{ edge_id: string; other_id: string; position: number }>
+  ).map((r) => ({ edgeId: r.edge_id, otherId: r.other_id, position: r.position }));
+}
+
+/** Рёбра свойства-связи, направленные от владельца к цели. */
+function readPropertyEdges(ndb: NetworkDb, ownerId: string, prop: PropertyRow): PropertyEdge[] {
+  const structural = isStructuralLinkProperty(prop.config);
+  const side = structural
+    ? null
+    : resolveOwnerBindingSide(ndb, ownerId, prop.id) ??
+      linkPropertySideFromConfig('link', prop.config);
+  const direction = structural
+    ? prop.config?.direction === 'in'
+      ? 'in'
+      : 'out'
+    : linkPropertyDirection(prop.config, side);
+  const linkTypeId = linkPropertyLinkTypeId(prop.config);
+
+  const ownerCol = direction === 'out' ? 'l.source_id' : 'l.target_id';
+  const targetJoin =
+    direction === 'out'
+      ? 'JOIN thoughts_v t ON t.id = l.target_id'
+      : 'JOIN thoughts_v t ON t.id = l.source_id';
+  const typeClause = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+  const params: unknown[] = linkTypeId === null ? [ownerId] : [ownerId, linkTypeId];
+
+  return (
+    ndb
+      .prepare(
+        `SELECT l.id AS edge_id, t.id AS thought_id, t.title AS title, t.type_id AS type_id,
+                l.position AS position
+           FROM links_v l ${targetJoin}
+          WHERE ${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0
+          ORDER BY l.position ASC, l.id ASC`,
+      )
+      .all(...params) as Array<{
+      edge_id: string;
+      thought_id: string;
+      title: string | null;
+      type_id: string | null;
+      position: number;
+    }>
+  ).map((r) => ({
+    edge_id: r.edge_id,
+    thought_id: r.thought_id,
+    title: r.title ?? '',
+    type_id: r.type_id,
+    position: r.position,
+  }));
+}
+
+/** Заголовки и типы мыслей одним запросом. */
+function loadThoughtMeta(
+  ndb: NetworkDb,
+  ids: readonly string[],
+): Map<string, { title: string; type_id: string | null }> {
+  const out = new Map<string, { title: string; type_id: string | null }>();
+  if (ids.length === 0) return out;
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(`SELECT id, title, type_id FROM thoughts_v WHERE id IN (${placeholders})`)
+    .all(...ids) as Array<{ id: string; title: string | null; type_id: string | null }>;
+  for (const r of rows) out.set(r.id, { title: r.title ?? '', type_id: r.type_id });
+  return out;
+}
+
+/** Постоянные комментарии мыслей (`body_md`) одним запросом. */
+function loadPermanentComments(ndb: NetworkDb, ids: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(
+      `SELECT owner_id, body_md FROM comments_v
+        WHERE owner_type = 'thought' AND kind = 'permanent' AND owner_id IN (${placeholders})`,
+    )
+    .all(...ids) as Array<{ owner_id: string; body_md: string }>;
+  for (const r of rows) out.set(r.owner_id, r.body_md);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Отбор заголовков (рецепт)
+// ---------------------------------------------------------------------------
+
+/**
+ * Исполнить рецепт заголовков существующим движком выборки и вернуть id всех
+ * совпавших мыслей в детерминированном порядке. Пагинация — keyset-курсором
+ * (единый движок), с потолком {@link PUBLICATION_RECIPE_MAX_NODES}.
+ */
+function selectRecipeIds(
+  ndb: NetworkDb,
+  userId: string,
+  recipe: SavedFilterDefinition,
+  warnings: string[],
+): string[] {
+  const raw = recipe as unknown as Record<string, unknown>;
+  let filter: StructureFilter;
+  try {
+    filter = parseStructureFilter(raw);
+  } catch (err) {
+    if (err instanceof EtnError) {
+      warnings.push(`рецепт заголовков не исполнен: ${err.message}`);
+      return [];
+    }
+    throw err;
+  }
+  const sort = asStructureSort(raw['sort']) ?? 'alpha';
+  const order = asSortOrder(raw['order']) ?? 'asc';
+
+  const ids: string[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const query = structureRequestToQuery({
+      ...filter,
+      sort,
+      order,
+      limit: PUBLICATION_ASSEMBLY_PAGE_SIZE,
+      offset: 0,
+      cursor,
+    });
+    const page = queryThoughtIds(ndb, userId, query, {
+      emptyFilterMode: 'all',
+      maxLimit: PUBLICATION_ASSEMBLY_PAGE_SIZE,
+    });
+    ids.push(...page.ids);
+    if (!page.has_more || page.next_cursor === null) break;
+    cursor = page.next_cursor;
+    if (ids.length >= PUBLICATION_RECIPE_MAX_NODES) {
+      warnings.push('отбор заголовков усечён по потолку узлов сборки');
+      break;
+    }
+  }
+  return ids;
+}
+
+// ---------------------------------------------------------------------------
+// Построение дерева разделов ([[#599414b6]])
+// ---------------------------------------------------------------------------
+
+/**
+ * Построить дерево разделов из отобранных мыслей:
+ *   * ближайший отобранный предок (сквозь неотобранные узлы) даёт привязку;
+ *   * нет отобранных предков → корень;
+ *   * несколько родителей → первое достижение, повторные места — `repeat_of`
+ *     (якорь первого вхождения), заход в текущую ветку — `cycle_cut`.
+ *
+ * Обход итеративный: глубина дерева не ограничена.
+ */
+export function buildSectionTree(
+  ndb: NetworkDb,
+  selectedIds: readonly string[],
+  localOrder: Map<string, number>,
+): { tree: PublicationContentNode[]; shownIds: Set<string> } {
+  const selected = new Set(selectedIds);
+  const parentsCache = new Map<string, StructuralEdge[]>();
+  const parentsOf = (id: string): StructuralEdge[] => {
+    let value = parentsCache.get(id);
+    if (value === undefined) {
+      value = untypedParents(ndb, id);
+      parentsCache.set(id, value);
+    }
+    return value;
+  };
+
+  // Ближайшие отобранные предки (BFS вверх сквозь неотобранные узлы).
+  const attachCache = new Map<string, Attachment[]>();
+  const nearestAncestors = (id: string): Attachment[] => {
+    const cached = attachCache.get(id);
+    if (cached !== undefined) return cached;
+    const out: Attachment[] = [];
+    const seen = new Set<string>();
+    const queue: Array<{ node: string; position: number }> = parentsOf(id).map((e) => ({
+      node: e.otherId,
+      position: e.position,
+    }));
+    for (let i = 0; i < queue.length; i += 1) {
+      const cur = queue[i]!;
+      if (selected.has(cur.node)) {
+        if (!out.some((a) => a.parentId === cur.node)) {
+          out.push({ parentId: cur.node, branchPosition: cur.position });
+        }
+        continue;
+      }
+      if (seen.has(cur.node)) continue;
+      seen.add(cur.node);
+      for (const e of parentsOf(cur.node)) queue.push({ node: e.otherId, position: e.position });
+    }
+    attachCache.set(id, out);
+    return out;
+  };
+
+  const placementKeyOf = (id: string): string => parentsOf(id)[0]?.edgeId ?? id;
+  const localOf = (key: string): number | null => localOrder.get(key) ?? null;
+
+  const childrenMap = new Map<
+    string,
+    Array<{ childId: string; orderKey: number; tie: string }>
+  >();
+  const roots: string[] = [];
+  const rootOrder = new Map<string, number>();
+  const selectionIndex = new Map<string, number>();
+  // Порядок корней: локальный порядок по id мысли; иначе — минимальная позиция
+  // входящего ребра; у корня без родителей ребра нет — берём порядок рецепта.
+  // Ничья разрешается порядком отбора (детерминированно).
+  for (const [index, id] of selectedIds.entries()) {
+    const ancestors = nearestAncestors(id);
+    if (ancestors.length === 0) {
+      const minParent = parentsOf(id).reduce(
+        (min, e) => Math.min(min, e.position),
+        Number.POSITIVE_INFINITY,
+      );
+      roots.push(id);
+      rootOrder.set(id, localOf(id) ?? (minParent === Number.POSITIVE_INFINITY ? index : minParent));
+      selectionIndex.set(id, index);
+      continue;
+    }
+    selectionIndex.set(id, index);
+    const placementKey = placementKeyOf(id);
+    for (const a of ancestors) {
+      const bucket = childrenMap.get(a.parentId) ?? [];
+      bucket.push({
+        childId: id,
+        orderKey: localOf(placementKey) ?? a.branchPosition,
+        tie: placementKey,
+      });
+      childrenMap.set(a.parentId, bucket);
+    }
+  }
+  const orderedRoots = [...roots].sort((a, b) => {
+    const ka = rootOrder.get(a) ?? Number.POSITIVE_INFINITY;
+    const kb = rootOrder.get(b) ?? Number.POSITIVE_INFINITY;
+    return (
+      ka - kb ||
+      (selectionIndex.get(a) ?? 0) - (selectionIndex.get(b) ?? 0) ||
+      (a < b ? -1 : a > b ? 1 : 0)
+    );
+  });
+
+  const orderedChildren = (id: string): string[] => {
+    const bucket = childrenMap.get(id);
+    if (bucket === undefined) return [];
+    bucket.sort(
+      (a, b) =>
+        a.orderKey - b.orderKey ||
+        (selectionIndex.get(a.childId) ?? 0) - (selectionIndex.get(b.childId) ?? 0) ||
+        (a.tie < b.tie ? -1 : a.tie > b.tie ? 1 : 0),
+    );
+    return bucket.map((b) => b.childId);
+  };
+
+  // Итеративный DFS с отслеживанием ветки (кольца) и множеством показанных.
+  type Action =
+    | { type: 'enter'; id: string; parent: RawNode | null }
+    | { type: 'exit'; id: string };
+  const emitted = new Set<string>();
+  const inPath = new Set<string>();
+  const rootNodes: RawNode[] = [];
+  const stack: Action[] = [];
+  for (let i = orderedRoots.length - 1; i >= 0; i -= 1) {
+    stack.push({ type: 'enter', id: orderedRoots[i]!, parent: null });
+  }
+  while (stack.length > 0) {
+    const action = stack.pop()!;
+    if (action.type === 'exit') {
+      inPath.delete(action.id);
+      continue;
+    }
+    const { id, parent } = action;
+    if (emitted.has(id)) {
+      const repeat: RawNode = {
+        thoughtId: id,
+        repeat: true,
+        cycleCut: inPath.has(id),
+        children: [],
+      };
+      if (parent === null) rootNodes.push(repeat);
+      else parent.children.push(repeat);
+      continue;
+    }
+    emitted.add(id);
+    const node: RawNode = { thoughtId: id, repeat: false, cycleCut: false, children: [] };
+    if (parent === null) rootNodes.push(node);
+    else parent.children.push(node);
+    inPath.add(id);
+    stack.push({ type: 'exit', id });
+    const kids = orderedChildren(id);
+    for (let i = kids.length - 1; i >= 0; i -= 1) {
+      stack.push({ type: 'enter', id: kids[i]!, parent: node });
+    }
+  }
+
+  // Уровни и сквозные счётчики нумерации (повторы номер не получают).
+  const tree: PublicationContentNode[] = [];
+  type LevelAction = {
+    raw: RawNode;
+    level: number;
+    counters: number[];
+    parent: PublicationContentNode | null;
+  };
+  const levelStack: LevelAction[] = [];
+  const initial: LevelAction[] = [];
+  let rootIndex = 1;
+  for (const raw of rootNodes) {
+    const counters = raw.repeat ? [] : [rootIndex];
+    if (!raw.repeat) rootIndex += 1;
+    initial.push({ raw, level: 1, counters, parent: null });
+  }
+  for (let i = initial.length - 1; i >= 0; i -= 1) levelStack.push(initial[i]!);
+  while (levelStack.length > 0) {
+    const { raw, level, counters, parent } = levelStack.pop()!;
+    const node: PublicationContentNode = {
+      thoughtId: raw.thoughtId,
+      level,
+      counters,
+      repeatOf: raw.repeat ? publicationAnchor(raw.thoughtId) : null,
+      cycleCut: raw.cycleCut,
+      children: [],
+    };
+    if (parent === null) tree.push(node);
+    else parent.children.push(node);
+    const childEntries: LevelAction[] = [];
+    let index = 1;
+    for (const child of raw.children) {
+      const childCounters = child.repeat ? [] : [...counters, index];
+      if (!child.repeat) index += 1;
+      childEntries.push({ raw: child, level: level + 1, counters: childCounters, parent: node });
+    }
+    for (let i = childEntries.length - 1; i >= 0; i -= 1) levelStack.push(childEntries[i]!);
+  }
+
+  return { tree, shownIds: emitted };
+}
+
+/** Плоский список узлов дерева (pre-order). */
+function flattenTree(tree: readonly PublicationContentNode[]): PublicationContentNode[] {
+  const out: PublicationContentNode[] = [];
+  const stack: PublicationContentNode[] = [...tree].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    out.push(node);
+    for (let i = node.children.length - 1; i >= 0; i -= 1) stack.push(node.children[i]!);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Подготовка структуры документа
+// ---------------------------------------------------------------------------
+
+/** Исключения публикации с названиями (для пометок редактора). */
+function loadExcluded(
+  ndb: NetworkDb,
+  publicationId: string,
+): { set: Set<string>; list: PublicationAssemblyExcluded[] } {
+  const exclusions = listPublicationExclusions(ndb, publicationId);
+  const set = new Set(exclusions.map((e) => e.thought_id));
+  const list: PublicationAssemblyExcluded[] = [];
+  if (exclusions.length > 0) {
+    const meta = loadThoughtMeta(ndb, exclusions.map((e) => e.thought_id));
+    for (const e of exclusions) {
+      const m = meta.get(e.thought_id);
+      if (m !== undefined) list.push({ thought_id: e.thought_id, title: m.title });
+    }
+  }
+  return { set, list };
+}
+
+/**
+ * Собрать структуру документа без рендера: отбор, дерево, тексты по разделам,
+ * исключения, кандидаты, предупреждения. Общая база для сборки, кандидатов и
+ * использования.
+ */
+function buildDocument(
+  ndb: NetworkDb,
+  pub: Publication,
+  userId: string,
+  includeExcluded: boolean,
+  warnings: string[],
+): BuiltDocument {
+  const excluded = loadExcluded(ndb, pub.id);
+  const selectedIds =
+    pub.title_recipe === null ? [] : selectRecipeIds(ndb, userId, pub.title_recipe, warnings);
+  const structSelected = includeExcluded
+    ? selectedIds
+    : selectedIds.filter((id) => !excluded.set.has(id));
+
+  const localOrder = new Map(
+    listPublicationOrder(ndb, pub.id).map((item) => [item.node_key, item.position] as const),
+  );
+  const { tree, shownIds } = buildSectionTree(ndb, structSelected, localOrder);
+
+  const contentNodes = flattenTree(tree).filter((n) => n.repeatOf === null);
+  const contentIds = new Set(contentNodes.map((n) => n.thoughtId));
+
+  const propertyCache = new Map<string, PropertyRow | null>();
+  const propertyRow = (id: string): PropertyRow | null => {
+    let row = propertyCache.get(id);
+    if (row === undefined) {
+      row = getPropertyRow(ndb, id);
+      propertyCache.set(id, row);
+    }
+    return row;
+  };
+
+  const textsBySection = new Map<string, SectionText[]>();
+  const textIds = new Set<string>();
+  for (const section of contentNodes) {
+    const texts: SectionText[] = [];
+    for (const propId of pub.text_sources) {
+      const prop = propertyRow(propId);
+      if (prop === null) {
+        warnings.push(`свойство текстов ${propId} не найдено`);
+        continue;
+      }
+      if (prop.value_type !== 'link') {
+        warnings.push(`свойство текстов «${prop.name}» не является свойством-связью`);
+        continue;
+      }
+      const edges = readPropertyEdges(ndb, section.thoughtId, prop);
+      edges.sort(
+        (a, b) =>
+          (localOrder.get(a.edge_id) ?? a.position) - (localOrder.get(b.edge_id) ?? b.position) ||
+          (a.edge_id < b.edge_id ? -1 : a.edge_id > b.edge_id ? 1 : 0),
+      );
+      for (const edge of edges) {
+        if (contentIds.has(edge.thought_id)) continue; // роль раздела приоритетна
+        if (!includeExcluded && excluded.set.has(edge.thought_id)) continue;
+        texts.push({ thoughtId: edge.thought_id, edgeId: edge.edge_id });
+        textIds.add(edge.thought_id);
+      }
+    }
+    textsBySection.set(section.thoughtId, texts);
+  }
+
+  const candidateIds = selectedIds.filter(
+    (id) => !shownIds.has(id) && !excluded.set.has(id),
+  );
+
+  return {
+    selectedIds,
+    tree,
+    shownIds,
+    contentIds,
+    textIds,
+    candidateIds,
+    textsBySection,
+    excluded: excluded.list,
+    warnings,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Рендер документа
+// ---------------------------------------------------------------------------
+
+/** Резолвер wiki-ссылок сборки: якорь внутри документа, иначе — название. */
+function makeLinkResolver(
+  ndb: NetworkDb,
+  docAnchors: Map<string, string>,
+): (ref: WikiLinkRef) => WikiLinkResolution | undefined {
+  const titleCache = new Map<string, string | null>();
+  const titleOf = (id: string): string | null => {
+    let title = titleCache.get(id);
+    if (title === undefined) {
+      title = resolveThoughts(ndb, [id])[0]?.title ?? null;
+      titleCache.set(id, title);
+    }
+    return title;
+  };
+  return (ref) => {
+    if (ref.kind === 'pub') {
+      if (ref.id === null) return { kind: 'missing' };
+      const resolved = resolvePublicationRefs(ndb, [ref.id])[0];
+      if (resolved === undefined) return { kind: 'missing' };
+      return { kind: 'text', text: ref.alias ?? resolved.title };
+    }
+    if (ref.kind === 'id') {
+      if (ref.id === null) return { kind: 'missing' };
+      const anchor = docAnchors.get(ref.id);
+      const title = titleOf(ref.id);
+      if (anchor !== undefined) return { kind: 'anchor', anchor, text: ref.alias ?? title ?? '' };
+      if (title !== null) return { kind: 'text', text: ref.alias ?? title };
+      return { kind: 'missing' };
+    }
+    // Обезличенные (name) и кросс-сетевые ссылки — как в экспорте подграфа:
+    // решение не даём, рендерер подставит алиас/название.
+    return undefined;
+  };
+}
+
+/** Провайдер якорей внутренних заголовков блока (`pub-<shortid>-<n>`). */
+function headingAnchorFor(
+  thoughtId: string,
+): (ctx: { index: number; decapitated: boolean }) => string | undefined {
+  const base = publicationAnchor(thoughtId);
+  return (ctx) => (ctx.decapitated ? undefined : `${base}-${ctx.index + 1}`);
+}
+
+/** «Доп. материалы» раздела: имена свойств и названия целей. */
+function extraGroupsFor(
+  ndb: NetworkDb,
+  pub: Publication,
+  thoughtId: string,
+): PublicationAssemblyExtraGroup[] {
+  const groups: PublicationAssemblyExtraGroup[] = [];
+  for (const propId of pub.extra_properties) {
+    const prop = getPropertyRow(ndb, propId);
+    if (prop === null || prop.value_type !== 'link') continue;
+    const edges = readPropertyEdges(ndb, thoughtId, prop);
+    if (edges.length === 0) continue;
+    groups.push({
+      property: prop.name,
+      targets: edges.map((e) => ({ id: e.thought_id, title: e.title })),
+    });
+  }
+  return groups;
+}
+
+/** Контекст рендера раздела (общий для всего документа). */
+interface RenderContext {
+  pub: Publication;
+  comments: Map<string, string>;
+  titles: Map<string, { title: string }>;
+  textsBySection: Map<string, SectionText[]>;
+  resolver: (ref: WikiLinkRef) => WikiLinkResolution | undefined;
+  /** Кеш «доп. материалов» по мысли (раздел рендерится один раз, но защищаемся). */
+  extraCache: Map<string, PublicationAssemblyExtraGroup[]>;
+}
+
+/** Отрендерить один раздел и его поддерево в DTO. */
+function renderSection(
+  ndb: NetworkDb,
+  node: PublicationContentNode,
+  ctx: RenderContext,
+): PublicationAssemblySection {
+  const title = ctx.titles.get(node.thoughtId)?.title ?? '';
+  const headingNumber = node.level + 1;
+  const number =
+    node.repeatOf === null
+      ? formatSectionNumber(node.counters, { from: ctx.pub.numbering_from, to: ctx.pub.numbering_to })
+      : null;
+  const heading = number !== null ? `${number}. ${title}` : title;
+
+  const preambleSource = ctx.comments.get(node.thoughtId) ?? '';
+  const preamble_html =
+    preambleSource.trim() === ''
+      ? ''
+      : renderPublicationFragment(preambleSource, {
+          baseLevel: headingNumber,
+          headingAnchor: headingAnchorFor(node.thoughtId),
+          resolveLink: ctx.resolver,
+        }).html;
+
+  const texts: PublicationAssemblyText[] =
+    node.repeatOf === null
+      ? (ctx.textsBySection.get(node.thoughtId) ?? []).map((t) => {
+          const body = ctx.comments.get(t.thoughtId) ?? '';
+          return {
+            thought_id: t.thoughtId,
+            anchor: publicationAnchor(t.thoughtId),
+            edge_id: t.edgeId,
+            body_html:
+              body.trim() === ''
+                ? ''
+                : renderPublicationFragment(body, {
+                    baseLevel: headingNumber,
+                    headingAnchor: headingAnchorFor(t.thoughtId),
+                    resolveLink: ctx.resolver,
+                  }).html,
+          };
+        })
+      : [];
+
+  let extra = ctx.extraCache.get(node.thoughtId);
+  if (extra === undefined) {
+    extra = node.repeatOf === null ? extraGroupsFor(ndb, ctx.pub, node.thoughtId) : [];
+    ctx.extraCache.set(node.thoughtId, extra);
+  }
+
+  return {
+    thought_id: node.thoughtId,
+    anchor: publicationAnchor(node.thoughtId),
+    level: node.level,
+    heading,
+    preamble_html,
+    texts,
+    extra: node.repeatOf === null ? extra : [],
+    flags: { repeat_of: node.repeatOf, cycle_cut: node.cycleCut },
+    children: node.children.map((child) => renderSection(ndb, child, ctx)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Публичный API
+// ---------------------------------------------------------------------------
+
+/** Публикация по id в контексте слоя или `NOT_FOUND`. */
+function getPublicationOrThrow(ndb: NetworkDb, id: string): Publication {
+  const pub = getPublication(ndb, id);
+  if (pub === null) {
+    throw new EtnError('NOT_FOUND', `publication ${id} not found`, { entity: 'publication', id });
+  }
+  return pub;
+}
+
+/**
+ * Собрать страницу документа (`GET /publications/{id}/assembly`). Пагинация —
+ * по разделам верхнего уровня; нумерация и якоря считаются по всему дереву,
+ * поэтому стабильны между страницами.
+ */
+export function assemblePublication(
+  ndb: NetworkDb,
+  publicationId: string,
+  userId: string,
+  query: { page?: number; include_excluded?: boolean } = {},
+): PublicationAssembly {
+  const pub = getPublicationOrThrow(ndb, publicationId);
+  const includeExcluded = query.include_excluded === true;
+  const warnings: string[] = [];
+  const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
+
+  // Якоря всех блоков документа (разделы + тексты): ссылка на мысль внутри
+  // публикации становится якорем даже с другой страницы ([[#888453b6]]).
+  const docAnchors = new Map<string, string>();
+  for (const node of flattenTree(doc.tree)) {
+    docAnchors.set(node.thoughtId, publicationAnchor(node.thoughtId));
+  }
+  for (const textId of doc.textIds) docAnchors.set(textId, publicationAnchor(textId));
+
+  const blockIds = new Set<string>([
+    ...flattenTree(doc.tree).map((n) => n.thoughtId),
+    ...doc.textIds,
+  ]);
+  const resolver = makeLinkResolver(ndb, docAnchors);
+  const ctx: RenderContext = {
+    pub,
+    comments: loadPermanentComments(ndb, [...blockIds]),
+    titles: loadThoughtMeta(ndb, [...blockIds]),
+    textsBySection: doc.textsBySection,
+    resolver,
+    extraCache: new Map(),
+  };
+
+  const perPage = PUBLICATION_ASSEMBLY_PAGE_SIZE;
+  const totalRoots = doc.tree.length;
+  const page = Math.max(1, Math.trunc(query.page ?? 1));
+  const start = (page - 1) * perPage;
+  const pageRoots = doc.tree.slice(start, start + perPage);
+  const sections = pageRoots.map((root) => renderSection(ndb, root, ctx));
+
+  const cover: PublicationAssemblyCover =
+    pub.cover_kind === 'attachment'
+      ? { kind: 'attachment', ref: pub.cover_attachment_id }
+      : pub.cover_kind === 'url'
+        ? { kind: 'url', ref: pub.cover_url }
+        : { kind: 'placeholder', ref: null };
+  const summary = pub.summary_md ?? '';
+  const summaryHtml =
+    summary.trim() === ''
+      ? ''
+      : renderPublicationFragment(summary, { resolveLink: resolver }).html;
+
+  return {
+    publication: {
+      title: pub.title,
+      subtitle: pub.subtitle,
+      authorship: pub.authorship,
+      assembly_date: pub.assembly_date,
+      summary_html: summaryHtml,
+      cover,
+      new_candidates: doc.candidateIds.length,
+    },
+    sections,
+    excluded: doc.excluded,
+    warnings,
+    meta: {
+      page,
+      per_page: perPage,
+      total_roots: totalRoots,
+      has_more: start + pageRoots.length < totalRoots,
+    },
+  };
+}
+
+/**
+ * Новые кандидаты публикации (`GET /publications/{id}/candidates`): отбор
+ * минус дерево минус исключения, с лимитом и пагинацией (усечение — не ошибка).
+ */
+export function listPublicationCandidates(
+  ndb: NetworkDb,
+  publicationId: string,
+  userId: string,
+  query: {
+    limit?: number;
+    offset?: number;
+    include_excluded?: boolean;
+    /** Кеш членства с дебаунсом (ленивый фасад); без него — прямой расчёт. */
+    cache?: PublicationMembershipCache;
+  } = {},
+): PublicationCandidatesResult {
+  const pub = getPublicationOrThrow(ndb, publicationId);
+  const includeExcluded = query.include_excluded === true;
+  const limit = Math.min(
+    Math.max(Math.trunc(query.limit ?? PUBLICATION_CANDIDATES_DEFAULT_LIMIT), 0),
+    PUBLICATION_CANDIDATES_MAX_LIMIT,
+  );
+  const offset = Math.max(Math.trunc(query.offset ?? 0), 0);
+  const compute = (): PublicationCandidatesResult => {
+    const warnings: string[] = [];
+    const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
+    const ids = doc.candidateIds;
+    const pageIds = ids.slice(offset, offset + limit);
+    const meta = loadThoughtMeta(ndb, pageIds);
+    const items: PublicationCandidate[] = pageIds.map((id) => ({
+      thought_id: id,
+      title: meta.get(id)?.title ?? '',
+      type_id: meta.get(id)?.type_id ?? null,
+    }));
+    return {
+      items,
+      total: ids.length,
+      limit,
+      offset,
+      has_more: offset + items.length < ids.length,
+    };
+  };
+  return query.cache === undefined
+    ? compute()
+    : query.cache.getCandidates(
+        candidatesCacheKey(publicationId, ndb.layerId, includeExcluded, limit, offset),
+        compute,
+      );
+}
+
+/** Прочитать прямые значения свойств типа «Публикация» у мысли. */
+function directPublicationUsages(ndb: NetworkDb, thoughtId: string): PublicationUsageItem[] {
+  const rows = ndb
+    .prepare(
+      `SELECT pv.value_text AS value_text, p.name AS property_name
+         FROM property_values_v pv
+         JOIN properties_v p ON p.id = pv.property_id
+        WHERE pv.owner_type = 'thought' AND pv.owner_id = ? AND p.value_type = 'publication'`,
+    )
+    .all(thoughtId) as Array<{ value_text: string | null; property_name: string }>;
+  const ids: string[] = [];
+  const propByPub = new Map<string, string>();
+  for (const row of rows) {
+    if (row.value_text === null) continue;
+    const values = parseStringArray(row.value_text);
+    const list = values.length > 0 ? values : [row.value_text];
+    for (const pubId of list) {
+      const key = pubId.toLowerCase();
+      if (!propByPub.has(key)) {
+        propByPub.set(key, row.property_name);
+        ids.push(key);
+      }
+    }
+  }
+  return resolvePublicationRefs(ndb, ids).map((ref) => ({
+    publication_id: ref.id,
+    title: ref.title,
+    role: 'direct' as const,
+    property: propByPub.get(ref.id.toLowerCase()),
+  }));
+}
+
+/** Путь (id разделов от корня) до содержательного узла или `null`. */
+function findSectionPath(
+  tree: readonly PublicationContentNode[],
+  thoughtId: string,
+): string[] | null {
+  type Frame = { node: PublicationContentNode; path: string[] };
+  const stack: Frame[] = [...tree].reverse().map((node) => ({ node, path: [node.thoughtId] }));
+  while (stack.length > 0) {
+    const { node, path } = stack.pop()!;
+    if (node.thoughtId === thoughtId && node.repeatOf === null) return path;
+    for (let i = node.children.length - 1; i >= 0; i -= 1) {
+      const child = node.children[i]!;
+      stack.push({ node: child, path: [...path, child.thoughtId] });
+    }
+  }
+  return null;
+}
+
+/**
+ * Использование мысли в публикациях слоя (`GET /thoughts/{id}/publications`):
+ * роли «раздел» (хлебные крошки имён разделов) и «текст» по рецептам, плюс
+ * прямые значения свойств типа «Публикация». Ленивый расчёт с лимитом публикаций.
+ */
+export function listPublicationUsage(
+  ndb: NetworkDb,
+  thoughtId: string,
+  userId: string,
+  query: {
+    limit?: number;
+    offset?: number;
+    publication_limit?: number;
+    /** Кеш членства с дебаунсом (ленивый фасад); без него — прямой расчёт. */
+    cache?: PublicationMembershipCache;
+  } = {},
+): PublicationUsageResult {
+  const limit = Math.min(
+    Math.max(Math.trunc(query.limit ?? PUBLICATION_USAGE_DEFAULT_LIMIT), 0),
+    PUBLICATION_USAGE_MAX_LIMIT,
+  );
+  const pubLimit = Math.max(
+    Math.trunc(query.publication_limit ?? PUBLICATION_USAGE_MAX_PUBLICATIONS),
+    0,
+  );
+  const offset = Math.max(Math.trunc(query.offset ?? 0), 0);
+  const compute = (): PublicationUsageResult => {
+    const items: PublicationUsageItem[] = directPublicationUsages(ndb, thoughtId);
+
+    const listQuery: PublicationListQuery = { active: 'true', limit: pubLimit, offset: 0 };
+    const publications = listPublications(ndb, listQuery);
+    const scanTruncated = publications.total > publications.items.length;
+
+    for (const pub of publications.items) {
+      const warnings: string[] = [];
+      const doc = buildDocument(ndb, pub, userId, false, warnings);
+
+      const path = findSectionPath(doc.tree, thoughtId);
+      if (path !== null) {
+        const titles = loadThoughtMeta(ndb, path);
+        items.push({
+          publication_id: pub.id,
+          title: pub.title,
+          role: 'section',
+          breadcrumbs: path.map((id) => titles.get(id)?.title ?? ''),
+        });
+        continue;
+      }
+      for (const [sectionId, texts] of doc.textsBySection) {
+        if (texts.some((t) => t.thoughtId === thoughtId)) {
+          const titles = loadThoughtMeta(ndb, [sectionId]);
+          items.push({
+            publication_id: pub.id,
+            title: pub.title,
+            role: 'text',
+            section_title: titles.get(sectionId)?.title ?? '',
+            section_thought_id: sectionId,
+          });
+          break;
+        }
+      }
+    }
+
+    const page = items.slice(offset, offset + limit);
+    return {
+      items: page,
+      total: items.length,
+      limit,
+      offset,
+      has_more: scanTruncated || offset + page.length < items.length,
+    };
+  };
+  return query.cache === undefined
+    ? compute()
+    : query.cache.getUsage(
+        usageCacheKey(thoughtId, ndb.layerId, limit, offset, pubLimit),
+        compute,
+      );
+}
+
+// ---------------------------------------------------------------------------
+// Кеш членства с дебаунсом (ADR 7adf7778)
+// ---------------------------------------------------------------------------
+
+interface CacheEntry<T> {
+  value: T;
+  at: number;
+}
+
+/**
+ * Кеш ленивых вычислений членства (кандидаты/использование) с окном дебаунса:
+ * повторный вызов для того же ключа внутри окна отдаёт прежний результат, не
+ * исполняя рецепты заново. Один экземпляр на процесс; в тестах сбрасывается
+ * {@link resetPublicationMembershipCache}.
+ */
+export class PublicationMembershipCache {
+  private readonly candidates = new Map<string, CacheEntry<PublicationCandidatesResult>>();
+  private readonly usage = new Map<string, CacheEntry<PublicationUsageResult>>();
+
+  constructor(
+    private readonly windowMs: number = PUBLICATION_MEMBERSHIP_DEBOUNCE_MS,
+    private readonly now: () => number = () => Date.now(),
+  ) {}
+
+  /** Кандидаты с кешем (ключ — публикация + слой + параметры). */
+  getCandidates(
+    key: string,
+    compute: () => PublicationCandidatesResult,
+  ): PublicationCandidatesResult {
+    return this.through(this.candidates, key, compute);
+  }
+
+  /** Использование с кешем (ключ — мысль + слой + параметры). */
+  getUsage(key: string, compute: () => PublicationUsageResult): PublicationUsageResult {
+    return this.through(this.usage, key, compute);
+  }
+
+  private through<T>(store: Map<string, CacheEntry<T>>, key: string, compute: () => T): T {
+    const entry = store.get(key);
+    const now = this.now();
+    if (entry !== undefined && now - entry.at < this.windowMs) return entry.value;
+    const value = compute();
+    store.set(key, { value, at: now });
+    return value;
+  }
+
+  /** Полный сброс (тесты, смена слоя). */
+  clear(): void {
+    this.candidates.clear();
+    this.usage.clear();
+  }
+}
+
+/** Процессный кеш членства. */
+export const publicationMembershipCache = new PublicationMembershipCache();
+
+/** Сбросить процессный кеш членства (тесты). */
+export function resetPublicationMembershipCache(): void {
+  publicationMembershipCache.clear();
+}
+
+/** Ключ кеша кандидатов. */
+export function candidatesCacheKey(
+  publicationId: string,
+  layerId: string,
+  includeExcluded: boolean,
+  limit: number,
+  offset: number,
+): string {
+  return `candidates:${publicationId}:${layerId}:${includeExcluded ? 1 : 0}:${limit}:${offset}`;
+}
+
+/** Ключ кеша использования. */
+export function usageCacheKey(
+  thoughtId: string,
+  layerId: string,
+  limit: number,
+  offset: number,
+  pubLimit: number,
+): string {
+  return `usage:${thoughtId}:${layerId}:${limit}:${offset}:${pubLimit}`;
+}

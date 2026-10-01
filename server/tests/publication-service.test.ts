@@ -15,6 +15,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { EtnError } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
+import { publicationOrderId } from '../src/db/publication-id.js';
 import {
   addPublicationExclusion,
   addShelfItem,
@@ -401,6 +402,49 @@ describe(
           () => createShelf(ndb, { title: 'полка' }, 'u'),
           (e) => codeOf(e) === 'VALIDATION_ERROR',
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('оживляет надгробия порядка, исключений и состава полки в слое', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+        const p = createPublication(ndb, { title: 'X' }, 'u');
+
+        // publication_order: принудительное надгробие → повторная перестановка
+        // оживляет строку (детерминированный id), позиция применяется.
+        const orderId = publicationOrderId(p.id, 'n1');
+        ndb
+          .prepare(
+            `INSERT INTO publication_order (id, layer_id, publication_id, node_key, position,
+                                            deleted, updated_at, updated_by)
+             VALUES (?, ?, ?, 'n1', 9, 1, '2024-01-01T00:00:00Z', 'u')`,
+          )
+          .run(orderId, layerId, p.id);
+        assert.equal(listPublicationOrder(ndb, p.id).length, 0);
+        setPublicationOrder(ndb, p.id, [{ node_key: 'n1', position: 5 }], 'u');
+        assert.deepEqual(listPublicationOrder(ndb, p.id), [{ node_key: 'n1', position: 5 }]);
+
+        // publication_exclusions: add → remove (надгробие) → add оживляет.
+        const thought = randomUUID();
+        addPublicationExclusion(ndb, p.id, thought, 'u');
+        removePublicationExclusion(ndb, p.id, thought);
+        assert.equal(listPublicationExclusions(ndb, p.id).length, 0);
+        addPublicationExclusion(ndb, p.id, thought, 'u');
+        assert.equal(listPublicationExclusions(ndb, p.id).length, 1);
+
+        // shelf_items: add → remove (надгробие) → add оживляет с новой позицией.
+        const shelf = createShelf(ndb, { title: 'Полка' }, 'u');
+        addShelfItem(ndb, shelf.id, p.id, 1, 'u');
+        removeShelfItem(ndb, shelf.id, p.id);
+        assert.equal(listShelves(ndb)[0]?.items.length, 0);
+        addShelfItem(ndb, shelf.id, p.id, 7, 'u');
+        const items = listShelves(ndb)[0]?.items ?? [];
+        assert.equal(items.length, 1);
+        assert.equal(items[0]?.position, 7);
       } finally {
         ndb.close();
       }

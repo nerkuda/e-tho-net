@@ -159,3 +159,148 @@ export interface ShelfInput {
   title?: string;
   position?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Сборка документа (0.11.1, задача 34119c67; сущность 8b849dfc; операция
+// 19d80dd2; требования дерева 599414b6, текстов 620aa285, титула 745fdc48,
+// нумерации a33f7b0e; ADR членства 7adf7778)
+// ---------------------------------------------------------------------------
+
+/** Источник обложки в собранном документе: вложение, URL или заглушка. */
+export const PUBLICATION_ASSEMBLY_COVER_KINDS = ['attachment', 'url', 'placeholder'] as const;
+export type PublicationAssemblyCoverKind = (typeof PUBLICATION_ASSEMBLY_COVER_KINDS)[number];
+
+/** Обложка титульного блока сборки. `ref` — id вложения / URL; у заглушки `null`. */
+export interface PublicationAssemblyCover {
+  kind: PublicationAssemblyCoverKind;
+  ref: string | null;
+}
+
+/** Титульный блок документа (H1), собираемый из полей публикации. */
+export interface PublicationAssemblyTitle {
+  title: string;
+  subtitle: string | null;
+  /** Авторство текстом; пусто — клиент показывает создателя публикации. */
+  authorship: string | null;
+  /** Хранимая дата сборки; меняет только rebuild. */
+  assembly_date: string | null;
+  /** Резюме, отрендеренное в HTML (без заголовков). */
+  summary_html: string;
+  cover: PublicationAssemblyCover;
+  /** Число новых кандидатов (мыслей под отбор, не попавших в дерево). */
+  new_candidates: number;
+}
+
+/** Один текст раздела: мысль-текст, её якорь, ребро-источник и HTML. */
+export interface PublicationAssemblyText {
+  thought_id: string;
+  anchor: string;
+  /** Ребро свойства-источника (ключ локального порядка текста). */
+  edge_id: string;
+  body_html: string;
+}
+
+/** Блок «дополнительные материалы»: свойство рецепта и названия его целей. */
+export interface PublicationAssemblyExtraGroup {
+  property: string;
+  targets: Array<{ id: string; title: string }>;
+}
+
+/** Пометки раздела: повторное вхождение и обрыв кольца. */
+export interface PublicationSectionFlags {
+  /** Якорь первого вхождения раздела; `null` — первое (содержательное). */
+  repeat_of: string | null;
+  /** Повторный заход пришёлся на текущую ветку обхода (кольцо). */
+  cycle_cut: boolean;
+}
+
+/** Узел дерева разделов сборки. */
+export interface PublicationAssemblySection {
+  thought_id: string;
+  /** Детерминированный якорь блока `pub-<shortid>`. */
+  anchor: string;
+  /** Уровень дерева, корень = 1. */
+  level: number;
+  /** Заголовок с номером (нумерация по настройке) или без. */
+  heading: string;
+  /** Предисловие — комментарий раздела, отрендеренный в HTML. */
+  preamble_html: string;
+  texts: PublicationAssemblyText[];
+  extra: PublicationAssemblyExtraGroup[];
+  flags: PublicationSectionFlags;
+  children: PublicationAssemblySection[];
+}
+
+/** Исключённая мысль (для пометки в редакторе). */
+export interface PublicationAssemblyExcluded {
+  thought_id: string;
+  title: string;
+}
+
+/** Мета пагинации по разделам верхнего уровня. */
+export interface PublicationAssemblyMeta {
+  page: number;
+  per_page: number;
+  total_roots: number;
+  has_more: boolean;
+}
+
+/** Ответ сборки документа (`GET /publications/{id}/assembly`). */
+export interface PublicationAssembly {
+  publication: PublicationAssemblyTitle;
+  sections: PublicationAssemblySection[];
+  excluded: PublicationAssemblyExcluded[];
+  warnings: string[];
+  meta: PublicationAssemblyMeta;
+}
+
+/** Параметры сборки. */
+export interface PublicationAssemblyQuery {
+  /** Страница по разделам верхнего уровня (1-based). */
+  page?: number;
+  /** Для редактора — включить исключённые разделы (с пометками). */
+  include_excluded?: boolean;
+}
+
+/** Кандидат — мысль под рецепт заголовков, не входящая в сборку. */
+export interface PublicationCandidate {
+  thought_id: string;
+  title: string;
+  type_id: string | null;
+}
+
+/** Ответ `GET /publications/{id}/candidates` (лимит + усечение, не ошибка). */
+export interface PublicationCandidatesResult {
+  items: PublicationCandidate[];
+  /** Полное число кандидатов до пагинации. */
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+/** Роль мысли в публикации: раздел, текст или прямая ссылка свойством. */
+export type PublicationUsageRole = 'section' | 'text' | 'direct';
+
+/** Одно использование мысли в публикации (группа «Публикации»). */
+export interface PublicationUsageItem {
+  publication_id: string;
+  title: string;
+  role: PublicationUsageRole;
+  /** Для роли `section` — хлебные крошки имён разделов (от корня). */
+  breadcrumbs?: string[];
+  /** Для роли `text` — название и id раздела, в котором мысль текст. */
+  section_title?: string;
+  section_thought_id?: string;
+  /** Для роли `direct` — имя свойства типа «Публикация». */
+  property?: string;
+}
+
+/** Ответ `GET /thoughts/{id}/publications` (лимит публикаций + усечение). */
+export interface PublicationUsageResult {
+  items: PublicationUsageItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
