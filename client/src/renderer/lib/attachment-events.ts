@@ -24,8 +24,12 @@
  * показанной сущности не перечитывается на каждое вложение сети.
  */
 
-/** Владелец вложения — мысль или связь. */
-export type AttachmentOwnerType = 'thought' | 'link';
+import type { AttachmentOwnerType } from '@etn/shared';
+
+/** Владелец вложения — мысль, связь или публикация (0.11.1, задача f37b468d:
+ *  обложка публикации — новый тип владельца). Тип берётся из общего реестра
+ *  `@etn/shared`, чтобы клиент не расходился с сервером. */
+export type { AttachmentOwnerType };
 
 /** Владелец вложения. */
 export interface AttachmentOwner {

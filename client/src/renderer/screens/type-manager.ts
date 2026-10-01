@@ -174,6 +174,8 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   thought_ref: 'ссылка на мысль (legacy)',
   // Кросс-сетевая ссылка (задача 7849008a).
   cross_network_ref: 'кросс-сетевая ссылка',
+  // Ссылка на публикацию (0.11.1, задача f37b468d).
+  publication: 'публикация',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */

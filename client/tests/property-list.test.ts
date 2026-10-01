@@ -183,6 +183,9 @@ describe('иконки видов значения (требование 4)', ()
       link: null,
       // Кросс-сетевая ссылка (задача 7849008a): своя иконка для UX.
       cross_network_ref: 'value-cross-network-ref',
+      // `publication` (0.11.1, задача f37b468d): своей иконки пока нет —
+      // поле/иконку добавляет клиентская задача 3275fd8d.
+      publication: null,
     };
     for (const [vt, icon] of Object.entries(expected)) {
       assert.equal(valueTypeIconName(vt as PropertyValueType), icon, `иконка вида ${vt}`);

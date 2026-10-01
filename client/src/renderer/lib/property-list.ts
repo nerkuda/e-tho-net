@@ -81,6 +81,9 @@ export const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   // `n:<network_id>#<thought_id>` другой сети; снапшот имени хранится
   // служебно, чтение чужой базы не открывает.
   cross_network_ref: 'кросс-сетевая ссылка',
+  // Ссылка на публикацию (0.11.1, задача f37b468d): значение — публикация
+  // текущей сети.
+  publication: 'публикация',
 };
 
 /** Предел обрезки имени стороны связи в колонке «Тип значения» (задача
@@ -401,6 +404,8 @@ const VALUE_TYPE_ICONS: Partial<Record<PropertyValueType, IconName>> = {
   thought_ref: 'value-ref',
   // Кросс-сетевая ссылка (задача 7849008a).
   cross_network_ref: 'value-cross-network-ref',
+  // `publication` (0.11.1, задача f37b468d) — иконку и полный рендер поля
+  // добавляет клиентская задача 3275fd8d («поле свойства «Публикация»»).
 };
 
 export function valueTypeIconName(valueType: PropertyValueType): IconName | null {

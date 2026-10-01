@@ -1,10 +1,12 @@
 /**
  * Backlinks service (task R3, docs/03-server-api.md §13a,
  * docs/12-wiki-id-refs.md §6.1): find comments whose `body_md` carries an
- * explicit ID-based wiki-link `[[#<id>]]` or `[[n:<net>#<id>]]` to a given
- * thought. Runtime regex over `body_md` (no separate index — task R3
- * decision). One hit per `(owner_type, owner_id)`; the target thought's own
- * comments are excluded (anti-self).
+ * explicit ID-based wiki-link to a given thought (`[[#<id>]]` or
+ * `[[n:<net>#<id>]]`) or publication (`[[#pub:<id>]]`, 0.11.1, задача f37b468d,
+ * требование 7f583ef9). Runtime regex over `body_md` (no separate index — task
+ * R3 decision). One hit per `(owner_type, owner_id)`; a thought target's own
+ * comments are excluded (anti-self). Publications have no comments of their own,
+ * so no exclusion is needed there.
  */
 
 import { EtnError, type MentionHit } from '@etn/shared';
@@ -13,6 +15,10 @@ import { makeSnippet } from './search-service.js';
 
 /** Matches `[[#<uuid>]]` or `[[#<uuid>|<alias>]]`. */
 const RE_ID = /\[\[#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\|[^\]\n]*)?\]\]/gi;
+
+/** Matches `[[#pub:<uuid>]]` or `[[#pub:<uuid>|<alias>]]` (задача f37b468d). */
+const RE_PUB =
+  /\[\[#pub:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\|[^\]\n]*)?\]\]/gi;
 
 /**
  * Matches `[[n:<uuid>#<uuid>]]` or `[[n:<uuid>#<uuid>|<alias>]]`. The first
@@ -23,6 +29,16 @@ const RE_ID = /\[\[#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const RE_CROSS =
   /\[\[n:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\|[^\]\n]*)?\]\]/gi;
 
+/** Which kinds of wiki-link a scan matches (and which it ignores). */
+interface BacklinkMatchers {
+  /** Match bare thought-id links `[[#<uuid>]]`. */
+  id: boolean;
+  /** Match cross-network thought links `[[n:<net>#<uuid>]]`. */
+  cross: boolean;
+  /** Match publication links `[[#pub:<uuid>]]`. */
+  pub: boolean;
+}
+
 interface BacklinkRow {
   comment_id: string;
   owner_id: string;
@@ -32,53 +48,43 @@ interface BacklinkRow {
 }
 
 /**
- * Scan a single comment body for any ID-based wiki-link whose target id
- * matches `targetIdLowercased`. Returns the first matching id-pattern as the
- * snippet highlight term (so the snippet is centered on it), or null if no
- * match.
+ * Scan a single comment body for any matching wiki-link whose target id equals
+ * `targetIdLowercased`. Returns the first matching id as the snippet highlight
+ * term (so the snippet is centered on it), or null if no match.
  */
-function findMatchingId(body: string, targetIdLowercased: string): string | null {
-  RE_ID.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = RE_ID.exec(body)) !== null) {
-    const captured = m[1];
-    if (captured !== undefined && captured.toLowerCase() === targetIdLowercased) {
-      return captured;
+function findMatchingId(body: string, targetIdLowercased: string, m: BacklinkMatchers): string | null {
+  const patterns: Array<{ re: RegExp; group: number }> = [];
+  if (m.id) patterns.push({ re: RE_ID, group: 1 });
+  if (m.cross) patterns.push({ re: RE_CROSS, group: 2 });
+  if (m.pub) patterns.push({ re: RE_PUB, group: 1 });
+  for (const { re, group } of patterns) {
+    re.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(body)) !== null) {
+      const captured = match[group];
+      if (captured !== undefined && captured.toLowerCase() === targetIdLowercased) {
+        return captured;
+      }
+      if (match[0].length === 0) re.lastIndex += 1; // guard against empty matches
     }
-    if (m[0].length === 0) RE_ID.lastIndex += 1; // guard against empty matches
-  }
-  RE_CROSS.lastIndex = 0;
-  while ((m = RE_CROSS.exec(body)) !== null) {
-    const captured = m[2];
-    if (captured !== undefined && captured.toLowerCase() === targetIdLowercased) {
-      return captured;
-    }
-    if (m[0].length === 0) RE_CROSS.lastIndex += 1;
   }
   return null;
 }
 
 /**
- * Find backlinks (explicit ID-based wiki references) to the given thought.
+ * Scan thought- and link-owned comments for a matching wiki-link to `targetId`
+ * and return one {@link MentionHit} per `(owner_type, owner_id)`.
  *
- * @param ndb Network-scoped DB handle.
- * @param thoughtId Target thought id (UUID).
- * @returns One `MentionHit` per `(owner_type, owner_id)` owner whose comments
- *   carry a `[[#<id>]]` or `[[n:<net>#<id>]]` reference to this thought.
- *   The target thought's own comments are excluded.
- * @throws `EtnError('NOT_FOUND')` if the target thought does not exist.
+ * @param excludeThoughtId — when set, that thought's own comments are skipped
+ *   (anti-self for a thought target).
  */
-export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
-  // 1) Verify the target thought exists; mirror `findMentions` semantics.
-  const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(thoughtId);
-  if (!exists) {
-    throw new EtnError('NOT_FOUND', `thought ${thoughtId} not found`, {
-      entity: 'thought',
-      id: thoughtId,
-    });
-  }
-
-  const targetIdLower = thoughtId.toLowerCase();
+function scanBacklinkOwners(
+  ndb: NetworkDb,
+  targetId: string,
+  matchers: BacklinkMatchers,
+  excludeThoughtId: string | null,
+): MentionHit[] {
+  const targetIdLower = targetId.toLowerCase();
   const out: MentionHit[] = [];
   const seen = new Set<string>();
 
@@ -91,9 +97,9 @@ export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
               t.title AS title, t.active AS active, c.body_md AS body
        FROM comments_v c
        JOIN thoughts_v t ON t.id = c.owner_id
-       WHERE c.owner_type = 'thought' AND c.owner_id <> ?`,
+       WHERE c.owner_type = 'thought'${excludeThoughtId === null ? '' : ' AND c.owner_id <> ?'}`,
     )
-    .all(thoughtId) as BacklinkRow[];
+    .all(...(excludeThoughtId === null ? [] : [excludeThoughtId])) as BacklinkRow[];
 
   // 3) Pull link-owned comments — `title` is the link type's forward name.
   const linkRows = ndb
@@ -111,7 +117,7 @@ export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
 
   for (const rows of [thoughtRows, linkRows]) {
     for (const r of rows) {
-      const matchedId = findMatchingId(r.body, targetIdLower);
+      const matchedId = findMatchingId(r.body, targetIdLower, matchers);
       if (matchedId === null) continue;
 
       // Collapse per (owner_type, owner_id): the first matching comment
@@ -133,4 +139,47 @@ export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   }
 
   return out;
+}
+
+/**
+ * Find backlinks (explicit ID-based wiki references) to the given thought.
+ *
+ * @param ndb Network-scoped DB handle.
+ * @param thoughtId Target thought id (UUID).
+ * @returns One `MentionHit` per `(owner_type, owner_id)` owner whose comments
+ *   carry a `[[#<id>]]` or `[[n:<net>#<id>]]` reference to this thought.
+ *   The target thought's own comments are excluded. Publication links
+ *   (`[[#pub:…]]`) are NOT thought references and are ignored.
+ * @throws `EtnError('NOT_FOUND')` if the target thought does not exist.
+ */
+export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
+  // 1) Verify the target thought exists; mirror `findMentions` semantics.
+  const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(thoughtId);
+  if (!exists) {
+    throw new EtnError('NOT_FOUND', `thought ${thoughtId} not found`, {
+      entity: 'thought',
+      id: thoughtId,
+    });
+  }
+  return scanBacklinkOwners(ndb, thoughtId, { id: true, cross: true, pub: false }, thoughtId);
+}
+
+/**
+ * Find backlinks to the given publication (0.11.1, задача f37b468d,
+ * требование 7f583ef9): owners whose comments carry a `[[#pub:<id>]]`
+ * reference. Only publication refs are matched — a bare `[[#<id>]]` is a
+ * thought link, and a publication id is never a thought.
+ *
+ * @throws `EtnError('NOT_FOUND')` if the target publication does not exist in
+ *   the connection's layer context.
+ */
+export function findPublicationBacklinks(ndb: NetworkDb, publicationId: string): MentionHit[] {
+  const exists = ndb.prepare('SELECT 1 FROM publications_v WHERE id = ?').get(publicationId);
+  if (!exists) {
+    throw new EtnError('NOT_FOUND', `publication ${publicationId} not found`, {
+      entity: 'publication',
+      id: publicationId,
+    });
+  }
+  return scanBacklinkOwners(ndb, publicationId, { id: false, cross: false, pub: true }, null);
 }

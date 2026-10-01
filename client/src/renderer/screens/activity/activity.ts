@@ -21,7 +21,7 @@
  * удалённые сущности показываются read-only с пометкой «удалена».
  */
 
-import type { ActivityEntityType, ActivityRow } from '@etn/shared';
+import type { ActivityEntityType, ActivityRow, AttachmentOwnerType } from '@etn/shared';
 import { t } from '../../lib/i18n.js';
 
 import { requireNetworkId } from '../../app.js';
@@ -972,14 +972,19 @@ async function openEntity(row: ActivityRow): Promise<void> {
 }
 
 /**
- * Открывает владельца комментария/вложения (мысль или связь) в редакторе.
- * Если у комментария нет ни одного target (например, он был удалён вместе
- * с владельцем), показывается снимок из activity_log.
+ * Открывает владельца комментария/вложения (мысль, связь или публикация) в
+ * редакторе. Если у комментария нет ни одного target (например, он был удалён
+ * вместе с владельцем), показывается снимок из activity_log.
  * `atLayer` пробрасывается в GET — иначе для события из чужого слоя
  * запрос провалится (задача 59119797).
+ *
+ * Публикация (0.11.1, задача f37b468d: обложка/вложения публикации) пока не
+ * имеет клиентского редактора — экран публикаций реализуется отдельной задачей.
+ * Пока редактора нет, владелец-публикация возвращает ошибку, и вызывающий
+ * показывает снимок из журнала (как для недоступной сущности).
  */
 async function openCommentOrAttachmentOwner(
-  target: { owner_type: 'thought' | 'link'; owner_id: string } | undefined,
+  target: { owner_type: AttachmentOwnerType; owner_id: string } | undefined,
   atLayer?: string,
 ): Promise<void> {
   if (target === undefined) return; // вызывающий обработает снимок
@@ -988,6 +993,11 @@ async function openCommentOrAttachmentOwner(
     const thought = await etn.thoughts.get(networkId, target.owner_id, atLayer);
     await setThoughtEditorTarget(thought);
     return;
+  }
+  if (target.owner_type === 'publication') {
+    // Редактор публикации появится вместе с экраном «Публикации» (задача
+    // a3cfc018) — до тех пор показываем снимок из журнала.
+    throw new Error('редактор публикации недоступен');
   }
   const link = await etn.links.get(networkId, target.owner_id, atLayer);
   store.update({

@@ -527,6 +527,10 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.10.3 (задача 75c75a2f): прирост `inputSchema` от
         // `attachments[].mime_type`/`data_base64` — планка поднята ровно под
         // контракт (36 700 → 36 800), проза не менялась.
+        // 0.11.1 (задача f37b468d): `owner_type` вложений получил значение
+        // `publication`, а `value_type` свойства — вид `publication`; прирост
+        // `inputSchema` — ровно перечисления, планка поднята ровно под контракт
+        // (36 800 → 36 801), проза не менялась.
         let descriptionsPlusInputSchema = 0;
         for (const tool of tools) {
           descriptionsPlusInputSchema += Buffer.byteLength(
@@ -539,8 +543,8 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
           );
         }
         assert.ok(
-          descriptionsPlusInputSchema <= 36_800,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36800`,
+          descriptionsPlusInputSchema <= 36_801,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 36801`,
         );
       } finally {
         await handle.close();

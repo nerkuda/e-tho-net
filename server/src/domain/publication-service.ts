@@ -171,6 +171,54 @@ function getPublicationOrThrow(ndb: NetworkDb, id: string): Publication {
   return publication;
 }
 
+/**
+ * Ссылка на публикацию для подстановки имени (0.11.1, задача f37b468d,
+ * требование 7f583ef9): id + название + актуальность.
+ */
+export interface PublicationRef {
+  id: string;
+  title: string;
+  active: boolean;
+}
+
+/**
+ * Серверная подстановка имён: батч-резолв публикаций по id для wiki-ссылок
+ * `[[#pub:<id>]]`. Это серверная половина «двух резолверов» требования
+ * 7f583ef9 (клиентский wiki-резолвер подставляет имена в комментариях,
+ * экспортная подстановка — при сборке документа): обе стороны читают имена
+ * ОТСЮДА, повторной реализации разбора/резолва не заводят.
+ *
+ * Разрешение — в контексте слоя соединения (`publications_v`): невидимая или
+ * удалённая публикация в результат не попадает, вызывающий рисует пометку
+ * «удалена» (как для удалённой мысли). Порядок результата повторяет порядок
+ * входных id (без дублей) — подстановка детерминирована.
+ */
+export function resolvePublicationRefs(ndb: NetworkDb, ids: readonly string[]): PublicationRef[] {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of ids) {
+    const id = raw.toLowerCase();
+    if (id === '' || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  if (unique.length === 0) return [];
+  const placeholders = unique.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(
+      `SELECT id, title, active FROM publications_v WHERE id IN (${placeholders})`,
+    )
+    .all(...unique) as Array<{ id: string; title: string; active: number }>;
+  const byId = new Map(rows.map((r) => [r.id.toLowerCase(), r]));
+  const out: PublicationRef[] = [];
+  for (const id of unique) {
+    const row = byId.get(id);
+    if (row === undefined) continue;
+    out.push({ id: row.id, title: row.title, active: row.active === 1 });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Валидация (требования карточки CRUD 5af247e4, жизненного цикла 200b87be)
 // ---------------------------------------------------------------------------
@@ -513,11 +561,12 @@ function markPublicationTrashed(
 /**
  * Число живых значений свойств типа «Публикация», ссылающихся на публикацию.
  *
- * Тип значения `publication` реализуется задачей f37b468d; до его появления
- * живых свойств такого вида в сети нет, и счётчик равен нулю. Запрос построен
+ * Тип значения `publication` реализован задачей f37b468d: значение хранится в
+ * `property_values.value_text` — скаляром (single) или JSON-массивом id
+ * (multiple), поэтому матч покрывает обе формы: точное равенство и элемент
+ * JSON-массива (паттерн `%"<id>"%`, как у legacy thought_ref). Запрос построен
  * на реестре (`properties_v` по `value_type`) и всех `value_*`-колонках
- * `property_values`, поэтому не зависит от имени колонки хранения ссылки,
- * которую введёт та задача.
+ * `property_values`, поэтому не зависит от имени колонки хранения ссылки.
  */
 export function countPublicationRefUsages(ndb: NetworkDb, publicationId: string): number {
   const props = (
@@ -533,9 +582,11 @@ export function countPublicationRefUsages(ndb: NetworkDb, publicationId: string)
   if (columns.length === 0) return 0;
 
   const placeholders = props.map(() => '?').join(', ');
-  const match = columns.map((c) => `${c} = ?`).join(' OR ');
+  // Точное совпадение (single) ИЛИ вхождение id в JSON-массив (multiple).
+  const arrayMatch = `%"${publicationId}"%`;
+  const match = columns.map((c) => `(${c} = ? OR ${c} LIKE ? ESCAPE '\\')`).join(' OR ');
   const params: unknown[] = [...props];
-  for (let i = 0; i < columns.length; i += 1) params.push(publicationId);
+  for (let i = 0; i < columns.length; i += 1) params.push(publicationId, arrayMatch);
   const row = ndb
     .prepare(
       `SELECT COUNT(*) AS c FROM property_values_v

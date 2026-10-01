@@ -124,7 +124,10 @@ function validateOwnerType(ownerType: unknown): AttachmentOwnerType {
  */
 function ensureOwnerExists(ndb: NetworkDb, ownerType: AttachmentOwnerType, ownerId: string): void {
   // Reads go through the layer-resolving views (13-layers.md §4.2).
-  const table = ownerType === 'thought' ? 'thoughts_v' : 'links_v';
+  // `publication` (0.11.1, задача f37b468d, ADR 73cfcf64) — обложка публикации:
+  // публикация текущего слоя (`publications_v`).
+  const table =
+    ownerType === 'thought' ? 'thoughts_v' : ownerType === 'link' ? 'links_v' : 'publications_v';
   const row = ndb.prepare(`SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`).get(ownerId);
   if (!row) {
     throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
@@ -415,6 +418,11 @@ export function createAttachmentFromInput(
  * Targets that already own an attachment with the same `kind` and the same
  * `url`/`file_path` are skipped silently and reported via `skipped`.
  *
+ * Targets may be thoughts, links or publications (0.11.1, задача f37b468d):
+ * this is the mechanism behind «взять обложку из чужого вложения» — the source
+ * thought keeps its row, the publication gets its own row over the same file
+ * (ADR 73cfcf64).
+ *
  * Throws:
  *   * `NOT_FOUND` (404) if the source attachment does not exist;
  *   * `VALIDATION_ERROR` (422) if any target owner id does not exist.
@@ -431,14 +439,6 @@ export function copyAttachment(
   actorUserId: string,
 ): AttachmentCopyResult {
   const targetOwnerType = validateOwnerType(input.target_owner_type);
-  // Link owners are intentionally not supported yet: the workplan task scope is
-  // "copy attachment to other thoughts". When support is added, the route
-  // handler will switch to validateOwnerType unconditionally.
-  if (targetOwnerType !== 'thought') {
-    throw new EtnError('VALIDATION_ERROR', 'target_owner_type must be "thought"', {
-      field: 'target_owner_type',
-    });
-  }
   const targetIds = Array.from(new Set(input.target_owner_ids));
   if (targetIds.length === 0) {
     return { created: [], skipped: [] };
@@ -448,16 +448,22 @@ export function copyAttachment(
     // All targets must exist before any row is written — 422 names the first
     // missing id so the client can show a precise error.
     const placeholders = targetIds.map(() => '?').join(', ');
-    const existingThoughtIds = new Set(
+    const targetTable =
+      targetOwnerType === 'thought'
+        ? 'thoughts_v'
+        : targetOwnerType === 'link'
+          ? 'links_v'
+          : 'publications_v';
+    const existingTargetIds = new Set(
       (
         ndb
-          .prepare(`SELECT id FROM thoughts_v WHERE id IN (${placeholders})`)
+          .prepare(`SELECT id FROM ${targetTable} WHERE id IN (${placeholders})`)
           .all(...targetIds) as { id: string }[]
       ).map((r) => r.id),
     );
     for (const id of targetIds) {
-      if (!existingThoughtIds.has(id)) {
-        throw new EtnError('VALIDATION_ERROR', `thought ${id} not found`, {
+      if (!existingTargetIds.has(id)) {
+        throw new EtnError('VALIDATION_ERROR', `${targetOwnerType} ${id} not found`, {
           field: 'target_owner_ids',
           missing: id,
         });

@@ -377,7 +377,11 @@ function collectAttachments(ndb: NetworkDb, ids: string[]): EtnxManifest['attach
     for (const a of atts) {
       rows.push({
         id: a.id,
-        owner_type: a.owner_type,
+        // `listAttachments(ndb, 'thought', …)` возвращает только вложения
+        // мыслей; вложения-обложки публикаций (owner_type='publication') в
+        // манифест .etnx этой задачи не входят (перенос публикаций — отдельная
+        // работа техпроекта c5261d02).
+        owner_type: 'thought',
         owner_id: a.owner_id,
         kind: a.kind,
         url: a.url,

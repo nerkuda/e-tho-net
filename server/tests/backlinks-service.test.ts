@@ -12,7 +12,8 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
-import { findBacklinks } from '../src/domain/backlinks-service.js';
+import { findBacklinks, findPublicationBacklinks } from '../src/domain/backlinks-service.js';
+import { createPublication } from '../src/domain/publication-service.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -286,6 +287,82 @@ describe('findBacklinks (R3)', { skip }, () => {
       const hits = findBacklinks(ndb, target);
       assert.equal(hits.length, 1);
       assert.equal(hits[0]!.active, false);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('публикационная ссылка [[#pub:…]] не считается backlinks мысли', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      const pub = createPublication(ndb, { title: 'Публикация' }, 'u');
+      // `pub:`-ссылка адресует публикацию, а не мысль с тем же uuid-видом.
+      seedThoughtComment(ndb, owner, `см. [[#pub:${pub.id}]]`);
+      assert.equal(findBacklinks(ndb, target).length, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+});
+
+describe('findPublicationBacklinks (f37b468d)', { skip }, () => {
+  it('находит [[#pub:…]] в комментарии мысли и отдаёт владельца', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const pub = createPublication(ndb, { title: 'Публикация' }, 'u');
+      const owner = seedThought(ndb, 'Заметка');
+      seedThoughtComment(ndb, owner, `см. [[#pub:${pub.id}|название]]`);
+
+      const hits = findPublicationBacklinks(ndb, pub.id);
+      assert.equal(hits.length, 1);
+      assert.equal(hits[0]!.owner_type, 'thought');
+      assert.equal(hits[0]!.owner_id, owner);
+      assert.ok(hits[0]!.snippet.includes('<mark>'), 'snippet выделяет совпавший id');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('находит [[#pub:…]] в комментарии связи', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const pub = createPublication(ndb, { title: 'Публикация' }, 'u');
+      const a = seedThought(ndb, 'A');
+      const b = seedThought(ndb, 'B');
+      const link = seedLink(ndb, a, b);
+      seedLinkComment(ndb, link, `связь упоминает [[#pub:${pub.id}]]`);
+
+      const hits = findPublicationBacklinks(ndb, pub.id);
+      assert.equal(hits.length, 1);
+      assert.equal(hits[0]!.owner_type, 'link');
+      assert.equal(hits[0]!.owner_id, link);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('голая [[#<uuid>]] мыслью не считается ссылкой на публикацию', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const pub = createPublication(ndb, { title: 'Публикация' }, 'u');
+      const owner = seedThought(ndb, 'Заметка');
+      seedThoughtComment(ndb, owner, `см. [[#${pub.id}]]`);
+      assert.equal(findPublicationBacklinks(ndb, pub.id).length, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('NOT_FOUND если публикации не существует', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      assert.throws(
+        () => findPublicationBacklinks(ndb, randomUUID()),
+        (err: unknown) =>
+          typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'NOT_FOUND',
+      );
     } finally {
       ndb.close();
     }

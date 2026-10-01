@@ -34,6 +34,7 @@ import { z, type ZodType } from 'zod';
 
 import {
   ATTACHMENT_KINDS,
+  ATTACHMENT_OWNER_TYPES,
   AUDIT_CATEGORIES,
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
@@ -1228,7 +1229,7 @@ export const AttachmentsAdd = defineContract(
   'etn.attachments.add',
   z.object({
     network_id: NetworkId,
-    owner_type: z.enum(['thought', 'link']),
+    owner_type: z.enum(ATTACHMENT_OWNER_TYPES),
     owner_id: z.string().min(1),
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
@@ -1251,7 +1252,7 @@ export const AttachmentsCopy = defineContract(
   z.object({
     network_id: NetworkId,
     attachment_id: z.string().min(1),
-    target_owner_type: z.enum(['thought', 'link']),
+    target_owner_type: z.enum(ATTACHMENT_OWNER_TYPES),
     target_owner_ids: z.array(z.string().min(1)).min(1),
   }),
   {},
@@ -1263,7 +1264,7 @@ export const AttachmentsSearch = defineContract(
     network_id: NetworkId,
     q: z.string().min(1),
     kind: z.enum(ATTACHMENT_KINDS).optional(),
-    exclude_owner_type: z.enum(['thought', 'link']).optional(),
+    exclude_owner_type: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
     exclude_owner_id: z.string().min(1).optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
@@ -2323,8 +2324,8 @@ export const RestAttachmentSearch = defineContract(
     q: { from: { kind: 'query' }, t: z.string().optional() },
     exclude_owner_type: {
       from: { kind: 'query' },
-      t: z.enum(['thought', 'link']).optional(),
-      msg: 'exclude_owner_type должен быть thought|link.',
+      t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
+      msg: 'exclude_owner_type должен быть thought|link|publication.',
     },
     exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: 'exclude_owner_id должен быть строкой.' },
     kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: 'kind должен быть url|file.' },
@@ -2350,9 +2351,9 @@ export const RestAttachmentCopy = defineContract(
     attachment_id: { from: { kind: 'param', name: 'id' } },
     target_owner_type: {
       from: { kind: 'body' },
-      t: z.enum(['thought', 'link']),
+      t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: 'target_owner_type должен быть thought|link.',
+      msg: 'target_owner_type должен быть thought|link|publication.',
     },
     target_owner_ids: {
       from: { kind: 'body' },
@@ -2402,8 +2403,8 @@ export const RestAttachmentUpdate = defineContract(
     position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'position должен быть числом.' },
     owner_type: {
       from: { kind: 'body' },
-      t: z.enum(['thought', 'link']).optional(),
-      msg: 'owner_type должен быть thought|link.',
+      t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
+      msg: 'owner_type должен быть thought|link|publication.',
     },
     owner_id: { from: { kind: 'body' }, t: z.string().optional() },
   },

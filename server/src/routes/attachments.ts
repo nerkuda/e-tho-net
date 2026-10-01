@@ -216,7 +216,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestAttachmentCopy, req);
         const parsed = {
-          target_owner_type: input.target_owner_type as 'thought' | 'link',
+          target_owner_type: input.target_owner_type as AttachmentOwnerType,
           target_owner_ids: input.target_owner_ids as string[],
         };
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
@@ -278,7 +278,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.icon !== undefined) changes.icon = input.icon as string | null;
         if (input.position !== undefined) changes.position = input.position as number;
         if (input.owner_type !== undefined)
-          changes.owner_type = input.owner_type as 'thought' | 'link';
+          changes.owner_type = input.owner_type as AttachmentOwnerType;
         if (input.owner_id !== undefined) changes.owner_id = input.owner_id as string;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const attachment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
