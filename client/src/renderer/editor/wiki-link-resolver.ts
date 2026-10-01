@@ -21,6 +21,7 @@ import type { ThoughtRef } from '@etn/shared';
 import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
 
 import { etn } from '../lib/etn.js';
+import { t } from '../lib/i18n.js';
 import { store } from '../state.js';
 
 /** CSS class added to a span whose target thought is missing/deleted. */
@@ -268,6 +269,11 @@ function paintPubSpans(root: HTMLElement, networkId: string): void {
     if (entry === undefined) continue;
     const paint = wikiSpanPaint(span.textContent ?? '', entry, store.state.showInactive);
     if (paint.text !== null) span.textContent = paint.text;
+    // Отсутствующая публикация без алиаса: пометка «удалена» (требование
+    // 7f583ef9 п.4, элемент интерфейса d421c5d8).
+    if (paint.deleted && (span.textContent ?? '') === '') {
+      span.textContent = t('publications.link.deleted');
+    }
     span.classList.toggle('wiki-link-deleted', paint.deleted);
     if (paint.markResolved) span.classList.add(CSS_WIKI_LINK_RESOLVED);
   }
